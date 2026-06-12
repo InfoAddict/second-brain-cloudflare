@@ -1,0 +1,150 @@
+name: Upstream Release Update
+
+on:
+  schedule:
+    # Check once a day for a new upstream release.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "GitHub repository to monitor"
+        required: false
+        default: "rahilp/second-brain-cloudflare"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-release-update
+  cancel-in-progress: false
+
+jobs:
+  update-from-upstream-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'rahilp/second-brain-cloudflare' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find latest upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! release_json="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" 2>/tmp/upstream-release-error.log)"; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream GitHub release found for ${UPSTREAM_REPO}; nothing to update."
+            cat /tmp/upstream-release-error.log
+            exit 0
+          fi
+
+          tag_name="$(jq -r '.tag_name' <<< "$release_json")"
+          release_name="$(jq -r '.name // .tag_name' <<< "$release_json")"
+          release_url="$(jq -r '.html_url' <<< "$release_json")"
+          branch_name="upstream-release/${tag_name//[^A-Za-z0-9._-]/-}"
+
+          {
+            echo "found=true"
+            echo "tag_name=$tag_name"
+            echo "release_name=$release_name"
+            echo "release_url=$release_url"
+            echo "branch_name=$branch_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch upstream tag
+        if: steps.release.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "refs/tags/${{ steps.release.outputs.tag_name }}:refs/tags/${{ steps.release.outputs.tag_name }}"
+
+      - name: Check whether update is needed
+        if: steps.release.outputs.found == 'true'
+        id: update
+        run: |
+          set -euo pipefail
+
+          if git merge-base --is-ancestor "${{ steps.release.outputs.tag_name }}" HEAD; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Current branch already contains ${{ steps.release.outputs.tag_name }}."
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create update branch
+        if: steps.update.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${{ steps.release.outputs.branch_name }}"
+          git merge --no-edit "${{ steps.release.outputs.tag_name }}"
+
+      - name: Setup Node
+        if: steps.update.outputs.needed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.update.outputs.needed == 'true'
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck
+        if: steps.update.outputs.needed == 'true'
+        run: npm run typecheck
+
+      - name: Test
+        if: steps.update.outputs.needed == 'true'
+        run: npm run test
+
+      - name: Push update branch
+        if: steps.update.outputs.needed == 'true'
+        run: git push --force-with-lease origin "${{ steps.release.outputs.branch_name }}"
+
+      - name: Open or update pull request
+        if: steps.update.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          existing_pr="$(gh pr list \
+            --head "${{ steps.release.outputs.branch_name }}" \
+            --base main \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          body="$(cat <<'BODY'
+          Automated upstream release update.
+
+          Source release: ${{ steps.release.outputs.release_url }}
+
+          Checks run:
+          - npm run typecheck
+          - npm run test
+          BODY
+          )"
+
+          if [[ -n "$existing_pr" ]]; then
+            gh pr edit "$existing_pr" \
+              --title "Update from upstream release ${{ steps.release.outputs.tag_name }}" \
+              --body "$body"
+          else
+            gh pr create \
+              --base main \
+              --head "${{ steps.release.outputs.branch_name }}" \
+              --title "Update from upstream release ${{ steps.release.outputs.tag_name }}" \
+              --body "$body"
+          fi
