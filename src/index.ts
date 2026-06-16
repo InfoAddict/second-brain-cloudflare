@@ -50,6 +50,7 @@ const CHUNK_OVERLAP_CHARS = 200;
 
 // ─── Token limits ─────────────────────────────────────────────────────────────
 
+const CLASSIFY_MAX_TOKENS = 80;
 const CONTRADICTION_MAX_TOKENS = 80;
 const SMART_MERGE_MAX_TOKENS = 250;
 const INSIGHT_MAX_TOKENS = 300;
@@ -64,6 +65,46 @@ const VECTORIZE_TOP_K_MULTIPLIER = 3;
 const VECTORIZE_GET_BY_IDS_BATCH = 20;
 // D1 allows at most 100 bound parameters per query
 const D1_MAX_BOUND_PARAMS = 100;
+
+// ─── Memory status layer (issue #119) ──────────────────────────────────────────
+// Status lives as a reserved tag (e.g. "status:canonical") on entries.tags — no
+// schema change. Absent status = unspecified = default behavior.
+
+export const STATUS_VALUES = ["canonical", "draft", "deprecated"] as const;
+export type MemoryStatus = (typeof STATUS_VALUES)[number];
+const STATUS_PREFIX = "status:";
+
+export function getStatus(tags: string[]): MemoryStatus | null {
+  const tag = tags.find(t => t.startsWith(STATUS_PREFIX));
+  if (!tag) return null;
+  const value = tag.slice(STATUS_PREFIX.length) as MemoryStatus;
+  return (STATUS_VALUES as readonly string[]).includes(value) ? value : null;
+}
+
+export function withStatus(tags: string[], status: MemoryStatus): string[] {
+  const cleaned = tags.filter(t => !t.startsWith(STATUS_PREFIX));
+  return [...cleaned, `${STATUS_PREFIX}${status}`];
+}
+
+// ─── Memory kind layer (issue #12) ──────────────────────────────────────────────
+// Kind lives as a reserved tag (e.g. "kind:episodic") on entries.tags — no schema
+// change. Absent kind = unknown (unclassified). Orthogonal to status (#119).
+
+export const KIND_VALUES = ["episodic", "semantic"] as const;
+export type MemoryKind = (typeof KIND_VALUES)[number];
+const KIND_PREFIX = "kind:";
+
+export function getKind(tags: string[]): MemoryKind | null {
+  const tag = tags.find(t => t.startsWith(KIND_PREFIX));
+  if (!tag) return null;
+  const value = tag.slice(KIND_PREFIX.length) as MemoryKind;
+  return (KIND_VALUES as readonly string[]).includes(value) ? value : null;
+}
+
+export function withKind(tags: string[], kind: MemoryKind): string[] {
+  const cleaned = tags.filter(t => !t.startsWith(KIND_PREFIX));
+  return [...cleaned, `${KIND_PREFIX}${kind}`];
+}
 
 // ─── Runtime state ────────────────────────────────────────────────────────────
 
@@ -501,23 +542,63 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
   return { cleanQuery: query };
 }
 
-// ─── AI importance scoring ────────────────────────────────────────────────────
+// ─── AI classification (importance + canonical) ───────────────────────────────
 
-async function scoreImportance(content: string, env: Env): Promise<number> {
+// Map the model's free-text kind to our enum — tolerant of case, whitespace, and
+// common synonyms a small model emits (e.g. "event" → episodic, "fact" → semantic).
+function normalizeKind(raw: unknown): MemoryKind | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+  if (/episod|event|decision|milestone|occurrence/.test(v)) return "episodic";
+  if (/semantic|fact|preference|knowledge|belief/.test(v)) return "semantic";
+  return null;
+}
+
+// Parse the classifier's response. Tries strict JSON first, then falls back to
+// tolerant per-field extraction so one malformed field (small models intermittently
+// emit e.g. {"canonical":,}) doesn't discard the other valid fields.
+function parseClassification(text: string): { importance: number; canonical: boolean; kind: MemoryKind | null } {
+  const obj = text.match(/\{[^{}]*\}/);
+  if (obj) {
+    try {
+      const p = JSON.parse(obj[0]);
+      return {
+        importance: p.importance >= 1 && p.importance <= 5 ? p.importance : 3,
+        canonical: p.canonical === true,
+        kind: normalizeKind(p.kind),
+      };
+    } catch { /* fall through to tolerant extraction */ }
+  }
+  const imp = text.match(/"importance"\s*:\s*([1-5])/);
+  const can = text.match(/"canonical"\s*:\s*(true|false)/i);
+  const knd = text.match(/"kind"\s*:\s*"?([a-zA-Z]+)/);
+  return {
+    importance: imp ? parseInt(imp[1], 10) : 3,
+    canonical: can ? can[1].toLowerCase() === "true" : false,
+    kind: knd ? normalizeKind(knd[1]) : null,
+  };
+}
+
+export async function classifyEntry(content: string, env: Env): Promise<{ importance: number; canonical: boolean; kind: MemoryKind | null }> {
+  let text: string;
   try {
     const stream = await env.AI.run(LLM_MODEL as any, {
-      messages: [{
-        role: "user", content:
-          `Rate the long-term importance of this memory 1-5. Reply with only a single digit.\n1=trivial 3=useful context 5=critical decision or goal\n\nMemory: ${content.slice(0, 500)}`
+      messages: [{ role: "user", content:
+        `Classify this memory. Respond with ONLY one JSON object and nothing else — no prose, no markdown, no code fences.\n` +
+        `{"importance": <1-5>, "canonical": <true|false>, "kind": "episodic"|"semantic"}\n` +
+        `importance: 1=trivial, 3=useful context, 5=critical decision or goal.\n` +
+        `canonical: true ONLY for a confirmed decision, durable fact, or stated permanent preference that should be authoritative (be conservative; false for anything tentative, one-off, or event-like).\n` +
+        `kind: "episodic" for a specific event/decision/milestone that happened at a point in time; "semantic" for a general fact, preference, or piece of knowledge.\n\n` +
+        `Memory: ${content.slice(0, 500)}`,
       }],
+      max_tokens: CLASSIFY_MAX_TOKENS,
       stream: true,
     });
-    const text = await readStreamText(stream as ReadableStream);
-    const score = parseInt(text.trim(), 10);
-    return score >= 1 && score <= 5 ? score : 3;
+    text = await readStreamText(stream as ReadableStream);
   } catch {
-    return 0;
+    return { importance: 0, canonical: false, kind: null };
   }
+  return parseClassification(text);
 }
 
 // ─── Hashtag extraction ───────────────────────────────────────────────────────
@@ -961,12 +1042,12 @@ export interface RecallSearchResult {
 }
 
 export async function recallEntries(
-  params: { query: string; topK: number; tag?: string; after?: number; before?: number },
+  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind },
   env: Env,
   ctx: ExecutionContext
 ): Promise<RecallSearchResult> {
   const { query, topK } = params;
-  let { tag, after, before } = params;
+  let { tag, after, before, kind } = params;
   const now = Date.now();
 
   let embedQuery = query;
@@ -1056,11 +1137,18 @@ export async function recallEntries(
 
   if (!deduped.length) return { matches: [], insight: "" };
 
-  // Fetch full content from D1 for all matched parent IDs, applying time filter if set
+  // Fetch full content from D1 for all matched parent IDs, applying filters: auto-pattern
+  // exclusion, status:deprecated exclusion, optional kind match, and optional after/before range
   const parentIds = deduped.map((m) => (m.metadata as any)?.parentId ?? m.id);
   const placeholders = parentIds.map(() => "?").join(", ");
   const d1Bindings: (string | number)[] = [...parentIds];
-  let d1Sql = `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${placeholders}) AND tags NOT LIKE '%"auto-pattern"%'`;
+  let d1Sql = `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${placeholders}) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  if (kind && (KIND_VALUES as readonly string[]).includes(kind)) {
+    // Safe to interpolate: `kind` is validated against the KIND_VALUES enum just above,
+    // so only "episodic"/"semantic" can reach the string. Kept as a literal (not a bound
+    // param) so it doesn't shift the positional after/before bindings below.
+    d1Sql += ` AND tags LIKE '%"kind:${kind}"%'`;
+  }
   if (after !== undefined) { d1Sql += ` AND created_at >= ?`; d1Bindings.push(after); }
   if (before !== undefined) { d1Sql += ` AND created_at <= ?`; d1Bindings.push(before); }
   const { results: d1Rows } = await env.DB.prepare(d1Sql).bind(...d1Bindings).all() as { results: Record<string, any>[] };
@@ -1076,34 +1164,26 @@ export async function recallEntries(
     ).catch(e => console.error("recall_count update failed (non-fatal):", e))
   );
 
-  const matches: RecallMatch[] = deduped.map((m) => {
+  const matches: RecallMatch[] = deduped.flatMap((m) => {
     const meta = m.metadata as Record<string, any>;
     const parentId = (meta?.parentId ?? m.id) as string;
     const row = d1Map.get(parentId);
     const isUpdate = !!meta?.isUpdate;
 
-    if (row) {
-      return {
-        id: parentId,
-        content: row.content as string,
-        score: m.score,
-        createdAt: row.created_at as number,
-        tags: JSON.parse(row.tags ?? "[]"),
-        source: row.source as string,
-        isUpdate,
-      };
+    if (!row) {
+      // D1 row not found — either filtered out (e.g. status:deprecated) or genuinely missing
+      return [];
     }
 
-    // Fallback to metadata if D1 row not found (shouldn't happen)
-    return {
+    return [{
       id: parentId,
-      content: (meta?.content as string) ?? "",
+      content: row.content as string,
       score: m.score,
-      createdAt: (meta?.created_at as number) ?? now,
-      tags: Array.isArray(meta?.tags) ? (meta.tags as string[]) : [],
-      source: (meta?.source as string) ?? "",
+      createdAt: row.created_at as number,
+      tags: JSON.parse(row.tags ?? "[]"),
+      source: row.source as string,
       isUpdate,
-    };
+    }];
   });
 
   const insight = d1Rows.length > 1
@@ -1122,11 +1202,31 @@ export async function recallEntries(
 
 // ─── Shared write path ────────────────────────────────────────────────────────
 
+// Classify an entry's content (importance + canonical + kind) and apply the tags,
+// asynchronously. Used for both newly-inserted entries and smart-merge targets.
+function scheduleClassifyAndTag(entryId: string, content: string, env: Env, ctx: ExecutionContext): void {
+  ctx.waitUntil(
+    classifyEntry(content, env)
+      .then(async ({ importance, canonical, kind }) => {
+        await env.DB.prepare(`UPDATE entries SET importance_score = ? WHERE id = ?`).bind(importance, entryId).run();
+        if (!kind && !canonical) return;
+        const row = await env.DB.prepare(`SELECT tags FROM entries WHERE id = ?`).bind(entryId).first() as Record<string, any> | null;
+        if (!row) return;
+        let tags: string[] = JSON.parse(row.tags ?? "[]");
+        if (kind) tags = withKind(tags, kind);
+        if (canonical && getStatus(tags) === null) tags = withStatus(tags, "canonical");
+        await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), entryId).run();
+      })
+      .catch(e => console.error("Classification failed (non-fatal):", e))
+  );
+}
+
 export type CaptureResult =
   | { status: "blocked"; matchId: string; score: number }
   | { status: "stored"; id: string }
   | { status: "flagged"; id: string; matchId: string; score: number }
   | { status: "contradiction"; id: string; resolvedConflict: string; reason?: string }
+  | { status: "contradiction_protected"; id: string; canonicalId: string; reason?: string }
   | { status: "merged"; id: string }
   | { status: "replaced"; id: string };
 
@@ -1162,9 +1262,10 @@ export async function captureEntry(
       const existingSource = targetRow.source as string;
       const oldVectorIds: string[] = JSON.parse(targetRow.vector_ids ?? "[]");
 
-      // Protect high-importance memories from being silently overwritten.
-      // Score ≥ 4 means the existing entry is critical — keep both rather than replace.
-      if ((targetRow.importance_score as number) >= 4) {
+      // Protect high-importance or canonical memories from being silently overwritten.
+      // Score ≥ 4 means the existing entry is critical; canonical = confirmed authoritative.
+      const targetStatus = getStatus(existingTags);
+      if ((targetRow.importance_score as number) >= 4 || targetStatus === "canonical") {
         return { status: "flagged", id: crypto.randomUUID(), matchId: targetId, score: dup.score };
       }
 
@@ -1181,6 +1282,9 @@ export async function captureEntry(
       try {
         await deleteStaleVectors(env, oldVectorIds, newVectorIds);
       } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
+
+      // Re-classify the merged/replaced content — updates importance_score + kind (and canonical if warranted) on the target.
+      scheduleClassifyAndTag(targetId, newContent, env, ctx);
 
       return mergeAction.action === "merge"
         ? { status: "merged", id: targetId }
@@ -1203,23 +1307,30 @@ export async function captureEntry(
       .catch(e => console.error("Vectorize insert failed (non-fatal):", e))
   );
 
-  ctx.waitUntil(
-    scoreImportance(c, env)
-      .then(score => env.DB.prepare(`UPDATE entries SET importance_score = ? WHERE id = ?`).bind(score, id).run())
-      .catch(e => console.error("Importance scoring failed (non-fatal):", e))
-  );
+  scheduleClassifyAndTag(id, c, env, ctx);
 
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictId = contradiction.conflicting_id;
+    const conflictRow = await env.DB.prepare(
+      `SELECT tags FROM entries WHERE id = ?`
+    ).bind(conflictId).first() as Record<string, any> | null;
+    const conflictStatus = conflictRow ? getStatus(JSON.parse(conflictRow.tags ?? "[]")) : null;
+
+    if (conflictStatus === "canonical") {
+      // Don't overwrite a canonical memory — keep it, demote the new entry to draft.
+      // Strip "contradiction-resolved" — that tag marks entries that WON a contradiction;
+      // this entry lost, so it must not carry that tag.
+      const draftTags = finalTags.filter(t => t !== "contradiction-resolved");
+      await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
+        .bind(JSON.stringify(withStatus(draftTags, "draft")), id).run();
+      return { status: "contradiction_protected", id, canonicalId: conflictId, reason: contradiction.reason };
+    }
+
+    // Non-canonical loser: deprecate (keep row for audit) instead of hard-delete.
     try {
-      const conflictRow = await env.DB.prepare(
-        `SELECT vector_ids FROM entries WHERE id = ?`
-      ).bind(conflictId).first() as Record<string, any> | null;
-      const conflictVectorIds: string[] = JSON.parse(conflictRow?.vector_ids ?? "[]");
-      await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(conflictId).run();
-      if (conflictVectorIds.length) await env.VECTORIZE.deleteByIds(conflictVectorIds);
+      await deprecateEntry(conflictId, env);
     } catch (e) {
-      console.error("Contradiction resolution cleanup failed (non-fatal):", e);
+      console.error("Contradiction deprecation failed (non-fatal):", e);
     }
     return { status: "contradiction", id, resolvedConflict: conflictId, reason: contradiction.reason };
   }
@@ -1262,6 +1373,39 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
   return { status: "deleted", vectorCount: vectorIds.length };
 }
 
+// Deprecate (issue #119): keep the D1 row for audit but make the entry
+// unrecallable by deleting its vectors and tagging it status:deprecated.
+export async function deprecateEntry(id: string, env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT tags, vector_ids FROM entries WHERE id = ?`
+  ).bind(id).first() as Record<string, any> | null;
+  if (!row) return false;
+
+  const tags: string[] = JSON.parse(row.tags ?? "[]");
+  const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
+
+  await env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?`)
+    .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", id).run();
+
+  try {
+    if (vectorIds.length) await env.VECTORIZE.deleteByIds(vectorIds);
+  } catch (e) {
+    console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
+  }
+  return true;
+}
+
+// Apply a lifecycle status to an entry (issue #119). 'deprecated' deletes vectors
+// (via deprecateEntry); others swap the status:* tag in place. Returns ok=false if no such entry.
+export async function applyStatus(id: string, status: MemoryStatus, env: Env): Promise<boolean> {
+  if (status === "deprecated") return deprecateEntry(id, env);
+  const row = await env.DB.prepare(`SELECT tags FROM entries WHERE id = ?`).bind(id).first() as Record<string, any> | null;
+  if (!row) return false;
+  const tags: string[] = JSON.parse(row.tags ?? "[]");
+  await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(withStatus(tags, status)), id).run();
+  return true;
+}
+
 // ─── MCP Server ───────────────────────────────────────────────────────────────
 
 function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
@@ -1285,6 +1429,9 @@ function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       }
       if (result.status === "contradiction") {
         return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.` }] };
+      }
+      if (result.status === "contradiction_protected") {
+        return { content: [{ type: "text", text: `Stored as draft (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.` }] };
       }
       if (result.status === "replaced") {
         return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).` }] };
@@ -1404,6 +1551,23 @@ function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
     }
   );
 
+  // ── set_status ─────────────────────────────────────────────────────────────
+  server.registerTool(
+    "set_status",
+    {
+      description: "Set a memory's lifecycle status. 'canonical' = confirmed/authoritative (protected from auto-overwrite), 'draft' = tentative, 'deprecated' = no longer accurate (removed from recall, kept for audit). Get the entry ID from recall or list_recent first.",
+      inputSchema: {
+        id: z.string().describe("Entry ID — from recall or list_recent"),
+        status: z.enum([...STATUS_VALUES] as [string, ...string[]]).describe("canonical | draft | deprecated"),
+      },
+    },
+    async ({ id, status }) => {
+      const ok = await applyStatus(id, status as MemoryStatus, env);
+      if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      return { content: [{ type: "text", text: status === "deprecated" ? `Entry ${id} deprecated — removed from recall, kept for audit.` : `Entry ${id} marked ${status}.` }] };
+    }
+  );
+
   // ── recall ───────────────────────────────────────────────────────────────
   server.registerTool(
     "recall",
@@ -1415,10 +1579,11 @@ function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         tag: z.string().optional().describe("Filter by a specific tag"),
         after: z.number().int().optional().describe("Only return entries after this Unix ms timestamp"),
         before: z.number().int().optional().describe("Only return entries before this Unix ms timestamp"),
+        kind: z.enum([...KIND_VALUES] as [string, ...string[]]).optional().describe("Filter to episodic (events) or semantic (facts/knowledge)"),
       },
     },
-    async ({ query, topK, tag, after, before }) => {
-      const { matches, insight } = await recallEntries({ query, topK, tag, after, before }, env, ctx);
+    async ({ query, topK, tag, after, before, kind }) => {
+      const { matches, insight } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined }, env, ctx);
 
       if (!matches.length) {
         return { content: [{ type: "text", text: "Nothing found matching that query." }] };
@@ -1573,6 +1738,9 @@ const defaultHandler = {
       }
       if (result.status === "contradiction") {
         return json({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason });
+      }
+      if (result.status === "contradiction_protected") {
+        return json({ ok: true, id: result.id, status: "draft", kept_canonical: result.canonicalId, reason: result.reason });
       }
       if (result.status === "replaced") {
         return json({ ok: true, id: result.id, action: "replaced", message: "New memory replaced an outdated existing entry" });
@@ -1767,8 +1935,10 @@ const defaultHandler = {
       const tag = url.searchParams.get("tag")?.trim() || undefined;
       const after = url.searchParams.has("after") ? parseInt(url.searchParams.get("after")!, 10) : undefined;
       const before = url.searchParams.has("before") ? parseInt(url.searchParams.get("before")!, 10) : undefined;
+      const kindParam = url.searchParams.get("kind")?.trim();
+      const kind = kindParam && (KIND_VALUES as readonly string[]).includes(kindParam) ? kindParam as MemoryKind : undefined;
 
-      const { matches, insight } = await recallEntries({ query, topK, tag, after, before }, env, ctx);
+      const { matches, insight } = await recallEntries({ query, topK, tag, after, before, kind }, env, ctx);
 
       if (!matches.length) {
         return json({ ok: true, results: [], message: "Nothing found matching that query." });
@@ -1806,6 +1976,29 @@ const defaultHandler = {
       }
 
       return json({ ok: true, id, deletedVectors: result.vectorCount });
+    }
+
+    // POST /status — set lifecycle status, mirrors the MCP `set_status` tool
+    if (url.pathname === "/status" && request.method === "POST") {
+      const authErr = requireAuth(request, env);
+      if (authErr) return authErr;
+
+      let body: { id?: string; status?: string };
+      try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+      if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+      if (!(STATUS_VALUES as readonly string[]).includes(body.status ?? "")) {
+        return json({ ok: false, error: `status must be one of: ${STATUS_VALUES.join(", ")}` }, 400);
+      }
+
+      const id = body.id.trim();
+      const status = body.status as MemoryStatus;
+      const ok = await applyStatus(id, status, env);
+
+      if (!ok) {
+        return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      }
+
+      return json({ ok: true, id, status });
     }
 
     // POST /chat
