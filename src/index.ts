@@ -38,6 +38,9 @@ const DUPLICATE_FLAG_THRESHOLD = 0.85;
 const CANDIDATE_SCORE_THRESHOLD = 0.45;
 const TAG_BOOST_STEP = 0.15;
 const TAG_BOOST_MAX = 1.5;
+// Each net contradiction (win or loss) shifts a memory's effective importance by
+// log1p(|net|) * this step, clamped to the [1,5] importance band. Tunable.
+const CONTRADICTION_IMPORTANCE_STEP = 1.0;
 
 // ─── Model constants ──────────────────────────────────────────────────────────
 
@@ -223,6 +226,8 @@ async function initializeDatabase(env: Env): Promise<void> {
   for (const alter of [
     `ALTER TABLE entries ADD COLUMN recall_count INTEGER DEFAULT 0`,
     `ALTER TABLE entries ADD COLUMN importance_score INTEGER DEFAULT 0`,
+    `ALTER TABLE entries ADD COLUMN contradiction_wins INTEGER DEFAULT 0`,
+    `ALTER TABLE entries ADD COLUMN contradiction_losses INTEGER DEFAULT 0`,
   ]) {
     try { await env.DB.exec(alter); } catch { /* column already exists — no-op */ }
   }
@@ -455,7 +460,9 @@ export function rerankWithTimeDecay(
   matches: VectorizeMatch[],
   recallCounts: Map<string, number> = new Map(),
   importanceScores: Map<string, number> = new Map(),
-  queryTags: string[] = []
+  queryTags: string[] = [],
+  contradictionWins: Map<string, number> = new Map(),
+  contradictionLosses: Map<string, number> = new Map()
 ): VectorizeMatch[] {
   const now = Date.now();
 
@@ -479,10 +486,23 @@ export function rerankWithTimeDecay(
       const appendPenalty = isShortAppend ? 0.2 : 1.0;
       const rolledUpPenalty = tags.includes("rolled-up") ? 0.4 : 1.0;
 
-      // importance_score 0 = unscored (neutral). 1–5 scales from 0.88 → 1.20.
-      // Lets high-importance memories surface above the recency cap without dominating.
+      // Effective importance = classifier score adjusted by net contradiction history.
+      // Survivors (net wins) rise toward 5; repeatedly-contradicted memories (net losses)
+      // fall toward 1. log1p gives diminishing returns; clamp keeps the effect inside the
+      // existing 0.88–1.20 importance band. The stored importance_score is never mutated.
       const imp = importanceScores.get(parentId) ?? 0;
-      const importanceMultiplier = imp === 0 ? 1.0 : 0.8 + (imp / 5) * 0.4;
+      const wins = contradictionWins.get(parentId) ?? 0;
+      const losses = contradictionLosses.get(parentId) ?? 0;
+      const net = wins - losses;
+      let importanceMultiplier: number;
+      if (imp === 0 && net === 0) {
+        importanceMultiplier = 1.0; // unscored and never contested — unchanged baseline
+      } else {
+        const base = imp === 0 ? 3 : imp; // unscored-but-contested → neutral midpoint
+        const adj = Math.sign(net) * Math.log1p(Math.abs(net)) * CONTRADICTION_IMPORTANCE_STEP;
+        const effectiveImp = Math.max(1, Math.min(5, base + adj));
+        importanceMultiplier = 0.8 + (effectiveImp / 5) * 0.4;
+      }
 
       // Tag boost: applied outside the recency ≤1.0 cap so a tag-relevant memory can
       // surface above a marginally-closer but irrelevant one.
@@ -1113,19 +1133,21 @@ export async function recallEntries(
   // The tag path can produce far more than 100 candidates, so chunk the IN query
   // to stay under D1's bound-parameter limit.
   const candidateIds = [...new Set(results.matches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
-  const rcRows: { id: string; recall_count: number; importance_score: number }[] = [];
+  const rcRows: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number }[] = [];
   for (let i = 0; i < candidateIds.length; i += D1_MAX_BOUND_PARAMS) {
     const batch = candidateIds.slice(i, i + D1_MAX_BOUND_PARAMS);
     const rcPlaceholders = batch.map(() => "?").join(", ");
     const { results: rows } = await env.DB.prepare(
-      `SELECT id, recall_count, importance_score FROM entries WHERE id IN (${rcPlaceholders})`
-    ).bind(...batch).all() as { results: { id: string; recall_count: number; importance_score: number }[] };
+      `SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE id IN (${rcPlaceholders})`
+    ).bind(...batch).all() as { results: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number }[] };
     rcRows.push(...rows);
   }
   const recallCounts = new Map(rcRows.map(r => [r.id, r.recall_count ?? 0]));
   const importanceScores = new Map(rcRows.map(r => [r.id, r.importance_score ?? 0]));
+  const contradictionWins = new Map(rcRows.map(r => [r.id, r.contradiction_wins ?? 0]));
+  const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
 
-  const reranked = rerankWithTimeDecay(results.matches as VectorizeMatch[], recallCounts, importanceScores, queryTags);
+  const reranked = rerankWithTimeDecay(results.matches as VectorizeMatch[], recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses);
 
   const seen = new Set<string>();
   const deduped = reranked.filter((m) => {
@@ -1323,10 +1345,25 @@ export async function captureEntry(
       const draftTags = finalTags.filter(t => t !== "contradiction-resolved");
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
         .bind(JSON.stringify(withStatus(draftTags, "draft")), id).run();
+      // Record the outcome: canonical incumbent survived (win), new draft lost (loss).
+      // Non-fatal — a failed count update must not abort capture.
+      try {
+        await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
+        await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
+      } catch (e) {
+        console.error("Contradiction count update failed (non-fatal):", e);
+      }
       return { status: "contradiction_protected", id, canonicalId: conflictId, reason: contradiction.reason };
     }
 
-    // Non-canonical loser: deprecate (keep row for audit) instead of hard-delete.
+    // Non-canonical loser: the new entry wins; the incumbent loses and is deprecated
+    // (row kept for audit). Record the outcome before deprecating. Non-fatal.
+    try {
+      await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
+      await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
+    } catch (e) {
+      console.error("Contradiction count update failed (non-fatal):", e);
+    }
     try {
       await deprecateEntry(conflictId, env);
     } catch (e) {
