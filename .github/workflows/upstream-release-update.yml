@@ -113,6 +113,7 @@ jobs:
         run: git push --force-with-lease origin "${{ steps.release.outputs.branch_name }}"
 
       - name: Open or update pull request
+        id: pull_request
         if: steps.update.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -134,6 +135,8 @@ jobs:
           Checks run:
           - npm run typecheck
           - npm run test
+
+          This PR is merged automatically after the update branch passes checks.
           BODY
           )"
 
@@ -141,10 +144,22 @@ jobs:
             gh pr edit "$existing_pr" \
               --title "Update from upstream release ${{ steps.release.outputs.tag_name }}" \
               --body "$body"
+            pr_number="$existing_pr"
           else
-            gh pr create \
+            pr_url="$(gh pr create \
               --base main \
               --head "${{ steps.release.outputs.branch_name }}" \
               --title "Update from upstream release ${{ steps.release.outputs.tag_name }}" \
-              --body "$body"
+              --body "$body")"
+            pr_number="$(gh pr view "$pr_url" --json number --jq '.number')"
           fi
+
+          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge update pull request
+        if: steps.update.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr merge "${{ steps.pull_request.outputs.pr_number }}" --merge --delete-branch
