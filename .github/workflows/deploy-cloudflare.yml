@@ -1,0 +1,104 @@
+name: Deploy Cloudflare Worker
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Write deploy Wrangler config
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          OAUTH_KV_NAMESPACE_ID: ${{ secrets.OAUTH_KV_NAMESPACE_ID }}
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in CLOUDFLARE_ACCOUNT_ID D1_DATABASE_ID OAUTH_KV_NAMESPACE_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required GitHub secret: ${name}"
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          cat > wrangler.deploy.toml <<EOF
+          name = "second-brain"
+          main = "src/index.ts"
+          account_id = "${CLOUDFLARE_ACCOUNT_ID}"
+          compatibility_date = "2024-11-01"
+          compatibility_flags = ["nodejs_compat"]
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "second-brain-db"
+          database_id = "${D1_DATABASE_ID}"
+
+          [[vectorize]]
+          binding = "VECTORIZE"
+          index_name = "second-brain-vectors"
+          dimensions = 384
+          metric = "cosine"
+
+          [ai]
+          binding = "AI"
+
+          [[kv_namespaces]]
+          binding = "OAUTH_KV"
+          id = "${OAUTH_KV_NAMESPACE_ID}"
+
+          [vars]
+          VECTORIZE_GRACE_MS = "300000"
+
+          [assets]
+          directory = "./public"
+
+          [triggers]
+          crons = ["0 1 * * *"]
+          EOF
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "::error::Missing required GitHub secret: CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+
+          npx wrangler deploy --config wrangler.deploy.toml
