@@ -38,6 +38,27 @@ const DUPLICATE_FLAG_THRESHOLD = 0.85;
 const CANDIDATE_SCORE_THRESHOLD = 0.45;
 const TAG_BOOST_STEP = 0.15;
 const TAG_BOOST_MAX = 1.5;
+// Each net contradiction (win or loss) shifts a memory's effective importance by
+// log1p(|net|) * this step, clamped to the [1,5] importance band. Tunable.
+const CONTRADICTION_IMPORTANCE_STEP = 1.0;
+
+// ─── Compression eligibility ──────────────────────────────────────────────────
+// An entry is eligible for nightly digest compression only if it's low-importance,
+// not proven-useful by recall, and not a contradiction survivor. Strictly more
+// protective than the old `importance_score < 4` filter — it can only exempt MORE.
+export const COMPRESSION_IMPORTANCE_THRESHOLD = 4;   // importance >= this → protected
+export const COMPRESSION_MIN_RECALL = 2;             // recalled >= this many times → protected
+export const COMPRESSION_MIN_AGE_MS = 60 * 86400000; // entries with fewer than COMPRESSION_MIN_RECALL recalls protected until this old (60 days)
+
+// Returns a SQL boolean fragment for "this entry is eligible for compression".
+// Contains exactly one `?` placeholder — bind `Date.now() - COMPRESSION_MIN_AGE_MS`.
+// columnPrefix: "" for bare columns (compressTag), "entries." for json_each-joined queries.
+export function compressionEligibilitySql(columnPrefix = ""): string {
+  const p = columnPrefix;
+  return `(${p}importance_score IS NULL OR ${p}importance_score < ${COMPRESSION_IMPORTANCE_THRESHOLD})
+      AND (${p}recall_count = 0 OR (${p}recall_count < ${COMPRESSION_MIN_RECALL} AND ${p}created_at < ?))
+      AND (${p}contradiction_wins IS NULL OR ${p}contradiction_wins = 0)`;
+}
 
 // ─── Model constants ──────────────────────────────────────────────────────────
 
@@ -65,6 +86,16 @@ const VECTORIZE_TOP_K_MULTIPLIER = 3;
 const VECTORIZE_GET_BY_IDS_BATCH = 20;
 // D1 allows at most 100 bound parameters per query
 const D1_MAX_BOUND_PARAMS = 100;
+
+// ─── Hybrid recall (keyword + semantic fusion) ─────────────────────────────────
+const RRF_K = 60;                    // Reciprocal Rank Fusion dampening constant
+const KEYWORD_CANDIDATE_LIMIT = 100; // max rows the LIKE keyword query scans
+const KEYWORD_MIN_TOKEN_LEN = 2;     // ignore 1-char tokens
+const KEYWORD_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",
+  "i", "me", "my", "we", "you", "it", "this", "that", "these", "those", "with", "about", "from", "at", "as", "by",
+  "do", "did", "does", "what", "when", "where", "who", "whom", "how", "why", "which",
+]);
 
 // ─── Memory status layer (issue #119) ──────────────────────────────────────────
 // Status lives as a reserved tag (e.g. "status:canonical") on entries.tags — no
@@ -223,6 +254,8 @@ async function initializeDatabase(env: Env): Promise<void> {
   for (const alter of [
     `ALTER TABLE entries ADD COLUMN recall_count INTEGER DEFAULT 0`,
     `ALTER TABLE entries ADD COLUMN importance_score INTEGER DEFAULT 0`,
+    `ALTER TABLE entries ADD COLUMN contradiction_wins INTEGER DEFAULT 0`,
+    `ALTER TABLE entries ADD COLUMN contradiction_losses INTEGER DEFAULT 0`,
   ]) {
     try { await env.DB.exec(alter); } catch { /* column already exists — no-op */ }
   }
@@ -455,7 +488,9 @@ export function rerankWithTimeDecay(
   matches: VectorizeMatch[],
   recallCounts: Map<string, number> = new Map(),
   importanceScores: Map<string, number> = new Map(),
-  queryTags: string[] = []
+  queryTags: string[] = [],
+  contradictionWins: Map<string, number> = new Map(),
+  contradictionLosses: Map<string, number> = new Map()
 ): VectorizeMatch[] {
   const now = Date.now();
 
@@ -479,10 +514,23 @@ export function rerankWithTimeDecay(
       const appendPenalty = isShortAppend ? 0.2 : 1.0;
       const rolledUpPenalty = tags.includes("rolled-up") ? 0.4 : 1.0;
 
-      // importance_score 0 = unscored (neutral). 1–5 scales from 0.88 → 1.20.
-      // Lets high-importance memories surface above the recency cap without dominating.
+      // Effective importance = classifier score adjusted by net contradiction history.
+      // Survivors (net wins) rise toward 5; repeatedly-contradicted memories (net losses)
+      // fall toward 1. log1p gives diminishing returns; clamp keeps the effect inside the
+      // existing 0.88–1.20 importance band. The stored importance_score is never mutated.
       const imp = importanceScores.get(parentId) ?? 0;
-      const importanceMultiplier = imp === 0 ? 1.0 : 0.8 + (imp / 5) * 0.4;
+      const wins = contradictionWins.get(parentId) ?? 0;
+      const losses = contradictionLosses.get(parentId) ?? 0;
+      const net = wins - losses;
+      let importanceMultiplier: number;
+      if (imp === 0 && net === 0) {
+        importanceMultiplier = 1.0; // unscored and never contested — unchanged baseline
+      } else {
+        const base = imp === 0 ? 3 : imp; // unscored-but-contested → neutral midpoint
+        const adj = Math.sign(net) * Math.log1p(Math.abs(net)) * CONTRADICTION_IMPORTANCE_STEP;
+        const effectiveImp = Math.max(1, Math.min(5, base + adj));
+        importanceMultiplier = 0.8 + (effectiveImp / 5) * 0.4;
+      }
 
       // Tag boost: applied outside the recency ≤1.0 cap so a tag-relevant memory can
       // surface above a marginally-closer but irrelevant one.
@@ -825,14 +873,19 @@ export async function synthesizeInsight(
     .map((r, i) => `[${i + 1}] ID: ${r.id}\n${r.content}`)
     .join("\n\n");
 
-  const prompt = `You are a second brain assistant. Given the user's query and their relevant stored memories, synthesize what they most need to know. Be specific and concise.
+  const prompt = `You are a second brain assistant. Summarize what the user's stored memories below say in relation to their query. Base the insight ONLY on these memories.
 
 Query: "${query}"
 
-Relevant memories:
+Memories:
 ${memoriesList}
 
-Provide a brief insight (2-4 sentences) focused on what's most relevant to this query.`;
+Rules:
+- Use ONLY the information in the memories above. Do not add, infer, guess, or speculate, and do not use hedging language like "might" or "it seems".
+- These memories are a retrieved subset, not the user's full memory store. Never say that information is missing, unavailable, or does not exist.
+- If the memories don't address the query, briefly state only what they do contain.
+
+Write a brief insight (2-4 sentences).`;
 
   let insight = "";
   try {
@@ -943,6 +996,14 @@ export async function compressTag(
   env: Env,
   ctx: ExecutionContext
 ): Promise<{ synthesizedId: string | null; entriesUsed: number; text: string }> {
+  // Reserved/namespaced tags (kind:*, status:*) describe a memory's type/lifecycle,
+  // not a topic — digesting them would blend unrelated memories (and could compress
+  // protected/canonical ones). Never compress by them. This also guards /digest and
+  // the web UI Compress button, not just the nightly cron.
+  if (tag.startsWith(STATUS_PREFIX) || tag.startsWith(KIND_PREFIX)) {
+    return { synthesizedId: null, entriesUsed: 0, text: "" };
+  }
+
   const recentSynth = await env.DB.prepare(`
     SELECT id FROM entries
     WHERE tags LIKE '%"synthesized"%'
@@ -962,10 +1023,10 @@ export async function compressTag(
       AND tags NOT LIKE '%"synthesized"%'
       AND tags NOT LIKE '%"auto-pattern"%'
       AND tags NOT LIKE '%"rolled-up"%'
-      AND (importance_score IS NULL OR importance_score < 4)
+      AND ${compressionEligibilitySql()}
     ORDER BY created_at DESC
     LIMIT 50
-  `).bind(`%"${tag}"%`).all();
+  `).bind(`%"${tag}"%`, Date.now() - COMPRESSION_MIN_AGE_MS).all();
 
   if (rawEntries.length < 10) {
     return { synthesizedId: null, entriesUsed: 0, text: "" };
@@ -1002,14 +1063,16 @@ async function runNightlyCompression(env: Env, ctx: ExecutionContext): Promise<v
     SELECT value as tag, COUNT(*) as count
     FROM entries, json_each(entries.tags)
     WHERE value NOT IN ('synthesized', 'auto-pattern', 'duplicate-candidate', 'contradiction-resolved', 'rolled-up')
+      AND value NOT LIKE 'status:%'
+      AND value NOT LIKE 'kind:%'
       AND entries.tags NOT LIKE '%"rolled-up"%'
       AND entries.tags NOT LIKE '%"synthesized"%'
       AND entries.tags NOT LIKE '%"auto-pattern"%'
-      AND (entries.importance_score IS NULL OR entries.importance_score < 4)
+      AND ${compressionEligibilitySql("entries.")}
     GROUP BY value
     HAVING count > 10
     ORDER BY count DESC
-  `).all();
+  `).bind(Date.now() - COMPRESSION_MIN_AGE_MS).all();
 
   for (const row of results) {
     const tag = row.tag as string;
@@ -1041,6 +1104,85 @@ export interface RecallSearchResult {
   insight: string;
 }
 
+// ─── Hybrid recall: keyword search + Reciprocal Rank Fusion ────────────────────
+
+interface KeywordRow { id: string; content: string; tags: string; source: string; created_at: number; }
+
+// Split a query into lexical search tokens: lowercase, strip surrounding punctuation,
+// drop stopwords / 1-char tokens, and remove SQL LIKE wildcards so each token is a literal
+// substring. Identifier-shaped tokens (e.g. "v1.9", "#149") are preserved intact.
+export function tokenizeQuery(query: string): string[] {
+  return [...new Set(
+    query.toLowerCase().split(/\s+/)
+      .map(t => t.replace(/^[^\w#.]+|[^\w#.]+$/g, "").replace(/[%_]/g, ""))
+      .filter(t => t.length >= KEYWORD_MIN_TOKEN_LEN && !KEYWORD_STOPWORDS.has(t))
+  )];
+}
+
+// Keyword candidates: entries whose content contains any query token, bounded by
+// KEYWORD_CANDIDATE_LIMIT. Relevance ranking happens in fuseDenseAndKeyword.
+async function keywordSearch(tokens: string[], env: Env): Promise<KeywordRow[]> {
+  if (!tokens.length) return [];
+  const where = tokens.map(() => "content LIKE ?").join(" OR ");
+  const { results } = await env.DB.prepare(
+    `SELECT id, content, tags, source, created_at FROM entries WHERE ${where} ORDER BY created_at DESC LIMIT ?`
+  ).bind(...tokens.map(t => `%${t}%`), KEYWORD_CANDIDATE_LIMIT).all();
+  return results as unknown as KeywordRow[];
+}
+
+// Reciprocal Rank Fusion. Dense candidates contribute 1/(k+rank); keyword candidates
+// contribute weight/(k+rank), where weight = number of distinct query tokens the entry
+// matched — so an exact multi-token/identifier hit outweighs entries that merely share a
+// common word, and an entry present in BOTH lists accumulates from both.
+export function rrfFuse(
+  denseRanked: string[],
+  keywordRanked: { id: string; weight: number }[],
+  k = RRF_K
+): Map<string, number> {
+  const scores = new Map<string, number>();
+  denseRanked.forEach((id, i) => scores.set(id, (scores.get(id) ?? 0) + 1 / (k + i)));
+  keywordRanked.forEach((e, i) => scores.set(e.id, (scores.get(e.id) ?? 0) + e.weight / (k + i)));
+  return scores;
+}
+
+// Fuse a dense match list (Vectorize chunks, or tag-path cosine scores) with keyword rows
+// into one per-parent candidate list scored by RRF, ready for rerankWithTimeDecay. With
+// allowKeywordOnly=false (tag path) keyword is a re-ranking signal only — it never
+// introduces an entry the dense pass didn't already surface.
+function fuseDenseAndKeyword(
+  denseMatches: VectorizeMatch[],
+  keywordRows: KeywordRow[],
+  tokens: string[],
+  allowKeywordOnly: boolean
+): VectorizeMatch[] {
+  const denseByParent = new Map<string, VectorizeMatch>();
+  for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
+    const pid = ((m.metadata as any)?.parentId ?? m.id) as string;
+    if (!denseByParent.has(pid)) denseByParent.set(pid, m);
+  }
+  const denseRanked = [...denseByParent.keys()];
+
+  const keywordRanked = keywordRows
+    .map(r => ({ row: r, weight: tokens.reduce((n, t) => n + (r.content.toLowerCase().includes(t) ? 1 : 0), 0) }))
+    .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)))
+    .sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
+
+  const fused = rrfFuse(denseRanked, keywordRanked.map(x => ({ id: x.row.id, weight: x.weight })));
+  const keywordRowById = new Map(keywordRows.map(r => [r.id, r]));
+
+  const out: VectorizeMatch[] = [];
+  for (const [pid, score] of fused) {
+    const dm = denseByParent.get(pid);
+    if (dm) {
+      out.push({ id: dm.id, score, metadata: dm.metadata });
+    } else {
+      const r = keywordRowById.get(pid)!;
+      out.push({ id: pid, score, metadata: { parentId: pid, created_at: r.created_at, tags: JSON.parse(r.tags ?? "[]"), content: r.content, source: r.source } });
+    }
+  }
+  return out;
+}
+
 export async function recallEntries(
   params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind },
   env: Env,
@@ -1058,11 +1200,13 @@ export async function recallEntries(
     embedQuery = parsed.cleanQuery;
   }
 
+  const tokens = tokenizeQuery(embedQuery);
   const [values, queryTags] = await Promise.all([
     embed(embedQuery, env),
     inferQueryTags(embedQuery, env),
   ]);
 
+  let keywordRows: KeywordRow[] = [];
   let results: { matches: VectorizeMatch[] };
   if (tag) {
     // Tag path: score the tag's own vectors directly. An unconstrained Vectorize
@@ -1070,9 +1214,10 @@ export async function recallEntries(
     // semantic rank falls outside the top 50 (issue #141). D1 is the source of
     // truth for tags and already stores each entry's vector_ids.
     const { results: tagRows } = await env.DB.prepare(
-      `SELECT id, vector_ids FROM entries WHERE tags LIKE ?`
+      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE tags LIKE ?`
     ).bind(`%"${tag}"%`).all();
     if (!tagRows.length) return { matches: [], insight: "" };
+    keywordRows = tagRows as unknown as KeywordRow[];
 
     const vectorIds = [...new Set(
       (tagRows as any[]).flatMap(r => JSON.parse((r.vector_ids as string) ?? "[]") as string[])
@@ -1092,12 +1237,15 @@ export async function recallEntries(
       })) as VectorizeMatch[],
     };
   } else {
-    // Cloudflare Vectorize caps topK at 50 when returnMetadata="all" (error 40025)
+    // Cloudflare Vectorize caps topK at 50 when returnMetadata="all" (error 40025).
+    // Run the keyword search in parallel with the dense query.
     const vectorizeTopK = Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, 50);
-    results = await env.VECTORIZE.query(values, {
-      topK: vectorizeTopK,
-      returnMetadata: "all",
-    });
+    const [denseResults, kwRows] = await Promise.all([
+      env.VECTORIZE.query(values, { topK: vectorizeTopK, returnMetadata: "all" }),
+      keywordSearch(tokens, env),
+    ]);
+    results = denseResults;
+    keywordRows = kwRows;
 
     if (results.matches.length && results.matches[0].score < DUPLICATE_FLAG_THRESHOLD) {
       results = await env.VECTORIZE.query(values, {
@@ -1107,25 +1255,31 @@ export async function recallEntries(
     }
   }
 
-  if (!results.matches.length) return { matches: [], insight: "" };
+  // Always-on hybrid retrieval: fuse dense + keyword candidates via RRF. On the tag path
+  // keyword is a re-ranking signal only (allowKeywordOnly=false); on the default path it can
+  // also surface exact-identifier matches the dense top-K missed entirely.
+  const fusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !tag);
+  if (!fusedMatches.length) return { matches: [], insight: "" };
 
   // Fetch recall_count and importance_score for all candidates to use in scoring.
   // The tag path can produce far more than 100 candidates, so chunk the IN query
   // to stay under D1's bound-parameter limit.
-  const candidateIds = [...new Set(results.matches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
-  const rcRows: { id: string; recall_count: number; importance_score: number }[] = [];
+  const candidateIds = [...new Set(fusedMatches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
+  const rcRows: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number }[] = [];
   for (let i = 0; i < candidateIds.length; i += D1_MAX_BOUND_PARAMS) {
     const batch = candidateIds.slice(i, i + D1_MAX_BOUND_PARAMS);
     const rcPlaceholders = batch.map(() => "?").join(", ");
     const { results: rows } = await env.DB.prepare(
-      `SELECT id, recall_count, importance_score FROM entries WHERE id IN (${rcPlaceholders})`
-    ).bind(...batch).all() as { results: { id: string; recall_count: number; importance_score: number }[] };
+      `SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE id IN (${rcPlaceholders})`
+    ).bind(...batch).all() as { results: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number }[] };
     rcRows.push(...rows);
   }
   const recallCounts = new Map(rcRows.map(r => [r.id, r.recall_count ?? 0]));
   const importanceScores = new Map(rcRows.map(r => [r.id, r.importance_score ?? 0]));
+  const contradictionWins = new Map(rcRows.map(r => [r.id, r.contradiction_wins ?? 0]));
+  const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
 
-  const reranked = rerankWithTimeDecay(results.matches as VectorizeMatch[], recallCounts, importanceScores, queryTags);
+  const reranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses);
 
   const seen = new Set<string>();
   const deduped = reranked.filter((m) => {
@@ -1185,6 +1339,11 @@ export async function recallEntries(
       isUpdate,
     }];
   });
+
+  // Normalize fused scores to 0–1 (top match = 1.0) so the displayed match % is a clean,
+  // monotonically-decreasing scale rather than raw RRF values.
+  const maxScore = matches.reduce((mx, m) => Math.max(mx, m.score), 0);
+  if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;
 
   const insight = d1Rows.length > 1
     ? await synthesizeInsight(embedQuery, d1Rows as { id: string; content: string }[], env)
@@ -1323,10 +1482,25 @@ export async function captureEntry(
       const draftTags = finalTags.filter(t => t !== "contradiction-resolved");
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
         .bind(JSON.stringify(withStatus(draftTags, "draft")), id).run();
+      // Record the outcome: canonical incumbent survived (win), new draft lost (loss).
+      // Non-fatal — a failed count update must not abort capture.
+      try {
+        await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
+        await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
+      } catch (e) {
+        console.error("Contradiction count update failed (non-fatal):", e);
+      }
       return { status: "contradiction_protected", id, canonicalId: conflictId, reason: contradiction.reason };
     }
 
-    // Non-canonical loser: deprecate (keep row for audit) instead of hard-delete.
+    // Non-canonical loser: the new entry wins; the incumbent loses and is deprecated
+    // (row kept for audit). Record the outcome before deprecating. Non-fatal.
+    try {
+      await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
+      await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
+    } catch (e) {
+      console.error("Contradiction count update failed (non-fatal):", e);
+    }
     try {
       await deprecateEntry(conflictId, env);
     } catch (e) {
@@ -1879,15 +2053,17 @@ const defaultHandler = {
           SELECT value as tag, COUNT(*) as count
           FROM entries, json_each(entries.tags)
           WHERE value NOT IN ('synthesized', 'auto-pattern', 'duplicate-candidate', 'contradiction-resolved', 'rolled-up')
+            AND value NOT LIKE 'status:%'
+            AND value NOT LIKE 'kind:%'
             AND entries.tags NOT LIKE '%"rolled-up"%'
             AND entries.tags NOT LIKE '%"synthesized"%'
             AND entries.tags NOT LIKE '%"auto-pattern"%'
-            AND (entries.importance_score IS NULL OR entries.importance_score < 4)
+            AND ${compressionEligibilitySql("entries.")}
           GROUP BY value
           HAVING count > 10
           ORDER BY count DESC
           LIMIT 10
-        `).all(),
+        `).bind(Date.now() - COMPRESSION_MIN_AGE_MS).all(),
       ]);
 
       const cutoff = Date.now() - 86400000;

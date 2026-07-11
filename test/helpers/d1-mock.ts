@@ -1,3 +1,5 @@
+import { COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_MIN_RECALL } from "../../src/index";
+
 export class D1Mock {
   entries: any[] = [];
 
@@ -9,7 +11,7 @@ export class D1Mock {
       async run() {
         if (s.startsWith("INSERT INTO entries")) {
           const [id, content, tags, source, created_at, vector_ids] = args;
-          db.entries.push({ id, content, tags, source, created_at, vector_ids, recall_count: 0, importance_score: 0 });
+          db.entries.push({ id, content, tags, source, created_at, vector_ids, recall_count: 0, importance_score: 0, contradiction_wins: 0, contradiction_losses: 0 });
           return { meta: { changes: 1 } };
         }
         if (s.startsWith("UPDATE entries SET content = ?, vector_ids")) {
@@ -67,6 +69,18 @@ export class D1Mock {
             if (!tags.includes(tag)) tags.push(tag);
             row.tags = JSON.stringify(tags);
           }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET contradiction_wins = contradiction_wins + 1")) {
+          const [id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) row.contradiction_wins = (row.contradiction_wins ?? 0) + 1;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET contradiction_losses = contradiction_losses + 1")) {
+          const [id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) row.contradiction_losses = (row.contradiction_losses ?? 0) + 1;
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET recall_count")) {
@@ -137,18 +151,33 @@ export class D1Mock {
         return null;
       },
       async all() {
-        if (s === "SELECT id FROM entries WHERE tags LIKE ?" || s === "SELECT id, vector_ids FROM entries WHERE tags LIKE ?") {
+        if (
+          s === "SELECT id FROM entries WHERE tags LIKE ?" ||
+          s === "SELECT id, vector_ids FROM entries WHERE tags LIKE ?" ||
+          s === "SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE tags LIKE ?"
+        ) {
           const pattern = String(args[0]);
           const tag = pattern.replace(/%"/g, "").replace(/"%/g, "");
           const results = db.entries
             .filter((e: any) => (JSON.parse(e.tags ?? "[]") as string[]).includes(tag))
-            .map((e: any) => ({ id: e.id, vector_ids: e.vector_ids ?? "[]" }));
+            .map((e: any) => ({ id: e.id, vector_ids: e.vector_ids ?? "[]", content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, recall_count, importance_score FROM entries")) {
+        if (s.includes("WHERE content LIKE") && s.includes("ORDER BY created_at DESC LIMIT")) {
+          // Keyword (hybrid recall) query: content LIKE ? OR content LIKE ? ... LIMIT ?
+          const limit = Number(args[args.length - 1]);
+          const patterns = args.slice(0, -1).map((a: any) => String(a).replace(/^%/, "").replace(/%$/, "").toLowerCase());
+          const rows = [...db.entries]
+            .filter((e: any) => patterns.some((p: string) => String(e.content).toLowerCase().includes(p)))
+            .sort((a: any, b: any) => b.created_at - a.created_at)
+            .slice(0, limit)
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
+          return { results: rows };
+        }
+        if (s.includes("SELECT id, recall_count, importance_score") && s.includes("WHERE id IN")) {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, recall_count: e.recall_count ?? 0, importance_score: e.importance_score ?? 0 }));
+            .map((e: any) => ({ id: e.id, recall_count: e.recall_count ?? 0, importance_score: e.importance_score ?? 0, contradiction_wins: e.contradiction_wins ?? 0, contradiction_losses: e.contradiction_losses ?? 0 }));
           return { results };
         }
         if (s.includes("FROM entries WHERE id IN") && s.includes("tags NOT LIKE")) {
@@ -179,19 +208,21 @@ export class D1Mock {
           return { results };
         }
         if (s.includes("SELECT id, content FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
-          // compressTag raw entries query — filter by tag, exclude system tags and high importance
+          // compressTag raw entries query — tag match, system-tag exclusion, and the
+          // recall/age/contradiction eligibility predicate (cutoff is the 2nd bind param).
           const tagPattern = args[0] as string;
           const tag = tagPattern.replace(/%"/g, "").replace(/"%/g, "");
+          const cutoff = Number(args[1]);
           const results = [...db.entries]
             .filter((e: any) => {
               const tags: string[] = JSON.parse(e.tags ?? "[]");
-              return (
-                tags.includes(tag) &&
-                !tags.includes("synthesized") &&
-                !tags.includes("auto-pattern") &&
-                !tags.includes("rolled-up") &&
-                (e.importance_score == null || e.importance_score < 4)
-              );
+              if (!tags.includes(tag)) return false;
+              if (tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("rolled-up")) return false;
+              if (!(e.importance_score == null || e.importance_score < COMPRESSION_IMPORTANCE_THRESHOLD)) return false;
+              const rc = e.recall_count; // NULL/undefined → recall clause is falsy → protected (matches SQL)
+              if (!(rc === 0 || (rc < COMPRESSION_MIN_RECALL && e.created_at < cutoff))) return false;
+              if (!(e.contradiction_wins == null || e.contradiction_wins === 0)) return false;
+              return true;
             })
             .sort((a: any, b: any) => b.created_at - a.created_at)
             .slice(0, 50)
@@ -202,6 +233,31 @@ export class D1Mock {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
             .map((e: any) => ({ id: e.id, content: e.content }));
+          return { results };
+        }
+        if (s.includes("json_each(entries.tags)") && s.includes("HAVING count > 10")) {
+          // Digest-candidate query (nightly compression + /stats): per-tag count of
+          // entries that pass the compression eligibility predicate. Cutoff is args[0].
+          const cutoff = Number(args[0]);
+          const SYSTEM = ["synthesized", "auto-pattern", "duplicate-candidate", "contradiction-resolved", "rolled-up"];
+          const counts = new Map<string, number>();
+          for (const e of db.entries as any[]) {
+            const tags: string[] = JSON.parse(e.tags ?? "[]");
+            if (tags.includes("rolled-up") || tags.includes("synthesized") || tags.includes("auto-pattern")) continue;
+            if (!(e.importance_score == null || e.importance_score < COMPRESSION_IMPORTANCE_THRESHOLD)) continue;
+            const rc = e.recall_count; // NULL/undefined → recall clause is falsy → protected (matches SQL)
+            if (!(rc === 0 || (rc < COMPRESSION_MIN_RECALL && e.created_at < cutoff))) continue;
+            if (!(e.contradiction_wins == null || e.contradiction_wins === 0)) continue;
+            for (const t of tags) {
+              if (SYSTEM.includes(t)) continue;
+              if (t.startsWith("status:") || t.startsWith("kind:")) continue;
+              counts.set(t, (counts.get(t) ?? 0) + 1);
+            }
+          }
+          const results = [...counts.entries()]
+            .filter(([, c]) => c > 10)
+            .sort((a, b) => b[1] - a[1])
+            .map(([tag, count]) => ({ tag, count }));
           return { results };
         }
         if (s.includes("json_each(entries.tags)") && s.includes("GROUP BY value")) {

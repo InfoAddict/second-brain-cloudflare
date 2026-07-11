@@ -129,3 +129,53 @@ describe("GET /stats — vectorization fields", () => {
     expect(data.vectorize_grace_ms).toBe(60000);
   });
 });
+
+describe("GET /stats — digest candidates", () => {
+  let env: Env;
+  let db: D1Mock;
+
+  beforeEach(() => {
+    db = makeTestDb();
+    env = makeTestEnv(db);
+  });
+
+  function compressible(id: string, tag: string) {
+    return { id, content: `c ${id}`, tags: JSON.stringify([tag]), source: "api", created_at: Date.now(), vector_ids: "[]", recall_count: 0, importance_score: 0, contradiction_wins: 0 };
+  }
+
+  it("reports a tag with >10 eligible entries as a digest candidate", async () => {
+    for (let i = 0; i < 11; i++) db.entries.push(compressible(`e-${i}`, "work"));
+    const res = await worker.fetch(req("GET", "/stats"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.digest_candidates.some((c: any) => c.tag === "work" && c.count === 11)).toBe(true);
+  });
+
+  it("does not report a tag whose entries are all recall-protected", async () => {
+    for (let i = 0; i < 11; i++) db.entries.push({ ...compressible(`e-${i}`, "work"), recall_count: 5 });
+    const res = await worker.fetch(req("GET", "/stats"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.digest_candidates.some((c: any) => c.tag === "work")).toBe(false);
+  });
+
+  it("does not report a tag whose entries are all contradiction survivors", async () => {
+    for (let i = 0; i < 11; i++) db.entries.push({ ...compressible(`e-${i}`, "work"), contradiction_wins: 1 });
+    const res = await worker.fetch(req("GET", "/stats"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.digest_candidates.some((c: any) => c.tag === "work")).toBe(false);
+  });
+
+  it("excludes reserved namespaced tags (kind:* / status:*) from digest candidates", async () => {
+    for (let i = 0; i < 12; i++) {
+      db.entries.push({
+        ...compressible(`e-${i}`, "work"),
+        tags: JSON.stringify(["work", "kind:semantic", "status:canonical"]),
+      });
+    }
+    const res = await worker.fetch(req("GET", "/stats"), env, ctx);
+    const data = await res.json() as any;
+    const tags = data.digest_candidates.map((c: any) => c.tag);
+    expect(tags).toContain("work");                  // topical tag still a candidate
+    expect(tags).not.toContain("kind:semantic");     // namespaced excluded
+    expect(tags).not.toContain("status:canonical");  // namespaced excluded
+  });
+});
