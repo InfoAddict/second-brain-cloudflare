@@ -1,6 +1,26 @@
 import { describe, it, expect } from "vitest";
 
-const { parseRecallResult, escHtml, escAttr, toDateStr } = require("../../public/utils.js");
+const { parseRecallResult, escHtml, escAttr, toDateStr, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
+
+// Minimal fake document so the banner DOM glue can be tested in the node
+// environment without jsdom. appendChild registers the element by id so a later
+// getElementById finds it; remove() unregisters it.
+function makeFakeDoc() {
+  const byId: Record<string, any> = {};
+  const doc: any = {
+    body: { style: {} as Record<string, string> },
+    getElementById: (id: string) => byId[id] || null,
+    createElement: () => ({
+      id: "",
+      style: {} as Record<string, string>,
+      innerHTML: "",
+      offsetHeight: 24,
+      remove() { delete byId[this.id]; },
+    }),
+  };
+  doc.body.appendChild = (el: any) => { byId[el.id] = el; };
+  return doc;
+}
 
 describe("parseRecallResult", () => {
   it("parses a JSON array of entries", () => {
@@ -248,5 +268,82 @@ describe("toDateStr", () => {
   it("zero-pads December correctly", () => {
     const d = new Date(2026, 11, 31); // December 31 2026
     expect(toDateStr(d)).toBe("2026-12-31");
+  });
+});
+
+describe("vectorizeHealthBanner", () => {
+  it("returns null when vectorize is healthy", () => {
+    expect(vectorizeHealthBanner({ ok: true, vectorize: { ok: true, indexName: "second-brain-vectors" } })).toBeNull();
+  });
+
+  it("returns null when health is null or undefined (no false alarm)", () => {
+    expect(vectorizeHealthBanner(null)).toBeNull();
+    expect(vectorizeHealthBanner(undefined)).toBeNull();
+  });
+
+  it("returns a title and fix command naming the index when it is missing", () => {
+    const b = vectorizeHealthBanner({ ok: false, vectorize: { ok: false, indexName: "second-brain-vectors", error: "index not found" } });
+    expect(b).not.toBeNull();
+    expect(b.title).toContain("second-brain-vectors");
+    expect(b.command).toBe("npx wrangler vectorize create second-brain-vectors --dimensions=384 --metric=cosine");
+    expect(b.gui).toContain("Vectorize Edit");
+  });
+
+  it("falls back to the default index name when indexName is absent", () => {
+    const b = vectorizeHealthBanner({ ok: false, vectorize: { ok: false } });
+    expect(b.command).toContain("second-brain-vectors");
+  });
+});
+
+describe("vectorizeBannerHtml", () => {
+  it("includes the title, command, and a How to fix expander", () => {
+    const html = vectorizeBannerHtml({ title: "Index missing", command: "npx wrangler create", gui: "grant permission" });
+    expect(html).toContain("Index missing");
+    expect(html).toContain("npx wrangler create");
+    expect(html).toContain("How to fix");
+    expect(html).toContain("grant permission");
+  });
+
+  it("escapes HTML in every interpolated field (XSS-safe)", () => {
+    const html = vectorizeBannerHtml({
+      title: 'idx "<img src=x onerror=alert(1)>"',
+      command: "a && b <script>",
+      gui: "grant & redeploy",
+    });
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("&amp;");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script>");
+  });
+});
+
+describe("syncVectorizeBanner", () => {
+  it("mounts the banner and offsets the body when a banner is given", () => {
+    const doc = makeFakeDoc();
+    const banner = vectorizeHealthBanner({ ok: false, vectorize: { ok: false, indexName: "second-brain-vectors" } });
+    const el = syncVectorizeBanner(doc, banner);
+    expect(el).not.toBeNull();
+    expect(doc.getElementById("vectorize-banner")).toBe(el);
+    expect(el.innerHTML).toContain("second-brain-vectors");
+    expect(doc.body.style.paddingTop).toBe("24px");
+  });
+
+  it("reuses the existing element and updates its content instead of recreating", () => {
+    const doc = makeFakeDoc();
+    const first = syncVectorizeBanner(doc, { title: "first", command: "c", gui: "g" });
+    const second = syncVectorizeBanner(doc, { title: "second", command: "c", gui: "g" });
+    expect(second).toBe(first);
+    expect(first.innerHTML).toContain("second");
+  });
+
+  it("removes the banner and clears the body offset when banner is null", () => {
+    const doc = makeFakeDoc();
+    syncVectorizeBanner(doc, { title: "t", command: "c", gui: "g" });
+    expect(doc.getElementById("vectorize-banner")).not.toBeNull();
+    const res = syncVectorizeBanner(doc, null);
+    expect(res).toBeNull();
+    expect(doc.getElementById("vectorize-banner")).toBeNull();
+    expect(doc.body.style.paddingTop).toBe("");
   });
 });

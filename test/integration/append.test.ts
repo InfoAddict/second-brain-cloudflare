@@ -29,6 +29,37 @@ describe("POST /append", () => {
     expect(res.status).toBe(400);
   });
 
+  it("auto-links the entry to a similar neighbor after appending (#16)", async () => {
+    db.entries.push({ id: "target", content: "Original note", tags: "[]", source: "api", created_at: 1, vector_ids: "[]" });
+    db.entries.push({ id: "neighbor", content: "Related memory", tags: "[]", source: "api", created_at: 1, vector_ids: "[]" });
+    env = makeTestEnv(db, {
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [{ id: "neighbor", score: 0.85, metadata: { parentId: "neighbor" } }] }),
+      }),
+    });
+
+    const res = await worker.fetch(req("POST", "/append", { body: { id: "target", addition: "New related detail" } }), env, ctx);
+    expect(res.status).toBe(200);
+
+    const e = db.edges.find((x: any) => x.type === "relates_to");
+    expect(e).toBeTruthy();
+    expect([e.source_id, e.target_id].sort()).toEqual(["neighbor", "target"]);
+    expect(e.provenance).toBe("inferred");
+  });
+
+  it("does not link a loosely-related neighbor below the threshold", async () => {
+    db.entries.push({ id: "target", content: "Original note", tags: "[]", source: "api", created_at: 1, vector_ids: "[]" });
+    env = makeTestEnv(db, {
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [{ id: "loose", score: 0.6, metadata: { parentId: "loose" } }] }),
+      }),
+    });
+
+    const res = await worker.fetch(req("POST", "/append", { body: { id: "target", addition: "New detail" } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(db.edges).toHaveLength(0);
+  });
+
   it("returns 404 for non-existent id", async () => {
     const res = await worker.fetch(req("POST", "/append", { body: { id: "no-such-id", addition: "update" } }), env, ctx);
     expect(res.status).toBe(404);

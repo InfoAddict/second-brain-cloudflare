@@ -4,3 +4,7 @@ node_modules/
 coverage/
 .wrangler/
 docs/
+.claude/
+.dev.vars
+.env
+worker-configuration.d.ts

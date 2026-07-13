@@ -87,6 +87,23 @@ describe("POST /forget", () => {
     expect(data.id).toBe("entry-1");
   });
 
+  it("cascade-deletes edges touching the forgotten entry", async () => {
+    db.entries.push({
+      id: "entry-1", content: "Some content", tags: "[]", source: "api", created_at: Date.now(), vector_ids: "[]",
+    });
+    db.edges.push(
+      { id: "e1", source_id: "entry-1", target_id: "other", type: "relates_to", weight: 0.5, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 },
+      { id: "e2", source_id: "another", target_id: "entry-1", type: "relates_to", weight: 0.5, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 },
+      { id: "e3", source_id: "x", target_id: "y", type: "relates_to", weight: 0.5, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 },
+    );
+
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "entry-1" } }), env, ctx);
+    expect(res.status).toBe(200);
+
+    // Edges with entry-1 as source OR target are removed; the unrelated edge survives — no dangling edges.
+    expect(db.edges.map((e: any) => e.id)).toEqual(["e3"]);
+  });
+
   it("is non-fatal when Vectorize delete fails", async () => {
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({

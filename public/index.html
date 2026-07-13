@@ -1472,6 +1472,7 @@
       #append-sheet,
       #edit-sheet,
       #menu-sheet,
+      #integrations-sheet,
       #view-sheet {
         display: none;
         position: fixed;
@@ -1490,6 +1491,7 @@
       #append-sheet.open,
       #edit-sheet.open,
       #menu-sheet.open,
+      #integrations-sheet.open,
       #view-sheet.open {
         display: flex;
         opacity: 1;
@@ -2010,6 +2012,84 @@
         margin-bottom: 10px;
       }
 
+      .digest-note a {
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid var(--accent-soft);
+      }
+
+      .digest-note a:hover {
+        border-bottom-color: var(--accent);
+      }
+
+      .integration-row {
+        padding: 2px 0;
+      }
+
+      .integration-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+      }
+
+      .integration-head i {
+        color: var(--accent);
+        font-size: 15px;
+      }
+
+      .integration-state {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text-tertiary);
+      }
+
+      .integration-state.connected {
+        color: var(--good);
+      }
+
+      .integration-connect-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .integration-connect-row input {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 10px;
+        background: transparent;
+        border: 0.5px solid var(--border-input);
+        border-radius: 9px;
+        font-size: 13px;
+        font-family: inherit;
+        color: var(--text-primary);
+        outline: none;
+      }
+
+      .integration-connect-row input:focus {
+        border-color: var(--accent);
+      }
+
+      .integration-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .digest-btn.danger {
+        color: var(--danger);
+        background: rgba(179, 38, 30, 0.08);
+      }
+
+      .integration-error {
+        font-size: 12px;
+        color: var(--danger);
+        margin-bottom: 6px;
+      }
+
       .digest-result {
         font-size: 12px;
         color: var(--text-secondary);
@@ -2185,7 +2265,6 @@
         }
 
         #main-panel {
-          max-width: 760px;
           margin: 0 auto;
           border-left: 0.5px solid var(--border);
           border-right: 0.5px solid var(--border);
@@ -2195,6 +2274,7 @@
         #append-sheet,
         #edit-sheet,
         #menu-sheet,
+        #integrations-sheet,
         #view-sheet {
           align-items: center;
           justify-content: center;
@@ -2297,6 +2377,7 @@
           <button class="sb-tab active" id="sb-tab-recall" onclick="switchTab('recall')"><i class="ti ti-search"></i><span>Recall</span></button>
           <button class="sb-tab" id="sb-tab-recent" onclick="switchTab('recent')"><i class="ti ti-clock"></i><span>Recent</span></button>
           <button class="sb-tab" id="sb-tab-remember" onclick="switchTab('remember')"><i class="ti ti-plus"></i><span>Remember</span></button>
+          <button class="sb-tab" id="sb-tab-graph" onclick="switchTab('graph')"><i class="ti ti-affiliate"></i><span>Graph</span></button>
         </nav>
         <div class="sb-footer">
           <button class="sb-footer-btn" onclick="openMenu()"><i class="ti ti-settings"></i><span>Settings</span></button>
@@ -2405,12 +2486,31 @@
               </div>
             </div>
           </div>
+
+          <div class="screen" id="screen-graph">
+            <div class="graph-toolbar">
+              <div class="graph-legend">
+                <span><i class="gl-dot" style="background: #b26641"></i>Knowledge</span>
+                <span><i class="gl-dot" style="background: #4a7c8c"></i>Events</span>
+                <span><i class="gl-dot" style="background: #9a958a"></i>Unsorted</span>
+              </div>
+              <div class="graph-controls">
+                <button class="graph-btn" onclick="graphZoom(0.8)" title="Zoom out"><i class="ti ti-minus"></i></button>
+                <button class="graph-btn" onclick="graphZoom(1.25)" title="Zoom in"><i class="ti ti-plus"></i></button>
+                <button class="graph-btn" onclick="graphFit()" title="Fit to view"><i class="ti ti-maximize"></i></button>
+                <button class="graph-btn" onclick="loadGraph()" title="Refresh"><i class="ti ti-refresh"></i></button>
+              </div>
+            </div>
+            <canvas id="graph-canvas"></canvas>
+            <div class="graph-empty" id="graph-empty" style="display: none">No connections yet — link memories, or let them auto-connect as you add more.</div>
+          </div>
         </div>
 
         <div id="navbar">
           <button class="nav-tab active" id="tab-recall" onclick="switchTab('recall')"><i class="ti ti-search"></i><span>Recall</span></button>
           <button class="nav-tab" id="tab-recent" onclick="switchTab('recent')"><i class="ti ti-clock"></i><span>Recent</span></button>
           <button class="nav-tab" id="tab-remember" onclick="switchTab('remember')"><i class="ti ti-plus"></i><span>Remember</span></button>
+          <button class="nav-tab" id="tab-graph" onclick="switchTab('graph')"><i class="ti ti-affiliate"></i><span>Graph</span></button>
         </div>
       </div>
     </div>
@@ -2455,6 +2555,139 @@
       </div>
     </div>
 
+    <style>
+      #screen-graph {
+        padding: 0;
+      }
+      #screen-graph.active {
+        display: flex;
+        flex-direction: column;
+      }
+      .graph-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-input);
+      }
+      .graph-hint {
+        font-size: 12px;
+        color: var(--text-tertiary);
+      }
+      .graph-legend {
+        display: flex;
+        gap: 14px;
+        font-size: 11px;
+        color: var(--text-secondary);
+        flex-wrap: wrap;
+      }
+      .graph-legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .graph-legend .gl-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .graph-controls {
+        display: flex;
+        gap: 4px;
+      }
+      .graph-btn {
+        background: none;
+        border: 1px solid var(--border-input);
+        border-radius: 8px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-size: 15px;
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+      .graph-btn:hover {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      #graph-canvas {
+        flex: 1 1 auto;
+        width: 100%;
+        min-height: 320px;
+        display: block;
+        touch-action: none;
+        cursor: grab;
+      }
+      .graph-empty {
+        padding: 48px 24px;
+        text-align: center;
+        color: var(--text-tertiary);
+        font-size: 14px;
+      }
+      .view-related {
+        margin-top: 14px;
+        border-top: 1px solid var(--border-input);
+        padding-top: 12px;
+      }
+      .view-related-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-tertiary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
+      }
+      .related-item {
+        display: flex;
+        align-items: stretch;
+        width: 100%;
+        background: var(--accent-soft);
+        border-radius: 8px;
+        margin-bottom: 6px;
+        font-size: 13px;
+        line-height: 1.35;
+        color: var(--text-primary);
+      }
+      .related-open {
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+        background: none;
+        border: none;
+        padding: 8px 10px;
+        cursor: pointer;
+        font-size: inherit;
+        line-height: inherit;
+        color: inherit;
+        font-family: inherit;
+      }
+      .related-unlink {
+        flex-shrink: 0;
+        background: none;
+        border: none;
+        padding: 0 10px;
+        cursor: pointer;
+        color: var(--text-tertiary);
+        font-size: 14px;
+      }
+      .related-unlink:hover {
+        color: var(--danger);
+      }
+      .related-item:hover {
+        background: rgba(178, 102, 65, 0.16);
+      }
+      .related-type {
+        font-weight: 600;
+        color: var(--accent);
+        margin-right: 6px;
+      }
+    </style>
+
     <div id="view-sheet">
       <div class="view-inner">
         <div class="view-header">
@@ -2463,6 +2696,7 @@
         </div>
         <div class="view-content" id="view-content-text"></div>
         <div class="view-tags" id="view-tags-container"></div>
+        <div class="view-related" id="view-related" style="display: none"></div>
         <div class="view-actions">
           <button class="btn-view-append" id="view-btn-append"><i class="ti ti-writing"></i> Append</button>
           <button class="btn-view-edit" id="view-btn-edit"><i class="ti ti-pencil"></i> Edit</button>
@@ -2490,8 +2724,10 @@
             <div class="stats-tags" id="stats-tags"></div>
           </div>
         </div>
-        <div class="digest-section" id="digest-section" style="display:none"></div>
-        <div class="digest-section" id="vectorize-section" style="display:none"></div>
+        <div class="digest-section" id="patterns-section" style="display: none"></div>
+        <div class="digest-section" id="digest-section" style="display: none"></div>
+        <div class="digest-section" id="vectorize-section" style="display: none"></div>
+        <div class="digest-section" id="classify-section" style="display: none"></div>
         <div class="theme-row">
           <span class="theme-row-label">Appearance</span>
           <div class="theme-toggle" id="theme-toggle">
@@ -2509,9 +2745,24 @@
         >
           <i class="ti ti-clock"></i> View all memories
         </button>
+        <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> Integrations</button>
         <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> Export as JSON</button>
         <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> Export as Markdown</button>
         <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> Disconnect</button>
+      </div>
+    </div>
+
+    <div id="integrations-sheet">
+      <div class="menu-inner">
+        <div class="view-header">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <button class="btn-close-icon" onclick="backToMenu()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
+            <h3 style="margin-bottom: 0">Integrations</h3>
+          </div>
+          <button class="btn-close-icon" onclick="closeIntegrations()"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note">Connect the tools where your context already lives. Synced content stays up to date and surfaces in recall like any other memory.</p>
+        <div id="integration-notion"><p class="digest-note">Loading&hellip;</p></div>
       </div>
     </div>
 
@@ -2578,6 +2829,7 @@
         loadRecent()
         loadTags()
         updateStatus()
+        checkVectorize()
       }
 
       async function loadTags() {
@@ -2670,6 +2922,7 @@
         const sbTab = document.getElementById('sb-tab-' + tab)
         if (sbTab) sbTab.classList.add('active')
         if (tab === 'recent') loadRecent()
+        if (tab === 'graph') loadGraph()
       }
 
       async function updateStatus() {
@@ -2682,6 +2935,20 @@
           const sb = document.getElementById('sb-status')
           if (sb) sb.textContent = text
         } catch {}
+      }
+
+      async function checkVectorize() {
+        try {
+          const res = await fetch(`${WORKER_URL}/health`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+          const data = await res.json()
+          renderVectorizeBanner(vectorizeHealthBanner(data))
+        } catch {}
+      }
+
+      // Thin wrapper over the unit-tested syncVectorizeBanner in utils.js, which
+      // owns the mount/update/remove + body-offset logic against the real document.
+      function renderVectorizeBanner(banner) {
+        syncVectorizeBanner(document, banner)
       }
 
       async function apiMcp(toolName, args) {
@@ -2738,7 +3005,9 @@
         try {
           // Use the REST endpoint for structured results — parsing the MCP tool's
           // formatted text miscounts sources when memory content contains list items
-          const params = new URLSearchParams({ query, topK: '5' })
+          // hops=1 lets recall follow relationship edges one step out; direct matches
+          // always outrank expanded ones (worker applies a graph-distance penalty)
+          const params = new URLSearchParams({ query, topK: '5', hops: '1' })
           if (selectedTag) params.set('tag', selectedTag)
           const recallRes = await fetch(`${WORKER_URL}/recall?${params}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
           const data = await recallRes.json()
@@ -2750,7 +3019,7 @@
           } else {
             // REST scores are already 0–100 (one decimal); map directly rather than via
             // normalizeEntry, whose 0–1 rescale heuristic would turn a 0.8% match into 80%
-            const entries = data.results.map((m) => ({ id: m.id, content: m.content, tags: m.tags || [], score: Math.min(100, Math.round(m.score)) }))
+            const entries = data.results.map((m) => ({ id: m.id, content: m.content, tags: m.tags || [], score: Math.min(100, Math.round(m.score)), hop: m.hop || 0 }))
             const answerBubble = document.createElement('div')
             answerBubble.className = 'ex-a-row'
             const answerEl = document.createElement('div')
@@ -2762,12 +3031,15 @@
             // format — dates/tags/source are needed for temporal questions
             const memories =
               (data.insight ? `Insight: ${data.insight}\n\n` : '') +
-              data.results.map((m, i) => {
-                const date = new Date(m.created_at).toLocaleDateString()
-                const tagList = m.tags && m.tags.length ? ` [${m.tags.join(', ')}]` : ''
-                const src = m.source ? ` · ${m.source}` : ''
-                return `${i + 1}. [${date}${src}${tagList}] (${Math.min(100, Math.round(m.score))}% match)${m.updated ? ' [updated]' : ''}\n${m.content}`
-              }).join('\n\n')
+              data.results
+                .map((m, i) => {
+                  const date = new Date(m.created_at).toLocaleDateString()
+                  const tagList = m.tags && m.tags.length ? ` [${m.tags.join(', ')}]` : ''
+                  const src = m.source ? ` · ${m.source}` : ''
+                  const related = m.hop > 0 ? ` [related, ${m.hop} hop${m.hop > 1 ? 's' : ''}]` : ''
+                  return `${i + 1}. [${date}${src}${tagList}] (${Math.min(100, Math.round(m.score))}% match)${m.updated ? ' [updated]' : ''}${related}\n${m.content}`
+                })
+                .join('\n\n')
             const res = await fetch(`${WORKER_URL}/chat`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
@@ -2830,6 +3102,7 @@
         card.innerHTML = `
     <div class="match-line">
       <span class="match-pct">${entry.score}%</span>
+      ${entry.hop > 0 ? `<span class="tag-chip" style="background:var(--accent-soft);color:var(--accent);flex-shrink:0">related · ${entry.hop} hop${entry.hop > 1 ? 's' : ''}</span>` : ''}
       <div class="match-bar-bg"><div class="match-bar-fill" style="width:${entry.score}%"></div></div>
     </div>
     <div class="card-content" style="cursor: pointer;">${escHtml(entry.content)}</div>
@@ -2934,17 +3207,20 @@
         const isRolledUp = tags.includes('rolled-up')
 
         let vectorIds = []
-        try { vectorIds = JSON.parse(entry.vector_ids || '[]') } catch {}
+        try {
+          vectorIds = JSON.parse(entry.vector_ids || '[]')
+        } catch {}
         const vectorized = vectorIds.length > 0
         // Pending state is computed at render time; won't auto-flip — reload required
-        const pending = !vectorized && (Date.now() - (entry.created_at || 0) < vectorizeGraceMs)
-        const vec = vectorized ? 'on' : (pending ? 'pending' : 'off')
+        const pending = !vectorized && Date.now() - (entry.created_at || 0) < vectorizeGraceMs
+        const vec = vectorized ? 'on' : pending ? 'pending' : 'off'
 
-        const vecChip = vec === 'on'
-          ? `<span class="tag-chip vec-chip vec-chip--on" title="Vectorized — searchable via recall"><i class="ti ti-circle-check"></i></span>`
-          : vec === 'pending'
-          ? `<span class="tag-chip vec-chip vec-chip--pending" title="Vectorizing… (just captured)"><i class="ti ti-clock"></i></span>`
-          : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
+        const vecChip =
+          vec === 'on'
+            ? `<span class="tag-chip vec-chip vec-chip--on" title="Vectorized — searchable via recall"><i class="ti ti-circle-check"></i></span>`
+            : vec === 'pending'
+              ? `<span class="tag-chip vec-chip vec-chip--pending" title="Vectorizing… (just captured)"><i class="ti ti-clock"></i></span>`
+              : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
 
         const card = document.createElement('div')
         card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '')
@@ -3138,12 +3414,25 @@
         document.getElementById('menu-sheet').classList.remove('open')
       }
 
+      function openIntegrations() {
+        closeMenu()
+        document.getElementById('integrations-sheet').classList.add('open')
+        loadIntegrations()
+      }
+      function closeIntegrations() {
+        document.getElementById('integrations-sheet').classList.remove('open')
+      }
+      function backToMenu() {
+        closeIntegrations()
+        openMenu()
+      }
+
       async function loadMenuStats() {
         try {
           const res = await fetch(`${WORKER_URL}/stats`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
           const data = await res.json()
           document.getElementById('stats-count').textContent = (data.count ?? 0).toLocaleString()
-          document.getElementById('stats-importance').textContent = data.avg_importance != null ? data.avg_importance.toFixed(1) + ' / 10' : '—'
+          document.getElementById('stats-importance').textContent = data.avg_importance != null ? data.avg_importance.toFixed(1) + ' / 5' : '—'
           const tagsEl = document.getElementById('stats-tags')
           tagsEl.innerHTML = data.top_tags?.length
             ? data.top_tags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
@@ -3151,17 +3440,99 @@
           vectorizeGraceMs = data.vectorize_grace_ms ?? vectorizeGraceMs
           renderDigestSection(data.digest_candidates ?? [])
           renderVectorizeSection(data.unvectorized ?? 0)
+          renderClassifySection(data.unclassified ?? 0)
+          loadPatterns()
         } catch {}
+      }
+
+      // ── Patterns panel: system proposes, human ratifies ───────────────────────
+      // Auto-derived patterns are excluded from recall until confirmed; confirming
+      // strips the auto-pattern tag (which is the exclusion), dismissing deprecates.
+      async function loadPatterns() {
+        const el = document.getElementById('patterns-section')
+        try {
+          const res = await fetch(`${WORKER_URL}/list?n=20&tag=auto-pattern`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+          const rows = await res.json()
+          const patterns = (Array.isArray(rows) ? rows : []).filter((e) => {
+            let tags = []
+            try {
+              tags = JSON.parse(e.tags || '[]')
+            } catch {}
+            return !tags.includes('status:deprecated') // dismissed patterns linger in /list
+          })
+          if (!patterns.length) {
+            el.style.display = 'none'
+            el.innerHTML = ''
+            return
+          }
+          el.style.display = ''
+          el.innerHTML = `
+            <div class="digest-section-label">Patterns noticed</div>
+            <p class="digest-note">Your brain spotted these across multiple memories. Confirm to make one a trusted, recallable fact; dismiss to discard it.</p>
+            ${patterns
+              .map(
+                (p) => `
+              <div class="digest-result" id="pattern-row-${escAttr(p.id)}">
+                ${escHtml(p.content)}
+                <div style="display: flex; gap: 8px; margin-top: 10px">
+                  <button class="digest-btn" onclick="resolvePattern('${escAttr(p.id)}', 'confirm', this)">Confirm</button>
+                  <button class="digest-btn danger" onclick="resolvePattern('${escAttr(p.id)}', 'dismiss', this)">Dismiss</button>
+                </div>
+              </div>`,
+              )
+              .join('')}
+          `
+        } catch {}
+      }
+
+      async function resolvePattern(id, action, btn) {
+        const row = document.getElementById('pattern-row-' + id)
+        row.querySelectorAll('button').forEach((b) => (b.disabled = true))
+        btn.classList.add('digest-btn--loading')
+        btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+        try {
+          const res = await fetch(`${WORKER_URL}/patterns/resolve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+            body: JSON.stringify({ id, action }),
+          })
+          const data = await res.json()
+          if (!data.ok) throw new Error(data.error || 'failed')
+          if (action === 'dismiss') {
+            row.classList.add('explode-out')
+            setTimeout(() => {
+              row.innerHTML = `<div class="digest-result-meta">Dismissed</div>`
+              row.classList.remove('explode-out')
+              row.style.opacity = '1'
+            }, 400)
+          } else {
+            row.style.transition = 'opacity 0.4s'
+            row.style.opacity = '0'
+            setTimeout(() => {
+              row.innerHTML = `<div class="digest-result-meta"><i class="ti ti-check"></i> Saved as a trusted memory</div>`
+              row.style.opacity = '1'
+            }, 400)
+          }
+        } catch {
+          btn.classList.remove('digest-btn--loading')
+          btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Failed'
+          setTimeout(() => loadPatterns(), 2000)
+        }
       }
 
       function renderDigestSection(candidates) {
         const el = document.getElementById('digest-section')
-        if (!candidates.length) { el.style.display = 'none'; return }
+        if (!candidates.length) {
+          el.style.display = 'none'
+          return
+        }
         el.style.display = ''
         el.innerHTML = `
           <div class="digest-section-label">Ready to compress</div>
           <p class="digest-note">Originals are never deleted — digest adds a summary and ranks originals lower in recall so they don't crowd results.</p>
-          ${candidates.map(c => `
+          ${candidates
+            .map(
+              (c) => `
             <div class="digest-candidate-row" id="digest-row-${escAttr(c.tag)}">
               <div class="digest-candidate-label">
                 <span>${escHtml(c.tag)}</span>
@@ -3169,7 +3540,9 @@
               </div>
               <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">Digest →</button>
             </div>
-          `).join('')}
+          `,
+            )
+            .join('')}
         `
       }
 
@@ -3180,7 +3553,7 @@
         const row = document.getElementById('digest-row-' + tag)
         try {
           const res = await fetch(`${WORKER_URL}/digest?tag=${encodeURIComponent(tag)}`, {
-            headers: { Authorization: `Bearer ${AUTH_TOKEN}` }
+            headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
           })
           const data = await res.json()
           if (data.synthesis) {
@@ -3214,7 +3587,10 @@
 
       function renderVectorizeSection(count) {
         const el = document.getElementById('vectorize-section')
-        if (!count) { el.style.display = 'none'; return }
+        if (!count) {
+          el.style.display = 'none'
+          return
+        }
         el.style.display = ''
         el.innerHTML = `
           <div class="digest-section-label">Not indexed</div>
@@ -3233,7 +3609,7 @@
           while (remaining > 0) {
             const res = await fetch(`${WORKER_URL}/vectorize-pending`, {
               method: 'POST',
-              headers: { Authorization: `Bearer ${AUTH_TOKEN}` }
+              headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
             })
             if (!res.ok) throw new Error(`Server error: ${res.status}`)
             const data = await res.json()
@@ -3258,27 +3634,226 @@
         }
       }
 
+      // ── Integrations (Notion) ─────────────────────────────────────────────
+      let notionInfo = null
+
+      async function loadIntegrations() {
+        const el = document.getElementById('integration-notion')
+        try {
+          const res = await fetch(`${WORKER_URL}/integrations`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+          const data = await res.json()
+          notionInfo = (data.integrations || []).find((i) => i.provider === 'notion') || null
+          renderNotionCard()
+        } catch {
+          el.innerHTML = '<p class="digest-note">Could not load integrations.</p>'
+        }
+      }
+
+      function renderNotionCard() {
+        const el = document.getElementById('integration-notion')
+        if (!notionInfo || !notionInfo.connected) {
+          el.innerHTML = `
+            <div class="integration-row">
+              <div class="integration-head"><i class="ti ti-brand-notion"></i><span>Notion</span><span class="integration-state">Not connected</span></div>
+              <p class="digest-note">
+                Create an internal <b>connection</b> (not a personal access token) at
+                <a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener noreferrer">app.notion.com/developers/connections</a>,
+                share the pages you want remembered with it (page menu &rarr; Connections), then paste its secret here. Shared pages
+                sync into your brain and stay updated.
+              </p>
+              <div class="integration-connect-row">
+                <input type="password" id="notion-token-input" placeholder="Integration secret (ntn_…)" autocomplete="off" />
+                <button class="digest-btn" onclick="connectNotion(this)">Connect</button>
+              </div>
+              <div class="integration-error" id="notion-error"></div>
+            </div>`
+          return
+        }
+        const last = notionInfo.lastSyncedAt ? new Date(notionInfo.lastSyncedAt).toLocaleString() : 'never'
+        const pages = `${notionInfo.itemCount} page${notionInfo.itemCount === 1 ? '' : 's'} synced`
+        const err = notionInfo.lastSyncError ? `<div class="integration-error">Last sync failed: ${escHtml(notionInfo.lastSyncError)}</div>` : ''
+        el.innerHTML = `
+          <div class="integration-row">
+            <div class="integration-head"><i class="ti ti-brand-notion"></i><span>Notion</span><span class="integration-state connected">${escHtml(notionInfo.workspaceName || 'Connected')}</span></div>
+            <p class="digest-note" id="notion-sync-note">${pages} &middot; Last sync: ${escHtml(last)}</p>
+            ${err}
+            <div class="integration-actions">
+              <button class="digest-btn" onclick="syncNotion(this)"><i class="ti ti-refresh"></i> Sync now</button>
+              <button class="digest-btn danger" onclick="disconnectNotion(this)">Disconnect</button>
+            </div>
+          </div>`
+      }
+
+      async function connectNotion(btn) {
+        const input = document.getElementById('notion-token-input')
+        const errEl = document.getElementById('notion-error')
+        const token = input.value.trim()
+        if (!token) {
+          errEl.textContent = 'Paste your integration secret first.'
+          return
+        }
+        btn.disabled = true
+        btn.textContent = 'Connecting…'
+        errEl.textContent = ''
+        try {
+          const res = await fetch(`${WORKER_URL}/integrations/notion/connect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+            body: JSON.stringify({ token }),
+          })
+          const data = await res.json()
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Could not connect')
+          await loadIntegrations()
+        } catch (e) {
+          errEl.textContent = e.message || 'Could not connect.'
+          btn.disabled = false
+          btn.textContent = 'Connect'
+        }
+      }
+
+      async function syncNotion(btn) {
+        btn.disabled = true
+        btn.classList.add('digest-btn--loading')
+        btn.innerHTML = '<i class="ti ti-loader-2"></i> Syncing…'
+        const note = document.getElementById('notion-sync-note')
+        try {
+          // Each call processes a bounded batch (Workers subrequest limits) and
+          // reports what's left — loop until the backlog drains, like runVectorize.
+          let remaining = 1
+          let processed = 0
+          let guard = 0
+          while (remaining > 0 && guard < 40) {
+            guard++
+            const res = await fetch(`${WORKER_URL}/integrations/notion/sync`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+            })
+            const data = await res.json()
+            if (!res.ok || !data.ok) throw new Error(data.error || 'Sync failed')
+            processed += (data.created ?? 0) + (data.updated ?? 0)
+            remaining = data.remaining ?? 0
+            if (note) note.textContent = `Syncing… ${processed} page${processed === 1 ? '' : 's'} so far`
+            // A batch with zero progress means every page in it failed — stop looping.
+            if ((data.created ?? 0) + (data.updated ?? 0) + (data.deleted ?? 0) === 0 && remaining > 0) break
+          }
+          btn.classList.remove('digest-btn--loading')
+          btn.innerHTML = `<i class="ti ti-check"></i> ${processed} synced`
+          btn.style.color = 'var(--good)'
+          setTimeout(async () => {
+            await loadIntegrations()
+          }, 900)
+          loadRecent()
+          loadTags()
+          updateStatus()
+        } catch (e) {
+          btn.classList.remove('digest-btn--loading')
+          btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Sync failed'
+          btn.style.color = 'var(--danger)'
+          setTimeout(() => loadIntegrations(), 3000)
+        }
+      }
+
+      async function disconnectNotion(btn) {
+        if (!confirm('Disconnect Notion? Pages will stop syncing.')) return
+        let purge = false
+        if (notionInfo && notionInfo.itemCount > 0) {
+          purge = confirm(
+            `Also delete the ${notionInfo.itemCount} memor${notionInfo.itemCount === 1 ? 'y' : 'ies'} synced from Notion?\n\nOK = delete them\nCancel = keep them as regular memories`,
+          )
+        }
+        btn.disabled = true
+        btn.textContent = 'Disconnecting…'
+        try {
+          const res = await fetch(`${WORKER_URL}/integrations/notion/disconnect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+            body: JSON.stringify({ purge }),
+          })
+          const data = await res.json()
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Disconnect failed')
+          await loadIntegrations()
+          if (purge) {
+            loadRecent()
+            loadTags()
+            updateStatus()
+          }
+        } catch (e) {
+          btn.disabled = false
+          btn.textContent = 'Disconnect'
+          alert(e.message || 'Disconnect failed')
+        }
+      }
+
+      function renderClassifySection(count) {
+        const el = document.getElementById('classify-section')
+        if (!count) { el.style.display = 'none'; return }
+        el.style.display = ''
+        el.innerHTML = `
+          <div class="digest-section-label">Not classified</div>
+          <p class="digest-note">${count} ${count === 1 ? 'memory has' : 'memories have'} no kind or status tag yet (captured before classification existed).</p>
+          <button class="digest-btn" id="classify-btn" onclick="runClassify(this)">Classify now →</button>
+        `
+      }
+
+      async function runClassify(btn) {
+        btn.disabled = true
+        btn.classList.add('digest-btn--loading')
+        btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+        try {
+          let remaining = 1
+          let prevRemaining = Infinity
+          let totalProcessed = 0
+          while (remaining > 0) {
+            const res = await fetch(`${WORKER_URL}/classify-pending`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${AUTH_TOKEN}` }
+            })
+            if (!res.ok) throw new Error(`Server error: ${res.status}`)
+            const data = await res.json()
+            remaining = data.remaining ?? 0
+            totalProcessed += data.processed ?? 0
+            if (remaining >= prevRemaining) break
+            prevRemaining = remaining
+          }
+          btn.classList.remove('digest-btn--loading')
+          btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} classified`
+          btn.style.color = 'var(--good)'
+          await loadMenuStats()
+          loadRecent()
+        } catch {
+          btn.classList.remove('digest-btn--loading')
+          btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
+          btn.style.color = 'var(--danger)'
+          setTimeout(() => {
+            btn.disabled = false
+            btn.innerHTML = 'Classify now →'
+            btn.style.color = ''
+          }, 3000)
+        }
+      }
+
       async function exportMemories(format) {
         closeMenu()
         try {
-          const res = await fetch(`${WORKER_URL}/list?n=9999`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+          // /export returns everything — entries AND edges — in one shot; /list caps
+          // at 100 rows, which used to silently truncate bigger brains
+          const res = await fetch(`${WORKER_URL}/export`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
           if (!res.ok) throw new Error(`Server error: ${res.status}`)
-          const entries = await res.json()
+          const data = await res.json()
+          const entries = data.entries || []
+          const edges = data.edges || []
 
           let content, filename, mime
           const ts = new Date().toISOString().slice(0, 10)
 
           if (format === 'json') {
-            content = JSON.stringify(entries, null, 2)
+            content = JSON.stringify(data, null, 2)
             filename = `second-brain-export-${ts}.json`
             mime = 'application/json'
           } else {
             const lines = [`# Second Brain Export`, `Exported: ${ts}`, '']
             entries.forEach((e, i) => {
-              let tags = []
-              try {
-                tags = JSON.parse(e.tags || '[]')
-              } catch {}
+              const tags = e.tags || []
               const date = new Date(e.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
               lines.push(`## Memory ${i + 1}`)
               lines.push(`**Date:** ${date}`)
@@ -3290,6 +3865,17 @@
               lines.push('---')
               lines.push('')
             })
+            if (edges.length) {
+              const labelById = new Map(entries.map((e) => [e.id, (e.content || '').slice(0, 60)]))
+              lines.push(`## Relationships`)
+              lines.push('')
+              edges.forEach((e) => {
+                const src = labelById.get(e.source_id) || e.source_id
+                const tgt = labelById.get(e.target_id) || e.target_id
+                lines.push(`- [${e.type}] ${src} -> ${tgt} (${e.weight})`)
+              })
+              lines.push('')
+            }
             content = lines.join('\n')
             filename = `second-brain-export-${ts}.md`
             mime = 'text/markdown'
@@ -3314,6 +3900,10 @@
         if (entry.tags && entry.tags.length > 0) {
           tagsContainer.innerHTML = entry.tags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
         }
+        const relatedEl = document.getElementById('view-related')
+        relatedEl.style.display = 'none'
+        relatedEl.innerHTML = ''
+        if (entry.id) loadRelated(entry.id, relatedEl)
         const appendBtn = document.getElementById('view-btn-append')
         if (entry.id) {
           appendBtn.onclick = () => {
@@ -3352,6 +3942,606 @@
         document.getElementById('view-sheet').classList.remove('open')
       }
 
+      // ── Related memories (issue #16) ──────────────────────────────────────────
+      async function loadRelated(id, el) {
+        try {
+          const res = await fetch(`${WORKER_URL}/connections?id=${encodeURIComponent(id)}`, {
+            headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+          })
+          const data = await res.json()
+          if (!data.ok || !data.connections || !data.connections.length) {
+            // also handles the refresh after the last link is removed
+            el.style.display = 'none'
+            el.innerHTML = ''
+            return
+          }
+          el.innerHTML =
+            `<div class="view-related-label">Related</div>` +
+            data.connections
+              .map(
+                (c) =>
+                  `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="Remove link"><i class="ti ti-unlink"></i></button></div>`,
+              )
+              .join('')
+          el.style.display = 'block'
+          el.querySelectorAll('.related-item').forEach((row) => {
+            row.querySelector('.related-open').onclick = () => {
+              const c = data.connections.find((x) => x.id === row.dataset.id)
+              if (c) openView({ id: c.id, content: c.content, tags: c.tags }, null)
+            }
+            row.querySelector('.related-unlink').onclick = async () => {
+              if (!confirm('Remove this link? The memories stay; only the connection is deleted.')) return
+              try {
+                await fetch(`${WORKER_URL}/unlink`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+                  body: JSON.stringify({ source_id: id, target_id: row.dataset.id, type: row.dataset.type }),
+                })
+              } catch {}
+              loadRelated(id, el)
+            }
+          })
+        } catch {}
+      }
+
+      // ── Force-directed graph view (issue #16) ─────────────────────────────────
+      let graphState = null
+
+      // Graph nodes only carry an 80-char label; fetch the full memory on tap so the
+      // view sheet shows the whole thing. Falls back to the label if the fetch fails
+      // (offline etc.) so the graph never dead-ends.
+      async function openNodeView(node) {
+        try {
+          const res = await fetch(`${WORKER_URL}/entry?id=${encodeURIComponent(node.id)}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+          const data = await res.json()
+          if (data.ok && data.entry) {
+            openView({ id: data.entry.id, content: data.entry.content, tags: data.entry.tags }, null)
+            return
+          }
+          throw new Error('entry fetch failed')
+        } catch {
+          openView({ id: node.id, content: node.label, tags: node.tags }, null)
+        }
+      }
+
+      async function loadGraph() {
+        const canvas = document.getElementById('graph-canvas')
+        const emptyEl = document.getElementById('graph-empty')
+        if (!canvas) return
+        try {
+          const res = await fetch(`${WORKER_URL}/graph`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+          const data = await res.json()
+          if (!data.ok || !data.nodes || !data.nodes.length) {
+            graphState = null
+            canvas.style.display = 'none'
+            emptyEl.style.display = 'block'
+            return
+          }
+          emptyEl.style.display = 'none'
+          canvas.style.display = 'block'
+          initGraphSim(canvas, data.nodes, data.edges)
+        } catch (e) {
+          emptyEl.textContent = 'Could not load the graph.'
+          emptyEl.style.display = 'block'
+        }
+      }
+
+      function graphNodeColor(n) {
+        return n.clusterColor || '#9a958a'
+      }
+
+      function initGraphSim(canvas, nodes, edges) {
+        const dpr = window.devicePixelRatio || 1
+        const rect = canvas.getBoundingClientRect()
+        const W = rect.width || 600
+        const H = rect.height || 420
+        canvas.width = W * dpr
+        canvas.height = H * dpr
+        const ctx = canvas.getContext('2d')
+
+        const byId = {}
+        nodes.forEach((n) => {
+          byId[n.id] = n
+        })
+        const links = edges.map((e) => ({ s: byId[e.source], t: byId[e.target], w: e.weight })).filter((l) => l.s && l.t)
+
+        // No physics: node positions are computed deterministically below (static packed
+        // clusters), after topic clustering.
+
+        // Topic clusters (reagraph-style clusterAttribute): assignGraphClusters (utils.js, unit
+        // tested) tags each node with n.cluster (its broad category) and n.sub (a shared
+        // sub-topic within that category, or null). The clusters drive the static packed
+        // layout, the outline rings, the cluster labels, and the legend below.
+        assignGraphClusters(nodes)
+
+        // Order clusters (largest first, sentinels last), assign palette colors + dense index.
+        const CLUSTER_PALETTE = ['#b26641', '#4a7c8c', '#7a9a5b', '#a9739e', '#c99a3f', '#5b8a8f', '#8c6f5b', '#6a7bb0', '#b0685f', '#5f8c6a', '#9a7bb0', '#7d8c4f']
+        const SENTINEL_COLOR = { __other__: '#9a958a', __untagged__: '#b8b3a8', __autopattern__: '#9aa7ad' }
+        const SENTINEL_CLUSTER = new Set(['__other__', '__untagged__', '__autopattern__'])
+        const clusterLabelOf = (id) =>
+          id === '__other__' ? 'Other' : id === '__untagged__' ? 'Untagged' : id === '__autopattern__' ? 'Auto-patterns' : id
+        const clusterHue = (s) => {
+          let h = 0
+          for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+          return `hsl(${h % 360}, 45%, 52%)`
+        }
+        const clusterColor = new Map()
+        const clusterLegend = []
+        {
+          const sz = new Map()
+          for (const n of nodes) sz.set(n.cluster, (sz.get(n.cluster) || 0) + 1)
+          const ordered = [...sz.keys()].sort((a, b) => {
+            const sa = SENTINEL_CLUSTER.has(a),
+              sb = SENTINEL_CLUSTER.has(b)
+            if (sa !== sb) return sa ? 1 : -1
+            return sz.get(b) - sz.get(a) || (a < b ? -1 : 1)
+          })
+          let pi = 0
+          ordered.forEach((id) => {
+            const color = SENTINEL_CLUSTER.has(id) ? SENTINEL_COLOR[id] : pi < CLUSTER_PALETTE.length ? CLUSTER_PALETTE[pi++] : clusterHue(id)
+            clusterColor.set(id, color)
+            clusterLegend.push({ label: clusterLabelOf(id), color, count: sz.get(id) })
+          })
+        }
+        for (const n of nodes) n.clusterColor = clusterColor.get(n.cluster)
+
+        // Nested packed layout (static, no physics). Two levels: pack each sub-topic's nodes into
+        // a small disc, pack those sub-discs plus the category's loose nodes inside the category's
+        // outer disc, then pack the outer discs on the canvas. Everything is final; nothing
+        // animates. clusterList drives the outer rings/labels, subList the inner ones.
+        const NODE_PACK_R = 9 // representative node radius used for packing spacing
+        const GAP_SUB = 7 // gap between sub-discs / loose nodes inside a category
+        const GAP_OUT = 24 // gap between category discs
+        // packGraphNodes / packGraphCircles (utils.js, unit tested) do the geometry: phyllotaxis
+        // node offsets within a disc, and non-overlapping closest-to-center circle packing.
+
+        const clusterList = [] // outer category discs: { color, label, cx, cy, R }
+        const subList = [] // inner sub-topic discs: { color, label, cx, cy, R }
+        {
+          const byOuter = new Map()
+          for (const n of nodes) {
+            if (!byOuter.has(n.cluster)) byOuter.set(n.cluster, [])
+            byOuter.get(n.cluster).push(n)
+          }
+          const outerObjs = []
+          for (const [id, members] of byOuter) {
+            const color = clusterColor.get(id)
+            // split members into sub-topic groups + loose members
+            const bySub = new Map()
+            const loose = []
+            for (const n of members) {
+              if (!n.sub) {
+                loose.push(n)
+                continue
+              }
+              if (!bySub.has(n.sub)) bySub.set(n.sub, [])
+              bySub.get(n.sub).push(n)
+            }
+            const subs = []
+            for (const [tag, subMembers] of bySub) {
+              const spread = subMembers.length <= 1 ? 0 : 7 + 8 * Math.sqrt(subMembers.length)
+              const local = packGraphNodes(subMembers.length, spread)
+              subMembers.forEach((n, i) => {
+                n.slx = local[i].x
+                n.sly = local[i].y
+              })
+              subs.push({ tag, members: subMembers, ringR: spread + NODE_PACK_R + 3 })
+            }
+            // pack sub-discs (radius ringR) + loose nodes (radius NODE_PACK_R+3) inside the category
+            const items = [...subs.map((s) => s.ringR), ...loose.map(() => NODE_PACK_R + 4)]
+            const packed = packGraphCircles(items, GAP_SUB)
+            subs.forEach((s, i) => {
+              s.cx = packed.centers[i].x
+              s.cy = packed.centers[i].y
+            })
+            loose.forEach((n, i) => {
+              const c = packed.centers[subs.length + i]
+              n.olx = c.x
+              n.oly = c.y
+            })
+            outerObjs.push({ id, color, label: clusterLabelOf(id), subs, loose, R: packed.R + 9 })
+          }
+          // pack the category discs on the canvas (largest first)
+          const outerPacked = packGraphCircles(
+            outerObjs.map((o) => o.R),
+            GAP_OUT,
+          )
+          outerObjs.forEach((o, i) => {
+            o.cx = outerPacked.centers[i].x
+            o.cy = outerPacked.centers[i].y
+          })
+          // resolve absolute node positions and build the draw lists
+          for (const o of outerObjs) {
+            clusterList.push({ color: o.color, label: o.label, cx: o.cx, cy: o.cy, R: o.R })
+            for (const s of o.subs) {
+              const scx = o.cx + s.cx
+              const scy = o.cy + s.cy
+              subList.push({ color: o.color, label: s.tag, cx: scx, cy: scy, R: s.ringR })
+              for (const n of s.members) {
+                n.x = scx + n.slx
+                n.y = scy + n.sly
+              }
+            }
+            for (const n of o.loose) {
+              n.x = o.cx + n.olx
+              n.y = o.cy + n.oly
+            }
+          }
+        }
+
+        // cam maps world → screen: screen = world * scale + (x, y). Node coords are in world space.
+        const cam = { x: 0, y: 0, scale: 1 }
+        const pointers = new Map()
+        const state = {
+          hover: null,
+          pressNode: null,
+          panning: false,
+          panStart: null,
+          moved: false,
+          downId: null,
+          pinch: null,
+          cam,
+        }
+        graphState = state
+
+        const SHOW_LABELS = nodes.length <= 50 // hide always-on labels on big graphs (hover still works)
+        const nodeRadius = (n) => 5 + Math.min(6, n.importance || 0)
+
+        const localXY = (ev) => {
+          const r = canvas.getBoundingClientRect()
+          return { x: ev.clientX - r.left, y: ev.clientY - r.top }
+        }
+        const screenToWorld = (sx, sy) => ({ x: (sx - cam.x) / cam.scale, y: (sy - cam.y) / cam.scale })
+        function nodeAt(sx, sy) {
+          const w = screenToWorld(sx, sy)
+          const tol = 18 / cam.scale
+          let best = null,
+            bestD = tol * tol
+          for (const n of nodes) {
+            const dx = n.x - w.x,
+              dy = n.y - w.y,
+              d = dx * dx + dy * dy
+            if (d < bestD) {
+              bestD = d
+              best = n
+            }
+          }
+          return best
+        }
+
+        // ── camera: zoom toward a screen point, and fit-to-view ──
+        const clampScale = (s) => Math.max(0.05, Math.min(4, s)) // floor low enough to fit an uncapped graph
+        function zoomAround(sx, sy, factor) {
+          const ns = clampScale(cam.scale * factor)
+          cam.x = sx - (sx - cam.x) * (ns / cam.scale)
+          cam.y = sy - (sy - cam.y) * (ns / cam.scale)
+          cam.scale = ns
+          requestDraw()
+        }
+        function fit() {
+          if (!nodes.length) return
+          let minX = Infinity,
+            minY = Infinity,
+            maxX = -Infinity,
+            maxY = -Infinity
+          for (const n of nodes) {
+            minX = Math.min(minX, n.x)
+            maxX = Math.max(maxX, n.x)
+            minY = Math.min(minY, n.y)
+            maxY = Math.max(maxY, n.y)
+          }
+          const pad = 70
+          const gw = maxX - minX || 1,
+            gh = maxY - minY || 1
+          cam.scale = clampScale(Math.min((W - pad) / gw, (H - pad) / gh, 1.4))
+          cam.x = W / 2 - ((minX + maxX) / 2) * cam.scale
+          cam.y = H / 2 - ((minY + maxY) / 2) * cam.scale
+          requestDraw()
+        }
+        state.api = { zoomBy: (f) => zoomAround(W / 2, H / 2, f), fit, redraw: () => requestDraw() }
+
+        // ── input: wheel zoom, pointer drag/pan, two-pointer pinch ──
+        canvas.addEventListener(
+          'wheel',
+          (ev) => {
+            ev.preventDefault()
+            const p = localXY(ev)
+            zoomAround(p.x, p.y, Math.exp(-ev.deltaY * 0.0015))
+          },
+          { passive: false },
+        )
+
+        const twoPointers = () => [...pointers.values()]
+        function startPinch() {
+          const [a, b] = twoPointers()
+          state.pressNode = null
+          state.panning = false
+          state.pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: cam.scale }
+        }
+        function movePinch() {
+          const [a, b] = twoPointers()
+          const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1
+          const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+          zoomAround(mid.x, mid.y, (dist / state.pinch.dist) * (state.pinch.scale / cam.scale))
+        }
+
+        canvas.addEventListener('pointerdown', (ev) => {
+          canvas.setPointerCapture(ev.pointerId)
+          const p = localXY(ev)
+          pointers.set(ev.pointerId, p)
+          if (pointers.size === 2) {
+            startPinch()
+            return
+          }
+          state.moved = false
+          state.downId = ev.pointerId
+          state.pressNode = nodeAt(p.x, p.y) // remembered for tap-to-open; any drag pans the canvas
+          state.panning = true
+          state.panStart = { x: ev.clientX - cam.x, y: ev.clientY - cam.y }
+          canvas.style.cursor = 'grabbing'
+        })
+
+        canvas.addEventListener('pointermove', (ev) => {
+          const p = localXY(ev)
+          if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, p)
+          if (state.pinch && pointers.size === 2) {
+            movePinch()
+            return
+          }
+          if (state.panning) {
+            cam.x = ev.clientX - state.panStart.x
+            cam.y = ev.clientY - state.panStart.y
+            state.moved = true
+            requestDraw()
+          } else {
+            const prev = state.hover
+            state.hover = nodeAt(p.x, p.y)
+            canvas.style.cursor = state.hover ? 'pointer' : 'grab'
+            if (prev !== state.hover) draw()
+          }
+        })
+
+        function endPointer(ev) {
+          pointers.delete(ev.pointerId)
+          try {
+            canvas.releasePointerCapture(ev.pointerId)
+          } catch (e) {}
+          if (state.pinch && pointers.size < 2) state.pinch = null
+          if (ev.pointerId === state.downId) {
+            if (state.pressNode && !state.moved) openNodeView(state.pressNode)
+            state.pressNode = null
+            state.panning = false
+            state.downId = null
+            canvas.style.cursor = 'grab'
+            requestDraw()
+          }
+        }
+        canvas.addEventListener('pointerup', endPointer)
+        canvas.addEventListener('pointercancel', endPointer)
+        canvas.addEventListener('pointerleave', () => {
+          if (!state.panning && state.hover) {
+            state.hover = null
+            draw()
+          }
+        })
+
+        function shortLabel(n) {
+          const t = (n.label || '').replace(/\s+/g, ' ').trim()
+          return t.length > 22 ? t.slice(0, 22).trimEnd() + '…' : t
+        }
+        // A rounded label pill centered horizontally at cx, with its top at topY (world coords).
+        function labelPill(text, cx, topY, emphasize, alpha) {
+          ctx.font = (emphasize ? '600 ' : '') + '11px "DM Sans", system-ui, sans-serif'
+          const tw = ctx.measureText(text).width
+          const padX = 5,
+            h = 16,
+            rr = 5
+          const x = cx - tw / 2 - padX
+          const w = tw + padX * 2
+          ctx.globalAlpha = alpha
+          ctx.fillStyle = emphasize ? 'rgba(252,251,247,0.97)' : 'rgba(252,251,247,0.82)'
+          ctx.beginPath()
+          ctx.moveTo(x + rr, topY)
+          ctx.arcTo(x + w, topY, x + w, topY + h, rr)
+          ctx.arcTo(x + w, topY + h, x, topY + h, rr)
+          ctx.arcTo(x, topY + h, x, topY, rr)
+          ctx.arcTo(x, topY, x + w, topY, rr)
+          ctx.fill()
+          ctx.fillStyle = emphasize ? '#26241f' : '#6e6b62'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(text, cx, topY + h / 2)
+          ctx.globalAlpha = 1
+        }
+
+        function requestDraw() {
+          draw()
+        }
+
+        function draw() {
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+          ctx.clearRect(0, 0, W, H)
+          ctx.setTransform(dpr * cam.scale, 0, 0, dpr * cam.scale, dpr * cam.x, dpr * cam.y)
+          const hover = state.hover
+          // Theme-aware ink: dark strokes on the light theme, light strokes on the dark theme,
+          // so edges and the hover ring stay visible in both. Slightly more alpha in dark mode
+          // since light lines read fainter on a dark background.
+          const darkTheme = document.documentElement.getAttribute('data-theme') === 'dark'
+          const inkRGB = darkTheme ? '224,221,213' : '38,36,31'
+          const inkHex = darkTheme ? '#e0ddd5' : '#26241f'
+          const edgeA = darkTheme ? 0.15 : 0.06
+          const edgeDimA = darkTheme ? 0.07 : 0.03
+          // Outer category rings: a barely-there fill plus a screen-constant stroke (a boundary,
+          // not a shaded blob). c.R already includes the ring padding.
+          for (const c of clusterList) {
+            ctx.beginPath()
+            ctx.arc(c.cx, c.cy, c.R, 0, Math.PI * 2)
+            ctx.globalAlpha = 0.045
+            ctx.fillStyle = c.color
+            ctx.fill()
+            ctx.globalAlpha = 0.5
+            ctx.strokeStyle = c.color
+            ctx.lineWidth = 1.25 / cam.scale
+            ctx.stroke()
+            ctx.globalAlpha = 1
+          }
+          // Inner sub-topic rings: same hue, thinner and dashed, no fill.
+          ctx.setLineDash([4 / cam.scale, 4 / cam.scale])
+          for (const s of subList) {
+            ctx.beginPath()
+            ctx.arc(s.cx, s.cy, s.R, 0, Math.PI * 2)
+            ctx.globalAlpha = 0.4
+            ctx.strokeStyle = s.color
+            ctx.lineWidth = 1 / cam.scale
+            ctx.stroke()
+            ctx.globalAlpha = 1
+          }
+          ctx.setLineDash([])
+          for (const l of links) {
+            const dim = l.s.status === 'deprecated' || l.t.status === 'deprecated'
+            const lit = hover && (l.s === hover || l.t === hover)
+            ctx.strokeStyle = lit ? 'rgba(178,102,65,0.55)' : dim ? `rgba(${inkRGB}, ${edgeDimA})` : `rgba(${inkRGB}, ${edgeA})`
+            ctx.lineWidth = lit ? Math.max(1.5, l.w * 2.5) : Math.max(0.4, l.w * 1.5)
+            ctx.beginPath()
+            ctx.moveTo(l.s.x, l.s.y)
+            ctx.lineTo(l.t.x, l.t.y)
+            ctx.stroke()
+          }
+          for (const n of nodes) {
+            const r = nodeRadius(n)
+            ctx.globalAlpha = n.status === 'deprecated' ? 0.4 : 1
+            ctx.fillStyle = graphNodeColor(n)
+            ctx.beginPath()
+            ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+            ctx.fill()
+            if (n === hover) {
+              ctx.globalAlpha = 1
+              ctx.strokeStyle = inkHex
+              ctx.lineWidth = 2
+              ctx.beginPath()
+              ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2)
+              ctx.stroke()
+            }
+            ctx.globalAlpha = 1
+          }
+          // labels scale with zoom; hide the always-on ones when zoomed far out to avoid clutter
+          if (SHOW_LABELS && cam.scale >= 0.5) {
+            for (const n of nodes) {
+              if (n === hover) continue
+              labelPill(shortLabel(n), n.x, n.y + nodeRadius(n) + 4, false, n.status === 'deprecated' ? 0.5 : 1)
+            }
+          }
+          // Cluster labels: a bold, cluster-colored pill above each cluster's top edge.
+          if (cam.scale >= 0.4) {
+            for (const c of clusterList) {
+              const cx = c.cx
+              const cy = c.cy - c.R - 16
+              ctx.font = '700 13px "DM Sans", system-ui, sans-serif'
+              const tw = ctx.measureText(c.label).width
+              const padX = 7
+              const h = 20
+              const rr = 6
+              const x = cx - tw / 2 - padX
+              const w = tw + padX * 2
+              const topY = cy - h / 2
+              ctx.globalAlpha = 0.92
+              ctx.fillStyle = 'rgba(252,251,247,0.9)'
+              ctx.beginPath()
+              ctx.moveTo(x + rr, topY)
+              ctx.arcTo(x + w, topY, x + w, topY + h, rr)
+              ctx.arcTo(x + w, topY + h, x, topY + h, rr)
+              ctx.arcTo(x, topY + h, x, topY, rr)
+              ctx.arcTo(x, topY, x + w, topY, rr)
+              ctx.fill()
+              ctx.fillStyle = c.color
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'middle'
+              ctx.fillText(c.label, cx, cy)
+              ctx.globalAlpha = 1
+            }
+          }
+          // Inner sub-topic labels (smaller; shown only when zoomed in enough to read them).
+          if (cam.scale >= 0.7) {
+            for (const s of subList) {
+              const cx = s.cx
+              const cy = s.cy - s.R - 9
+              ctx.font = '600 10px "DM Sans", system-ui, sans-serif'
+              const tw = ctx.measureText(s.label).width
+              const padX = 5
+              const h = 15
+              const rr = 5
+              const x = cx - tw / 2 - padX
+              const w = tw + padX * 2
+              const topY = cy - h / 2
+              ctx.globalAlpha = 0.9
+              ctx.fillStyle = 'rgba(252,251,247,0.88)'
+              ctx.beginPath()
+              ctx.moveTo(x + rr, topY)
+              ctx.arcTo(x + w, topY, x + w, topY + h, rr)
+              ctx.arcTo(x + w, topY + h, x, topY + h, rr)
+              ctx.arcTo(x, topY + h, x, topY, rr)
+              ctx.arcTo(x, topY, x + w, topY, rr)
+              ctx.fill()
+              ctx.fillStyle = s.color
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'middle'
+              ctx.fillText(s.label, cx, cy)
+              ctx.globalAlpha = 1
+            }
+          }
+          if (hover) {
+            const full = (hover.label || '').replace(/\s+/g, ' ').trim()
+            const text = full.length > 48 ? full.slice(0, 48).trimEnd() + '…' : full
+            const withKind = hover.kind ? `${hover.kind} · ${text}` : text
+            labelPill(withKind, hover.x, hover.y + nodeRadius(hover) + 4, true, 1)
+          }
+          // Legend (screen space): color swatch + label + count per cluster, top-left,
+          // fixed while the graph pans/zooms. Ivory pill + dark text reads on both themes.
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+          if (clusterLegend.length) {
+            const rows = clusterLegend.slice(0, 10)
+            ctx.font = '600 11px "DM Sans", system-ui, sans-serif'
+            let maxW = 0
+            for (const r of rows) maxW = Math.max(maxW, ctx.measureText(r.label).width + ctx.measureText(String(r.count)).width)
+            const padX = 8
+            const rowH = 17
+            const sw = 10
+            const gap = 24
+            const boxW = padX * 2 + sw + 6 + maxW + gap
+            const boxH = padX + rows.length * rowH
+            ctx.globalAlpha = 0.92
+            ctx.fillStyle = 'rgba(252,251,247,0.9)'
+            ctx.beginPath()
+            ctx.rect(10, 10, boxW, boxH)
+            ctx.fill()
+            ctx.globalAlpha = 1
+            ctx.textBaseline = 'middle'
+            rows.forEach((r, i) => {
+              const y = 10 + padX + i * rowH + rowH / 2 - 4
+              ctx.fillStyle = r.color
+              ctx.beginPath()
+              ctx.arc(10 + padX + sw / 2, y, sw / 2, 0, Math.PI * 2)
+              ctx.fill()
+              ctx.textAlign = 'left'
+              ctx.fillStyle = '#26241f'
+              ctx.fillText(r.label, 10 + padX + sw + 6, y)
+              ctx.textAlign = 'right'
+              ctx.fillStyle = '#6e6b62'
+              ctx.fillText(String(r.count), 10 + boxW - padX, y)
+            })
+          }
+        }
+
+        fit()
+      }
+
+      function graphZoom(factor) {
+        if (graphState && graphState.api) graphState.api.zoomBy(factor)
+      }
+      function graphFit() {
+        if (graphState && graphState.api) graphState.api.fit()
+      }
+
       document.getElementById('confirm-dialog').addEventListener('click', (e) => {
         if (e.target === document.getElementById('confirm-dialog')) closeConfirm()
       })
@@ -3360,6 +4550,9 @@
       })
       document.getElementById('menu-sheet').addEventListener('click', (e) => {
         if (e.target === document.getElementById('menu-sheet')) closeMenu()
+      })
+      document.getElementById('integrations-sheet').addEventListener('click', (e) => {
+        if (e.target === document.getElementById('integrations-sheet')) closeIntegrations()
       })
       document.getElementById('view-sheet').addEventListener('click', (e) => {
         if (e.target === document.getElementById('view-sheet')) closeView()
@@ -3478,6 +4671,7 @@
         const tc = document.querySelector('meta[name="theme-color"]')
         if (tc) tc.setAttribute('content', dark ? '#18160F' : '#F4F1EA')
         document.querySelectorAll('#theme-toggle [data-theme-val]').forEach((b) => b.classList.toggle('active', b.dataset.themeVal === mode))
+        if (graphState && graphState.api) graphState.api.redraw() // repaint the graph in the new theme's ink
       }
       _prefersDark.addEventListener('change', applyTheme)
 
