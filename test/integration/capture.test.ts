@@ -98,6 +98,24 @@ describe("POST /capture", () => {
     expect(tags).toContain("fitness");
   });
 
+  it("stores domain tags as values without creating invalid Vectorize metadata keys", async () => {
+    const vectorize = makeVectorizeMock();
+    env = makeTestEnv(db, { VECTORIZE: vectorize });
+    const { ctx, drain } = makeCtx();
+
+    const res = await worker.fetch(req("POST", "/capture", {
+      body: { content: "Reference note", tags: ["richardhames.com", "kind:semantic"] }
+    }), env, ctx);
+    await drain();
+
+    expect(res.status).toBe(200);
+    const insertMock = vectorize.insert as ReturnType<typeof vi.fn>;
+    const vectors = insertMock.mock.calls[0][0] as any[];
+    expect(vectors[0].metadata.tags).toEqual(["richardhames.com", "kind:semantic"]);
+    expect(Object.keys(vectors[0].metadata).some(key => key.includes("."))).toBe(false);
+    expect(Object.keys(vectors[0].metadata).some(key => key.startsWith("tag_"))).toBe(false);
+  });
+
   it("behaves identically when no hashtags are present (regression)", async () => {
     const { ctx, drain } = makeCtx();
     const res = await worker.fetch(req("POST", "/capture", { body: { content: "plain note", tags: ["work"] } }), env, ctx);

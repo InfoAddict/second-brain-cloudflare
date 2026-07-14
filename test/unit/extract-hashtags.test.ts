@@ -49,4 +49,18 @@ describe("extractHashtags", () => {
     expect(cleanContent).toBe("note");
     expect(hashtags).toEqual(["tag_1", "item2"]);
   });
+
+  it("keeps hyphenated stream slugs intact and removes the full hashtag", () => {
+    const { cleanContent, hashtags } = extractHashtags(
+      "BREADCRUMB · #job-search done: followed up next: call recruiter"
+    );
+    expect(cleanContent).toBe("BREADCRUMB · done: followed up next: call recruiter");
+    expect(hashtags).toEqual(["job-search"]);
+  });
+
+  it("handles stream slugs with more than one hyphen", () => {
+    const { cleanContent, hashtags } = extractHashtags("note #upgrade-the-system today");
+    expect(cleanContent).toBe("note today");
+    expect(hashtags).toEqual(["upgrade-the-system"]);
+  });
 });

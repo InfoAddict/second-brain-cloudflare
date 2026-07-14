@@ -238,11 +238,11 @@ describe("POST /append", () => {
     expect(data.ok).toBe(true);
   });
 
-  it("populates per-tag metadata keys when entry has non-empty tags (short path)", async () => {
+  it("keeps tags as metadata values without generating unsafe per-tag keys", async () => {
     db.entries.push({
       id: "tagged-entry",
       content: "Original",
-      tags: '["work","idea"]',
+      tags: '["work","richardhames.com"]',
       source: "api",
       created_at: Date.now(),
       vector_ids: "[]",
@@ -254,10 +254,10 @@ describe("POST /append", () => {
     );
     expect(res.status).toBe(200);
 
-    // Verify Vectorize.insert was called with tag_* metadata fields
     const insertMock = env.VECTORIZE.insert as ReturnType<typeof import("vitest").vi.fn>;
     const vectors = insertMock.mock.calls[0][0] as any[];
-    expect(vectors[0].metadata).toMatchObject({ tag_work: true, tag_idea: true });
+    expect(vectors[0].metadata.tags).toEqual(["work", "richardhames.com"]);
+    expect(Object.keys(vectors[0].metadata).some(key => key.startsWith("tag_"))).toBe(false);
   });
 
   it("returns 500 when appendToEntry throws due to Vectorize failure (short path)", async () => {

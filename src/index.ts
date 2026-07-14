@@ -1102,8 +1102,9 @@ export async function classifyEntry(content: string, env: Env): Promise<{ import
 // ─── Hashtag extraction ───────────────────────────────────────────────────────
 
 export function extractHashtags(content: string): { cleanContent: string; hashtags: string[] } {
-  const hashtags = (content.match(/#\w+/g) ?? []).map(t => t.slice(1).toLowerCase());
-  const cleanContent = content.replace(/#\w+/g, '').replace(/\s+/g, ' ').trim();
+  const hashtagPattern = /#\w+(?:-\w+)*/g;
+  const hashtags = (content.match(hashtagPattern) ?? []).map(t => t.slice(1).toLowerCase());
+  const cleanContent = content.replace(hashtagPattern, '').replace(/\s+/g, ' ').trim();
   return { cleanContent, hashtags };
 }
 
@@ -1192,10 +1193,6 @@ async function storeEntry(
         source,
         created_at: now,
       };
-
-      tags.forEach(t => {
-        metadata[`tag_${t}`] = true;
-      });
 
       return {
         id: chunks.length === 1 ? id : `${id}-chunk-${i}`,
@@ -1300,10 +1297,6 @@ async function appendToEntry(
     source,
     created_at: Date.now(),
   };
-
-  tags.forEach(t => {
-    metadata[`tag_${t}`] = true;
-  });
 
   await env.VECTORIZE.insert([{
     id: newChunkId,
