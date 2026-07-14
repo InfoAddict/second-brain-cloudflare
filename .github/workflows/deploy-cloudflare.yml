@@ -5,6 +5,13 @@ on:
     branches:
       - main
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to deploy"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -16,10 +23,12 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -55,40 +64,18 @@ jobs:
             exit 1
           fi
 
-          cat > wrangler.deploy.toml <<EOF
-          name = "second-brain"
-          main = "src/index.ts"
-          account_id = "${CLOUDFLARE_ACCOUNT_ID}"
-          compatibility_date = "2024-11-01"
-          compatibility_flags = ["nodejs_compat"]
-
-          [[d1_databases]]
-          binding = "DB"
-          database_name = "second-brain-db"
-          database_id = "${D1_DATABASE_ID}"
-
-          [[vectorize]]
-          binding = "VECTORIZE"
-          index_name = "second-brain-vectors"
-          dimensions = 384
-          metric = "cosine"
-
-          [ai]
-          binding = "AI"
-
-          [[kv_namespaces]]
-          binding = "OAUTH_KV"
-          id = "${OAUTH_KV_NAMESPACE_ID}"
-
-          [vars]
-          VECTORIZE_GRACE_MS = "300000"
-
-          [assets]
-          directory = "./public"
-
-          [triggers]
-          crons = ["0 1 * * *"]
-          EOF
+          jq \
+            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg database_id "$D1_DATABASE_ID" \
+            --arg oauth_kv_id "$OAUTH_KV_NAMESPACE_ID" \
+            '.account_id = $account_id
+              | .d1_databases |= map(
+                  if .binding == "DB" then .database_id = $database_id else . end
+                )
+              | .kv_namespaces |= map(
+                  if .binding == "OAUTH_KV" then .id = $oauth_kv_id else . end
+                )' \
+            wrangler.jsonc > wrangler.deploy.json
 
       - name: Deploy
         env:
@@ -101,4 +88,4 @@ jobs:
             exit 1
           fi
 
-          npx wrangler deploy --config wrangler.deploy.toml
+          npx wrangler deploy --config wrangler.deploy.json

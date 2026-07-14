@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: upstream-release-update
@@ -22,7 +21,9 @@ concurrency:
 jobs:
   update-from-upstream-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    outputs:
+      update_applied: ${{ steps.update.outputs.needed }}
     env:
       UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'rahilp/second-brain-cloudflare' }}
     steps:
@@ -108,58 +109,26 @@ jobs:
         if: steps.update.outputs.needed == 'true'
         run: npm run test
 
-      - name: Push update branch
+      - name: Publish tested release
         if: steps.update.outputs.needed == 'true'
-        run: git push --force-with-lease origin "${{ steps.release.outputs.branch_name }}"
-
-      - name: Open or update pull request
-        id: pull_request
-        if: steps.update.outputs.needed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          existing_pr="$(gh pr list \
-            --head "${{ steps.release.outputs.branch_name }}" \
-            --base main \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')"
+          git push --force-with-lease origin "HEAD:${{ steps.release.outputs.branch_name }}"
+          git push origin "HEAD:main"
 
-          body="$(cat <<'BODY'
-          Automated upstream release update.
+          {
+            echo "### Applied upstream release ${{ steps.release.outputs.tag_name }}"
+            echo
+            echo "Source: ${{ steps.release.outputs.release_url }}"
+            echo
+            echo "Typecheck and tests passed before the release was pushed to main."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          Source release: ${{ steps.release.outputs.release_url }}
-
-          Checks run:
-          - npm run typecheck
-          - npm run test
-
-          This PR is merged automatically after the update branch passes checks.
-          BODY
-          )"
-
-          if [[ -n "$existing_pr" ]]; then
-            gh pr edit "$existing_pr" \
-              --title "Update from upstream release ${{ steps.release.outputs.tag_name }}" \
-              --body "$body"
-            pr_number="$existing_pr"
-          else
-            pr_url="$(gh pr create \
-              --base main \
-              --head "${{ steps.release.outputs.branch_name }}" \
-              --title "Update from upstream release ${{ steps.release.outputs.tag_name }}" \
-              --body "$body")"
-            pr_number="$(gh pr view "$pr_url" --json number --jq '.number')"
-          fi
-
-          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
-
-      - name: Merge update pull request
-        if: steps.update.outputs.needed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh pr merge "${{ steps.pull_request.outputs.pr_number }}" --merge --delete-branch
+  deploy-upstream-release:
+    needs: update-from-upstream-release
+    if: needs.update-from-upstream-release.outputs.update_applied == 'true'
+    uses: ./.github/workflows/deploy-cloudflare.yml
+    with:
+      ref: main
+    secrets: inherit

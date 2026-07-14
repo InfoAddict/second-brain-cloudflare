@@ -3472,6 +3472,9 @@ const oauthProvider = new OAuthProvider({
   authorizeEndpoint: "/oauth/authorize",
   tokenEndpoint: "/oauth/token",
   clientRegistrationEndpoint: "/oauth/register",
+  // Personal deployments should not require frequent client reauthorization.
+  refreshTokenTTL: 365 * 24 * 60 * 60,
+  clientRegistrationTTL: 365 * 24 * 60 * 60,
   // Accept the static AUTH_TOKEN for Claude Desktop + mcp-remote (no browser flow).
   resolveExternalToken: async ({ token, env }) => {
     if (token === (env as Env).AUTH_TOKEN) {
