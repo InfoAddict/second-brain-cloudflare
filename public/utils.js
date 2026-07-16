@@ -33,6 +33,18 @@ function toDateStr(d) {
   return `${y}-${m}-${day}`;
 }
 
+/* Read the optional dashboard entry deep link without trusting arbitrary input.
+ * Entry ids are later encoded into the authenticated /entry request. */
+function entryIdFromSearch(search) {
+  try {
+    const value = new URLSearchParams(String(search || '')).get('entry');
+    const entryId = value && value.trim();
+    return entryId && entryId.length <= 256 ? entryId : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /* Parse the text returned by the `recall` MCP tool into entry objects.
  * Tolerant of a few shapes: JSON array, or a numbered / bulleted text list
  * with an optional [NN%] score, inline #hashtags, and a trailing (id: …).
@@ -352,5 +364,5 @@ function packGraphCircles(radii, gap) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, assignGraphClusters, packGraphNodes, packGraphCircles };
+  module.exports = { escHtml, escAttr, toDateStr, entryIdFromSearch, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, assignGraphClusters, packGraphNodes, packGraphCircles };
 }

@@ -2772,6 +2772,8 @@
       let WORKER_URL = '',
         AUTH_TOKEN = '',
         allEntries = []
+      let requestedEntryId = null,
+        requestedEntryOpening = false
       let pendingForgetId = null,
         pendingAppendId = null,
         pendingForgetCard = null
@@ -2783,6 +2785,7 @@
 
       function init() {
         applyTheme()
+        requestedEntryId = entryIdFromSearch(window.location.search)
         // Auto-populate URL from the current page origin (UI is hosted on the same Worker)
         const origin = window.location.origin
         document.getElementById('auth-url').value = origin
@@ -2831,6 +2834,31 @@
         loadTags()
         updateStatus()
         checkVectorize()
+        void openRequestedEntry()
+      }
+
+      async function openRequestedEntry() {
+        if (!requestedEntryId || requestedEntryOpening) return
+        const entryId = requestedEntryId
+        requestedEntryOpening = true
+        try {
+          const res = await fetch(`${WORKER_URL}/entry?id=${encodeURIComponent(entryId)}`, {
+            headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+          })
+          const data = await res.json()
+          if (!res.ok || !data.ok || !data.entry) throw new Error('linked memory was not found')
+          openView({
+            id: data.entry.id,
+            content: data.entry.content,
+            tags: data.entry.tags,
+          }, null)
+        } catch (error) {
+          console.warn('Could not open linked memory:', error)
+          alert('Could not open the linked memory. It may have been removed.')
+        } finally {
+          requestedEntryId = null
+          requestedEntryOpening = false
+        }
       }
 
       async function loadTags() {

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 
-const { parseRecallResult, escHtml, escAttr, toDateStr, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
+const { parseRecallResult, escHtml, escAttr, toDateStr, entryIdFromSearch, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
+const dashboardHtml = readFileSync("public/index.html", "utf8");
 
 // Minimal fake document so the banner DOM glue can be tested in the node
 // environment without jsdom. appendChild registers the element by id so a later
@@ -21,6 +23,28 @@ function makeFakeDoc() {
   doc.body.appendChild = (el: any) => { byId[el.id] = el; };
   return doc;
 }
+
+describe("entryIdFromSearch", () => {
+  it("reads and decodes the dashboard entry deep link", () => {
+    expect(entryIdFromSearch("?entry=memory%2Fone")).toBe("memory/one");
+  });
+
+  it("trims the entry id and ignores unrelated or empty queries", () => {
+    expect(entryIdFromSearch("?entry=%20memory-1%20")).toBe("memory-1");
+    expect(entryIdFromSearch("?tag=throughline")).toBeNull();
+    expect(entryIdFromSearch("?entry=%20%20")).toBeNull();
+  });
+
+  it("rejects unreasonably large entry ids", () => {
+    expect(entryIdFromSearch(`?entry=${"a".repeat(257)}`)).toBeNull();
+  });
+
+  it("is wired into the authenticated dashboard entry flow", () => {
+    expect(dashboardHtml).toContain("requestedEntryId = entryIdFromSearch(window.location.search)");
+    expect(dashboardHtml).toContain("void openRequestedEntry()");
+    expect(dashboardHtml).toContain("/entry?id=${encodeURIComponent(entryId)}");
+  });
+});
 
 describe("parseRecallResult", () => {
   it("parses a JSON array of entries", () => {
