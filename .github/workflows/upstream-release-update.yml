@@ -41,17 +41,32 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Find latest upstream release
+      - name: Find latest upstream app release
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          if ! release_json="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" 2>/tmp/upstream-release-error.log)"; then
+          if ! releases_json="$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100" 2>/tmp/upstream-release-error.log)"; then
             echo "found=false" >> "$GITHUB_OUTPUT"
             echo "No upstream GitHub release found for ${UPSTREAM_REPO}; nothing to update."
             cat /tmp/upstream-release-error.log
+            exit 0
+          fi
+
+          # The repository also publishes installer-v* desktop releases. Follow
+          # only stable app versions such as v2.0.0, v1.6, or 1.5.1.
+          release_json="$(jq -c '
+            map(select(
+              (.draft | not) and
+              (.prerelease | not) and
+              (.tag_name | test("^v?[0-9]+(\\.[0-9]+){1,2}$"))
+            )) | first // empty
+          ' <<< "$releases_json")"
+          if [[ -z "$release_json" ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No stable upstream app release found for ${UPSTREAM_REPO}; nothing to update."
             exit 0
           fi
 
@@ -95,8 +110,17 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base_sha="$(git rev-parse HEAD)"
           git checkout -B "${{ steps.release.outputs.branch_name }}"
           git merge --no-edit "${{ steps.release.outputs.tag_name }}"
+
+          # Deployment and update automation belong to this fork. Keeping the
+          # local versions also prevents GitHub's workflow-file push restriction
+          # from blocking otherwise valid upstream app updates.
+          git restore --source="$base_sha" --staged --worktree -- .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
 
       - name: Setup Node
         if: steps.update.outputs.needed == 'true'
