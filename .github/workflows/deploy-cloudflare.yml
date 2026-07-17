@@ -89,3 +89,27 @@ jobs:
           fi
 
           npx wrangler deploy --config wrangler.deploy.json
+
+      - name: Restore required Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SECOND_BRAIN_TOKEN: ${{ secrets.SECOND_BRAIN_TOKEN }}
+          RELEASE_NOTIFY_TOKEN: ${{ secrets.RELEASE_NOTIFY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN SECOND_BRAIN_TOKEN RELEASE_NOTIFY_TOKEN; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required GitHub secret: ${name}"
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          printf '%s' "$SECOND_BRAIN_TOKEN" \
+            | npx wrangler secret put AUTH_TOKEN --config wrangler.deploy.json
+          printf '%s' "$RELEASE_NOTIFY_TOKEN" \
+            | npx wrangler secret put RELEASE_NOTIFY_TOKEN --config wrangler.deploy.json
