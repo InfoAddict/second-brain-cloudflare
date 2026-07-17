@@ -41,6 +41,12 @@ export function makeKVMock(): KVNamespace {
   } as unknown as KVNamespace;
 }
 
+export function makeSendEmailMock(): SendEmail {
+  return {
+    send: vi.fn().mockResolvedValue({ messageId: "test-message-id" }),
+  } as unknown as SendEmail;
+}
+
 // Stateful in-memory KV for tests where reads must see prior writes (the
 // integrations flow) — makeKVMock above always returns null.
 export function makeMemoryKV(): KVNamespace {
@@ -66,6 +72,7 @@ export function makeTestEnv(db?: D1Mock, overrides: Partial<Env> = {}): Env {
     AI: makeAIMock(),
     AUTH_TOKEN: "test-token",
     OAUTH_KV: makeKVMock(),
+    RELEASE_EMAIL: makeSendEmailMock(),
     ...overrides,
   };
 }

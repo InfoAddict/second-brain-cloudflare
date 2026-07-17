@@ -26,6 +26,12 @@
 			"binding": "OAUTH_KV"
 		}
 	],
+	"send_email": [
+		{
+			"name": "RELEASE_EMAIL",
+			"destination_address": "dan@infoaddict.net"
+		}
+	],
 	"vars": {
 		"VECTORIZE_GRACE_MS": "300000"
 	},

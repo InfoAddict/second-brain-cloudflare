@@ -25,6 +25,9 @@ export interface Env extends Omit<Cloudflare.Env, "VECTORIZE_GRACE_MS"> {
 }
 
 const LLM_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
+const RELEASE_EMAIL_FROM = "releases@updates.infoaddict.net";
+const RELEASE_EMAIL_TO = "dan@infoaddict.net";
+const RELEASE_DEPLOYMENT_URL = "https://brain.infoaddict.com";
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -575,6 +578,27 @@ function json(data: unknown, status = 200): Response {
 function requireAuth(request: Request, env: Env): Response | null {
   if (isAuthorized(request, env)) return null;
   return json({ ok: false, error: "Unauthorized" }, 401);
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[char] ?? char);
+}
+
+function isGitHubReleaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && url.hostname === "github.com"
+      && url.pathname.includes("/releases/");
+  } catch {
+    return false;
+  }
 }
 
 // Hosted OAuth login page. Styled to match the dashboard's token-entry card
@@ -2740,6 +2764,58 @@ const defaultHandler = {
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS });
+    }
+
+    // POST /internal/release-notification
+    // Called by GitHub Actions only after a tested upstream release deploys.
+    if (url.pathname === "/internal/release-notification" && request.method === "POST") {
+      const authErr = requireAuth(request, env);
+      if (authErr) return authErr;
+
+      let body: { releaseTag?: string; releaseName?: string; releaseUrl?: string; test?: boolean };
+      try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+
+      const releaseTag = body.releaseTag?.trim();
+      const releaseName = body.releaseName?.trim();
+      const releaseUrl = body.releaseUrl?.trim();
+      if (!releaseTag || !releaseName || !releaseUrl) {
+        return json({ ok: false, error: "releaseTag, releaseName, and releaseUrl are required" }, 400);
+      }
+      if (releaseTag.length > 100 || releaseName.length > 200 || releaseUrl.length > 500) {
+        return json({ ok: false, error: "Release metadata is too long" }, 400);
+      }
+      if (!isGitHubReleaseUrl(releaseUrl)) {
+        return json({ ok: false, error: "releaseUrl must be a GitHub release URL" }, 400);
+      }
+
+      const isTest = body.test === true;
+      const releaseLabel = releaseName === releaseTag ? releaseTag : `${releaseName} (${releaseTag})`;
+      const subject = isTest
+        ? "Second Brain release email test"
+        : `Second Brain updated: ${releaseTag}`;
+      const intro = isTest
+        ? `This is a setup test for the automatic release notification using ${releaseLabel}.`
+        : `Second Brain was updated to ${releaseLabel} after its checks passed and the Worker deployed successfully.`;
+      const textBody = `${intro}\n\nLive Worker: ${RELEASE_DEPLOYMENT_URL}\n\nRelease notes: ${releaseUrl}`;
+      const htmlBody = [
+        `<p>${escapeHtml(intro)}</p>`,
+        `<p><a href="${RELEASE_DEPLOYMENT_URL}">Open the live Worker</a></p>`,
+        `<p><a href="${escapeHtml(releaseUrl)}">View the upstream release notes</a></p>`,
+      ].join("");
+
+      try {
+        const result = await env.RELEASE_EMAIL.send({
+          from: RELEASE_EMAIL_FROM,
+          to: RELEASE_EMAIL_TO,
+          subject,
+          text: textBody,
+          html: htmlBody,
+        });
+        return json({ ok: true, messageId: result.messageId, test: isTest });
+      } catch (error) {
+        console.error("Release notification email failed:", error);
+        return json({ ok: false, error: "Release notification email failed" }, 502);
+      }
     }
 
     // POST /capture

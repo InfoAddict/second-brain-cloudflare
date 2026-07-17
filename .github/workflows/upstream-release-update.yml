@@ -10,6 +10,11 @@ on:
         description: "GitHub repository to monitor"
         required: false
         default: "rahilp/second-brain-cloudflare"
+      test_notification:
+        description: "Send a test release email when no update is needed"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -24,6 +29,9 @@ jobs:
     timeout-minutes: 30
     outputs:
       update_applied: ${{ steps.update.outputs.needed }}
+      release_tag: ${{ steps.release.outputs.tag_name }}
+      release_name: ${{ steps.release.outputs.release_name }}
+      release_url: ${{ steps.release.outputs.release_url }}
     env:
       UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'rahilp/second-brain-cloudflare' }}
     steps:
@@ -132,3 +140,88 @@ jobs:
     with:
       ref: main
     secrets: inherit
+
+  notify-upstream-release:
+    needs:
+      - update-from-upstream-release
+      - deploy-upstream-release
+    if: >-
+      always() &&
+      (
+        (
+          needs.update-from-upstream-release.outputs.update_applied == 'true' &&
+          needs.deploy-upstream-release.result == 'success'
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          inputs.test_notification == true &&
+          needs.update-from-upstream-release.outputs.update_applied != 'true'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Email applied release
+        env:
+          SECOND_BRAIN_URL: ${{ secrets.SECOND_BRAIN_URL }}
+          SECOND_BRAIN_TOKEN: ${{ secrets.SECOND_BRAIN_TOKEN }}
+          RELEASE_TAG: ${{ needs.update-from-upstream-release.outputs.release_tag }}
+          RELEASE_NAME: ${{ needs.update-from-upstream-release.outputs.release_name }}
+          RELEASE_URL: ${{ needs.update-from-upstream-release.outputs.release_url }}
+          IS_TEST: ${{ needs.update-from-upstream-release.outputs.update_applied != 'true' }}
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in SECOND_BRAIN_URL SECOND_BRAIN_TOKEN RELEASE_TAG RELEASE_NAME RELEASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required value: ${name}"
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          payload="$(jq -n \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg release_name "$RELEASE_NAME" \
+            --arg release_url "$RELEASE_URL" \
+            --argjson test "$IS_TEST" \
+            '{
+              releaseTag: $release_tag,
+              releaseName: $release_name,
+              releaseUrl: $release_url,
+              test: $test
+            }')"
+
+          response_file="$(mktemp)"
+          status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer ${SECOND_BRAIN_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "$payload" \
+            "${SECOND_BRAIN_URL%/}/internal/release-notification")"
+
+          if [[ "$status" -lt 200 || "$status" -ge 300 ]] || ! jq -e '.ok == true' "$response_file" >/dev/null; then
+            echo "::error::Release notification failed with HTTP ${status}"
+            cat "$response_file"
+            exit 1
+          fi
+
+          message_id="$(jq -r '.messageId // "unknown"' "$response_file")"
+          {
+            if [[ "$IS_TEST" == "true" ]]; then
+              echo "### Release notification test delivered"
+            else
+              echo "### Emailed applied release ${RELEASE_TAG}"
+            fi
+            echo
+            echo "Recipient: dan@infoaddict.net"
+            echo
+            echo "Release notes: ${RELEASE_URL}"
+            echo
+            echo "Cloudflare message ID: ${message_id}"
+          } >> "$GITHUB_STEP_SUMMARY"

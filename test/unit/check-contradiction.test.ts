@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { checkDuplicateAndContradiction } from "../../src/index";
 import type { MergeAction } from "../../src/index";
-import { makeTestDb, makeVectorizeMock, makeKVMock } from "../helpers/make-env";
+import { makeTestDb, makeVectorizeMock, makeKVMock, makeSendEmailMock } from "../helpers/make-env";
 import type { Env } from "../../src/index";
 
 function makeEnv(aiResponse: string, vectorMatches: any[] = [], dbEntries: any[] = []): Env {
@@ -27,6 +27,7 @@ function makeEnv(aiResponse: string, vectorMatches: any[] = [], dbEntries: any[]
     } as unknown as Ai,
     AUTH_TOKEN: "test-token",
     OAUTH_KV: makeKVMock(),
+    RELEASE_EMAIL: makeSendEmailMock(),
   };
 }
 
@@ -104,6 +105,7 @@ describe("checkDuplicateAndContradiction()", () => {
       } as unknown as Ai,
       AUTH_TOKEN: "test-token",
       OAUTH_KV: makeKVMock(),
+      RELEASE_EMAIL: makeSendEmailMock(),
     };
     const { contradiction } = await checkDuplicateAndContradiction("I moved to LA", env);
     expect(contradiction.detected).toBe(false);
@@ -188,6 +190,7 @@ describe("checkDuplicateAndContradiction()", () => {
       } as unknown as Ai,
       AUTH_TOKEN: "test-token",
       OAUTH_KV: makeKVMock(),
+      RELEASE_EMAIL: makeSendEmailMock(),
     };
     const { mergeAction } = await checkDuplicateAndContradiction("I like dark mode", env);
     expect(mergeAction).toEqual({ action: "keep_both" });
