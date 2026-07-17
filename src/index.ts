@@ -580,6 +580,11 @@ function requireAuth(request: Request, env: Env): Response | null {
   return json({ ok: false, error: "Unauthorized" }, 401);
 }
 
+function requireReleaseNotificationAuth(request: Request, env: Env): Response | null {
+  if (request.headers.get("Authorization") === `Bearer ${env.RELEASE_NOTIFY_TOKEN}`) return null;
+  return json({ ok: false, error: "Unauthorized" }, 401);
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, char => ({
     "&": "&amp;",
@@ -2769,7 +2774,7 @@ const defaultHandler = {
     // POST /internal/release-notification
     // Called by GitHub Actions only after a tested upstream release deploys.
     if (url.pathname === "/internal/release-notification" && request.method === "POST") {
-      const authErr = requireAuth(request, env);
+      const authErr = requireReleaseNotificationAuth(request, env);
       if (authErr) return authErr;
 
       let body: { releaseTag?: string; releaseName?: string; releaseUrl?: string; test?: boolean };

@@ -36,7 +36,7 @@
 		"VECTORIZE_GRACE_MS": "300000"
 	},
 	"secrets": {
-		"required": ["AUTH_TOKEN"]
+		"required": ["AUTH_TOKEN", "RELEASE_NOTIFY_TOKEN"]
 	},
 	"assets": {
 		"directory": "./public"

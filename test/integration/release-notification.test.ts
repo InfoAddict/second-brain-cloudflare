@@ -33,10 +33,22 @@ describe("Release notification", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("does not accept the normal Second Brain login token", async () => {
+    const response = await worker.fetch(
+      req("POST", "/internal/release-notification", { body: release }),
+      env,
+      ctx,
+    );
+
+    expect(response.status).toBe(401);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("rejects non-GitHub release links", async () => {
     const response = await worker.fetch(
       req("POST", "/internal/release-notification", {
         body: { ...release, releaseUrl: "https://example.com/release/v2.1.0" },
+        token: "release-test-token",
       }),
       env,
       ctx,
@@ -48,7 +60,7 @@ describe("Release notification", () => {
 
   it("sends the applied release and release-notes link to Dan", async () => {
     const response = await worker.fetch(
-      req("POST", "/internal/release-notification", { body: release }),
+      req("POST", "/internal/release-notification", { body: release, token: "release-test-token" }),
       env,
       ctx,
     );
@@ -66,7 +78,10 @@ describe("Release notification", () => {
 
   it("labels setup emails as tests", async () => {
     const response = await worker.fetch(
-      req("POST", "/internal/release-notification", { body: { ...release, test: true } }),
+      req("POST", "/internal/release-notification", {
+        body: { ...release, test: true },
+        token: "release-test-token",
+      }),
       env,
       ctx,
     );
@@ -81,7 +96,7 @@ describe("Release notification", () => {
     send.mockRejectedValue(new Error("send failed"));
 
     const response = await worker.fetch(
-      req("POST", "/internal/release-notification", { body: release }),
+      req("POST", "/internal/release-notification", { body: release, token: "release-test-token" }),
       env,
       ctx,
     );

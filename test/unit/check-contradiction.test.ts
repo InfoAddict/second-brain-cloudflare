@@ -26,6 +26,7 @@ function makeEnv(aiResponse: string, vectorMatches: any[] = [], dbEntries: any[]
       }),
     } as unknown as Ai,
     AUTH_TOKEN: "test-token",
+    RELEASE_NOTIFY_TOKEN: "release-test-token",
     OAUTH_KV: makeKVMock(),
     RELEASE_EMAIL: makeSendEmailMock(),
   };
@@ -104,6 +105,7 @@ describe("checkDuplicateAndContradiction()", () => {
         }),
       } as unknown as Ai,
       AUTH_TOKEN: "test-token",
+      RELEASE_NOTIFY_TOKEN: "release-test-token",
       OAUTH_KV: makeKVMock(),
       RELEASE_EMAIL: makeSendEmailMock(),
     };
@@ -189,6 +191,7 @@ describe("checkDuplicateAndContradiction()", () => {
         }),
       } as unknown as Ai,
       AUTH_TOKEN: "test-token",
+      RELEASE_NOTIFY_TOKEN: "release-test-token",
       OAUTH_KV: makeKVMock(),
       RELEASE_EMAIL: makeSendEmailMock(),
     };

@@ -71,6 +71,7 @@ export function makeTestEnv(db?: D1Mock, overrides: Partial<Env> = {}): Env {
     VECTORIZE: makeVectorizeMock(),
     AI: makeAIMock(),
     AUTH_TOKEN: "test-token",
+    RELEASE_NOTIFY_TOKEN: "release-test-token",
     OAUTH_KV: makeKVMock(),
     RELEASE_EMAIL: makeSendEmailMock(),
     ...overrides,

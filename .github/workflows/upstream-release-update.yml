@@ -188,7 +188,7 @@ jobs:
       - name: Email applied release
         env:
           SECOND_BRAIN_URL: ${{ secrets.SECOND_BRAIN_URL }}
-          SECOND_BRAIN_TOKEN: ${{ secrets.SECOND_BRAIN_TOKEN }}
+          RELEASE_NOTIFY_TOKEN: ${{ secrets.RELEASE_NOTIFY_TOKEN }}
           RELEASE_TAG: ${{ needs.update-from-upstream-release.outputs.release_tag }}
           RELEASE_NAME: ${{ needs.update-from-upstream-release.outputs.release_name }}
           RELEASE_URL: ${{ needs.update-from-upstream-release.outputs.release_url }}
@@ -197,7 +197,7 @@ jobs:
           set -euo pipefail
 
           missing=0
-          for name in SECOND_BRAIN_URL SECOND_BRAIN_TOKEN RELEASE_TAG RELEASE_NAME RELEASE_URL; do
+          for name in SECOND_BRAIN_URL RELEASE_NOTIFY_TOKEN RELEASE_TAG RELEASE_NAME RELEASE_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::Missing required value: ${name}"
               missing=1
@@ -224,7 +224,7 @@ jobs:
             --output "$response_file" \
             --write-out '%{http_code}' \
             --request POST \
-            --header "Authorization: Bearer ${SECOND_BRAIN_TOKEN}" \
+            --header "Authorization: Bearer ${RELEASE_NOTIFY_TOKEN}" \
             --header "Content-Type: application/json" \
             --data "$payload" \
             "${SECOND_BRAIN_URL%/}/internal/release-notification")"
