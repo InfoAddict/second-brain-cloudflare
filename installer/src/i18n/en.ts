@@ -2,7 +2,6 @@ import type { Messages } from "./types";
 
 export const en: Messages = {
   common: {
-    back: "Back",
     continue: "Continue",
     copy: "Copy",
     copied: "Copied ✓",
@@ -33,6 +32,8 @@ export const en: Messages = {
     title: "Let's set up your Second Brain",
     lede:
       "One private memory that every AI tool you use can share. " +
+      "Every app and device you connect is a door into the same memory, " +
+      "so there is nothing to sync between them. " +
       "It takes about two minutes, lives in your own private space, " +
       "and nothing technical is required.",
     getStarted: "Get started",
@@ -125,8 +126,10 @@ export const en: Messages = {
     claudeWeb: "Claude (web & desktop)",
   },
   details: {
-    title: "Connection details",
-    lede: "Everything you need to connect a tool or another computer.",
+    title: "Connections",
+    lede:
+      "This window is where you connect things to your Second Brain. " +
+      "Your memories themselves live in the dashboard, which opens in its own window.",
     notSetupTitle: "Not set up yet",
     notSetupLede: "Finish setting up your Second Brain first — these details appear here afterwards.",
     addressLabel: "Your Second Brain address",
@@ -140,6 +143,10 @@ export const en: Messages = {
       "it will ask for your password the first time.",
     integrationsTitle: "Integrations",
     integrationsDesc: "Bring in notes and pages from the tools you already use.",
+    navConnection: "Connection",
+    navTools: "AI tools",
+    navIntegrations: "Integrations",
+    navComputer: "This computer",
     updateLabel: "A newer Second Brain is available ({version})",
     updateDesc:
       "Update to get the latest improvements. Your memories, password, and connected tools are kept.",
@@ -156,14 +163,18 @@ export const en: Messages = {
     obsidianSub: "Keep your vault notes and your Second Brain in sync.",
     openObsidian: "Open in Obsidian",
     getPlugin: "Get the plugin",
-    notionTitle: "Notion",
-    notionSub: "Sync Notion pages into your memory.",
-    notionConnected: "Connected.",
-    notionConnectedTo: "Connected to {workspace}.",
+    connectedPlain: "Connected.",
+    connectedTo: "Connected to {workspace}.",
     syncNow: "Sync now",
     syncing: "Syncing…",
     manage: "Manage",
-    setupNotion: "Set up Notion",
+    setUp: "Set up",
+    appsTitle: "Apps",
+    back: "All integrations",
+    categoryKnowledge: "Knowledge",
+    categoryCalendar: "Calendars",
+    categoryEmail: "Email",
+    categoryOther: "Other",
   },
   logout: {
     button: "Log out of this computer",

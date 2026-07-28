@@ -44,27 +44,73 @@ async function boot() {
     "worker_update_available",
   ).catch(() => null);
 
+  // One pane at a time, chosen from a rail. Everything used to be stacked in a
+  // single column, so most of it was below the fold and the only way to find
+  // anything was to scroll and read. Each pane now answers one question.
+  type SectionId = "connection" | "tools" | "integrations" | "computer";
+  let active: SectionId = "connection";
+
+  const paneFor = (id: SectionId): HTMLElement[] => {
+    if (id === "connection") {
+      // No "open the dashboard" button here on purpose: this window is reached
+      // from the dashboard, which stays open behind it, so the button only sent
+      // this window to the back. The menu bar still has one for the case where
+      // no dashboard window is open.
+      return [
+        h("h2", { class: "pane-title" }, [t("details.navConnection")]),
+        h("p", { class: "pane-desc" }, [t("details.lede")]),
+        ...detailCards(details),
+        h("div", { class: "actions-spread" }, [copyBothButton(details), emailButton(details)]),
+      ];
+    }
+    if (id === "tools") {
+      return [
+        h("h2", { class: "pane-title" }, [t("details.connectToolsTitle")]),
+        h("p", { class: "pane-desc" }, [t("details.connectToolsDesc")]),
+        toolRows(details, tools),
+      ];
+    }
+    if (id === "integrations") {
+      return [
+        h("h2", { class: "pane-title" }, [t("details.integrationsTitle")]),
+        h("p", { class: "pane-desc" }, [t("details.integrationsDesc")]),
+        integrationRows(details),
+      ];
+    }
+    return [
+      h("h2", { class: "pane-title" }, [t("details.navComputer")]),
+      ...(update ? [updateCard(update.availableVersion)] : []),
+      settingsSection(() => render()),
+      logoutSection(),
+    ];
+  };
+
   const render = () => {
     document.title = t("details.title");
     void getCurrentWindow().setTitle(t("details.title"));
+
+    const rail = h("nav", { class: "rail" });
+    const sections: { id: SectionId; label: string }[] = [
+      { id: "connection", label: t("details.navConnection") },
+      { id: "tools", label: t("details.navTools") },
+      { id: "integrations", label: t("details.navIntegrations") },
+      { id: "computer", label: t("details.navComputer") },
+    ];
+    for (const section of sections) {
+      const button = h(
+        "button",
+        { class: section.id === active ? "rail-btn on" : "rail-btn" },
+        [section.label],
+      );
+      button.addEventListener("click", () => {
+        active = section.id;
+        render();
+      });
+      rail.append(button);
+    }
+
     app.replaceChildren(
-      h("div", { class: "screen" }, [
-        h("h1", {}, [t("details.title")]),
-        settingsSection(() => render()),
-        h("p", { class: "lede" }, [t("details.lede")]),
-        ...(update ? [updateCard(update.availableVersion)] : []),
-        ...detailCards(details),
-        h("div", { class: "actions-spread" }, [copyBothButton(details), emailButton(details)]),
-        h("div", { style: "height:18px" }),
-        h("div", { class: "url-label" }, [t("details.connectToolsTitle")]),
-        h("div", { class: "url-desc" }, [t("details.connectToolsDesc")]),
-        toolRows(details, tools),
-        h("div", { style: "height:18px" }),
-        h("div", { class: "url-label" }, [t("details.integrationsTitle")]),
-        h("div", { class: "url-desc" }, [t("details.integrationsDesc")]),
-        integrationRows(details),
-        logoutSection(),
-      ]),
+      h("div", { class: "panel" }, [rail, h("section", { class: "pane" }, paneFor(active))]),
     );
   };
 

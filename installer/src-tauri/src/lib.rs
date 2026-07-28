@@ -105,7 +105,13 @@ pub fn run() {
                 }
             }
         }))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The details panel always opens at its designed size. Restoring a saved
+        // geometry meant a window sized before a layout change stayed wrong forever.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .skip_initial_state("details")
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -150,7 +156,7 @@ pub fn run() {
             let hub_item = MenuItem::with_id(
                 app,
                 "menu-hub",
-                "Connections & Integrations…",
+                "Connections…",
                 true,
                 Some("CmdOrCtrl+D"),
             )?;
@@ -188,7 +194,7 @@ pub fn run() {
             let tray_hub = MenuItem::with_id(
                 app,
                 "tray-hub",
-                "Connections & Integrations…",
+                "Connections…",
                 true,
                 None::<&str>,
             )?;

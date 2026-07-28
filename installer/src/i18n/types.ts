@@ -2,7 +2,6 @@ export type Locale = "en" | "it";
 
 export type Messages = {
   common: {
-    back: string;
     continue: string;
     copy: string;
     copied: string;
@@ -116,6 +115,10 @@ export type Messages = {
     connectToolsDesc: string;
     integrationsTitle: string;
     integrationsDesc: string;
+    navConnection: string;
+    navTools: string;
+    navIntegrations: string;
+    navComputer: string;
     updateLabel: string;
     updateDesc: string;
     updateButton: string;
@@ -131,14 +134,18 @@ export type Messages = {
     obsidianSub: string;
     openObsidian: string;
     getPlugin: string;
-    notionTitle: string;
-    notionSub: string;
-    notionConnected: string;
-    notionConnectedTo: string;
+    connectedPlain: string;
+    connectedTo: string;
     syncNow: string;
     syncing: string;
     manage: string;
-    setupNotion: string;
+    setUp: string;
+    appsTitle: string;
+    back: string;
+    categoryKnowledge: string;
+    categoryCalendar: string;
+    categoryEmail: string;
+    categoryOther: string;
   };
   logout: {
     button: string;

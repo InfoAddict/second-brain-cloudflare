@@ -2,7 +2,6 @@ import type { Messages } from "./types";
 
 export const it: Messages = {
   common: {
-    back: "Indietro",
     continue: "Continua",
     copy: "Copia",
     copied: "Copiato ✓",
@@ -33,6 +32,8 @@ export const it: Messages = {
     title: "Configura il tuo Second Brain",
     lede:
       "Una memoria privata condivisa tra tutti gli strumenti AI che usi. " +
+      "Ogni app e dispositivo che colleghi è una porta sulla stessa memoria, " +
+      "quindi non c'è nulla da sincronizzare tra loro. " +
       "Ci vogliono circa due minuti, tutto nel tuo spazio privato, " +
       "senza competenze tecniche.",
     getStarted: "Inizia",
@@ -123,8 +124,10 @@ export const it: Messages = {
     claudeWeb: "Claude (web e desktop)",
   },
   details: {
-    title: "Dettagli connessione",
-    lede: "Tutto ciò che serve per collegare uno strumento o un altro computer.",
+    title: "Connessioni",
+    lede:
+      "Da qui colleghi le cose al tuo Second Brain. " +
+      "Le memorie vivono nella dashboard, che si apre in una finestra dedicata.",
     notSetupTitle: "Non ancora configurato",
     notSetupLede: "Completa prima la configurazione — i dettagli appariranno qui.",
     addressLabel: "Indirizzo del Second Brain",
@@ -138,6 +141,10 @@ export const it: Messages = {
       "chiederà la password la prima volta.",
     integrationsTitle: "Integrazioni",
     integrationsDesc: "Importa note e pagine dagli strumenti che già usi.",
+    navConnection: "Connessione",
+    navTools: "Strumenti AI",
+    navIntegrations: "Integrazioni",
+    navComputer: "Questo computer",
     updateLabel: "È disponibile un nuovo Second Brain ({version})",
     updateDesc:
       "Aggiorna per le ultime novità. Memorie, password e strumenti collegati restano.",
@@ -154,14 +161,18 @@ export const it: Messages = {
     obsidianSub: "Allinea il vault Obsidian con il Second Brain.",
     openObsidian: "Apri in Obsidian",
     getPlugin: "Ottieni il plugin",
-    notionTitle: "Notion",
-    notionSub: "Sincronizza le pagine Notion nella memoria.",
-    notionConnected: "Collegato.",
-    notionConnectedTo: "Collegato a {workspace}.",
+    connectedPlain: "Collegato.",
+    connectedTo: "Collegato a {workspace}.",
     syncNow: "Sincronizza ora",
     syncing: "Sincronizzazione…",
     manage: "Gestisci",
-    setupNotion: "Configura Notion",
+    setUp: "Configura",
+    appsTitle: "App",
+    back: "Tutte le integrazioni",
+    categoryKnowledge: "Conoscenza",
+    categoryCalendar: "Calendari",
+    categoryEmail: "Email",
+    categoryOther: "Altro",
   },
   logout: {
     button: "Esci da questo computer",
