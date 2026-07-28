@@ -165,7 +165,7 @@ function cutOnBoundary(text: string, budget: number): string {
 // The marker appended to a cut snippet. Carries the id so the caller can fetch
 // the rest without a second lookup.
 export function truncationNote(id: string, s: Snippet): string {
-  return `\n[truncated · ${s.fullLength.toLocaleString()} chars total · get("${id}") for full text]`;
+  return `\n[truncated · ${s.fullLength.toLocaleString("en-US")} chars total · get("${id}") for full text]`;
 }
 
 /**
