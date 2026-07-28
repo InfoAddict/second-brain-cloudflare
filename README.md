@@ -24,6 +24,14 @@ Prefer to run it yourself? Use the one-click **[Deploy to Cloudflare](https://de
 >
 > <a href="https://www.producthunt.com/products/second-brain-cloudflare?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-second-brain-for-ai" target="_blank" rel="noopener noreferrer"><img alt="Second Brain for AI: Persistent memory for Claude, ChatGPT, and Cursor" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1151393&theme=light&period=daily&t=1780357463637"></a>
 
+## What's new in v2.1
+
+* **Calendar sync.** Connect Google, Outlook, or iCloud calendars from **Settings → Integrations** by pasting your calendar's private iCal (`.ics`) link — no OAuth, no developer setup. Upcoming events sync into memory and stay current, so recall knows what's on your plate; past events are kept as a bounded history.
+
+* **Email capture.** Connect Gmail or iCloud with an app password from **Settings → Integrations**, and Second Brain captures the meaningful mail from your inbox — automatically filtering out newsletters, marketing, receipts, and other automated noise — so real correspondence surfaces in recall.
+
+* **Integrations, organized.** The Integrations screen now groups connections into **Knowledge**, **Calendars**, and **Email**, so it stays easy to navigate as more are added. Synced items are classified like anything else you save.
+
 ## What's new in v2
 
 * **Memory graph.** Memories now connect to each other — automatically as you save, or explicitly with the new `link` and `connections` tools. Recall can follow those connections (the `hops` option) to surface related context that a plain search would miss, and the dashboard has a new **Graph** tab to explore your memory visually.
@@ -39,6 +47,8 @@ Prefer to run it yourself? Use the one-click **[Deploy to Cloudflare](https://de
 ## How it works
 
 Connect Second Brain to the AI tools you already use, then save information as it comes up.
+
+Your Second Brain runs as a single Worker in your own Cloudflare account. Every install (the desktop app, CLI, browser extension, Obsidian, and each AI client) is a client pointed at that one Worker. There is nothing to sync between devices; they all read and write the same memory.
 
 Second Brain retrieves memories by meaning rather than exact wording. Asking:
 
@@ -71,6 +81,10 @@ Memory is most useful when capturing information is easy. Second Brain connects 
 
 * **Notion:** Connect your Notion workspace from **Settings → Integrations** in the web dashboard. Create an internal **connection** in the [Notion developer portal](https://app.notion.com/developers/connections) (a connection, not a personal access token — only connections appear in a page's Connections menu), share the pages you want remembered with it, and paste its secret — shared pages sync into memory automatically (nightly, or on demand with **Sync now**) and stay updated as they change in Notion.
 
+* **Calendar:** Connect Google, Outlook, or iCloud from **Settings → Integrations** and paste your calendar's private **iCal (`.ics`) link** (Google: *your calendar → Integrate calendar → "Secret address in iCal format"*; Outlook: *Calendar → Shared calendars → Publish*; iCloud: *Share Calendar → Public Calendar*). Read-only — upcoming events sync into memory automatically (nightly, or on demand with **Sync now**), and past events are kept as a bounded history.
+
+* **Email:** Connect Gmail or iCloud from **Settings → Integrations** with an **app password** (Google: *Account → Security → App passwords*; iCloud: *appleid.apple.com → App-Specific Passwords*). Read-only — meaningful messages are captured into memory, while newsletters, marketing, receipts, and other automated mail are filtered out.
+
 * **Obsidian:** Automatically sync notes using the [Second Brain Sync plugin](https://github.com/rahilp/second-brain-obsidian-plugin), also available through [Obsidian Community Plugins](https://community.obsidian.md/plugins/second-brain-sync).
 
 * **Browser extension:** Capture a page or highlighted text using the [Chrome extension](https://github.com/rahilp/second-brain-browser-extension).
@@ -99,7 +113,7 @@ Prefer to deploy the Worker yourself without the app? Set it up in three steps.
 
 ### 1. Choose an authentication token
 
-Your `AUTH_TOKEN` is the password used to access your Second Brain.
+Your `AUTH_TOKEN` is the password used to access your Second Brain. It is the same value every client asks for. Whether a surface calls it your "auth token", "bearer token", or "password", they all mean this one token, sent in the `Authorization: Bearer` header.
 
 Use either:
 
@@ -213,6 +227,7 @@ The following clients support this flow:
 * Claude.ai
 * Claude Code
 * Codex CLI
+* Cursor
 
 You can also configure supported command-line clients manually:
 
@@ -231,6 +246,48 @@ Authorization: Bearer YOUR-AUTH-TOKEN
 ```
 
 OAuth requires the `OAUTH_KV` namespace for client registrations and tokens. The Deploy to Cloudflare button provisions it automatically.
+
+</details>
+
+<details>
+<summary><strong>MCP OAuth troubleshooting</strong></summary>
+
+### Opera shows “Did you mean gmail.com?” during Authenticate
+
+Some browsers flag a **false phishing warning** when your Cloudflare account subdomain contains `gmail-com`. Cloudflare auto-generates that label for accounts linked to a Gmail address, so your Worker URL can look like:
+
+```text
+https://second-brain.your-name-gmail-com-s-account.workers.dev
+```
+
+Opera may treat `gmail-com` in the hostname as a fake Gmail site and block the OAuth login page before it loads.
+
+**Quick workarounds**
+
+* Click **Ignore** on Opera’s warning page, then enter your `AUTH_TOKEN` on the Second Brain sign-in page.
+* Use another browser (Chrome, Edge, Firefox) as your system default, or open the auth link there.
+* In Cursor: remove the MCP server, add it again, then click **Connect**.
+
+**Permanent fix — change your `workers.dev` subdomain**
+
+1. Open [Workers subdomain settings](https://dash.cloudflare.com/?to=/:account/workers/subdomain) in the Cloudflare dashboard.
+2. Click **Change** next to your current subdomain.
+3. Pick a name **without** `gmail` (for example `vincenzofabiano` instead of `vincenzofabiano92-gmail-com-s-account`).
+4. Update every client config to the new URL:
+
+   ```text
+   https://second-brain.YOUR-NEW-SUBDOMAIN.workers.dev/mcp
+   ```
+
+5. Remove and re-add the MCP connector in Cursor (or other clients), then authenticate again.
+
+**Alternative — custom domain**
+
+Attach a domain you control under **Worker → Settings → Domains & Routes**. Browsers will not confuse a custom hostname with Gmail.
+
+### Stale OAuth registration in Cursor
+
+If the browser opens a plain error instead of the sign-in form (“invalid authorization request” or similar), Cursor may be using an old OAuth `client_id`. Remove the Second Brain MCP entry, add it again with the correct Worker URL, then authenticate once more.
 
 </details>
 

@@ -1486,6 +1486,22 @@
         color: var(--text-tertiary);
       }
 
+      .first-run-steps {
+        margin: 14px 0 0;
+        padding-left: 20px;
+        text-align: left;
+        font-family: var(--font-sans);
+        font-style: normal;
+        font-size: 14px;
+        line-height: 1.65;
+        color: var(--text-secondary);
+        max-width: 460px;
+      }
+
+      .first-run-steps li {
+        margin-bottom: 8px;
+      }
+
       /* ============ BOTTOM SHEETS ============ */
       #confirm-dialog,
       #append-sheet,
@@ -2042,7 +2058,49 @@
       }
 
       .integration-row {
-        padding: 2px 0;
+        padding: 16px 0;
+      }
+
+      .integration-row + .integration-row {
+        border-top: 0.5px solid var(--border-input);
+      }
+
+      .integration-category-row {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        width: 100%;
+        padding: 15px 4px;
+        background: transparent;
+        border: none;
+        border-bottom: 0.5px solid var(--border-input);
+        font-family: inherit;
+        font-size: 14px;
+        color: var(--text-primary);
+        cursor: pointer;
+        text-align: left;
+      }
+      .integration-category-row:last-child {
+        border-bottom: none;
+      }
+      .integration-category-row:hover {
+        background: rgba(128, 128, 128, 0.08);
+      }
+      .integration-category-row > i.ti {
+        color: var(--accent);
+        font-size: 18px;
+      }
+      .integration-category-name {
+        font-weight: 500;
+      }
+      .integration-category-summary {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--text-tertiary);
+      }
+      .integration-category-chevron {
+        color: var(--text-tertiary) !important;
+        font-size: 16px !important;
       }
 
       .integration-head {
@@ -2074,6 +2132,11 @@
         display: flex;
         gap: 8px;
         margin-bottom: 6px;
+      }
+
+      .integration-connect-col {
+        flex-direction: column;
+        align-items: stretch;
       }
 
       .integration-connect-row input {
@@ -2364,7 +2427,7 @@
           <i class="ti ti-brain"></i>
         </div>
         <h1>Second Brain</h1>
-        <p>Enter your Bearer token to connect to your personal memory layer.</p>
+        <p>Enter your Bearer token to connect to your personal memory layer. This is the password you chose when you set up Second Brain.</p>
         <form
           class="field-group"
           onsubmit="
@@ -2374,7 +2437,7 @@
         >
           <input type="text" name="username" value="user" autocomplete="username" style="display: none" />
           <input type="url" id="auth-url" autocomplete="off" autocapitalize="none" />
-          <input type="password" id="auth-token" placeholder="Bearer token" autocomplete="current-password" />
+          <input type="password" id="auth-token" placeholder="Bearer token (your setup password)" autocomplete="current-password" />
           <button id="auth-connect" type="submit">Connect</button>
         </form>
         <div id="auth-error"></div>
@@ -2775,13 +2838,13 @@
       <div class="menu-inner">
         <div class="view-header">
           <div style="display: flex; align-items: center; gap: 10px">
-            <button class="btn-close-icon" onclick="backToMenu()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
-            <h3 style="margin-bottom: 0">Integrations</h3>
+            <button class="btn-close-icon" id="integrations-back" onclick="backToMenu()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
+            <h3 style="margin-bottom: 0" id="integrations-title">Integrations</h3>
           </div>
           <button class="btn-close-icon" onclick="closeIntegrations()"><i class="ti ti-x"></i></button>
         </div>
-        <p class="digest-note">Connect the tools where your context already lives. Synced content stays up to date and surfaces in recall like any other memory.</p>
-        <div id="integration-notion"><p class="digest-note">Loading&hellip;</p></div>
+        <p class="digest-note" id="integrations-intro">Connect the tools where your context already lives. Synced content stays up to date and surfaces in recall like any other memory.</p>
+        <div id="integrations-list"><p class="digest-note">Loading&hellip;</p></div>
       </div>
     </div>
 
@@ -3026,7 +3089,9 @@
           // formatted text miscounts sources when memory content contains list items
           // hops=1 lets recall follow relationship edges one step out; direct matches
           // always outrank expanded ones (worker applies a graph-distance penalty)
-          const params = new URLSearchParams({ query, topK: '5', hops: '1' })
+          // full=1: the dashboard renders whole memories in its cards, so it opts out
+          // of the snippet shortening that keeps API/agent responses small
+          const params = new URLSearchParams({ query, topK: '5', hops: '1', full: '1' })
           if (selectedTag) params.set('tag', selectedTag)
           const recallRes = await fetch(`${WORKER_URL}/recall?${params}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
           const data = await recallRes.json()
@@ -3148,6 +3213,7 @@
         try {
           allEntries = await apiList(50)
           renderRecent(allEntries)
+          showFirstRunIfEmpty(allEntries.length === 0)
           updateStatus()
           loadTags()
         } catch {
@@ -3173,10 +3239,34 @@
         )
       }
 
+      // A brand-new brain has nothing to recall, so the usual prompt and its
+      // suggestions would all come back empty. Say where things live instead.
+      function showFirstRunIfEmpty(isEmpty) {
+        const welcome = document.getElementById('recall-welcome')
+        const suggestions = document.querySelector('.suggestions-row')
+        if (!welcome) return
+        if (!isEmpty) {
+          if (suggestions) suggestions.style.display = ''
+          welcome.classList.remove('first-run')
+          return
+        }
+        if (suggestions) suggestions.style.display = 'none'
+        welcome.classList.add('first-run')
+        welcome.innerHTML =
+          `<div class="eyebrow">Getting started</div>` +
+          `<div class="hero-line">Your Second Brain is empty. Here is where everything lives.</div>` +
+          `<ol class="first-run-steps">` +
+          `<li><b>Remember</b> saves something. Try it with a decision you made this week.</li>` +
+          `<li><b>Recall</b> finds it later by meaning, so you do not need the words you used.</li>` +
+          `<li><b>Settings</b> is where you connect Claude, ChatGPT, Cursor, your email and calendar, ` +
+          `so they read from and add to this same memory.</li>` +
+          `</ol>`
+      }
+
       function renderRecent(entries) {
         const list = document.getElementById('recent-list')
         if (!entries.length) {
-          list.innerHTML = `<div class="empty-state"><i class="ti ti-brain"></i><span>No memories yet.<br>Use Remember to add some.</span></div>`
+          list.innerHTML = `<div class="empty-state"><i class="ti ti-brain"></i><span>No memories yet.<br>Use Remember to save your first one.</span></div>`
           return
         }
         const groups = {},
@@ -3435,6 +3525,7 @@
 
       function openIntegrations() {
         closeMenu()
+        currentCategory = null
         document.getElementById('integrations-sheet').classList.add('open')
         loadIntegrations()
       }
@@ -3653,69 +3744,180 @@
         }
       }
 
-      // ── Integrations (Notion) ─────────────────────────────────────────────
-      let notionInfo = null
+      // ── Integrations (registry-driven) ────────────────────────────────────
+      let integrationsInfo = []
+      let currentCategory = null // null = category list (level 1); else a category id (level 2)
+
+      // Ordered category groups for the two-level integrations UI. Only categories
+      // that have at least one registered provider are shown, so Email appears
+      // automatically once email providers are registered.
+      const CATEGORY_META = [
+        { id: 'knowledge', name: 'Knowledge', icon: 'ti-notebook' },
+        { id: 'calendar', name: 'Calendars', icon: 'ti-calendar' },
+        { id: 'email', name: 'Email', icon: 'ti-mail' },
+      ]
+
+      const INTEGRATION_ICONS = {
+        notion: 'ti-brand-notion',
+        'calendar-google': 'ti-brand-google',
+        'calendar-outlook': 'ti-brand-windows',
+        'calendar-icloud': 'ti-brand-apple',
+      }
+      // Notion keeps its bespoke connect copy; calendar providers ship their own connectHint.
+      const NOTION_HINT =
+        'Create an internal <b>connection</b> (not a personal access token) at ' +
+        '<a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener noreferrer">app.notion.com/developers/connections</a>, ' +
+        'share the pages you want remembered with it (page menu &rarr; Connections), then paste its secret here.'
 
       async function loadIntegrations() {
-        const el = document.getElementById('integration-notion')
+        const el = document.getElementById('integrations-list')
         try {
           const res = await fetch(`${WORKER_URL}/integrations`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
           const data = await res.json()
-          notionInfo = (data.integrations || []).find((i) => i.provider === 'notion') || null
-          renderNotionCard()
+          integrationsInfo = data.integrations || []
+          renderIntegrations()
         } catch {
           el.innerHTML = '<p class="digest-note">Could not load integrations.</p>'
         }
       }
 
-      function renderNotionCard() {
-        const el = document.getElementById('integration-notion')
-        if (!notionInfo || !notionInfo.connected) {
-          el.innerHTML = `
-            <div class="integration-row">
-              <div class="integration-head"><i class="ti ti-brand-notion"></i><span>Notion</span><span class="integration-state">Not connected</span></div>
-              <p class="digest-note">
-                Create an internal <b>connection</b> (not a personal access token) at
-                <a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener noreferrer">app.notion.com/developers/connections</a>,
-                share the pages you want remembered with it (page menu &rarr; Connections), then paste its secret here. Shared pages
-                sync into your brain and stay updated.
-              </p>
-              <div class="integration-connect-row">
-                <input type="password" id="notion-token-input" placeholder="Integration secret (ntn_…)" autocomplete="off" />
-                <button class="digest-btn" onclick="connectNotion(this)">Connect</button>
-              </div>
-              <div class="integration-error" id="notion-error"></div>
-            </div>`
+      // Resolve a provider's category id, falling back to 'other' so nothing is lost.
+      function integrationCategoryId(info) {
+        return CATEGORY_META.some((c) => c.id === info.category) ? info.category : 'other'
+      }
+
+      function categoryMeta(id) {
+        return CATEGORY_META.find((c) => c.id === id) || { id, name: 'Other', icon: 'ti-plug' }
+      }
+
+      // Categories present in the data, in CATEGORY_META order, with any leftover
+      // 'other' bucket last.
+      function presentCategories() {
+        const present = new Set(integrationsInfo.map(integrationCategoryId))
+        const ordered = CATEGORY_META.filter((c) => present.has(c.id))
+        if (present.has('other')) ordered.push(categoryMeta('other'))
+        return ordered
+      }
+
+      // Header back-button / title / intro reflect the current level.
+      function renderIntegrationsChrome() {
+        const back = document.getElementById('integrations-back')
+        const title = document.getElementById('integrations-title')
+        const intro = document.getElementById('integrations-intro')
+        if (currentCategory) {
+          title.textContent = categoryMeta(currentCategory).name
+          back.setAttribute('title', 'Back to integrations')
+          back.onclick = backToCategoryList
+          intro.style.display = 'none'
+        } else {
+          title.textContent = 'Integrations'
+          back.setAttribute('title', 'Back to settings')
+          back.onclick = backToMenu
+          intro.style.display = ''
+        }
+      }
+
+      function renderIntegrations() {
+        renderIntegrationsChrome()
+        const el = document.getElementById('integrations-list')
+        if (!integrationsInfo.length) {
+          el.innerHTML = '<p class="digest-note">No integrations available.</p>'
           return
         }
-        const last = notionInfo.lastSyncedAt ? new Date(notionInfo.lastSyncedAt).toLocaleString() : 'never'
-        const pages = `${notionInfo.itemCount} page${notionInfo.itemCount === 1 ? '' : 's'} synced`
-        const err = notionInfo.lastSyncError ? `<div class="integration-error">Last sync failed: ${escHtml(notionInfo.lastSyncError)}</div>` : ''
-        el.innerHTML = `
+        if (currentCategory) {
+          const cards = integrationsInfo
+            .filter((i) => integrationCategoryId(i) === currentCategory)
+            .map(renderIntegrationCard)
+            .join('')
+          el.innerHTML = cards || '<p class="digest-note">Nothing here yet.</p>'
+          return
+        }
+        el.innerHTML = presentCategories().map(renderCategoryRow).join('')
+      }
+
+      function renderCategoryRow(cat) {
+        const items = integrationsInfo.filter((i) => integrationCategoryId(i) === cat.id)
+        const connected = items.filter((i) => i.connected).length
+        const summary = connected > 0 ? `${connected} connected` : 'Not connected'
+        return `
+          <button class="integration-category-row" onclick="openCategory('${cat.id}')">
+            <i class="ti ${cat.icon}"></i>
+            <span class="integration-category-name">${escHtml(cat.name)}</span>
+            <span class="integration-category-summary">${summary}</span>
+            <i class="ti ti-chevron-right integration-category-chevron"></i>
+          </button>`
+      }
+
+      function openCategory(id) {
+        currentCategory = id
+        renderIntegrations()
+      }
+      function backToCategoryList() {
+        currentCategory = null
+        renderIntegrations()
+      }
+
+      function renderIntegrationCard(info) {
+        const p = info.provider
+        const icon = INTEGRATION_ICONS[p] || 'ti-plug'
+        if (!info.connected) {
+          const hint = p === 'notion' ? NOTION_HINT : (info.connectHint || '')
+          const label = escHtml(info.connectLabel || 'Paste your secret')
+          const isEmail = p.startsWith('email')
+          let inputs
+          if (isEmail) {
+            // Email needs two fields; connectIntegration packs them into the token.
+            inputs =
+              `<input type="email" id="email-${p}" placeholder="you@example.com" aria-label="Email address" autocomplete="off" />` +
+              `<input type="password" id="tok-${p}" placeholder="${escHtml(info.connectPlaceholder || 'app password')}" aria-label="App password" autocomplete="off" />`
+          } else {
+            const placeholder = escHtml(info.connectPlaceholder || (p === 'notion' ? 'Integration secret (ntn_…)' : 'https://…'))
+            inputs = `<input type="password" id="tok-${p}" placeholder="${placeholder}" aria-label="${label}" autocomplete="off" />`
+          }
+          return `
+            <div class="integration-row">
+              <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state">Not connected</span></div>
+              <p class="digest-note">${hint}</p>
+              <div class="integration-connect-row${isEmail ? ' integration-connect-col' : ''}">
+                ${inputs}
+                <button class="digest-btn" onclick="connectIntegration('${p}', this)">Connect</button>
+              </div>
+              <div class="integration-error" id="err-${p}"></div>
+            </div>`
+        }
+        const last = info.lastSyncedAt ? new Date(info.lastSyncedAt).toLocaleString() : 'never'
+        const noun = p.startsWith('calendar') ? 'event' : p.startsWith('email') ? 'email' : 'item'
+        const count = `${info.itemCount} ${noun}${info.itemCount === 1 ? '' : 's'} synced`
+        const err = info.lastSyncError ? `<div class="integration-error">Last sync failed: ${escHtml(info.lastSyncError)}</div>` : ''
+        return `
           <div class="integration-row">
-            <div class="integration-head"><i class="ti ti-brand-notion"></i><span>Notion</span><span class="integration-state connected">${escHtml(notionInfo.workspaceName || 'Connected')}</span></div>
-            <p class="digest-note" id="notion-sync-note">${pages} &middot; Last sync: ${escHtml(last)}</p>
+            <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state connected">${escHtml(info.workspaceName || 'Connected')}</span></div>
+            <p class="digest-note" id="note-${p}">${count} &middot; Last sync: ${escHtml(last)}</p>
             ${err}
             <div class="integration-actions">
-              <button class="digest-btn" onclick="syncNotion(this)"><i class="ti ti-refresh"></i> Sync now</button>
-              <button class="digest-btn danger" onclick="disconnectNotion(this)">Disconnect</button>
+              <button class="digest-btn" onclick="syncIntegration('${p}', this)"><i class="ti ti-refresh"></i> Sync now</button>
+              <button class="digest-btn danger" onclick="disconnectIntegration('${p}', this)">Disconnect</button>
             </div>
           </div>`
       }
 
-      async function connectNotion(btn) {
-        const input = document.getElementById('notion-token-input')
-        const errEl = document.getElementById('notion-error')
-        const token = input.value.trim()
-        if (!token) {
-          errEl.textContent = 'Paste your integration secret first.'
-          return
+      async function connectIntegration(provider, btn) {
+        const errEl = document.getElementById(`err-${provider}`)
+        let token
+        if (provider.startsWith('email')) {
+          const email = (document.getElementById(`email-${provider}`).value || '').trim()
+          const pw = (document.getElementById(`tok-${provider}`).value || '').trim()
+          if (!email || !pw) { errEl.textContent = 'Enter your email and app password.'; return }
+          token = JSON.stringify({ email: email, appPassword: pw })
+        } else {
+          token = (document.getElementById(`tok-${provider}`).value || '').trim()
+          if (!token) { errEl.textContent = 'Paste your secret first.'; return }
         }
         btn.disabled = true
         btn.textContent = 'Connecting…'
         errEl.textContent = ''
         try {
-          const res = await fetch(`${WORKER_URL}/integrations/notion/connect`, {
+          const res = await fetch(`${WORKER_URL}/integrations/${provider}/connect`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
             body: JSON.stringify({ token }),
@@ -3723,6 +3925,9 @@
           const data = await res.json()
           if (!res.ok || !data.ok) throw new Error(data.error || 'Could not connect')
           await loadIntegrations()
+          // Kick off the first sync automatically.
+          const syncBtn = document.querySelector(`[onclick^="syncIntegration('${provider}'"]`)
+          if (syncBtn) syncIntegration(provider, syncBtn)
         } catch (e) {
           errEl.textContent = e.message || 'Could not connect.'
           btn.disabled = false
@@ -3730,20 +3935,19 @@
         }
       }
 
-      async function syncNotion(btn) {
+      async function syncIntegration(provider, btn) {
         btn.disabled = true
         btn.classList.add('digest-btn--loading')
         btn.innerHTML = '<i class="ti ti-loader-2"></i> Syncing…'
-        const note = document.getElementById('notion-sync-note')
+        const note = document.getElementById(`note-${provider}`)
+        const noun = provider.startsWith('calendar') ? 'event' : provider.startsWith('email') ? 'email' : 'item'
         try {
-          // Each call processes a bounded batch (Workers subrequest limits) and
-          // reports what's left — loop until the backlog drains, like runVectorize.
-          let remaining = 1
-          let processed = 0
-          let guard = 0
+          // Each call processes a bounded batch and reports what's left — loop
+          // until the backlog drains (same pattern as runVectorize).
+          let remaining = 1, processed = 0, guard = 0
           while (remaining > 0 && guard < 40) {
             guard++
-            const res = await fetch(`${WORKER_URL}/integrations/notion/sync`, {
+            const res = await fetch(`${WORKER_URL}/integrations/${provider}/sync`, {
               method: 'POST',
               headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
             })
@@ -3751,16 +3955,14 @@
             if (!res.ok || !data.ok) throw new Error(data.error || 'Sync failed')
             processed += (data.created ?? 0) + (data.updated ?? 0)
             remaining = data.remaining ?? 0
-            if (note) note.textContent = `Syncing… ${processed} page${processed === 1 ? '' : 's'} so far`
-            // A batch with zero progress means every page in it failed — stop looping.
+            if (note) note.textContent = `Syncing… ${processed} ${noun}${processed === 1 ? '' : 's'} so far`
+            // A batch with zero progress means everything in it failed — stop.
             if ((data.created ?? 0) + (data.updated ?? 0) + (data.deleted ?? 0) === 0 && remaining > 0) break
           }
           btn.classList.remove('digest-btn--loading')
           btn.innerHTML = `<i class="ti ti-check"></i> ${processed} synced`
           btn.style.color = 'var(--good)'
-          setTimeout(async () => {
-            await loadIntegrations()
-          }, 900)
+          setTimeout(loadIntegrations, 900)
           loadRecent()
           loadTags()
           updateStatus()
@@ -3768,22 +3970,23 @@
           btn.classList.remove('digest-btn--loading')
           btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Sync failed'
           btn.style.color = 'var(--danger)'
-          setTimeout(() => loadIntegrations(), 3000)
+          setTimeout(loadIntegrations, 3000)
         }
       }
 
-      async function disconnectNotion(btn) {
-        if (!confirm('Disconnect Notion? Pages will stop syncing.')) return
+      async function disconnectIntegration(provider, btn) {
+        const info = integrationsInfo.find((i) => i.provider === provider) || {}
+        if (!confirm(`Disconnect ${info.name || provider}? It will stop syncing.`)) return
         let purge = false
-        if (notionInfo && notionInfo.itemCount > 0) {
+        if (info.itemCount > 0) {
           purge = confirm(
-            `Also delete the ${notionInfo.itemCount} memor${notionInfo.itemCount === 1 ? 'y' : 'ies'} synced from Notion?\n\nOK = delete them\nCancel = keep them as regular memories`,
+            `Also delete the ${info.itemCount} synced memor${info.itemCount === 1 ? 'y' : 'ies'}?\n\nOK = delete them\nCancel = keep them as regular memories`,
           )
         }
         btn.disabled = true
         btn.textContent = 'Disconnecting…'
         try {
-          const res = await fetch(`${WORKER_URL}/integrations/notion/disconnect`, {
+          const res = await fetch(`${WORKER_URL}/integrations/${provider}/disconnect`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
             body: JSON.stringify({ purge }),
@@ -3791,11 +3994,7 @@
           const data = await res.json()
           if (!res.ok || !data.ok) throw new Error(data.error || 'Disconnect failed')
           await loadIntegrations()
-          if (purge) {
-            loadRecent()
-            loadTags()
-            updateStatus()
-          }
+          if (purge) { loadRecent(); loadTags(); updateStatus() }
         } catch (e) {
           btn.disabled = false
           btn.textContent = 'Disconnect'
@@ -3978,8 +4177,11 @@
             `<div class="view-related-label">Related</div>` +
             data.connections
               .map(
-                (c) =>
-                  `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="Remove link"><i class="ti ti-unlink"></i></button></div>`,
+                (c) => {
+                  const who = c.provenance === 'explicit' ? 'you linked' : c.provenance === 'system' ? 'system-linked' : 'auto-linked'
+                  const when = c.linkedAt ? ' · ' + new Date(c.linkedAt).toLocaleDateString() : ''
+                  return `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)} · ${who}${when}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="Remove link"><i class="ti ti-unlink"></i></button></div>`
+                },
               )
               .join('')
           el.style.display = 'block'
@@ -4062,7 +4264,7 @@
         nodes.forEach((n) => {
           byId[n.id] = n
         })
-        const links = edges.map((e) => ({ s: byId[e.source], t: byId[e.target], w: e.weight })).filter((l) => l.s && l.t)
+        const links = edges.map((e) => ({ s: byId[e.source], t: byId[e.target], w: e.weight, p: e.provenance })).filter((l) => l.s && l.t)
 
         // No physics: node positions are computed deterministically below (static packed
         // clusters), after topic clustering.
@@ -4419,6 +4621,12 @@
           for (const l of links) {
             const dim = l.s.status === 'deprecated' || l.t.status === 'deprecated'
             const lit = hover && (l.s === hover || l.t === hover)
+            // Edge dash encodes provenance: solid = you linked, dashed = auto-inferred, dotted = system.
+            ctx.setLineDash(
+              l.p === 'explicit' ? [] :
+              l.p === 'system' ? [1 / cam.scale, 2 / cam.scale] :
+              [3 / cam.scale, 3 / cam.scale],
+            )
             ctx.strokeStyle = lit ? 'rgba(178,102,65,0.55)' : dim ? `rgba(${inkRGB}, ${edgeDimA})` : `rgba(${inkRGB}, ${edgeA})`
             ctx.lineWidth = lit ? Math.max(1.5, l.w * 2.5) : Math.max(0.4, l.w * 1.5)
             ctx.beginPath()
@@ -4426,6 +4634,7 @@
             ctx.lineTo(l.t.x, l.t.y)
             ctx.stroke()
           }
+          ctx.setLineDash([])
           for (const n of nodes) {
             const r = nodeRadius(n)
             ctx.globalAlpha = n.status === 'deprecated' ? 0.4 : 1

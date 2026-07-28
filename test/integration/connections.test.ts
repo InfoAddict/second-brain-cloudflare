@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import worker from "../../src/index";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
@@ -47,6 +47,16 @@ describe("GET /connections", () => {
     expect(data.ok).toBe(true);
     expect(data.connections).toHaveLength(1);
     expect(data.connections[0]).toMatchObject({ id: "b", content: "Outcome B", type: "relates_to", label: "Related to" });
+  });
+
+  it("surfaces edge provenance and when it was formed (#225)", async () => {
+    seedEntry(db, "a", "Decision A");
+    seedEntry(db, "b", "Auto-linked B");
+    db.edges.push({ id: "a-b-relates_to", source_id: "a", target_id: "b", type: "relates_to", weight: 0.7, provenance: "inferred", metadata: "{}", created_at: 1710000000000, updated_at: 1710000000000 });
+
+    const res = await worker.fetch(req("GET", "/connections?id=a"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.connections[0]).toMatchObject({ id: "b", provenance: "inferred", linkedAt: 1710000000000 });
   });
 
   it("filters by relationship type", async () => {

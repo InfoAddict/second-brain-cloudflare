@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import worker from "../../src/index";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
@@ -43,7 +43,7 @@ describe("GET /graph", () => {
     expect(a).toMatchObject({ kind: "semantic", status: null, label: "Memory A" });
     const b = data.nodes.find((n: any) => n.id === "b");
     expect(b).toMatchObject({ kind: "episodic", status: "deprecated" });
-    expect(data.edges).toEqual([{ source: "a", target: "b", type: "relates_to", weight: 0.7 }]);
+    expect(data.edges).toEqual([{ source: "a", target: "b", type: "relates_to", weight: 0.7, provenance: "inferred" }]);
   });
 
   it("never returns dangling edges (an endpoint missing from the node set)", async () => {

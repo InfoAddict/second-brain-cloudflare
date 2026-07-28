@@ -1,4 +1,4 @@
-import { COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_MIN_RECALL } from "../../src/index";
+import { COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_MIN_RECALL } from "../../src/compression/eligibility";
 
 export class D1Mock {
   entries: any[] = [];
@@ -240,7 +240,7 @@ export class D1Mock {
           const results = db.edges
             .filter((e: any) => ids.has(e.source_id) || ids.has(e.target_id))
             .sort((a: any, b: any) => b.weight - a.weight)
-            .map((e: any) => ({ source_id: e.source_id, target_id: e.target_id, type: e.type, weight: e.weight }));
+            .map((e: any) => ({ source_id: e.source_id, target_id: e.target_id, type: e.type, weight: e.weight, provenance: e.provenance, created_at: e.created_at }));
           return { results };
         }
         if (s.includes("SELECT source_id, target_id FROM edges ORDER BY weight DESC")) {
