@@ -54,4 +54,8 @@ Tags to use:
 
 Always set source to "codex" when storing.
 
-If the second brain MCP tools are unavailable, tell me immediately. Do not fall back to your own memory silently.
+MCP availability (Codex CLI and other lazy-loading clients):
+- Codex and similar clients may load MCP tool schemas lazily — second brain tools (remember, recall, etc.) may NOT appear in the session's visible tool list even when the server is connected.
+- Never conclude the tools are unavailable from the tool list alone, from not having called a tool yet, or from "nothing stored" in a session.
+- Verify by actually calling recall (or another second brain tool). Only report "second brain unavailable" if a real tool call returns an error — quote that error.
+- Do not fall back to your own memory silently when tools are down; if recall succeeds, the tools are available.

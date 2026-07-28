@@ -289,6 +289,14 @@ Attach a domain you control under **Worker → Settings → Domains & Routes**. 
 
 If the browser opens a plain error instead of the sign-in form (“invalid authorization request” or similar), Cursor may be using an old OAuth `client_id`. Remove the Second Brain MCP entry, add it again with the correct Worker URL, then authenticate once more.
 
+### Claude Code says Second Brain is “not available”
+
+Some MCP clients (notably **Claude Code**) load tool schemas **lazily**. `/mcp` can show **connected** while `remember` / `recall` do not appear in the session’s visible tool list at first. That does **not** mean the server is down.
+
+**Verify with a real tool call** — ask the agent to run `recall` with a natural-language query. If it returns results (or “no memories found”), MCP is working.
+
+Only treat Second Brain as unavailable when a tool call returns an **error** (auth failure, network error, 5xx). Re-run `scripts/connect-ai-clients.sh` or `.ps1` if your global instructions still tell the agent to report unavailable without calling a tool.
+
 </details>
 
 ## Option 3 — Manual deployment
