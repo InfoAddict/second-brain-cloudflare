@@ -46,30 +46,30 @@ jobs:
   # a PR can turn the Tauri app into something that does not build and still go
   # green, with the failure surfacing only when an `installer-v*` tag kicks off
   # installer-release.yml. That is the most expensive place to find it.
+  #
+  # Runs on the two platforms the app ships on, matching installer-release.yml.
+  # That is deliberate rather than a cost decision: `detect_obsidian`
+  # (commands.rs) selects its body with `cfg(target_os)`, so a Linux runner
+  # would compile a fallback branch that never ships while never compiling the
+  # Windows branch at all — under-reporting real breakage and able to fail on
+  # code no user runs. macOS and Windows also need no system packages (WebKit
+  # and WebView2 are provided by the OS and the runner image), so there is no
+  # apt list here to drift out of step with a runner upgrade.
   desktop:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    strategy:
+      # Report both platforms. Without this a macOS failure cancels the Windows
+      # job and hides whatever it would have found.
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-      # Tauri links against GTK/WebKit on Linux, and the headers are required
-      # even for `cargo check`. The app ships on macOS and Windows only, so this
-      # job is here to catch type, trait and borrow errors early — it is not a
-      # claim that the Linux bundle works.
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            patchelf
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
