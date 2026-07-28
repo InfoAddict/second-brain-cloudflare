@@ -5,10 +5,13 @@
 //!   * afterwards → a native shell around the user's own Worker dashboard
 //! Mode is decided by whether OS-secure storage holds a completed setup.
 
+mod app_menus;
 mod app_update;
 mod cf;
 mod cli_config;
 mod commands;
+mod credits;
+mod i18n;
 mod mcp_config;
 mod password_check;
 mod secure_store;
@@ -16,24 +19,33 @@ mod version;
 mod windows;
 mod worker_bundle;
 
+use app_menus::{build_menu_items, build_tray_items, install_app_menu, install_tray, AppMenus};
 use commands::SetupSession;
-use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
-use tauri::tray::TrayIconBuilder;
+use i18n::{self, AppLocale, Key};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 /// Opens the user's dashboard from a menu action (no `State` handle). Falls
 /// back to setup when this computer isn't connected yet.
 fn open_dashboard_from_menu(app: &AppHandle) {
-    if let Some(info) = secure_store::load_setup() {
-        let _ = windows::open_wrapper_window(app, &info.worker_url, &info.auth_token);
-        for label in ["main", "details"] {
-            if let Some(w) = app.get_webview_window(label) {
-                let _ = w.close();
+    let session = app.state::<SetupSession>();
+    match commands::open_dashboard_impl(app, &session) {
+        Ok(()) => {}
+        Err(message) => {
+            let locale = app
+                .try_state::<AppLocale>()
+                .map(|l| l.get())
+                .unwrap_or(i18n::Locale::En);
+            if secure_store::load_setup().is_none() && !session.dry_run {
+                let _ = windows::open_setup_window(app);
+            } else {
+                app.dialog()
+                    .message(message)
+                    .title(i18n::t(locale, Key::OpenDashboardFailed))
+                    .kind(MessageDialogKind::Warning)
+                    .show(|_| {});
             }
         }
-    } else {
-        let _ = windows::open_setup_window(app);
     }
 }
 
@@ -44,15 +56,20 @@ fn sync_notion_from_menu(app: &AppHandle) {
         let _ = windows::open_setup_window(app);
         return;
     };
+    let locale = app
+        .try_state::<AppLocale>()
+        .map(|l| l.get())
+        .unwrap_or(i18n::Locale::En);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let message = match commands::notion_sync(&info.worker_url, &info.auth_token).await {
+        let message = match commands::notion_sync(&info.worker_url, &info.auth_token, locale).await
+        {
             Ok(msg) => msg,
             Err(e) => e,
         };
         app.dialog()
             .message(message)
-            .title("Notion sync")
+            .title(i18n::t(locale, Key::NotionSyncTitle))
             .kind(MessageDialogKind::Info)
             .show(|_| {});
     });
@@ -66,17 +83,18 @@ fn confirm_logout(app: &AppHandle) {
         let _ = windows::open_setup_window(app);
         return;
     }
+    let locale = app
+        .try_state::<AppLocale>()
+        .map(|l| l.get())
+        .unwrap_or(i18n::Locale::En);
     let handle = app.clone();
     app.dialog()
-        .message(
-            "Log out of this computer?\n\nYour Second Brain and all its memories stay safe. \
-             You can reconnect anytime with your address and password.",
-        )
-        .title("Log out")
+        .message(i18n::t(locale, Key::LogoutMessage))
+        .title(i18n::t(locale, Key::LogoutTitle))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Log out".to_string(),
-            "Cancel".to_string(),
+            i18n::t(locale, Key::LogoutConfirm).to_string(),
+            i18n::t(locale, Key::Cancel).to_string(),
         ))
         .show(move |confirmed| {
             if confirmed {
@@ -100,6 +118,7 @@ pub fn run() {
             for label in ["brain", "main", "details"] {
                 if let Some(w) = app.get_webview_window(label) {
                     let _ = w.show();
+                    let _ = w.unminimize();
                     let _ = w.set_focus();
                     return;
                 }
@@ -140,44 +159,26 @@ pub fn run() {
             commands::open_dashboard,
             commands::open_details_window,
             commands::logout,
+            commands::set_locale,
             commands::worker_update_available,
             commands::begin_worker_update,
             commands::start_worker_update,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            let config_dir = app.path().app_config_dir().ok();
+            let locale = i18n::resolve_initial_locale(config_dir.as_deref());
+            app.manage(AppLocale::new(locale));
 
-            // App menu: platform defaults (gives Edit/copy/paste, needed for
-            // the password field on macOS) plus a coherent control center. The
-            // old submenu mixed updates and logout under "Connections"; this
-            // groups actions by what they do — open, manage, maintain.
-            let open_item =
-                MenuItem::with_id(app, "menu-open", "Open Dashboard", true, Some("CmdOrCtrl+O"))?;
-            let hub_item = MenuItem::with_id(
-                app,
-                "menu-hub",
-                "Connections…",
-                true,
-                Some("CmdOrCtrl+D"),
-            )?;
-            let sync_item =
-                MenuItem::with_id(app, "menu-sync-notion", "Sync Notion now", true, None::<&str>)?;
-            let update_item =
-                MenuItem::with_id(app, "menu-update", "Check for updates…", true, None::<&str>)?;
-            let logout_item =
-                MenuItem::with_id(app, "menu-logout", "Log out…", true, None::<&str>)?;
-            let menu = Menu::default(&handle)?;
-            let connections = SubmenuBuilder::new(app, "Connections")
-                .item(&open_item)
-                .item(&hub_item)
-                .item(&sync_item)
-                .separator()
-                .item(&update_item)
-                .separator()
-                .item(&logout_item)
-                .build()?;
-            menu.append(&connections)?;
-            app.set_menu(menu)?;
+            let (
+                menu_open,
+                menu_hub,
+                menu_sync,
+                menu_update,
+                menu_logout,
+                connections,
+            ) = build_menu_items(&handle, locale)?;
+            install_app_menu(&handle, &connections)?;
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "menu-open" => open_dashboard_from_menu(app),
                 "menu-hub" => windows::open_details_window(app),
@@ -187,45 +188,39 @@ pub fn run() {
                 _ => {}
             });
 
-            // Tray: the always-available control center — open the dashboard,
-            // manage every connection and integration, sync, update, log out.
-            let tray_open =
-                MenuItem::with_id(app, "tray-open", "Open Second Brain", true, None::<&str>)?;
-            let tray_hub = MenuItem::with_id(
-                app,
-                "tray-hub",
-                "Connections…",
-                true,
-                None::<&str>,
-            )?;
-            let tray_sync =
-                MenuItem::with_id(app, "tray-sync-notion", "Sync Notion now", true, None::<&str>)?;
-            let tray_update =
-                MenuItem::with_id(app, "tray-update", "Check for updates…", true, None::<&str>)?;
-            let tray_logout =
-                MenuItem::with_id(app, "tray-logout", "Log out…", true, None::<&str>)?;
-            let tray_quit = MenuItem::with_id(app, "tray-quit", "Quit", true, None::<&str>)?;
-            let tray_menu = MenuBuilder::new(app)
-                .items(&[&tray_open, &tray_hub, &tray_sync])
-                .separator()
-                .items(&[&tray_update, &tray_logout])
-                .separator()
-                .item(&tray_quit)
-                .build()?;
-            TrayIconBuilder::with_id("second-brain-tray")
-                .icon(app.default_window_icon().expect("bundled icon").clone())
-                .menu(&tray_menu)
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "tray-open" => open_dashboard_from_menu(app),
-                    "tray-hub" => windows::open_details_window(app),
-                    "tray-sync-notion" => sync_notion_from_menu(app),
-                    "tray-update" => app_update::check_for_updates(app, false),
-                    "tray-logout" => confirm_logout(app),
-                    "tray-quit" => app.exit(0),
-                    _ => {}
-                })
-                .build(app)?;
+            let (
+                tray_open,
+                tray_hub,
+                tray_sync,
+                tray_update,
+                tray_logout,
+                tray_quit,
+                tray_menu,
+            ) = build_tray_items(&handle, locale)?;
+            install_tray(&handle, &tray_menu, |app, event| match event.id().as_ref() {
+                "tray-open" => open_dashboard_from_menu(app),
+                "tray-hub" => windows::open_details_window(app),
+                "tray-sync-notion" => sync_notion_from_menu(app),
+                "tray-update" => app_update::check_for_updates(app, false),
+                "tray-logout" => confirm_logout(app),
+                "tray-quit" => app.exit(0),
+                _ => {}
+            })?;
+
+            app.manage(AppMenus {
+                menu_open,
+                menu_hub,
+                menu_sync,
+                menu_update,
+                menu_logout,
+                connections_submenu: connections,
+                tray_open,
+                tray_hub,
+                tray_sync,
+                tray_update,
+                tray_logout,
+                tray_quit,
+            });
 
             // Mode selection. Dry-run always shows setup so the flow can be
             // demoed even on a machine that already has a Second Brain.
