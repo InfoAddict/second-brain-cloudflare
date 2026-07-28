@@ -1,9 +1,11 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, "v*"]
+  # No branch filter: every pull request is checked regardless of its base.
+  # A filter here silently skips CI for PRs targeting a release branch, which
+  # is exactly when the checks matter most.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -38,3 +40,49 @@ jobs:
       - name: Post coverage comment on PR
         if: github.event_name == 'pull_request'
         uses: davelosert/vitest-coverage-report-action@v2
+
+  # The desktop app is Rust, and nothing above compiles it — the suite, the
+  # wrangler dry-run and the worker bundle are all JavaScript. Without this job
+  # a PR can turn the Tauri app into something that does not build and still go
+  # green, with the failure surfacing only when an `installer-v*` tag kicks off
+  # installer-release.yml. That is the most expensive place to find it.
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # Tauri links against GTK/WebKit on Linux, and the headers are required
+      # even for `cargo check`. The app ships on macOS and Windows only, so this
+      # job is here to catch type, trait and borrow errors early — it is not a
+      # claim that the Linux bundle works.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: installer/src-tauri -> target
+      # Root deps first: the esbuild bundle resolves the Worker's own
+      # dependencies from the repository root, not from installer/.
+      - run: npm ci --legacy-peer-deps
+      - run: npm ci
+        working-directory: installer
+      # build.rs panics unless worker-dist/ exists, so the bundle has to run
+      # before cargo touches the crate.
+      - name: Bundle Worker (required by build.rs)
+        working-directory: installer
+        run: npm run bundle-worker
+      - name: Check desktop app compiles
+        run: cargo check --manifest-path installer/src-tauri/Cargo.toml
