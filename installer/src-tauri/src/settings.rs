@@ -9,6 +9,7 @@
 //! The seventh control (which AI model) is a plain dropdown over LLM_MODEL and
 //! is not modelled here.
 
+use crate::i18n::{self, Key, Locale};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
@@ -150,6 +151,191 @@ fn values_eq(a: &Value, b: &Value) -> bool {
         (Some(x), Some(y)) => (x - y).abs() < f64::EPSILON * 8.0,
         _ => a == b,
     }
+}
+
+// ── Worker API ──────────────────────────────────────────────────────────────
+//
+// The desktop app is the only writer of config (#244): it holds AUTH_TOKEN in
+// secure_store, and the dashboard deliberately has no settings UI. These call
+// the routes #245 added.
+
+const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlView {
+    pub id: &'static str,
+    /// Level ids in display order, so the UI never hardcodes them.
+    pub levels: Vec<&'static str>,
+    /// `None` when the stored config matches no level — shown as "Custom"
+    /// rather than snapping the user to a level they did not pick.
+    pub level: Option<String>,
+    pub forward_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    pub controls: Vec<ControlView>,
+    pub llm_model: String,
+}
+
+fn base(worker_url: &str) -> &str {
+    worker_url.trim_end_matches('/')
+}
+
+/// Maps the Worker's effective config onto the level each control is showing.
+fn view_from_config(config: &Map<String, Value>) -> SettingsView {
+    SettingsView {
+        controls: CONTROLS
+            .iter()
+            .map(|c| ControlView {
+                id: c.id,
+                levels: c.levels.iter().map(|l| l.id).collect(),
+                level: level_of(c.id, config).map(|s| s.to_string()),
+                forward_only: c.forward_only,
+            })
+            .collect(),
+        llm_model: config
+            .get("LLM_MODEL")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+pub async fn fetch_settings(
+    worker_url: &str,
+    auth_token: &str,
+    locale: Locale,
+) -> Result<SettingsView, String> {
+    let resp = reqwest::Client::new()
+        .get(format!("{}/config", base(worker_url)))
+        .bearer_auth(auth_token)
+        .timeout(TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            log::warn!("config fetch failed: {e}");
+            i18n::t(locale, Key::ErrorReachBrain).to_string()
+        })?;
+
+    if !resp.status().is_success() {
+        return Err(i18n::t_fmt(
+            locale,
+            Key::ErrorBrainHttpStatus,
+            &[("status", &resp.status().as_u16().to_string())],
+        ));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Wrapper {
+        config: Map<String, Value>,
+    }
+    let body: Wrapper = resp
+        .json()
+        .await
+        .map_err(|e| {
+            log::warn!("config parse failed: {e}");
+            i18n::t(locale, Key::ErrorBrainUnexpected).to_string()
+        })?;
+
+    Ok(view_from_config(&body.config))
+}
+
+/// Sends a sparse patch. The Worker rejects the whole patch if any key is
+/// invalid or would cross an invariant, and its message names the offending key
+/// — surfaced verbatim, because it is the only thing that tells the user what
+/// actually went wrong.
+pub async fn patch_config(
+    worker_url: &str,
+    auth_token: &str,
+    patch: &Value,
+    locale: Locale,
+) -> Result<(), String> {
+    let resp = reqwest::Client::new()
+        .patch(format!("{}/config", base(worker_url)))
+        .bearer_auth(auth_token)
+        .json(patch)
+        .timeout(TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            log::warn!("config patch failed: {e}");
+            i18n::t(locale, Key::ErrorReachBrain).to_string()
+        })?;
+
+    if resp.status().is_success() {
+        return Ok(());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Err_ {
+        error: Option<String>,
+    }
+    let status = resp.status().as_u16().to_string();
+    match resp.json::<Err_>().await.ok().and_then(|b| b.error) {
+        Some(message) => Err(message),
+        None => Err(i18n::t_fmt(locale, Key::ErrorBrainHttpStatus, &[("status", &status)])),
+    }
+}
+
+/// Writes the level for one control. Validated locally first so an unknown
+/// control or level never reaches the Worker.
+pub async fn apply_level(
+    worker_url: &str,
+    auth_token: &str,
+    control_id: &str,
+    level_id: &str,
+    locale: Locale,
+) -> Result<(), String> {
+    let patch = patch_for(control_id, level_id)
+        .ok_or_else(|| i18n::t(locale, Key::ErrorUnknownTool).to_string())?;
+    patch_config(worker_url, auth_token, &Value::Object(patch), locale).await
+}
+
+/// Per-setting reset: deletes every key the control owns, leaving all other
+/// controls untouched. A delete rather than a write-back of the default, so the
+/// user rejoins the shipped value and picks up any later retune of it.
+pub async fn reset_control(
+    worker_url: &str,
+    auth_token: &str,
+    control_id: &str,
+    locale: Locale,
+) -> Result<(), String> {
+    let c = control(control_id)
+        .ok_or_else(|| i18n::t(locale, Key::ErrorUnknownTool).to_string())?;
+    let client = reqwest::Client::new();
+    for key in c.keys {
+        let resp = client
+            .delete(format!("{}/config/{key}", base(worker_url)))
+            .bearer_auth(auth_token)
+            .timeout(TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| {
+                log::warn!("config reset failed for {key}: {e}");
+                i18n::t(locale, Key::ErrorReachBrain).to_string()
+            })?;
+        if !resp.status().is_success() {
+            return Err(i18n::t_fmt(
+                locale,
+                Key::ErrorBrainHttpStatus,
+                &[("status", &resp.status().as_u16().to_string())],
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The model dropdown is a single string key, so it needs no level mapping.
+pub async fn set_llm_model(
+    worker_url: &str,
+    auth_token: &str,
+    model: &str,
+    locale: Locale,
+) -> Result<(), String> {
+    patch_config(worker_url, auth_token, &json!({ "LLM_MODEL": model }), locale).await
 }
 
 #[cfg(test)]
@@ -300,6 +486,143 @@ mod tests {
         for c in CONTROLS {
             assert!(!c.keys.contains(&"CANDIDATE_SCORE_THRESHOLD"), "{} exposes a write-path-only constant", c.id);
         }
+    }
+
+
+    // ── HTTP layer ──────────────────────────────────────────────────────────
+    //
+    // Driven against a real tiny_http server, matching the convention in
+    // cf/api.rs: the request path and method select the scenario, so the
+    // assertions cover what the Worker actually receives, not a mock's idea of
+    // it.
+
+    fn spawn_worker() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            loop {
+                let Ok(mut req) = server.recv() else { return };
+                let method = req.method().as_str().to_string();
+                let url = req.url().to_string();
+                let auth = req
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("authorization"))
+                    .map(|h| h.value.to_string())
+                    .unwrap_or_default();
+                let mut body = String::new();
+                let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
+                log.lock().unwrap().push(format!("{method} {url} auth={auth} body={body}"));
+
+                let (status, payload) = match (method.as_str(), url.as_str()) {
+                    ("GET", "/config") => (
+                        200,
+                        r#"{"ok":true,"config":{"MMR_LAMBDA":0.7,"RECENCY_FLOOR":0.6,"RECENCY_FLOOR_DURABLE":0.9,"RECENCY_FLOOR_VOLATILE":0.15,"DEFAULT_HOPS":0,"GRAPH_HOP_DECAY":0.6,"RECALL_OUTPUT_BUDGET":12000,"SNIPPET_MAX_CHARS":400,"RECALL_FULL_MATCHES":2,"DUPLICATE_BLOCK_THRESHOLD":0.95,"DUPLICATE_FLAG_THRESHOLD":0.85,"COMPRESSION_IMPORTANCE_THRESHOLD":4,"COMPRESSION_MIN_RECALL":2,"COMPRESSION_MIN_AGE_MS":5184000000,"LLM_MODEL":"@cf/meta/llama-4-scout-17b-16e-instruct"},"overrides":{},"defaults":{}}"#.to_string(),
+                    ),
+                    ("PATCH", "/config") if body.contains("\"BAD\"") => (
+                        400,
+                        r#"{"ok":false,"error":"MMR_LAMBDA must be between 0 and 1 (got 99)"}"#.to_string(),
+                    ),
+                    ("PATCH", "/config") => (200, r#"{"ok":true}"#.to_string()),
+                    ("DELETE", u) if u.starts_with("/config/") => (200, r#"{"ok":true}"#.to_string()),
+                    _ => (404, r#"{"ok":false}"#.to_string()),
+                };
+                let resp = tiny_http::Response::from_string(payload)
+                    .with_status_code(status)
+                    .with_header("Content-Type: application/json".parse::<tiny_http::Header>().unwrap());
+                let _ = req.respond(resp);
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), seen)
+    }
+
+    #[tokio::test]
+    async fn fetch_settings_maps_the_workers_config_to_selected_levels() {
+        let (url, _) = spawn_worker();
+        let view = fetch_settings(&url, "tok", Locale::En).await.expect("view");
+
+        // The Worker returned its shipped defaults, so every control must read
+        // as its default level.
+        for (control_id, level_id) in DEFAULT_LEVELS {
+            let c = view.controls.iter().find(|c| c.id == *control_id).expect("control present");
+            assert_eq!(c.level.as_deref(), Some(*level_id), "{control_id} read as the wrong level");
+        }
+        assert_eq!(view.llm_model, "@cf/meta/llama-4-scout-17b-16e-instruct");
+    }
+
+    #[tokio::test]
+    async fn fetch_settings_marks_the_two_forward_only_controls() {
+        let (url, _) = spawn_worker();
+        let view = fetch_settings(&url, "tok", Locale::En).await.unwrap();
+        let forward: Vec<&str> = view.controls.iter().filter(|c| c.forward_only).map(|c| c.id).collect();
+        assert_eq!(forward, vec!["duplicates", "compression"]);
+    }
+
+    #[tokio::test]
+    async fn fetch_settings_sends_the_bearer_token() {
+        let (url, seen) = spawn_worker();
+        fetch_settings(&url, "secret-token", Locale::En).await.unwrap();
+        let log = seen.lock().unwrap();
+        assert!(log[0].contains("auth=Bearer secret-token"), "got: {}", log[0]);
+    }
+
+    #[tokio::test]
+    async fn apply_level_patches_only_that_controls_keys() {
+        let (url, seen) = spawn_worker();
+        apply_level(&url, "tok", "variety", "varied", Locale::En).await.unwrap();
+        let log = seen.lock().unwrap();
+        assert!(log[0].starts_with("PATCH /config"), "got: {}", log[0]);
+        assert!(log[0].contains("MMR_LAMBDA"));
+        // A control must never write a key it does not own.
+        assert!(!log[0].contains("RECENCY_FLOOR"), "leaked another control's key: {}", log[0]);
+    }
+
+    #[tokio::test]
+    async fn apply_level_rejects_an_unknown_level_without_calling_the_worker() {
+        let (url, seen) = spawn_worker();
+        let err = apply_level(&url, "tok", "variety", "nonsense", Locale::En).await;
+        assert!(err.is_err());
+        assert!(seen.lock().unwrap().is_empty(), "must not hit the Worker for an invalid level");
+    }
+
+    #[tokio::test]
+    async fn apply_level_surfaces_the_workers_validation_message() {
+        let (url, _) = spawn_worker();
+        // The fake Worker 400s on a body containing "BAD".
+        let err = patch_config(&url, "tok", &serde_json::json!({"BAD": 99}), Locale::En)
+            .await
+            .expect_err("should fail");
+        assert!(err.contains("must be between 0 and 1"), "lost the Worker's message: {err}");
+    }
+
+    #[tokio::test]
+    async fn reset_control_deletes_every_key_the_control_owns() {
+        let (url, seen) = spawn_worker();
+        reset_control(&url, "tok", "recency", Locale::En).await.unwrap();
+        let log = seen.lock().unwrap();
+        assert_eq!(log.len(), 3, "recency owns three keys, got {} calls", log.len());
+        for key in control("recency").unwrap().keys {
+            assert!(
+                log.iter().any(|l| l.contains(&format!("DELETE /config/{key}"))),
+                "never reset {key}: {log:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reset_control_rejects_an_unknown_control_without_calling_the_worker() {
+        let (url, seen) = spawn_worker();
+        assert!(reset_control(&url, "tok", "nope", Locale::En).await.is_err());
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_worker_is_a_readable_error_not_a_panic() {
+        // Port 1 is reserved and will refuse instantly.
+        let err = fetch_settings("http://127.0.0.1:1", "tok", Locale::En).await;
+        assert!(err.is_err());
     }
 
     #[test]
