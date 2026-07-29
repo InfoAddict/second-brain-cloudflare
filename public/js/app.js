@@ -1,6 +1,5 @@
 function init() {
   applyTheme()
-  if (typeof renderAboutCredits === 'function') renderAboutCredits()
   // Auto-populate URL from the current page origin (UI is hosted on the same Worker)
   const origin = window.location.origin
   document.getElementById('auth-url').value = origin

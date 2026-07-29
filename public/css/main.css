@@ -1894,56 +1894,6 @@
         color: var(--danger);
       }
 
-      .about-credits {
-        margin: 18px 0 14px;
-        padding: 14px 16px;
-        background: var(--bg-card);
-        border: 0.5px solid var(--border-card);
-        border-radius: var(--radius-card);
-        font-size: 13px;
-        color: var(--text-secondary);
-        line-height: 1.5;
-      }
-
-      .about-credits-label {
-        font-family: var(--font-serif);
-        font-size: 15px;
-        font-weight: 500;
-        color: var(--text-primary);
-        margin-bottom: 10px;
-      }
-
-      .about-credits-kicker {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 500;
-        color: var(--text-tertiary);
-        margin: 0 0 6px;
-      }
-
-      .about-credits-line {
-        margin: 0 0 12px;
-      }
-
-      .about-credits-list {
-        margin: 0;
-        padding-left: 18px;
-      }
-
-      .about-credits-list li {
-        margin-bottom: 4px;
-      }
-
-      .about-credits a {
-        color: var(--accent-ink);
-        text-decoration: none;
-      }
-
-      .about-credits a:hover {
-        text-decoration: underline;
-      }
-
       .stats-panel {
         padding: 2px 0 10px;
         margin-bottom: 4px;

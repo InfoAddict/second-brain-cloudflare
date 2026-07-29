@@ -2,6 +2,8 @@
 
 Incremental split of the former monolithic `index.html`. Entry point remains `index.html` (Wrangler static assets).
 
+The one-shot migration script that performed this split was removed after use; do not re-run historical split tooling against the modular tree.
+
 ## Layers (load order / dependency rules)
 
 | Layer | Path | May depend on |
@@ -18,7 +20,7 @@ Incremental split of the former monolithic `index.html`. Entry point remains `in
 ## Script load order
 
 ```
-utils.js → credits.js → state.js → api.js → theme.js → ui-chat.js
+utils.js → state.js → api.js → theme.js → ui-chat.js
 → recall.js → recent.js → remember.js → memory-crud.js
 → settings.js → integrations.js → graph-canvas.js
 → nav.js → auth.js → app.js
@@ -45,11 +47,10 @@ utils.js → credits.js → state.js → api.js → theme.js → ui-chat.js
 | Auth connect / showApp | `js/auth.js` |
 | Sheet listeners, `init()` | `js/app.js` |
 | Escaping, graph layout, vectorize banner | `utils.js` (existing) |
-| About credits | `credits.js` (existing) |
 
 ## Tests
 
-Vitest covers `utils.js` (`test/ui/utils.test.ts`, `test/ui/graph-clusters.test.ts`). Feature modules use classic globals; test pure helpers via `utils.js` dual CJS export.
+Vitest covers `utils.js` (`test/ui/utils.test.ts`, `test/ui/graph-clusters.test.ts`) and dashboard module load order / inline-handler contract (`test/ui/dashboard-modules.test.ts`). Feature modules use classic globals; test pure helpers via `utils.js` dual CJS export.
 
 ## Deploy
 
@@ -57,4 +58,4 @@ No build step. Wrangler serves `public/` as static assets; `installer/scripts/bu
 
 ## Split status
 
-Completed: all CSS and JS extracted from the monolithic inline blocks. `index.html` is markup + external link/script tags only.
+Completed: all CSS and JS extracted from the monolithic inline blocks. `index.html` is markup + external link/script tags only. Duplicate unused `filterRecent` was dropped during the split (dead code; filtering uses `onTagChange` / `applyRecentFilters`).

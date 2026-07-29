@@ -7,7 +7,6 @@ const ROOT = resolve(import.meta.dirname, "../..");
 
 const DASHBOARD_SCRIPTS = [
   "public/utils.js",
-  "public/credits.js",
   "public/js/state.js",
   "public/js/api.js",
   "public/js/theme.js",
@@ -24,25 +23,20 @@ const DASHBOARD_SCRIPTS = [
   "public/js/app.js",
 ];
 
-/** Handlers referenced from index.html onclick/onchange attributes. */
-const REQUIRED_GLOBALS = [
-  "switchTab",
-  "connect",
-  "showApp",
-  "logout",
-  "sendRecall",
-  "loadRecent",
-  "sendRemember",
-  "openAppend",
-  "openEdit",
-  "confirmForget",
-  "openMenu",
-  "openIntegrations",
-  "loadGraph",
-  "graphZoom",
-  "setTheme",
-  "init",
-];
+/** Keywords / literals that appear in onclick expressions but are not handlers. */
+const INLINE_CALL_DENYLIST = new Set(["return", "false", "true"]);
+
+function extractInlineHandlerNames(html: string): string[] {
+  const names = new Set<string>();
+  const attrPattern = /\bon\w+\s*=\s*"([^"]+)"/g;
+  const callPattern = /\b([A-Za-z_$][\w$]*)\s*\(/g;
+  for (const [, expr] of html.matchAll(attrPattern)) {
+    for (const [, fn] of expr.matchAll(callPattern)) {
+      if (!INLINE_CALL_DENYLIST.has(fn)) names.add(fn);
+    }
+  }
+  return [...names].sort();
+}
 
 function loadDashboardSource({ runInit = false }: { runInit?: boolean } = {}) {
   let src = DASHBOARD_SCRIPTS.map((rel) => readFileSync(resolve(ROOT, rel), "utf8")).join("\n");
@@ -83,8 +77,15 @@ function makeFakeDocument() {
 }
 
 describe("dashboard modules", () => {
+  const html = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
+  const requiredGlobals = extractInlineHandlerNames(html);
+
   it("loads all scripts in index.html order without parse errors", () => {
     expect(() => new Function(loadDashboardSource())).not.toThrow();
+  });
+
+  it("derives a non-trivial set of inline handlers from index.html", () => {
+    expect(requiredGlobals.length).toBeGreaterThanOrEqual(31);
   });
 
   it("exposes handlers required by inline HTML attributes", () => {
@@ -105,7 +106,7 @@ describe("dashboard modules", () => {
     };
     vm.createContext(sandbox);
     vm.runInContext(loadDashboardSource(), sandbox);
-    for (const name of REQUIRED_GLOBALS) {
+    for (const name of requiredGlobals) {
       expect(typeof sandbox[name], `${name} should be a function`).toBe("function");
     }
   });

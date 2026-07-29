@@ -5,6 +5,7 @@ coverage/
 .wrangler/
 .wrangler-dry-run/
 docs/
+!docs/dashboard-architecture.md
 .claude/
 .dev.vars
 .env
