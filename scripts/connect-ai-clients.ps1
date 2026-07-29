@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Wires up Second Brain for Claude Code and Codex CLI in one shot:
-    - appends global system instructions to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
+    - installs or updates global system instructions in ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
     - registers the /mcp endpoint as an MCP server via OAuth (no token ever stored here)
 
 .USAGE
@@ -15,9 +15,6 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RawBase = "https://raw.githubusercontent.com/rahilp/second-brain-cloudflare/main"
-$StartMarker = "<!-- second-brain:instructions:start -->"
-$EndMarker = "<!-- second-brain:instructions:end -->"
-$SentinelPhrase = "At the start of EVERY conversation, call recall"
 
 if ([string]::IsNullOrWhiteSpace($WorkerUrl)) {
   $WorkerUrl = Read-Host "Enter your Second Brain worker URL (e.g. https://your-worker.workers.dev)"
@@ -36,7 +33,26 @@ Write-Host "Worker URL: $WorkerUrl"
 Write-Host "MCP endpoint: $McpUrl"
 Write-Host ""
 
-function Append-Instructions {
+function Resolve-InstructionBlockHelper {
+  $localHelper = Join-Path $PSScriptRoot "instruction-block.mjs"
+  if (Test-Path $localHelper) {
+    return $localHelper
+  }
+
+  $tmp = [System.IO.Path]::GetTempFileName()
+  Invoke-RestMethod -Uri "$RawBase/scripts/instruction-block.mjs" -OutFile $tmp
+  return $tmp
+}
+
+$InstructionBlockHelper = Resolve-InstructionBlockHelper
+$RemoveTempHelper = $InstructionBlockHelper -ne (Join-Path $PSScriptRoot "instruction-block.mjs")
+
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  Write-Error "node is required to install or update Second Brain instructions."
+  exit 1
+}
+
+function Apply-Instructions {
   param(
     [string]$TargetFile,
     [string]$SourcePath,
@@ -47,19 +63,6 @@ function Append-Instructions {
   if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
   if (-not (Test-Path $TargetFile)) { New-Item -ItemType File -Path $TargetFile -Force | Out-Null }
 
-  $existing = Get-Content -Raw -ErrorAction SilentlyContinue $TargetFile
-  if ($null -eq $existing) { $existing = "" }
-
-  if ($existing.Contains($StartMarker)) {
-    Write-Host "[$Label] Already configured (marker found in $TargetFile) - skipping."
-    return
-  }
-
-  if ($existing.Contains($SentinelPhrase)) {
-    Write-Host "[$Label] Looks like you already pasted these instructions manually into $TargetFile - skipping to avoid duplicating."
-    return
-  }
-
   try {
     $body = Invoke-RestMethod -Uri "$RawBase/$SourcePath" -ErrorAction Stop
   } catch {
@@ -67,14 +70,33 @@ function Append-Instructions {
     return
   }
 
-  $block = "`n$StartMarker`n$body`n$EndMarker`n"
-  Add-Content -Path $TargetFile -Value $block
-  Write-Host "[$Label] Appended instructions to $TargetFile"
+  try {
+    $action = $body | node $InstructionBlockHelper $TargetFile
+  } catch {
+    Write-Warning "[$Label] Failed to update instructions in $TargetFile - skipping."
+    return
+  }
+
+  switch ($action) {
+    { $_ -in @("updated", "updated-legacy") } {
+      Write-Host "[$Label] Updated instructions in $TargetFile"
+    }
+    "appended" {
+      Write-Host "[$Label] Appended instructions to $TargetFile"
+    }
+    default {
+      Write-Host "[$Label] Installed instructions in $TargetFile"
+    }
+  }
 }
 
 Write-Host "-- Global instructions --"
-Append-Instructions -TargetFile (Join-Path $env:USERPROFILE ".claude\CLAUDE.md") -SourcePath "AI_Instructions/CLAUDE_INSTRUCTIONS.md" -Label "Claude Code"
-Append-Instructions -TargetFile (Join-Path $env:USERPROFILE ".codex\AGENTS.md") -SourcePath "AI_Instructions/CODEX_INSTRUCTIONS.md" -Label "Codex CLI"
+Apply-Instructions -TargetFile (Join-Path $env:USERPROFILE ".claude\CLAUDE.md") -SourcePath "AI_Instructions/CLAUDE_INSTRUCTIONS.md" -Label "Claude Code"
+Apply-Instructions -TargetFile (Join-Path $env:USERPROFILE ".codex\AGENTS.md") -SourcePath "AI_Instructions/CODEX_INSTRUCTIONS.md" -Label "Codex CLI"
+
+if ($RemoveTempHelper -and (Test-Path $InstructionBlockHelper)) {
+  Remove-Item -Force $InstructionBlockHelper
+}
 Write-Host ""
 
 Write-Host "-- MCP server registration (OAuth - no token needed here) --"

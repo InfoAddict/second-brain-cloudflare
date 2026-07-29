@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Wires up Second Brain for Claude Code and Codex CLI in one shot:
-#   - appends global system instructions to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
+#   - installs or updates global system instructions in ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
 #   - registers the /mcp endpoint as an MCP server via OAuth (no token ever stored here)
 #
 # Usage:
@@ -9,9 +9,6 @@
 set -euo pipefail
 
 RAW_BASE="https://raw.githubusercontent.com/rahilp/second-brain-cloudflare/main"
-START_MARKER="<!-- second-brain:instructions:start -->"
-END_MARKER="<!-- second-brain:instructions:end -->"
-SENTINEL_PHRASE="At the start of EVERY conversation, call recall"
 
 WORKER_URL="${1:-}"
 
@@ -37,8 +34,36 @@ fetch() {
   curl -fsSL "$1"
 }
 
-# ─── Append instructions idempotently ────────────────────────────────────────
-append_instructions() {
+resolve_instruction_block_helper() {
+  local script_path="${BASH_SOURCE[0]:-}"
+  if [[ -n "$script_path" && "$script_path" != "-" && -f "$script_path" ]]; then
+    local local_helper
+    local_helper="$(cd "$(dirname "$script_path")" && pwd)/instruction-block.mjs"
+    if [[ -f "$local_helper" ]]; then
+      INSTRUCTION_BLOCK_HELPER="$local_helper"
+      return
+    fi
+  fi
+
+  INSTRUCTION_BLOCK_HELPER="$(mktemp)"
+  fetch "${RAW_BASE}/scripts/instruction-block.mjs" > "$INSTRUCTION_BLOCK_HELPER"
+  FETCHED_INSTRUCTION_BLOCK_HELPER="$INSTRUCTION_BLOCK_HELPER"
+}
+
+FETCHED_INSTRUCTION_BLOCK_HELPER=""
+INSTRUCTION_BLOCK_HELPER=""
+resolve_instruction_block_helper
+if [[ -n "$FETCHED_INSTRUCTION_BLOCK_HELPER" ]]; then
+  trap 'rm -f "$FETCHED_INSTRUCTION_BLOCK_HELPER"' EXIT
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Error: node is required to install or update Second Brain instructions." >&2
+  exit 1
+fi
+
+# ─── Install or refresh instructions ────────────────────────────────────────
+apply_instructions() {
   local target_file="$1"
   local source_path="$2"
   local label="$3"
@@ -46,35 +71,34 @@ append_instructions() {
   mkdir -p "$(dirname "$target_file")"
   touch "$target_file"
 
-  if grep -qF "$START_MARKER" "$target_file" 2>/dev/null; then
-    echo "[$label] Already configured (marker found in $target_file) — skipping."
-    return
-  fi
-
-  if grep -qF "$SENTINEL_PHRASE" "$target_file" 2>/dev/null; then
-    echo "[$label] Looks like you already pasted these instructions manually into $target_file — skipping to avoid duplicating."
-    return
-  fi
-
   local body
   if ! body="$(fetch "${RAW_BASE}/${source_path}")"; then
     echo "[$label] Could not fetch instruction body from ${RAW_BASE}/${source_path} — skipping." >&2
     return
   fi
 
-  {
-    echo
-    echo "$START_MARKER"
-    echo "$body"
-    echo "$END_MARKER"
-  } >> "$target_file"
+  local action
+  if ! action="$(printf '%s' "$body" | node "$INSTRUCTION_BLOCK_HELPER" "$target_file")"; then
+    echo "[$label] Failed to update instructions in $target_file — skipping." >&2
+    return
+  fi
 
-  echo "[$label] Appended instructions to $target_file"
+  case "$action" in
+    updated|updated-legacy)
+      echo "[$label] Updated instructions in $target_file"
+      ;;
+    appended)
+      echo "[$label] Appended instructions to $target_file"
+      ;;
+    *)
+      echo "[$label] Installed instructions in $target_file"
+      ;;
+  esac
 }
 
 echo "── Global instructions ──"
-append_instructions "$HOME/.claude/CLAUDE.md" "AI_Instructions/CLAUDE_INSTRUCTIONS.md" "Claude Code"
-append_instructions "$HOME/.codex/AGENTS.md" "AI_Instructions/CODEX_INSTRUCTIONS.md" "Codex CLI"
+apply_instructions "$HOME/.claude/CLAUDE.md" "AI_Instructions/CLAUDE_INSTRUCTIONS.md" "Claude Code"
+apply_instructions "$HOME/.codex/AGENTS.md" "AI_Instructions/CODEX_INSTRUCTIONS.md" "Codex CLI"
 echo
 
 # ─── Register MCP server via OAuth ────────────────────────────────────────────

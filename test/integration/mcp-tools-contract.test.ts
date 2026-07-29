@@ -52,7 +52,7 @@ describe("MCP tools contract (InMemoryTransport)", () => {
     });
   });
 
-  it("remember stores content and recall finds it", async () => {
+  it("remember and recall round-trip through the MCP transport", async () => {
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
         query: vi.fn().mockImplementation(async () => {
