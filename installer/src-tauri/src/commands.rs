@@ -912,15 +912,23 @@ pub fn perform_logout(app: &AppHandle) {
 // so what it stored may differ from what was asked for — rendering from the
 // request would show the user a state their brain is not actually in.
 
-async fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
+/// Resolves the brain to talk to, going through the same session-aware helper
+/// the dashboard commands use.
+///
+/// Deliberately NOT `secure_store::load_setup()` directly: that ignores
+/// dry-run, so it both breaks demoing the panel on a configured machine and
+/// raises a Keychain prompt for a value dry-run would discard — the bug fixed
+/// for launch in #252, which is easy to reintroduce one command at a time.
+fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
     let locale = locale_of(app);
-    let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
-    Ok((info.worker_url, info.auth_token, locale))
+    let session = app.state::<SetupSession>();
+    let (url, token) = dashboard_credentials(&session, locale)?;
+    Ok((url, token, locale))
 }
 
 #[tauri::command]
 pub async fn get_brain_settings(app: AppHandle) -> Result<crate::settings::SettingsView, String> {
-    let (url, token, locale) = settings_target(&app).await?;
+    let (url, token, locale) = settings_target(&app)?;
     crate::settings::fetch_settings(&url, &token, locale).await
 }
 
@@ -930,7 +938,7 @@ pub async fn set_control_level(
     control: String,
     level: String,
 ) -> Result<crate::settings::SettingsView, String> {
-    let (url, token, locale) = settings_target(&app).await?;
+    let (url, token, locale) = settings_target(&app)?;
     crate::settings::apply_level(&url, &token, &control, &level, locale).await?;
     crate::settings::fetch_settings(&url, &token, locale).await
 }
@@ -940,7 +948,7 @@ pub async fn reset_control_setting(
     app: AppHandle,
     control: String,
 ) -> Result<crate::settings::SettingsView, String> {
-    let (url, token, locale) = settings_target(&app).await?;
+    let (url, token, locale) = settings_target(&app)?;
     crate::settings::reset_control(&url, &token, &control, locale).await?;
     crate::settings::fetch_settings(&url, &token, locale).await
 }
@@ -950,7 +958,7 @@ pub async fn set_brain_llm_model(
     app: AppHandle,
     model: String,
 ) -> Result<crate::settings::SettingsView, String> {
-    let (url, token, locale) = settings_target(&app).await?;
+    let (url, token, locale) = settings_target(&app)?;
     crate::settings::set_llm_model(&url, &token, &model, locale).await?;
     crate::settings::fetch_settings(&url, &token, locale).await
 }
@@ -1006,6 +1014,26 @@ mod tests {
                 "input: {input:?}"
             );
         }
+    }
+
+
+    /// #252 fixed launch raising a Keychain prompt in dry-run. Every command
+    /// that resolves a brain must go through dashboard_credentials for the same
+    /// reason — bypassing it reintroduces the bug one command at a time.
+    #[test]
+    fn settings_commands_resolve_credentials_through_the_session_helper() {
+        let src = include_str!("commands.rs");
+        let start = src.find("fn settings_target").expect("settings_target");
+        let end = src[start..].find("\n}").expect("end of fn") + start;
+        let body = &src[start..end];
+        assert!(
+            body.contains("dashboard_credentials"),
+            "settings_target must use dashboard_credentials so dry-run is honoured"
+        );
+        assert!(
+            !body.contains("secure_store::load_setup"),
+            "settings_target must not read secure_store directly — it ignores dry-run and prompts the Keychain"
+        );
     }
 
     #[test]
