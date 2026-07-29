@@ -8,6 +8,8 @@ use crate::cf::backend::{DryRunBackend, LiveBackend};
 use crate::cf::oauth::{self, Tokens};
 use crate::cf::provision::{self, ProvisionError, ProvisionOutcome};
 use crate::cf::types::{Account, CfApiError};
+use crate::app_menus::AppMenus;
+use crate::i18n::{self, AppLocale, Key, Locale};
 use crate::{cli_config, mcp_config, password_check, secure_store, windows, worker_bundle};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -50,8 +52,16 @@ impl SetupSession {
 }
 
 const MIN_PASSWORD_LEN: usize = 12;
-const FRIENDLY_RETRY: &str =
-    "That didn't work, but nothing is lost — your progress is saved, so it's safe to try again.";
+
+fn locale_of(app: &AppHandle) -> Locale {
+    app.try_state::<AppLocale>()
+        .map(|l| l.get())
+        .unwrap_or(Locale::En)
+}
+
+fn user_err(locale: Locale, key: Key) -> String {
+    i18n::t(locale, key).to_string()
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,11 +103,18 @@ pub fn generate_password() -> String {
 }
 
 #[tauri::command]
-pub fn submit_password(password: String, session: State<'_, SetupSession>) -> Result<(), String> {
+pub fn submit_password(
+    password: String,
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
+    let locale = locale_of(&app);
     let trimmed = password.trim();
     if trimmed.len() < MIN_PASSWORD_LEN {
-        return Err(format!(
-            "Your password needs at least {MIN_PASSWORD_LEN} characters."
+        return Err(i18n::t_fmt(
+            locale,
+            Key::ErrorPasswordTooShort,
+            &[("min", &MIN_PASSWORD_LEN.to_string())],
         ));
     }
     *session.password.lock().unwrap() = Some(trimmed.to_string());
@@ -128,14 +145,15 @@ pub async fn connect_cloudflare(
         e.to_string()
     })?;
 
+    let locale = locale_of(&app);
     let accounts = CfClient::list_accounts(&tokens.access_token)
         .await
         .map_err(|e| {
             log::warn!("account listing failed: {e}");
-            "Signed in, but we couldn't read your account. Please try again.".to_string()
+            user_err(locale, Key::ErrorCfAccountListFailed)
         })?;
     if accounts.is_empty() {
-        return Err("That Cloudflare login has no account we can set up in.".into());
+        return Err(user_err(locale, Key::ErrorCfNoAccount));
     }
 
     *session.tokens.lock().unwrap() = Some(tokens);
@@ -149,12 +167,13 @@ pub async fn start_provisioning(
     app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<ProvisionOutcome, String> {
+    let locale = locale_of(&app);
     let password = session
         .password
         .lock()
         .unwrap()
         .clone()
-        .ok_or("Please choose a password first.")?;
+        .ok_or_else(|| user_err(locale, Key::ErrorChoosePasswordFirst))?;
     let manifest = worker_bundle::manifest();
 
     let progress_app = app.clone();
@@ -167,7 +186,7 @@ pub async fn start_provisioning(
             .await
             .map_err(|e| {
                 log::warn!("dry-run provision failed: {e}");
-                FRIENDLY_RETRY.to_string()
+                user_err(locale, Key::ErrorFriendlyRetry)
             })?
     } else {
         let account_name = session
@@ -177,20 +196,20 @@ pub async fn start_provisioning(
             .iter()
             .find(|a| a.id == account_id)
             .map(|a| a.name.clone())
-            .ok_or("Please sign in to Cloudflare first.")?;
+            .ok_or_else(|| user_err(locale, Key::ErrorCfSignInFirst))?;
         let mut tokens = session
             .tokens
             .lock()
             .unwrap()
             .clone()
-            .ok_or("Please sign in to Cloudflare first.")?;
+            .ok_or_else(|| user_err(locale, Key::ErrorCfSignInFirst))?;
 
         // Refresh proactively if the access token already aged out (the user
         // may have sat on the password/progress screens for a while).
         if tokens.expires_at <= std::time::Instant::now() {
             tokens = oauth::refresh(&tokens).await.map_err(|e| {
                 log::warn!("proactive token refresh failed: {e}");
-                "Your Cloudflare sign-in expired. Please sign in again.".to_string()
+                user_err(locale, Key::ErrorCfSignInExpired)
             })?;
             *session.tokens.lock().unwrap() = Some(tokens.clone());
         }
@@ -214,13 +233,17 @@ pub async fn start_provisioning(
                 Err(ProvisionError::Api(CfApiError::Unauthorized)) if attempt == 1 => {
                     tokens = oauth::refresh(&tokens).await.map_err(|e| {
                         log::warn!("token refresh failed: {e}");
-                        "Your Cloudflare sign-in expired. Please sign in again.".to_string()
+                        user_err(locale, Key::ErrorCfSignInExpired)
                     })?;
                     *session.tokens.lock().unwrap() = Some(tokens.clone());
                 }
                 Err(e) => {
                     log::warn!("provisioning failed: {e}");
-                    return Err(format!("{FRIENDLY_RETRY}\n\nWhat went wrong: {e}"));
+                    return Err(format!(
+                        "{}\n\n{}",
+                        user_err(locale, Key::ErrorFriendlyRetry),
+                        i18n::t_fmt(locale, Key::ErrorProvisioningDetail, &[("detail", &e.to_string())])
+                    ));
                 }
             }
         }
@@ -229,8 +252,7 @@ pub async fn start_provisioning(
     if !session.dry_run {
         secure_store::save_setup(&outcome.worker_url, &password).map_err(|e| {
             log::error!("secure store save failed: {e}");
-            "Setup finished, but we couldn't save your details to this device's secure storage."
-                .to_string()
+            user_err(locale, Key::ErrorSecureStoreSetup)
         })?;
     }
     *session.outcome.lock().unwrap() = Some(outcome.clone());
@@ -240,27 +262,27 @@ pub async fn start_provisioning(
 /// Turns whatever the user pasted into a canonical `https://host` origin:
 /// tolerates a missing scheme, trailing slashes, and pasted sub-paths
 /// (e.g. their /mcp connector link or a dashboard page).
-fn normalize_worker_url(input: &str) -> Result<String, String> {
-    const BAD: &str = "That doesn't look like a web address. It usually ends in .workers.dev.";
+fn normalize_worker_url(input: &str, locale: Locale) -> Result<String, String> {
+    let bad = || user_err(locale, Key::ErrorBadUrl);
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err(BAD.into());
+        return Err(bad());
     }
     let with_scheme = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
         format!("https://{trimmed}")
     };
-    let parsed = url::Url::parse(&with_scheme).map_err(|_| BAD.to_string())?;
+    let parsed = url::Url::parse(&with_scheme).map_err(|_| bad())?;
     if parsed.scheme() != "https" && parsed.scheme() != "http" {
-        return Err(BAD.into());
+        return Err(bad());
     }
     // No legitimate Worker address carries credentials — this also catches
     // scheme-ish junk like "mailto:a@b.c" being read as user@host.
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(BAD.into());
+        return Err(bad());
     }
-    let host = parsed.host_str().ok_or(BAD)?;
+    let host = parsed.host_str().ok_or_else(bad)?;
     let origin = match parsed.port() {
         Some(port) => format!("{}://{host}:{port}", parsed.scheme()),
         None => format!("{}://{host}", parsed.scheme()),
@@ -275,12 +297,14 @@ fn normalize_worker_url(input: &str) -> Result<String, String> {
 pub async fn connect_existing(
     address: String,
     password: String,
+    app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<ProvisionOutcome, String> {
-    let worker_url = normalize_worker_url(&address)?;
+    let locale = locale_of(&app);
+    let worker_url = normalize_worker_url(&address, locale)?;
     let password = password.trim().to_string();
     if password.is_empty() {
-        return Err("Enter the password you chose when you set it up.".into());
+        return Err(user_err(locale, Key::ErrorEmptyPassword));
     }
 
     if !session.dry_run {
@@ -288,19 +312,19 @@ pub async fn connect_existing(
         match probe_worker(&worker_url, &password).await {
             Ok(WorkerProbe::Valid) => {}
             Ok(WorkerProbe::WrongPassword) => {
-                return Err("That password doesn't match this Second Brain. Check it and try again.".into())
+                return Err(user_err(locale, Key::ErrorWrongPassword));
             }
             Ok(WorkerProbe::NotABrain) => {
-                return Err("We couldn't find a Second Brain at that address. Double-check the link — it usually ends in .workers.dev.".into())
+                return Err(user_err(locale, Key::ErrorNotABrain));
             }
             Err(e) => {
                 log::warn!("existing-brain probe failed: {e}");
-                return Err("We couldn't reach that address. Check it and your internet connection, then try again.".into());
+                return Err(user_err(locale, Key::ErrorCantReach));
             }
         }
         secure_store::save_setup(&worker_url, &password).map_err(|e| {
             log::error!("secure store save failed: {e}");
-            "Connected, but we couldn't save your details to this device's secure storage.".to_string()
+            user_err(locale, Key::ErrorSecureStoreConnect)
         })?;
     }
 
@@ -323,8 +347,11 @@ fn details_from_anywhere(session: &SetupSession) -> Option<ProvisionOutcome> {
 }
 
 #[tauri::command]
-pub fn get_connection_details(session: State<'_, SetupSession>) -> Result<ProvisionOutcome, String> {
-    details_from_anywhere(&session).ok_or_else(|| "Setup hasn't finished yet.".to_string())
+pub fn get_connection_details(
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<ProvisionOutcome, String> {
+    details_from_anywhere(&session).ok_or_else(|| user_err(locale_of(&app), Key::ErrorSetupNotFinished))
 }
 
 #[derive(serde::Serialize)]
@@ -344,18 +371,23 @@ pub fn detect_tools() -> ToolStatus {
 }
 
 #[tauri::command]
-pub fn connect_tool(tool: String, session: State<'_, SetupSession>) -> Result<String, String> {
-    let tool = mcp_config::Tool::from_id(&tool).ok_or("Unknown tool.")?;
-    let outcome = details_from_anywhere(&session).ok_or("Setup hasn't finished yet.")?;
-    let home = dirs::home_dir().ok_or("Couldn't find your home folder.")?;
+pub fn connect_tool(
+    tool: String,
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<String, String> {
+    let locale = locale_of(&app);
+    let tool = mcp_config::Tool::from_id(&tool).ok_or_else(|| user_err(locale, Key::ErrorUnknownTool))?;
+    let outcome = details_from_anywhere(&session)
+        .ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
+    let home = dirs::home_dir().ok_or_else(|| user_err(locale, Key::ErrorNoHomeFolder))?;
     if session.dry_run {
         // Demo mode must not touch real tool configs.
         return Ok("(demo) no changes written".into());
     }
     let path = mcp_config::connect(tool, &home, &outcome.mcp_url).map_err(|e| {
         log::warn!("mcp config write failed: {e}");
-        "We couldn't update that tool's settings. You can paste the link manually instead."
-            .to_string()
+        user_err(locale, Key::ErrorMcpConfigFailed)
     })?;
     Ok(path.display().to_string())
 }
@@ -390,15 +422,16 @@ pub async fn detect_cli() -> CliStatus {
 /// Reads the Worker URL + token straight from secure storage — they never reach
 /// the webview.
 #[tauri::command]
-pub fn connect_cli(session: State<'_, SetupSession>) -> Result<String, String> {
+pub fn connect_cli(app: AppHandle, session: State<'_, SetupSession>) -> Result<String, String> {
+    let locale = locale_of(&app);
     if session.dry_run {
         return Ok("(demo) no changes written".into());
     }
-    let info = secure_store::load_setup().ok_or("Setup hasn't finished yet.")?;
-    let home = dirs::home_dir().ok_or("Couldn't find your home folder.")?;
+    let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
+    let home = dirs::home_dir().ok_or_else(|| user_err(locale, Key::ErrorNoHomeFolder))?;
     let path = cli_config::write_config(&home, &info.worker_url, &info.auth_token).map_err(|e| {
         log::warn!("cli config write failed: {e}");
-        "We couldn't write the CLI config. You can run `brain setup` yourself instead.".to_string()
+        user_err(locale, Key::ErrorCliConfigFailed)
     })?;
     Ok(path.display().to_string())
 }
@@ -412,14 +445,14 @@ pub async fn install_cli(app: AppHandle) -> Result<String, String> {
     }
     tauri::async_runtime::spawn_blocking(cli_config::install)
         .await
-        .map_err(|_| "The install was interrupted.".to_string())?
+        .map_err(|_| user_err(locale_of(&app), Key::ErrorInstallInterrupted))?
 }
 
 #[tauri::command]
 pub fn copy_text(text: String, app: AppHandle) -> Result<(), String> {
     app.clipboard()
         .write_text(text)
-        .map_err(|_| "Couldn't copy to the clipboard.".to_string())
+        .map_err(|_| user_err(locale_of(&app), Key::ErrorClipboardFailed))
 }
 
 /// Opens a URL in the default browser (or the Obsidian app for `obsidian://`).
@@ -434,11 +467,11 @@ pub fn open_external(url: String, app: AppHandle) -> Result<(), String> {
         || url.starts_with("obsidian://")
         || url.starts_with("mailto:");
     if !allowed {
-        return Err("That link can't be opened from here.".into());
+        return Err(user_err(locale_of(&app), Key::ErrorLinkNotAllowed));
     }
     app.opener()
         .open_url(url, None::<&str>)
-        .map_err(|_| "Couldn't open your browser.".to_string())
+        .map_err(|_| user_err(locale_of(&app), Key::ErrorOpenBrowserFailed))
 }
 
 // ── Guided integrations (extension / Obsidian / Notion) ───────────────────────
@@ -505,7 +538,8 @@ pub async fn integration_status(app: AppHandle) -> Result<Vec<IntegrationStatus>
             demo("email-icloud", "iCloud Mail", "email", false),
         ]);
     }
-    let info = secure_store::load_setup().ok_or("Setup hasn't finished yet.")?;
+    let locale = locale_of(&app);
+    let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
     let worker = info.worker_url.trim_end_matches('/');
     let resp = reqwest::Client::new()
         .get(format!("{worker}/integrations"))
@@ -515,12 +549,13 @@ pub async fn integration_status(app: AppHandle) -> Result<Vec<IntegrationStatus>
         .await
         .map_err(|e| {
             log::warn!("integrations fetch failed: {e}");
-            "Couldn't reach your Second Brain.".to_string()
+            user_err(locale, Key::ErrorReachBrain)
         })?;
     if !resp.status().is_success() {
-        return Err(format!(
-            "Your Second Brain returned {}.",
-            resp.status().as_u16()
+        return Err(i18n::t_fmt(
+            locale,
+            Key::ErrorBrainHttpStatus,
+            &[("status", &resp.status().as_u16().to_string())],
         ));
     }
     #[derive(serde::Deserialize)]
@@ -530,7 +565,7 @@ pub async fn integration_status(app: AppHandle) -> Result<Vec<IntegrationStatus>
     let body: Wrapper = resp
         .json()
         .await
-        .map_err(|_| "Unexpected response from your Second Brain.".to_string())?;
+        .map_err(|_| user_err(locale, Key::ErrorBrainUnexpected))?;
     Ok(body.integrations)
 }
 
@@ -538,7 +573,11 @@ pub async fn integration_status(app: AppHandle) -> Result<Vec<IntegrationStatus>
 /// bounded batch per call and reports `remaining`, so this loops until it drains
 /// (capped so a runaway can't spin forever). Reusable by the command and the
 /// menu-bar action.
-pub async fn notion_sync(worker_url: &str, auth_token: &str) -> Result<String, String> {
+pub async fn notion_sync(
+    worker_url: &str,
+    auth_token: &str,
+    locale: Locale,
+) -> Result<String, String> {
     let worker = worker_url.trim_end_matches('/');
     let client = reqwest::Client::new();
     let mut changed = 0i64;
@@ -551,7 +590,7 @@ pub async fn notion_sync(worker_url: &str, auth_token: &str) -> Result<String, S
             .await
             .map_err(|e| {
                 log::warn!("notion sync failed: {e}");
-                "Couldn't reach your Second Brain.".to_string()
+                user_err(locale, Key::ErrorReachBrain)
             })?;
         let ok_status = resp.status().is_success();
         let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
@@ -559,7 +598,7 @@ pub async fn notion_sync(worker_url: &str, auth_token: &str) -> Result<String, S
             let err = body
                 .get("error")
                 .and_then(|v| v.as_str())
-                .unwrap_or("The sync didn't finish. Please try again from the dashboard.");
+                .unwrap_or(i18n::t(locale, Key::ErrorNotionSyncFailed));
             return Err(err.to_string());
         }
         let field = |k: &str| body.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
@@ -569,20 +608,25 @@ pub async fn notion_sync(worker_url: &str, auth_token: &str) -> Result<String, S
         }
     }
     Ok(if changed > 0 {
-        format!("Synced {changed} change(s) from Notion.")
+        i18n::t_fmt(
+            locale,
+            Key::ErrorNotionSynced,
+            &[("count", &changed.to_string())],
+        )
     } else {
-        "Notion is already up to date.".to_string()
+        user_err(locale, Key::ErrorNotionUpToDate)
     })
 }
 
 /// Runs Notion sync to completion.
 #[tauri::command]
 pub async fn sync_notion(app: AppHandle) -> Result<String, String> {
+    let locale = locale_of(&app);
     if app.state::<SetupSession>().dry_run {
-        return Ok("(demo) Notion is up to date.".into());
+        return Ok(user_err(locale, Key::ErrorNotionUpToDate));
     }
-    let info = secure_store::load_setup().ok_or("Setup hasn't finished yet.")?;
-    notion_sync(&info.worker_url, &info.auth_token).await
+    let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
+    notion_sync(&info.worker_url, &info.auth_token, locale).await
 }
 
 /// Opens the dashboard and drops the user straight into the Integrations panel.
@@ -592,38 +636,71 @@ pub fn open_dashboard_integrations(
     app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<(), String> {
+    let locale = locale_of(&app);
     let (worker_url, token) = if session.dry_run {
-        let outcome = details_from_anywhere(&session).ok_or("Setup hasn't finished yet.")?;
+        let outcome = details_from_anywhere(&session)
+            .ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
         (outcome.worker_url, "demo".to_string())
     } else {
-        let info = secure_store::load_setup().ok_or("Setup hasn't finished yet.")?;
+        let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
         (info.worker_url, info.auth_token)
     };
     windows::open_wrapper_window_integrations(&app, &worker_url, &token)
-        .map_err(|_| "Couldn't open your Second Brain window.".to_string())?;
+        .map_err(|_| user_err(locale, Key::OpenDashboardFailed))?;
+    close_setup_windows(&app);
+    Ok(())
+}
+
+fn dashboard_credentials(
+    session: &SetupSession,
+    locale: Locale,
+) -> Result<(String, String), String> {
+    if session.dry_run {
+        let outcome = details_from_anywhere(session)
+            .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
+        Ok((outcome.worker_url, "demo".to_string()))
+    } else {
+        let info = secure_store::load_setup()
+            .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
+        Ok((info.worker_url, info.auth_token))
+    }
+}
+
+/// Opens the dashboard wrapper, closing setup/details windows on success.
+pub fn open_dashboard_impl(app: &AppHandle, session: &SetupSession) -> Result<(), String> {
+    let locale = locale_of(app);
+    let (worker_url, token) = dashboard_credentials(session, locale)?;
+    windows::open_wrapper_window(app, &worker_url, &token)
+        .map_err(|_| user_err(locale, Key::OpenDashboardFailed))?;
+    close_setup_windows(app);
+    Ok(())
+}
+
+fn close_setup_windows(app: &AppHandle) {
     for label in ["main", "details"] {
         if let Some(w) = app.get_webview_window(label) {
             let _ = w.close();
         }
     }
-    Ok(())
 }
 
 #[tauri::command]
 pub fn open_dashboard(app: AppHandle, session: State<'_, SetupSession>) -> Result<(), String> {
-    let (worker_url, token) = if session.dry_run {
-        let outcome = details_from_anywhere(&session).ok_or("Setup hasn't finished yet.")?;
-        (outcome.worker_url, "demo".to_string())
-    } else {
-        let info = secure_store::load_setup().ok_or("Setup hasn't finished yet.")?;
-        (info.worker_url, info.auth_token)
-    };
-    windows::open_wrapper_window(&app, &worker_url, &token)
-        .map_err(|_| "Couldn't open your Second Brain window.".to_string())?;
-    for label in ["main", "details"] {
-        if let Some(w) = app.get_webview_window(label) {
-            let _ = w.close();
-        }
+    open_dashboard_impl(&app, &session)
+}
+
+#[tauri::command]
+pub fn set_locale(locale: String, app: AppHandle) -> Result<(), String> {
+    let locale = Locale::parse(&locale).ok_or_else(|| "Invalid locale".to_string())?;
+    if let Ok(config) = app.path().app_config_dir() {
+        let _ = i18n::write_stored_locale(&config, locale);
+    }
+    if let Some(state) = app.try_state::<AppLocale>() {
+        state.set(locale);
+    }
+    if let Some(menus) = app.try_state::<AppMenus>() {
+        menus.apply_locale(locale);
+        menus.rebuild_tray_menu(&app).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -683,24 +760,24 @@ pub async fn worker_update_available(
 pub fn maybe_offer_worker_update(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let locale = locale_of(&app);
         let dry_run = app.state::<SetupSession>().dry_run;
         let Some(update) = compute_worker_update(dry_run).await else {
             return;
         };
-        let message = format!(
-            "A newer version of your Second Brain is available (version {}).\n\n\
-             Update now? You'll sign in to Cloudflare once. Your memories, password, \
-             and connected tools are kept.",
-            update.available_version
+        let message = i18n::t_fmt(
+            locale,
+            Key::WorkerUpdateMessage,
+            &[("version", &update.available_version)],
         );
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.dialog()
             .message(message)
-            .title("Update your Second Brain")
+            .title(i18n::t(locale, Key::WorkerUpdateTitle))
             .kind(tauri_plugin_dialog::MessageDialogKind::Info)
             .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
-                "Update now".to_string(),
-                "Later".to_string(),
+                i18n::t(locale, Key::AppUpdateNow).to_string(),
+                i18n::t(locale, Key::AppUpdateLater).to_string(),
             ))
             .show(move |accepted| {
                 let _ = tx.send(accepted);
@@ -717,7 +794,8 @@ pub fn maybe_offer_worker_update(app: &AppHandle) {
 #[tauri::command]
 pub fn begin_worker_update(app: AppHandle, session: State<'_, SetupSession>) -> Result<(), String> {
     *session.pending_worker_update.lock().unwrap() = true;
-    windows::open_setup_window(&app).map_err(|_| "Couldn't open the update window.".to_string())
+    windows::open_setup_window(&app)
+        .map_err(|_| user_err(locale_of(&app), Key::ErrorOpenWindowFailed))
 }
 
 /// Runs the preserve-everything redeploy. Requires a prior `connect_cloudflare`
@@ -728,6 +806,7 @@ pub async fn start_worker_update(
     app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<ProvisionOutcome, String> {
+    let locale = locale_of(&app);
     let manifest = worker_bundle::manifest();
 
     let progress_app = app.clone();
@@ -744,25 +823,25 @@ pub async fn start_worker_update(
             .await
             .map_err(|e| {
                 log::warn!("dry-run worker update failed: {e}");
-                FRIENDLY_RETRY.to_string()
+                user_err(locale, Key::ErrorFriendlyRetry)
             })?;
         *session.pending_worker_update.lock().unwrap() = false;
         return Ok(outcome);
     }
 
-    let info = secure_store::load_setup().ok_or("This computer isn't set up yet.")?;
+    let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorComputerNotSetup))?;
     let expected_sub = subdomain_of(&info.worker_url)
-        .ok_or("Your Second Brain is on a custom address — update it from your dashboard.")?;
+        .ok_or_else(|| user_err(locale, Key::ErrorCustomDomain))?;
     let mut tokens = session
         .tokens
         .lock()
         .unwrap()
         .clone()
-        .ok_or("Please sign in to Cloudflare first.")?;
+        .ok_or_else(|| user_err(locale, Key::ErrorCfSignInFirst))?;
     if tokens.expires_at <= std::time::Instant::now() {
         tokens = oauth::refresh(&tokens).await.map_err(|e| {
             log::warn!("token refresh failed: {e}");
-            "Your Cloudflare sign-in expired. Please sign in again.".to_string()
+            user_err(locale, Key::ErrorCfSignInExpired)
         })?;
         *session.tokens.lock().unwrap() = Some(tokens.clone());
     }
@@ -779,9 +858,7 @@ pub async fn start_worker_update(
             }
         }
     }
-    let account_id = matched.ok_or(
-        "That Cloudflare account doesn't host this Second Brain. Sign in with the account you set it up in.",
-    )?;
+    let account_id = matched.ok_or_else(|| user_err(locale, Key::ErrorWrongCfAccount))?;
 
     let backend = LiveBackend {
         client: CfClient::new(tokens.access_token.clone(), account_id),
@@ -790,7 +867,7 @@ pub async fn start_worker_update(
         .await
         .map_err(|e| {
             log::warn!("worker update failed: {e}");
-            FRIENDLY_RETRY.to_string()
+            user_err(locale, Key::ErrorFriendlyRetry)
         })?;
 
     *session.pending_worker_update.lock().unwrap() = false;
@@ -830,7 +907,9 @@ pub fn perform_logout(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_worker_url;
+    use super::{dashboard_credentials, normalize_worker_url, SetupSession};
+    use crate::cf::provision::ProvisionOutcome;
+    use crate::i18n::Locale;
 
     #[test]
     fn normalizes_pasted_addresses() {
@@ -842,7 +921,7 @@ mod tests {
             "https://second-brain.demo.workers.dev/graph?tab=all",
         ] {
             assert_eq!(
-                normalize_worker_url(input).unwrap(),
+                normalize_worker_url(input, Locale::En).unwrap(),
                 "https://second-brain.demo.workers.dev",
                 "input: {input:?}"
             );
@@ -850,9 +929,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_garbage_urls() {
+        for input in ["", "not a url", "ftp://bad.scheme"] {
+            assert!(normalize_worker_url(input, Locale::En).is_err(), "input: {input:?}");
+        }
+    }
+
+    #[test]
     fn keeps_explicit_http_and_ports_for_dev_setups() {
         assert_eq!(
-            normalize_worker_url("http://localhost:8787/mcp").unwrap(),
+            normalize_worker_url("http://localhost:8787/mcp", Locale::En).unwrap(),
             "http://localhost:8787"
         );
     }
@@ -860,7 +946,22 @@ mod tests {
     #[test]
     fn rejects_junk() {
         for input in ["", "   ", "not a url at all!", "ftp://x.dev", "mailto:a@b.c"] {
-            assert!(normalize_worker_url(input).is_err(), "input: {input:?}");
+            assert!(
+                normalize_worker_url(input, Locale::En).is_err(),
+                "input: {input:?}"
+            );
         }
+    }
+
+    #[test]
+    fn dashboard_credentials_dry_run_uses_demo_token() {
+        let session = SetupSession::new(true);
+        *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
+            worker_url: "https://second-brain.demo.workers.dev".into(),
+            mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
+        });
+        let (url, token) = dashboard_credentials(&session, Locale::En).unwrap();
+        assert_eq!(url, "https://second-brain.demo.workers.dev");
+        assert_eq!(token, "demo");
     }
 }

@@ -12,6 +12,7 @@ import {
   h,
   toolRows,
 } from "./shared";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { initI18n, LOCALE_CHANGE_EVENT, t } from "./i18n";
 import "./style.css";
 
@@ -504,9 +505,16 @@ function workerUpdateDoneScreen() {
   );
 }
 
+function applyWindowTitle() {
+  document.title = t("common.appTitle");
+  void getCurrentWindow().setTitle(t("common.appTitle"));
+}
+
 async function boot() {
   initI18n();
+  applyWindowTitle();
   window.addEventListener(LOCALE_CHANGE_EVENT, () => {
+    applyWindowTitle();
     currentScreen?.();
   });
 

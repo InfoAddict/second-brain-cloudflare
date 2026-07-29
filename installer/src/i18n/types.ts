@@ -3,6 +3,7 @@ export type Locale = "en" | "it";
 export type Messages = {
   common: {
     continue: string;
+    back: string;
     copy: string;
     copied: string;
     copyBoth: string;
@@ -20,6 +21,7 @@ export type Messages = {
     ready: string;
     notFound: string;
     demoMode: string;
+    appTitle: string;
   };
   settings: {
     title: string;

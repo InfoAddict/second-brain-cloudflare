@@ -3,6 +3,7 @@ import type { Messages } from "./types";
 export const it: Messages = {
   common: {
     continue: "Continua",
+    back: "Indietro",
     copy: "Copia",
     copied: "Copiato ✓",
     copyBoth: "Copia entrambi",
@@ -20,6 +21,7 @@ export const it: Messages = {
     ready: "Pronto",
     notFound: "Non trovato",
     demoMode: "Modalità demo",
+    appTitle: "Second Brain",
   },
   settings: {
     title: "Impostazioni",

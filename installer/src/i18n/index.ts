@@ -1,6 +1,7 @@
 import { en } from "./en";
 import { it } from "./it";
 import type { Locale, Messages } from "./types";
+import { invoke } from "@tauri-apps/api/core";
 
 export const LOCALE_STORAGE_KEY = "sb-locale";
 export const LOCALE_CHANGE_EVENT = "sb-locale-change";
@@ -8,6 +9,12 @@ export const LOCALE_CHANGE_EVENT = "sb-locale-change";
 const catalogs: Record<Locale, Messages> = { en, it };
 
 let currentLocale: Locale = "en";
+
+function syncLocaleToRust(locale: Locale): void {
+  void invoke("set_locale", { locale }).catch(() => {
+    /* not running inside Tauri during dev in browser */
+  });
+}
 
 function readStoredLocale(): Locale {
   try {
@@ -24,6 +31,7 @@ function readStoredLocale(): Locale {
 export function initI18n(): Locale {
   currentLocale = readStoredLocale();
   document.documentElement.lang = currentLocale === "it" ? "it" : "en";
+  syncLocaleToRust(currentLocale);
   return currentLocale;
 }
 
@@ -40,6 +48,7 @@ export function setLocale(locale: Locale): void {
     /* ignore */
   }
   document.documentElement.lang = locale === "it" ? "it" : "en";
+  syncLocaleToRust(locale);
   window.dispatchEvent(new CustomEvent(LOCALE_CHANGE_EVENT, { detail: locale }));
 }
 
