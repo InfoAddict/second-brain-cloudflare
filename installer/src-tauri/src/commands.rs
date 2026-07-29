@@ -700,7 +700,7 @@ pub fn set_locale(locale: String, app: AppHandle) -> Result<(), String> {
     }
     if let Some(menus) = app.try_state::<AppMenus>() {
         menus.apply_locale(locale);
-        menus.rebuild_tray_menu(&app)?;
+        menus.rebuild_tray_menu(&app).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -6,7 +6,7 @@ use tauri::menu::{
     SubmenuBuilder,
 };
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// Handles to menu items so labels can be updated when the locale changes.
 pub struct AppMenus {
@@ -250,7 +250,7 @@ pub fn install_tray<F>(
     on_menu_event: F,
 ) -> tauri::Result<()>
 where
-    F: Fn(&AppHandle, &tauri::menu::MenuEvent) + Send + Sync + 'static,
+    F: Fn(&AppHandle, tauri::menu::MenuEvent) + Send + Sync + 'static,
 {
     TrayIconBuilder::with_id("second-brain-tray")
         .icon(

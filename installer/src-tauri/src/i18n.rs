@@ -421,6 +421,78 @@ pub fn resolve_initial_locale(config_dir: Option<&Path>) -> Locale {
 mod tests {
     use super::*;
 
+    fn all_keys() -> &'static [Key] {
+        use Key::*;
+        &[
+            MenuOpenDashboard,
+            MenuConnections,
+            MenuSyncNotion,
+            MenuCheckUpdates,
+            MenuLogout,
+            SubmenuConnections,
+            TrayOpen,
+            TrayQuit,
+            LogoutTitle,
+            LogoutMessage,
+            LogoutConfirm,
+            Cancel,
+            NotionSyncTitle,
+            AppUpdateUpToDateTitle,
+            AppUpdateUpToDateMessage,
+            AppUpdateCheckFailedTitle,
+            AppUpdateCheckFailedMessage,
+            AppUpdateAvailableTitle,
+            AppUpdateAvailableMessage,
+            AppUpdateWhatsNew,
+            AppUpdateNow,
+            AppUpdateLater,
+            AppUpdateFailedTitle,
+            AppUpdateFailedMessage,
+            WorkerUpdateTitle,
+            WorkerUpdateMessage,
+            OpenDashboardFailed,
+            OpenDashboardNotSetup,
+            WindowSecondBrain,
+            WindowConnections,
+            ConnectionsButtonLabel,
+            ConnectionsButtonTooltip,
+            ErrorBadUrl,
+            ErrorEmptyPassword,
+            ErrorWrongPassword,
+            ErrorNotABrain,
+            ErrorCantReach,
+            ErrorSetupNotFinished,
+            ErrorPasswordTooShort,
+            ErrorFriendlyRetry,
+            ErrorSecureStoreSetup,
+            ErrorSecureStoreConnect,
+            ErrorUnknownTool,
+            ErrorNoHomeFolder,
+            ErrorMcpConfigFailed,
+            ErrorCliConfigFailed,
+            ErrorInstallInterrupted,
+            ErrorClipboardFailed,
+            ErrorOpenWindowFailed,
+            ErrorCfNoAccount,
+            ErrorCfSignInFirst,
+            ErrorCfSignInExpired,
+            ErrorNotionSynced,
+            ErrorNotionUpToDate,
+            ErrorCfAccountListFailed,
+            ErrorChoosePasswordFirst,
+            ErrorLinkNotAllowed,
+            ErrorOpenBrowserFailed,
+            ErrorReachBrain,
+            ErrorComputerNotSetup,
+            ErrorCustomDomain,
+            ErrorWrongCfAccount,
+            ErrorProvisioningDetail,
+            ErrorBrainHttpStatus,
+            ErrorBrainUnexpected,
+            ErrorNotionSyncFailed,
+        ]
+    }
+
     #[test]
     fn parse_locale() {
         assert_eq!(Locale::parse("en"), Some(Locale::En));
@@ -449,5 +521,33 @@ mod tests {
         write_stored_locale(&dir, Locale::It).unwrap();
         assert_eq!(read_stored_locale(&dir), Some(Locale::It));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_initial_locale_prefers_stored_over_system() {
+        let dir = std::env::temp_dir().join(format!("sb-locale-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_stored_locale(&dir, Locale::It).unwrap();
+        assert_eq!(resolve_initial_locale(Some(&dir)), Locale::It);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_initial_locale_falls_back_without_stored_file() {
+        let dir = std::env::temp_dir().join(format!("sb-locale-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // No locale file → same result as from_system().
+        assert_eq!(resolve_initial_locale(Some(&dir)), Locale::from_system());
+        assert_eq!(resolve_initial_locale(None), Locale::from_system());
+    }
+
+    #[test]
+    fn every_key_has_non_empty_en_and_it_string() {
+        for &key in all_keys() {
+            let en = t(Locale::En, key);
+            let it = t(Locale::It, key);
+            assert!(!en.is_empty(), "empty EN string for {key:?}");
+            assert!(!it.is_empty(), "empty IT string for {key:?}");
+        }
     }
 }

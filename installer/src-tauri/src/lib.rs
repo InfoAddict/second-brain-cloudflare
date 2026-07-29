@@ -21,7 +21,7 @@ mod worker_bundle;
 
 use app_menus::{build_menu_items, build_tray_items, install_app_menu, install_tray, AppMenus};
 use commands::SetupSession;
-use i18n::{self, AppLocale, Key};
+use i18n::{AppLocale, Key};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
