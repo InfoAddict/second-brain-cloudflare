@@ -71,7 +71,7 @@ function makeFakeDocument() {
     documentElement: { setAttribute() {}, getAttribute: () => null },
     querySelector: () => el(),
     querySelectorAll: () => [],
-    getElementById: () => el(),
+    getElementById: (_id?: string) => el(),
     createElement: () => el(),
     body: { style: {}, appendChild() {} },
   };
@@ -119,7 +119,7 @@ describe("dashboard modules", () => {
     const sandbox: Record<string, unknown> = {
       document: {
         ...makeFakeDocument(),
-        getElementById: (id: string) => (id === "about-credits" ? creditsRoot : makeFakeDocument().getElementById(id)),
+        getElementById: (id?: string) => (id === "about-credits" ? creditsRoot : makeFakeDocument().getElementById(id)),
       },
       module: undefined,
       exports: undefined,
