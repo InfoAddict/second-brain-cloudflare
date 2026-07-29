@@ -79,7 +79,7 @@ export async function recallEntries(
   const { query, topK } = params;
   const synthesize = params.synthesize ?? true;
   let { tag, after, before, kind } = params;
-  const hops = Math.max(0, Math.min(cfg.GRAPH_MAX_HOPS, params.hops ?? 0));
+  const hops = Math.max(0, Math.min(cfg.GRAPH_MAX_HOPS, params.hops ?? cfg.DEFAULT_HOPS));
   const now = Date.now();
   let semanticUnavailable = false;
 
