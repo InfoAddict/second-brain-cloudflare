@@ -15,6 +15,7 @@ mod i18n;
 mod mcp_config;
 mod password_check;
 mod secure_store;
+mod settings;
 mod version;
 mod windows;
 mod worker_bundle;
