@@ -6,6 +6,7 @@ coverage/
 .wrangler-dry-run/
 docs/
 .claude/
+.cursor/
 .dev.vars
 .env
 worker-configuration.d.ts
