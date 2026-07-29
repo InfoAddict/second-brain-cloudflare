@@ -22,6 +22,7 @@ mod worker_bundle;
 use app_menus::{build_menu_items, build_tray_items, install_app_menu, install_tray, AppMenus};
 use commands::SetupSession;
 use i18n::{AppLocale, Key};
+use secure_store::SetupInfo;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -101,6 +102,24 @@ fn confirm_logout(app: &AppHandle) {
                 commands::perform_logout(&handle);
             }
         });
+}
+
+/// Resolves the stored setup for launch, skipping secure storage entirely in
+/// dry-run.
+///
+/// The loader is taken lazily rather than as a value because reading it prompts
+/// for Keychain access on macOS. Dry-run always launches into the setup flow, so
+/// the loaded value was discarded anyway — the old `match` paid a credential
+/// prompt for a result it threw away, which made `SECOND_BRAIN_DRY_RUN=1`
+/// unusable for demoing on a machine that already has a Second Brain.
+fn load_setup_unless_dry_run(
+    dry_run: bool,
+    load: impl FnOnce() -> Option<SetupInfo>,
+) -> Option<SetupInfo> {
+    if dry_run {
+        return None;
+    }
+    load()
 }
 
 pub fn run() {
@@ -224,8 +243,8 @@ pub fn run() {
 
             // Mode selection. Dry-run always shows setup so the flow can be
             // demoed even on a machine that already has a Second Brain.
-            match secure_store::load_setup() {
-                Some(info) if !dry_run => {
+            match load_setup_unless_dry_run(dry_run, secure_store::load_setup) {
+                Some(info) => {
                     windows::open_wrapper_window(&handle, &info.worker_url, &info.auth_token)?;
                     // In wrapper mode, quietly check whether the deployed Worker
                     // is behind what this app bundles and offer to update it.
@@ -243,4 +262,46 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn info() -> SetupInfo {
+        SetupInfo { worker_url: "https://example.workers.dev".into(), auth_token: "t".into() }
+    }
+
+    #[test]
+    fn dry_run_does_not_read_secure_storage() {
+        let called = Cell::new(false);
+
+        let got = load_setup_unless_dry_run(true, || {
+            called.set(true);
+            Some(info())
+        });
+
+        assert!(!called.get(), "dry-run must not touch the keychain");
+        assert!(got.is_none(), "dry-run always launches into setup");
+    }
+
+    #[test]
+    fn normal_launch_reads_secure_storage() {
+        let called = Cell::new(false);
+
+        let got = load_setup_unless_dry_run(false, || {
+            called.set(true);
+            Some(info())
+        });
+
+        assert!(called.get());
+        assert_eq!(got.map(|i| i.worker_url), Some("https://example.workers.dev".to_string()));
+    }
+
+    #[test]
+    fn normal_launch_without_stored_setup_falls_through_to_setup() {
+        let got = load_setup_unless_dry_run(false, || None);
+        assert!(got.is_none());
+    }
 }
