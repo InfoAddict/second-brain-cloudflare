@@ -17,6 +17,11 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 /// does not route, so nothing is lost if the interception ever fails.
 const CONNECTIONS_PATH: &str = "/__sb-connections";
 
+/// Same navigation-sentinel trick for the settings panel. The dashboard has no
+/// settings UI by design (#244) — the desktop app is the only writer of config —
+/// so this button is injected here rather than shipped in the dashboard.
+const SETTINGS_PATH: &str = "/__sb-settings";
+
 /// Adds a "Connections" entry to the dashboard's own sidebar footer, next to
 /// Settings, reusing the dashboard's `sb-footer-btn` class so it inherits the
 /// real styling rather than floating over the page. Injected rather than shipped
@@ -45,6 +50,42 @@ const CONNECTIONS_BUTTON_JS: &str = r#"(function () {
     }
   }, 100);
 })();"#;
+
+/// Second injected footer button, for the settings panel. Kept as its own
+/// script rather than parameterising the Connections one: the ids, labels and
+/// target paths differ, and one script doing both would need every value
+/// twice anyway.
+const SETTINGS_BUTTON_JS: &str = r#"(function () {
+  var ID = 'sb-desktop-settings';
+  var LABEL = __LABEL__;
+  var TITLE = __TITLE__;
+  var tries = 0;
+  var iv = setInterval(function () {
+    if (document.getElementById(ID)) { clearInterval(iv); return; }
+    var footer = document.querySelector('.sb-footer');
+    if (footer) {
+      var b = document.createElement('button');
+      b.id = ID;
+      b.className = 'sb-footer-btn';
+      b.title = TITLE;
+      b.innerHTML = '<i class="ti ti-sliders"></i><span>' + LABEL + '</span>';
+      b.addEventListener('click', function () { location.assign('__SETTINGS_PATH__'); });
+      footer.appendChild(b);
+      clearInterval(iv);
+    } else if (++tries > 60) {
+      clearInterval(iv);
+    }
+  }, 100);
+})();"#;
+
+fn settings_button_js(locale: Locale) -> String {
+    let label = serde_json::to_string(i18n::t(locale, Key::SettingsButtonLabel)).expect("string");
+    let title = serde_json::to_string(i18n::t(locale, Key::SettingsButtonTooltip)).expect("string");
+    SETTINGS_BUTTON_JS
+        .replace("__LABEL__", &label)
+        .replace("__TITLE__", &title)
+        .replace("__SETTINGS_PATH__", SETTINGS_PATH)
+}
 
 fn connections_button_js(locale: Locale) -> String {
     let label = serde_json::to_string(i18n::t(locale, Key::ConnectionsButtonLabel)).expect("string");
@@ -146,6 +187,8 @@ fn open_wrapper_window_impl(
     }
     init.push('\n');
     init.push_str(&connections_button_js(locale));
+    init.push('\n');
+    init.push_str(&settings_button_js(locale));
 
     let url: tauri::Url = format!("{origin}/")
         .parse()
@@ -160,11 +203,17 @@ fn open_wrapper_window_impl(
         // route; turn that request into the native window and let the page stay
         // where it is.
         .on_navigation(move |target| {
-            if target.path() == CONNECTIONS_PATH {
-                open_details_window(&nav_handle);
-                return false;
+            match target.path() {
+                CONNECTIONS_PATH => {
+                    open_details_window(&nav_handle);
+                    false
+                }
+                SETTINGS_PATH => {
+                    open_settings_window(&nav_handle);
+                    false
+                }
+                _ => true,
             }
-            true
         })
         .build()?;
     Ok(())
@@ -186,6 +235,28 @@ pub fn open_details_window(app: &AppHandle) {
         .title(i18n::t(locale, Key::WindowConnections))
         .inner_size(960.0, 680.0)
         .min_inner_size(820.0, 560.0)
+        .center()
+        .build();
+}
+
+/// Sized to its content: seven controls with three radio levels each is taller
+/// than Connections (960x680) but no wider.
+pub fn open_settings_window(app: &AppHandle) {
+    let locale = app
+        .try_state::<crate::i18n::AppLocale>()
+        .map(|l| l.get())
+        .unwrap_or(Locale::En);
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.center();
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+        .title(i18n::t(locale, Key::WindowSettings))
+        .inner_size(760.0, 820.0)
+        .min_inner_size(640.0, 560.0)
         .center()
         .build();
 }

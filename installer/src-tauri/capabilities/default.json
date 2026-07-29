@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the bundled setup and details windows. The wrapper window (label `brain`) loads the user's remote dashboard and intentionally gets no IPC access.",
-  "windows": ["main", "details"],
+  "description": "Capabilities for the bundled setup, details and settings windows. The wrapper window (label `brain`) loads the user's remote dashboard and intentionally gets no IPC access.",
+  "windows": ["main", "details", "settings"],
   "permissions": [
     "core:default"
   ]

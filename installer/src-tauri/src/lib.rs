@@ -183,6 +183,11 @@ pub fn run() {
             commands::worker_update_available,
             commands::begin_worker_update,
             commands::start_worker_update,
+            commands::get_brain_settings,
+            commands::set_control_level,
+            commands::reset_control_setting,
+            commands::set_brain_llm_model,
+            commands::open_settings_window,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -193,6 +198,7 @@ pub fn run() {
             let (
                 menu_open,
                 menu_hub,
+                menu_settings,
                 menu_sync,
                 menu_update,
                 menu_logout,
@@ -202,6 +208,7 @@ pub fn run() {
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "menu-open" => open_dashboard_from_menu(app),
                 "menu-hub" => windows::open_details_window(app),
+                "menu-settings" => windows::open_settings_window(app),
                 "menu-sync-notion" => sync_notion_from_menu(app),
                 "menu-update" => app_update::check_for_updates(app, false),
                 "menu-logout" => confirm_logout(app),
@@ -211,6 +218,7 @@ pub fn run() {
             let (
                 tray_open,
                 tray_hub,
+                tray_settings,
                 tray_sync,
                 tray_update,
                 tray_logout,
@@ -220,6 +228,7 @@ pub fn run() {
             install_tray(&handle, &tray_menu, |app, event| match event.id().as_ref() {
                 "tray-open" => open_dashboard_from_menu(app),
                 "tray-hub" => windows::open_details_window(app),
+                    "tray-settings" => windows::open_settings_window(app),
                 "tray-sync-notion" => sync_notion_from_menu(app),
                 "tray-update" => app_update::check_for_updates(app, false),
                 "tray-logout" => confirm_logout(app),
@@ -230,12 +239,14 @@ pub fn run() {
             app.manage(AppMenus {
                 menu_open,
                 menu_hub,
+                menu_settings,
                 menu_sync,
                 menu_update,
                 menu_logout,
                 connections_submenu: connections,
                 tray_open,
                 tray_hub,
+                tray_settings,
                 tray_sync,
                 tray_update,
                 tray_logout,

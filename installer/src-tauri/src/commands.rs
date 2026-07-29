@@ -905,6 +905,61 @@ pub fn perform_logout(app: &AppHandle) {
     let _ = windows::open_setup_window(app);
 }
 
+// ── Brain settings (#246) ───────────────────────────────────────────────────
+//
+// Every mutating command returns the freshly re-read view rather than echoing
+// what was requested. The Worker clamps and invariant-checks at resolve time,
+// so what it stored may differ from what was asked for — rendering from the
+// request would show the user a state their brain is not actually in.
+
+async fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
+    let locale = locale_of(app);
+    let info = secure_store::load_setup().ok_or_else(|| user_err(locale, Key::ErrorSetupNotFinished))?;
+    Ok((info.worker_url, info.auth_token, locale))
+}
+
+#[tauri::command]
+pub async fn get_brain_settings(app: AppHandle) -> Result<crate::settings::SettingsView, String> {
+    let (url, token, locale) = settings_target(&app).await?;
+    crate::settings::fetch_settings(&url, &token, locale).await
+}
+
+#[tauri::command]
+pub async fn set_control_level(
+    app: AppHandle,
+    control: String,
+    level: String,
+) -> Result<crate::settings::SettingsView, String> {
+    let (url, token, locale) = settings_target(&app).await?;
+    crate::settings::apply_level(&url, &token, &control, &level, locale).await?;
+    crate::settings::fetch_settings(&url, &token, locale).await
+}
+
+#[tauri::command]
+pub async fn reset_control_setting(
+    app: AppHandle,
+    control: String,
+) -> Result<crate::settings::SettingsView, String> {
+    let (url, token, locale) = settings_target(&app).await?;
+    crate::settings::reset_control(&url, &token, &control, locale).await?;
+    crate::settings::fetch_settings(&url, &token, locale).await
+}
+
+#[tauri::command]
+pub async fn set_brain_llm_model(
+    app: AppHandle,
+    model: String,
+) -> Result<crate::settings::SettingsView, String> {
+    let (url, token, locale) = settings_target(&app).await?;
+    crate::settings::set_llm_model(&url, &token, &model, locale).await?;
+    crate::settings::fetch_settings(&url, &token, locale).await
+}
+
+#[tauri::command]
+pub fn open_settings_window(app: AppHandle) {
+    crate::windows::open_settings_window(&app);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{dashboard_credentials, normalize_worker_url, SetupSession};

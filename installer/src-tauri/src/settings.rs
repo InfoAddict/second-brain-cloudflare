@@ -153,6 +153,18 @@ fn values_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// Models offered in the dropdown. A curated list rather than a live catalogue
+/// fetch: the panel must render offline, and an unrecognised model string still
+/// resolves fine on the Worker (LLM_MODEL is validated only as a non-empty
+/// string), so a stale entry degrades to "works" rather than "breaks".
+pub const LLM_MODELS: &[&str] = &[
+    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "@cf/meta/llama-3.1-8b-instruct-fast",
+    "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    "@cf/qwen/qwen2.5-coder-32b-instruct",
+];
+
 // ── Worker API ──────────────────────────────────────────────────────────────
 //
 // The desktop app is the only writer of config (#244): it holds AUTH_TOKEN in
@@ -170,6 +182,9 @@ pub struct ControlView {
     /// `None` when the stored config matches no level — shown as "Custom"
     /// rather than snapping the user to a level they did not pick.
     pub level: Option<String>,
+    /// What "Reset to default" returns to, so the UI can name it instead of
+    /// saying "default" and leaving the user to guess.
+    pub default_level: &'static str,
     pub forward_only: bool,
 }
 
@@ -178,6 +193,8 @@ pub struct ControlView {
 pub struct SettingsView {
     pub controls: Vec<ControlView>,
     pub llm_model: String,
+    /// Sent to the UI so the dropdown never hardcodes model ids.
+    pub llm_models: Vec<&'static str>,
 }
 
 fn base(worker_url: &str) -> &str {
@@ -193,6 +210,11 @@ fn view_from_config(config: &Map<String, Value>) -> SettingsView {
                 id: c.id,
                 levels: c.levels.iter().map(|l| l.id).collect(),
                 level: level_of(c.id, config).map(|s| s.to_string()),
+                default_level: DEFAULT_LEVELS
+                    .iter()
+                    .find(|(id, _)| *id == c.id)
+                    .map(|(_, lvl)| *lvl)
+                    .unwrap_or(""),
                 forward_only: c.forward_only,
             })
             .collect(),
@@ -201,6 +223,7 @@ fn view_from_config(config: &Map<String, Value>) -> SettingsView {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
+        llm_models: LLM_MODELS.to_vec(),
     }
 }
 
@@ -661,6 +684,36 @@ mod tests {
                 let seg = &panel[seg_start..(seg_start + 1200).min(panel.len())];
                 assert!(seg.contains("note:"), "{locale_file}: {} is forward-only but has no note", c.id);
             }
+        }
+    }
+
+
+    #[tokio::test]
+    async fn every_control_in_the_view_names_its_default_level() {
+        let (url, _) = spawn_worker();
+        let view = fetch_settings(&url, "tok", Locale::En).await.unwrap();
+        for c in &view.controls {
+            assert!(!c.default_level.is_empty(), "{} has no default level in the view", c.id);
+        }
+    }
+
+
+    /// The settings window groups controls into sections with a hardcoded list.
+    /// A control missing from it would simply never render — no error, no blank
+    /// space, just a setting the user cannot reach.
+    #[test]
+    fn the_settings_window_renders_every_control() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/settings.ts");
+        let src = std::fs::read_to_string(path).expect("read settings.ts");
+        let start = src.find("const SECTIONS").expect("SECTIONS list");
+        let end = src[start..].find("];").expect("end of SECTIONS") + start;
+        let sections = &src[start..end];
+        for c in CONTROLS {
+            assert!(
+                sections.contains(&format!("\"{}\"", c.id)),
+                "settings.ts SECTIONS omits {} — it would never render",
+                c.id
+            );
         }
     }
 

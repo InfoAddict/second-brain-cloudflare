@@ -628,3 +628,112 @@ li.error .check-icon {
   margin-top: 0;
 }
 
+
+/* ── Brain settings window (#246) ─────────────────────────────────────────── */
+
+.settings-title {
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+  margin: 1.5rem 1.5rem 0.25rem;
+  color: var(--text-primary);
+}
+
+.settings-lede {
+  margin: 0 1.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.settings-section {
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin: 1.5rem 1.5rem 0.5rem;
+}
+
+.settings-control {
+  margin: 0 1.5rem 0.75rem;
+}
+
+.settings-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.settings-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.settings-level:hover {
+  background: var(--accent-soft);
+}
+
+/* The selected pill is outlined rather than filled: three of these sit side by
+   side, and a filled one reads as a primary action. */
+.settings-level:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.settings-level input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* Reserves two lines so swapping level does not reflow the card under the
+   cursor mid-click. */
+.settings-notice {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  min-height: 2.3em;
+}
+
+.settings-forward-note {
+  color: var(--text-tertiary);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  margin-top: 0.4rem;
+}
+
+.settings-custom {
+  display: inline-block;
+  margin-bottom: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-press);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.settings-reset {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.settings-status {
+  margin: 0 1.5rem;
+  min-height: 1.2em;
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+}
+
+.settings-status-ok { color: var(--ok); }
+.settings-status-error { color: var(--danger); }
+.settings-status-pending { color: var(--text-tertiary); }

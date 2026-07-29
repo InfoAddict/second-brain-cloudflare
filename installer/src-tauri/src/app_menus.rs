@@ -12,12 +12,14 @@ use tauri::AppHandle;
 pub struct AppMenus {
     pub menu_open: MenuItem<tauri::Wry>,
     pub menu_hub: MenuItem<tauri::Wry>,
+    pub menu_settings: MenuItem<tauri::Wry>,
     pub menu_sync: MenuItem<tauri::Wry>,
     pub menu_update: MenuItem<tauri::Wry>,
     pub menu_logout: MenuItem<tauri::Wry>,
     pub connections_submenu: Submenu<tauri::Wry>,
     pub tray_open: MenuItem<tauri::Wry>,
     pub tray_hub: MenuItem<tauri::Wry>,
+    pub tray_settings: MenuItem<tauri::Wry>,
     pub tray_sync: MenuItem<tauri::Wry>,
     pub tray_update: MenuItem<tauri::Wry>,
     pub tray_logout: MenuItem<tauri::Wry>,
@@ -28,6 +30,7 @@ impl AppMenus {
     pub fn apply_locale(&self, locale: Locale) {
         let _ = self.menu_open.set_text(i18n::t(locale, Key::MenuOpenDashboard));
         let _ = self.menu_hub.set_text(i18n::t(locale, Key::MenuConnections));
+        let _ = self.menu_settings.set_text(i18n::t(locale, Key::MenuSettings));
         let _ = self.menu_sync.set_text(i18n::t(locale, Key::MenuSyncNotion));
         let _ = self.menu_update.set_text(i18n::t(locale, Key::MenuCheckUpdates));
         let _ = self.menu_logout.set_text(i18n::t(locale, Key::MenuLogout));
@@ -36,6 +39,7 @@ impl AppMenus {
             .set_text(i18n::t(locale, Key::SubmenuConnections));
         let _ = self.tray_open.set_text(i18n::t(locale, Key::TrayOpen));
         let _ = self.tray_hub.set_text(i18n::t(locale, Key::MenuConnections));
+        let _ = self.tray_settings.set_text(i18n::t(locale, Key::MenuSettings));
         let _ = self.tray_sync.set_text(i18n::t(locale, Key::MenuSyncNotion));
         let _ = self.tray_update.set_text(i18n::t(locale, Key::MenuCheckUpdates));
         let _ = self.tray_logout.set_text(i18n::t(locale, Key::MenuLogout));
@@ -66,6 +70,7 @@ pub fn build_menu_items(
     MenuItem<tauri::Wry>,
     MenuItem<tauri::Wry>,
     MenuItem<tauri::Wry>,
+    MenuItem<tauri::Wry>,
     Submenu<tauri::Wry>,
 )> {
     let open_item = MenuItem::with_id(
@@ -81,6 +86,13 @@ pub fn build_menu_items(
         i18n::t(locale, Key::MenuConnections),
         true,
         Some("CmdOrCtrl+D"),
+    )?;
+    let settings_item = MenuItem::with_id(
+        app,
+        "menu-settings",
+        i18n::t(locale, Key::MenuSettings),
+        true,
+        Some("CmdOrCtrl+,"),
     )?;
     let sync_item = MenuItem::with_id(
         app,
@@ -106,6 +118,7 @@ pub fn build_menu_items(
     let connections = SubmenuBuilder::new(app, i18n::t(locale, Key::SubmenuConnections))
         .item(&open_item)
         .item(&hub_item)
+        .item(&settings_item)
         .item(&sync_item)
         .separator()
         .item(&update_item)
@@ -115,6 +128,7 @@ pub fn build_menu_items(
     Ok((
         open_item,
         hub_item,
+        settings_item,
         sync_item,
         update_item,
         logout_item,
@@ -182,6 +196,7 @@ pub fn build_tray_items(
     MenuItem<tauri::Wry>,
     MenuItem<tauri::Wry>,
     MenuItem<tauri::Wry>,
+    MenuItem<tauri::Wry>,
     Menu<tauri::Wry>,
 )> {
     let tray_open = MenuItem::with_id(
@@ -195,6 +210,13 @@ pub fn build_tray_items(
         app,
         "tray-hub",
         i18n::t(locale, Key::MenuConnections),
+        true,
+        None::<&str>,
+    )?;
+    let tray_settings = MenuItem::with_id(
+        app,
+        "tray-settings",
+        i18n::t(locale, Key::MenuSettings),
         true,
         None::<&str>,
     )?;
@@ -236,6 +258,7 @@ pub fn build_tray_items(
     Ok((
         tray_open,
         tray_hub,
+        tray_settings,
         tray_sync,
         tray_update,
         tray_logout,
