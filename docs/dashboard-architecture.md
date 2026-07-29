@@ -20,7 +20,7 @@ The one-shot migration script that performed this split was removed after use; d
 ## Script load order
 
 ```
-utils.js → state.js → api.js → theme.js → ui-chat.js
+utils.js → credits.js → state.js → api.js → theme.js → ui-chat.js
 → recall.js → recent.js → remember.js → memory-crud.js
 → settings.js → integrations.js → graph-canvas.js
 → nav.js → auth.js → app.js
@@ -47,6 +47,7 @@ utils.js → state.js → api.js → theme.js → ui-chat.js
 | Auth connect / showApp | `js/auth.js` |
 | Sheet listeners, `init()` | `js/app.js` |
 | Escaping, graph layout, vectorize banner | `utils.js` (existing) |
+| About credits | `credits.js` |
 
 ## Tests
 
