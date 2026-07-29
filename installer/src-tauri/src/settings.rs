@@ -625,6 +625,45 @@ mod tests {
         assert!(err.is_err());
     }
 
+
+    /// Every control and level id must have copy in both locales.
+    ///
+    /// The ids live in Rust and the copy lives in TypeScript, so no compiler
+    /// spans the two. Adding a level here without copy would render a blank
+    /// radio button; the TS `Messages` type enforces en/it parity, but it
+    /// cannot know what Rust defines.
+    #[test]
+    fn every_control_and_level_has_copy_in_both_locales() {
+        for locale_file in ["en.ts", "it.ts"] {
+            let path = format!("{}/../src/i18n/{}", env!("CARGO_MANIFEST_DIR"), locale_file);
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let start = src.find("settingsPanel:").unwrap_or_else(|| panic!("{locale_file} has no settingsPanel"));
+            let panel = &src[start..];
+
+            for c in CONTROLS {
+                assert!(
+                    panel.contains(&format!("{}: {{", c.id)),
+                    "{locale_file} has no copy for control {}",
+                    c.id
+                );
+                for l in c.levels {
+                    assert!(
+                        panel.contains(&format!("{}: {{", l.id)),
+                        "{locale_file} has no copy for {}/{}",
+                        c.id,
+                        l.id
+                    );
+                }
+            }
+            // The forward-only pair each need their explanatory note.
+            for c in CONTROLS.iter().filter(|c| c.forward_only) {
+                let seg_start = panel.find(&format!("{}: {{", c.id)).unwrap();
+                let seg = &panel[seg_start..(seg_start + 1200).min(panel.len())];
+                assert!(seg.contains("note:"), "{locale_file}: {} is forward-only but has no note", c.id);
+            }
+        }
+    }
+
     #[test]
     fn ships_seven_controls_counting_the_model_dropdown() {
         // Six level controls here; the seventh (LLM_MODEL) is a dropdown and is

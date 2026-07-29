@@ -30,6 +30,114 @@ export const en: Messages = {
     english: "English",
     italian: "Italiano",
   },
+  settingsPanel: {
+    title: "Brain settings",
+    lede: "How your Second Brain remembers and recalls. Changes apply to your next search.",
+    sectionRecall: "Recall",
+    sectionSaving: "Saving",
+    sectionAi: "AI",
+    custom: "Custom",
+    customNote: "These values were set outside the app and don't match a preset. Picking a level below will replace them.",
+    reset: "Reset to default",
+    saving: "Saving…",
+    saved: "Saved",
+    loadFailed: "Couldn't load your settings.",
+    recency: {
+      label: "How much recent memories outrank older ones",
+      desc: "Older memories gradually lose ground to newer ones. This sets how steeply — and how much protection settled, important memories get.",
+      levels: {
+        timeless: {
+          name: "Timeless",
+          notice: "Age barely matters. Good if your brain is mostly reference you want found regardless of when you saved it.",
+        },
+        balanced: {
+          name: "Balanced",
+          notice: "The default. Recent wins ties, but a strong old match still beats a weak new one.",
+        },
+        recent_first: {
+          name: "Recent-first",
+          notice: "Newer memories dominate. Good for fast-moving work, at the cost of burying older context.",
+        },
+      },
+    },
+    variety: {
+      label: "Variety in results",
+      desc: "When several memories say nearly the same thing, Second Brain can return all of them or spread the results out.",
+      levels: {
+        focused: { name: "Focused", notice: "The closest matches, even if a few repeat each other." },
+        balanced: { name: "Balanced", notice: "The default." },
+        varied: {
+          name: "Varied",
+          notice: "A wider spread of different memories. Some very close matches get dropped to make room.",
+        },
+      },
+    },
+    connections: {
+      label: "How far to follow connections",
+      desc: "Past direct matches, Second Brain can walk the links between memories and pull in what they connect to.",
+      levels: {
+        off: { name: "Off", notice: "Direct matches only." },
+        nearby: { name: "Nearby", notice: "One step out. Surfaces obvious context you didn't search for." },
+        extended: {
+          name: "Extended",
+          notice: "Two steps out. Richer context, and occasionally something you'd call a stretch.",
+        },
+      },
+    },
+    detail: {
+      label: "How much detail comes back",
+      desc: "Sets how much of each memory gets sent to your assistant.",
+      levels: {
+        compact: {
+          name: "Compact",
+          notice: "Short snippets. Leaves the most room in your assistant's context window.",
+        },
+        standard: { name: "Standard", notice: "The default. Full text for the top matches, snippets below." },
+        full: { name: "Full", notice: "More of every memory. Best answers, uses noticeably more context." },
+      },
+    },
+    duplicates: {
+      label: "Blocking near-duplicate saves",
+      desc: "When something very similar is already stored, Second Brain can block the save or let it through with a flag.",
+      note: "Applies to new saves. Duplicates already in your brain aren't affected.",
+      levels: {
+        permissive: { name: "Permissive", notice: "Almost everything saves. Repeats accumulate." },
+        standard: {
+          name: "Standard",
+          notice: "The default. Near-identical saves are blocked, similar ones flagged.",
+        },
+        strict: {
+          name: "Strict",
+          notice: "Blocks aggressively. Occasionally rejects a genuine update to something you already stored.",
+        },
+      },
+    },
+    compression: {
+      label: "Compressing old memories",
+      desc: "Each night, old memories you rarely recall can be folded into summaries so search stays sharp.",
+      note: "Takes effect on tonight's run. Already-compressed memories stay compressed.",
+      levels: {
+        conservative: {
+          name: "Conservative",
+          notice: "Protects more. Your brain grows larger and searches get gradually slower.",
+        },
+        standard: {
+          name: "Standard",
+          notice: "The default. Important or frequently-recalled memories are never compressed.",
+        },
+        aggressive: {
+          name: "Aggressive",
+          notice: "Compresses sooner. Leaner brain, and detail in old memories is summarized away.",
+        },
+      },
+    },
+    model: {
+      label: "Which AI model to use",
+      desc: "Used for sorting, summarizing, and spotting contradictions in your memories — not for the search itself. Every model here runs on your own Cloudflare account.",
+      sizeNote: "Larger models write better summaries and cost more neurons. Smaller ones are faster and cheaper.",
+      neuronsNote: "Neurons are Cloudflare's usage unit for AI. Your plan includes a daily allowance.",
+    },
+  },
   welcome: {
     title: "Let's set up your Second Brain",
     lede:
