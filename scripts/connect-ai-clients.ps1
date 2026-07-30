@@ -84,6 +84,10 @@ function Apply-Instructions {
     "updated-legacy" {
       Write-Host "[$Label] Updated instructions in $TargetFile (replaced legacy block; backup at ${TargetFile}.bak)"
     }
+    "appended-legacy-kept" {
+      Write-Host "[$Label] Appended instructions to $TargetFile"
+      Write-Host "[$Label] An older Second Brain block is still in that file. We could not tell where it ended, so nothing was deleted — please remove the old copy by hand."
+    }
     "appended" {
       Write-Host "[$Label] Appended instructions to $TargetFile"
     }

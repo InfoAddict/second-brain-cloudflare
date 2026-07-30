@@ -117,6 +117,58 @@ describe("instruction-block apply logic", () => {
     expect(content.startsWith("# My global instructions")).toBe(true);
   });
 
+  it("keeps notes written directly above the legacy block", () => {
+    // The block is preceded by the user's own lines under a heading they share.
+    // Reaching upward for a plausible start once absorbed anything within
+    // twenty lines, which is exactly where a note about the block would sit.
+    const existing = [
+      "# My setup",
+      "",
+      "I work in Europe/Rome, so schedule things accordingly.",
+      "Prefer pnpm over npm.",
+      "",
+      "You have access to a personal second brain via MCP tools.",
+      "",
+      `1. ${SENTINEL_PHRASE} with a natural language query.`,
+      "12. If the second brain MCP tools are unavailable, tell me immediately.",
+    ].join("\n");
+
+    const { content, action } = applyInstructionBlock(existing, newBody);
+    expect(action).toBe("updated-legacy");
+    expect(content).toContain("I work in Europe/Rome, so schedule things accordingly.");
+    expect(content).toContain("Prefer pnpm over npm.");
+    expect(content).toContain("MCP availability");
+  });
+
+  it("appends rather than deleting when the legacy block has no recognisable end", () => {
+    // An edited block whose tail matches nothing we know, with no heading after
+    // it. Replacing here meant deleting to the end of the file — the original
+    // defect. Leaving a stale copy is recoverable in a minute; this is not.
+    const existing = [
+      "# Second Brain",
+      "",
+      "You have access to a personal second brain via MCP tools.",
+      "",
+      `1. ${SENTINEL_PHRASE} with a natural language query.`,
+      "2. Store EVERYTHING important automatically.",
+      "",
+      "My unrelated note at the bottom of the file.",
+    ].join("\n");
+
+    const { content, action } = applyInstructionBlock(existing, newBody);
+    expect(action).toBe("appended-legacy-kept");
+    expect(content).toContain("My unrelated note at the bottom of the file.");
+    expect(content).toContain("2. Store EVERYTHING important automatically.");
+    expect(content).toContain("MCP availability");
+  });
+
+  it("reports an unbounded legacy block distinctly, so the user is told to tidy it", () => {
+    // Silently appending would leave the file saying two different things with
+    // no explanation of why.
+    const plainAppend = applyInstructionBlock("# Notes\n\nnothing to do with us\n", newBody);
+    expect(plainAppend.action).toBe("appended");
+  });
+
   it("writes a backup before legacy upgrades", () => {
     const dir = mkdtempSync(join(tmpdir(), "sb-instruction-block-"));
     const target = join(dir, "CLAUDE.md");

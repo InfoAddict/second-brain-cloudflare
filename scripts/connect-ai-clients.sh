@@ -93,6 +93,10 @@ apply_instructions() {
     appended)
       echo "[$label] Appended instructions to $target_file"
       ;;
+    appended-legacy-kept)
+      echo "[$label] Appended instructions to $target_file"
+      echo "[$label] An older Second Brain block is still in that file. We could not tell where it ended, so nothing was deleted — please remove the old copy by hand."
+      ;;
     *)
       echo "[$label] Installed instructions in $target_file"
       ;;

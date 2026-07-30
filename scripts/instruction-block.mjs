@@ -45,7 +45,24 @@ function isSecondBrainHeading(line) {
 
 /**
  * Find the line range of a legacy (unmarked) Second Brain instruction block.
- * Preserves user-authored content before and after the block.
+ *
+ * Returns `null` when the end of the block cannot be established, because the
+ * caller deletes whatever range this reports. The file is the user's own global
+ * instructions: prose we cannot attribute to Second Brain is theirs, and the
+ * cost of guessing wrong is content they may not notice missing for weeks. So
+ * every line removed has to be positively identified, and where identification
+ * runs out the answer is "don't" rather than "probably".
+ *
+ * Two rules follow from that:
+ *
+ * - Walking up, an unrecognised line ends the search. It does not extend the
+ *   block on the assumption that anything near the sentinel belongs to it —
+ *   a note written just above the block is the likeliest thing to sit there.
+ * - Walking down, the block must end at something we recognise: a closing line
+ *   or the user's next heading. Running to the end of the file instead is the
+ *   original defect this bounding was added to fix, and it survives for any
+ *   block whose tail has been edited — which, in a file that exists to be
+ *   edited, is not the rare case.
  */
 export function findLegacyBlockRange(lines, sentinelLine) {
   let startLine = sentinelLine;
@@ -69,11 +86,11 @@ export function findLegacyBlockRange(lines, sentinelLine) {
       continue;
     }
 
-    if (i < sentinelLine - 20) break;
-    startLine = i;
+    // Not recognisably ours. Leave it, and everything above it, alone.
+    break;
   }
 
-  let endLine = sentinelLine;
+  let endLine = -1;
   for (let i = sentinelLine; i < lines.length; i++) {
     const line = lines[i];
 
@@ -86,9 +103,9 @@ export function findLegacyBlockRange(lines, sentinelLine) {
       endLine = i;
       break;
     }
-
-    endLine = i;
   }
+
+  if (endLine < 0) return null;
 
   while (endLine > startLine && lines[endLine].trim() === "") endLine--;
 
@@ -115,7 +132,14 @@ function replaceLegacyBlock(normalizedExisting, newBody) {
     return null;
   }
 
-  const { startLine, endLine } = findLegacyBlockRange(lines, sentinelLine);
+  const range = findLegacyBlockRange(lines, sentinelLine);
+  // Unbounded block: fall through to appending. The old copy stays in the file
+  // and the user is told to remove it, which is a minute's tidying — where
+  // deleting to the end of the file is not something they can undo once the
+  // backup has aged out of memory.
+  if (!range) return null;
+
+  const { startLine, endLine } = range;
   const block = buildMarkedBlock(newBody);
   const before = normalizedExisting.slice(0, offsetBeforeLine(lines, startLine)).replace(/\s*$/, "");
   const after = normalizedExisting.slice(offsetAfterLine(lines, endLine)).replace(/^\n+/, "");
@@ -141,7 +165,8 @@ export function applyInstructionBlock(existing, newBody) {
     return { content: normalizedExisting.replace(markedPattern, block), action: "updated" };
   }
 
-  if (normalizedExisting.includes(SENTINEL_PHRASE)) {
+  const hasLegacy = normalizedExisting.includes(SENTINEL_PHRASE);
+  if (hasLegacy) {
     const legacy = replaceLegacyBlock(normalizedExisting, newBody);
     if (legacy) return legacy;
   }
@@ -151,7 +176,12 @@ export function applyInstructionBlock(existing, newBody) {
   }
 
   const separator = normalizedExisting.endsWith("\n") ? "\n" : "\n\n";
-  return { content: `${normalizedExisting}${separator}${block}\n`, action: "appended" };
+  const content = `${normalizedExisting}${separator}${block}\n`;
+  // Distinct from a plain append: there is an older copy above that we declined
+  // to delete, and the file now says two things. The user has to be told, or
+  // they are left with duplicate instructions and no idea why.
+  const action = hasLegacy ? "appended-legacy-kept" : "appended";
+  return { content, action };
 }
 
 function readTarget(path) {
