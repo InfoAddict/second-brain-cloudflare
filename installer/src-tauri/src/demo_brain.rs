@@ -83,6 +83,10 @@ const UNREACHABLE: &str = "http://127.0.0.1:1";
 /// non-empty, so nothing breaks if a caller uses a different string.
 pub const DEFAULT_TOKEN: &str = "demo";
 
+/// AI tools a demo brain starts out believing are connected — the two the app
+/// can connect, Claude Code and Cursor.
+const OAUTH_CONNECTIONS: u32 = 2;
+
 const THREADS: usize = 3;
 
 // ── Options ─────────────────────────────────────────────────────────────────
@@ -99,6 +103,14 @@ pub struct Options {
     /// Refuse a newly rotated password this many times before honouring it, so
     /// the health gate's retry loop has something to retry through.
     pub rotate_after: Option<u64>,
+    /// How many AI tools this brain believes are connected through the browser
+    /// OAuth flow, before anything disconnects them.
+    ///
+    /// Two, because that is what the app can connect: Claude Code and Cursor.
+    /// A count rather than a fixed reply so the route can report what it
+    /// actually closed and then report nothing left, which is the sequence a
+    /// user sees when they press the button twice.
+    pub oauth_connections: u32,
 }
 
 impl Default for Options {
@@ -110,6 +122,7 @@ impl Default for Options {
             batch_pause: BATCH_PAUSE,
             stall_after: parse_stall_after(std::env::var(STALL_ENV).ok().as_deref()),
             rotate_after: parse_rotate_after(std::env::var(ROTATE_ENV).ok().as_deref()),
+            oauth_connections: OAUTH_CONNECTIONS,
         }
     }
 }
@@ -265,6 +278,10 @@ struct State {
     /// Sparse, exactly like `config:overrides` in KV.
     overrides: Map<String, Value>,
     ledger: Option<Ledger>,
+    /// `None` until something disconnects the AI tools, after which it is
+    /// whatever is left. Kept apart from [`Options::oauth_connections`] so the
+    /// seeded count stays readable while the live one changes.
+    oauth_connections: Option<u32>,
     /// `None` until something rotates this brain — see [`is_authenticated`] for
     /// why the default is permissive.
     password: Option<Password>,
@@ -297,8 +314,27 @@ impl Demo {
                 self.state.lock().unwrap().ledger = None;
                 (200, json!({ "ok": true }))
             }
+            ("POST", "/oauth/revoke-all") => (200, self.revoke_all()),
             _ => (404, json!({ "ok": false, "error": "Not found" })),
         }
+    }
+
+    /// `{ ok, revoked, failed }`, as `src/routes/oauth-revoke.ts` returns it.
+    ///
+    /// Rotation deliberately leaves OAuth-connected tools working, so the app
+    /// offers this as a separate action — and an action whose whole purpose is
+    /// to close a door has to be demonstrable, or the one screen that must not
+    /// lie is the one nobody ever sees.
+    ///
+    /// Counts down rather than replying with a fixed number: pressing the button
+    /// twice reports two connections closed and then none left, which is the
+    /// real sequence. A constant `{ ok: true, revoked: 2 }` would report closing
+    /// connections that were already closed.
+    fn revoke_all(&self) -> Value {
+        let mut state = self.state.lock().unwrap();
+        let live = state.oauth_connections.unwrap_or(self.options.oauth_connections);
+        state.oauth_connections = Some(0);
+        json!({ "ok": true, "revoked": live, "failed": 0 })
     }
 
     /// `{ ok, version, vectorize }`, as `src/routes/admin.ts` returns it. The
@@ -795,6 +831,40 @@ mod tests {
             .expect("request");
         let status = resp.status().as_u16();
         (status, resp.json().await.unwrap_or(Value::Null))
+    }
+
+    /// Disconnecting reports what it closed, then reports nothing left.
+    ///
+    /// The second call is the point of the test. A demo route that always
+    /// answered `{ revoked: 2 }` would tell a user it had just closed two
+    /// connections that were already closed — and this is the one action whose
+    /// entire value is that its report can be believed.
+    #[tokio::test]
+    async fn disconnecting_reports_what_it_closed_and_then_that_none_are_left() {
+        let url = brain();
+
+        let (status, body) = post(&url, "/oauth/revoke-all").await;
+        assert_eq!(status, 200);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["revoked"], OAUTH_CONNECTIONS);
+        assert_eq!(body["failed"], 0);
+
+        let (status, body) = post(&url, "/oauth/revoke-all").await;
+        assert_eq!(status, 200);
+        assert_eq!(body["ok"], true, "nothing to close is still a success");
+        assert_eq!(body["revoked"], 0);
+
+        // Guarded like every other route the real Worker guards.
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/oauth/revoke-all"))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(resp.status().as_u16(), 401);
+
+        // A page load must never disconnect anything.
+        let (status, _) = get(&url, "/oauth/revoke-all").await;
+        assert_eq!(status, 404, "GET must not do the work");
     }
 
     // ── The config the window renders ───────────────────────────────────────
