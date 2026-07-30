@@ -78,9 +78,28 @@ describe("DEFAULT_HOPS (#246 connections control)", () => {
     expect(res.matches.map(m => m.id)).toContain("neighbor");
   });
 
-  it("still clamps the default to GRAPH_MAX_HOPS, which stays a hard cap", async () => {
-    const res = await recallEntries({ query: "x", topK: 5 }, env(db, { DEFAULT_HOPS: 99 }), ctx);
-    // 99 is clamped at resolve time; recall must not throw or explode the fanout.
-    expect(Array.isArray(res.matches)).toBe(true);
+  it("clamps a raised default to GRAPH_MAX_HOPS, which stays a hard cap", async () => {
+    // A chain one hop longer than the cap. GRAPH_MAX_HOPS is 3, so with
+    // DEFAULT_HOPS asking for 99 the third link must still be reachable and the
+    // fourth must not — which is what distinguishes a clamp from no cap at all.
+    //
+    // The cap is enforced three times over: the DEFAULT_HOPS rule in config.ts
+    // clamps at resolve time, search.ts clamps again when it picks the hop
+    // count, and traverse.ts clamps once more. Removing any single one leaves the
+    // other two, so this asserts the end-to-end property rather than any one
+    // implementation — verified by mutation: it only goes red when all three are
+    // removed together, and it does go red then.
+    for (const id of ["h1", "h2", "h3", "h4"]) seed(db, id);
+    edge(db, "seed", "h1");
+    edge(db, "h1", "h2");
+    edge(db, "h2", "h3");
+    edge(db, "h3", "h4");
+
+    // topK is generous so the assertion is about traversal depth, not truncation.
+    const res = await recallEntries({ query: "x", topK: 50 }, env(db, { DEFAULT_HOPS: 99 }), ctx);
+    const ids = res.matches.map(m => m.id);
+
+    expect(ids).toContain("h3");
+    expect(ids).not.toContain("h4");
   });
 });
