@@ -155,21 +155,20 @@ mod tests {
         backend::set(super::KEY_WORKER_URL, "https://x.workers.dev").unwrap();
         assert!(load_setup().is_none(), "URL without token must not count as set up");
         clear_setup();
-    }
 
-    #[test]
-    fn cf_hints_roundtrip_and_stay_independent_of_setup() {
-        clear_setup();
+        // ── Cloudflare hints ────────────────────────────────────────────────
+        // In the same test, not a second one: the backing map is process-global,
+        // so two tests mutating it race (a concurrent clear_setup() wipes the
+        // other's state mid-assertion).
         assert!(load_cf_hints().is_none());
-
         save_cf_hints("acct-123", "demo").unwrap();
         assert_eq!(
             load_cf_hints(),
             Some(CfHints { account_id: "acct-123".into(), subdomain: "demo".into() })
         );
 
-        // Hints alone must never read as a completed setup, or the app would
-        // boot into wrapper mode with no brain to talk to.
+        // Hints alone must never read as a completed setup, or the app would boot
+        // into wrapper mode with no brain to talk to.
         assert!(load_setup().is_none(), "hints are not credentials");
 
         // And a brain connected without ever signing in to Cloudflare has no
@@ -183,22 +182,27 @@ mod tests {
         assert!(load_cf_hints().is_none(), "disconnect must clear hints too");
     }
 
-    /// The Cloudflare OAuth token is not persisted anywhere. Asserted on the
-    /// source because the risk is a future edit adding a key for it, which no
-    /// behavioural test would catch.
+    /// The Cloudflare OAuth token is not persisted anywhere.
+    ///
+    /// Pins the complete set of keys rather than pattern-matching their names: a
+    /// future `KEY_CF_TOKEN` or `KEY_BEARER` would slip past a substring check,
+    /// but cannot slip past an exact list. Adding a key here is then a deliberate
+    /// act that forces a second look at what is being stored.
     #[test]
-    fn no_key_here_stores_a_cloudflare_token() {
+    fn the_stored_key_set_is_exactly_these_four() {
         let src = include_str!("secure_store.rs");
         let keys: Vec<&str> = src
             .lines()
             .filter(|l| l.trim_start().starts_with("const KEY_"))
+            .filter_map(|l| l.split('"').nth(1))
             .collect();
-        for line in keys {
-            let lowered = line.to_lowercase();
-            assert!(
-                !(lowered.contains("access") || lowered.contains("refresh") || lowered.contains("oauth")),
-                "secure_store must not gain a key for a Cloudflare token: {line}"
-            );
-        }
+        assert_eq!(
+            keys,
+            vec!["worker-url", "auth-token", "cf-account-id", "cf-subdomain"],
+            "secure_store gained or lost a key. A Cloudflare access or refresh \
+             token must never be one of them: the AUTH_TOKEN unlocks one brain, \
+             a Cloudflare token unlocks the whole account."
+        );
     }
+
 }

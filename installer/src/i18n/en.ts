@@ -165,20 +165,31 @@ export const en: Messages = {
     footnote:
       "The address is in Connection details on your other computer, " +
       "or in the confirmation email you sent yourself.",
+    chooseLede:
+      "Setting up a new computer? Connect the Second Brain you already have — " +
+      "nothing will be changed or reset.",
     signInButton: "Sign in with Cloudflare",
     signInHint: "We'll find your Second Brain for you — no address to look up.",
+    signInFootnote:
+      "Your Second Brain lives in your own space at Cloudflare, so we sign in " +
+      "there to look for it. Cloudflare will ask you to allow that. We never " +
+      "see your Cloudflare password, and nothing in your space is changed.",
     manualButton: "Enter the address myself",
+    accountPickerTitle: "Which space should we look in?",
+    accountPickerLede: "Your login has more than one — pick where your Second Brain lives.",
     searchingTitle: "Looking for your Second Brain",
-    searchingLede: "Checking what's in your Cloudflare account. This takes a moment.",
-    searchingStep: "Looking through your account",
-    pickTitle: "Is this your Second Brain?",
-    pickLede: "Pick the one you want to connect to.",
+    searchingLede: "Checking your Cloudflare space. This can take up to a minute.",
+    searchingStep: "Looking through your space",
+    pickTitleOne: "Is this your Second Brain?",
+    pickTitleMany: "Which one is your Second Brain?",
+    pickLedeOne: "Connect to it, or enter a different address yourself.",
+    pickLedeMany: "Pick the one you want to connect to.",
     noneFound:
-      "We couldn't find a Second Brain in that account. If it's somewhere " +
-      "else — another account, or your own web address — enter it below.",
+      "We couldn't find a Second Brain in that space. If it's somewhere " +
+      "else — another space, or your own web address — enter the address below.",
     unlockTitle: "Enter your password",
     unlockLede:
-      "This is the password you chose when you first set up {name}. " +
+      "This is the password you chose when you first set up your Second Brain. " +
       "Nothing will be changed or reset.",
   },
   password: {

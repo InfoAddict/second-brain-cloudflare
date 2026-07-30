@@ -96,12 +96,15 @@ function connectExistingScreen(errorMsg?: string) {
   show(
     brand(),
     h("h1", {}, [t("connectExisting.title")]),
-    h("p", { class: "lede" }, [t("connectExisting.lede")]),
+    h("p", { class: "lede" }, [t("connectExisting.chooseLede")]),
     errorMsg ? notice(errorMsg) : "",
     signIn,
     h("p", { class: "footnote" }, [t("connectExisting.signInHint")]),
     manual,
     back,
+    // Signing in to Cloudflare hands over real access, and the consent screen
+    // that follows says so in Cloudflare's words. Say it in ours first.
+    h("p", { class: "footnote" }, [t("connectExisting.signInFootnote")]),
   );
 }
 
@@ -130,7 +133,12 @@ async function discoverScreen() {
     } else {
       // More than one account, so the user picks before we scan — scanning all
       // of them would be slower and would list brains they didn't ask about.
-      accountPickerScreen(() => void runDiscovery());
+      accountPickerScreen(
+        () => void runDiscovery(),
+        t("connectExisting.accountPickerTitle"),
+        t("connectExisting.accountPickerLede"),
+        () => connectExistingScreen(),
+      );
     }
   } catch (e) {
     connectExistingScreen(String(e));
@@ -161,15 +169,10 @@ function brainPickerScreen(found: DiscoveredBrain[]) {
   currentScreen = () => brainPickerScreen(found);
   const list = h("ul", { class: "account-list" });
   for (const brain of found) {
-    // The address is shown alongside the name: two Workers can have similar
-    // names, and the address is what actually gets connected to.
-    const btn = h("button", {}, [
-      h("span", {}, [brain.name]),
-      h("span", { class: "footnote", style: "display:block;margin:2px 0 0" }, [
-        brain.url.replace(/^https:\/\//, ""),
-      ]),
-    ]);
-    btn.addEventListener("click", () => unlockBrainScreen(brain));
+    // The address leads, not the name: this app deploys every brain under the
+    // same script name, so the address is the only part that distinguishes one.
+    const btn = h("button", {}, [brain.url.replace(/^https:\/\//, "")]);
+    btn.addEventListener("click", () => unlockBrainScreen(brain, undefined, found));
     list.append(h("li", {}, [btn]));
   }
   const manual = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
@@ -177,12 +180,21 @@ function brainPickerScreen(found: DiscoveredBrain[]) {
   ]);
   manual.addEventListener("click", () => manualEntryScreen());
 
+  const one = found.length === 1;
+  const back = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
+    t("common.back"),
+  ]);
+  back.addEventListener("click", () => connectExistingScreen());
+
   show(
     brand(),
-    h("h1", {}, [t("connectExisting.pickTitle")]),
-    h("p", { class: "lede" }, [t("connectExisting.pickLede")]),
+    h("h1", {}, [t(one ? "connectExisting.pickTitleOne" : "connectExisting.pickTitleMany")]),
+    h("p", { class: "lede" }, [
+      t(one ? "connectExisting.pickLedeOne" : "connectExisting.pickLedeMany"),
+    ]),
     list,
     manual,
+    back,
   );
 }
 
@@ -190,15 +202,21 @@ function brainPickerScreen(found: DiscoveredBrain[]) {
 /// Discovery cannot retrieve it: Cloudflare secrets are write-only, so an
 /// existing AUTH_TOKEN can never be read back — only overwritten, which would
 /// break every other client the user has connected.
-function unlockBrainScreen(brain: DiscoveredBrain, errorMsg?: string) {
-  currentScreen = () => unlockBrainScreen(brain, errorMsg);
+function unlockBrainScreen(
+  brain: DiscoveredBrain,
+  errorMsg?: string,
+  found: DiscoveredBrain[] = [brain],
+) {
+  currentScreen = () => unlockBrainScreen(brain, errorMsg, found);
   const password = h("input", {
     type: "password",
     placeholder: t("connectExisting.passwordPlaceholder"),
   });
   const connect = h("button", { class: "btn-primary" }, [t("connectExisting.connect")]);
   const back = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [t("common.back")]);
-  back.addEventListener("click", () => connectExistingScreen());
+  // Back to the pick-list, not to the chooser: returning to the chooser would
+  // discard the scan and cost another Cloudflare sign-in to get here again.
+  back.addEventListener("click", () => brainPickerScreen(found));
 
   connect.addEventListener("click", async () => {
     connect.disabled = true;
@@ -210,14 +228,14 @@ function unlockBrainScreen(brain: DiscoveredBrain, errorMsg?: string) {
       });
       await toolsScreen();
     } catch (e) {
-      unlockBrainScreen(brain, String(e));
+      unlockBrainScreen(brain, String(e), found);
     }
   });
 
   show(
     brand(),
     h("h1", {}, [t("connectExisting.unlockTitle")]),
-    h("p", { class: "lede" }, [t("connectExisting.unlockLede", { name: brain.name })]),
+    h("p", { class: "lede" }, [t("connectExisting.unlockLede")]),
     errorMsg ? notice(errorMsg) : "",
     h("div", { class: "field-stack" }, [password]),
     connect,
@@ -449,8 +467,13 @@ function connectScreen(errorMsg?: string) {
 
 /// `next` is what runs once an account is chosen. Provisioning goes straight to
 /// the progress screen; brain discovery scans the chosen account instead.
-function accountPickerScreen(next: () => void = progressScreen) {
-  currentScreen = () => accountPickerScreen(next);
+function accountPickerScreen(
+  next: () => void = progressScreen,
+  title = t("cloudflare.pickerTitle"),
+  lede = t("cloudflare.pickerLede"),
+  back?: () => void,
+) {
+  currentScreen = () => accountPickerScreen(next, title, lede, back);
   const list = h("ul", { class: "account-list" });
   for (const account of accounts) {
     const btn = h("button", {}, [account.name]);
@@ -460,11 +483,19 @@ function accountPickerScreen(next: () => void = progressScreen) {
     });
     list.append(h("li", {}, [btn]));
   }
+  // Without this the screen is a dead end: a user who signed in with the wrong
+  // Cloudflare login, or who recognises none of the names, could only quit.
+  const backBtn = back
+    ? h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [t("common.back")])
+    : "";
+  if (back && backBtn instanceof HTMLElement) backBtn.addEventListener("click", back);
+
   show(
     brand(),
-    h("h1", {}, [t("cloudflare.pickerTitle")]),
-    h("p", { class: "lede" }, [t("cloudflare.pickerLede")]),
+    h("h1", {}, [title]),
+    h("p", { class: "lede" }, [lede]),
     list,
+    backBtn,
   );
 }
 

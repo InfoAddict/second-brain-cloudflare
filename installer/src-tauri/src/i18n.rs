@@ -235,12 +235,12 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
             "Signed in, but we couldn't read your account. Please try again."
         }
         (Locale::En, Key::ErrorCfNoSubdomain) => {
-            "This Cloudflare account doesn't have a workers.dev address yet, so there's \
-nothing to search. You can still enter your brain's address by hand."
+            "We couldn't work out the web address for this Cloudflare space, so there's \
+nothing to search. You can still enter your Second Brain's address by hand."
         }
         (Locale::En, Key::ErrorCfDiscoverFailed) => {
-            "Couldn't look through your Cloudflare account just now. You can enter your \
-brain's address by hand instead."
+            "Couldn't look through your Cloudflare space just now. You can enter your \
+Second Brain's address by hand instead."
         }
         (Locale::En, Key::ErrorChoosePasswordFirst) => "Please choose a password first.",
         (Locale::En, Key::ErrorLinkNotAllowed) => "That link can't be opened from here.",
@@ -378,12 +378,12 @@ brain's address by hand instead."
             "Accesso effettuato, ma non è stato possibile leggere l'account. Riprova."
         }
         (Locale::It, Key::ErrorCfNoSubdomain) => {
-            "Questo account Cloudflare non ha ancora un indirizzo workers.dev, quindi non \
-c'è nulla da cercare. Puoi comunque inserire a mano l'indirizzo del tuo cervello."
+            "Non siamo riusciti a determinare l'indirizzo web di questo spazio Cloudflare, \
+quindi non c'è nulla da cercare. Puoi comunque inserire a mano l'indirizzo del tuo Second Brain."
         }
         (Locale::It, Key::ErrorCfDiscoverFailed) => {
-            "Non è stato possibile esaminare il tuo account Cloudflare in questo momento. \
-Puoi inserire a mano l'indirizzo del tuo cervello."
+            "Non è stato possibile esaminare il tuo spazio Cloudflare in questo momento. \
+Puoi inserire a mano l'indirizzo del tuo Second Brain."
         }
         (Locale::It, Key::ErrorChoosePasswordFirst) => "Scegli prima una password.",
         (Locale::It, Key::ErrorLinkNotAllowed) => "Questo link non può essere aperto da qui.",

@@ -1,331 +1,245 @@
 //! Finding an existing Second Brain in the user's Cloudflare account.
 //!
-//! Setup used to require the user to go to the Cloudflare dashboard, find their
-//! Worker, and type its `workers.dev` URL. This lists the account's Workers
-//! instead and asks each one, without credentials, whether it looks like a
-//! Second Brain.
+//! Setup used to require the user to open the Cloudflare dashboard, find their
+//! Worker, and type its `workers.dev` URL. This asks Cloudflare instead.
 //!
-//! Everything here probes the *deployed Worker*, not the Cloudflare API, and
-//! every probe is unauthenticated — discovery must never send the user's
-//! password to an address that has not been identified yet.
+//! # Why this asks Cloudflare and not the Worker
+//!
+//! The obvious design — and the one this issue originally specified — is to build
+//! each Worker's `workers.dev` URL and probe it over HTTP for something that
+//! looks like a Second Brain: an auth-gated `/health`, the MCP OAuth metadata at
+//! `/.well-known/oauth-protected-resource/mcp`, or the `Second Brain` title on
+//! `/oauth/authorize`.
+//!
+//! None of those are safe, because of what happens next. Whatever the user picks
+//! is what they then type their brain password into, and the app sends that
+//! password to the chosen address as a bearer token. The address therefore has to
+//! be trustworthy *before* the password is entered.
+//!
+//! An HTTP probe cannot establish that, no matter which endpoint it reads or how
+//! brand-specific the string it looks for. Every byte of an HTTP response is
+//! authored by the candidate itself, so any Worker in the account can serve
+//! `401 {"ok":false}`, MCP metadata, or `<title>Second Brain</title>` on purpose
+//! — forging it costs nothing. A third-party Worker the user deployed from a
+//! template or a "Deploy to Cloudflare" button would then be shown to them under
+//! the heading "Is this your Second Brain?", and would be handed their password.
+//!
+//! So identification happens through the Cloudflare control plane. A Worker
+//! cannot lie about its own bindings: those are account state, readable only with
+//! the user's Cloudflare token and not writable by the running script. A brain is
+//! a script bound to a Vectorize index named `second-brain-vectors` and to a D1
+//! database — which is what [`provision`](super::provision) creates.
+//!
+//! # Why only the conventional script name is offered
+//!
+//! Discovery deliberately looks at one script — the name this app deploys under —
+//! rather than every script in the account, even though the bindings check would
+//! happily identify a brain deployed under another name.
+//!
+//! The reason is what happens *after* connecting. `provision::update_worker`
+//! takes its script name from the bundled manifest, not from the stored address,
+//! and deploys with a `PUT` — an upsert. So a brain connected as
+//! `my-brain.acme.workers.dev` would later be "updated" by writing the bundle to
+//! a script named `second-brain` in that account: failing every time if none
+//! exists, or overwriting an unrelated Worker if one does.
+//!
+//! Offering arbitrarily-named Workers as endorsed choices would walk users into
+//! that. Someone whose brain has another name can still connect it by hand, which
+//! is one of the reasons manual entry is not removable — and fixing the updater
+//! to derive its script name from the stored address is tracked separately.
 
 use super::api::CfClient;
 use super::types::CfApiError;
-use std::time::Duration;
-
-/// How long a single probe waits. Short on purpose: an account can hold dozens
-/// of Workers, and an unreachable one must not stall the whole scan.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
-
-/// How many Workers are probed at once.
-const MAX_CONCURRENT_PROBES: usize = 8;
-
-/// How sure we are that an address is a Second Brain.
-///
-/// Two independent signals go into this:
-///
-/// 1. **Auth-gated JSON** — `/health` (or `/count` on brains predating it)
-///    answers 401 with the Worker's `{ ok: false, … }` shape. This is the
-///    Second-Brain-specific signal.
-/// 2. **MCP OAuth metadata** — `/.well-known/oauth-protected-resource/mcp`
-///    serves resource metadata. This comes from `workers-oauth-provider`, so it
-///    proves "an MCP OAuth Worker" and *not* "a Second Brain" — any Worker
-///    built on that library serves it.
-///
-/// Signal 2 alone therefore does not qualify: it would match an unrelated MCP
-/// server in the same account. Signal 1 is required, and signal 2 upgrades the
-/// result to [`Confidence::Strong`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Confidence {
-    /// Auth-gated like a brain, and serves MCP OAuth metadata.
-    Likely,
-    /// Both signals. Ordered last so `sort` puts the best matches at the end
-    /// and `rev` yields strongest-first.
-    Strong,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
-    /// The Worker's deploy name, which is what the user recognises.
+    /// The Worker's deploy name.
     pub name: String,
     pub url: String,
 }
 
-/// Builds the `workers.dev` origin for a script. Cloudflare's scheme is
-/// `<script>.<account-subdomain>.workers.dev`.
+/// Builds the `workers.dev` origin for a script: `<script>.<subdomain>.workers.dev`.
 pub fn workers_dev_url(script: &str, subdomain: &str) -> String {
     format!("https://{script}.{subdomain}.workers.dev")
 }
 
-/// Asks one address whether it is a Second Brain, using no credentials.
+/// Whether a value is safe to interpolate as one label of a hostname.
 ///
-/// `None` means "not a brain, or not reachable" — the two are deliberately not
-/// distinguished, because neither is something to offer the user as a brain to
-/// connect to.
-pub async fn classify(origin: &str) -> Option<Confidence> {
-    let http = reqwest::Client::builder()
-        .timeout(PROBE_TIMEOUT)
-        .build()
-        .ok()?;
-
-    // The discriminating probe runs first, so an unrelated Worker costs one or
-    // two requests and never reaches the generic one.
-    if !auth_gated_like_a_brain(&http, origin).await {
-        return None;
-    }
-    if serves_mcp_oauth_metadata(&http, origin).await {
-        Some(Confidence::Strong)
-    } else {
-        Some(Confidence::Likely)
-    }
+/// Checked rather than assumed. Both halves of a workers.dev address come from a
+/// remote API, and a value containing `?`, `#`, `/` or `@` would move the request
+/// to an entirely different host — `evil.com?` yields
+/// `https://second-brain.evil.com?.workers.dev`, whose host is `evil.com`.
+pub fn is_safe_dns_label(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 63
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
-/// True when an unauthenticated read is refused the way the Worker refuses it:
-/// HTTP 401 with a JSON body carrying `ok: false`.
+/// Whether a script's bindings are the ones this app provisions.
 ///
-/// `/count` is tried after `/health` for brains deployed before `/health`
-/// existed — the same fallback [`super::api::probe_worker`] makes, for the same
-/// reason.
-async fn auth_gated_like_a_brain(http: &reqwest::Client, origin: &str) -> bool {
-    for path in ["/health", "/count"] {
-        let Ok(resp) = http.get(format!("{origin}{path}")).send().await else {
-            // A transport error on the first path is usually a dead host;
-            // trying the second would just pay the timeout twice.
-            return false;
-        };
-        if resp.status().as_u16() != 401 {
-            continue;
-        }
-        let Ok(body) = resp.json::<serde_json::Value>().await else {
-            continue; // 401 but not JSON — someone else's auth wall
-        };
-        if body.get("ok") == Some(&serde_json::Value::Bool(false)) {
-            return true;
-        }
-    }
-    false
-}
-
-/// True when the address serves MCP protected-resource metadata.
+/// The Vectorize index name is the distinguishing part: it is specific to this
+/// project, and a binding is account state rather than something the Worker's own
+/// code can assert.
 ///
-/// Corroborating only — see [`Confidence`]. Requires the document to actually
-/// describe an MCP resource rather than merely be 200 JSON.
-async fn serves_mcp_oauth_metadata(http: &reqwest::Client, origin: &str) -> bool {
-    let url = format!("{origin}/.well-known/oauth-protected-resource/mcp");
-    let Ok(resp) = http.get(&url).send().await else {
-        return false;
+/// The `AUTH_TOKEN` secret is deliberately *not* required. Cloudflare does not
+/// promise to list secret bindings when reading a script's settings, and a check
+/// depending on one would risk silently matching nothing at all.
+pub fn bindings_look_like_a_brain(bindings: &[serde_json::Value], vectorize_name: &str) -> bool {
+    let type_of = |b: &serde_json::Value| {
+        b.get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string()
     };
-    if !resp.status().is_success() {
-        return false;
-    }
-    let Ok(body) = resp.json::<serde_json::Value>().await else {
-        return false;
-    };
-    let resource_is_mcp = body
-        .get("resource")
-        .and_then(|r| r.as_str())
-        .is_some_and(|r| r.ends_with("/mcp"));
-    let has_auth_server = body
-        .get("authorization_servers")
-        .and_then(|s| s.as_array())
-        .is_some_and(|s| !s.is_empty());
-    resource_is_mcp && has_auth_server
-}
-
-/// Probes every candidate concurrently and returns those worth offering.
-///
-/// Ordering is by confidence then name, so the list is stable across runs —
-/// Cloudflare does not promise an order for the script list.
-pub async fn probe_all(scripts: Vec<String>, subdomain: &str) -> Vec<(Candidate, Confidence)> {
-    let mut found: Vec<(Candidate, Confidence)> = Vec::new();
-    // Chunked rather than one big JoinSet so a large account does not open
-    // dozens of sockets at once.
-    for chunk in scripts.chunks(MAX_CONCURRENT_PROBES) {
-        let mut set = tokio::task::JoinSet::new();
-        for script in chunk {
-            let name = script.clone();
-            let url = workers_dev_url(script, subdomain);
-            set.spawn(async move {
-                let verdict = classify(&url).await;
-                (Candidate { name, url }, verdict)
-            });
-        }
-        while let Some(joined) = set.join_next().await {
-            // A panicking probe task must not take the scan down with it.
-            if let Ok((candidate, Some(confidence))) = joined {
-                found.push((candidate, confidence));
-            }
-        }
-    }
-    found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
-    found
-}
-
-/// Narrows probe results to what the user should actually see.
-///
-/// When anything matched on both signals, only those are offered: an account
-/// can hold unrelated Workers that happen to answer 401 with JSON, and listing
-/// them next to a confirmed brain makes the confirmed one harder to trust. With
-/// no strong match, the weaker ones are all there is, so they are offered
-/// rather than showing an empty list.
-pub fn select_candidates(probed: Vec<(Candidate, Confidence)>) -> Vec<Candidate> {
-    let has_strong = probed.iter().any(|(_, c)| *c == Confidence::Strong);
-    probed
-        .into_iter()
-        .filter(|(_, c)| !has_strong || *c == Confidence::Strong)
-        .map(|(candidate, _)| candidate)
-        .collect()
+    let vectorize_index_matches = bindings.iter().any(|b| {
+        type_of(b) == "vectorize"
+            && b.get("index_name").and_then(|n| n.as_str()) == Some(vectorize_name)
+    });
+    let has_database = bindings.iter().any(|b| type_of(b) == "d1");
+    vectorize_index_matches && has_database
 }
 
 /// What a scan of one account produced. The subdomain comes back alongside the
-/// matches because the caller persists it as a hint, and re-fetching it would
-/// be a second round trip for something already known.
+/// matches because the caller persists it as a hint, and re-fetching it would be
+/// a second round trip for something already known.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Discovery {
     pub subdomain: String,
     pub brains: Vec<Candidate>,
 }
 
-/// Why a scan could not run. Kept separate from "ran and matched nothing",
-/// which is a `Discovery` with an empty list — the two need different messages.
+/// Why a scan could not run. Kept separate from "ran and matched nothing", which
+/// is a `Discovery` with an empty list — the two need different messages.
 #[derive(Debug)]
 pub enum DiscoverFailure {
-    /// The account has never registered a workers.dev subdomain, so there are
-    /// no addresses to construct.
+    /// The account has never registered a workers.dev subdomain, so there are no
+    /// addresses to construct.
     NoSubdomain,
     Api(CfApiError),
 }
 
 /// Scans one Cloudflare account for Second Brains.
 ///
-/// Split out of the Tauri command so the ordering and failure mapping are
-/// testable without an app handle: the command around this is only i18n and
-/// session bookkeeping.
-pub async fn discover_in_account(client: &CfClient) -> Result<Discovery, DiscoverFailure> {
+/// `conventional_name` and `vectorize_name` come from the bundled Worker
+/// manifest, so the check always describes what this build of the app deploys.
+pub async fn discover_in_account(
+    client: &CfClient,
+    conventional_name: &str,
+    vectorize_name: &str,
+) -> Result<Discovery, DiscoverFailure> {
     let subdomain = client
         .get_account_subdomain()
         .await
         .map_err(DiscoverFailure::Api)?
+        .filter(|s| is_safe_dns_label(s))
         .ok_or(DiscoverFailure::NoSubdomain)?;
-    let scripts = client.list_workers().await.map_err(DiscoverFailure::Api)?;
-    let brains = select_candidates(probe_all(scripts, &subdomain).await);
+
+    let scripts: Vec<String> = client
+        .list_workers()
+        .await
+        .map_err(DiscoverFailure::Api)?
+        .into_iter()
+        .filter(|name| is_safe_dns_label(name))
+        .collect();
+
+    let brains = find_brains(client, scripts, conventional_name, vectorize_name, &subdomain).await;
     Ok(Discovery { subdomain, brains })
+}
+
+/// The check itself, split from the API preamble so it is testable.
+///
+/// One script, one settings read, whatever the size of the account — see the
+/// module docs for why the search is not widened.
+async fn find_brains(
+    client: &CfClient,
+    scripts: Vec<String>,
+    conventional_name: &str,
+    vectorize_name: &str,
+    subdomain: &str,
+) -> Vec<Candidate> {
+    if !scripts.iter().any(|s| s == conventional_name) {
+        return Vec::new();
+    }
+    if !is_brain(client, conventional_name, vectorize_name).await {
+        // A script squatting the name without the bindings is not a brain.
+        return Vec::new();
+    }
+    vec![Candidate {
+        name: conventional_name.to_string(),
+        url: workers_dev_url(conventional_name, subdomain),
+    }]
+}
+
+/// One script, one control-plane read. A failure counts as "not a brain": the
+/// scan must survive a single unreadable script rather than abandon the account.
+async fn is_brain(client: &CfClient, script: &str, vectorize_name: &str) -> bool {
+    match client.get_script_bindings(script).await {
+        Ok(bindings) => bindings_look_like_a_brain(&bindings, vectorize_name),
+        Err(e) => {
+            log::debug!("could not read a script's bindings: {e}");
+            false
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A Worker stand-in. `kind` selects which contract the fake serves, so the
-    /// tests exercise the real HTTP paths rather than a mocked classifier.
-    fn spawn_worker(kind: &'static str) -> String {
-        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-        let port = server.server_addr().to_ip().unwrap().port();
-        std::thread::spawn(move || loop {
-            let Ok(req) = server.recv() else { return };
-            let url = req.url().to_string();
-            let json = |status: u16, payload: &str| {
-                tiny_http::Response::from_string(payload)
-                    .with_status_code(status)
-                    .with_header(
-                        "Content-Type: application/json"
-                            .parse::<tiny_http::Header>()
-                            .unwrap(),
-                    )
-            };
-            let metadata = r#"{"resource":"http://x/mcp","authorization_servers":["http://x"]}"#;
-            let unauthorized = r#"{"ok":false,"error":"Unauthorized"}"#;
-
-            let resp = match (kind, url.as_str()) {
-                // A current Second Brain.
-                ("brain", "/health") => json(401, unauthorized),
-                ("brain", "/.well-known/oauth-protected-resource/mcp") => json(200, metadata),
-
-                // Deployed before /health existed: 404 there, 401 on /count.
-                ("old_brain", "/health") => json(404, r#"{"error":"Not found"}"#),
-                ("old_brain", "/count") => json(401, unauthorized),
-                ("old_brain", "/.well-known/oauth-protected-resource/mcp") => {
-                    json(404, r#"{}"#)
-                }
-
-                // Someone else's MCP server: serves the generic OAuth metadata
-                // but is not auth-gated the way a brain is.
-                ("other_mcp", "/health") => json(200, r#"{"status":"fine"}"#),
-                ("other_mcp", "/count") => json(404, r#"{}"#),
-                ("other_mcp", "/.well-known/oauth-protected-resource/mcp") => {
-                    json(200, metadata)
-                }
-
-                // An unrelated JSON API behind an auth wall. Parses fine, so
-                // only the body shape distinguishes it from a brain.
-                ("json_wall", "/health") => json(401, r#"{"message":"Forbidden"}"#),
-                ("json_wall", "/count") => json(401, r#"{"ok":true,"detail":"nope"}"#),
-
-                // An unrelated app behind an auth wall that isn't JSON.
-                ("html_wall", "/health") => tiny_http::Response::from_string("<html>login</html>")
-                    .with_status_code(401)
-                    .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap()),
-
-                // Auth-gated with the brain's shape, no OAuth metadata at all.
-                ("bare_brain", "/health") => json(401, unauthorized),
-
-                _ => json(404, r#"{}"#),
-            };
-            let _ = req.respond(resp);
-        });
-        format!("http://127.0.0.1:{port}")
+    fn vectorize(index: &str) -> serde_json::Value {
+        serde_json::json!({ "type": "vectorize", "name": "VECTORIZE", "index_name": index })
+    }
+    fn d1() -> serde_json::Value {
+        serde_json::json!({ "type": "d1", "name": "DB", "database_id": "abc" })
     }
 
-    #[tokio::test]
-    async fn recognises_a_current_brain_on_both_signals() {
-        let origin = spawn_worker("brain");
-        assert_eq!(classify(&origin).await, Some(Confidence::Strong));
+    #[test]
+    fn recognises_the_bindings_this_app_provisions() {
+        let bindings = vec![
+            d1(),
+            vectorize("second-brain-vectors"),
+            serde_json::json!({ "type": "kv_namespace", "name": "OAUTH_KV" }),
+            serde_json::json!({ "type": "ai", "name": "AI" }),
+        ];
+        assert!(bindings_look_like_a_brain(&bindings, "second-brain-vectors"));
     }
 
-    #[tokio::test]
-    async fn recognises_a_brain_that_predates_the_health_endpoint() {
-        let origin = spawn_worker("old_brain");
-        // Only the /count fallback identifies this one, and it serves no OAuth
-        // metadata — still a brain, just not a confident match.
-        assert_eq!(classify(&origin).await, Some(Confidence::Likely));
+    /// Cloudflare may or may not list secret bindings, so the check must not
+    /// depend on the AUTH_TOKEN secret appearing.
+    #[test]
+    fn does_not_require_the_auth_token_secret_to_be_listed() {
+        let bindings = vec![d1(), vectorize("second-brain-vectors")];
+        assert!(bindings_look_like_a_brain(&bindings, "second-brain-vectors"));
     }
 
-    /// The false positive that matters: `workers-oauth-provider` serves the
-    /// well-known route for every Worker built on it, so that signal alone must
-    /// never qualify.
-    #[tokio::test]
-    async fn rejects_an_unrelated_mcp_worker_in_the_same_account() {
-        let origin = spawn_worker("other_mcp");
-        assert_eq!(classify(&origin).await, None);
-    }
-
-    #[tokio::test]
-    async fn rejects_a_401_that_is_not_the_workers_json_contract() {
-        let origin = spawn_worker("html_wall");
-        assert_eq!(classify(&origin).await, None);
-    }
-
-    /// The stricter half of the above: a 401 whose body is perfectly good JSON,
-    /// just not the Worker's `{ ok: false }`. Parsing succeeds here, so only the
-    /// shape check rejects it — without that check every authenticated JSON API
-    /// in the account would be offered as a brain.
-    #[tokio::test]
-    async fn rejects_a_401_from_an_unrelated_json_api() {
-        let origin = spawn_worker("json_wall");
-        assert_eq!(classify(&origin).await, None);
-    }
-
-    #[tokio::test]
-    async fn accepts_a_brain_without_oauth_metadata_as_likely() {
-        let origin = spawn_worker("bare_brain");
-        assert_eq!(classify(&origin).await, Some(Confidence::Likely));
-    }
-
-    #[tokio::test]
-    async fn an_unreachable_address_is_not_offered() {
-        // Nothing is listening on this port.
-        assert_eq!(classify("http://127.0.0.1:1").await, None);
+    /// The property that HTTP probing could not provide: a Worker cannot assert
+    /// its own bindings, so an unrelated script in the same account fails to
+    /// match however it chooses to answer over HTTP.
+    #[test]
+    fn rejects_an_unrelated_worker_in_the_same_account() {
+        for bindings in [
+            vec![],
+            vec![serde_json::json!({ "type": "kv_namespace", "name": "CACHE" })],
+            // Vectorize, but somebody else's index.
+            vec![d1(), vectorize("my-rag-index")],
+            // The right index, but no database — not a brain.
+            vec![vectorize("second-brain-vectors")],
+            // A binding that merely mentions the name in the wrong field.
+            vec![
+                d1(),
+                serde_json::json!({ "type": "vectorize", "name": "second-brain-vectors" }),
+            ],
+        ] {
+            assert!(
+                !bindings_look_like_a_brain(&bindings, "second-brain-vectors"),
+                "wrongly matched: {bindings:?}"
+            );
+        }
     }
 
     #[test]
@@ -336,188 +250,195 @@ mod tests {
         );
     }
 
+    /// A script name becomes a hostname, so a name carrying URL syntax would
+    /// silently retarget the request: `evil.com?` yields
+    /// `https://evil.com?.acme.workers.dev`, whose host is `evil.com`.
     #[test]
-    fn a_confirmed_brain_hides_the_weaker_guesses() {
-        let probed = vec![
-            (
-                Candidate { name: "noise".into(), url: "u1".into() },
-                Confidence::Likely,
-            ),
-            (
-                Candidate { name: "brain".into(), url: "u2".into() },
-                Confidence::Strong,
-            ),
-        ];
-        let picked = select_candidates(probed);
-        assert_eq!(picked.len(), 1);
-        assert_eq!(picked[0].name, "brain");
-    }
-
-    #[test]
-    fn weak_guesses_are_offered_when_nothing_matched_strongly() {
-        let probed = vec![
-            (
-                Candidate { name: "b".into(), url: "u2".into() },
-                Confidence::Likely,
-            ),
-            (
-                Candidate { name: "a".into(), url: "u1".into() },
-                Confidence::Likely,
-            ),
-        ];
-        let picked = select_candidates(probed);
-        assert_eq!(picked.len(), 2, "an empty list would be worse than a guess");
-    }
-
-    #[tokio::test]
-    async fn scans_a_mixed_account_and_offers_only_the_brain() {
-        // Three Workers on one subdomain is not expressible through
-        // workers_dev_url against a local server, so probe_all's selection is
-        // covered by the pure tests above and its concurrency by this one:
-        // an empty account must not hang or error.
-        let out = probe_all(vec![], "demo").await;
-        assert!(out.is_empty());
-    }
-
-    // ── The setup UI wired to this ──────────────────────────────────────────
-    //
-    // Read from installer/src/main.ts, following the convention in
-    // settings.rs: the Rust core and the webview are separate build units, so
-    // nothing but a source check catches the UI drifting away from the commands
-    // it is supposed to call.
-
-    fn setup_ui() -> String {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/main.ts");
-        std::fs::read_to_string(path).expect("read installer/src/main.ts")
-    }
-
-    /// The whole point of the feature: sign-in must actually reach discovery.
-    #[test]
-    fn the_existing_brain_path_offers_cloudflare_sign_in() {
-        let ui = setup_ui();
-        assert!(
-            ui.contains(r#"invoke<Account[]>("connect_cloudflare")"#),
-            "the existing-brain path must offer Cloudflare sign-in"
-        );
-        assert!(
-            ui.contains(r#"invoke<DiscoveredBrain[]>("discover_brains""#),
-            "signing in must lead to a scan, or nothing is discovered"
-        );
-    }
-
-    /// Manual entry cannot be removed. A custom domain, a brain in another
-    /// party's account, and a user unwilling to grant scopes all depend on it,
-    /// and none of them are recoverable if the field is gone.
-    #[test]
-    fn manual_address_entry_survives() {
-        let ui = setup_ui();
-        assert!(
-            ui.contains("function manualEntryScreen("),
-            "manual address entry must remain available"
-        );
-        assert!(
-            ui.contains(r#"t("connectExisting.addressPlaceholder")"#),
-            "the address field must still be offered"
-        );
-        // Reachable from the chooser *and* from a scan that found nothing.
-        assert!(
-            ui.matches("manualEntryScreen(").count() >= 3,
-            "manual entry must be reachable, not just defined"
-        );
-    }
-
-    /// Discovery hands the picked address to `connect_existing`, the same
-    /// command manual entry uses. That is what keeps the stored state identical
-    /// however the brain was found — and `start_worker_update` reads exactly
-    /// that state, so a discovery path that saved differently would break
-    /// updates for these users.
-    #[test]
-    fn a_discovered_brain_connects_through_the_same_command_as_a_typed_one() {
-        let ui = setup_ui();
-        let unlock_start = ui.find("function unlockBrainScreen(").expect("unlock screen");
-        let unlock = &ui[unlock_start..];
-        let unlock = &unlock[..unlock.find("\nfunction ").unwrap_or(unlock.len())];
-        assert!(
-            unlock.contains(r#"invoke<ConnectionDetails>("connect_existing""#),
-            "the discovered-brain path must save through connect_existing"
-        );
-        assert!(
-            unlock.contains("address: brain.url"),
-            "it must connect to the address that was discovered"
-        );
-    }
-
-    /// The password is asked for after the address is known, never before —
-    /// discovery probes are unauthenticated, and a password typed earlier could
-    /// only have been sent to an unidentified address.
-    #[test]
-    fn the_password_is_requested_only_once_an_address_is_chosen() {
-        let ui = setup_ui();
-        let searching = ui
-            .find("function searchingScreen(")
-            .expect("searching screen");
-        let block = &ui[searching..];
-        let block = &block[..block.find("\nasync function").unwrap_or(block.len())];
-        assert!(
-            !block.contains("passwordPlaceholder"),
-            "the scan screen must not collect a password"
-        );
-    }
-
-    // ── Account-level orchestration ─────────────────────────────────────────
-    //
-    // Against a fake Cloudflare API. The Workers these build addresses for do
-    // not exist, so `brains` is empty — what is under test is the ordering, the
-    // subdomain handling, and the failure mapping.
-
-    fn spawn_cf_api(subdomain_body: &'static str) -> String {
-        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-        let port = server.server_addr().to_ip().unwrap().port();
-        std::thread::spawn(move || loop {
-            let Ok(req) = server.recv() else { return };
-            let body = if req.url().contains("/workers/subdomain") {
-                subdomain_body
-            } else {
-                r#"{"success":true,"errors":[],"result":[{"id":"nope"}]}"#
-            };
-            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(200));
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    #[tokio::test]
-    async fn a_scan_reports_the_subdomain_it_used() {
-        let base = spawn_cf_api(r#"{"success":true,"errors":[],"result":{"subdomain":"acme"}}"#);
-        let client = CfClient::with_base("tok".into(), "acct".into(), base);
-        let found = discover_in_account(&client).await.expect("scan runs");
-        // Carried back so the caller can persist it without a second lookup.
-        assert_eq!(found.subdomain, "acme");
-    }
-
-    /// An account that never registered a workers.dev subdomain cannot be
-    /// scanned at all, and that must not be reported as the same thing as an
-    /// account with no brains in it.
-    #[tokio::test]
-    async fn an_account_without_a_subdomain_fails_distinctly() {
-        for body in [
-            r#"{"success":true,"errors":[],"result":{"subdomain":null}}"#,
-            // Empty string is what Cloudflare returns in practice, and
-            // get_account_subdomain filters it to None.
-            r#"{"success":true,"errors":[],"result":{"subdomain":""}}"#,
+    fn refuses_hostname_labels_that_would_move_the_host() {
+        for bad in [
+            "",
+            "-lead",
+            "trail-",
+            "evil.com?",
+            "a#b",
+            "a/b",
+            "a@b",
+            "a b",
+            "UPPER",
+            "a:b",
+            "sub.domain",
         ] {
-            let client = CfClient::with_base("tok".into(), "acct".into(), spawn_cf_api(body));
-            match discover_in_account(&client).await {
-                Err(DiscoverFailure::NoSubdomain) => {}
-                other => panic!("expected NoSubdomain, got {other:?}"),
-            }
+            assert!(!is_safe_dns_label(bad), "accepted unsafe label: {bad:?}");
+        }
+        for good in ["second-brain", "my_brain2", "brain-2", "a", "acme-corp-s-account"] {
+            assert!(is_safe_dns_label(good), "rejected valid label: {good:?}");
         }
     }
 
-    /// The address discovery builds must be one `start_worker_update` can later
-    /// resolve back to an account: it matches the second dotted label of the
-    /// stored URL against each account's subdomain. Since discovery constructs
-    /// the URL *from* that subdomain, the match holds by construction — this
-    /// pins the two formats together so a change to either breaks here.
+    // ── Against a fake Cloudflare API ───────────────────────────────────────
+
+    /// `scripts` is the account's script list; `brains` are those whose settings
+    /// come back carrying brain bindings. The returned counter records how many
+    /// per-script settings reads the scan performed.
+    fn spawn_cf_api(
+        subdomain: Option<&'static str>,
+        scripts: &'static [&'static str],
+        brains: &'static [&'static str],
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let settings_reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = settings_reads.clone();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let url = req.url().to_string();
+            let body = if url.contains("/workers/subdomain") {
+                match subdomain {
+                    Some(s) => {
+                        format!(r#"{{"success":true,"errors":[],"result":{{"subdomain":"{s}"}}}}"#)
+                    }
+                    None => {
+                        r#"{"success":true,"errors":[],"result":{"subdomain":null}}"#.to_string()
+                    }
+                }
+            } else if let Some(rest) = url.split("/workers/scripts/").nth(1) {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let script = rest.trim_end_matches("/settings");
+                let bindings = if brains.contains(&script) {
+                    r#"[{"type":"d1","database_id":"x"},{"type":"vectorize","index_name":"second-brain-vectors"}]"#
+                } else {
+                    r#"[{"type":"kv_namespace","namespace_id":"y"}]"#
+                };
+                format!(r#"{{"success":true,"errors":[],"result":{{"bindings":{bindings}}}}}"#)
+            } else {
+                let list = scripts
+                    .iter()
+                    .map(|s| format!(r#"{{"id":"{s}"}}"#))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(r#"{{"success":true,"errors":[],"result":[{list}]}}"#)
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(200));
+        });
+        (format!("http://127.0.0.1:{port}"), settings_reads)
+    }
+
+    fn client(base: String) -> CfClient {
+        CfClient::with_base("tok".into(), "acct".into(), base)
+    }
+
+    const CONVENTIONAL: &str = "second-brain";
+    const INDEX: &str = "second-brain-vectors";
+
+    #[tokio::test]
+    async fn finds_the_brain_and_reports_the_subdomain_it_used() {
+        let (base, _) = spawn_cf_api(Some("acme"), &["second-brain", "blog"], &["second-brain"]);
+        let found = discover_in_account(&client(base), CONVENTIONAL, INDEX)
+            .await
+            .expect("scan runs");
+        assert_eq!(found.subdomain, "acme");
+        assert_eq!(
+            found.brains,
+            vec![Candidate {
+                name: "second-brain".into(),
+                url: "https://second-brain.acme.workers.dev".into(),
+            }]
+        );
+    }
+
+    /// The conventional name is checked alone first, so the common case costs one
+    /// settings read however large the account is.
+    #[tokio::test]
+    async fn a_conventionally_named_brain_costs_a_single_lookup() {
+        let (base, reads) = spawn_cf_api(
+            Some("acme"),
+            &["second-brain", "a", "b", "c", "d", "e", "f", "g", "h"],
+            &["second-brain"],
+        );
+        discover_in_account(&client(base), CONVENTIONAL, INDEX)
+            .await
+            .unwrap();
+        assert_eq!(
+            reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the fast path must not read every script in the account"
+        );
+    }
+
+    /// A brain deployed under another name is deliberately NOT offered, even
+    /// though the bindings check would recognise it.
+    ///
+    /// `update_worker` derives its script name from the bundled manifest and
+    /// deploys with a `PUT`, so connecting `my-memory` would later write the
+    /// bundle to a script named `second-brain` in that account — failing forever
+    /// if none exists, or overwriting an unrelated Worker if one does. Manual
+    /// entry remains the route for these users.
+    #[tokio::test]
+    async fn a_brain_under_another_name_is_not_offered() {
+        let (base, _) = spawn_cf_api(Some("acme"), &["notes", "my-memory"], &["my-memory"]);
+        let found = discover_in_account(&client(base), CONVENTIONAL, INDEX)
+            .await
+            .unwrap();
+        assert!(
+            found.brains.is_empty(),
+            "offering this would break the user's future updates"
+        );
+    }
+
+    /// A script holding the conventional name without the bindings is not a
+    /// brain, and must not be offered just because its name matches.
+    #[tokio::test]
+    async fn a_script_squatting_the_name_without_the_bindings_is_not_offered() {
+        let (base, _) = spawn_cf_api(Some("acme"), &["second-brain", "blog"], &[]);
+        let found = discover_in_account(&client(base), CONVENTIONAL, INDEX)
+            .await
+            .unwrap();
+        assert!(found.brains.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_account_with_no_brain_returns_an_empty_list_not_an_error() {
+        let (base, _) = spawn_cf_api(Some("acme"), &["blog", "api"], &[]);
+        let found = discover_in_account(&client(base), CONVENTIONAL, INDEX)
+            .await
+            .unwrap();
+        assert!(found.brains.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_empty_account_scans_cleanly() {
+        let (base, _) = spawn_cf_api(Some("acme"), &[], &[]);
+        let found = discover_in_account(&client(base), CONVENTIONAL, INDEX)
+            .await
+            .unwrap();
+        assert!(found.brains.is_empty());
+    }
+
+    /// A subdomain Cloudflare should never return, but which would build a URL
+    /// pointing somewhere else, must not produce an address at all.
+    #[tokio::test]
+    async fn an_unsafe_subdomain_never_becomes_an_address() {
+        let (base, _) = spawn_cf_api(Some("evil.com?"), &["second-brain"], &["second-brain"]);
+        match discover_in_account(&client(base), CONVENTIONAL, INDEX).await {
+            Err(DiscoverFailure::NoSubdomain) => {}
+            other => panic!("expected the unsafe subdomain to be refused, got {other:?}"),
+        }
+    }
+
+    /// An account that never registered a workers.dev subdomain cannot be scanned
+    /// at all, which is not the same as holding no brains.
+    #[tokio::test]
+    async fn an_account_without_a_subdomain_fails_distinctly() {
+        let (base, _) = spawn_cf_api(None, &["second-brain"], &["second-brain"]);
+        match discover_in_account(&client(base), CONVENTIONAL, INDEX).await {
+            Err(DiscoverFailure::NoSubdomain) => {}
+            other => panic!("expected NoSubdomain, got {other:?}"),
+        }
+    }
+
+    /// The address discovery builds must be one `start_worker_update` can resolve
+    /// back to an account. It calls the real `subdomain_of` rather than
+    /// re-implementing it, so a change to *either* function breaks this.
     #[test]
     fn a_discovered_address_resolves_back_to_its_account_subdomain() {
         for (script, subdomain) in [
@@ -525,24 +446,84 @@ mod tests {
             ("my-brain-2", "dad-piranifam-com-s-account"),
         ] {
             let url = workers_dev_url(script, subdomain);
-            let host = url.strip_prefix("https://").expect("https origin");
-            let second_label = host.split('.').nth(1).expect("second dotted label");
             assert_eq!(
-                second_label, subdomain,
+                crate::commands::subdomain_of(&url).as_deref(),
+                Some(subdomain),
                 "start_worker_update would not find the account for {url}"
             );
-            assert!(host.ends_with(".workers.dev"), "{url} must not look like a custom domain");
         }
     }
 
-    #[tokio::test]
-    async fn a_dead_account_scan_yields_nothing_rather_than_failing() {
-        // Real script names against a subdomain that resolves to nothing.
-        let out = probe_all(
-            vec!["one".into(), "two".into()],
-            "definitely-not-a-real-subdomain-9f3a2b",
-        )
-        .await;
-        assert!(out.is_empty());
+    // ── The setup UI wired to this ──────────────────────────────────────────
+    //
+    // Read from installer/src/main.ts, following the convention in settings.rs:
+    // the Rust core and the webview are separate build units, so nothing but a
+    // source check catches the UI drifting from the commands it must call.
+
+    fn setup_ui() -> String {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/main.ts");
+        std::fs::read_to_string(path).expect("read installer/src/main.ts")
+    }
+
+    #[test]
+    fn the_existing_brain_path_offers_cloudflare_sign_in() {
+        let ui = setup_ui();
+        assert!(ui.contains(r#"invoke<Account[]>("connect_cloudflare""#));
+        assert!(
+            ui.contains(r#"invoke<DiscoveredBrain[]>("discover_brains""#),
+            "signing in must lead to a scan, or nothing is discovered"
+        );
+    }
+
+    /// Manual entry cannot be removed. A custom domain, a brain in another
+    /// party's account, and a user unwilling to grant access all depend on it,
+    /// and none of them are recoverable if the field is gone.
+    #[test]
+    fn manual_address_entry_survives() {
+        let ui = setup_ui();
+        assert!(ui.contains("function manualEntryScreen("));
+        assert!(ui.contains(r#"t("connectExisting.addressPlaceholder")"#));
+        // Counting occurrences of the name would pass even with every button
+        // deleted — the definition, the re-render closure and the error-retry
+        // recursion all mention it. Only a click handler makes it reachable.
+        let clickable = ui
+            .matches(r#"addEventListener("click", () => manualEntryScreen())"#)
+            .count();
+        assert!(
+            clickable >= 2,
+            "manual entry must be clickable from the chooser and the pick-list; \
+             found {clickable} handlers"
+        );
+    }
+
+    /// Discovery hands the picked address to `connect_existing`, the same command
+    /// manual entry uses, which is what keeps the stored state identical however
+    /// the brain was found. `start_worker_update` reads exactly that state, so a
+    /// path that saved differently would break updates.
+    #[test]
+    fn a_discovered_brain_connects_through_the_same_command_as_a_typed_one() {
+        let ui = setup_ui();
+        let start = ui.find("function unlockBrainScreen(").expect("unlock screen");
+        let block = &ui[start..];
+        let block = &block[..block.find("\nfunction ").unwrap_or(block.len())];
+        assert!(block.contains(r#"invoke<ConnectionDetails>("connect_existing""#));
+        assert!(block.contains("address: brain.url"));
+    }
+
+    /// The password is collected only once an address is chosen. Nothing in
+    /// discovery needs it, and a password gathered earlier could only have been
+    /// sent somewhere not yet identified.
+    #[test]
+    fn no_screen_before_the_pick_collects_a_password() {
+        let ui = setup_ui();
+        // Every screen from the chooser up to (but excluding) the unlock screen.
+        let from = ui.find("function connectExistingScreen(").expect("chooser");
+        let to = ui.find("function unlockBrainScreen(").expect("unlock screen");
+        assert!(from < to, "unlock screen must come after the chooser");
+        let before_pick = &ui[from..to];
+        assert!(
+            !before_pick.contains(r#"type: "password""#),
+            "no screen before the address is chosen may render a password field"
+        );
     }
 }

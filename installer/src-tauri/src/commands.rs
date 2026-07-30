@@ -29,6 +29,10 @@ pub struct SetupSession {
     /// Set when the main window should boot straight into the Worker-update
     /// flow instead of the normal setup flow.
     pending_worker_update: Mutex<bool>,
+    /// Account id + workers.dev subdomain from the most recent scan, held until
+    /// a brain is actually connected. Non-secret, but pointless — and possibly
+    /// wrong — to persist for a scan the user abandoned.
+    cf_hints: Mutex<Option<(String, String)>>,
 }
 
 impl SetupSession {
@@ -40,6 +44,7 @@ impl SetupSession {
             accounts: Mutex::new(Vec::new()),
             outcome: Mutex::new(None),
             pending_worker_update: Mutex::new(false),
+            cf_hints: Mutex::new(None),
         }
     }
 
@@ -49,6 +54,7 @@ impl SetupSession {
         self.accounts.lock().unwrap().clear();
         *self.outcome.lock().unwrap() = None;
         *self.pending_worker_update.lock().unwrap() = false;
+        *self.cf_hints.lock().unwrap() = None;
     }
 }
 
@@ -213,7 +219,14 @@ pub async fn discover_brains(
 
     let client = CfClient::new(tokens.access_token.clone(), account_id.clone());
 
-    let found = discover::discover_in_account(&client).await.map_err(|e| match e {
+    let manifest = worker_bundle::manifest();
+    let found = discover::discover_in_account(
+        &client,
+        &manifest.script_name,
+        &manifest.vectorize_name,
+    )
+    .await
+    .map_err(|e| match e {
         // No workers.dev subdomain means no address to construct, which is a
         // different problem from "found nothing" and gets its own message.
         discover::DiscoverFailure::NoSubdomain => user_err(locale, Key::ErrorCfNoSubdomain),
@@ -223,13 +236,12 @@ pub async fn discover_brains(
         }
     })?;
 
-    // Non-secret, and it lets a later operation skip account enumeration. Saved
-    // even when nothing matched — the account and subdomain are still correct.
-    // A failure here is not worth surfacing: it costs a lookup later, nothing
-    // more.
-    if let Err(e) = secure_store::save_cf_hints(&account_id, &found.subdomain) {
-        log::warn!("could not save Cloudflare hints: {e}");
-    }
+    // Held in memory, not written yet. Persisting at scan time would leave a
+    // Cloudflare account id in the keychain for someone who signed in, saw
+    // nothing, and quit — and would record *this* account even if the user went
+    // on to connect a brain living in a different one. connect_existing writes
+    // it once a brain is actually connected.
+    *session.cf_hints.lock().unwrap() = Some((account_id, found.subdomain.clone()));
 
     Ok(found.brains)
 }
@@ -399,6 +411,17 @@ pub async fn connect_existing(
             log::error!("secure store save failed: {e}");
             user_err(locale, Key::ErrorSecureStoreConnect)
         })?;
+
+        // Only now, and only if this brain came from a scan of that account. A
+        // failure is not worth surfacing: it costs a lookup later, nothing more.
+        let hints = session.cf_hints.lock().unwrap().clone();
+        if let Some((account_id, subdomain)) = hints {
+            if worker_url.contains(&format!(".{subdomain}.workers.dev")) {
+                if let Err(e) = secure_store::save_cf_hints(&account_id, &subdomain) {
+                    log::warn!("could not save Cloudflare hints: {e}");
+                }
+            }
+        }
     }
 
     let outcome = ProvisionOutcome {
@@ -794,7 +817,7 @@ pub struct WorkerUpdateInfo {
 
 /// The workers.dev subdomain in a Worker URL is the second dotted label:
 /// `second-brain.acme.workers.dev` → `acme`.
-fn subdomain_of(worker_url: &str) -> Option<String> {
+pub(crate) fn subdomain_of(worker_url: &str) -> Option<String> {
     let host = url::Url::parse(worker_url).ok()?.host_str()?.to_string();
     if !host.ends_with(".workers.dev") {
         return None; // custom domain — can't auto-resolve the account
