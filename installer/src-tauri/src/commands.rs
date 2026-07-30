@@ -753,9 +753,15 @@ fn dashboard_credentials(
     locale: Locale,
 ) -> Result<(String, String), String> {
     if session.dry_run {
-        let outcome = details_from_anywhere(session)
+        // The same "is this computer connected yet?" check as a real run — demo
+        // mode should refuse here for the same reason and with the same message.
+        details_from_anywhere(session)
             .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
-        Ok((outcome.worker_url, "demo".to_string()))
+        // The local demo brain, not `second-brain.demo.workers.dev`: that address
+        // does not resolve, so every Worker-backed screen failed with "Couldn't
+        // reach your Second Brain". Pointing at a real server on loopback means
+        // settings and migration run their actual HTTP paths against real data.
+        Ok((crate::demo_brain::base_url(), "demo".to_string()))
     } else {
         let info = secure_store::load_setup()
             .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
@@ -1128,10 +1134,15 @@ pub async fn begin_embedding_migration(
     };
 
     if session.dry_run {
+        // The demo brain runs on a loopback address, which has no script or
+        // subdomain to derive — `update_worker` would refuse it before doing
+        // anything. DryRunBackend ignores the URL entirely (its health check is
+        // stubbed), so a synthetic workers.dev address exercises the same code
+        // path while the real loopback address keeps serving the HTTP calls.
         provision::update_worker(
             &DryRunBackend,
             manifest,
-            &worker_url,
+            "https://second-brain.demo.workers.dev",
             "demo",
             provision::VectorizeTarget { name: &target_index, dimensions },
             progress,
@@ -1141,10 +1152,33 @@ pub async fn begin_embedding_migration(
             log::warn!("dry-run migration redeploy failed: {e}");
             user_err(locale, Key::ErrorFriendlyRetry)
         })?;
-        return Ok(());
+        // In the same order as the live path below, so demo mode actually moves
+        // the model. Without this the demo rebuild runs at the old model, the
+        // old index stays "live", and the final free-up step is unreachable —
+        // which would leave the most consequential screen untested.
+        crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale).await?;
+        return crate::migration::reset(&worker_url, &auth_token, locale).await;
     }
 
     let client = cloudflare_client_for_brain(&worker_url, &session, locale).await?;
+
+    // What the brain reads right now, taken from the live binding rather than
+    // derived from an assumed size. Recorded BEFORE the switch, because
+    // afterwards the brain reports the new index as current and this name is the
+    // only thing that identifies what may later be freed. Written first so it
+    // survives a redeploy that fails half-way.
+    if let Some(script) = crate::worker_url::script_of(&worker_url) {
+        if let Ok(bindings) = client.get_script_bindings(&script).await {
+            if let Some(current) = provision::binding_field(&bindings, "vectorize", "index_name") {
+                if current != target_index {
+                    if let Err(e) = secure_store::save_previous_index(current) {
+                        log::warn!("could not record the outgoing index: {e}");
+                    }
+                }
+            }
+        }
+    }
+
     let backend = LiveBackend { client };
 
     // Creating the index is idempotent and non-destructive, and update_worker
@@ -1167,12 +1201,32 @@ pub async fn begin_embedding_migration(
         }
     })?;
 
-    // Only now is the brain reading the new index, so only now is the new model
-    // safe to record.
-    crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale).await?;
+    // Past this point the brain is already reading the new index, so a failure is
+    // not "nothing happened". Search stays incomplete until the rebuild runs, and
+    // the message has to say so — retrying is safe and idempotent, but walking
+    // away is not.
+    let half_switched = |_e: String| user_err(locale, Key::ErrorMigrationHalfSwitched);
+
+    crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale)
+        .await
+        .map_err(half_switched)?;
 
     // Any ledger from a previous target is meaningless against this one.
-    crate::migration::reset(&worker_url, &auth_token, locale).await
+    crate::migration::reset(&worker_url, &auth_token, locale)
+        .await
+        .map_err(half_switched)
+}
+
+/// Abandons an unfinished rebuild so the next one starts from the beginning.
+///
+/// The escape hatch for a rebuild that keeps stalling on the same entry: without
+/// it, a user whose cursor sits on a permanently failing memory has no way out.
+/// Rebuilding is idempotent, so this costs model calls and cannot corrupt
+/// anything.
+#[tauri::command]
+pub async fn migration_reset(app: AppHandle) -> Result<(), String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::reset(&url, &token, locale).await
 }
 
 /// One re-embed batch. The window loops on this until `done`, and stops if
@@ -1183,36 +1237,47 @@ pub async fn migration_step(app: AppHandle) -> Result<crate::migration::BatchPro
     crate::migration::run_batch(&url, &token, locale).await
 }
 
-/// Deletes the superseded index. The one irreversible step, so the UI confirms it
-/// separately and only after a rebuild has finished.
+/// Whether an index is left over from a migration, and can be freed.
+///
+/// The window asks this rather than tracking sizes itself: the name comes from
+/// what Cloudflare reported as bound before the switch, so nothing is derived
+/// from an assumed dimension count and nothing lives in browser storage that a
+/// reset could lose.
+#[tauri::command]
+pub fn outstanding_old_index() -> Option<String> {
+    secure_store::load_previous_index()
+}
+
+/// Deletes the superseded index. The one irreversible step, so the window
+/// confirms it separately and only after a rebuild has finished.
+///
+/// Takes no argument on purpose. An earlier shape had the window pass the size it
+/// thought it was moving from, which put the name of something irreversibly
+/// deletable in the hands of browser storage.
 #[tauri::command]
 pub async fn finish_embedding_migration(
-    old_dimensions: u32,
     app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<(), String> {
     let locale = locale_of(&app);
-    let manifest = worker_bundle::manifest();
-    let (worker_url, _, _) = settings_target(&app)?;
+    let (worker_url, auth_token, _) = settings_target(&app)?;
 
-    let old_index = crate::migration::index_name_for(
-        &manifest.vectorize_name,
-        old_dimensions,
-        manifest.vectorize_dimensions,
-    );
+    let old_index = secure_store::load_previous_index()
+        .ok_or_else(|| user_err(locale, Key::ErrorNoOldIndexToFree))?;
 
-    // Refuse to delete the index the brain is currently reading. The caller passes
-    // the size it is moving *from*, and a mistake there would drop the live one —
-    // so the live model is read back and checked rather than trusted.
-    let (_, auth_token, _) = settings_target(&app)?;
-    let status = crate::migration::fetch_status(&worker_url, &auth_token, locale).await?;
-    let live_model = status
+    // Refuse to delete the index the brain is reading. The recorded name is
+    // trustworthy, but a redeploy could have been rolled back since, and the cost
+    // of being wrong here is unrecoverable.
+    let live_model = crate::migration::fetch_status(&worker_url, &auth_token, locale)
+        .await?
         .get("model")
         .and_then(|m| m.as_str())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_string();
+    let manifest = worker_bundle::manifest();
     let live_index = crate::migration::index_name_for(
         &manifest.vectorize_name,
-        crate::migration::dimensions_for(live_model).unwrap_or(manifest.vectorize_dimensions),
+        crate::migration::dimensions_for(&live_model).unwrap_or(manifest.vectorize_dimensions),
         manifest.vectorize_dimensions,
     );
     if old_index == live_index {
@@ -1227,12 +1292,21 @@ pub async fn finish_embedding_migration(
         user_err(locale, Key::ErrorFriendlyRetry)
     };
     if session.dry_run {
-        return DryRunBackend.delete_vectorize(&old_index).await.map_err(failed);
+        DryRunBackend
+            .delete_vectorize(&old_index)
+            .await
+            .map_err(failed)?;
+    } else {
+        let backend = LiveBackend {
+            client: cloudflare_client_for_brain(&worker_url, &session, locale).await?,
+        };
+        backend.delete_vectorize(&old_index).await.map_err(failed)?;
     }
-    let backend = LiveBackend {
-        client: cloudflare_client_for_brain(&worker_url, &session, locale).await?,
-    };
-    backend.delete_vectorize(&old_index).await.map_err(failed)
+
+    // Only after the delete succeeded. Clearing it first would silently orphan
+    // the index with nothing left pointing at it.
+    secure_store::clear_previous_index();
+    Ok(())
 }
 
 fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
@@ -1338,15 +1412,19 @@ mod tests {
         );
     }
 
+    /// Demo mode is pointed at the local demo brain, not at
+    /// `second-brain.demo.workers.dev` — that address does not resolve, so every
+    /// Worker-backed screen failed before anything could be demonstrated.
     #[test]
-    fn dashboard_credentials_dry_run_uses_demo_token() {
+    fn dashboard_credentials_dry_run_uses_the_local_demo_brain() {
         let session = SetupSession::new(true);
         *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
             worker_url: "https://second-brain.demo.workers.dev".into(),
             mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
         });
         let (url, token) = dashboard_credentials(&session, Locale::En).unwrap();
-        assert_eq!(url, "https://second-brain.demo.workers.dev");
+        assert_eq!(url, crate::demo_brain::base_url());
+        assert!(url.starts_with("http://127.0.0.1:"), "got {url}");
         assert_eq!(token, "demo");
     }
 }

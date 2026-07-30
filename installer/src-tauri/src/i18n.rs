@@ -111,7 +111,9 @@ pub enum Key {
     ErrorCfAccountListFailed,
     ErrorBrainNeedsUpdateForMigration,
     ErrorUnknownEmbeddingModel,
+    ErrorMigrationHalfSwitched,
     ErrorCannotDeleteLiveIndex,
+    ErrorNoOldIndexToFree,
     ErrorCfNoSubdomain,
     ErrorCfDiscoverFailed,
     ErrorChoosePasswordFirst,
@@ -237,8 +239,16 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         (Locale::En, Key::ErrorCfAccountListFailed) => {
             "Signed in, but we couldn't read your account. Please try again."
         }
+        (Locale::En, Key::ErrorMigrationHalfSwitched) => {
+            "Your Second Brain has switched to the new way of reading, but finishing the \
+switch didn't complete. Your memories are safe and nothing was deleted — reopen this \
+window and carry on, or search will stay incomplete."
+        }
         (Locale::En, Key::ErrorUnknownEmbeddingModel) => {
             "That isn't a way of reading memories this app knows how to set up."
+        }
+        (Locale::En, Key::ErrorNoOldIndexToFree) => {
+            "There's no leftover search data to free up. Nothing was changed."
         }
         (Locale::En, Key::ErrorCannotDeleteLiveIndex) => {
             "That's the search data your Second Brain is using right now, so it can't be \
@@ -391,8 +401,16 @@ Second Brain's address by hand instead."
         (Locale::It, Key::ErrorCfAccountListFailed) => {
             "Accesso effettuato, ma non è stato possibile leggere l'account. Riprova."
         }
+        (Locale::It, Key::ErrorMigrationHalfSwitched) => {
+            "Il tuo Second Brain è passato al nuovo modo di leggere, ma il passaggio non è \
+stato completato. I tuoi ricordi sono al sicuro e nulla è stato cancellato — riapri questa \
+finestra e continua, altrimenti la ricerca resterà incompleta."
+        }
         (Locale::It, Key::ErrorUnknownEmbeddingModel) => {
             "Non è un modo di leggere i ricordi che questa app sappia configurare."
+        }
+        (Locale::It, Key::ErrorNoOldIndexToFree) => {
+            "Non ci sono vecchi dati di ricerca da liberare. Nulla è stato modificato."
         }
         (Locale::It, Key::ErrorCannotDeleteLiveIndex) => {
             "Sono i dati di ricerca che il tuo Second Brain sta usando in questo momento, \
@@ -547,7 +565,9 @@ mod tests {
             ErrorCfSignInExpired,
             ErrorBrainNeedsUpdateForMigration,
             ErrorUnknownEmbeddingModel,
+            ErrorMigrationHalfSwitched,
             ErrorCannotDeleteLiveIndex,
+            ErrorNoOldIndexToFree,
             ErrorCfNoSubdomain,
             ErrorCfDiscoverFailed,
             ErrorNotionSynced,

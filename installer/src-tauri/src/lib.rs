@@ -11,6 +11,7 @@ mod cf;
 mod cli_config;
 mod commands;
 mod credits;
+mod demo_brain;
 mod i18n;
 mod mcp_config;
 mod migration;
@@ -135,6 +136,14 @@ pub fn run() {
 
     let dry_run = std::env::var("SECOND_BRAIN_DRY_RUN").is_ok();
 
+    // A demo has to have something to operate on. Started here rather than on
+    // first use so it is listening before any window can ask for it, and only in
+    // dry-run — a real run must never have a second brain on loopback that a
+    // stray address could reach.
+    if dry_run {
+        demo_brain::start();
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             for label in ["brain", "main", "details"] {
@@ -171,6 +180,8 @@ pub fn run() {
             commands::begin_embedding_migration,
             commands::migration_step,
             commands::finish_embedding_migration,
+            commands::migration_reset,
+            commands::outstanding_old_index,
             commands::start_provisioning,
             commands::get_connection_details,
             commands::detect_tools,

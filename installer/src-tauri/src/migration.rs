@@ -42,17 +42,37 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 /// Only models whose dimensions are documented are listed. A model whose
 /// dimension count we would have to guess cannot be offered: guessing wrong
 /// creates an index that rejects every vector.
-pub const EMBEDDING_MODELS: &[(&str, u32)] = &[
-    ("@cf/baai/bge-small-en-v1.5", 384),
-    ("@cf/baai/bge-base-en-v1.5", 768),
-    ("@cf/baai/bge-large-en-v1.5", 1024),
+pub const EMBEDDING_MODELS: &[EmbeddingChoice] = &[
+    EmbeddingChoice { model: "@cf/baai/bge-small-en-v1.5", dimensions: 384, level: "standard" },
+    EmbeddingChoice { model: "@cf/baai/bge-base-en-v1.5", dimensions: 768, level: "finer" },
+    EmbeddingChoice { model: "@cf/baai/bge-large-en-v1.5", dimensions: 1024, level: "finest" },
 ];
+
+/// One offerable way of reading memories.
+///
+/// `level` is a copy key, not a label: the window looks it up in its own catalogue
+/// so the choice reads as "Standard / Finer / Finest" rather than as a model id.
+/// That matches the named-level pattern every other control in the same window
+/// uses, and it matters more here — this is the last thing read before a one-way
+/// operation, and asking someone to reason about the position of an opaque string
+/// in a list is not a choice they can make well.
+///
+/// `dimensions` deliberately never reaches the screen. It exists to size the
+/// index and to order the list.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingChoice {
+    pub model: &'static str,
+    #[serde(skip)]
+    pub dimensions: u32,
+    pub level: &'static str,
+}
 
 pub fn dimensions_for(model: &str) -> Option<u32> {
     EMBEDDING_MODELS
         .iter()
-        .find(|(m, _)| *m == model)
-        .map(|(_, d)| *d)
+        .find(|c| c.model == model)
+        .map(|c| c.dimensions)
 }
 
 /// The index a given dimension count lives in.
@@ -81,8 +101,8 @@ pub struct MigrationEstimate {
     /// the UI says "at least" rather than implying precision it does not have.
     pub chunks_at_least: u64,
     pub current_model: String,
-    /// Model id and dimensions, for the picker.
-    pub models: Vec<(&'static str, u32)>,
+    /// The choices the picker offers, ordered coarsest first.
+    pub models: Vec<EmbeddingChoice>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,10 +121,18 @@ pub struct BatchProgress {
     pub remaining: u64,
     pub total: u64,
     pub done: bool,
-    /// The Worker stopped because a batch achieved nothing — almost always the
-    /// day's model budget. The cursor is kept, so resuming later costs nothing
-    /// already paid for.
+    /// The Worker stopped because a batch achieved nothing. The cursor is kept,
+    /// so resuming later costs nothing already paid for.
     pub stalled: bool,
+    /// Why it stopped: `"budget"` when the day's allowance looks spent, or
+    /// `"failing"` when an entry keeps failing for some other reason.
+    ///
+    /// The distinction is the difference between "come back tomorrow" and "come
+    /// back tomorrow forever": a persistently failing entry sits at the cursor and
+    /// makes every future batch achieve nothing, so telling that user to wait for
+    /// an allowance reset would be advice that can never work.
+    #[serde(default)]
+    pub stalled_reason: Option<String>,
 }
 
 async fn get_json<T: serde::de::DeserializeOwned>(
@@ -239,11 +267,29 @@ mod tests {
         // A model whose dimension count we had to guess cannot be offered:
         // guessing wrong creates an index that rejects every vector written to
         // it, and the index cannot be altered afterwards.
-        for (model, dims) in EMBEDDING_MODELS {
+        for choice in EMBEDDING_MODELS {
+            let EmbeddingChoice { model, dimensions, level } = choice;
             assert!(model.starts_with("@cf/"), "{model} is not a Workers AI id");
-            assert!(*dims > 0, "{model} has no dimensions");
-            assert_eq!(dimensions_for(model), Some(*dims));
+            assert!(*dimensions > 0, "{model} has no dimensions");
+            assert_eq!(dimensions_for(model), Some(*dimensions));
+            // Every choice needs a named level, or the window falls back to
+            // showing the raw model id at the moment of commitment.
+            assert!(!level.is_empty(), "{model} has no named level");
         }
+
+        // Coarsest first, so "further down the list reads in finer detail" is
+        // true rather than aspirational.
+        let sizes: Vec<u32> = EMBEDDING_MODELS.iter().map(|c| c.dimensions).collect();
+        let mut sorted = sizes.clone();
+        sorted.sort();
+        assert_eq!(sizes, sorted, "the picker's order must ascend by detail");
+
+        // Distinct levels, or two choices render identically.
+        let mut levels: Vec<&str> = EMBEDDING_MODELS.iter().map(|c| c.level).collect();
+        levels.sort();
+        let before = levels.len();
+        levels.dedup();
+        assert_eq!(levels.len(), before, "two choices share a level name");
     }
 
     #[test]
@@ -310,10 +356,16 @@ mod tests {
         for key in ["entries", "chunksAtLeast", "currentModel", "models"] {
             assert!(json.get(key).is_some(), "the window reads {key}, which is absent");
         }
-        // The picker needs [id, dimensions] pairs, and orders by dimensions.
+        // The picker reads a named level per choice. Dimensions must NOT be in
+        // the payload: they are an implementation detail, and putting a number
+        // like 768 on the decision screen is what the named level replaces.
         let first = &json["models"][0];
-        assert!(first[0].is_string(), "model id must be a string");
-        assert!(first[1].is_u64(), "dimensions must be a number");
+        assert!(first["model"].is_string(), "model id must be present for auditing");
+        assert!(first["level"].is_string(), "each choice needs a named level");
+        assert!(
+            first.get("dimensions").is_none(),
+            "dimensions must not reach the window: {first}"
+        );
     }
 
     #[test]
