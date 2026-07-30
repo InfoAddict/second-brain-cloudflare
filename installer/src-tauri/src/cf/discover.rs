@@ -527,14 +527,63 @@ mod tests {
             .join("")
     }
 
+    /// The sign-in button must actually reach the scan.
+    ///
+    /// An earlier version of this test asserted only that the two command names
+    /// appeared *somewhere* in the file. That could not distinguish a wired
+    /// button from a dead one: replacing the click handler with a no-op breaks
+    /// the entire feature while leaving both `invoke` calls sitting in the
+    /// source, so every test stayed green. Assert the chain instead.
     #[test]
-    fn the_existing_brain_path_offers_cloudflare_sign_in() {
+    fn the_sign_in_button_is_wired_through_to_the_scan() {
         let ui = setup_ui();
-        assert!(ui.contains(r#"invoke<Account[]>("connect_cloudflare""#));
+
+        // 1. The button reaches the sign-in screen.
         assert!(
-            ui.contains(r#"invoke<DiscoveredBrain[]>("discover_brains""#),
-            "signing in must lead to a scan, or nothing is discovered"
+            ui.contains(r#"signIn.addEventListener("click", () => void discoverScreen())"#),
+            "the sign-in button must be wired to discoverScreen"
         );
+
+        // 2. That screen signs in to Cloudflare, and
+        // 3. hands off to the scan, which calls discover_brains.
+        let sign_in = fn_body(&ui, "async function discoverScreen(");
+        assert!(
+            sign_in.contains(r#"invoke<Account[]>("connect_cloudflare""#),
+            "discoverScreen must sign in to Cloudflare"
+        );
+        // Both branches, named separately. A bare contains("runDiscovery()")
+        // passes while one of them is broken, because the other still mentions
+        // it — and the single-account branch is the common case.
+        assert!(
+            sign_in.contains("await runDiscovery();"),
+            "the single-account path must scan straight away"
+        );
+        assert!(
+            sign_in.contains("() => void runDiscovery()"),
+            "the multi-account path must scan once an account is picked"
+        );
+
+        let scan = fn_body(&ui, "async function runDiscovery(");
+        assert!(
+            scan.contains(r#"invoke<DiscoveredBrain[]>("discover_brains""#),
+            "the scan must call discover_brains, or nothing is ever discovered"
+        );
+    }
+
+    /// The body of a top-level function in main.ts, up to the next one.
+    fn fn_body<'a>(ui: &'a str, signature: &str) -> &'a str {
+        let start = ui
+            .find(signature)
+            .unwrap_or_else(|| panic!("main.ts has no {signature}"));
+        let rest = &ui[start..];
+        let end = rest
+            .find("\nfunction ")
+            .into_iter()
+            .chain(rest.find("\nasync function "))
+            .filter(|i| *i > 0)
+            .min()
+            .unwrap_or(rest.len());
+        &rest[..end]
     }
 
     /// Manual entry cannot be removed. A custom domain, a brain in another
