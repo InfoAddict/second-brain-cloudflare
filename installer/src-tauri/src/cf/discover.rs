@@ -257,6 +257,11 @@ mod tests {
                     json(200, metadata)
                 }
 
+                // An unrelated JSON API behind an auth wall. Parses fine, so
+                // only the body shape distinguishes it from a brain.
+                ("json_wall", "/health") => json(401, r#"{"message":"Forbidden"}"#),
+                ("json_wall", "/count") => json(401, r#"{"ok":true,"detail":"nope"}"#),
+
                 // An unrelated app behind an auth wall that isn't JSON.
                 ("html_wall", "/health") => tiny_http::Response::from_string("<html>login</html>")
                     .with_status_code(401)
@@ -298,6 +303,16 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_401_that_is_not_the_workers_json_contract() {
         let origin = spawn_worker("html_wall");
+        assert_eq!(classify(&origin).await, None);
+    }
+
+    /// The stricter half of the above: a 401 whose body is perfectly good JSON,
+    /// just not the Worker's `{ ok: false }`. Parsing succeeds here, so only the
+    /// shape check rejects it — without that check every authenticated JSON API
+    /// in the account would be offered as a brain.
+    #[tokio::test]
+    async fn rejects_a_401_from_an_unrelated_json_api() {
+        let origin = spawn_worker("json_wall");
         assert_eq!(classify(&origin).await, None);
     }
 
