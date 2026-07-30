@@ -398,6 +398,15 @@ export const it: Messages = {
       "quando la ricostruzione finisce. Anche ricominciarla da capo ci arriva, " +
       "ma rilegge tutti i ricordi dal primo, quindi ci vuole più tempo.",
     blockedButton: "Apri le Impostazioni avanzate",
+    // "non è mai arrivata conferma" riprende alla lettera failUnsureBody: è lo
+    // stesso fatto, e due formulazioni diverse leggerebbero come due situazioni
+    // diverse.
+    blockedMayBeLive:
+      "Un tentativo precedente è stato inviato al tuo Second Brain e non è mai " +
+      "arrivata conferma, quindi la password qui sotto potrebbe già essere " +
+      "quella che funziona. Salvala prima di chiudere questa finestra. " +
+      "Riprovare chiarirebbe la situazione, ma è possibile solo quando la " +
+      "ricostruzione è finita.",
     lostTitle: "I tuoi ricordi sono al sicuro",
     lostLede:
       "Non hai perso nulla. Nessuno può recuperare la tua password al posto tuo " +

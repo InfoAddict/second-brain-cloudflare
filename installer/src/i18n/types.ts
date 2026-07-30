@@ -222,6 +222,14 @@ export type Messages = {
     /** An abandoned rebuild blocks this forever without a way out on screen. */
     blockedEscape: string;
     blockedButton: string;
+    /**
+     * Added to the blocked *screen* — never the Connection pane's card — when an
+     * earlier attempt in the same window reached the brain and never confirmed.
+     * Being blocked and having a password that may already be live are both
+     * true at once, and the screen that drops either one is lying about the
+     * other.
+     */
+    blockedMayBeLive: string;
     // Door B intro — one screen, two variants
     lostTitle: string;
     lostLede: string;

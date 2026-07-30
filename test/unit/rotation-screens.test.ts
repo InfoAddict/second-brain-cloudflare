@@ -15,11 +15,15 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  blockedCopy,
   localFailureCopy,
+  recheckArgs,
+  rotateArgs,
   rotateErrorOf,
   screenForFailure,
   screenForOutcome,
   withAddress,
+  ROTATION_STEP_IDS,
   type RotateOutcome,
 } from "../../installer/src/rotation-state";
 
@@ -83,13 +87,67 @@ describe("which failure screen", () => {
     // Showing that screen would read: "your old one still works and everything
     // is exactly as it was". The old one is dead.
     expect(screenForFailure("notSent", true)).toBe("failUnsure");
-    expect(screenForFailure("blocked", true)).toBe("failUnsure");
+  });
+
+  it("still shows the blocked screen after an attempt that may have landed", () => {
+    // This assertion used to read `.toBe("failUnsure")`, and that was the bug.
+    //
+    // "blocked" is the one stage that is not a report on what happened — it is
+    // an instruction, and this is the only screen that carries it. The escape
+    // paragraph and the Advanced Settings button are the sole route out of an
+    // abandoned rebuild ledger, which is exactly why the stage was split out of
+    // "notSent" in the first place.
+    //
+    // The sticky flag was undoing the split for one sequence: once any attempt
+    // reached "unconfirmed", every later attempt — all of them blocked, none of
+    // them capable of succeeding — rendered "may already be live" with a "Try
+    // again" button and no mention of the rebuild. The user retries forever
+    // against a gate whose key is in another window they have no reason to
+    // open.
+    //
+    // Both facts are true and neither is optional, so the screen carries both:
+    // it is blocked, *and* the password may already be live.
+    expect(screenForFailure("blocked", true)).toBe("blocked");
   });
 
   it("lets the local stage overrule the doubt, because it resolves it", () => {
     // "local" means the brain confirmed the new password. That is the ambiguity
     // ending in the direction that leaves nothing to be unsure about.
     expect(screenForFailure("local", true)).toBe("failLocal");
+  });
+});
+
+describe("the blocked screen, when an earlier attempt may already have landed", () => {
+  it("says nothing about a live password on a run where nothing was sent", () => {
+    const copy = blockedCopy(false);
+    expect(copy.liveNotice).toBe(null);
+    // Nothing reached the brain, so the old password still works and this one
+    // demonstrably does not. Calling it "your new password" here would tell
+    // someone who saved it that they now hold the working key.
+    expect(copy.passwordLabel).toBe("changePassword.failNotSentLabel");
+    expect(copy.guardLeaving).toBe(false);
+  });
+
+  it("carries the warning the failUnsure screen would have carried", () => {
+    const copy = blockedCopy(true);
+    // Without this, rendering the blocked screen after an unconfirmed attempt
+    // would drop the may-already-be-live warning entirely — which is what made
+    // routing to failUnsure look like the lesser evil.
+    expect(copy.liveNotice).toBe("changePassword.blockedMayBeLive");
+  });
+
+  it("does not call a password that may be live 'not in use'", () => {
+    // The label failNotSentLabel spells out "not in use". After an attempt that
+    // reached the brain and never confirmed, that may be the only key the brain
+    // still answers to — and this screen offers no Try again to settle it, so
+    // the user's next move is deciding whether to keep what is on screen.
+    expect(blockedCopy(true).passwordLabel).toBe("changePassword.passwordLabel");
+  });
+
+  it("asks before letting the only copy of it be closed", () => {
+    // The same acknowledgement failUnsure guards its exit with, for the same
+    // reason: this window may hold the only password that opens the brain.
+    expect(blockedCopy(true).guardLeaving).toBe(true);
   });
 });
 
@@ -137,6 +195,45 @@ describe("the 'changed, but not saved here' screen", () => {
     const bothLesser = localFailureCopy({ keychain: true, cliConfig: false, dashboard: false });
     expect(bothLesser.notice).toBe("changePassword.failLocalCli");
     expect(bothLesser.extra).toEqual(["changePassword.failLocalDashboard"]);
+  });
+});
+
+describe("what crosses the IPC boundary", () => {
+  it("keys the checklist on the step ids the Rust side emits", () => {
+    // These must match the `Step` variants in
+    // `installer/src-tauri/src/cf/provision.rs` — Step::Secret, Step::Confirm,
+    // Step::Local — as that enum's `rename_all` serialises them. The Rust half
+    // is pinned by `the_step_ids_on_the_wire_are_the_ones_the_screens_key_on`
+    // in the same file; this is the other half, and both are needed.
+    //
+    // Nothing else catches a drift. Every one of the seven ids in `StepId` is a
+    // legal value for a rotation row, so writing `finish` where `secret`
+    // belongs type-checks, builds, and passes the whole suite — while the
+    // checklist sits at three static bullets for the entire run under copy
+    // reading "Leave this window open". That is the exact defect this branch
+    // was opened to fix, and until this assertion existed it could be
+    // reintroduced by a one-word edit.
+    expect([...ROTATION_STEP_IDS]).toEqual(["secret", "confirm", "local"]);
+  });
+
+  it("names the rotate arguments the way the command declares them", () => {
+    // `commands::rotate_password(new_password: String, address: Option<String>)`
+    // and `commands::recheck_password(password: String, address: Option<String>)`.
+    // Tauri matches an argument bag to those parameters by name, camelCase to
+    // snake_case, and a key that matches nothing is not a type error at either
+    // end — the call compiles, ships, and fails only when a user runs it.
+    expect(rotateArgs("pw", null)).toEqual({ newPassword: "pw" });
+    expect(recheckArgs("pw", null)).toEqual({ password: "pw" });
+    // …and the address, when Door B supplies one, keeps the name the commands
+    // declare too.
+    expect(rotateArgs("pw", "https://brain.example.workers.dev")).toEqual({
+      newPassword: "pw",
+      address: "https://brain.example.workers.dev",
+    });
+    expect(recheckArgs("pw", "https://brain.example.workers.dev")).toEqual({
+      password: "pw",
+      address: "https://brain.example.workers.dev",
+    });
   });
 });
 

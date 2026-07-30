@@ -406,6 +406,15 @@ export const en: Messages = {
       "gets there too, but it reads every memory again from the first one, so it " +
       "takes longer.",
     blockedButton: "Open Advanced Settings",
+    // Only on the blocked screen, and only after an attempt that may have
+    // landed. The rebuild takes away the one thing that would settle it —
+    // trying again — so the sentence that says so has to come with the reason
+    // the password below is still worth keeping.
+    blockedMayBeLive:
+      "An earlier attempt was sent to your Second Brain and never confirmed, so " +
+      "the password below may already be the one that works. Save it before you " +
+      "close this window. Trying again is what would settle that, and it has to " +
+      "wait until the rebuild is finished.",
     lostTitle: "Your memories are safe",
     lostLede:
       "Nothing is lost. Nobody can look your password up for you — not this app, " +

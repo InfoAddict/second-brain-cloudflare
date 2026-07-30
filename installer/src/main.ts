@@ -16,14 +16,18 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { initI18n, LOCALE_CHANGE_EVENT, t } from "./i18n";
 import {
+  blockedCopy,
   localFailureCopy,
+  recheckArgs,
+  rotateArgs,
   rotateErrorOf,
   screenForFailure,
   screenForOutcome,
-  withAddress,
+  ROTATION_STEP_IDS,
   type ChangePasswordKey,
   type RecheckResult,
   type RotateOutcome,
+  type RotationStepId,
 } from "./rotation-state";
 import "./style.css";
 
@@ -32,10 +36,12 @@ interface Account {
   name: string;
 }
 
-// The last three are the password change's steps (#235). They are none of the
-// four provisioning steps, and labelling "waiting for your Second Brain to
-// accept it" as `recall` would mislead the next person to read this.
-type StepId = "space" | "memory" | "recall" | "finish" | "secret" | "confirm" | "local";
+// The password change's three steps (#235) come from `ROTATION_STEP_IDS`, not
+// from a second list written out here. They are none of the four provisioning
+// steps — labelling "waiting for your Second Brain to accept it" as `recall`
+// would mislead the next person to read this — and spelling them twice is how
+// one copy gets renamed and the other does not.
+type StepId = "space" | "memory" | "recall" | "finish" | RotationStepId;
 interface StepEvent {
   step: StepId;
   status: "running" | "done" | "error";
@@ -1284,12 +1290,18 @@ function savePasswordScreen() {
   );
 }
 
+/// The ids are `ROTATION_STEP_IDS`, which is where the wire contract with the
+/// Rust `Step` enum is stated and tested; this only decides what each one is
+/// called on screen. Keyed by id rather than listed alongside them so a label
+/// cannot be attached to a step that does not exist, or a step left unlabelled.
+const ROTATION_STEP_LABELS: Record<RotationStepId, ChangePasswordKey> = {
+  secret: "changePassword.stepSend",
+  confirm: "changePassword.stepConfirm",
+  local: "changePassword.stepLocal",
+};
+
 function rotationSteps(): { id: StepId; label: string }[] {
-  return [
-    { id: "secret", label: t("changePassword.stepSend") },
-    { id: "confirm", label: t("changePassword.stepConfirm") },
-    { id: "local", label: t("changePassword.stepLocal") },
-  ];
+  return ROTATION_STEP_IDS.map((id) => ({ id, label: t(ROTATION_STEP_LABELS[id]) }));
 }
 
 /** Step state lives outside the render so a locale change redraws the checklist
@@ -1339,7 +1351,7 @@ async function runRotation() {
     // Door A omits it and the command uses the address this computer holds.
     const outcome = await invoke<RotateOutcome>(
       "rotate_password",
-      withAddress({ newPassword: rotationPassword }, rotationAddress),
+      rotateArgs(rotationPassword, rotationAddress),
     );
     unlisten();
     // The brain confirmed the new password, so there is no ambiguity left for a
@@ -1373,25 +1385,44 @@ async function runRotation() {
 /// same three strings the Connection pane shows in place of the door, including
 /// the escape — an abandoned rebuild would otherwise leave this screen as a dead
 /// end with the reason relegated to a footnote under "Try again".
+///
+/// This screen renders whenever the stage is `blocked`, including after an
+/// earlier attempt that may already have changed the password. It is the only
+/// place the escape route is named, and a run that is blocked stays blocked, so
+/// routing that case to "may already be live" would leave a "Try again" button
+/// on a run that cannot succeed and no way to reach the thing that unsticks it.
+/// The other truth is not dropped: `blockedCopy` puts it on this screen.
 function rotateBlockedScreen(detail: string) {
   currentScreen = () => rotateBlockedScreen(detail);
+  const copy = blockedCopy(rotationMayBeLive);
   const settings = h("button", { class: "btn-primary" }, [t("changePassword.blockedButton")]);
   settings.addEventListener("click", () => void invoke("open_settings_window"));
-  const leave = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
-    t("common.notNow"),
-  ]);
-  leave.addEventListener("click", leaveRotation);
+  // Leaving is a click when nothing was sent and the old password still works,
+  // and a decision when this window holds the only copy of one that may already
+  // be live — the same acknowledgement the other may-be-live screen asks for.
+  const leave = copy.guardLeaving
+    ? guardedExit(t("changePassword.failUnsureLeave"), leaveRotation)
+    : (() => {
+        const go = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
+          t("common.notNow"),
+        ]);
+        go.addEventListener("click", leaveRotation);
+        return go;
+      })();
 
   show(
     brand(),
     h("h1", {}, [t("changePassword.blockedTitle")]),
     notice(t("changePassword.blockedBody")),
     h("p", { class: "lede" }, [t("changePassword.blockedEscape")]),
+    // Above the password card, because it is the reason to keep what is in it.
+    copy.liveNotice ? notice(t(copy.liveNotice)) : "",
     failDetailLine(detail),
-    // Labelled as chosen and not in use, exactly as on the "nothing was
-    // changed" screen: nothing was sent, so calling it "your new password" here
-    // would tell someone who saved it that they now hold the working key.
-    secretCard(t("changePassword.failNotSentLabel"), rotationPassword),
+    // "The password you chose — not in use" while nothing has been sent, and
+    // "Your new password" once an attempt may have landed. Calling it not in
+    // use on that second path would tell someone deciding whether to keep it
+    // that they can safely throw away the only key to their brain.
+    secretCard(t(copy.passwordLabel), rotationPassword),
     settings,
     leave,
   );
@@ -1453,7 +1484,7 @@ function rotateFailUnsureScreen(detail: string, recheck?: RecheckResult) {
     try {
       const live = await invoke<boolean>(
         "recheck_password",
-        withAddress({ password: rotationPassword }, rotationAddress),
+        recheckArgs(rotationPassword, rotationAddress),
       );
       result = live ? "confirmed" : "notLive";
     } catch {

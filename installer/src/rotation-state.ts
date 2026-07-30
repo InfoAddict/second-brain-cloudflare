@@ -86,16 +86,65 @@ export function screenForOutcome(outcome: RotateOutcome): "done" | "failLocal" {
  * screen there would tell someone whose old password is already dead that
  * "everything is exactly as it was".
  *
- * So once any attempt has reached `unconfirmed`, the only stage allowed to
- * overrule it is `local` — which is the brain confirming the new password, i.e.
- * the ambiguity resolving in the direction that ends the doubt.
+ * So once any attempt has reached `unconfirmed`, the stages allowed to overrule
+ * it are exactly two:
+ *
+ * - `local`, which is the brain confirming the new password — the ambiguity
+ *   resolving in the direction that ends the doubt.
+ * - `blocked`, which is not a resolution but an *instruction*, and the only
+ *   screen that carries it. `blocked` was split out of `notSent` because an
+ *   abandoned rebuild ledger blocks every attempt forever, and the way out is
+ *   in Advanced Settings — somewhere no user would think to look. Letting the
+ *   sticky flag route this to `failUnsure` puts a "Try again" button on a run
+ *   that can never succeed and hides the one paragraph that says why.
+ *
+ * The two facts are not in competition: the run is blocked *and* an earlier
+ * attempt may already have landed. `blockedCopy` carries the second onto the
+ * blocked screen rather than trading one truth for the other.
  */
 export function screenForFailure(stage: RotateStage, mayBeLive: boolean): RotationScreen {
   if (stage === "local") return "failLocal";
+  if (stage === "blocked") return "blocked";
   if (mayBeLive) return "failUnsure";
   if (stage === "unconfirmed") return "failUnsure";
-  if (stage === "blocked") return "blocked";
   return "failNotSent";
+}
+
+/** What the blocked screen says, once an earlier attempt is in the picture. */
+export interface BlockedCopy {
+  /**
+   * The may-already-be-live warning, or null on a run where nothing was ever
+   * sent and the old password demonstrably still works.
+   */
+  liveNotice: ChangePasswordKey | null;
+  /**
+   * The password card's label. `failNotSentLabel` calls it "not in use", which
+   * is only true while nothing has been sent — after an `unconfirmed` attempt
+   * it may be the one key that opens the brain, and saying otherwise to someone
+   * deciding whether to keep it is the mistake that costs them the brain.
+   */
+  passwordLabel: ChangePasswordKey;
+  /**
+   * Whether leaving needs the acknowledgement the other may-be-live screen
+   * uses. This window holds the only copy of a password that may already be
+   * live, and the blocked screen offers no way to settle it.
+   */
+  guardLeaving: boolean;
+}
+
+export function blockedCopy(mayBeLive: boolean): BlockedCopy {
+  if (!mayBeLive) {
+    return {
+      liveNotice: null,
+      passwordLabel: "changePassword.failNotSentLabel",
+      guardLeaving: false,
+    };
+  }
+  return {
+    liveNotice: "changePassword.blockedMayBeLive",
+    passwordLabel: "changePassword.passwordLabel",
+    guardLeaving: true,
+  };
 }
 
 /** What the three-way "Check again" probe found. */
@@ -170,6 +219,35 @@ export function localFailureCopy(outcome: RotateOutcome | null): LocalFailureCop
   };
 }
 
+/* ------------------------------------------------------------------------- *
+ * What crosses the IPC boundary.
+ *
+ * Everything below is a string the Rust side also spells out, and every one of
+ * them type-checks perfectly when it is wrong: a step id is a legal `StepId`
+ * whichever of the seven it is, and an `invoke` argument bag is
+ * `Record<string, unknown>`. Both halves compile, the build passes, and the only
+ * symptom is at runtime. So they live here, where a test can read them without
+ * a webview, rather than inline at the call site where nothing can.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The three rows of the password-change checklist, in the order they run.
+ *
+ * These are the `step` values `rotate_password` emits on `setup-progress`, and
+ * they must match the `Step` variants in
+ * `installer/src-tauri/src/cf/provision.rs` — `Step::Secret`, `Step::Confirm`,
+ * `Step::Local` — as serialised by that enum's `rename_all`. The Rust end of
+ * the same contract is pinned by
+ * `the_step_ids_on_the_wire_are_the_ones_the_screens_key_on` in that file; this
+ * is the other end. Both are needed, because either half can be renamed on its
+ * own and still compile, which is exactly how a rotation once shipped emitting
+ * `"finish"` at a checklist keyed on `"secret"` — three static bullets for the
+ * whole run, under copy reading "Leave this window open".
+ */
+export const ROTATION_STEP_IDS = ["secret", "confirm", "local"] as const;
+
+export type RotationStepId = (typeof ROTATION_STEP_IDS)[number];
+
 /**
  * Adds Door B's address to a command's arguments.
  *
@@ -185,4 +263,21 @@ export function withAddress(
   address: string | null,
 ): Record<string, unknown> {
   return address ? { ...args, address } : { ...args };
+}
+
+/**
+ * The argument bag for `invoke("rotate_password", …)`.
+ *
+ * Tauri matches these keys to the command's parameters by name, camelCase to
+ * snake_case, and an unmatched key is not a compile error at either end — it is
+ * a deserialisation failure at runtime. `newPassword` here is `new_password` in
+ * `commands::rotate_password`; renaming either alone breaks the call silently.
+ */
+export function rotateArgs(newPassword: string, address: string | null): Record<string, unknown> {
+  return withAddress({ newPassword }, address);
+}
+
+/** The same, for `commands::recheck_password(password, address)`. */
+export function recheckArgs(password: string, address: string | null): Record<string, unknown> {
+  return withAddress({ password }, address);
 }
