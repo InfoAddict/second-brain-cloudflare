@@ -400,6 +400,30 @@ impl CfClient {
         Ok(())
     }
 
+    /// Writes one secret on a deployed script, leaving everything else alone.
+    ///
+    /// The whole of a password change (#235) is this request. The obvious
+    /// alternative — redeploy with the new `AUTH_TOKEN` in the upload metadata —
+    /// re-uploads every asset and rewrites every binding to change one field, and
+    /// it forces a question nobody has an answer to: whether an explicit
+    /// `secret_text` binding beats `keep_bindings` when a deploy carries both. A
+    /// wrong answer there either drops a secret the user added by hand or keeps
+    /// the old password while reporting success, and the second failure stays
+    /// invisible until they are locked out.
+    ///
+    /// An upsert, not an update: the same request sets a secret that was never
+    /// there. Cloudflare applies it to the live deployment asynchronously, so the
+    /// Worker can still be serving the previous value for a few seconds after
+    /// this returns — callers that need the new value to be in force must verify
+    /// it themselves (see `provision::rotate_secret`).
+    pub async fn put_secret(&self, script: &str, name: &str, text: &str) -> Result<(), CfApiError> {
+        let url = self.url(&self.account_path(&format!("/workers/scripts/{script}/secrets")));
+        let body = serde_json::json!({ "name": name, "text": text, "type": "secret_text" });
+        self.send::<serde_json::Value>(|h| h.put(&url).json(&body))
+            .await?;
+        Ok(())
+    }
+
     // ── workers.dev subdomain ───────────────────────────────────────────────
 
     /// Every Worker script in the account, by deploy name.
@@ -1029,5 +1053,82 @@ mod tests {
                 "vectorize_info swallowed the {name} failure"
             );
         }
+    }
+
+    /// The body shape is the whole risk here. Cloudflare accepts the request and
+    /// answers `success: true` for a payload that names the wrong field, and the
+    /// only symptom is that the user's password did not change — discovered the
+    /// next time they try to sign in, from a machine that no longer works. A
+    /// compiler cannot check a `json!` literal, so the assertion is an exact
+    /// value comparison: an extra key or a renamed one fails it.
+    ///
+    /// The method matters as much: `POST` to the same path is a different
+    /// operation, and the account bearer proves this went through `send` rather
+    /// than the JWT-authenticated `send_no_auth` used for asset uploads.
+    #[tokio::test]
+    async fn put_secret_sends_the_documented_body_to_the_script_secrets_path() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug)]
+        struct Seen {
+            method: String,
+            path: String,
+            auth: String,
+            body: String,
+        }
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let seen: Arc<Mutex<Vec<Seen>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_bg = seen.clone();
+        std::thread::spawn(move || loop {
+            let Ok(mut req) = server.recv() else { return };
+            let mut body = String::new();
+            let _ = req.as_reader().read_to_string(&mut body);
+            let auth = req
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap_or_default();
+            seen_bg.lock().unwrap().push(Seen {
+                method: req.method().as_str().to_string(),
+                path: req.url().to_string(),
+                auth,
+                body,
+            });
+            // What Cloudflare answers: the secret it stored, never its value.
+            let _ = req.respond(
+                tiny_http::Response::from_string(
+                    r#"{"success":true,"errors":[],"messages":[],"result":{"name":"AUTH_TOKEN","type":"secret_text"}}"#,
+                )
+                .with_status_code(200),
+            );
+        });
+
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        client
+            .put_secret("my-brain", "AUTH_TOKEN", "correct horse battery staple")
+            .await
+            .unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "one write, not a retry loop: {seen:?}");
+        assert_eq!(seen[0].method, "PUT");
+        assert_eq!(seen[0].path, "/accounts/acct/workers/scripts/my-brain/secrets");
+        assert_eq!(seen[0].auth, "Bearer tok");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&seen[0].body).unwrap(),
+            serde_json::json!({
+                "name": "AUTH_TOKEN",
+                "text": "correct horse battery staple",
+                "type": "secret_text"
+            }),
+            "exact body shape, not a superset"
+        );
     }
 }

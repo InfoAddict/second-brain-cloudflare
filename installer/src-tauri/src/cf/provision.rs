@@ -99,6 +99,10 @@ pub trait Backend {
     ) -> Result<(), CfApiError>;
     async fn set_cron(&self, script: &str, crons: &[String]) -> Result<(), CfApiError>;
     async fn enable_script_subdomain(&self, script: &str) -> Result<(), CfApiError>;
+    /// Writes one secret on a deployed script without redeploying it. Takes
+    /// effect at the edge a little after it returns — see [`rotate_secret`],
+    /// which is the only caller that may treat it as done.
+    async fn put_secret(&self, script: &str, name: &str, text: &str) -> Result<(), CfApiError>;
     async fn health_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError>;
     async fn capture_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError>;
     /// The deployed script's current bindings (for a preserve-everything update).
@@ -486,6 +490,97 @@ pub async fn update_worker<B: Backend>(
     Ok(())
 }
 
+/// Replaces the brain's password and waits for it to take effect.
+///
+/// Returns only once the Worker authenticates the NEW token, so a caller may
+/// treat success as "safe to persist locally".
+///
+/// The deployment is otherwise untouched: no assets are re-uploaded, no bindings
+/// are rewritten, and no code is redeployed. Progress is reported as
+/// [`Step::Finish`] — see the note on the emit below.
+///
+/// A failure here is *not* proof that the password is unchanged. The write and
+/// the confirmation are two separate operations, and only the second one can
+/// time out, so a caller must present the failure as "your new password may
+/// already be live" rather than "nothing happened".
+#[allow(dead_code)] // called by the #235 rotation flow landing alongside this
+pub async fn rotate_secret<B: Backend>(
+    backend: &B,
+    worker_url: &str,
+    new_token: &str,
+    progress: impl Fn(StepEvent),
+) -> Result<(), ProvisionError> {
+    // One step for the whole rotation, and an existing one. A new `Step` variant
+    // would need copy in every locale and a case in the progress UI to describe a
+    // single API call and a wait; `Finish` already means "the remote change is
+    // going in, and we are verifying it", which is exactly this.
+    let emit = |status: StepStatus| {
+        progress(StepEvent {
+            step: Step::Finish,
+            status,
+        })
+    };
+
+    // #257, and it bites harder here than it did there. The script name comes
+    // from the address the user is actually connected to, never from the bundled
+    // manifest: a brain reached at `my-brain.acme.workers.dev` would otherwise
+    // have its password "changed" by writing AUTH_TOKEN onto a script called
+    // `second-brain` — leaving the real brain on the old password (the user is
+    // then locked out of nothing, but believes they rotated) while handing an
+    // unrelated Worker a secret it never asked for.
+    //
+    // Derived before anything is emitted or written, so a brain on a custom
+    // domain is refused without a half-started progress screen.
+    let script =
+        crate::worker_url::script_of(worker_url).ok_or(ProvisionError::NotAWorkersDevAddress)?;
+
+    emit(StepStatus::Running);
+    let result = async {
+        backend.put_secret(&script, "AUTH_TOKEN", new_token).await?;
+
+        // The write is asynchronous at the edge, so the point of this loop is to
+        // wait out the propagation with the *new* token. The secret is PUT once,
+        // above: re-sending it on every attempt would be a second write racing
+        // the first, and would tell us nothing new.
+        for attempt in 0..HEALTH_ATTEMPTS {
+            match backend.health_ok(worker_url, new_token).await {
+                Ok(true) => return Ok(()),
+                // Read this next to `update_worker`'s health poll before changing
+                // it: the two treat a 401 in opposite ways, on purpose.
+                //
+                // There, the poll uses the token the app already had, so a 401
+                // means the redeploy dropped the secret — retrying would only
+                // delay telling the user they are locked out, and it is terminal.
+                //
+                // Here the poll uses the token that was just written, so a 401
+                // means the edge is still serving the *old* secret and the change
+                // has not landed yet. It is the expected answer for the first few
+                // seconds of every rotation. Making it terminal turns any deploy
+                // slower than one probe into a reported failure — of a rotation
+                // that then succeeds seconds later, leaving the user with a
+                // password the app told them was not applied.
+                Err(CfApiError::Unauthorized) => {}
+                // Not live yet, or DNS/network still catching up.
+                Ok(false) | Err(_) => {}
+            }
+            if attempt + 1 < HEALTH_ATTEMPTS {
+                backend.sleep(HEALTH_WAIT).await;
+            }
+        }
+        // Every attempt used up. The password may still be in force — see the
+        // note on this function.
+        Err(ProvisionError::HealthCheckFailed)
+    }
+    .await;
+
+    emit(if result.is_ok() {
+        StepStatus::Done
+    } else {
+        StepStatus::Error
+    });
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +615,12 @@ mod tests {
         existing_vectorize: bool,
         subdomain_rejections: Mutex<u32>,
         health_failures: Mutex<u32>,
+        /// Health probes to answer with a 401 before anything else, standing in
+        /// for a secret that has not propagated to the edge yet.
+        health_unauthorized: Mutex<u32>,
+        /// Every health probe, answered or not — a count the log cannot give,
+        /// since the log only records the ones that pass.
+        health_calls: Mutex<u32>,
         script_bindings: Vec<serde_json::Value>,
         last_deploy_metadata: Mutex<Option<serde_json::Value>>,
     }
@@ -613,6 +714,12 @@ mod tests {
             Ok(())
         }
         async fn health_ok(&self, _url: &str, _token: &str) -> Result<bool, CfApiError> {
+            *self.health_calls.lock().unwrap() += 1;
+            let mut unauthorized = self.health_unauthorized.lock().unwrap();
+            if *unauthorized > 0 {
+                *unauthorized -= 1;
+                return Err(CfApiError::Unauthorized);
+            }
             let mut failures = self.health_failures.lock().unwrap();
             if *failures > 0 {
                 *failures -= 1;
@@ -620,6 +727,15 @@ mod tests {
             }
             self.log("health_ok");
             Ok(true)
+        }
+        async fn put_secret(
+            &self,
+            script: &str,
+            name: &str,
+            text: &str,
+        ) -> Result<(), CfApiError> {
+            self.log(format!("put_secret:{script}:{name}:{text}"));
+            Ok(())
         }
         async fn capture_ok(&self, _url: &str, _token: &str) -> Result<bool, CfApiError> {
             self.log("capture_ok");
@@ -950,6 +1066,155 @@ mod tests {
         let find = |ty: &str| bindings.iter().find(|b| b["type"] == ty).unwrap();
         assert_eq!(find("d1")["database_id"], "found-d1");
         assert_eq!(find("kv_namespace")["namespace_id"], "found-kv");
+    }
+
+    /// Counts the secret writes in a fake's log — a rotation is one PUT, and
+    /// several of the tests below are about how many times it happened.
+    fn secret_writes(fake: &Fake) -> Vec<String> {
+        fake.entries()
+            .into_iter()
+            .filter(|l| l.starts_with("put_secret:"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn rotation_writes_the_password_and_confirms_it() {
+        let fake = Fake::default();
+        let events = Mutex::new(Vec::new());
+        rotate_secret(
+            &&fake,
+            "https://second-brain.acme.workers.dev",
+            "new-pw-123456789",
+            |e| events.lock().unwrap().push((e.step, e.status)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            secret_writes(&fake),
+            vec!["put_secret:second-brain:AUTH_TOKEN:new-pw-123456789".to_string()]
+        );
+        // Confirmed against the Worker, not just written. Success is the caller's
+        // signal that the new password is safe to store locally.
+        assert!(fake.entries().contains(&"health_ok".to_string()));
+
+        let events = events.into_inner().unwrap();
+        assert_eq!(
+            events,
+            vec![
+                (Step::Finish, StepStatus::Running),
+                (Step::Finish, StepStatus::Done)
+            ]
+        );
+    }
+
+    /// The inversion guard. In `update_worker` a 401 during the health poll means
+    /// the redeploy dropped the secret and is terminal; here it means the new
+    /// secret has not reached the edge yet, which is the *normal* answer for the
+    /// first seconds of a rotation.
+    ///
+    /// This test fails the moment someone "fixes" the two functions to agree.
+    #[tokio::test]
+    async fn rotation_retries_through_unauthorized_until_the_secret_propagates() {
+        let fake = Fake {
+            health_unauthorized: Mutex::new(3),
+            ..Default::default()
+        };
+        rotate_secret(
+            &&fake,
+            "https://second-brain.acme.workers.dev",
+            "new-pw-123456789",
+            |_| {},
+        )
+        .await
+        .expect("a 401 while the secret propagates is not a failed rotation");
+
+        assert_eq!(*fake.health_calls.lock().unwrap(), 4, "3 × 401, then green");
+        // Waiting is what fixes a 401 here — re-writing the secret would be a
+        // second write racing the first and would tell us nothing new.
+        assert_eq!(secret_writes(&fake).len(), 1);
+    }
+
+    /// A rotation that never confirms fails, rather than waiting forever — but it
+    /// still only ever wrote once, so the caller's "your new password may already
+    /// be live" message stays true.
+    #[tokio::test]
+    async fn rotation_gives_up_after_health_attempts_and_writes_only_once() {
+        let fake = Fake {
+            health_unauthorized: Mutex::new(HEALTH_ATTEMPTS + 5),
+            ..Default::default()
+        };
+        let events = Mutex::new(Vec::new());
+        let err = rotate_secret(
+            &&fake,
+            "https://second-brain.acme.workers.dev",
+            "new-pw-123456789",
+            |e| events.lock().unwrap().push((e.step, e.status)),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ProvisionError::HealthCheckFailed),
+            "expected HealthCheckFailed, got {err:?}"
+        );
+        assert_eq!(
+            *fake.health_calls.lock().unwrap(),
+            HEALTH_ATTEMPTS,
+            "every attempt is used, and no more"
+        );
+        assert_eq!(secret_writes(&fake).len(), 1, "one PUT, not one per poll");
+        assert!(events
+            .into_inner()
+            .unwrap()
+            .contains(&(Step::Finish, StepStatus::Error)));
+    }
+
+    /// A brain on its own domain yields no script name, so there is nothing to
+    /// write the secret to. The refusal has to come *before* the write: guessing
+    /// at a name would set AUTH_TOKEN on some other Worker in the account.
+    #[tokio::test]
+    async fn rotation_refuses_a_custom_domain_before_touching_the_password() {
+        let fake = Fake::default();
+        let err = rotate_secret(&&fake, "https://brain.example.com", "new-pw-123456789", |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ProvisionError::NotAWorkersDevAddress),
+            "expected NotAWorkersDevAddress, got {err:?}"
+        );
+        assert!(
+            fake.entries().is_empty(),
+            "a refused rotation must not call Cloudflare at all: {:?}",
+            fake.entries()
+        );
+    }
+
+    /// #257, applied to the password. The secret goes to the script named by the
+    /// address the user is connected to, never to the bundled manifest's name —
+    /// which here is `second-brain` and would be a different Worker entirely.
+    ///
+    /// Getting this wrong is worse than the update bug it mirrors: the real brain
+    /// would keep the old password while the app reported a successful change,
+    /// and an unrelated script would quietly gain an AUTH_TOKEN.
+    #[tokio::test]
+    async fn rotation_writes_to_the_script_named_by_the_address() {
+        let fake = Fake::default();
+        rotate_secret(
+            &&fake,
+            "https://my-brain.acme.workers.dev",
+            "new-pw-123456789",
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            secret_writes(&fake),
+            vec!["put_secret:my-brain:AUTH_TOKEN:new-pw-123456789".to_string()],
+            "the manifest's script name must never be reached for"
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ use super::api::{self, CfClient};
 use super::provision::Backend;
 use super::types::CfApiError;
 use crate::worker_bundle;
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub struct LiveBackend {
@@ -64,6 +65,9 @@ impl Backend for LiveBackend {
     async fn enable_script_subdomain(&self, script: &str) -> Result<(), CfApiError> {
         self.client.enable_script_subdomain(script).await
     }
+    async fn put_secret(&self, script: &str, name: &str, text: &str) -> Result<(), CfApiError> {
+        self.client.put_secret(script, name, text).await
+    }
     async fn health_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
         api::worker_health_ok(worker_url, auth_token).await
     }
@@ -84,6 +88,30 @@ impl Backend for LiveBackend {
 /// Answers everything successfully after a short pause, so the setup flow can
 /// be demoed end-to-end. Never touches the network or the keychain.
 pub struct DryRunBackend;
+
+/// Every secret write a dry run has made, as `(script, name)` pairs.
+///
+/// [`DryRunBackend`] is a unit struct constructed inline at every call site
+/// (`&DryRunBackend`), so there is nowhere on the value to hang a record, and
+/// giving it state would mean editing every caller to make one test possible. A
+/// module static is the cheap way to make "the rotation really did reach the
+/// backend" observable — the same shape as `secure_store`'s read counter.
+///
+/// The secret's text is deliberately not kept. Nothing here has a reason to hold
+/// the user's new password after the call returns, and a demo password is still
+/// a password.
+static DRY_RUN_SECRET_PUTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Test-only view of the secret writes a dry run has made.
+#[cfg(test)]
+pub mod probe {
+    pub fn secret_puts() -> Vec<(String, String)> {
+        super::DRY_RUN_SECRET_PUTS.lock().unwrap().clone()
+    }
+    pub fn reset_secret_puts() {
+        super::DRY_RUN_SECRET_PUTS.lock().unwrap().clear();
+    }
+}
 
 impl DryRunBackend {
     async fn pause(&self) {
@@ -150,6 +178,18 @@ impl Backend for DryRunBackend {
         self.pause().await;
         Ok(())
     }
+    /// Records the write and succeeds. Flipping the password the demo brain
+    /// actually accepts is `demo_brain`'s half of the job: it is the thing
+    /// serving `/health`, and a rotation is only worth demoing if the old
+    /// password starts failing afterwards.
+    async fn put_secret(&self, script: &str, name: &str, _text: &str) -> Result<(), CfApiError> {
+        self.pause().await;
+        DRY_RUN_SECRET_PUTS
+            .lock()
+            .unwrap()
+            .push((script.to_string(), name.to_string()));
+        Ok(())
+    }
     async fn health_ok(&self, _worker_url: &str, _auth_token: &str) -> Result<bool, CfApiError> {
         self.pause().await;
         Ok(true)
@@ -172,4 +212,26 @@ impl Backend for DryRunBackend {
         ])
     }
     async fn sleep(&self, _duration: Duration) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dry run must not quietly skip the password write. Demo mode exists to
+    /// walk the real flow, so a rotation that never reached the backend has to
+    /// look different from one that did — otherwise the demo proves nothing about
+    /// the thing it is demonstrating.
+    #[tokio::test]
+    async fn dry_run_records_the_secret_write() {
+        probe::reset_secret_puts();
+        DryRunBackend
+            .put_secret("my-brain", "AUTH_TOKEN", "demo-password")
+            .await
+            .unwrap();
+        assert_eq!(
+            probe::secret_puts(),
+            vec![("my-brain".to_string(), "AUTH_TOKEN".to_string())]
+        );
+    }
 }
