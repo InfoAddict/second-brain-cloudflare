@@ -400,6 +400,30 @@ impl CfClient {
         Ok(())
     }
 
+    /// Writes one secret on a deployed script, leaving everything else alone.
+    ///
+    /// The whole of a password change (#235) is this request. The obvious
+    /// alternative — redeploy with the new `AUTH_TOKEN` in the upload metadata —
+    /// re-uploads every asset and rewrites every binding to change one field, and
+    /// it forces a question nobody has an answer to: whether an explicit
+    /// `secret_text` binding beats `keep_bindings` when a deploy carries both. A
+    /// wrong answer there either drops a secret the user added by hand or keeps
+    /// the old password while reporting success, and the second failure stays
+    /// invisible until they are locked out.
+    ///
+    /// An upsert, not an update: the same request sets a secret that was never
+    /// there. Cloudflare applies it to the live deployment asynchronously, so the
+    /// Worker can still be serving the previous value for a few seconds after
+    /// this returns — callers that need the new value to be in force must verify
+    /// it themselves (see `provision::rotate_secret`).
+    pub async fn put_secret(&self, script: &str, name: &str, text: &str) -> Result<(), CfApiError> {
+        let url = self.url(&self.account_path(&format!("/workers/scripts/{script}/secrets")));
+        let body = serde_json::json!({ "name": name, "text": text, "type": "secret_text" });
+        self.send::<serde_json::Value>(|h| h.put(&url).json(&body))
+            .await?;
+        Ok(())
+    }
+
     // ── workers.dev subdomain ───────────────────────────────────────────────
 
     /// Every Worker script in the account, by deploy name.
@@ -509,6 +533,47 @@ pub async fn worker_health_ok(worker_url: &str, auth_token: &str) -> Result<bool
     }
     let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
     Ok(body["ok"] == true && body["vectorize"]["ok"] == true)
+}
+
+/// GET /health, asking one question only: **does this password open this
+/// brain?**
+///
+/// Every answer other than a 401 is a pass — a 500, a 404, a body that is not
+/// JSON at all. That is the whole difference from [`worker_health_ok`], and it
+/// is deliberate: the Worker runs `requireAuth` before any route body
+/// (`src/lib/http.ts`), so anything that is not a 401 is proof the token was
+/// accepted, whatever went wrong afterwards.
+///
+/// This exists for [`super::provision::rotate_secret`], whose gate is "has the
+/// new password taken effect", not "is this brain healthy". Gating a rotation on
+/// full health makes a brain with a degraded vector index **permanently
+/// unrotatable**: `vectorize.ok` is false, so the poll can never go green, so
+/// nothing local is ever written — the keychain keeps the old password while the
+/// brain is already on the new one, and "Try again" lands on the identical
+/// screen forever. The password change succeeded on the first attempt and
+/// nothing in the app is able to say so.
+///
+/// [`worker_health_ok`] stays as it is, and `provision`/`update_worker` keep
+/// using it. There a 401 means a secret was dropped and a degraded index means
+/// the deploy is not finished, so both legitimately want the whole contract.
+///
+/// Never answers `Ok(false)`. A refusal comes back as `Unauthorized` because the
+/// caller has to tell "the edge is still serving the old secret" apart from a
+/// network error, and a bool cannot carry that; the `bool` is here so the
+/// [`super::provision::Backend`] method mirrors `health_ok` and a dry run can
+/// wave through an address with no server behind it.
+pub async fn worker_auth_ok(worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
+    let http = reqwest::Client::new();
+    let resp = http
+        .get(format!("{worker_url}/health"))
+        .bearer_auth(auth_token)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await?;
+    if resp.status().as_u16() == 401 {
+        return Err(CfApiError::Unauthorized);
+    }
+    Ok(true)
 }
 
 /// GET /health and return the Worker's reported `version` (None if the field
@@ -1029,5 +1094,224 @@ mod tests {
                 "vectorize_info swallowed the {name} failure"
             );
         }
+    }
+
+    /// The body shape is the whole risk here. Cloudflare accepts the request and
+    /// answers `success: true` for a payload that names the wrong field, and the
+    /// only symptom is that the user's password did not change — discovered the
+    /// next time they try to sign in, from a machine that no longer works. A
+    /// compiler cannot check a `json!` literal, so the assertion is an exact
+    /// value comparison: an extra key or a renamed one fails it.
+    ///
+    /// The method matters as much: `POST` to the same path is a different
+    /// operation, and the account bearer proves this went through `send` rather
+    /// than the JWT-authenticated `send_no_auth` used for asset uploads.
+    #[tokio::test]
+    async fn put_secret_sends_the_documented_body_to_the_script_secrets_path() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug)]
+        struct Seen {
+            method: String,
+            path: String,
+            auth: String,
+            body: String,
+        }
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let seen: Arc<Mutex<Vec<Seen>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_bg = seen.clone();
+        std::thread::spawn(move || loop {
+            let Ok(mut req) = server.recv() else { return };
+            let mut body = String::new();
+            let _ = req.as_reader().read_to_string(&mut body);
+            let auth = req
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap_or_default();
+            seen_bg.lock().unwrap().push(Seen {
+                method: req.method().as_str().to_string(),
+                path: req.url().to_string(),
+                auth,
+                body,
+            });
+            // What Cloudflare answers: the secret it stored, never its value.
+            let _ = req.respond(
+                tiny_http::Response::from_string(
+                    r#"{"success":true,"errors":[],"messages":[],"result":{"name":"AUTH_TOKEN","type":"secret_text"}}"#,
+                )
+                .with_status_code(200),
+            );
+        });
+
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        client
+            .put_secret("my-brain", "AUTH_TOKEN", "correct horse battery staple")
+            .await
+            .unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "one write, not a retry loop: {seen:?}");
+        assert_eq!(seen[0].method, "PUT");
+        assert_eq!(seen[0].path, "/accounts/acct/workers/scripts/my-brain/secrets");
+        assert_eq!(seen[0].auth, "Bearer tok");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&seen[0].body).unwrap(),
+            serde_json::json!({
+                "name": "AUTH_TOKEN",
+                "text": "correct horse battery staple",
+                "type": "secret_text"
+            }),
+            "exact body shape, not a superset"
+        );
+    }
+
+    /// The three ways the write can be refused, which a rotation has to tell
+    /// apart. Until now the stub only ever answered `200 {"success":true}`, so
+    /// the whole error mapping was unexercised — and `commands::rotation_failure`
+    /// routes `Unauthorized` to a different screen ("sign in to Cloudflare
+    /// again") from everything else, so getting it wrong sends a user to fix a
+    /// problem they do not have.
+    ///
+    /// The 403 is not a duplicate of the 401. Cloudflare answers 403 for a
+    /// session that is signed in but whose token lacks Workers Scripts:Edit, and
+    /// re-authorising is the fix for both — so both must reach the same screen.
+    ///
+    /// The 500 pins the other half: a server error must *not* look like an auth
+    /// problem, or a Cloudflare incident tells the user their sign-in expired.
+    /// It costs the retry ladder's ~4s of backoff, which is the price of
+    /// asserting that a 5xx really is retried and a 4xx really is not.
+    #[tokio::test]
+    async fn put_secret_maps_the_refusals_a_rotation_has_to_tell_apart() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let hits = Arc::new(AtomicU32::new(0));
+        let hits_bg = hits.clone();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            hits_bg.fetch_add(1, Ordering::SeqCst);
+            // The account id selects the scenario; the path is otherwise the
+            // one real path, so nothing here passes by hitting a stub route.
+            let (status, body) = match req.url() {
+                u if u.starts_with("/accounts/expired/") => (
+                    401,
+                    r#"{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}"#,
+                ),
+                u if u.starts_with("/accounts/scopeless/") => (
+                    403,
+                    r#"{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}"#,
+                ),
+                _ => (
+                    500,
+                    r#"{"success":false,"errors":[{"code":10013,"message":"workers.api.error.internal"}]}"#,
+                ),
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(status));
+        });
+        let base = format!("http://127.0.0.1:{port}");
+        let client_for = |account: &str| {
+            CfClient::with_base("tok".into(), account.to_string(), base.clone())
+        };
+
+        for account in ["expired", "scopeless"] {
+            match client_for(account).put_secret("my-brain", "AUTH_TOKEN", "pw").await {
+                Err(CfApiError::Unauthorized) => {}
+                other => panic!("{account} must route to the re-authorise screen: {other:?}"),
+            }
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "a refusal is not transient — retrying it only delays the truth"
+        );
+
+        match client_for("outage").put_secret("my-brain", "AUTH_TOKEN", "pw").await {
+            Err(CfApiError::Api { code, message }) => {
+                assert_eq!(code, 10013);
+                assert!(message.contains("internal"), "lost the message: {message}");
+            }
+            other => panic!("a server error must not read as an auth problem: {other:?}"),
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2 + MAX_ATTEMPTS,
+            "a 5xx is transient and must be retried before it is believed"
+        );
+    }
+
+    /// The probe a rotation is gated on, asserted next to the one it must *not*
+    /// be gated on.
+    ///
+    /// A brain whose vector index is degraded answers 200 with
+    /// `vectorize.ok: false`. `worker_health_ok` calls that unhealthy, which is
+    /// right for a deploy. If a rotation asked the same question the poll could
+    /// never go green: the secret would be written, the confirmation would fail
+    /// on every one of its twelve attempts, nothing local would be written, and
+    /// the user would be locked out of their own brain by an index problem that
+    /// has nothing to do with their password — with "Try again" landing on the
+    /// same screen forever.
+    ///
+    /// The last case is what keeps the probe from being vacuous: a connection
+    /// that never reached a server is not a pass. "Any non-401 answer" means an
+    /// answer.
+    #[tokio::test]
+    async fn the_auth_probe_passes_everything_that_is_not_a_refusal() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let (status, body) = match req.url() {
+                // Live, authenticating, vector index broken.
+                u if u.starts_with("/degraded") => (
+                    200,
+                    r#"{"ok":false,"version":"2.2.0","vectorize":{"ok":false,"error":"index not found"}}"#,
+                ),
+                // Authenticated, then fell over inside the route.
+                u if u.starts_with("/broken") => (500, r#"{"ok":false,"error":"boom"}"#),
+                // Something that is not the health contract at all.
+                u if u.starts_with("/html") => (200, "<html>gateway</html>"),
+                _ => (401, r#"{"ok":false,"error":"Unauthorized"}"#),
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(status));
+        });
+        let base = format!("http://127.0.0.1:{port}");
+
+        assert!(
+            matches!(worker_auth_ok(&format!("{base}/degraded"), "pw").await, Ok(true)),
+            "a degraded index is not a wrong password"
+        );
+        // …and the difference from the full check is the point of having two.
+        assert!(
+            matches!(worker_health_ok(&format!("{base}/degraded"), "pw").await, Ok(false)),
+            "worker_health_ok must keep failing a degraded index — provision and \
+             update_worker are gated on it"
+        );
+        for path in ["/broken", "/html"] {
+            assert!(
+                matches!(worker_auth_ok(&format!("{base}{path}"), "pw").await, Ok(true)),
+                "{path}: the token was accepted, whatever happened next"
+            );
+        }
+        assert!(
+            matches!(
+                worker_auth_ok(&format!("{base}/refused"), "pw").await,
+                Err(CfApiError::Unauthorized)
+            ),
+            "only a 401 means the new secret has not landed yet"
+        );
+        assert!(
+            worker_auth_ok("http://127.0.0.1:1/nothing", "pw").await.is_err(),
+            "nothing answered, so nothing accepted the password"
+        );
     }
 }

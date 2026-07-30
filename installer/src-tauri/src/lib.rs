@@ -16,6 +16,7 @@ mod i18n;
 mod mcp_config;
 mod migration;
 mod password_check;
+mod rotate;
 mod secure_store;
 mod settings;
 mod version;
@@ -41,12 +42,7 @@ fn open_dashboard_from_menu(app: &AppHandle) {
                 .try_state::<AppLocale>()
                 .map(|l| l.get())
                 .unwrap_or(i18n::Locale::En);
-            // dry_run first: `&&` is short-circuiting, so testing it second
-            // still performs the keychain read, and every read can raise an OS
-            // password prompt on an unsigned dev build. This fired at startup,
-            // before any window opened, which is why demo mode has always asked
-            // for the login keychain.
-            if !session.dry_run && secure_store::load_setup().is_none() {
+            if not_connected_yet(session.dry_run, secure_store::load_setup) {
                 let _ = windows::open_setup_window(app);
             } else {
                 app.dialog()
@@ -57,6 +53,27 @@ fn open_dashboard_from_menu(app: &AppHandle) {
             }
         }
     }
+}
+
+/// Whether a failed "open my dashboard" means "this computer is not connected
+/// yet" — in which case the setup window is the answer rather than a warning.
+///
+/// The early return is the point, and it is `load_setup_unless_dry_run`'s point
+/// as well. Written inline as `!dry_run && load_setup().is_none()` this is one
+/// short-circuit away from #252: `&&` evaluates left to right, so swapping the
+/// terms — which compiles, reads the same to a reviewer, and survives every
+/// assertion about the value — makes a demo launch read the keychain and raise an
+/// OS password prompt on an unsigned dev build, before any window has opened.
+/// As a function with `dry_run` in a `return`, the ordering is structural and the
+/// loader is injectable, so a test can watch whether it was called at all.
+fn not_connected_yet(dry_run: bool, load: impl FnOnce() -> Option<SetupInfo>) -> bool {
+    if dry_run {
+        // Demo mode is never "not connected": the demo brain is always there, and
+        // asking secure storage about it would be asking the wrong question at
+        // the cost of a credential prompt.
+        return false;
+    }
+    load().is_none()
 }
 
 /// Menu-bar "Sync Notion now": runs the sync in the background and reports the
@@ -210,6 +227,14 @@ pub fn run() {
             commands::get_brain_settings,
             commands::save_brain_settings,
             commands::open_settings_window,
+            // Changing the brain's password (#235). A command that is written,
+            // tested, and left unregistered is invisible to the UI.
+            commands::begin_password_change,
+            commands::rotation_blocked,
+            commands::rotate_password,
+            commands::recheck_password,
+            commands::validate_brain_address,
+            commands::disconnect_ai_tools,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -280,9 +305,10 @@ pub fn run() {
             match load_setup_unless_dry_run(dry_run, secure_store::load_setup) {
                 Some(info) => {
                     windows::open_wrapper_window(&handle, &info.worker_url, &info.auth_token)?;
-                    // In wrapper mode, quietly check whether the deployed Worker
-                    // is behind what this app bundles and offer to update it.
-                    commands::maybe_offer_worker_update(&handle);
+                    // In wrapper mode, quietly ask the brain how it is: whether
+                    // the deployed Worker is behind what this app bundles, and
+                    // whether the password stored here still opens it at all.
+                    commands::check_brain_at_launch(&handle);
                 }
                 _ => windows::open_setup_window(&handle)?,
             }
@@ -337,5 +363,67 @@ mod tests {
     fn normal_launch_without_stored_setup_falls_through_to_setup() {
         let got = load_setup_unless_dry_run(false, || None);
         assert!(got.is_none());
+    }
+
+    /// The other place #252's short-circuit lives: the menu-bar "Open dashboard"
+    /// that failed, deciding whether to show setup or a warning.
+    ///
+    /// Same bug, same shape, and until now nothing watched it. The prompt itself
+    /// is an OS dialog no test can see; whether the loader was called at all is
+    /// observable, and that is the thing that causes it.
+    #[test]
+    fn a_failed_menu_open_asks_the_keychain_nothing_in_dry_run() {
+        let called = Cell::new(false);
+        let answer = not_connected_yet(true, || {
+            called.set(true);
+            None
+        });
+        assert!(!called.get(), "dry-run must not touch the keychain");
+        assert!(
+            !answer,
+            "demo mode is never 'not connected' — the demo brain is always there"
+        );
+
+        // …and a real run does consult it, both ways round, so the guard above
+        // cannot be satisfied by never asking anyone.
+        assert!(not_connected_yet(false, || None), "no stored setup means setup");
+        assert!(
+            !not_connected_yet(false, || Some(info())),
+            "a connected computer gets the warning, not a fresh setup flow"
+        );
+    }
+
+    /// A command that is written, tested, and left unregistered is invisible to
+    /// the UI: `invoke` fails at runtime with "command not found", and nothing in
+    /// this crate notices, because every test here calls the Rust function
+    /// directly and never goes through the bridge.
+    ///
+    /// #235 added six, which is more than anyone keeps in their head. Scans only
+    /// the handler list, so the names written here cannot satisfy it.
+    #[test]
+    fn every_command_the_password_change_needs_is_reachable_from_the_webview() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("tauri::generate_handler![")
+            .expect("the invoke handler");
+        let rest = &src[start..];
+        let handlers = &rest[..rest
+            .find("])")
+            .expect("the handler list closes with `])`")];
+
+        for command in [
+            "begin_password_change",
+            "rotation_blocked",
+            "rotate_password",
+            "recheck_password",
+            "validate_brain_address",
+            "disconnect_ai_tools",
+        ] {
+            assert!(
+                handlers.contains(&format!("commands::{command},")),
+                "`{command}` is not registered, so the screen that calls it gets \
+                 \"command not found\" and no test in this crate can tell"
+            );
+        }
     }
 }

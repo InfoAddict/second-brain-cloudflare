@@ -348,6 +348,7 @@ export const en: Messages = {
     unlockLede:
       "This is the password you chose when you first set up your Second Brain. " +
       "Nothing will be changed or reset.",
+    lostPassword: "I don't have my password",
   },
   password: {
     title: "Create your password",
@@ -374,6 +375,206 @@ export const en: Messages = {
       "We check new passwords against known data breaches without ever " +
       "sending your password anywhere — only a fragment of a fingerprint " +
       "leaves this computer.",
+  },
+  changePassword: {
+    title: "Change your password",
+    lede:
+      "You'll pick a new one, save it, and it replaces the old one everywhere. " +
+      "Your memories, your address, and your connected AI tools are all kept.",
+    notice:
+      "The old password stops working as soon as this finishes. Your other " +
+      "computers will ask for the new one the next time you open them.",
+    signInButton: "Sign in and continue",
+    signInFootnote:
+      "Your Second Brain lives in your own space at Cloudflare, so we sign in " +
+      "there to change it. We never see your Cloudflare password.",
+    waitingLede:
+      "Finish signing in to Cloudflare in the browser window that just opened, " +
+      "then come back here.",
+    blockedTitle: "The password can't be changed right now",
+    blockedBody:
+      "Your Second Brain is rebuilding how it reads your memories. Changing your " +
+      "password in the middle of that can stop the rebuild partway and make a " +
+      "password problem look like a failed rebuild, so it waits until the " +
+      "rebuild is done.",
+    // Carrying on and starting over are not equivalent here, and saying they
+    // were sent people to the one that doesn't work: a restarted rebuild writes
+    // a fresh unfinished record straight away, so it re-blocks within a second.
+    blockedEscape:
+      "If nothing is rebuilding, one was left unfinished. Open Advanced Settings " +
+      "and carry it on — this clears when the rebuild finishes. Starting it over " +
+      "gets there too, but it reads every memory again from the first one, so it " +
+      "takes longer.",
+    blockedButton: "Open Advanced Settings",
+    // Only on the blocked screen, and only after an attempt that may have
+    // landed. The rebuild takes away the one thing that would settle it —
+    // trying again — so the sentence that says so has to come with the reason
+    // the password below is still worth keeping.
+    blockedMayBeLive:
+      "An earlier attempt was sent to your Second Brain and never confirmed, so " +
+      "the password below may already be the one that works. Save it before you " +
+      "close this window. Trying again is what would settle that, and it has to " +
+      "wait until the rebuild is finished.",
+    lostTitle: "Your memories are safe",
+    lostLede:
+      "Nothing is lost. Nobody can look your password up for you — not this app, " +
+      "not Cloudflare — but it can be replaced, and replacing it is how you get " +
+      "back in.",
+    lostBodySignedIn:
+      "You're already signed in to the Cloudflare space your Second Brain lives " +
+      "in, which is what decides who gets in. So you can set a new password " +
+      "right now. Everything you've stored stays exactly where it is.",
+    lostBodySignIn:
+      "Your Second Brain lives in your own Cloudflare space, and that's what " +
+      "decides who gets in. Sign in there and you can set a new password. " +
+      "Everything you've stored stays exactly where it is.",
+    lostNotice:
+      "Anything that already has the old password will ask for the new one — " +
+      "your other computers, the browser extension, the Obsidian plugin.",
+    lostContinueButton: "Choose a new password",
+    // Word for word the same as connectExisting.signInButton: it is the same
+    // act with the same consequence, and two labels would read as two things.
+    lostSignInButton: "Sign in with Cloudflare",
+    pickBrainLedeOne: "Set a new password on it, or go back and pick another.",
+    pickBrainLedeMany: "Pick the one you've lost the password for.",
+    addressTitle: "What's your Second Brain's address?",
+    addressLede:
+      "We couldn't find it in that space. Enter the address and we'll set a new " +
+      "password on it — no current password needed.",
+    addressLedeManual:
+      "Enter the address of the Second Brain you want a new password for — no " +
+      "current password needed.",
+    pickTitle: "Choose a new password",
+    // Not "the copy you keep is the only copy". This computer keeps one too —
+    // in secure storage, and in the CLI's plaintext config file when that
+    // exists — and someone reasoning about where their secret lives has to be
+    // told the truth about that. What is true is that nobody will show it to
+    // them again.
+    pickLede:
+      "This one replaces the old one. Cloudflare can't show it to you again, and " +
+      "neither can we, so keep your own copy of it.",
+    generatedNote: "We've made a strong one for you. Type over it if you'd rather choose your own.",
+    pickNotice: "The old password stops working the moment this takes effect.",
+    saveTitle: "Save this somewhere",
+    saveLede:
+      "Once it's set, nothing in this app or at Cloudflare will show it to you " +
+      "again. It stays on screen in this window until you close it, and after " +
+      "that you'll need the copy you kept.",
+    passwordLabel: "Your new password",
+    saveAdvice:
+      "A password manager is the right place for it. If you keep it anywhere " +
+      "else, keep it somewhere you'd trust with the key to everything you've " +
+      "written down.",
+    saveConfirm: "I've saved it — change my password",
+    saveBack: "Choose a different one",
+    progressTitle: "Changing your password",
+    progressLede: "This takes up to a minute or two. Leave this window open.",
+    stepSend: "Setting the new password",
+    stepConfirm: "Waiting for your Second Brain to accept it",
+    stepLocal: "Saving it on this computer",
+    doneTitle: "Your password has been changed",
+    doneTitleLost: "You're back in",
+    doneLede:
+      "This computer is using the new password already. Your memories, your " +
+      "address, and everything you've connected are unchanged.",
+    doneNeedsHead: "What will ask for the new password",
+    doneNeeds1: "Your other computers, the next time you open Second Brain on them.",
+    // On this computer as well: a password change writes to secure storage, the
+    // brain command's config and the open dashboard window, and nothing else.
+    doneNeeds2:
+      "The browser extension and the Obsidian plugin, on this computer as well " +
+      "as any other. Each keeps its own copy, and this change doesn't reach them.",
+    doneNeeds3: "The brain command in a terminal on any other computer.",
+    doneNeeds4: "Any browser tab where you opened your dashboard directly.",
+    doneKeptHead: "What is still connected",
+    // Not "none of them ever used your password". A tool set up by pasting the
+    // password straight in — which is the documented route for anything that
+    // can't open a browser — did use it, does break, and cannot be reached by
+    // Disconnect either, because it has nothing stored to disconnect.
+    doneKept:
+      "AI tools you connected by signing in through your connection link are " +
+      "still connected and still working. Each one was given its own access at " +
+      "the time, separate from your password, so changing it doesn't reach them. " +
+      "Anything you connected by pasting the password itself is in the list " +
+      "above — it will ask for the new one.",
+    doneLeak:
+      "If you changed your password because someone else may have had it, those " +
+      "connections are the one thing this didn't close. Disconnecting them makes " +
+      "every tool ask to be connected again.",
+    doneDisconnectButton: "Disconnect AI tools…",
+    doneShow: "Show my new password",
+    doneHide: "Hide it",
+    failNotSentTitle: "Nothing was changed",
+    failNotSentBody:
+      "The new password never reached your Second Brain, so your old one still " +
+      "works and everything is exactly as it was. Trying again is safe.",
+    failNotSentLabel: "The password you chose — not in use",
+    failDetail: "What went wrong: {detail}",
+    failUnsureTitle: "Your new password may already be in use",
+    failUnsureBody:
+      "The change was sent to your Second Brain, but it didn't confirm in time, " +
+      "so we can't tell you which password is live. Save the one below before " +
+      "you do anything else — it may be the one that works now.",
+    failUnsureRetry:
+      "Try again. Setting the same password a second time changes nothing if it " +
+      "already went through, and finishes the job if it didn't — either way you " +
+      "end up knowing.",
+    failUnsureFootnote:
+      "This computer hasn't been updated yet, so it may ask for a password too. " +
+      "If it does, use the one above.",
+    failUnsureLeave: "Leave it for now",
+    recheckButton: "Check again",
+    recheckConfirmed:
+      "Your Second Brain answers to the new password, so that part is done. This " +
+      "computer hasn't saved it yet — try again to finish, and nothing on your " +
+      "Second Brain changes.",
+    recheckUnconfirmed:
+      "Your Second Brain still doesn't answer to the new password. It may need " +
+      "another moment, or the change may not have landed — trying again settles " +
+      "it either way.",
+    // The third answer, and not the same as "no". Collapsing a failed probe
+    // into "still doesn't answer" reports a question that was never asked as an
+    // answer of no.
+    recheckUnreachable:
+      "We couldn't reach your Second Brain to ask, so this settles nothing " +
+      "either way — the change may still have gone through. Check again in a " +
+      "moment, or go straight to trying the change again.",
+    failLocalTitle: "Your password was changed, but not saved on this computer",
+    failLocalTitlePartial:
+      "Your password was changed, but something on this computer still has the old one",
+    failLocalBody:
+      "Your Second Brain is using the new password. This computer couldn't store " +
+      "it, so it can't open your Second Brain until you connect again with the " +
+      "new one — save it now, if you haven't.",
+    failLocalCli:
+      "The brain command in your terminal is still set to the old password. Run " +
+      "brain setup to point it at the new one.",
+    failLocalDashboard:
+      "The Second Brain window that's already open is still using the old " +
+      "password. Close it and open it again.",
+    failLocalReconnect: "Connect this computer again",
+    leaveWarn:
+      "This is the last screen that shows this password. If you haven't put it " +
+      "somewhere safe, do it now.",
+    leaveConfirm: "I've saved it — leave",
+    leaveKeep: "Stay here",
+  },
+  passwordChangedElsewhere: {
+    title: "Your password was changed on another computer",
+    lede:
+      "Your Second Brain has a new password, so the one saved on this computer " +
+      "no longer opens it. Nothing was lost and nothing was deleted — this " +
+      "computer just needs the new one.",
+    body:
+      "You'll find it wherever you saved it when you changed it. It's the same " +
+      "Second Brain at the same address.",
+    findAgain: "Find my Second Brain again",
+    findAgainHint:
+      "Signs in to Cloudflare and looks for it, in case you're connecting to a " +
+      "different one now.",
+    footnote:
+      "Don't have the new one — or didn't change it yourself? Choosing a new " +
+      "password closes the old one for good.",
   },
   cloudflare: {
     title: "Connect your account",
@@ -433,6 +634,43 @@ export const en: Messages = {
     addressDesc: "Your private web dashboard, and where you connect new tools. Save it somewhere safe.",
     mcpLabel: "Your connection link (for AI tools)",
     mcpDesc: "Paste this into any AI tool that supports connectors.",
+    passwordLabel: "Your password",
+    // "Nothing can read it back, not even this app" was true of Cloudflare and
+    // false of the app: it is in this computer's secure storage, and this very
+    // feature writes it as plain text to the brain command's config file. A
+    // card whose whole job is to explain where a secret lives has to say so.
+    passwordDesc:
+      "The key to your Second Brain. It isn't shown here, but this computer " +
+      "keeps a copy: in its secure storage, and in the brain command's settings " +
+      "file if you set that up. Cloudflare can't read it back at all. If you " +
+      "want a different one, you can set one now.",
+    passwordButton: "Change my password",
+    disconnectLabel: "Disconnect your AI tools",
+    // Not "this closes all of it at once". Tools set up by pasting the password
+    // have no keys here to delete, so this route cannot reach them at all —
+    // changing the password is what closes those.
+    disconnectDesc:
+      "AI tools that signed in through your connection link were each given " +
+      "their own access, separate from your password. This closes all of those " +
+      "at once. Anything you connected by pasting your password instead isn't " +
+      "affected — changing your password is what closes those. Your memories " +
+      "and your password stay as they are.",
+    disconnectButton: "Disconnect AI tools…",
+    disconnectConfirmDesc:
+      "Every AI tool that signed in through your connection link — on this " +
+      "computer and on any other — will need connecting again, and each one " +
+      "will ask for your password when you do.",
+    disconnectConfirm: "Yes, disconnect them all",
+    disconnectKeep: "Keep them connected",
+    disconnectWorking: "Disconnecting…",
+    disconnectDone: "Disconnected. Each tool will ask to be connected again the next time you use it.",
+    disconnectDoneNone:
+      "No tool had signed in through your connection link, so there was nothing " +
+      "to close here. Tools that use your password are unaffected — changing " +
+      "your password is what closes those.",
+    disconnectFailed:
+      "Some connections couldn't be closed. The ones that were closed stay " +
+      "closed, so trying again only picks up what's left.",
     connectToolsTitle: "Connect your AI tools",
     connectToolsDesc:
       "Tools on this computer connect with one click. For anything else, " +

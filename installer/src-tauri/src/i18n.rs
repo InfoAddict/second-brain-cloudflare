@@ -127,6 +127,13 @@ pub enum Key {
     ErrorBrainHttpStatus,
     ErrorBrainUnexpected,
     ErrorNotionSyncFailed,
+    // Changing the password (#235). Each of these is a {detail} inside a screen
+    // the webview owns, never a screen of its own — every failure state in that
+    // flow has to carry the new password, which a bare error string cannot do.
+    ErrorRotateBlocked,
+    ErrorRotateNeedsHttps,
+    ErrorRotateNotConfirmed,
+    ErrorRotateSecureStore,
 }
 
 pub fn t(locale: Locale, key: Key) -> &'static str {
@@ -282,6 +289,25 @@ Second Brain's address by hand instead."
         (Locale::En, Key::ErrorBrainUnexpected) => "Unexpected response from your Second Brain.",
         (Locale::En, Key::ErrorNotionSyncFailed) => {
             "The sync didn't finish. Please try again from the dashboard."
+        }
+        (Locale::En, Key::ErrorRotateBlocked) => {
+            "Your Second Brain is rebuilding how it reads your memories, so its password \
+can't be changed just now."
+        }
+        // Deliberately not ErrorBadUrl: `http://my-brain.acme.workers.dev` is a
+        // perfectly good address, and telling someone it does not look like one
+        // sends them hunting for a typo that is not there.
+        (Locale::En, Key::ErrorRotateNeedsHttps) => {
+            "Your Second Brain's address has to start with https://. A plain http:// address \
+would send your new password unprotected."
+        }
+        (Locale::En, Key::ErrorRotateNotConfirmed) => {
+            "Your Second Brain didn't confirm the new password in time."
+        }
+        // Not ErrorSecureStoreConnect: that one says "Connected, but…", and
+        // nothing was connected here — a working password was replaced.
+        (Locale::En, Key::ErrorRotateSecureStore) => {
+            "Your password was changed, but we couldn't save it to this device's secure storage."
         }
 
         // Menu / tray — IT
@@ -445,6 +471,21 @@ Puoi inserire a mano l'indirizzo del tuo Second Brain."
         (Locale::It, Key::ErrorNotionSyncFailed) => {
             "La sincronizzazione non è terminata. Riprova dalla dashboard."
         }
+        (Locale::It, Key::ErrorRotateBlocked) => {
+            "Il tuo Second Brain sta ricostruendo il modo in cui legge i tuoi ricordi, \
+quindi la sua password non può essere cambiata adesso."
+        }
+        (Locale::It, Key::ErrorRotateNeedsHttps) => {
+            "L'indirizzo del tuo Second Brain deve iniziare con https://. Un indirizzo http:// \
+invierebbe la tua nuova password senza protezione."
+        }
+        (Locale::It, Key::ErrorRotateNotConfirmed) => {
+            "Il tuo Second Brain non ha confermato la nuova password in tempo."
+        }
+        (Locale::It, Key::ErrorRotateSecureStore) => {
+            "La password è stata cambiata, ma non è stato possibile salvarla nell'archivio \
+sicuro del dispositivo."
+        }
     }
 }
 
@@ -584,6 +625,10 @@ mod tests {
             ErrorBrainHttpStatus,
             ErrorBrainUnexpected,
             ErrorNotionSyncFailed,
+            ErrorRotateBlocked,
+            ErrorRotateNeedsHttps,
+            ErrorRotateNotConfirmed,
+            ErrorRotateSecureStore,
         ]
     }
 
