@@ -61,6 +61,11 @@ pub enum ProvisionError {
     CaptureFailed,
     #[error("could not reserve a web address for this space")]
     SubdomainUnavailable,
+    /// The stored address is not a workers.dev address, so there is no script
+    /// name to deploy to. Distinct from a generic failure because retrying
+    /// cannot help.
+    #[error("this Second Brain is on its own web address, so the app can't update it")]
+    NotAWorkersDevAddress,
 }
 
 /// Everything the pipeline needs from the outside world, so tests can drive
@@ -346,7 +351,20 @@ pub async fn update_worker<B: Backend>(
     progress: impl Fn(StepEvent),
 ) -> Result<(), ProvisionError> {
     let emit = |step: Step, status: StepStatus| progress(StepEvent { step, status });
-    let script = manifest.script_name.as_str();
+
+    // The script to deploy to comes from the address being updated, NOT from the
+    // bundled manifest.
+    //
+    // #257: deploys are a PUT, so taking the name from the manifest meant a brain
+    // connected as `my-brain.acme.workers.dev` was "updated" by writing the
+    // bundle to a script called `second-brain` in that account — creating a
+    // Worker the user never asked for, or silently overwriting an unrelated one
+    // that happened to hold the name. Every call below (`upload_assets`,
+    // `deploy_worker`, `set_cron`, `enable_script_subdomain`) targets this one
+    // value, so deriving it here fixes all of them at once.
+    let script = crate::worker_url::script_of(worker_url)
+        .ok_or(ProvisionError::NotAWorkersDevAddress)?;
+    let script = script.as_str();
 
     macro_rules! step {
         ($step:expr, $body:expr) => {{
@@ -541,9 +559,9 @@ mod tests {
         }
         async fn get_script_bindings(
             &self,
-            _script: &str,
+            script: &str,
         ) -> Result<Vec<serde_json::Value>, CfApiError> {
-            self.log("get_script_bindings");
+            self.log(format!("get_script_bindings:{script}"));
             Ok(self.script_bindings.clone())
         }
         async fn set_cron(&self, _script: &str, crons: &[String]) -> Result<(), CfApiError> {
@@ -701,7 +719,7 @@ mod tests {
         .unwrap();
 
         let log = fake.entries();
-        assert!(log.contains(&"get_script_bindings".to_string()));
+        assert!(log.contains(&"get_script_bindings:second-brain".to_string()));
         // Never re-created the resources that already exist.
         assert!(!log.iter().any(|l| l.starts_with("create_")));
 
@@ -714,6 +732,92 @@ mod tests {
         // Password preserved, not re-sent.
         assert!(!bindings.iter().any(|b| b["type"] == "secret_text"));
         assert_eq!(meta["keep_bindings"], serde_json::json!(["secret_text", "secret_key"]));
+    }
+
+    /// #257 — the update deploys to the script named by the address it was
+    /// given, never to the one in the bundled manifest.
+    ///
+    /// Deploys are a `PUT`. Taking the name from the manifest meant a brain
+    /// connected as `my-brain.acme.workers.dev` was "updated" by writing the
+    /// bundle to a script called `second-brain` in that account: creating a
+    /// Worker the user never asked for, or silently overwriting an unrelated one
+    /// that happened to hold the name.
+    #[tokio::test]
+    async fn update_targets_the_script_named_by_the_address() {
+        let fake = Fake {
+            script_bindings: vec![
+                serde_json::json!({ "type": "d1", "name": "DB", "database_id": "d1" }),
+                serde_json::json!({ "type": "kv_namespace", "name": "OAUTH_KV", "namespace_id": "kv" }),
+            ],
+            existing_vectorize: true,
+            ..Default::default()
+        };
+        update_worker(
+            &&fake,
+            &test_manifest(),
+            "https://my-brain.acme.workers.dev",
+            "tok",
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        let log = fake.entries();
+        for expected in [
+            "get_script_bindings:my-brain",
+            "upload_assets:my-brain",
+            "enable_subdomain:my-brain",
+        ] {
+            assert!(
+                log.contains(&expected.to_string()),
+                "expected {expected} in {log:?}"
+            );
+        }
+        assert!(
+            log.iter().any(|l| l.starts_with("deploy:my-brain:")),
+            "the bundle must be deployed to my-brain: {log:?}"
+        );
+
+        // And the manifest's name was never touched. Checked per call rather than
+        // as a substring search, because the Vectorize index is legitimately
+        // named `second-brain-vectors`.
+        for forbidden in [
+            "get_script_bindings:second-brain",
+            "upload_assets:second-brain",
+            "enable_subdomain:second-brain",
+            "deploy:second-brain",
+        ] {
+            assert!(
+                !log.iter().any(|l| l.starts_with(forbidden)),
+                "the update reached for the manifest name: {forbidden} in {log:?}"
+            );
+        }
+    }
+
+    /// A brain on its own domain has no script name to derive, so the update
+    /// refuses *before* touching the account rather than guessing one.
+    #[tokio::test]
+    async fn update_refuses_an_address_with_no_derivable_script() {
+        let fake = Fake::default();
+        let err = update_worker(
+            &&fake,
+            &test_manifest(),
+            "https://brain.example.com",
+            "tok",
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ProvisionError::NotAWorkersDevAddress),
+            "expected NotAWorkersDevAddress, got {err:?}"
+        );
+        assert!(
+            fake.entries().is_empty(),
+            "a refused update must not call Cloudflare at all: {:?}",
+            fake.entries()
+        );
     }
 
     #[tokio::test]

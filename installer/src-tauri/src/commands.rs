@@ -11,6 +11,7 @@ use crate::cf::provision::{self, ProvisionError, ProvisionOutcome};
 use crate::cf::types::{Account, CfApiError};
 use crate::app_menus::AppMenus;
 use crate::i18n::{self, AppLocale, Key, Locale};
+use crate::worker_url::subdomain_of;
 use crate::{cli_config, mcp_config, password_check, secure_store, windows, worker_bundle};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -815,16 +816,6 @@ pub struct WorkerUpdateInfo {
     pub available_version: String,
 }
 
-/// The workers.dev subdomain in a Worker URL is the second dotted label:
-/// `second-brain.acme.workers.dev` → `acme`.
-pub(crate) fn subdomain_of(worker_url: &str) -> Option<String> {
-    let host = url::Url::parse(worker_url).ok()?.host_str()?.to_string();
-    if !host.ends_with(".workers.dev") {
-        return None; // custom domain — can't auto-resolve the account
-    }
-    host.split('.').nth(1).map(|s| s.to_string())
-}
-
 /// Core check, usable outside a command context (the launch-time offer). None
 /// when up to date, unknown, on a custom domain, in dry-run, or not set up.
 async fn compute_worker_update(dry_run: bool) -> Option<WorkerUpdateInfo> {
@@ -963,7 +954,13 @@ pub async fn start_worker_update(
         .await
         .map_err(|e| {
             log::warn!("worker update failed: {e}");
-            user_err(locale, Key::ErrorFriendlyRetry)
+            match e {
+                // Permanent, so "try again" would be a lie. Reachable only if the
+                // subdomain check above is ever removed — the message is right
+                // either way.
+                ProvisionError::NotAWorkersDevAddress => user_err(locale, Key::ErrorCustomDomain),
+                _ => user_err(locale, Key::ErrorFriendlyRetry),
+            }
         })?;
 
     *session.pending_worker_update.lock().unwrap() = false;

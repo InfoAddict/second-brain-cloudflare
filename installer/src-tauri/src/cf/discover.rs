@@ -447,7 +447,7 @@ mod tests {
         ] {
             let url = workers_dev_url(script, subdomain);
             assert_eq!(
-                crate::commands::subdomain_of(&url).as_deref(),
+                crate::worker_url::subdomain_of(&url).as_deref(),
                 Some(subdomain),
                 "start_worker_update would not find the account for {url}"
             );

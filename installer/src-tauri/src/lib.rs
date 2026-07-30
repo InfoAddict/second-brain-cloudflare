@@ -19,6 +19,7 @@ mod settings;
 mod version;
 mod windows;
 mod worker_bundle;
+mod worker_url;
 
 use app_menus::{build_menu_items, build_tray_items, install_app_menu, install_tray, AppMenus};
 use commands::SetupSession;
