@@ -24,8 +24,12 @@ export function makeMirrorStore(env: Env): MirrorStore {
       // bucket. Non-fatal — a failure just leaves it for the backfill to pick up.
       let finalTags = tags;
       let importance = 0;
+      // Resolved once and used for both the classify and the embed below: they
+      // must agree on the model, and this function previously resolved config
+      // for the embed while classifying with the shipped default.
+      const cfg = await resolveConfig(env);
       try {
-        const c = await classifyEntry(content, env);
+        const c = await classifyEntry(content, env, cfg);
         importance = c.importance;
         if (c.kind) finalTags = withKind(finalTags, c.kind);
         if (c.canonical) finalTags = withStatus(finalTags, "canonical");
@@ -36,7 +40,7 @@ export function makeMirrorStore(env: Env): MirrorStore {
         `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, importance_score) VALUES (?, ?, ?, ?, ?, ?, ?)`
       ).bind(id, content, JSON.stringify(finalTags), source, now, "[]", importance).run();
       try {
-        await storeEntry(env, id, content, finalTags, source, now, await resolveConfig(env));
+        await storeEntry(env, id, content, finalTags, source, now, cfg);
       } catch (e) {
         console.error("Vectorize insert failed (non-fatal):", e);
       }

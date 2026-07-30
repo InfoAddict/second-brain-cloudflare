@@ -57,9 +57,15 @@ export async function classifyEntry(content: string, env: Env, config: Readonly<
   return parseClassification(text);
 }
 
-export function scheduleClassifyAndTag(entryId: string, content: string, env: Env, ctx: ExecutionContext): void {
+export function scheduleClassifyAndTag(
+  entryId: string,
+  content: string,
+  env: Env,
+  ctx: ExecutionContext,
+  config: Readonly<Config> = DEFAULTS,
+): void {
   ctx.waitUntil(
-    classifyEntry(content, env)
+    classifyEntry(content, env, config)
       .then(async ({ importance, canonical, kind }) => {
         await env.DB.prepare(`UPDATE entries SET importance_score = ? WHERE id = ?`).bind(importance, entryId).run();
         if (!kind && !canonical) return;

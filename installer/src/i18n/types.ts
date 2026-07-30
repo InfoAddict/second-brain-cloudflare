@@ -43,6 +43,7 @@ export type Messages = {
     sectionRecall: string;
     sectionRemember: string;
     sectionAi: string;
+    sectionMatching: string;
     custom: string;
     customNote: string;
     reset: string;
@@ -60,6 +61,91 @@ export type Messages = {
     duplicates: { label: string; desc: string; note: string; levels: { permissive: LevelCopy; standard: LevelCopy; strict: LevelCopy } };
     compression: { label: string; desc: string; note: string; levels: { conservative: LevelCopy; standard: LevelCopy; aggressive: LevelCopy } };
     model: { label: string; desc: string; sizeNote: string; neuronsNote: string };
+    /**
+     * Rebuilding how memories are read (#248). The only destructive, multi-step
+     * flow in this window, so it carries a screen's worth of copy per step
+     * rather than one notice per level.
+     */
+    migration: {
+      lede: string;
+      label: string;
+      desc: string;
+      /** Three forms: "1 memory saved" is the count a real new brain shows. */
+      entries: string;
+      entriesOne: string;
+      entriesNone: string;
+      pickLabel: string;
+      inUse: string;
+      storageWarning: string;
+      pickNote: string;
+      /**
+       * Named levels, keyed by the `level` each choice carries. These are the
+       * only labels the picker shows — the model id is secondary text on the
+       * confirm screen and nowhere else, because this is the last thing read
+       * before an operation that cannot be undone.
+       */
+      levels: { standard: LevelCopy; finer: LevelCopy; finest: LevelCopy };
+      sameAsCurrent: string;
+      dirtyNote: string;
+      startButton: string;
+      confirmTitle: string;
+      /** The one full-weight sentence on a screen that is otherwise all grey. */
+      confirmLead: string;
+      confirmBody: string;
+      point1: string;
+      point2: string;
+      /** How long, expressed in rounds — the only unit that can be honest. */
+      point3: string;
+      point4: string;
+      targetLine: string;
+      /** The raw model id, for anyone who wants to audit what they picked. */
+      modelLine: string;
+      confirmButton: string;
+      cancelButton: string;
+      startingTitle: string;
+      startingBody: string;
+      runningTitle: string;
+      runningBody: string;
+      pauseButton: string;
+      pausing: string;
+      pausedTitle: string;
+      pausedBody: string;
+      progress: string;
+      progressPending: string;
+      skipped: string;
+      stalledTitle: string;
+      stalledBody: string;
+      /** The other stall: one memory keeps failing, so waiting cannot help. */
+      stalledFailingTitle: string;
+      stalledFailingBody: string;
+      resumeButton: string;
+      startOverButton: string;
+      startOverNote: string;
+      resettingTitle: string;
+      resettingBody: string;
+      interruptedTitle: string;
+      interruptedBody: string;
+      failedTitle: string;
+      failedBody: string;
+      stuckTitle: string;
+      stuck: string;
+      doneTitle: string;
+      doneBody: string;
+      changeAgain: string;
+      freeLabel: string;
+      freeDesc: string;
+      freeButton: string;
+      freeConfirm: string;
+      freeKeep: string;
+      freeing: string;
+      freeingBody: string;
+      freedTitle: string;
+      freedBody: string;
+      loading: string;
+      loadFailed: string;
+      barRunning: string;
+      barWorking: string;
+    };
   };
   welcome: {
     title: string;

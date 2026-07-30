@@ -2,7 +2,6 @@
 //! Tokens and passwords flow IN through here (user input / OS keychain) but
 //! never back out to the webview; the UI only ever receives URLs, booleans,
 //! account names, and progress events.
-
 use crate::cf::api::CfClient;
 use crate::cf::backend::{DryRunBackend, LiveBackend};
 use crate::cf::discover;
@@ -11,6 +10,7 @@ use crate::cf::provision::{self, ProvisionError, ProvisionOutcome};
 use crate::cf::types::{Account, CfApiError};
 use crate::app_menus::AppMenus;
 use crate::i18n::{self, AppLocale, Key, Locale};
+use crate::worker_url::subdomain_of;
 use crate::{cli_config, mcp_config, password_check, secure_store, windows, worker_bundle};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -33,6 +33,11 @@ pub struct SetupSession {
     /// a brain is actually connected. Non-secret, but pointless — and possibly
     /// wrong — to persist for a scan the user abandoned.
     cf_hints: Mutex<Option<(String, String)>>,
+    /// Demo mode's stand-in for the outstanding-index note. Dry-run must never
+    /// reach the keychain — every read there can raise an OS password prompt,
+    /// which is #252 all over again — so the demo keeps its note in memory and
+    /// the flow stays exercisable end to end.
+    demo_previous_index: Mutex<Option<String>>,
 }
 
 impl SetupSession {
@@ -45,6 +50,7 @@ impl SetupSession {
             outcome: Mutex::new(None),
             pending_worker_update: Mutex::new(false),
             cf_hints: Mutex::new(None),
+            demo_previous_index: Mutex::new(None),
         }
     }
 
@@ -55,6 +61,7 @@ impl SetupSession {
         *self.outcome.lock().unwrap() = None;
         *self.pending_worker_update.lock().unwrap() = false;
         *self.cf_hints.lock().unwrap() = None;
+        *self.demo_previous_index.lock().unwrap() = None;
     }
 }
 
@@ -752,9 +759,22 @@ fn dashboard_credentials(
     locale: Locale,
 ) -> Result<(String, String), String> {
     if session.dry_run {
-        let outcome = details_from_anywhere(session)
-            .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
-        Ok((outcome.worker_url, "demo".to_string()))
+        // No keychain read, and no connected-yet check.
+        //
+        // This used to call details_from_anywhere, which falls back to
+        // secure_store::load_setup() when the session has no outcome — so opening
+        // the settings window in demo mode raised an OS keychain password prompt.
+        // That is the same class of bug as #252, and it is why the window never
+        // worked in demo mode: the prompt appeared before any request was made.
+        //
+        // The check itself does not apply here either. In a real run it asks "is
+        // this computer connected to a brain yet?"; in demo mode the local demo
+        // brain *is* the brain, always present, so there is nothing to refuse.
+        // The local demo brain, not `second-brain.demo.workers.dev`: that address
+        // does not resolve, so every Worker-backed screen failed with "Couldn't
+        // reach your Second Brain". Pointing at a real server on loopback means
+        // settings and migration run their actual HTTP paths against real data.
+        Ok((crate::demo_brain::base_url(), "demo".to_string()))
     } else {
         let info = secure_store::load_setup()
             .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
@@ -813,16 +833,6 @@ pub fn open_details_window(app: AppHandle) {
 pub struct WorkerUpdateInfo {
     pub deployed_version: Option<String>,
     pub available_version: String,
-}
-
-/// The workers.dev subdomain in a Worker URL is the second dotted label:
-/// `second-brain.acme.workers.dev` → `acme`.
-pub(crate) fn subdomain_of(worker_url: &str) -> Option<String> {
-    let host = url::Url::parse(worker_url).ok()?.host_str()?.to_string();
-    if !host.ends_with(".workers.dev") {
-        return None; // custom domain — can't auto-resolve the account
-    }
-    host.split('.').nth(1).map(|s| s.to_string())
 }
 
 /// Core check, usable outside a command context (the launch-time offer). None
@@ -915,7 +925,14 @@ pub async fn start_worker_update(
             worker_url: "https://second-brain.demo.workers.dev".into(),
             mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
         };
-        provision::update_worker(&DryRunBackend, manifest, &outcome.worker_url, "demo", progress)
+        provision::update_worker(
+            &DryRunBackend,
+            manifest,
+            &outcome.worker_url,
+            "demo",
+            provision::VectorizeTarget::shipped(manifest),
+            progress,
+        )
             .await
             .map_err(|e| {
                 log::warn!("dry-run worker update failed: {e}");
@@ -959,11 +976,26 @@ pub async fn start_worker_update(
     let backend = LiveBackend {
         client: CfClient::new(tokens.access_token.clone(), account_id),
     };
-    provision::update_worker(&backend, manifest, &info.worker_url, &info.auth_token, progress)
+    // A routine update stays on whatever index this build ships with. Only an
+    // embedding migration moves it, and that goes through its own command.
+    provision::update_worker(
+        &backend,
+        manifest,
+        &info.worker_url,
+        &info.auth_token,
+        provision::VectorizeTarget::shipped(manifest),
+        progress,
+    )
         .await
         .map_err(|e| {
             log::warn!("worker update failed: {e}");
-            user_err(locale, Key::ErrorFriendlyRetry)
+            match e {
+                // Permanent, so "try again" would be a lie. Reachable only if the
+                // subdomain check above is ever removed — the message is right
+                // either way.
+                ProvisionError::NotAWorkersDevAddress => user_err(locale, Key::ErrorCustomDomain),
+                _ => user_err(locale, Key::ErrorFriendlyRetry),
+            }
         })?;
 
     *session.pending_worker_update.lock().unwrap() = false;
@@ -1015,6 +1047,309 @@ pub fn perform_logout(app: &AppHandle) {
 /// dry-run, so it both breaks demoing the panel on a configured machine and
 /// raises a Keychain prompt for a value dry-run would discard — the bug fixed
 /// for launch in #252, which is easy to reintroduce one command at a time.
+/// Resolves the Cloudflare account that holds this brain, refreshing the sign-in
+/// if it aged out.
+///
+/// Shared by the worker update and the embedding migration: both need to act on
+/// the account the brain actually lives in, matched by the subdomain in its
+/// stored address rather than assumed.
+async fn cloudflare_client_for_brain(
+    worker_url: &str,
+    session: &SetupSession,
+    locale: Locale,
+) -> Result<CfClient, String> {
+    let expected_sub = crate::worker_url::subdomain_of(worker_url)
+        .ok_or_else(|| user_err(locale, Key::ErrorCustomDomain))?;
+
+    let mut tokens = session
+        .tokens
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| user_err(locale, Key::ErrorCfSignInFirst))?;
+    if tokens.expires_at <= std::time::Instant::now() {
+        tokens = oauth::refresh(&tokens).await.map_err(|e| {
+            log::warn!("token refresh failed: {e}");
+            user_err(locale, Key::ErrorCfSignInExpired)
+        })?;
+        *session.tokens.lock().unwrap() = Some(tokens.clone());
+    }
+
+    let accounts = session.accounts.lock().unwrap().clone();
+    for account in &accounts {
+        let client = CfClient::new(tokens.access_token.clone(), account.id.clone());
+        if let Ok(Some(sub)) = client.get_account_subdomain().await {
+            if sub == expected_sub {
+                return Ok(client);
+            }
+        }
+    }
+    Err(user_err(locale, Key::ErrorWrongCfAccount))
+}
+
+/// What a rebuild would involve, and which models can be chosen. Shown before
+/// anything is created.
+#[tauri::command]
+pub async fn migration_estimate(
+    app: AppHandle,
+) -> Result<crate::migration::MigrationEstimate, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    // The shipped dimension count is the fallback for a brain running a reading
+    // this build does not list.
+    let manifest = worker_bundle::manifest();
+    crate::migration::fetch_estimate(&url, &token, manifest.vectorize_dimensions, locale).await
+}
+
+/// Where an interrupted rebuild got to, so the app can offer to resume rather
+/// than start again.
+#[tauri::command]
+pub async fn migration_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::fetch_status(&url, &token, locale).await
+}
+
+/// Moves the brain onto a new embedding model: create the index it will use,
+/// redeploy the binding at it, then record the model.
+///
+/// Nothing is destroyed here. The previous index is left in place and populated,
+/// so every failure before [`finish_embedding_migration`] is recoverable by
+/// redeploying against it.
+///
+/// The order matters. The config write happens *after* the redeploy, because
+/// config lives in KV and takes effect on the very next request: writing it first
+/// would leave the Worker embedding at the new size against the old index, which
+/// fails every capture on upsert. Reversing them narrows that window to the gap
+/// between a successful deploy and one KV write. It cannot be closed entirely
+/// without the dual-binding scheme #248 defers, and the rebuild that follows
+/// leaves recall incomplete anyway — which the UI says plainly.
+#[tauri::command]
+pub async fn begin_embedding_migration(
+    model: String,
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
+    let locale = locale_of(&app);
+    let manifest = worker_bundle::manifest();
+
+    // Reject an unknown model before touching anything. Dimensions are fixed at
+    // index creation, so a model whose size we would have to guess could produce
+    // an index that rejects every vector — and an index cannot be altered.
+    let dimensions = crate::migration::dimensions_for(&model)
+        .ok_or_else(|| user_err(locale, Key::ErrorUnknownEmbeddingModel))?;
+    let target_index = crate::migration::index_name_for(
+        &manifest.vectorize_name,
+        dimensions,
+        manifest.vectorize_dimensions,
+    );
+
+    let (worker_url, auth_token, _) = settings_target(&app)?;
+
+    let progress_app = app.clone();
+    let progress = move |event: provision::StepEvent| {
+        let _ = progress_app.emit("setup-progress", &event);
+    };
+
+    if session.dry_run {
+        // The demo brain runs on a loopback address, which has no script or
+        // subdomain to derive — `update_worker` would refuse it before doing
+        // anything. DryRunBackend ignores the URL entirely (its health check is
+        // stubbed), so a synthetic workers.dev address exercises the same code
+        // path while the real loopback address keeps serving the HTTP calls.
+        provision::update_worker(
+            &DryRunBackend,
+            manifest,
+            "https://second-brain.demo.workers.dev",
+            "demo",
+            provision::VectorizeTarget { name: &target_index, dimensions },
+            progress,
+        )
+        .await
+        .map_err(|e| {
+            log::warn!("dry-run migration redeploy failed: {e}");
+            user_err(locale, Key::ErrorFriendlyRetry)
+        })?;
+        // In the same order as the live path below, so demo mode actually moves
+        // the model. Without this the demo rebuild runs at the old model, the
+        // old index stays "live", and the final free-up step is unreachable —
+        // which would leave the most consequential screen untested.
+        crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale).await?;
+        // In memory, never the keychain — see demo_previous_index.
+        if target_index != manifest.vectorize_name {
+            *session.demo_previous_index.lock().unwrap() = Some(manifest.vectorize_name.clone());
+        }
+        return crate::migration::reset(&worker_url, &auth_token, locale).await;
+    }
+
+    let client = cloudflare_client_for_brain(&worker_url, &session, locale).await?;
+
+    // What the brain reads right now, taken from the live binding rather than
+    // derived from an assumed size. Recorded BEFORE the switch, because
+    // afterwards the brain reports the new index as current and this name is the
+    // only thing that identifies what may later be freed. Written first so it
+    // survives a redeploy that fails half-way.
+    if let Some(script) = crate::worker_url::script_of(&worker_url) {
+        if let Ok(bindings) = client.get_script_bindings(&script).await {
+            if let Some(current) = provision::binding_field(&bindings, "vectorize", "index_name") {
+                if current != target_index {
+                    if let Err(e) = secure_store::save_previous_index(current) {
+                        log::warn!("could not record the outgoing index: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    let backend = LiveBackend { client };
+
+    // Creating the index is idempotent and non-destructive, and update_worker
+    // creates the target if it is missing — so a retry after a failed deploy
+    // costs nothing.
+    provision::update_worker(
+        &backend,
+        manifest,
+        &worker_url,
+        &auth_token,
+        provision::VectorizeTarget { name: &target_index, dimensions },
+        progress,
+    )
+    .await
+    .map_err(|e| {
+        log::warn!("migration redeploy failed: {e}");
+        match e {
+            ProvisionError::NotAWorkersDevAddress => user_err(locale, Key::ErrorCustomDomain),
+            _ => user_err(locale, Key::ErrorFriendlyRetry),
+        }
+    })?;
+
+    // Past this point the brain is already reading the new index, so a failure is
+    // not "nothing happened". Search stays incomplete until the rebuild runs, and
+    // the message has to say so — retrying is safe and idempotent, but walking
+    // away is not.
+    let half_switched = |_e: String| user_err(locale, Key::ErrorMigrationHalfSwitched);
+
+    crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale)
+        .await
+        .map_err(half_switched)?;
+
+    // Any ledger from a previous target is meaningless against this one.
+    crate::migration::reset(&worker_url, &auth_token, locale)
+        .await
+        .map_err(half_switched)
+}
+
+/// Abandons an unfinished rebuild so the next one starts from the beginning.
+///
+/// The escape hatch for a rebuild that keeps stalling on the same entry: without
+/// it, a user whose cursor sits on a permanently failing memory has no way out.
+/// Rebuilding is idempotent, so this costs model calls and cannot corrupt
+/// anything.
+#[tauri::command]
+pub async fn migration_reset(app: AppHandle) -> Result<(), String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::reset(&url, &token, locale).await
+}
+
+/// One re-embed batch. The window loops on this until `done`, and stops if
+/// `stalled` — the day's model allowance is spent and the cursor is kept.
+#[tauri::command]
+pub async fn migration_step(app: AppHandle) -> Result<crate::migration::BatchProgress, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::run_batch(&url, &token, locale).await
+}
+
+/// Whether an index is left over from a migration, and can be freed.
+///
+/// The window asks this rather than tracking sizes itself: the name comes from
+/// what Cloudflare reported as bound before the switch, so nothing is derived
+/// from an assumed dimension count and nothing lives in browser storage that a
+/// reset could lose.
+#[tauri::command]
+pub fn outstanding_old_index(session: State<'_, SetupSession>) -> Option<String> {
+    previous_index_for(&session)
+}
+
+/// Split out of the command so it can be tested: a Tauri `State` cannot be
+/// constructed in a unit test, and the property that matters here — that demo
+/// mode performs no keychain read — is only observable by calling it.
+fn previous_index_for(session: &SetupSession) -> Option<String> {
+    if session.dry_run {
+        // Checked before the keychain read, exactly as get_app_state does: a read
+        // here raises an OS password prompt on unsigned dev builds, and demo mode
+        // must never do that.
+        return session.demo_previous_index.lock().unwrap().clone();
+    }
+    secure_store::load_previous_index()
+}
+
+/// Deletes the superseded index. The one irreversible step, so the window
+/// confirms it separately and only after a rebuild has finished.
+///
+/// Takes no argument on purpose. An earlier shape had the window pass the size it
+/// thought it was moving from, which put the name of something irreversibly
+/// deletable in the hands of browser storage.
+#[tauri::command]
+pub async fn finish_embedding_migration(
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
+    let locale = locale_of(&app);
+    let (worker_url, auth_token, _) = settings_target(&app)?;
+
+    let old_index = if session.dry_run {
+        session.demo_previous_index.lock().unwrap().clone()
+    } else {
+        secure_store::load_previous_index()
+    }
+    .ok_or_else(|| user_err(locale, Key::ErrorNoOldIndexToFree))?;
+
+    // Refuse to delete the index the brain is reading. The recorded name is
+    // trustworthy, but a redeploy could have been rolled back since, and the cost
+    // of being wrong here is unrecoverable.
+    let live_model = crate::migration::fetch_status(&worker_url, &auth_token, locale)
+        .await?
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let manifest = worker_bundle::manifest();
+    let live_index = crate::migration::index_name_for(
+        &manifest.vectorize_name,
+        crate::migration::dimensions_for(&live_model).unwrap_or(manifest.vectorize_dimensions),
+        manifest.vectorize_dimensions,
+    );
+    if old_index == live_index {
+        return Err(user_err(locale, Key::ErrorCannotDeleteLiveIndex));
+    }
+
+    // Through the Backend trait rather than the client directly, so demo mode
+    // exercises the same code path instead of returning early past it.
+    use provision::Backend;
+    let failed = |e: CfApiError| {
+        log::warn!("old index delete failed: {e}");
+        user_err(locale, Key::ErrorFriendlyRetry)
+    };
+    if session.dry_run {
+        DryRunBackend
+            .delete_vectorize(&old_index)
+            .await
+            .map_err(failed)?;
+    } else {
+        let backend = LiveBackend {
+            client: cloudflare_client_for_brain(&worker_url, &session, locale).await?,
+        };
+        backend.delete_vectorize(&old_index).await.map_err(failed)?;
+    }
+
+    // Only after the delete succeeded. Clearing it first would silently orphan
+    // the index with nothing left pointing at it.
+    if session.dry_run {
+        *session.demo_previous_index.lock().unwrap() = None;
+    } else {
+        secure_store::clear_previous_index();
+    }
+    Ok(())
+}
+
 fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
     let locale = locale_of(app);
     let session = app.state::<SetupSession>();
@@ -1052,7 +1387,7 @@ pub fn open_settings_window(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dashboard_credentials, normalize_worker_url, SetupSession};
+    use super::{dashboard_credentials, normalize_worker_url, previous_index_for, SetupSession};
     use crate::cf::provision::ProvisionOutcome;
     use crate::i18n::Locale;
 
@@ -1118,15 +1453,73 @@ mod tests {
         );
     }
 
+    /// Demo mode is pointed at the local demo brain, not at
+    /// `second-brain.demo.workers.dev` — that address does not resolve, so every
+    /// Worker-backed screen failed before anything could be demonstrated.
+    /// Demo mode performs zero keychain reads.
+    ///
+    /// Counted rather than grepped. Two separate paths have now reached the
+    /// keychain in dry-run: `outstanding_old_index` read the note unconditionally,
+    /// and `dashboard_credentials` called `details_from_anywhere`, which falls
+    /// back to `secure_store::load_setup()` — so merely opening the settings
+    /// window raised an OS password prompt before any request was made. That
+    /// second one is why the window never worked in demo mode at all.
+    ///
+    /// A source scan cannot express the real rule, which is "not inside the
+    /// dry-run branch" rather than "the function mentions dry_run" — a guard I
+    /// wrote that way passed while the bug was reintroduced. The prompt itself is
+    /// an OS dialog no unit test can see, but the read that causes it is
+    /// countable, so this counts.
     #[test]
-    fn dashboard_credentials_dry_run_uses_demo_token() {
+    fn demo_mode_never_reads_the_keychain() {
+        let session = SetupSession::new(true);
+        *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
+            worker_url: "https://second-brain.demo.workers.dev".into(),
+            mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
+        });
+
+        crate::secure_store::probe::reset();
+        let (url, token) = dashboard_credentials(&session, Locale::En).expect("demo credentials");
+        assert_eq!(
+            crate::secure_store::probe::reads(),
+            0,
+            "dashboard_credentials touched the keychain in demo mode — that is the \
+             prompt users see when they open the settings window"
+        );
+        assert!(url.starts_with("http://127.0.0.1:"), "demo must use the local brain: {url}");
+        assert_eq!(token, "demo");
+
+        // The outstanding-index note is the other path that reached the keychain.
+        crate::secure_store::probe::reset();
+        let _ = previous_index_for(&session);
+        assert_eq!(
+            crate::secure_store::probe::reads(),
+            0,
+            "the outstanding-index note was read from the keychain in demo mode"
+        );
+
+        // And with no session outcome either: the fallback is exactly where the
+        // keychain read used to hide.
+        let fresh = SetupSession::new(true);
+        crate::secure_store::probe::reset();
+        let _ = dashboard_credentials(&fresh, Locale::En);
+        assert_eq!(
+            crate::secure_store::probe::reads(),
+            0,
+            "an unconnected demo session fell back to the keychain"
+        );
+    }
+
+    #[test]
+    fn dashboard_credentials_dry_run_uses_the_local_demo_brain() {
         let session = SetupSession::new(true);
         *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
             worker_url: "https://second-brain.demo.workers.dev".into(),
             mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
         });
         let (url, token) = dashboard_credentials(&session, Locale::En).unwrap();
-        assert_eq!(url, "https://second-brain.demo.workers.dev");
+        assert_eq!(url, crate::demo_brain::base_url());
+        assert!(url.starts_with("http://127.0.0.1:"), "got {url}");
         assert_eq!(token, "demo");
     }
 }

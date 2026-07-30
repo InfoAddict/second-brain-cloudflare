@@ -12,6 +12,14 @@ export const CONTRADICTION_IMPORTANCE_STEP = 1.0;
 export const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 
 export const CHUNK_MAX_CHARS = 1600;
+// ── Embedding migration (#248) ───────────────────────────────────────────────
+// Budgeted in chunks rather than entries because storeEntry fires one model call
+// per chunk, all concurrently: 25 single-chunk entries is already ~75 binding
+// calls, and a handful of long memories in one batch would be far more. The
+// entry cap is a second ceiling so a page of tiny entries cannot balloon either.
+export const MIGRATION_CHUNK_BUDGET = 20;
+export const MIGRATION_MAX_ENTRIES_PER_BATCH = 25;
+
 export const CHUNK_OVERLAP_CHARS = 200;
 
 export const CLASSIFY_MAX_TOKENS = 80;

@@ -11,14 +11,17 @@ mod cf;
 mod cli_config;
 mod commands;
 mod credits;
+mod demo_brain;
 mod i18n;
 mod mcp_config;
+mod migration;
 mod password_check;
 mod secure_store;
 mod settings;
 mod version;
 mod windows;
 mod worker_bundle;
+mod worker_url;
 
 use app_menus::{build_menu_items, build_tray_items, install_app_menu, install_tray, AppMenus};
 use commands::SetupSession;
@@ -38,7 +41,12 @@ fn open_dashboard_from_menu(app: &AppHandle) {
                 .try_state::<AppLocale>()
                 .map(|l| l.get())
                 .unwrap_or(i18n::Locale::En);
-            if secure_store::load_setup().is_none() && !session.dry_run {
+            // dry_run first: `&&` is short-circuiting, so testing it second
+            // still performs the keychain read, and every read can raise an OS
+            // password prompt on an unsigned dev build. This fired at startup,
+            // before any window opened, which is why demo mode has always asked
+            // for the login keychain.
+            if !session.dry_run && secure_store::load_setup().is_none() {
                 let _ = windows::open_setup_window(app);
             } else {
                 app.dialog()
@@ -133,6 +141,14 @@ pub fn run() {
 
     let dry_run = std::env::var("SECOND_BRAIN_DRY_RUN").is_ok();
 
+    // A demo has to have something to operate on. Started here rather than on
+    // first use so it is listening before any window can ask for it, and only in
+    // dry-run — a real run must never have a second brain on loopback that a
+    // stray address could reach.
+    if dry_run {
+        demo_brain::start();
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             for label in ["brain", "main", "details"] {
@@ -164,6 +180,13 @@ pub fn run() {
             commands::connect_cloudflare,
             commands::connect_existing,
             commands::discover_brains,
+            commands::migration_estimate,
+            commands::migration_status,
+            commands::begin_embedding_migration,
+            commands::migration_step,
+            commands::finish_embedding_migration,
+            commands::migration_reset,
+            commands::outstanding_old_index,
             commands::start_provisioning,
             commands::get_connection_details,
             commands::detect_tools,

@@ -798,6 +798,119 @@ body.settings-page #app {
   font-size: 0.85rem;
 }
 
+/* ── Rebuilding how memories are read (#248) ─────────────────────────────────
+   One card that becomes a small progress screen, so it needs headings, a bar
+   and a bullet list that the level controls never did. */
+
+.settings-migration-title {
+  margin-top: 0.9rem;
+}
+
+/* .settings-notice reserves two lines to stop level cards reflowing under the
+   cursor. These notices stack several deep, so they get their own class. */
+.settings-migration-note {
+  margin-top: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.settings-migration-count {
+  margin-top: 0.5rem;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.settings-migration-pick {
+  margin-top: 0.9rem;
+}
+
+.settings-progress {
+  height: 6px;
+  margin: 0.45rem 0 0.2rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+
+.settings-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.settings-migration-points {
+  margin: 0.6rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.settings-migration-points li {
+  margin-bottom: 0.3rem;
+}
+
+/* The one sentence on the warning screen that carries full weight. The rest of
+   that screen is grey, and a wall of grey before a one-way operation is not
+   read at all. */
+.settings-migration-lead {
+  margin-top: 0.55rem;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* What is being switched to, by its named level. Not monospace any more: it
+   held a model id when it was written, and now it holds a human label. */
+.settings-migration-target {
+  margin-top: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+/* The raw model id, kept for auditability on the screen that commits and
+   nowhere else. Sized and coloured so it reads as a footnote to the line above
+   rather than as the thing being chosen. */
+.settings-migration-model {
+  margin-top: 0.2rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  word-break: break-all;
+}
+
+.settings-migration-actions {
+  margin-top: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.settings-migration-error {
+  margin-top: 0.6rem;
+  color: var(--danger);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+/* The step that cannot be undone is fenced off from the finished-rebuild
+   message above it. */
+.settings-migration-free {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 0.5px solid var(--border);
+}
+
+/* .btn-primary is width:100% for the full-width setup buttons; inside a
+   settings card it has to size to its label like every other button here. */
+.settings-migration .btn-primary {
+  width: auto;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.85rem;
+}
+
 /* Staged edits in a pane the user is not looking at would otherwise be
    invisible until they hit Save. */
 .rail-dot {
@@ -805,4 +918,16 @@ body.settings-page #app {
   color: var(--accent);
   font-size: 0.6rem;
   vertical-align: middle;
+}
+
+/* The storage warning in the Matching pane. Every other note there is quiet
+   grey on purpose; this one is the single thing that says "this choice may not
+   work", so it carries the same accent the app uses for other cautions rather
+   than disappearing into the surrounding text. */
+.settings-migration-warn {
+  color: var(--text-primary);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.03));
+  border-left: 3px solid var(--danger, #c0392b);
+  padding: 8px 10px;
+  border-radius: 6px;
 }

@@ -36,6 +36,7 @@ export const it: Messages = {
     sectionRecall: "Recupero",
     sectionRemember: "Ricorda",
     sectionAi: "AI",
+    sectionMatching: "Corrispondenze",
     custom: "Personalizzato",
     customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",
     reset: "Ripristina il valore predefinito",
@@ -146,6 +147,150 @@ export const it: Messages = {
       desc: "Usato per ordinare, riassumere e individuare contraddizioni nei tuoi ricordi — non per la ricerca in sé. Ogni modello elencato qui gira sul tuo account Cloudflare.",
       sizeNote: "I modelli più grandi scrivono riassunti migliori e costano più Neurons. Quelli più piccoli sono più rapidi ed economici.",
       neuronsNote: "I Neurons sono l'unità di consumo AI di Cloudflare. Il tuo piano include un'assegnazione giornaliera.",
+    },
+    migration: {
+      lede: "Come il tuo Second Brain legge i tuoi ricordi e li abbina a ciò che chiedi.",
+      label: "Come vengono letti i tuoi ricordi",
+      desc:
+        "Ogni ricordo viene letto una volta quando lo salvi, e le ricerche vengono " +
+        "confrontate con quella lettura. Una lettura diversa può trovare corrispondenze " +
+        "più precise, ma prima tutto ciò che hai già salvato va riletto.",
+      entries: "{entries} ricordi salvati, tutti da rileggere.",
+      entriesOne: "1 ricordo salvato, da rileggere.",
+      entriesNone: "Non hai ancora salvato ricordi, quindi non c'è nulla da rileggere.",
+      pickLabel: "Modo di leggere",
+      inUse: "{name} (in uso ora)",
+      storageWarning:
+        "È più di quanto un account Cloudflare gratuito possa contenere per un " +
+        "Second Brain della tua dimensione. Durante la ricostruzione vengono " +
+        "conservati sia i vecchi sia i nuovi dati di ricerca, così puoi ancora " +
+        "cambiare idea — ed è lì che lo spazio finirebbe. Il salvataggio di nuovi " +
+        "ricordi inizierebbe a fallire. Un'opzione meno dettagliata, o un piano " +
+        "Cloudflare a pagamento, lo evita.",
+      pickNote:
+        "Leggere in modo più dettagliato trova corrispondenze più precise e consuma una " +
+        "parte maggiore della tua assegnazione AI giornaliera. Girano tutte sul tuo " +
+        "account Cloudflare.",
+      levels: {
+        standard: {
+          name: "Standard",
+          notice:
+            "È la più leggera per la tua assegnazione AI giornaliera e la più rapida da " +
+            "ricostruire. Va bene per la maggior parte delle ricerche.",
+        },
+        finer: {
+          name: "Più dettagliato",
+          notice:
+            "Coglie meglio di cosa parla ogni ricordo, così le corrispondenze meno ovvie " +
+            "risalgono nei risultati. Consuma una parte maggiore della tua assegnazione " +
+            "AI giornaliera.",
+        },
+        finest: {
+          name: "Massimo dettaglio",
+          notice:
+            "La corrispondenza più precisa, e la più esigente sia per la tua assegnazione " +
+            "AI giornaliera sia per lo spazio.",
+        },
+      },
+      sameAsCurrent: "È già quella in uso — non c'è nulla da fare.",
+      dirtyNote: "Salva o annulla prima le altre modifiche.",
+      startButton: "Ricostruisci con questa opzione",
+      confirmTitle: "Prima di iniziare",
+      confirmLead: "Finché non finisce, la ricerca è incompleta.",
+      confirmBody:
+        "I tuoi ricordi sono al sicuro: viene ricostruito solo ciò che il tuo Second Brain " +
+        "usa per cercare.",
+      point1: "I ricordi non ancora riletti non compaiono tra i risultati.",
+      point2:
+        "Consuma la tua assegnazione AI giornaliera e, se finisce, si mette in pausa per oggi.",
+      point3: "{chunks} parti da rileggere: circa {rounds} giri, uno dopo l'altro.",
+      point4:
+        "Fino alla fine non viene cancellato nulla: i vecchi dati di ricerca restano finché " +
+        "non scegli tu di liberarli.",
+      targetLine: "Nuovo modo di leggere: {name}",
+      modelLine: "Modello: {name}",
+      confirmButton: "Sì, ricostruisci",
+      cancelButton: "Non ora",
+      startingTitle: "Preparazione",
+      startingBody:
+        "Il nuovo modo di leggere i tuoi ricordi è quasi pronto; subito dopo il tuo Second " +
+        "Brain inizierà a usarlo. Ci vuole un minuto o due — lascia aperta questa finestra.",
+      runningTitle: "Rilettura dei tuoi ricordi",
+      runningBody:
+        "Finché non finisce, la ricerca è incompleta. Lascia aperta questa finestra, " +
+        "oppure metti in pausa e torna più tardi: in ogni caso nulla di già riletto va " +
+        "perso. Il totale può salire se salvi qualcosa di nuovo durante la rilettura.",
+      pauseButton: "Metti in pausa",
+      pausing: "Pausa alla fine di questo giro…",
+      pausedTitle: "In pausa",
+      pausedBody:
+        "Tutto ciò che è stato riletto è salvato. La ricerca resta incompleta finché non " +
+        "continui, e continuare non costa nulla per la parte già completata.",
+      progress: "{done} su {total} ricordi riletti",
+      progressPending: "Rilettura in corso…",
+      skipped:
+        "Ricordi che non è stato possibile rileggere finora: {failed}. Vengono ritentati " +
+        "mentre la rilettura continua.",
+      stalledTitle: "In pausa per oggi",
+      stalledBody:
+        "L'assegnazione AI di oggi è esaurita. Tutto ciò che è stato fatto è salvato e " +
+        "riprendere non costa nulla per la parte già completata. Torna domani, o quando la " +
+        "tua assegnazione si rinnova.",
+      stalledFailingTitle: "Un ricordo sta bloccando la ricostruzione",
+      stalledFailingBody:
+        "Lo stesso ricordo continua a non riuscire, così l'ultimo giro non ha concluso " +
+        "nulla. Aspettare non cambia niente: il tentativo successivo rifarebbe esattamente " +
+        "lo stesso giro. Riprova, nel caso fosse un intoppo momentaneo, oppure ricomincia " +
+        "da capo per dimenticare il punto raggiunto e rileggere tutto dall'inizio.",
+      resumeButton: "Continua",
+      startOverButton: "Ricomincia da capo",
+      startOverNote:
+        "Ricominciare da capo rilegge tutti i ricordi, anche quelli già fatti, e consuma " +
+        "una seconda volta la tua assegnazione AI per quel lavoro.",
+      resettingTitle: "Riavvio della rilettura",
+      resettingBody:
+        "Il registro di ciò che è già stato riletto viene azzerato, poi la rilettura " +
+        "riparte dal tuo primo ricordo.",
+      interruptedTitle: "Una ricostruzione è rimasta a metà",
+      interruptedBody:
+        "Una ricostruzione si è fermata a metà: {done} su {total} completati. La ricerca " +
+        "resta incompleta finché non finisce, e continuare non costa nulla per la parte " +
+        "già completata.",
+      failedTitle: "La ricostruzione si è fermata",
+      failedBody:
+        "I tuoi ricordi non sono stati toccati e tutto ciò che è stato riletto è salvato. " +
+        "Se riprendi, non si ricomincia da zero.",
+      stuckTitle: "La ricostruzione ha smesso di avanzare",
+      stuck:
+        "Niente è andato perso e tutto ciò che è stato riletto è salvato. Riprovare tra " +
+        "qualche minuto spesso basta; se non basta, ricomincia da capo.",
+      doneTitle: "Tutti i tuoi ricordi sono stati riletti.",
+      doneBody:
+        "La ricerca è di nuovo completa e il tuo Second Brain abbina i ricordi nel modo nuovo.",
+      changeAgain: "Cambia di nuovo",
+      freeLabel: "Libera i vecchi dati di ricerca",
+      freeDesc:
+        "I dati di ricerca precedenti alla ricostruzione occupano ancora spazio. I tuoi " +
+        "ricordi non vengono toccati: viene rimosso solo ciò che resta dei vecchi dati di " +
+        "ricerca, che il tuo Second Brain non usa più. È il solo passaggio qui che non si " +
+        "può annullare.",
+      freeButton: "Libera i vecchi dati",
+      freeConfirm: "Sì, liberali — so che non si può annullare",
+      freeKeep: "Conservali per ora",
+      freeing: "Liberazione dei vecchi dati di ricerca",
+      freeingBody: "Ci vuole solo un momento.",
+      freedTitle: "Tutto fatto",
+      freedBody:
+        "Il tuo Second Brain legge e abbina i tuoi ricordi nel modo nuovo, e i vecchi dati " +
+        "di ricerca non ci sono più. Nient'altro è cambiato.",
+      loading: "Verifica di come vengono letti i tuoi ricordi…",
+      loadFailed:
+        "Non è stato possibile verificare come vengono letti i tuoi ricordi in questo momento.",
+      barRunning:
+        "Rilettura dei tuoi ricordi — {done} su {total} completati. Le altre impostazioni " +
+        "sono bloccate fino alla fine.",
+      barWorking:
+        "Il tuo Second Brain è al lavoro. Le altre impostazioni sono bloccate fino alla fine.",
     },
   },
   welcome: {

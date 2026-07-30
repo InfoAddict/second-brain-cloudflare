@@ -49,7 +49,7 @@ If no genuine pattern exists across 3+ memories, respond with exactly: NONE`;
     const validStarters = ["You tend to", "There's a recurring", "Across your memories"];
     if (!validStarters.some(s => trimmed.startsWith(s))) return;
 
-    await captureEntry(trimmed, ["auto-pattern"], "system", env, ctx);
+    await captureEntry(trimmed, ["auto-pattern"], "system", env, ctx, config);
   } catch (e) {
     console.error("derivePattern failed (non-fatal):", String(e));
   }

@@ -109,6 +109,11 @@ pub enum Key {
     ErrorNotionSynced,
     ErrorNotionUpToDate,
     ErrorCfAccountListFailed,
+    ErrorBrainNeedsUpdateForMigration,
+    ErrorUnknownEmbeddingModel,
+    ErrorMigrationHalfSwitched,
+    ErrorCannotDeleteLiveIndex,
+    ErrorNoOldIndexToFree,
     ErrorCfNoSubdomain,
     ErrorCfDiscoverFailed,
     ErrorChoosePasswordFirst,
@@ -233,6 +238,25 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         (Locale::En, Key::ErrorNotionUpToDate) => "Notion is already up to date.",
         (Locale::En, Key::ErrorCfAccountListFailed) => {
             "Signed in, but we couldn't read your account. Please try again."
+        }
+        (Locale::En, Key::ErrorMigrationHalfSwitched) => {
+            "Your Second Brain has switched to the new way of reading, but finishing the \
+switch didn't complete. Your memories are safe and nothing was deleted — reopen this \
+window and carry on, or search will stay incomplete."
+        }
+        (Locale::En, Key::ErrorUnknownEmbeddingModel) => {
+            "That isn't a way of reading memories this app knows how to set up."
+        }
+        (Locale::En, Key::ErrorNoOldIndexToFree) => {
+            "There's no leftover search data to free up. Nothing was changed."
+        }
+        (Locale::En, Key::ErrorCannotDeleteLiveIndex) => {
+            "That's the search data your Second Brain is using right now, so it can't be \
+freed up. Nothing was changed."
+        }
+        (Locale::En, Key::ErrorBrainNeedsUpdateForMigration) => {
+            "Your Second Brain needs updating before it can change how it reads memories. \
+Update it first, then try again."
         }
         (Locale::En, Key::ErrorCfNoSubdomain) => {
             "We couldn't work out the web address for this Cloudflare space, so there's \
@@ -377,6 +401,25 @@ Second Brain's address by hand instead."
         (Locale::It, Key::ErrorCfAccountListFailed) => {
             "Accesso effettuato, ma non è stato possibile leggere l'account. Riprova."
         }
+        (Locale::It, Key::ErrorMigrationHalfSwitched) => {
+            "Il tuo Second Brain è passato al nuovo modo di leggere, ma il passaggio non è \
+stato completato. I tuoi ricordi sono al sicuro e nulla è stato cancellato — riapri questa \
+finestra e continua, altrimenti la ricerca resterà incompleta."
+        }
+        (Locale::It, Key::ErrorUnknownEmbeddingModel) => {
+            "Non è un modo di leggere i ricordi che questa app sappia configurare."
+        }
+        (Locale::It, Key::ErrorNoOldIndexToFree) => {
+            "Non ci sono vecchi dati di ricerca da liberare. Nulla è stato modificato."
+        }
+        (Locale::It, Key::ErrorCannotDeleteLiveIndex) => {
+            "Sono i dati di ricerca che il tuo Second Brain sta usando in questo momento, \
+quindi non possono essere liberati. Nulla è stato modificato."
+        }
+        (Locale::It, Key::ErrorBrainNeedsUpdateForMigration) => {
+            "Il tuo Second Brain va aggiornato prima di poter cambiare il modo in cui legge \
+i ricordi. Aggiornalo, poi riprova."
+        }
         (Locale::It, Key::ErrorCfNoSubdomain) => {
             "Non siamo riusciti a determinare l'indirizzo web di questo spazio Cloudflare, \
 quindi non c'è nulla da cercare. Puoi comunque inserire a mano l'indirizzo del tuo Second Brain."
@@ -520,6 +563,11 @@ mod tests {
             ErrorCfNoAccount,
             ErrorCfSignInFirst,
             ErrorCfSignInExpired,
+            ErrorBrainNeedsUpdateForMigration,
+            ErrorUnknownEmbeddingModel,
+            ErrorMigrationHalfSwitched,
+            ErrorCannotDeleteLiveIndex,
+            ErrorNoOldIndexToFree,
             ErrorCfNoSubdomain,
             ErrorCfDiscoverFailed,
             ErrorNotionSynced,

@@ -61,6 +61,11 @@ pub enum ProvisionError {
     CaptureFailed,
     #[error("could not reserve a web address for this space")]
     SubdomainUnavailable,
+    /// The stored address is not a workers.dev address, so there is no script
+    /// name to deploy to. Distinct from a generic failure because retrying
+    /// cannot help.
+    #[error("this Second Brain is on its own web address, so the app can't update it")]
+    NotAWorkersDevAddress,
 }
 
 /// Everything the pipeline needs from the outside world, so tests can drive
@@ -74,6 +79,10 @@ pub trait Backend {
     async fn find_kv(&self, title: &str) -> Result<Option<String>, CfApiError>;
     async fn create_kv(&self, title: &str) -> Result<String, CfApiError>;
     async fn vectorize_exists(&self, name: &str) -> Result<bool, CfApiError>;
+    /// Deletes an index and everything in it. Irreversible, so callers must have
+    /// confirmed with the user first — see the embedding migration, which only
+    /// reaches this after a rebuild has been verified.
+    async fn delete_vectorize(&self, name: &str) -> Result<(), CfApiError>;
     async fn create_vectorize(
         &self,
         name: &str,
@@ -176,15 +185,41 @@ pub fn binding_field<'a>(
 /// Update metadata: same bindings as a fresh deploy, but the `AUTH_TOKEN`
 /// secret is *preserved* from the previous deployment via `keep_bindings`
 /// rather than re-sent (the app never knows the password on an update).
+/// Which Vectorize index a deploy should bind, and the shape to create it with
+/// if it is missing.
+///
+/// Carried as a pair because the two must agree: an index's dimensions are fixed
+/// at creation and cannot be altered, so a name paired with the wrong size
+/// produces an index that rejects every vector written to it. A normal update
+/// passes the manifest's values; an embedding migration (#248) passes the new
+/// index it is moving to.
+#[derive(Debug, Clone, Copy)]
+pub struct VectorizeTarget<'a> {
+    pub name: &'a str,
+    pub dimensions: u32,
+}
+
+impl<'a> VectorizeTarget<'a> {
+    /// What this build of the app ships with — the right target for every deploy
+    /// that is not a migration.
+    pub fn shipped(manifest: &'a WorkerManifest) -> Self {
+        Self {
+            name: &manifest.vectorize_name,
+            dimensions: manifest.vectorize_dimensions,
+        }
+    }
+}
+
 pub fn build_update_metadata(
     manifest: &WorkerManifest,
     d1_id: &str,
     kv_id: &str,
     assets_jwt: &str,
+    vectorize_index: &str,
 ) -> serde_json::Value {
     let mut bindings = vec![
         serde_json::json!({ "type": "d1", "name": manifest.d1_binding, "database_id": d1_id }),
-        serde_json::json!({ "type": "vectorize", "name": manifest.vectorize_binding, "index_name": manifest.vectorize_name }),
+        serde_json::json!({ "type": "vectorize", "name": manifest.vectorize_binding, "index_name": vectorize_index }),
         serde_json::json!({ "type": "kv_namespace", "name": manifest.kv_binding, "namespace_id": kv_id }),
         serde_json::json!({ "type": "ai", "name": manifest.ai_binding }),
     ];
@@ -343,10 +378,24 @@ pub async fn update_worker<B: Backend>(
     manifest: &WorkerManifest,
     worker_url: &str,
     auth_token: &str,
+    vectorize: VectorizeTarget<'_>,
     progress: impl Fn(StepEvent),
 ) -> Result<(), ProvisionError> {
     let emit = |step: Step, status: StepStatus| progress(StepEvent { step, status });
-    let script = manifest.script_name.as_str();
+
+    // The script to deploy to comes from the address being updated, NOT from the
+    // bundled manifest.
+    //
+    // #257: deploys are a PUT, so taking the name from the manifest meant a brain
+    // connected as `my-brain.acme.workers.dev` was "updated" by writing the
+    // bundle to a script called `second-brain` in that account — creating a
+    // Worker the user never asked for, or silently overwriting an unrelated one
+    // that happened to hold the name. Every call below (`upload_assets`,
+    // `deploy_worker`, `set_cron`, `enable_script_subdomain`) targets this one
+    // value, so deriving it here fixes all of them at once.
+    let script = crate::worker_url::script_of(worker_url)
+        .ok_or(ProvisionError::NotAWorkersDevAddress)?;
+    let script = script.as_str();
 
     macro_rules! step {
         ($step:expr, $body:expr) => {{
@@ -385,13 +434,18 @@ pub async fn update_worker<B: Backend>(
         Ok::<_, ProvisionError>((d1_id, kv_id))
     });
 
-    // Recall — make sure the vector index exists (unchanged across updates).
+    // Recall — make sure the index this deploy is about to bind exists.
+    //
+    // Deliberately the *target*, not the manifest's index. A migration (#248)
+    // redeploys against a differently sized index, and checking the manifest here
+    // would recreate the index being abandoned while never creating the one the
+    // binding points at.
     step!(Step::Recall, async {
-        if !backend.vectorize_exists(&manifest.vectorize_name).await? {
+        if !backend.vectorize_exists(vectorize.name).await? {
             backend
                 .create_vectorize(
-                    &manifest.vectorize_name,
-                    manifest.vectorize_dimensions,
+                    vectorize.name,
+                    vectorize.dimensions,
                     &manifest.vectorize_metric,
                 )
                 .await?;
@@ -402,7 +456,7 @@ pub async fn update_worker<B: Backend>(
     // Finish — upload the newer assets + Worker (password preserved), then verify.
     step!(Step::Finish, async {
         let assets_jwt = backend.upload_assets(script).await?;
-        let metadata = build_update_metadata(manifest, &d1_id, &kv_id, &assets_jwt);
+        let metadata = build_update_metadata(manifest, &d1_id, &kv_id, &assets_jwt, vectorize.name);
         backend.deploy_worker(script, &metadata).await?;
         backend.set_cron(script, &manifest.cron).await?;
         backend.enable_script_subdomain(script).await?;
@@ -514,6 +568,10 @@ mod tests {
         async fn vectorize_exists(&self, _name: &str) -> Result<bool, CfApiError> {
             Ok(self.existing_vectorize)
         }
+        async fn delete_vectorize(&self, name: &str) -> Result<(), CfApiError> {
+            self.log(format!("delete_vectorize:{name}"));
+            Ok(())
+        }
         async fn create_vectorize(
             &self,
             name: &str,
@@ -541,9 +599,9 @@ mod tests {
         }
         async fn get_script_bindings(
             &self,
-            _script: &str,
+            script: &str,
         ) -> Result<Vec<serde_json::Value>, CfApiError> {
-            self.log("get_script_bindings");
+            self.log(format!("get_script_bindings:{script}"));
             Ok(self.script_bindings.clone())
         }
         async fn set_cron(&self, _script: &str, crons: &[String]) -> Result<(), CfApiError> {
@@ -695,13 +753,14 @@ mod tests {
             &test_manifest(),
             "https://second-brain.acme.workers.dev",
             "stored-token",
+            VectorizeTarget::shipped(&test_manifest()),
             |_| {},
         )
         .await
         .unwrap();
 
         let log = fake.entries();
-        assert!(log.contains(&"get_script_bindings".to_string()));
+        assert!(log.contains(&"get_script_bindings:second-brain".to_string()));
         // Never re-created the resources that already exist.
         assert!(!log.iter().any(|l| l.starts_with("create_")));
 
@@ -716,6 +775,162 @@ mod tests {
         assert_eq!(meta["keep_bindings"], serde_json::json!(["secret_text", "secret_key"]));
     }
 
+    /// #257 — the update deploys to the script named by the address it was
+    /// given, never to the one in the bundled manifest.
+    ///
+    /// Deploys are a `PUT`. Taking the name from the manifest meant a brain
+    /// connected as `my-brain.acme.workers.dev` was "updated" by writing the
+    /// bundle to a script called `second-brain` in that account: creating a
+    /// Worker the user never asked for, or silently overwriting an unrelated one
+    /// that happened to hold the name.
+    #[tokio::test]
+    async fn update_targets_the_script_named_by_the_address() {
+        let fake = Fake {
+            script_bindings: vec![
+                serde_json::json!({ "type": "d1", "name": "DB", "database_id": "d1" }),
+                serde_json::json!({ "type": "kv_namespace", "name": "OAUTH_KV", "namespace_id": "kv" }),
+            ],
+            existing_vectorize: true,
+            ..Default::default()
+        };
+        update_worker(
+            &&fake,
+            &test_manifest(),
+            "https://my-brain.acme.workers.dev",
+            "tok",
+            VectorizeTarget::shipped(&test_manifest()),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        let log = fake.entries();
+        for expected in [
+            "get_script_bindings:my-brain",
+            "upload_assets:my-brain",
+            "enable_subdomain:my-brain",
+        ] {
+            assert!(
+                log.contains(&expected.to_string()),
+                "expected {expected} in {log:?}"
+            );
+        }
+        assert!(
+            log.iter().any(|l| l.starts_with("deploy:my-brain:")),
+            "the bundle must be deployed to my-brain: {log:?}"
+        );
+
+        // And the manifest's name was never touched. Checked per call rather than
+        // as a substring search, because the Vectorize index is legitimately
+        // named `second-brain-vectors`.
+        for forbidden in [
+            "get_script_bindings:second-brain",
+            "upload_assets:second-brain",
+            "enable_subdomain:second-brain",
+            "deploy:second-brain",
+        ] {
+            assert!(
+                !log.iter().any(|l| l.starts_with(forbidden)),
+                "the update reached for the manifest name: {forbidden} in {log:?}"
+            );
+        }
+    }
+
+    /// #248 — a migration redeploy binds the index it is moving *to*, and creates
+    /// that one if it is missing.
+    ///
+    /// The step used to check the manifest's index. On a migration that is exactly
+    /// backwards: it would recreate the index being abandoned and never create the
+    /// one the binding is about to point at, leaving the brain reading an index
+    /// that does not exist.
+    #[tokio::test]
+    async fn a_migration_redeploy_binds_and_creates_the_target_index() {
+        let fake = Fake {
+            script_bindings: vec![
+                serde_json::json!({ "type": "d1", "name": "DB", "database_id": "d1" }),
+                serde_json::json!({ "type": "kv_namespace", "name": "OAUTH_KV", "namespace_id": "kv" }),
+            ],
+            // The target does not exist yet — this is the first move to it.
+            existing_vectorize: false,
+            ..Default::default()
+        };
+        update_worker(
+            &&fake,
+            &test_manifest(),
+            "https://second-brain.acme.workers.dev",
+            "tok",
+            VectorizeTarget { name: "second-brain-vectors-768", dimensions: 768 },
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        let log = fake.entries();
+        assert!(
+            log.contains(&"create_vectorize:second-brain-vectors-768:768:cosine".to_string()),
+            "must create the target index at its own size: {log:?}"
+        );
+        assert!(
+            !log.iter().any(|l| l.starts_with("create_vectorize:second-brain-vectors:")),
+            "must not recreate the index being abandoned: {log:?}"
+        );
+
+        let meta = fake.last_deploy_metadata.lock().unwrap().clone().unwrap();
+        let bindings = meta["bindings"].as_array().unwrap();
+        let vectorize = bindings.iter().find(|b| b["type"] == "vectorize").unwrap();
+        assert_eq!(vectorize["index_name"], "second-brain-vectors-768");
+    }
+
+    /// A routine update must keep binding what the build ships with, or every
+    /// update would quietly move users between indexes.
+    #[tokio::test]
+    async fn a_routine_update_binds_the_shipped_index() {
+        let manifest = test_manifest();
+        let fake = Fake { existing_vectorize: true, ..Default::default() };
+        update_worker(
+            &&fake,
+            &manifest,
+            "https://second-brain.acme.workers.dev",
+            "tok",
+            VectorizeTarget::shipped(&manifest),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        let meta = fake.last_deploy_metadata.lock().unwrap().clone().unwrap();
+        let bindings = meta["bindings"].as_array().unwrap();
+        let vectorize = bindings.iter().find(|b| b["type"] == "vectorize").unwrap();
+        assert_eq!(vectorize["index_name"], "second-brain-vectors");
+    }
+
+    /// A brain on its own domain has no script name to derive, so the update
+    /// refuses *before* touching the account rather than guessing one.
+    #[tokio::test]
+    async fn update_refuses_an_address_with_no_derivable_script() {
+        let fake = Fake::default();
+        let err = update_worker(
+            &&fake,
+            &test_manifest(),
+            "https://brain.example.com",
+            "tok",
+            VectorizeTarget::shipped(&test_manifest()),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ProvisionError::NotAWorkersDevAddress),
+            "expected NotAWorkersDevAddress, got {err:?}"
+        );
+        assert!(
+            fake.entries().is_empty(),
+            "a refused update must not call Cloudflare at all: {:?}",
+            fake.entries()
+        );
+    }
+
     #[tokio::test]
     async fn update_falls_back_when_bindings_absent() {
         // An older deployment whose settings don't expose the ids → find-or-create.
@@ -726,7 +941,8 @@ mod tests {
             existing_vectorize: true,
             ..Default::default()
         };
-        update_worker(&&fake, &test_manifest(), "https://x.acme.workers.dev", "tok", |_| {})
+        update_worker(&&fake, &test_manifest(), "https://x.acme.workers.dev", "tok", VectorizeTarget::shipped(&test_manifest()),
+            |_| {})
             .await
             .unwrap();
         let meta = fake.last_deploy_metadata.lock().unwrap().clone().unwrap();

@@ -9,6 +9,7 @@ import { handleGraphRoutes } from "./graph";
 import { handleIntegrationsRoutes } from "./integrations";
 import { handleAdminRoutes } from "./admin";
 import { handleConfigRoutes } from "./config";
+import { handleMigrationRoutes } from "./migration";
 
 type RouteHandler = (
   request: Request,
@@ -25,6 +26,7 @@ const routeHandlers: RouteHandler[] = [
   handleIntegrationsRoutes,
   handleAdminRoutes,
   handleConfigRoutes,
+  handleMigrationRoutes,
 ];
 
 export function createDefaultHandler() {

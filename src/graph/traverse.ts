@@ -101,8 +101,8 @@ async function hydrateGraphEntries(ids: string[], env: Env): Promise<Map<string,
   return map;
 }
 
-export async function getConnections(id: string, type: string | undefined, env: Env): Promise<Connection[]> {
-  let neighbors = await expandGraph([id], { hops: 1 }, env);
+export async function getConnections(id: string, type: string | undefined, env: Env, config: Readonly<Config> = DEFAULTS): Promise<Connection[]> {
+  let neighbors = await expandGraph([id], { hops: 1 }, env, config);
   if (type) neighbors = neighbors.filter(n => n.viaType === type);
   if (!neighbors.length) return [];
 
@@ -127,12 +127,12 @@ export async function getConnections(id: string, type: string | undefined, env: 
   return out;
 }
 
-export async function buildGraph(opts: { seed?: string; limit?: number }, env: Env): Promise<GraphView> {
+export async function buildGraph(opts: { seed?: string; limit?: number }, env: Env, config: Readonly<Config> = DEFAULTS): Promise<GraphView> {
   const limit = opts.limit && opts.limit > 0 ? opts.limit : Infinity;
 
   let nodeIds: string[];
   if (opts.seed) {
-    const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true }, env);
+    const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true }, env, config);
     nodeIds = [opts.seed, ...neighbors.map(n => n.id)].slice(0, limit);
   } else {
     const sql = Number.isFinite(limit)
