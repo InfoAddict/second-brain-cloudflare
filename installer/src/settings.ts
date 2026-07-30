@@ -1,11 +1,16 @@
-// The "Advanced Settings" window (#246) — the only place Second Brain's behaviour
-// can be tuned. The Worker stores and reads config; this app is its only
-// writer, which is why there is deliberately no settings UI in the dashboard.
+// The "Advanced Settings" window (#246) — the only place Second Brain's
+// behaviour can be tuned. The Worker stores and reads config; this app is its
+// only writer, which is why there is deliberately no settings UI in the
+// dashboard.
 //
 // Six controls are named levels rather than sliders: each moves two or three
 // config keys that must stay coherent, and two pairs carry invariants the
 // Worker resets wholesale if crossed. Offering independent sliders would let a
 // user produce a config that silently snaps back.
+//
+// Edits are STAGED, not written on change. These settings alter how recall
+// behaves, so a mis-click must not silently retune the user's brain — nothing
+// reaches the Worker until Save, and Cancel discards the batch.
 import { invoke } from "@tauri-apps/api/core";
 import { h } from "./shared";
 import { LOCALE_CHANGE_EVENT, initI18n, settingsSection, t } from "./i18n";
@@ -26,6 +31,9 @@ type SettingsView = {
   llmModels: string[];
 };
 
+/** A control's staged state: pick a level, or reset it to the shipped default. */
+type Staged = { kind: "level"; id: string } | { kind: "reset" };
+
 /** Which section each control belongs under, in display order. */
 const SECTIONS: { key: "sectionRecall" | "sectionSaving"; controls: string[] }[] = [
   { key: "sectionRecall", controls: ["recency", "variety", "connections", "detail"] },
@@ -34,34 +42,75 @@ const SECTIONS: { key: "sectionRecall" | "sectionSaving"; controls: string[] }[]
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
-let view: SettingsView | null = null;
-/** Guards against a second click while a write is in flight. */
+/** Last state read from the Worker — the baseline every diff is taken against. */
+let saved: SettingsView | null = null;
+/** Staged edits, keyed by control id. Empty means nothing to save. */
+let staged = new Map<string, Staged>();
+let stagedModel: string | null = null;
 let busy = false;
+let message: { text: string; kind: "ok" | "error" } | null = null;
 
-function status(message: string, kind: "ok" | "error" | "pending" = "ok"): void {
-  const el = document.querySelector<HTMLDivElement>("#sb-status");
-  if (!el) return;
-  el.textContent = message;
-  el.className = `settings-status settings-status-${kind}`;
+/** What a control shows right now: its staged value if edited, else saved. */
+function effectiveLevel(c: ControlView): string | null {
+  const s = staged.get(c.id);
+  if (!s) return c.level;
+  return s.kind === "reset" ? c.defaultLevel : s.id;
 }
 
-async function mutate(fn: () => Promise<SettingsView>): Promise<void> {
-  if (busy) return;
+function isDirty(): boolean {
+  return staged.size > 0 || stagedModel !== null;
+}
+
+function stage(controlId: string, next: Staged, c: ControlView): void {
+  // Staging back to the saved value is not a change — drop it so Save stays
+  // disabled and the count stays honest.
+  const backToSaved =
+    (next.kind === "level" && next.id === c.level) ||
+    (next.kind === "reset" && c.level === c.defaultLevel);
+  if (backToSaved) staged.delete(controlId);
+  else staged.set(controlId, next);
+  message = null;
+  render();
+}
+
+function discard(): void {
+  staged = new Map();
+  stagedModel = null;
+  message = null;
+  render();
+}
+
+async function save(): Promise<void> {
+  if (busy || !isDirty()) return;
   busy = true;
-  status(t("settingsPanel.saving"), "pending");
+  message = null;
+  render();
   try {
-    // Every command returns the freshly re-read view: the Worker clamps and
-    // invariant-checks on resolve, so rendering the request rather than the
-    // response could show a state the brain is not actually in.
-    view = await fn();
-    render();
-    status(t("settingsPanel.saved"), "ok");
+    const levels: [string, string][] = [];
+    const resets: string[] = [];
+    for (const [id, s] of staged) {
+      if (s.kind === "reset") resets.push(id);
+      else levels.push([id, s.id]);
+    }
+    // The command returns the freshly re-read view: the Worker clamps and
+    // invariant-checks on resolve, so what it stored may differ from what was
+    // asked for. Rendering the request would show a state the brain is not in.
+    saved = await invoke<SettingsView>("save_brain_settings", {
+      levels,
+      resets,
+      model: stagedModel,
+    });
+    staged = new Map();
+    stagedModel = null;
+    message = { text: t("settingsPanel.saved"), kind: "ok" };
   } catch (e) {
     // The Worker's message names the offending key or the invariant it
-    // crosses; it is the only thing that tells the user what went wrong.
-    status(typeof e === "string" ? e : String(e), "error");
+    // crosses; it is the only thing that tells the user what went wrong. The
+    // staged edits are kept so nothing chosen is lost on a rejection.
+    message = { text: typeof e === "string" ? e : String(e), kind: "error" };
   } finally {
     busy = false;
+    render();
   }
 }
 
@@ -69,8 +118,10 @@ function controlCard(c: ControlView): HTMLElement {
   // Typed so the dotted keys below still satisfy t()'s Path type rather
   // than widening to a bare string.
   const base: `settingsPanel.${string}` = `settingsPanel.${c.id}`;
-  const card = h("div", { class: "card settings-control" });
+  const shown = effectiveLevel(c);
+  const edited = staged.has(c.id);
 
+  const card = h("div", { class: `card settings-control${edited ? " settings-edited" : ""}` });
   card.append(
     h("div", { class: "url-label" }, [t(`${base}.label`)]),
     h("div", { class: "url-desc" }, [t(`${base}.desc`)]),
@@ -88,27 +139,24 @@ function controlCard(c: ControlView): HTMLElement {
 
   for (const levelId of c.levels) {
     const input = h("input", { type: "radio", name: `sb-${c.id}`, value: levelId });
-    (input as HTMLInputElement).checked = c.level === levelId;
+    (input as HTMLInputElement).checked = shown === levelId;
     (input as HTMLInputElement).disabled = busy;
-    input.addEventListener("change", () => {
-      void mutate(() =>
-        invoke<SettingsView>("set_control_level", { control: c.id, level: levelId }),
-      );
-    });
-    group.append(
-      h("label", { class: "settings-level" }, [input, t(`${base}.levels.${levelId}.name`)]),
-    );
-    // Hovering a level previews its notice; leaving restores the selected one.
-    group.lastElementChild?.addEventListener("mouseenter", () => paint(levelId));
-    group.lastElementChild?.addEventListener("mouseleave", () => paint(c.level));
+    input.addEventListener("change", () => stage(c.id, { kind: "level", id: levelId }, c));
+    const label = h("label", { class: "settings-level" }, [
+      input,
+      t(`${base}.levels.${levelId}.name`),
+    ]);
+    // Hovering previews that level's notice; leaving restores the shown one.
+    label.addEventListener("mouseenter", () => paint(levelId));
+    label.addEventListener("mouseleave", () => paint(shown));
+    group.append(label);
   }
   card.append(group);
 
-  if (c.level === null) {
+  if (shown === null) {
     card.append(h("div", { class: "settings-custom" }, [t("settingsPanel.custom")]));
   }
-
-  paint(c.level);
+  paint(shown);
   card.append(notice);
 
   // Forward-only controls cannot rewrite what is already stored. Marked
@@ -120,35 +168,37 @@ function controlCard(c: ControlView): HTMLElement {
   const reset = h("button", { class: "btn-secondary settings-reset", type: "button" }, [
     t("settingsPanel.reset"),
   ]);
-  (reset as HTMLButtonElement).disabled = busy || c.level === c.defaultLevel;
-  reset.addEventListener("click", () => {
-    void mutate(() => invoke<SettingsView>("reset_control_setting", { control: c.id }));
-  });
+  // Reset is itself staged, so it can be cancelled like any other edit.
+  (reset as HTMLButtonElement).disabled = busy || shown === c.defaultLevel;
+  reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
   card.append(reset);
 
   return card;
 }
 
 function modelCard(v: SettingsView): HTMLElement {
-  const card = h("div", { class: "card settings-control" });
+  const card = h("div", { class: `card settings-control${stagedModel ? " settings-edited" : ""}` });
   card.append(
     h("div", { class: "url-label" }, [t("settingsPanel.model.label")]),
     h("div", { class: "url-desc" }, [t("settingsPanel.model.desc")]),
   );
 
+  const current = stagedModel ?? v.llmModel;
   const select = h("select", { class: "locale-select" }) as HTMLSelectElement;
   for (const model of v.llmModels) {
     select.append(h("option", { value: model }, [model]));
   }
-  // A model set outside the app (or removed from the curated list) must still
+  // A model set outside the app (or dropped from the curated list) must still
   // show as selected rather than silently reading as the first entry.
-  if (v.llmModel && !v.llmModels.includes(v.llmModel)) {
-    select.append(h("option", { value: v.llmModel }, [v.llmModel]));
+  if (current && !v.llmModels.includes(current)) {
+    select.append(h("option", { value: current }, [current]));
   }
-  select.value = v.llmModel;
+  select.value = current;
   select.disabled = busy;
   select.addEventListener("change", () => {
-    void mutate(() => invoke<SettingsView>("set_brain_llm_model", { model: select.value }));
+    stagedModel = select.value === v.llmModel ? null : select.value;
+    message = null;
+    render();
   });
 
   card.append(
@@ -159,17 +209,50 @@ function modelCard(v: SettingsView): HTMLElement {
   return card;
 }
 
+/** Sticky footer: nothing reaches the Worker except through Save. */
+function actionBar(): HTMLElement {
+  const count = staged.size + (stagedModel ? 1 : 0);
+  const bar = h("div", { class: "settings-actions" });
+
+  const status = h("div", { class: "settings-actions-status" });
+  if (message) {
+    status.textContent = message.text;
+    status.classList.add(`settings-status-${message.kind}`);
+  } else if (count > 0) {
+    status.textContent =
+      count === 1
+        ? t("settingsPanel.unsavedOne")
+        : t("settingsPanel.unsaved", { count: String(count) });
+    status.classList.add("settings-status-pending");
+  }
+
+  const cancel = h("button", { class: "btn-secondary", type: "button" }, [
+    t("settingsPanel.cancel"),
+  ]);
+  (cancel as HTMLButtonElement).disabled = busy || !isDirty();
+  cancel.addEventListener("click", discard);
+
+  const saveBtn = h("button", { class: "btn-primary", type: "button" }, [
+    busy ? t("settingsPanel.saving") : t("settingsPanel.save"),
+  ]);
+  (saveBtn as HTMLButtonElement).disabled = busy || !isDirty();
+  saveBtn.addEventListener("click", () => void save());
+
+  bar.append(status, cancel, saveBtn);
+  return bar;
+}
+
 function render(): void {
+  const scroll = window.scrollY;
   app.replaceChildren();
-  if (!view) return;
+  if (!saved) return;
 
   app.append(
     h("h1", { class: "settings-title" }, [t("settingsPanel.title")]),
     h("p", { class: "settings-lede" }, [t("settingsPanel.lede")]),
-    h("div", { id: "sb-status", class: "settings-status" }),
   );
 
-  const byId = new Map(view.controls.map(c => [c.id, c]));
+  const byId = new Map(saved.controls.map(c => [c.id, c]));
   for (const section of SECTIONS) {
     app.append(h("h2", { class: "settings-section" }, [t(`settingsPanel.${section.key}`)]));
     for (const id of section.controls) {
@@ -182,16 +265,20 @@ function render(): void {
 
   app.append(
     h("h2", { class: "settings-section" }, [t("settingsPanel.sectionAi")]),
-    modelCard(view),
+    modelCard(saved),
     settingsSection(() => render()),
+    actionBar(),
   );
+  // Re-render replaces the whole tree; without this, staging an edit near the
+  // bottom would jump the view back to the top.
+  window.scrollTo({ top: scroll });
 }
 
 async function boot(): Promise<void> {
   initI18n();
   app.replaceChildren(h("p", { class: "settings-lede" }, [t("settingsPanel.saving")]));
   try {
-    view = await invoke<SettingsView>("get_brain_settings");
+    saved = await invoke<SettingsView>("get_brain_settings");
     render();
   } catch (e) {
     app.replaceChildren(
@@ -202,6 +289,11 @@ async function boot(): Promise<void> {
     );
   }
 }
+
+// Closing the window with staged edits would lose them silently.
+window.addEventListener("beforeunload", event => {
+  if (isDirty()) event.preventDefault();
+});
 
 window.addEventListener(LOCALE_CHANGE_EVENT, () => render());
 void boot();

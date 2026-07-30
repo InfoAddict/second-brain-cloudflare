@@ -46,6 +46,10 @@ export type Messages = {
     custom: string;
     customNote: string;
     reset: string;
+    save: string;
+    cancel: string;
+    unsaved: string;
+    unsavedOne: string;
     saving: string;
     saved: string;
     loadFailed: string;

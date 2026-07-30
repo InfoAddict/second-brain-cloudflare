@@ -932,34 +932,20 @@ pub async fn get_brain_settings(app: AppHandle) -> Result<crate::settings::Setti
     crate::settings::fetch_settings(&url, &token, locale).await
 }
 
+/// Commits staged changes from the Advanced Settings window.
+///
+/// Replaces the earlier save-on-change commands: settings that alter how recall
+/// behaves should not be written the instant a radio is clicked, because a
+/// mis-click silently retunes the user's brain with no way back.
 #[tauri::command]
-pub async fn set_control_level(
+pub async fn save_brain_settings(
     app: AppHandle,
-    control: String,
-    level: String,
+    levels: Vec<(String, String)>,
+    resets: Vec<String>,
+    model: Option<String>,
 ) -> Result<crate::settings::SettingsView, String> {
     let (url, token, locale) = settings_target(&app)?;
-    crate::settings::apply_level(&url, &token, &control, &level, locale).await?;
-    crate::settings::fetch_settings(&url, &token, locale).await
-}
-
-#[tauri::command]
-pub async fn reset_control_setting(
-    app: AppHandle,
-    control: String,
-) -> Result<crate::settings::SettingsView, String> {
-    let (url, token, locale) = settings_target(&app)?;
-    crate::settings::reset_control(&url, &token, &control, locale).await?;
-    crate::settings::fetch_settings(&url, &token, locale).await
-}
-
-#[tauri::command]
-pub async fn set_brain_llm_model(
-    app: AppHandle,
-    model: String,
-) -> Result<crate::settings::SettingsView, String> {
-    let (url, token, locale) = settings_target(&app)?;
-    crate::settings::set_llm_model(&url, &token, &model, locale).await?;
+    crate::settings::apply_settings(&url, &token, &levels, &resets, model, locale).await?;
     crate::settings::fetch_settings(&url, &token, locale).await
 }
 

@@ -184,9 +184,7 @@ pub fn run() {
             commands::begin_worker_update,
             commands::start_worker_update,
             commands::get_brain_settings,
-            commands::set_control_level,
-            commands::reset_control_setting,
-            commands::set_brain_llm_model,
+            commands::save_brain_settings,
             commands::open_settings_window,
         ])
         .setup(move |app| {

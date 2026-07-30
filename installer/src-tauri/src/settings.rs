@@ -309,20 +309,6 @@ pub async fn patch_config(
     }
 }
 
-/// Writes the level for one control. Validated locally first so an unknown
-/// control or level never reaches the Worker.
-pub async fn apply_level(
-    worker_url: &str,
-    auth_token: &str,
-    control_id: &str,
-    level_id: &str,
-    locale: Locale,
-) -> Result<(), String> {
-    let patch = patch_for(control_id, level_id)
-        .ok_or_else(|| i18n::t(locale, Key::ErrorUnknownTool).to_string())?;
-    patch_config(worker_url, auth_token, &Value::Object(patch), locale).await
-}
-
 /// Per-setting reset: deletes every key the control owns, leaving all other
 /// controls untouched. A delete rather than a write-back of the default, so the
 /// user rejoins the shipped value and picks up any later retune of it.
@@ -357,14 +343,44 @@ pub async fn reset_control(
     Ok(())
 }
 
-/// The model dropdown is a single string key, so it needs no level mapping.
-pub async fn set_llm_model(
+/// Commits a batch of staged changes: one merged PATCH for every changed level
+/// plus the model, then a DELETE per key of each control being reset.
+///
+/// Merged rather than one request per control on purpose. The Worker validates
+/// invariants against the whole resulting config, so splitting a batch could
+/// reject a combination that is valid as a whole, and would leave earlier
+/// controls written when a later one failed.
+///
+/// Every level is validated locally first, so an invalid batch writes nothing.
+pub async fn apply_settings(
     worker_url: &str,
     auth_token: &str,
-    model: &str,
+    levels: &[(String, String)],
+    resets: &[String],
+    model: Option<String>,
     locale: Locale,
 ) -> Result<(), String> {
-    patch_config(worker_url, auth_token, &json!({ "LLM_MODEL": model }), locale).await
+    let mut patch = Map::new();
+    for (control_id, level_id) in levels {
+        let keys = patch_for(control_id, level_id)
+            .ok_or_else(|| i18n::t(locale, Key::ErrorUnknownTool).to_string())?;
+        patch.extend(keys);
+    }
+    // Validate reset targets before writing anything, for the same reason.
+    for control_id in resets {
+        control(control_id).ok_or_else(|| i18n::t(locale, Key::ErrorUnknownTool).to_string())?;
+    }
+    if let Some(m) = model {
+        patch.insert("LLM_MODEL".into(), json!(m));
+    }
+
+    if !patch.is_empty() {
+        patch_config(worker_url, auth_token, &Value::Object(patch), locale).await?;
+    }
+    for control_id in resets {
+        reset_control(worker_url, auth_token, control_id, locale).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -600,7 +616,9 @@ mod tests {
     #[tokio::test]
     async fn apply_level_patches_only_that_controls_keys() {
         let (url, seen) = spawn_worker();
-        apply_level(&url, "tok", "variety", "varied", Locale::En).await.unwrap();
+        apply_settings(&url, "tok", &[("variety".into(), "varied".into())], &[], None, Locale::En)
+            .await
+            .unwrap();
         let log = seen.lock().unwrap();
         assert!(log[0].starts_with("PATCH /config"), "got: {}", log[0]);
         assert!(log[0].contains("MMR_LAMBDA"));
@@ -611,7 +629,7 @@ mod tests {
     #[tokio::test]
     async fn apply_level_rejects_an_unknown_level_without_calling_the_worker() {
         let (url, seen) = spawn_worker();
-        let err = apply_level(&url, "tok", "variety", "nonsense", Locale::En).await;
+        let err = apply_settings(&url, "tok", &[("variety".into(), "nonsense".into())], &[], None, Locale::En).await;
         assert!(err.is_err());
         assert!(seen.lock().unwrap().is_empty(), "must not hit the Worker for an invalid level");
     }
@@ -750,6 +768,64 @@ mod tests {
             "404 must point at the Worker update, got: {err}"
         );
         assert!(!err.contains("404"), "a bare status code is not actionable: {err}");
+    }
+
+
+    #[tokio::test]
+    async fn saving_several_controls_sends_one_merged_patch() {
+        let (url, seen) = spawn_worker();
+        apply_settings(
+            &url, "tok",
+            &[("variety".into(), "varied".into()), ("detail".into(), "compact".into())],
+            &[],
+            None,
+            Locale::En,
+        ).await.unwrap();
+
+        let log = seen.lock().unwrap();
+        let patches: Vec<&String> = log.iter().filter(|l| l.starts_with("PATCH")).collect();
+        // One request, not one per control: the Worker validates invariants
+        // against the merged result, so splitting them could reject a change
+        // that is valid as a whole.
+        assert_eq!(patches.len(), 1, "expected a single merged PATCH, got {patches:?}");
+        assert!(patches[0].contains("MMR_LAMBDA"));
+        assert!(patches[0].contains("SNIPPET_MAX_CHARS"));
+    }
+
+    #[tokio::test]
+    async fn saving_includes_the_model_when_it_changed() {
+        let (url, seen) = spawn_worker();
+        apply_settings(&url, "tok", &[], &[], Some("@cf/some/model".into()), Locale::En)
+            .await
+            .unwrap();
+        let log = seen.lock().unwrap();
+        assert!(log[0].contains("LLM_MODEL"), "got: {}", log[0]);
+    }
+
+    #[tokio::test]
+    async fn saving_a_reset_deletes_that_controls_keys() {
+        let (url, seen) = spawn_worker();
+        apply_settings(&url, "tok", &[], &["recency".into()], None, Locale::En)
+            .await
+            .unwrap();
+        let log = seen.lock().unwrap();
+        let deletes = log.iter().filter(|l| l.starts_with("DELETE")).count();
+        assert_eq!(deletes, 3, "recency owns three keys, got {deletes} deletes");
+    }
+
+    #[tokio::test]
+    async fn saving_nothing_makes_no_requests() {
+        let (url, seen) = spawn_worker();
+        apply_settings(&url, "tok", &[], &[], None, Locale::En).await.unwrap();
+        assert!(seen.lock().unwrap().is_empty(), "an empty save must not call the Worker");
+    }
+
+    #[tokio::test]
+    async fn saving_an_unknown_level_fails_before_any_request() {
+        let (url, seen) = spawn_worker();
+        let r = apply_settings(&url, "tok", &[("variety".into(), "nope".into())], &[], None, Locale::En).await;
+        assert!(r.is_err());
+        assert!(seen.lock().unwrap().is_empty(), "must validate before writing anything");
     }
 
     #[test]

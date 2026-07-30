@@ -754,3 +754,31 @@ body.settings-page #app {
 .settings-status-ok { color: var(--ok); }
 .settings-status-error { color: var(--danger); }
 .settings-status-pending { color: var(--text-tertiary); }
+
+/* Staged-edit affordances (#246). Nothing reaches the Worker until Save, so the
+   panel has to make "changed but not saved" unmistakable. */
+
+.settings-edited {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 1rem 1.5rem 0;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--border);
+  /* Opaque: cards scroll underneath this bar. */
+  background: var(--bg);
+}
+
+.settings-actions-status {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+  line-height: 1.35;
+}
