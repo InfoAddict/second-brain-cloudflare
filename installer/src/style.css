@@ -636,14 +636,16 @@ body.settings-page {
   overflow-y: auto;
 }
 
+/* .panel handles width and centring, exactly as the Connections window does.
+   Only the vertical centring has to go: a tall pane would otherwise be clipped
+   at the top rather than scrolling. */
 body.settings-page #app {
-  display: block;
-  align-items: stretch;
+  /* Column, not the inherited row: the panel and the sticky action bar are
+     siblings and would otherwise sit beside each other. */
+  flex-direction: column;
+  align-items: center;
   justify-content: flex-start;
-  min-height: 0;
-  padding: 0 0 2rem;
-  max-width: 760px;
-  margin: 0 auto;
+  padding: 0;
 }
 
 /* ── Advanced Settings window (#246) ─────────────────────────────────────────── */
@@ -656,7 +658,7 @@ body.settings-page #app {
 }
 
 .settings-lede {
-  margin: 0 1.5rem 1rem;
+  margin: 0 0 1rem;
   color: var(--text-secondary);
   font-size: 0.9rem;
   line-height: 1.45;
@@ -672,7 +674,7 @@ body.settings-page #app {
 }
 
 .settings-control {
-  margin: 0 1.5rem 0.75rem;
+  margin: 0 0 0.75rem;
 }
 
 .settings-levels {
@@ -769,8 +771,10 @@ body.settings-page #app {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  margin: 1rem 1.5rem 0;
-  padding: 0.85rem 0;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0.85rem 30px;
   border-top: 1px solid var(--border);
   /* Opaque: cards scroll underneath this bar. */
   background: var(--bg);
@@ -792,4 +796,13 @@ body.settings-page #app {
   width: auto;
   padding: 0.55rem 1.1rem;
   font-size: 0.85rem;
+}
+
+/* Staged edits in a pane the user is not looking at would otherwise be
+   invisible until they hit Save. */
+.rail-dot {
+  margin-left: 0.4rem;
+  color: var(--accent);
+  font-size: 0.6rem;
+  vertical-align: middle;
 }

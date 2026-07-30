@@ -41,7 +41,7 @@ export type Messages = {
     title: string;
     lede: string;
     sectionRecall: string;
-    sectionSaving: string;
+    sectionRemember: string;
     sectionAi: string;
     custom: string;
     customNote: string;

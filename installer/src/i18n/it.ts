@@ -34,7 +34,7 @@ export const it: Messages = {
     title: "Impostazioni avanzate",
     lede: "Come il tuo Second Brain ricorda e recupera. Le modifiche valgono dalla prossima ricerca.",
     sectionRecall: "Recupero",
-    sectionSaving: "Salvataggio",
+    sectionRemember: "Ricorda",
     sectionAi: "AI",
     custom: "Personalizzato",
     customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",

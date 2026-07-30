@@ -13,7 +13,7 @@
 // reaches the Worker until Save, and Cancel discards the batch.
 import { invoke } from "@tauri-apps/api/core";
 import { h } from "./shared";
-import { LOCALE_CHANGE_EVENT, initI18n, settingsSection, t } from "./i18n";
+import { LOCALE_CHANGE_EVENT, initI18n, t } from "./i18n";
 import "./style.css";
 
 type ControlView = {
@@ -34,11 +34,24 @@ type SettingsView = {
 /** A control's staged state: pick a level, or reset it to the shipped default. */
 type Staged = { kind: "level"; id: string } | { kind: "reset" };
 
-/** Which section each control belongs under, in display order. */
-const SECTIONS: { key: "sectionRecall" | "sectionSaving"; controls: string[] }[] = [
-  { key: "sectionRecall", controls: ["recency", "variety", "connections", "detail"] },
-  { key: "sectionSaving", controls: ["duplicates", "compression"] },
+/**
+ * Left-rail sections, mirroring the Connections window. Only the active pane
+ * renders — seven controls stacked in one column was a long scroll, and the
+ * grouping is what tells a user whether a setting affects recall or capture.
+ *
+ * "ai" holds the model dropdown rather than level controls, so it has no
+ * entry in `controls`.
+ */
+type SectionId = "recall" | "remember" | "ai";
+
+const SECTIONS: { id: SectionId; labelKey: "sectionRecall" | "sectionRemember" | "sectionAi"; controls: string[] }[] = [
+  { id: "recall", labelKey: "sectionRecall", controls: ["recency", "variety", "connections", "detail"] },
+  { id: "remember", labelKey: "sectionRemember", controls: ["duplicates", "compression"] },
+  { id: "ai", labelKey: "sectionAi", controls: [] },
 ];
+
+/** Recall is the default pane. */
+let active: SectionId = "recall";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -247,31 +260,51 @@ function render(): void {
   app.replaceChildren();
   if (!saved) return;
 
-  app.append(
-    h("h1", { class: "settings-title" }, [t("settingsPanel.title")]),
+  const rail = h("nav", { class: "rail" });
+  for (const section of SECTIONS) {
+    const edits = countEdits(section.id);
+    const btn = h("button", { class: section.id === active ? "rail-btn on" : "rail-btn", type: "button" }, [
+      t(`settingsPanel.${section.labelKey}`),
+    ]);
+    // A dot on an inactive section, so staged edits are not hidden by the pane
+    // the user happens to be looking at.
+    if (edits > 0) btn.append(h("span", { class: "rail-dot" }, ["●"]));
+    btn.addEventListener("click", () => {
+      active = section.id;
+      render();
+    });
+    rail.append(btn);
+  }
+
+  const section = SECTIONS.find(s => s.id === active)!;
+  const pane = h("section", { class: "pane" });
+  pane.append(
+    h("h2", { class: "pane-title" }, [t(`settingsPanel.${section.labelKey}`)]),
     h("p", { class: "settings-lede" }, [t("settingsPanel.lede")]),
   );
 
   const byId = new Map(saved.controls.map(c => [c.id, c]));
-  for (const section of SECTIONS) {
-    app.append(h("h2", { class: "settings-section" }, [t(`settingsPanel.${section.key}`)]));
-    for (const id of section.controls) {
-      const c = byId.get(id);
-      // Skip silently rather than throwing: a Worker running an older version
-      // may not expose every control yet.
-      if (c) app.append(controlCard(c));
-    }
+  for (const id of section.controls) {
+    const c = byId.get(id);
+    // Skip silently rather than throwing: a Worker running an older version
+    // may not expose every control yet.
+    if (c) pane.append(controlCard(c));
   }
+  if (active === "ai") pane.append(modelCard(saved));
 
-  app.append(
-    h("h2", { class: "settings-section" }, [t("settingsPanel.sectionAi")]),
-    modelCard(saved),
-    settingsSection(() => render()),
-    actionBar(),
-  );
+  app.append(h("div", { class: "panel" }, [rail, pane]), actionBar());
   // Re-render replaces the whole tree; without this, staging an edit near the
   // bottom would jump the view back to the top.
   window.scrollTo({ top: scroll });
+}
+
+/** Staged edits belonging to one section, for the rail indicator. */
+function countEdits(id: SectionId): number {
+  const section = SECTIONS.find(s => s.id === id);
+  if (!section) return 0;
+  let n = section.controls.filter(c => staged.has(c)).length;
+  if (id === "ai" && stagedModel) n += 1;
+  return n;
 }
 
 async function boot(): Promise<void> {

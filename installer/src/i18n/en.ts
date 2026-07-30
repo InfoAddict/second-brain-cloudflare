@@ -34,7 +34,7 @@ export const en: Messages = {
     title: "Advanced Settings",
     lede: "How your Second Brain remembers and recalls. Changes apply to your next search.",
     sectionRecall: "Recall",
-    sectionSaving: "Saving",
+    sectionRemember: "Remember",
     sectionAi: "AI",
     custom: "Custom",
     customNote: "These values were set outside the app and don't match a preset. Picking a level below will replace them.",
