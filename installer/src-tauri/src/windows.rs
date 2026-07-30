@@ -242,6 +242,54 @@ fn open_wrapper_window_impl(
     Ok(())
 }
 
+/// Re-points an already-open dashboard window at a new password, then reloads it.
+///
+/// The origin check is not ceremony, and it is the reason this is a separate
+/// script rather than a re-run of the creation-time one. The `brain` window
+/// navigates to third-party sites during an integration's OAuth handshake
+/// (Notion, Google, Microsoft), and `eval` runs against whatever document is
+/// loaded at the time — so an unguarded write would hand the user's brain
+/// password to someone else's origin. The reload sits inside the same guard for
+/// a milder version of the same reason: reloading a half-finished sign-in throws
+/// it away.
+const REFRESH_TOKEN_JS: &str = r#"(function () {
+  try {
+    if (location.origin !== __ORIGIN__) { return; }
+    localStorage.setItem('sb_url', __ORIGIN__);
+    localStorage.setItem('sb_token', __TOKEN__);
+    location.reload();
+  } catch (_) {}
+})();"#;
+
+/// Hands the open dashboard window the new password and reloads it.
+///
+/// The token reaches that window through an `initialization_script`, which runs
+/// once per page load. A window that was already open when the password changed
+/// therefore goes on presenting the old one indefinitely: nothing about it looks
+/// broken, it simply starts 401ing, and the only route back is Disconnect.
+///
+/// Returns whether the dashboard is now on the new password. `true` when there is
+/// no wrapper window at all — the caller is asking whether a stale copy is left
+/// anywhere, and with no window there is none.
+pub fn refresh_wrapper_token(app: &AppHandle, worker_url: &str, auth_token: &str) -> bool {
+    let Some(window) = app.get_webview_window("brain") else {
+        return true;
+    };
+    let origin = worker_url.trim_end_matches('/');
+    // serde_json turns both values into safely-escaped JS string literals, the
+    // same way the creation-time injection does.
+    let script = REFRESH_TOKEN_JS
+        .replace("__ORIGIN__", &serde_json::to_string(origin).expect("string serializes"))
+        .replace("__TOKEN__", &serde_json::to_string(auth_token).expect("string serializes"));
+    match window.eval(&script) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("could not refresh the dashboard window's password: {e}");
+            false
+        }
+    }
+}
+
 pub fn open_details_window(app: &AppHandle) {
     let locale = app
         .try_state::<crate::i18n::AppLocale>()
@@ -330,5 +378,41 @@ mod tests {
         let body = &src[start..end];
         assert!(body.contains("CONNECTIONS_PATH"));
         assert!(body.contains("SETTINGS_PATH"));
+    }
+
+    /// A rotation re-injects the password into an already-open dashboard window.
+    /// That window is not always on the user's own origin: an integration's
+    /// OAuth handshake navigates it to Notion or Google, and `eval` targets
+    /// whatever document is loaded. Writing the password there would hand the key
+    /// to the user's whole brain to a third party.
+    ///
+    /// Asserted on the source because the failure needs a live webview sitting on
+    /// a foreign origin, which this suite has no way to produce — but the guard
+    /// that prevents it is a single line, and its absence is checkable.
+    ///
+    /// Reads only the literal's own body, so the strings in this test cannot
+    /// satisfy it.
+    #[test]
+    fn the_token_refresh_writes_nothing_outside_the_brains_own_origin() {
+        let src = include_str!("windows.rs");
+        let start = src.find("const REFRESH_TOKEN_JS").expect("REFRESH_TOKEN_JS");
+        let body = &src[start..];
+        let body = &body[..body.find("\"#;").expect("end of the literal")];
+
+        let guard = body
+            .find("location.origin !== __ORIGIN__")
+            .expect("the refresh script must compare origins before writing");
+        let write = body.find("sb_token").expect("the token write");
+        let reload = body.find("location.reload").expect("the reload");
+
+        assert!(
+            guard < write,
+            "the password is written before the origin is checked, which leaks it \
+             to whatever site the dashboard window happens to be showing"
+        );
+        assert!(
+            guard < reload,
+            "an unguarded reload discards a third-party sign-in that is mid-flight"
+        );
     }
 }

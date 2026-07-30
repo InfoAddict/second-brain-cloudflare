@@ -16,6 +16,7 @@ mod i18n;
 mod mcp_config;
 mod migration;
 mod password_check;
+mod rotate;
 mod secure_store;
 mod settings;
 mod version;
@@ -210,6 +211,14 @@ pub fn run() {
             commands::get_brain_settings,
             commands::save_brain_settings,
             commands::open_settings_window,
+            // Changing the brain's password (#235). A command that is written,
+            // tested, and left unregistered is invisible to the UI.
+            commands::begin_password_change,
+            commands::rotation_blocked,
+            commands::rotate_password,
+            commands::recheck_password,
+            commands::validate_brain_address,
+            commands::disconnect_ai_tools,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -280,9 +289,10 @@ pub fn run() {
             match load_setup_unless_dry_run(dry_run, secure_store::load_setup) {
                 Some(info) => {
                     windows::open_wrapper_window(&handle, &info.worker_url, &info.auth_token)?;
-                    // In wrapper mode, quietly check whether the deployed Worker
-                    // is behind what this app bundles and offer to update it.
-                    commands::maybe_offer_worker_update(&handle);
+                    // In wrapper mode, quietly ask the brain how it is: whether
+                    // the deployed Worker is behind what this app bundles, and
+                    // whether the password stored here still opens it at all.
+                    commands::check_brain_at_launch(&handle);
                 }
                 _ => windows::open_setup_window(&handle)?,
             }
