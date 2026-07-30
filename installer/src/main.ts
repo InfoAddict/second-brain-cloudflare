@@ -15,6 +15,16 @@ import {
 } from "./shared";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { initI18n, LOCALE_CHANGE_EVENT, t } from "./i18n";
+import {
+  localFailureCopy,
+  rotateErrorOf,
+  screenForFailure,
+  screenForOutcome,
+  withAddress,
+  type ChangePasswordKey,
+  type RecheckResult,
+  type RotateOutcome,
+} from "./rotation-state";
 import "./style.css";
 
 interface Account {
@@ -230,6 +240,7 @@ function unlockBrainScreen(
     t("connectExisting.lostPassword"),
   ]);
   lost.addEventListener("click", () => {
+    beginRotation();
     rotationExit = () => unlockBrainScreen(brain, undefined, found);
     lostPasswordIntroScreen(brain.url);
   });
@@ -289,6 +300,7 @@ function manualEntryScreen(
     t("connectExisting.lostPassword"),
   ]);
   lost.addEventListener("click", () => {
+    beginRotation();
     rotationExit = () => manualEntryScreen(errorMsg, address.value, tone);
     rotationTypedAddress = address.value.trim();
     lostPasswordIntroScreen(null);
@@ -771,6 +783,34 @@ let rotationPassword = "";
 /** True while the field still holds what `generate_password` produced. */
 let rotationGenerated = false;
 
+/**
+ * True once *any* attempt in this window has reached the "may already be live"
+ * state, and never cleared until a change is confirmed.
+ *
+ * The reason it is sticky rather than per-attempt: attempt one can PUT the
+ * secret and then time out waiting for the brain to confirm it, and attempt two
+ * can fail before the PUT — an expired sign-in, a transient account lookup —
+ * which on its own is honestly "nothing was changed". Rendering that screen
+ * would tell someone whose old password is already dead that everything is
+ * exactly as it was, which is the one message in this flow that ends with a
+ * brain nobody can open.
+ */
+let rotationMayBeLive = false;
+
+/**
+ * Entering the flow from outside — Door A at launch, or the ghost link on any
+ * of the three connect screens. Deliberately not called by the Back paths,
+ * which are inside a flow that is still choosing its password.
+ *
+ * `rotationMayBeLive` is *not* reset here: a second run with a second password
+ * does not undo a first run that may already have taken effect, so the doubt
+ * outlives the flow that created it and only a confirmed change clears it.
+ */
+function beginRotation() {
+  rotationPassword = "";
+  rotationGenerated = false;
+}
+
 /** Where the password step's Back leads. Usually the intro; the discovery paths
  *  set it to the picker they came from, because the intro would mean signing in
  *  to Cloudflare a second time to get back here. */
@@ -778,35 +818,6 @@ let rotationBack: () => void = () => changePasswordIntroScreen();
 
 /** Where Door B leads out — the screen the ghost link was clicked on. */
 let rotationExit: () => void = () => connectExistingScreen();
-
-/** What `rotate_password` reports when the remote change succeeded. */
-interface RotateOutcome {
-  keychain: boolean;
-  /** null when the CLI was never installed — that is not a failure. */
-  cliConfig: boolean | null;
-}
-
-/** Which failure happened, and with it what may honestly be claimed. */
-interface RotateError {
-  /** "notSent" — the old password still works. "unconfirmed" — it may not.
-   *  "local" — the brain has the new one, a local write did not. */
-  stage: "notSent" | "unconfirmed" | "local";
-  /** Already localised by Rust; fills the failure screen's detail slot. */
-  detail: string;
-}
-
-function rotateErrorOf(e: unknown): RotateError {
-  if (typeof e === "object" && e !== null) {
-    const { stage, detail } = e as { stage?: unknown; detail?: unknown };
-    if (stage === "notSent" || stage === "unconfirmed" || stage === "local") {
-      return { stage, detail: typeof detail === "string" ? detail : "" };
-    }
-  }
-  // Anything we cannot read is treated as "may already be live", deliberately.
-  // Telling someone their old password still works when it may not is the one
-  // mistake in this flow that ends with a brain nobody can open.
-  return { stage: "unconfirmed", detail: String(e) };
-}
 
 /**
  * True once `connect_cloudflare` has succeeded in this window. The account list
@@ -822,6 +833,44 @@ function signedInToCloudflare(): boolean {
 function leaveRotation() {
   if (rotationDoor === "lost") rotationExit();
   else void invoke("open_dashboard");
+}
+
+/**
+ * An exit from a screen that may be holding the only password that opens the
+ * brain.
+ *
+ * The save gate has a deliberate "I've saved it" confirmation for a password
+ * that is merely *proposed*. Past that point the same password may already be
+ * the live one and this window the only place it exists, so walking away from
+ * it gets the same acknowledgement rather than a single click on a ghost.
+ *
+ * Not used on the "nothing was changed" screen: that screen renders only when
+ * no attempt in this window has ever reached the brain, so the password on it
+ * is by the app's own account not in use, and its copy says so.
+ *
+ * The two-step shape matches the Disconnect and Log out controls in the
+ * Connections window, so the pattern is already familiar where it matters most.
+ */
+function guardedExit(label: string, leave: () => void): HTMLElement {
+  const host = h("div", {});
+  const render = (confirming: boolean) => {
+    if (!confirming) {
+      const go = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [label]);
+      go.addEventListener("click", () => render(true));
+      host.replaceChildren(go);
+      return;
+    }
+    const confirm = h("button", { class: "btn-danger" }, [t("changePassword.leaveConfirm")]);
+    confirm.addEventListener("click", leave);
+    const stay = h("button", { class: "btn-ghost" }, [t("changePassword.leaveKeep")]);
+    stay.addEventListener("click", () => render(false));
+    host.replaceChildren(
+      h("div", { class: "notice" }, ["🔑", h("span", {}, [t("changePassword.leaveWarn")])]),
+      h("div", { class: "row-actions" }, [confirm, stay]),
+    );
+  };
+  render(false);
+  return host;
 }
 
 function cloudflareWaitingScreen(lede: string) {
@@ -1025,9 +1074,22 @@ function lostAddressScreen(
     else next.setAttribute("disabled", "");
   };
   address.addEventListener("input", sync);
-  next.addEventListener("click", () => {
-    rotationAddress = address.value.trim();
-    rotationTypedAddress = rotationAddress;
+  // Checked here rather than at the far end of the flow. `validate_brain_address`
+  // runs exactly the checks `rotate_password` runs on an explicit address, so a
+  // typo is reported in the field it was typed in — not after the save gate, a
+  // progress screen and a failure screen that has to hedge about what happened.
+  next.addEventListener("click", async () => {
+    const typed = address.value.trim();
+    next.disabled = true;
+    next.textContent = t("common.checking");
+    try {
+      await invoke("validate_brain_address", { address: typed });
+    } catch (e) {
+      lostAddressScreen(found, String(e), fromPicker, typed);
+      return;
+    }
+    rotationAddress = typed;
+    rotationTypedAddress = typed;
     rotationBack = () => lostAddressScreen(found, undefined, fromPicker, rotationTypedAddress);
     choosePasswordScreen();
   });
@@ -1275,21 +1337,64 @@ async function runRotation() {
   try {
     // Door B has no stored setup, so the brain it picked travels with the call.
     // Door A omits it and the command uses the address this computer holds.
-    const args: Record<string, unknown> = { newPassword: rotationPassword };
-    if (rotationAddress) args.address = rotationAddress;
-    const outcome = await invoke<RotateOutcome>("rotate_password", args);
+    const outcome = await invoke<RotateOutcome>(
+      "rotate_password",
+      withAddress({ newPassword: rotationPassword }, rotationAddress),
+    );
     unlisten();
+    // The brain confirmed the new password, so there is no ambiguity left for a
+    // later attempt to inherit.
+    rotationMayBeLive = false;
     // The done screen opens by claiming this computer already uses the new
-    // password, so it only gets shown when the local writes say so.
-    if (!outcome.keychain || outcome.cliConfig === false) rotateFailLocalScreen(outcome);
+    // password, so it only gets shown when every local write says so.
+    if (screenForOutcome(outcome) === "failLocal") rotateFailLocalScreen(outcome);
     else rotateDoneScreen();
   } catch (e) {
     unlisten();
     const failure = rotateErrorOf(e);
-    if (failure.stage === "notSent") rotateFailNotSentScreen(failure.detail);
-    else if (failure.stage === "local") rotateFailLocalScreen(null, failure.detail);
-    else rotateFailUnsureScreen(failure.detail);
+    if (failure.stage === "unconfirmed") rotationMayBeLive = true;
+    switch (screenForFailure(failure.stage, rotationMayBeLive)) {
+      case "failLocal":
+        rotateFailLocalScreen(null, failure.detail);
+        break;
+      case "failUnsure":
+        rotateFailUnsureScreen(failure.detail);
+        break;
+      case "blocked":
+        rotateBlockedScreen(failure.detail);
+        break;
+      default:
+        rotateFailNotSentScreen(failure.detail);
+    }
   }
+}
+
+/// A rebuild started while this flow was open, so nothing was attempted. The
+/// same three strings the Connection pane shows in place of the door, including
+/// the escape — an abandoned rebuild would otherwise leave this screen as a dead
+/// end with the reason relegated to a footnote under "Try again".
+function rotateBlockedScreen(detail: string) {
+  currentScreen = () => rotateBlockedScreen(detail);
+  const settings = h("button", { class: "btn-primary" }, [t("changePassword.blockedButton")]);
+  settings.addEventListener("click", () => void invoke("open_settings_window"));
+  const leave = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
+    t("common.notNow"),
+  ]);
+  leave.addEventListener("click", leaveRotation);
+
+  show(
+    brand(),
+    h("h1", {}, [t("changePassword.blockedTitle")]),
+    notice(t("changePassword.blockedBody")),
+    h("p", { class: "lede" }, [t("changePassword.blockedEscape")]),
+    failDetailLine(detail),
+    // Labelled as chosen and not in use, exactly as on the "nothing was
+    // changed" screen: nothing was sent, so calling it "your new password" here
+    // would tell someone who saved it that they now hold the working key.
+    secretCard(t("changePassword.failNotSentLabel"), rotationPassword),
+    settings,
+    leave,
+  );
 }
 
 function failDetailLine(detail: string): HTMLElement | string {
@@ -1323,7 +1428,7 @@ function rotateFailNotSentScreen(detail: string) {
 /// a statement about the password, which is the only fact the app has. Retry is
 /// the escape and the copy says why — setting the same password twice confirms
 /// what landed or completes what did not.
-function rotateFailUnsureScreen(detail: string, recheck?: "confirmed" | "unconfirmed") {
+function rotateFailUnsureScreen(detail: string, recheck?: RecheckResult) {
   currentScreen = () => rotateFailUnsureScreen(detail, recheck);
   const retry = h("button", { class: "btn-primary" }, [t("common.tryAgain")]);
   retry.addEventListener("click", () => void runRotation());
@@ -1336,37 +1441,46 @@ function rotateFailUnsureScreen(detail: string, recheck?: "confirmed" | "unconfi
   check.addEventListener("click", async () => {
     check.disabled = true;
     check.textContent = t("common.checking");
-    const live = await invoke<boolean>("recheck_password", {
-      password: rotationPassword,
-    }).catch(() => false);
-    rotateFailUnsureScreen(detail, live ? "confirmed" : "unconfirmed");
+    // Three answers, not two. The command deliberately separates "the brain
+    // answered, and not to this password" from "we could not ask it": reporting
+    // the second as the first turns a question that was never put into an answer
+    // of no, on the one screen where the user is deciding what to believe.
+    //
+    // The address travels with the call for the same reason it does with the
+    // change itself — Door B is a computer with no stored setup, so a missing
+    // address resolves to nothing rather than to the brain being asked about.
+    let result: RecheckResult;
+    try {
+      const live = await invoke<boolean>(
+        "recheck_password",
+        withAddress({ password: rotationPassword }, rotationAddress),
+      );
+      result = live ? "confirmed" : "notLive";
+    } catch {
+      result = "unreachable";
+    }
+    rotateFailUnsureScreen(detail, result);
   });
 
-  const leave = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
-    t("changePassword.failUnsureLeave"),
-  ]);
-  leave.addEventListener("click", leaveRotation);
+  const recheckKey: Record<RecheckResult, ChangePasswordKey> = {
+    confirmed: "changePassword.recheckConfirmed",
+    notLive: "changePassword.recheckUnconfirmed",
+    unreachable: "changePassword.recheckUnreachable",
+  };
 
   show(
     brand(),
     h("h1", {}, [t("changePassword.failUnsureTitle")]),
     notice(t("changePassword.failUnsureBody")),
     secretCard(t("changePassword.passwordLabel"), rotationPassword),
-    recheck
-      ? notice(
-          t(
-            recheck === "confirmed"
-              ? "changePassword.recheckConfirmed"
-              : "changePassword.recheckUnconfirmed",
-          ),
-          "info",
-        )
-      : "",
+    recheck ? notice(t(recheckKey[recheck]), "info") : "",
     h("p", { class: "lede" }, [t("changePassword.failUnsureRetry")]),
     failDetailLine(detail),
     retry,
     check,
-    leave,
+    // This window may hold the only password that opens the brain, so leaving
+    // it is a decision rather than a click.
+    guardedExit(t("changePassword.failUnsureLeave"), leaveRotation),
     // Not decoration: nothing local was written, so this machine still holds a
     // password that may now be dead, and the window with the live one is about
     // to be closed.
@@ -1379,23 +1493,34 @@ function rotateFailUnsureScreen(detail: string, recheck?: "confirmed" | "unconfi
 /// would change the password a second time.
 function rotateFailLocalScreen(outcome: RotateOutcome | null, detail = "") {
   currentScreen = () => rotateFailLocalScreen(outcome, detail);
-  // When only the CLI config is stale the keychain succeeded, so the body
-  // saying this computer will ask for the password would be untrue.
-  const keychainFailed = outcome === null || !outcome.keychain;
-  const cliFailed = outcome !== null && outcome.cliConfig === false;
-  const done = h("button", { class: "btn-primary" }, [t("details.openDashboard")]);
-  done.addEventListener("click", () => void invoke("open_dashboard"));
+  // Heading and body are chosen together. They used to disagree: the body
+  // switched to the CLI-specific message when secure storage had in fact
+  // succeeded, while the heading went on saying the password was "not saved on
+  // this computer" — and the heading was the false one.
+  const copy = localFailureCopy(outcome);
+
+  // When secure storage took the new password this computer can open its own
+  // brain, so the dashboard button is the right exit. When it did not, that
+  // button opens a window that silently 401s — on Door B it rejects outright,
+  // leaving the screen's only control visibly doing nothing, forever. The
+  // honest offer there is to connect this computer again with the password on
+  // screen, and it is guarded, because taking it means leaving this screen.
+  const exit = copy.reconnect
+    ? guardedExit(t("changePassword.failLocalReconnect"), () => connectExistingScreen())
+    : (() => {
+        const open = h("button", { class: "btn-primary" }, [t("details.openDashboard")]);
+        open.addEventListener("click", () => void invoke("open_dashboard"));
+        return open;
+      })();
 
   show(
     brand(),
-    h("h1", {}, [t("changePassword.failLocalTitle")]),
-    notice(t(keychainFailed ? "changePassword.failLocalBody" : "changePassword.failLocalCli")),
-    keychainFailed && cliFailed
-      ? h("p", { class: "lede" }, [t("changePassword.failLocalCli")])
-      : "",
+    h("h1", {}, [t(copy.title)]),
+    notice(t(copy.notice)),
+    ...copy.extra.map((key) => h("p", { class: "lede" }, [t(key)])),
     secretCard(t("changePassword.passwordLabel"), rotationPassword),
     failDetailLine(detail),
-    done,
+    exit,
   );
 }
 
@@ -1406,10 +1531,15 @@ function rotateFailLocalScreen(outcome: RotateOutcome | null, detail = "") {
 /// warning, so a hygiene user dismisses it in one beat.
 function rotateDoneScreen(revealed = false) {
   currentScreen = () => rotateDoneScreen(revealed);
+  // Four items, not three. A change writes to secure storage, the brain
+  // command's config and the open dashboard window — so the extension and the
+  // Obsidian plugin hold the old password on *this* computer too, which is what
+  // Door B's notice has always told people and this list used to deny.
   const needs = h("ul", { class: "url-desc", style: "padding-left:18px" }, [
     h("li", {}, [t("changePassword.doneNeeds1")]),
     h("li", {}, [t("changePassword.doneNeeds2")]),
     h("li", {}, [t("changePassword.doneNeeds3")]),
+    h("li", {}, [t("changePassword.doneNeeds4")]),
   ]);
   const disconnect = h("button", { class: "btn-secondary" }, [
     t("changePassword.doneDisconnectButton"),
@@ -1496,6 +1626,7 @@ async function passwordChangedElsewhereScreen(errorMsg?: string) {
     t("connectExisting.lostPassword"),
   ]);
   lost.addEventListener("click", () => {
+    beginRotation();
     rotationExit = () => void passwordChangedElsewhereScreen();
     lostPasswordIntroScreen(stored.workerUrl);
   });
@@ -1539,6 +1670,7 @@ async function boot() {
       return;
     }
     if (state.mode === "change-password") {
+      beginRotation();
       changePasswordIntroScreen();
       return;
     }

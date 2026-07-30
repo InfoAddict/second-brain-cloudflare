@@ -91,9 +91,17 @@ export async function handleOAuthRevokeRoutes(
       do {
         const page = await env.OAUTH_KV.list({ prefix, limit: LIST_PAGE_LIMIT, cursor });
         for (const key of page.keys) {
-          // KV already filtered by prefix; this re-check is the guard that a
-          // widened scan can never reach `config:overrides`,
+          // The delete is driven by the key's own name, never by the fact that
+          // `list()` handed it over. `prefix` is the only thing that decides,
+          // so a scan that came back wider than it was asked for — a widened
+          // query, a `prefix` dropped in a refactor, a namespace that answers
+          // loosely — still cannot reach `config:overrides`,
           // `migration:embedding` or `integrations:*`.
+          //
+          // `a_kv_that_over_returns_...` in the route's test drives exactly
+          // that: a namespace double that ignores the prefix and returns
+          // everything. Without this line it destroys the user's settings and
+          // every integration's credentials.
           if (!key.name.startsWith(prefix)) continue;
           try {
             await env.OAUTH_KV.delete(key.name);

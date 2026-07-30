@@ -397,14 +397,19 @@ export const en: Messages = {
       "password in the middle of that can stop the rebuild partway and make a " +
       "password problem look like a failed rebuild, so it waits until the " +
       "rebuild is done.",
+    // Carrying on and starting over are not equivalent here, and saying they
+    // were sent people to the one that doesn't work: a restarted rebuild writes
+    // a fresh unfinished record straight away, so it re-blocks within a second.
     blockedEscape:
       "If nothing is rebuilding, one was left unfinished. Open Advanced Settings " +
-      "to carry it on or start it over — either one clears this.",
+      "and carry it on — this clears when the rebuild finishes. Starting it over " +
+      "gets there too, but it reads every memory again from the first one, so it " +
+      "takes longer.",
     blockedButton: "Open Advanced Settings",
     lostTitle: "Your memories are safe",
     lostLede:
-      "Nothing is lost. Your password can't be read back — not by this app, not " +
-      "by Cloudflare — but it can be replaced, and replacing it is how you get " +
+      "Nothing is lost. Nobody can look your password up for you — not this app, " +
+      "not Cloudflare — but it can be replaced, and replacing it is how you get " +
       "back in.",
     lostBodySignedIn:
       "You're already signed in to the Cloudflare space your Second Brain lives " +
@@ -431,16 +436,21 @@ export const en: Messages = {
       "Enter the address of the Second Brain you want a new password for — no " +
       "current password needed.",
     pickTitle: "Choose a new password",
+    // Not "the copy you keep is the only copy". This computer keeps one too —
+    // in secure storage, and in the CLI's plaintext config file when that
+    // exists — and someone reasoning about where their secret lives has to be
+    // told the truth about that. What is true is that nobody will show it to
+    // them again.
     pickLede:
-      "This one replaces the old one. Nothing can read it back afterwards, so " +
-      "the copy you keep is the only copy.",
+      "This one replaces the old one. Cloudflare can't show it to you again, and " +
+      "neither can we, so keep your own copy of it.",
     generatedNote: "We've made a strong one for you. Type over it if you'd rather choose your own.",
     pickNotice: "The old password stops working the moment this takes effect.",
     saveTitle: "Save this somewhere",
     saveLede:
-      "Nothing can read this back once it's set — not this app, not Cloudflare, " +
-      "not us. It stays available in this window until you close it, and after " +
-      "that the only copy is the one you kept.",
+      "Once it's set, nothing in this app or at Cloudflare will show it to you " +
+      "again. It stays on screen in this window until you close it, and after " +
+      "that you'll need the copy you kept.",
     passwordLabel: "Your new password",
     saveAdvice:
       "A password manager is the right place for it. If you keep it anywhere " +
@@ -460,16 +470,24 @@ export const en: Messages = {
       "address, and everything you've connected are unchanged.",
     doneNeedsHead: "What will ask for the new password",
     doneNeeds1: "Your other computers, the next time you open Second Brain on them.",
+    // On this computer as well: a password change writes to secure storage, the
+    // brain command's config and the open dashboard window, and nothing else.
     doneNeeds2:
-      "The browser extension, the Obsidian plugin, and the brain command in a " +
-      "terminal on any other computer.",
-    doneNeeds3: "Any browser tab where you opened your dashboard directly.",
+      "The browser extension and the Obsidian plugin, on this computer as well " +
+      "as any other. Each keeps its own copy, and this change doesn't reach them.",
+    doneNeeds3: "The brain command in a terminal on any other computer.",
+    doneNeeds4: "Any browser tab where you opened your dashboard directly.",
     doneKeptHead: "What is still connected",
+    // Not "none of them ever used your password". A tool set up by pasting the
+    // password straight in — which is the documented route for anything that
+    // can't open a browser — did use it, does break, and cannot be reached by
+    // Disconnect either, because it has nothing stored to disconnect.
     doneKept:
-      "The AI tools you connected with your connection link are still connected " +
-      "and still working. Each one was given its own access when you connected " +
-      "it, so none of them ever used your password — and changing it doesn't " +
-      "reach them.",
+      "AI tools you connected by signing in through your connection link are " +
+      "still connected and still working. Each one was given its own access at " +
+      "the time, separate from your password, so changing it doesn't reach them. " +
+      "Anything you connected by pasting the password itself is in the list " +
+      "above — it will ask for the new one.",
     doneLeak:
       "If you changed your password because someone else may have had it, those " +
       "connections are the one thing this didn't close. Disconnecting them makes " +
@@ -505,13 +523,32 @@ export const en: Messages = {
       "Your Second Brain still doesn't answer to the new password. It may need " +
       "another moment, or the change may not have landed — trying again settles " +
       "it either way.",
+    // The third answer, and not the same as "no". Collapsing a failed probe
+    // into "still doesn't answer" reports a question that was never asked as an
+    // answer of no.
+    recheckUnreachable:
+      "We couldn't reach your Second Brain to ask, so this settles nothing " +
+      "either way — the change may still have gone through. Check again in a " +
+      "moment, or go straight to trying the change again.",
     failLocalTitle: "Your password was changed, but not saved on this computer",
+    failLocalTitlePartial:
+      "Your password was changed, but something on this computer still has the old one",
     failLocalBody:
       "Your Second Brain is using the new password. This computer couldn't store " +
-      "it, so it will ask you for it — save it now, if you haven't.",
+      "it, so it can't open your Second Brain until you connect again with the " +
+      "new one — save it now, if you haven't.",
     failLocalCli:
       "The brain command in your terminal is still set to the old password. Run " +
       "brain setup to point it at the new one.",
+    failLocalDashboard:
+      "The Second Brain window that's already open is still using the old " +
+      "password. Close it and open it again.",
+    failLocalReconnect: "Connect this computer again",
+    leaveWarn:
+      "This is the last screen that shows this password. If you haven't put it " +
+      "somewhere safe, do it now.",
+    leaveConfirm: "I've saved it — leave",
+    leaveKeep: "Stay here",
   },
   passwordChangedElsewhere: {
     title: "Your password was changed on another computer",
@@ -589,25 +626,39 @@ export const en: Messages = {
     mcpLabel: "Your connection link (for AI tools)",
     mcpDesc: "Paste this into any AI tool that supports connectors.",
     passwordLabel: "Your password",
+    // "Nothing can read it back, not even this app" was true of Cloudflare and
+    // false of the app: it is in this computer's secure storage, and this very
+    // feature writes it as plain text to the brain command's config file. A
+    // card whose whole job is to explain where a secret lives has to say so.
     passwordDesc:
-      "The key to your Second Brain. It can't be shown here — nothing can read " +
-      "it back, not even this app. If you want a different one, you can set one now.",
+      "The key to your Second Brain. It isn't shown here, but this computer " +
+      "keeps a copy: in its secure storage, and in the brain command's settings " +
+      "file if you set that up. Cloudflare can't read it back at all. If you " +
+      "want a different one, you can set one now.",
     passwordButton: "Change my password",
     disconnectLabel: "Disconnect your AI tools",
+    // Not "this closes all of it at once". Tools set up by pasting the password
+    // have no keys here to delete, so this route cannot reach them at all —
+    // changing the password is what closes those.
     disconnectDesc:
-      "Every AI tool you connected with your connection link was given its own " +
-      "access, separate from your password. This closes all of it at once. Your " +
-      "memories and your password are untouched.",
+      "AI tools that signed in through your connection link were each given " +
+      "their own access, separate from your password. This closes all of those " +
+      "at once. Anything you connected by pasting your password instead isn't " +
+      "affected — changing your password is what closes those. Your memories " +
+      "and your password stay as they are.",
     disconnectButton: "Disconnect AI tools…",
     disconnectConfirmDesc:
-      "Every AI tool you connected with your connection link — on this computer " +
-      "and on any other — will need connecting again, and each one will ask for " +
-      "your password when you do.",
+      "Every AI tool that signed in through your connection link — on this " +
+      "computer and on any other — will need connecting again, and each one " +
+      "will ask for your password when you do.",
     disconnectConfirm: "Yes, disconnect them all",
     disconnectKeep: "Keep them connected",
     disconnectWorking: "Disconnecting…",
     disconnectDone: "Disconnected. Each tool will ask to be connected again the next time you use it.",
-    disconnectDoneNone: "There was nothing connected to disconnect. Nothing was changed.",
+    disconnectDoneNone:
+      "No tool had signed in through your connection link, so there was nothing " +
+      "to close here. Tools that use your password are unaffected — changing " +
+      "your password is what closes those.",
     disconnectFailed:
       "Some connections couldn't be closed. The ones that were closed stay " +
       "closed, so trying again only picks up what's left.",

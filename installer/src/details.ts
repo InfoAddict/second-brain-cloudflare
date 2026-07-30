@@ -47,7 +47,27 @@ async function boot() {
   // can't run — offline, brain unreachable — the button stays enabled: a
   // network blip must not present as "you may not change your password", and
   // the command re-checks before it does anything anyway.
-  const rotationBlocked = await invoke<boolean>("rotation_blocked").catch(() => false);
+  let rotationBlocked = await invoke<boolean>("rotation_blocked").catch(() => false);
+
+  // Re-asked rather than captured once. A rebuild is finished (or carried on)
+  // in the Advanced Settings window, and the user comes straight back here to
+  // do the thing they were blocked from — so a value read at boot would go on
+  // saying the password can't be changed until this window was closed and
+  // reopened. Only a change in the answer redraws, so this settles after one
+  // flip instead of looping.
+  const refreshRotationBlocked = () => {
+    void invoke<boolean>("rotation_blocked").then(
+      blocked => {
+        if (blocked === rotationBlocked) return;
+        rotationBlocked = blocked;
+        render();
+      },
+      () => {
+        /* offline: keep whatever the last successful answer was */
+      },
+    );
+  };
+  window.addEventListener("focus", refreshRotationBlocked);
 
   // One pane at a time, chosen from a rail. Everything used to be stacked in a
   // single column, so most of it was below the fold and the only way to find
@@ -57,6 +77,8 @@ async function boot() {
 
   const paneFor = (id: SectionId): HTMLElement[] => {
     if (id === "connection") {
+      // Every time this pane is drawn, not only the first.
+      refreshRotationBlocked();
       // No "open the dashboard" button here on purpose: this window is reached
       // from the dashboard, which stays open behind it, so the button only sent
       // this window to the back. The menu bar still has one for the case where

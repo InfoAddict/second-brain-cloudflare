@@ -262,8 +262,15 @@ export type Messages = {
     doneLede: string;
     doneNeedsHead: string;
     doneNeeds1: string;
+    /**
+     * The extension and the Obsidian plugin hold the old password on *this*
+     * computer too — `persist` writes secure storage, the CLI config and the
+     * open dashboard window, and nothing else — so this list is not scoped to
+     * "any other computer". Door B's `lostNotice` has always said so.
+     */
     doneNeeds2: string;
     doneNeeds3: string;
+    doneNeeds4: string;
     doneKeptHead: string;
     doneKept: string;
     /** Conditional, not a warning: most changes are hygiene, not a leak. */
@@ -286,10 +293,25 @@ export type Messages = {
     recheckButton: string;
     recheckConfirmed: string;
     recheckUnconfirmed: string;
+    /** The third answer: we could not ask, which settles nothing either way. */
+    recheckUnreachable: string;
     // Changed, but not saved on this computer
     failLocalTitle: string;
+    /** When secure storage took it and something else here did not, so the
+     *  unconditional heading above would be untrue. */
+    failLocalTitlePartial: string;
     failLocalBody: string;
     failLocalCli: string;
+    failLocalDashboard: string;
+    failLocalReconnect: string;
+    /**
+     * The save gate confirms a password that is merely proposed. By the time a
+     * failure screen renders, the same password may already be the only key to
+     * the brain — so the exits from those screens get the same acknowledgement.
+     */
+    leaveWarn: string;
+    leaveConfirm: string;
+    leaveKeep: string;
   };
   /** The other machines, holding a password that was replaced elsewhere (#235 §5). */
   passwordChangedElsewhere: {

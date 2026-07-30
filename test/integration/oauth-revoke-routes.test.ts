@@ -74,6 +74,38 @@ function makePagingKV(pageSize: number) {
   return { kv: kv as unknown as KVNamespace, store };
 }
 
+/**
+ * A namespace that answers `list()` with *everything*, whatever prefix it was
+ * asked for.
+ *
+ * Both the real KV and `makePagingKV` filter by prefix, which makes the route's
+ * own `startsWith` re-check unreachable — and a guard nothing can reach is a
+ * comment claiming protection rather than protection. This double is the thing
+ * the guard is written against: a scan that comes back wider than it was asked
+ * for, whether because the query was widened in a refactor or because the
+ * namespace answered loosely. Without the re-check the route deletes the config,
+ * the migration ledger and every integration's credentials.
+ */
+function makeOverReturningKV() {
+  const store = new Map<string, string>();
+  const kv = {
+    get: async (key: string) => store.get(key) ?? null,
+    put: async (key: string, value: string) => {
+      store.set(key, String(value));
+    },
+    delete: async (key: string) => {
+      store.delete(key);
+    },
+    // `prefix` is accepted and deliberately ignored.
+    list: async () => ({
+      keys: [...store.keys()].sort().map(name => ({ name })),
+      list_complete: true,
+      cacheStatus: null,
+    }),
+  };
+  return { kv: kv as unknown as KVNamespace, store };
+}
+
 describe("oauth revoke-all route", () => {
   let env: Env;
   let store: Map<string, string>;
@@ -203,6 +235,36 @@ describe("oauth revoke-all route", () => {
     expect(body.ok).toBe(false);
     expect(body.revoked).toBe(3);
     expect(body.failed).toBe(1);
+  });
+
+  it("deletes by key name even when the scan comes back wider than it asked", async () => {
+    // The `startsWith` re-check inside the route is unreachable against KV and
+    // against the paging double above, both of which filter by prefix. This is
+    // the namespace that makes it fire: it returns the whole store for every
+    // list(), so the route's own decision about each key is the only thing
+    // standing between a revoke and a wipe.
+    const over = makeOverReturningKV();
+    const overEnv = makeTestEnv(makeTestDb(), { OAUTH_KV: over.kv, AUTH_TOKEN: TOKEN });
+    over.store.set(CONFIG_KEY, JSON.stringify({ EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5" }));
+    over.store.set(MIGRATION_KEY, JSON.stringify({ model: "x", startedAt: 1 }));
+    over.store.set("integrations:notion", JSON.stringify({ credentials: { token: "secret" } }));
+    over.store.set("client:abc", JSON.stringify({ clientId: "abc" }));
+    over.store.set("grant:owner:g1", JSON.stringify({ clientId: "c" }));
+    over.store.set("token:owner:g1:tok-g1", JSON.stringify({ grantId: "g1" }));
+
+    const res = await handler.fetch(req("/oauth/revoke-all", { method: "POST" }), overEnv, ctx);
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(res.status).toBe(200);
+    // Exactly the two connection keys, and each counted once even though every
+    // list() offered the whole namespace twice over.
+    expect(body.revoked).toBe(2);
+    expect(over.store.has("grant:owner:g1")).toBe(false);
+    expect(over.store.has("token:owner:g1:tok-g1")).toBe(false);
+    expect(over.store.get(CONFIG_KEY)).toContain("bge-base-en-v1.5");
+    expect(over.store.get(MIGRATION_KEY)).toContain("startedAt");
+    expect(over.store.get("integrations:notion")).toContain("secret");
+    expect(over.store.get("client:abc")).toContain("abc");
   });
 
   it("does not revoke on a GET", async () => {

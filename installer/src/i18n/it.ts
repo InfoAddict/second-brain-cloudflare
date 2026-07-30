@@ -394,13 +394,14 @@ export const it: Messages = {
       "aspetta che finisca.",
     blockedEscape:
       "Se non c'è nessuna ricostruzione in corso, significa che ne è rimasta una " +
-      "a metà. Apri le Impostazioni avanzate per continuarla o ricominciarla da " +
-      "capo: in entrambi i casi questo blocco sparisce.",
+      "a metà. Apri le Impostazioni avanzate e continuala: il blocco sparisce " +
+      "quando la ricostruzione finisce. Anche ricominciarla da capo ci arriva, " +
+      "ma rilegge tutti i ricordi dal primo, quindi ci vuole più tempo.",
     blockedButton: "Apri le Impostazioni avanzate",
     lostTitle: "I tuoi ricordi sono al sicuro",
     lostLede:
-      "Non hai perso nulla. La tua password non può essere riletta — né da " +
-      "questa app né da Cloudflare — ma può essere sostituita, ed è così che " +
+      "Non hai perso nulla. Nessuno può recuperare la tua password al posto tuo " +
+      "— né questa app né Cloudflare — ma può essere sostituita, ed è così che " +
       "rientri.",
     lostBodySignedIn:
       "Hai già effettuato l'accesso allo spazio Cloudflare in cui si trova il tuo " +
@@ -428,8 +429,8 @@ export const it: Messages = {
       "password: non serve quella attuale.",
     pickTitle: "Scegli una nuova password",
     pickLede:
-      "Questa sostituisce la vecchia. Dopo non potrà più essere riletta da " +
-      "nessuno, quindi la copia che conservi è l'unica.",
+      "Questa sostituisce la vecchia. Cloudflare non potrà più mostrartela, e " +
+      "nemmeno noi: conservane una copia tua.",
     generatedNote:
       "Ne abbiamo generata una robusta per te. Scrivici sopra se preferisci " +
       "sceglierne una tua.",
@@ -437,9 +438,9 @@ export const it: Messages = {
       "La vecchia password smette di funzionare nel momento in cui questa entra in vigore.",
     saveTitle: "Salvala da qualche parte",
     saveLede:
-      "Una volta impostata, nessuno può più rileggerla: né questa app, né " +
-      "Cloudflare, né noi. Resta disponibile in questa finestra finché non la " +
-      "chiudi; dopo, l'unica copia è quella che hai conservato.",
+      "Una volta impostata, niente in questa app né su Cloudflare te la mostrerà " +
+      "di nuovo. Resta visibile in questa finestra finché non la chiudi; dopo, " +
+      "ti servirà la copia che hai conservato.",
     passwordLabel: "La tua nuova password",
     saveAdvice:
       "Un gestore password è il posto giusto. Se la tieni altrove, tienila dove " +
@@ -459,17 +460,24 @@ export const it: Messages = {
     doneNeedsHead: "Che cosa chiederà la nuova password",
     doneNeeds1: "Gli altri tuoi computer, la prossima volta che ci apri Second Brain.",
     doneNeeds2:
-      "L'estensione del browser, il plugin di Obsidian e il comando brain nel " +
-      "terminale di qualsiasi altro computer.",
-    doneNeeds3: "Le schede del browser in cui hai aperto la dashboard direttamente.",
+      "L'estensione del browser e il plugin di Obsidian, su questo computer come " +
+      "su qualsiasi altro. Ognuno conserva la propria copia e questa modifica " +
+      "non li raggiunge.",
+    doneNeeds3: "Il comando brain nel terminale di qualsiasi altro computer.",
+    doneNeeds4: "Le schede del browser in cui hai aperto la dashboard direttamente.",
     doneKeptHead: "Che cosa resta collegato",
     doneKept:
-      "Gli strumenti AI che hai collegato con il tuo link di connessione restano " +
-      "collegati e continuano a funzionare. Quando li hai collegati, ognuno ha " +
-      "ricevuto un accesso proprio: non hanno mai usato la tua password, quindi " +
-      "cambiarla non li tocca.",
+      "Gli strumenti AI che hai collegato accedendo tramite il tuo link di " +
+      "connessione restano collegati e continuano a funzionare. Al momento del " +
+      "collegamento ognuno ha ricevuto un accesso proprio, separato dalla tua " +
+      "password, quindi cambiarla non li tocca. Ciò che invece hai collegato " +
+      "incollando la password si trova nell'elenco qui sopra: chiederà quella " +
+      "nuova.",
+    // "averla vista" softened EN's "may have had it": vedere una password legge
+    // come un'occhiata alle spalle, averla è ciò che la rende pericolosa — e
+    // questa è l'unica riga rivolta a chi ha subito una fuga di dati.
     doneLeak:
-      "Se hai cambiato la password perché qualcun altro potrebbe averla vista, " +
+      "Se hai cambiato la password perché qualcun altro potrebbe averla avuta, " +
       "quelle connessioni sono l'unica cosa che questa operazione non ha chiuso. " +
       "Scollegarle fa sì che ogni strumento chieda di essere collegato di nuovo.",
     doneDisconnectButton: "Scollega gli strumenti AI…",
@@ -499,19 +507,36 @@ export const it: Messages = {
     recheckConfirmed:
       "Il tuo Second Brain risponde alla nuova password, quindi quella parte è " +
       "fatta. Questo computer non l'ha ancora salvata: riprova per completare " +
-      "l'operazione, sul tuo Second Brain non cambierà nulla.",
+      "l'operazione, e sul tuo Second Brain non cambierà nulla.",
     recheckUnconfirmed:
       "Il tuo Second Brain non risponde ancora alla nuova password. Forse serve " +
       "ancora un momento, oppure la modifica non è arrivata: riprovare chiarisce " +
       "la situazione in entrambi i casi.",
+    recheckUnreachable:
+      "Non siamo riusciti a raggiungere il tuo Second Brain per chiederglielo, " +
+      "quindi questo non chiarisce nulla in un senso o nell'altro: la modifica " +
+      "potrebbe essere comunque passata. Controlla di nuovo tra un momento, " +
+      "oppure passa direttamente a riprovare il cambio.",
     failLocalTitle: "La password è stata cambiata, ma non salvata su questo computer",
+    failLocalTitlePartial:
+      "La password è stata cambiata, ma su questo computer qualcosa ha ancora la vecchia",
     failLocalBody:
       "Il tuo Second Brain sta usando la nuova password. Questo computer non è " +
-      "riuscito a memorizzarla, quindi te la chiederà: salvala ora, se non l'hai " +
-      "già fatto.",
+      "riuscito a memorizzarla, quindi non potrà aprire il tuo Second Brain " +
+      "finché non ti ricolleghi con quella nuova: salvala ora, se non l'hai già " +
+      "fatto.",
     failLocalCli:
       "Il comando brain nel terminale usa ancora la vecchia password. Esegui " +
       "brain setup per puntarlo a quella nuova.",
+    failLocalDashboard:
+      "La finestra di Second Brain già aperta usa ancora la vecchia password. " +
+      "Chiudila e riaprila.",
+    failLocalReconnect: "Ricollega questo computer",
+    leaveWarn:
+      "Questa è l'ultima schermata che mostra questa password. Se non l'hai " +
+      "ancora messa al sicuro, fallo adesso.",
+    leaveConfirm: "L'ho salvata — esci",
+    leaveKeep: "Resta qui",
   },
   passwordChangedElsewhere: {
     title: "La tua password è stata cambiata su un altro computer",
@@ -526,9 +551,12 @@ export const it: Messages = {
     findAgainHint:
       "Accede a Cloudflare e lo cerca, nel caso tu stia collegando un Second " +
       "Brain diverso.",
+    // "non sei stato tu" era l'unico partecipio al maschile singolare rivolto
+    // all'utente in tutto il catalogo: ovunque altrove l'accordo è con un
+    // oggetto, mai con chi legge.
     footnote:
-      "Non hai quella nuova — o non sei stato tu a cambiarla? Scegliendo una " +
-      "nuova password, la vecchia viene chiusa definitivamente.",
+      "Non hai quella nuova — o non l'hai cambiata tu? Scegliendo una nuova " +
+      "password, la vecchia viene chiusa definitivamente.",
   },
   cloudflare: {
     title: "Collega il tuo account",
@@ -589,27 +617,38 @@ export const it: Messages = {
     mcpDesc: "Incollalo in qualsiasi strumento AI che supporta i connettori.",
     passwordLabel: "La tua password",
     passwordDesc:
-      "È la chiave del tuo Second Brain. Qui non può essere mostrata: nessuno " +
-      "può rileggerla, nemmeno questa app. Se ne vuoi una diversa, puoi " +
-      "impostarla ora.",
+      "È la chiave del tuo Second Brain. Qui non viene mostrata, ma questo " +
+      "computer ne conserva una copia: nel suo archivio sicuro e, se hai " +
+      "configurato il comando brain, nel file di impostazioni di quel comando. " +
+      "Cloudflare invece non può rileggerla in alcun modo. Se ne vuoi una " +
+      "diversa, puoi impostarla ora.",
     passwordButton: "Cambia la password",
     disconnectLabel: "Scollega i tuoi strumenti AI",
     disconnectDesc:
-      "Ogni strumento AI che hai collegato con il tuo link di connessione ha " +
-      "ricevuto un accesso proprio, separato dalla tua password. Questa azione " +
-      "li chiude tutti insieme. I tuoi ricordi e la tua password non vengono " +
-      "toccati.",
+      "Gli strumenti AI che hanno effettuato l'accesso tramite il tuo link di " +
+      "connessione hanno ricevuto ognuno un accesso proprio, separato dalla tua " +
+      "password. Questa azione li chiude tutti insieme. Ciò che invece hai " +
+      "collegato incollando la password non viene toccato: quelle connessioni si " +
+      "chiudono cambiando la password. I tuoi ricordi e la tua password restano " +
+      "come sono.",
     disconnectButton: "Scollega gli strumenti AI…",
     disconnectConfirmDesc:
-      "Ogni strumento AI che hai collegato con il tuo link di connessione — su " +
-      "questo computer e su qualsiasi altro — andrà collegato di nuovo, e ognuno " +
-      "ti chiederà la password quando lo farai.",
+      "Ogni strumento AI che ha effettuato l'accesso tramite il tuo link di " +
+      "connessione — su questo computer e su qualsiasi altro — andrà collegato " +
+      "di nuovo, e ognuno ti chiederà la password quando lo farai.",
     disconnectConfirm: "Sì, scollegali tutti",
     disconnectKeep: "Lasciali collegati",
     disconnectWorking: "Scollegamento…",
+    // Non "Scollegati.": in apertura di frase si legge prima come imperativo
+    // riflessivo — "scollegati tu" — invece che come participio.
     disconnectDone:
-      "Scollegati. Ogni strumento chiederà di essere collegato di nuovo alla prossima occasione.",
-    disconnectDoneNone: "Non c'era nulla di collegato da scollegare. Nulla è stato modificato.",
+      "Connessioni chiuse. Ogni strumento chiederà di essere collegato di nuovo " +
+      "la prossima volta che lo usi.",
+    disconnectDoneNone:
+      "Nessuno strumento aveva effettuato l'accesso tramite il tuo link di " +
+      "connessione, quindi qui non c'era nulla da chiudere. Gli strumenti che " +
+      "usano la tua password non sono interessati: quelle connessioni si " +
+      "chiudono cambiando la password.",
     disconnectFailed:
       "Non è stato possibile chiudere alcune connessioni. Quelle già chiuse " +
       "restano chiuse, quindi riprovando si riprende solo da ciò che manca.",
