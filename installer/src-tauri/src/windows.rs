@@ -51,7 +51,11 @@ const CONNECTIONS_BUTTON_JS: &str = r#"(function () {
   }, 100);
 })();"#;
 
-/// Second injected footer button, for the settings panel. Kept as its own
+/// Second injected footer button, for the settings panel. Uses ti-adjustments
+/// (sliders) beside the dashboard's own ti-settings gear — ti-sliders is not a
+/// Tabler icon and rendered as nothing at all.
+///
+/// Kept as its own
 /// script rather than parameterising the Connections one: the ids, labels and
 /// target paths differ, and one script doing both would need every value
 /// twice anyway.
@@ -68,7 +72,7 @@ const SETTINGS_BUTTON_JS: &str = r#"(function () {
       b.id = ID;
       b.className = 'sb-footer-btn';
       b.title = TITLE;
-      b.innerHTML = '<i class="ti ti-sliders"></i><span>' + LABEL + '</span>';
+      b.innerHTML = '<i class="ti ti-adjustments"></i><span>' + LABEL + '</span>';
       b.addEventListener('click', function () { location.assign('__SETTINGS_PATH__'); });
       footer.appendChild(b);
       clearInterval(iv);

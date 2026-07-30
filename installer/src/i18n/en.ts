@@ -31,7 +31,7 @@ export const en: Messages = {
     italian: "Italiano",
   },
   settingsPanel: {
-    title: "Brain settings",
+    title: "Advanced Settings",
     lede: "How your Second Brain remembers and recalls. Changes apply to your next search.",
     sectionRecall: "Recall",
     sectionSaving: "Saving",

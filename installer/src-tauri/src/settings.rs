@@ -243,6 +243,12 @@ pub async fn fetch_settings(
             i18n::t(locale, Key::ErrorReachBrain).to_string()
         })?;
 
+    // 404 means the deployed Worker predates the config routes (#245). The app
+    // and the Worker update independently, so this is the ordinary state for
+    // anyone who updated the app first — say what to do, not what happened.
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(i18n::t(locale, Key::ErrorBrainNeedsUpdateForSettings).to_string());
+    }
     if !resp.status().is_success() {
         return Err(i18n::t_fmt(
             locale,
@@ -715,6 +721,35 @@ mod tests {
                 c.id
             );
         }
+    }
+
+
+    /// A Worker deployed before #245 has no /config route and answers 404.
+    ///
+    /// Found by running the real app against a real brain: the generic handler
+    /// reported "Your Second Brain returned 404.", which is accurate and
+    /// useless. The app and the Worker update independently, so this is the
+    /// normal state for anyone who updates the app first — it needs to say what
+    /// to do, not what happened.
+    #[tokio::test]
+    async fn a_worker_without_the_config_route_says_to_update_it() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || {
+            while let Ok(req) = server.recv() {
+                let _ = req.respond(tiny_http::Response::from_string("Not found").with_status_code(404));
+            }
+        });
+
+        let err = fetch_settings(&format!("http://127.0.0.1:{port}"), "tok", Locale::En)
+            .await
+            .expect_err("404 must be an error");
+
+        assert!(
+            err.to_lowercase().contains("update"),
+            "404 must point at the Worker update, got: {err}"
+        );
+        assert!(!err.contains("404"), "a bare status code is not actionable: {err}");
     }
 
     #[test]

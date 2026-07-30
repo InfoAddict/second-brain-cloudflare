@@ -31,7 +31,7 @@ export const it: Messages = {
     italian: "Italiano",
   },
   settingsPanel: {
-    title: "Impostazioni del cervello",
+    title: "Impostazioni avanzate",
     lede: "Come il tuo Second Brain ricorda e recupera. Le modifiche valgono dalla prossima ricerca.",
     sectionRecall: "Recupero",
     sectionSaving: "Salvataggio",

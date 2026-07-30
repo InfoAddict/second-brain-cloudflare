@@ -56,6 +56,7 @@ pub enum Key {
     WindowSettings,
     SettingsButtonLabel,
     SettingsButtonTooltip,
+    ErrorBrainNeedsUpdateForSettings,
     TrayOpen,
     TrayQuit,
     // Dialogs
@@ -130,10 +131,14 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         (Locale::En, Key::MenuCheckUpdates) => "Check for updates…",
         (Locale::En, Key::MenuLogout) => "Log out…",
         (Locale::En, Key::SubmenuConnections) => "Connections",
-        (Locale::En, Key::MenuSettings) => "Brain settings…",
-        (Locale::En, Key::WindowSettings) => "Brain settings",
-        (Locale::En, Key::SettingsButtonLabel) => "Brain settings",
+        (Locale::En, Key::MenuSettings) => "Advanced Settings…",
+        (Locale::En, Key::WindowSettings) => "Advanced Settings",
+        (Locale::En, Key::SettingsButtonLabel) => "Advanced Settings",
         (Locale::En, Key::SettingsButtonTooltip) => "Tune how your Second Brain remembers and recalls",
+        (Locale::En, Key::ErrorBrainNeedsUpdateForSettings) => {
+            "Your Second Brain is running an older version that has no settings yet. \
+             Update it from the Connections menu, then reopen this window."
+        }
         (Locale::En, Key::TrayOpen) => "Open Second Brain",
         (Locale::En, Key::TrayQuit) => "Quit",
         // Dialogs — EN
@@ -252,10 +257,14 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         (Locale::It, Key::MenuCheckUpdates) => "Controlla aggiornamenti…",
         (Locale::It, Key::MenuLogout) => "Esci…",
         (Locale::It, Key::SubmenuConnections) => "Connessioni",
-        (Locale::It, Key::MenuSettings) => "Impostazioni del cervello…",
-        (Locale::It, Key::WindowSettings) => "Impostazioni del cervello",
-        (Locale::It, Key::SettingsButtonLabel) => "Impostazioni",
+        (Locale::It, Key::MenuSettings) => "Impostazioni avanzate…",
+        (Locale::It, Key::WindowSettings) => "Impostazioni avanzate",
+        (Locale::It, Key::SettingsButtonLabel) => "Impostazioni avanzate",
         (Locale::It, Key::SettingsButtonTooltip) => "Regola come il tuo Second Brain ricorda e recupera",
+        (Locale::It, Key::ErrorBrainNeedsUpdateForSettings) => {
+            "Il tuo Second Brain usa una versione più vecchia che non ha ancora le impostazioni. \
+             Aggiornalo dal menu Connessioni, poi riapri questa finestra."
+        }
         (Locale::It, Key::TrayOpen) => "Apri Second Brain",
         (Locale::It, Key::TrayQuit) => "Esci",
         // Dialogs — IT
@@ -446,6 +455,7 @@ mod tests {
             WindowSettings,
             SettingsButtonLabel,
             SettingsButtonTooltip,
+            ErrorBrainNeedsUpdateForSettings,
             TrayOpen,
             TrayQuit,
             LogoutTitle,

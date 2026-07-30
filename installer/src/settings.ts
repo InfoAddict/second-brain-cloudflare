@@ -1,4 +1,4 @@
-// The "Brain settings" window (#246) — the only place Second Brain's behaviour
+// The "Advanced Settings" window (#246) — the only place Second Brain's behaviour
 // can be tuned. The Worker stores and reads config; this app is its only
 // writer, which is why there is deliberately no settings UI in the dashboard.
 //

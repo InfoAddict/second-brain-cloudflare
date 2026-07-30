@@ -905,7 +905,7 @@ pub fn perform_logout(app: &AppHandle) {
     let _ = windows::open_setup_window(app);
 }
 
-// ── Brain settings (#246) ───────────────────────────────────────────────────
+// ── Advanced Settings (#246) ───────────────────────────────────────────────────
 //
 // Every mutating command returns the freshly re-read view rather than echoing
 // what was requested. The Worker clamps and invariant-checks at resolve time,

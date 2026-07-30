@@ -629,7 +629,24 @@ li.error .check-icon {
 }
 
 
-/* ── Brain settings window (#246) ─────────────────────────────────────────── */
+/* #app centres a single card for the setup screens. This window is a scrolling
+   column of many cards, so that flex row has to be undone — otherwise every
+   control becomes a squeezed column and the last ones clip off the right edge. */
+body.settings-page {
+  overflow-y: auto;
+}
+
+body.settings-page #app {
+  display: block;
+  align-items: stretch;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 0 0 2rem;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+/* ── Advanced Settings window (#246) ─────────────────────────────────────────── */
 
 .settings-title {
   font-family: var(--font-serif);
