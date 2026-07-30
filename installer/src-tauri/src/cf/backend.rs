@@ -71,6 +71,9 @@ impl Backend for LiveBackend {
     async fn health_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
         api::worker_health_ok(worker_url, auth_token).await
     }
+    async fn auth_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
+        api::worker_auth_ok(worker_url, auth_token).await
+    }
     async fn capture_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
         api::worker_capture_ok(worker_url, auth_token).await
     }
@@ -236,7 +239,13 @@ impl Backend for DryRunBackend {
             .and_then(|b| b.get("text"))
             .and_then(|t| t.as_str())
         {
-            crate::demo_brain::rotate_to(token);
+            // `deployed_with`, not `rotate_to`: the secret rides along with this
+            // upload, so the Worker comes up already holding it and there is no
+            // propagation window to model. Routing a deploy through the rotation
+            // path instead pointed `SECOND_BRAIN_DEMO_ROTATE_AFTER` at
+            // `provision`'s health poll — where a 401 is terminal — and killed
+            // demo setup outright whenever the variable was exported.
+            crate::demo_brain::deployed_with(token);
         }
         Ok(())
     }
@@ -282,6 +291,21 @@ impl Backend for DryRunBackend {
             None => Ok(true),
         }
     }
+    /// The rotation gate's probe, resolved through exactly the same addresses as
+    /// [`Self::health_ok`] — see [`demo_health_target`]. A dry run that waved
+    /// this one through unconditionally would put the demo back to proving the
+    /// opposite of what it is run to prove, and this is the check a rotation
+    /// actually turns on.
+    async fn auth_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
+        self.pause().await;
+        match demo_health_target(worker_url) {
+            // `worker_auth_ok` maps a 401 — and only a 401 — to `Unauthorized`,
+            // which `rotate_secret`'s loop reads as "the new secret has not
+            // propagated yet" and retries.
+            Some(url) => api::worker_auth_ok(&url, auth_token).await,
+            None => Ok(true),
+        }
+    }
     async fn capture_ok(&self, _worker_url: &str, _auth_token: &str) -> Result<bool, CfApiError> {
         Ok(true)
     }
@@ -306,7 +330,7 @@ impl Backend for DryRunBackend {
 mod tests {
     use super::*;
 
-    use crate::demo_brain::{self, DEFAULT_TOKEN};
+    use crate::demo_brain;
 
     /// A dry run must not quietly skip the password write. Demo mode exists to
     /// walk the real flow, so a rotation that never reached the backend has to
@@ -318,36 +342,30 @@ mod tests {
     /// gate `rotate_secret` exists for passes against a server that accepts
     /// anything.
     ///
-    /// The password it settles on is [`DEFAULT_TOKEN`]. The demo brain is
-    /// process-wide and outlives this test, so leaving it on anything else would
-    /// start 401ing whatever else in the suite is mid-request against it — the
-    /// same reasoning `demo_brain`'s own
-    /// `rotate_to_reaches_the_brain_the_app_is_handed` sets out.
-    ///
-    /// It does pass through a distinct value first, and then puts it straight
-    /// back. Settling on the default alone would prove nothing: another test
-    /// leaves the brain on that password too, so this would pass with the
-    /// rotation deleted. A value nothing else uses is the only thing that can
-    /// only have come from this call. The window it is held for is two statements
-    /// with no request in between.
+    /// **The brain is bound for this test alone.** It used to rotate the
+    /// process-wide one and hand the password straight back, on the grounds that
+    /// the window was "two statements with no request in between" — true read
+    /// down the page, false under a parallel harness, where three other tests are
+    /// reading that same global. At `RUST_TEST_THREADS=64` it failed 10 runs out
+    /// of 15, and CI's thread count follows the runner's cores. A scoped brain
+    /// removes the shared state instead of narrowing the window, which also frees
+    /// the test to settle on a password nothing else uses — the only value that
+    /// can *only* have come from this call.
     #[tokio::test]
     async fn dry_run_records_the_secret_write_and_the_demo_brain_starts_enforcing_it() {
+        let brain = demo_brain::scoped_brain();
         probe::reset_secret_puts();
 
         DryRunBackend
             .put_secret("my-brain", "AUTH_TOKEN", "a-password-only-this-test-sets")
             .await
             .unwrap();
-        let taken = demo_brain::auth_token();
-        DryRunBackend
-            .put_secret("my-brain", "AUTH_TOKEN", DEFAULT_TOKEN)
-            .await
-            .unwrap();
         assert_eq!(
-            taken, "a-password-only-this-test-sets",
+            demo_brain::auth_token(),
+            "a-password-only-this-test-sets",
             "setting AUTH_TOKEN must move the demo brain onto it. Without that, \
-             `rotate_secret`'s health gate polls a server that accepts anything, \
-             passes on the first attempt, and a demo rotation flips nothing while \
+             `rotate_secret`'s gate polls a server that accepts anything, passes \
+             on the first attempt, and a demo rotation flips nothing while \
              reporting success"
         );
         // `contains`, not equality. The record is a process-global static and the
@@ -360,44 +378,75 @@ mod tests {
             probe::secret_puts()
         );
 
-        assert_eq!(
-            demo_brain::auth_token(),
-            DEFAULT_TOKEN,
-            "the demo brain must be holding the password that was just set"
-        );
-
         // A secret that is not the brain's password must not retire the one that
-        // is. In this test rather than its own, because the brain is process-wide
-        // and two tests reading its password concurrently are reading each
-        // other's writes.
+        // is.
         DryRunBackend
             .put_secret("my-brain", "SOME_OTHER_SECRET", "not-a-password")
             .await
             .unwrap();
         assert_eq!(
             demo_brain::auth_token(),
-            DEFAULT_TOKEN,
+            "a-password-only-this-test-sets",
             "a secret under another name is not the brain's password"
         );
-        assert!(
-            matches!(
-                DryRunBackend
-                    .health_ok(&demo_brain::base_url(), DEFAULT_TOKEN)
-                    .await,
-                Ok(true)
+
+        // Both probes: `auth_ok` is what a rotation is gated on, `health_ok` is
+        // what every other flow asks, and a dry run has to route them both at the
+        // demo brain rather than answer either from a constant.
+        let set = "a-password-only-this-test-sets";
+        let url = brain.base_url();
+        for (name, accepted, refused) in [
+            (
+                "auth_ok",
+                DryRunBackend.auth_ok(url, set).await,
+                DryRunBackend.auth_ok(url, "not-the-demo-password").await,
             ),
-            "the password that was set must open the demo brain"
-        );
-        assert!(
-            matches!(
-                DryRunBackend
-                    .health_ok(&demo_brain::base_url(), "not-the-demo-password")
-                    .await,
-                Err(CfApiError::Unauthorized)
+            (
+                "health_ok",
+                DryRunBackend.health_ok(url, set).await,
+                DryRunBackend.health_ok(url, "not-the-demo-password").await,
             ),
-            "setting the secret must retire every other password, or a demo \
-             rotation flips nothing and the health gate proves nothing"
-        );
+        ] {
+            assert!(
+                matches!(accepted, Ok(true)),
+                "{name}: the password that was set must open the demo brain, got {accepted:?}"
+            );
+            assert!(
+                matches!(refused, Err(CfApiError::Unauthorized)),
+                "{name}: setting the secret must retire every other password, or \
+                 a demo rotation flips nothing and the gate proves nothing. Got \
+                 {refused:?}"
+            );
+        }
+    }
+
+    /// Demo setup, end to end against the demo brain, with the rotation delay
+    /// exported.
+    ///
+    /// The knob is for rotation's retry loop. It used to reach the deploy as
+    /// well, and `provision`'s health poll treats a 401 as terminal — so with
+    /// `SECOND_BRAIN_DEMO_ROTATE_AFTER` set, the very first thing a demo user
+    /// does died on "Something went wrong", with no way to reach the screen the
+    /// variable was exported to see.
+    ///
+    /// A scoped brain, so the fresh password this provisions with cannot 401 the
+    /// rest of the suite.
+    #[tokio::test]
+    async fn a_dry_run_setup_completes_even_with_the_rotation_delay_exported() {
+        let _brain = demo_brain::scoped_brain_with(demo_brain::Options {
+            rotate_after: Some(3),
+            ..demo_brain::test_options()
+        });
+
+        crate::cf::provision::provision(
+            &DryRunBackend,
+            &crate::worker_bundle::manifest(),
+            "Demo Account",
+            "a-password-only-this-test-sets",
+            |_| {},
+        )
+        .await
+        .expect("a demo setup must not be broken by a knob meant for rotation");
     }
 
     /// The dry-run health check has to be capable of saying no.

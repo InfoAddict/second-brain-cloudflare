@@ -65,6 +65,11 @@ const STALL_ENV: &str = "SECOND_BRAIN_DEMO_STALL_AFTER";
 /// the first request would pass either implementation, so the difference the
 /// gate exists for would go untested. Off by default, because every other demo
 /// flow wants the rotation over with.
+///
+/// **Rotation only** — see [`Demo::deployed_with`]. A password that arrives with
+/// a deploy has nothing to propagate, and delaying that one instead pointed the
+/// knob at `provision`'s health poll, where a 401 is terminal: exporting this
+/// variable made first-time demo setup die with "Something went wrong".
 const ROTATE_ENV: &str = "SECOND_BRAIN_DEMO_ROTATE_AFTER";
 
 /// Shipped in `src/config.ts` DEFAULTS. Both must be values the pickers offer,
@@ -539,6 +544,25 @@ impl Demo {
     /// Makes `token` the only password this brain accepts, once any configured
     /// propagation delay has been spent.
     fn rotate_to(&self, token: &str) {
+        self.set_password(token, self.options.rotate_after.unwrap_or(0));
+    }
+
+    /// Makes `token` the only password this brain accepts, **now**.
+    ///
+    /// A fresh deploy carries `AUTH_TOKEN` as a binding in its upload metadata,
+    /// so the Worker comes up already holding it: there is no propagation window
+    /// because there was no separate secret write to propagate.
+    ///
+    /// Split from [`Self::rotate_to`] because [`ROTATE_ENV`] must reach one and
+    /// not the other. Applying the delay to a deploy aims it at `provision`'s
+    /// health poll, which treats a 401 as terminal — so with the variable
+    /// exported, first-time demo setup failed with "Something went wrong" and
+    /// the retry loop the variable exists to exercise was never reached.
+    fn deployed_with(&self, token: &str) {
+        self.set_password(token, 0);
+    }
+
+    fn set_password(&self, token: &str, pending: u64) {
         let mut state = self.state.lock().unwrap();
         // What is live now, not what was written last: rotating again while an
         // earlier rotation is still propagating must not resurrect a password
@@ -550,7 +574,7 @@ impl Demo {
         state.password = Some(Password {
             value: token.to_string(),
             previous,
-            pending: self.options.rotate_after.unwrap_or(0),
+            pending,
         });
     }
 
@@ -649,10 +673,13 @@ fn serve(server: &tiny_http::Server, demo: &Demo) {
         let method = req.method().as_str().to_string();
         let raw = req.url().to_string();
         let path = raw.split('?').next().unwrap_or_default().to_string();
-        let authed = is_authenticated(demo, &req);
-        let mut body = String::new();
-        let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
 
+        // Before the auth check, not after. The placeholder page is unguarded —
+        // it is a page, not a brain route — and asking `is_authenticated` about a
+        // request that is not going to be authorised anyway is not free: the
+        // check *spends* a propagation attempt while a rotation is in flight. A
+        // dashboard window loading this page mid-rotation would land the new
+        // password one refusal earlier than the demo was set up to require.
         if method == "GET" && (path == "/" || path == "/index.html") {
             let response = tiny_http::Response::from_string(PLACEHOLDER).with_header(
                 "Content-Type: text/html; charset=utf-8"
@@ -662,6 +689,10 @@ fn serve(server: &tiny_http::Server, demo: &Demo) {
             let _ = req.respond(response);
             continue;
         }
+
+        let authed = is_authenticated(demo, &req);
+        let mut body = String::new();
+        let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
 
         let (status, payload) = if authed {
             demo.handle(&method, &path, &body)
@@ -715,12 +746,101 @@ fn running() -> &'static Running {
     })
 }
 
+// A brain bound for the duration of one test, standing in for the process-wide
+// one — see `scoped_brain`.
+#[cfg(test)]
+thread_local! {
+    static SCOPED: std::cell::RefCell<Option<Arc<Running>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The brain the functions below reach: the one bound for the current test if
+/// there is one, and otherwise the process-wide one.
+fn with_current<T>(f: impl FnOnce(&Running) -> T) -> T {
+    #[cfg(test)]
+    if let Some(scoped) = SCOPED.with(|slot| slot.borrow().clone()) {
+        return f(&scoped);
+    }
+    f(running())
+}
+
+/// Binds a demo brain for this test and points [`base_url`], [`auth_token`],
+/// [`rotate_to`] and [`deployed_with`] at it until the returned guard is
+/// dropped.
+///
+/// For any test that changes a demo brain's password. The process-wide brain is
+/// exactly that — process-wide — so rotating it changes what every other test in
+/// the process must send, and the suite runs in parallel: what reads as two
+/// adjacent statements is a race against whatever else is mid-request. At
+/// `RUST_TEST_THREADS=64` one such test failed 10 runs out of 15, and CI's thread
+/// count follows the runner's cores.
+///
+/// Thread-local rather than a second static, because that is the scope the
+/// property needs: `#[tokio::test]` drives its future to completion on the
+/// calling thread, so everything the test awaits sees the binding and nothing
+/// outside the test can.
+#[cfg(test)]
+pub fn scoped_brain() -> ScopedBrain {
+    scoped_brain_with(test_options())
+}
+
+/// [`scoped_brain`] with the demo knobs set by hand — for the tests that are
+/// *about* a knob.
+#[cfg(test)]
+pub fn scoped_brain_with(options: Options) -> ScopedBrain {
+    let (base_url, demo) = bind(options).expect("bind loopback");
+    let running = Arc::new(Running { base_url: base_url.clone(), demo: Some(demo) });
+    let previous = SCOPED.with(|slot| slot.borrow_mut().replace(running));
+    ScopedBrain { base_url, previous }
+}
+
+/// Holds a [`scoped_brain`] in place. Dropping it hands the free functions back
+/// to whatever they reached before — the process-wide brain, or an outer scoped
+/// one. Restored rather than cleared so a nested binding cannot silently promote
+/// the inner brain's successor to the global.
+#[cfg(test)]
+pub struct ScopedBrain {
+    base_url: String,
+    previous: Option<Arc<Running>>,
+}
+
+#[cfg(test)]
+impl ScopedBrain {
+    /// This brain's address — the same value [`base_url`] answers while the
+    /// guard is alive, for tests that would rather be explicit about it.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScopedBrain {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        SCOPED.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+/// The options a test's brain runs with: the shipped numbers minus the delays,
+/// and with both environment gates pinned off. Both read the environment, and a
+/// variable left exported in a developer's shell must not change what the suite
+/// proves.
+#[cfg(test)]
+pub fn test_options() -> Options {
+    Options {
+        batch_pause: Duration::ZERO,
+        stall_after: None,
+        rotate_after: None,
+        ..Options::default()
+    }
+}
+
 /// The demo brain's address, starting it if it is not already up.
 ///
 /// Lazy as well as started at launch so no caller can be handed a dead address:
 /// the port is chosen by the OS, so it cannot be a constant.
 pub fn base_url() -> String {
-    running().base_url.clone()
+    with_current(|running| running.base_url.clone())
 }
 
 /// The password the demo brain accepts right now — [`DEFAULT_TOKEN`] until a
@@ -730,11 +850,13 @@ pub fn base_url() -> String {
 /// that hands a token to a window has to ask the brain what it currently
 /// answers to, or the window 401s for the rest of the run.
 pub fn auth_token() -> String {
-    running()
-        .demo
-        .as_ref()
-        .map(|demo| demo.auth_token())
-        .unwrap_or_else(|| DEFAULT_TOKEN.to_string())
+    with_current(|running| {
+        running
+            .demo
+            .as_ref()
+            .map(|demo| demo.auth_token())
+            .unwrap_or_else(|| DEFAULT_TOKEN.to_string())
+    })
 }
 
 /// Makes `token` the only password this demo brain accepts.
@@ -749,10 +871,22 @@ pub fn auth_token() -> String {
 /// Starts the brain if it is not up yet, so no ordering of a flow's calls can
 /// leave a rotation writing to a brain nobody is serving.
 pub fn rotate_to(token: &str) {
-    match &running().demo {
+    with_current(|running| match &running.demo {
         Some(demo) => demo.rotate_to(token),
         None => log::warn!("no demo brain is listening, so there is no password to rotate"),
-    }
+    })
+}
+
+/// Makes `token` the demo brain's password with no propagation delay, because a
+/// deploy carries the secret with it — see [`Demo::deployed_with`].
+///
+/// Called by `DryRunBackend::deploy_worker` when the upload metadata carries an
+/// `AUTH_TOKEN` binding, which is every fresh setup.
+pub fn deployed_with(token: &str) {
+    with_current(|running| match &running.demo {
+        Some(demo) => demo.deployed_with(token),
+        None => log::warn!("no demo brain is listening, so there is no password to set"),
+    })
 }
 
 /// Brings the demo brain up at launch, before any window can ask for it.
@@ -766,18 +900,11 @@ mod tests {
     use crate::i18n::Locale;
     use crate::settings::{self, CONTROLS, DEFAULT_LEVELS};
 
-    /// A demo brain with the delays removed. Everything else is what a real demo
-    /// run uses, so the tests exercise the shipped numbers. The two gates are
-    /// named rather than inherited: both read the environment, and a variable
-    /// left exported in a developer's shell must not change what the suite
-    /// proves.
+    /// A demo brain with the delays removed — [`test_options`] carries the
+    /// reasoning, and the shipped numbers otherwise, so the tests exercise what a
+    /// real demo run uses.
     fn brain() -> String {
-        brain_with(Options {
-            batch_pause: Duration::ZERO,
-            stall_after: None,
-            rotate_after: None,
-            ..Options::default()
-        })
+        brain_with(test_options())
     }
 
     fn brain_with(options: Options) -> String {
@@ -787,13 +914,7 @@ mod tests {
     /// A brain plus the handle a rotation goes through. Most tests need only an
     /// address; these have to reach the state behind it.
     fn brain_and_handle(rotate_after: Option<u64>) -> (String, Arc<Demo>) {
-        bind(Options {
-            batch_pause: Duration::ZERO,
-            stall_after: None,
-            rotate_after,
-            ..Options::default()
-        })
-        .expect("bind loopback")
+        bind(Options { rotate_after, ..test_options() }).expect("bind loopback")
     }
 
     async fn get(url: &str, path: &str) -> (u16, Value) {
@@ -846,7 +967,12 @@ mod tests {
         let (status, body) = post(&url, "/oauth/revoke-all").await;
         assert_eq!(status, 200);
         assert_eq!(body["ok"], true);
-        assert_eq!(body["revoked"], OAUTH_CONNECTIONS);
+        // A literal, not `OAUTH_CONNECTIONS`. Comparing the constant to itself
+        // would pass whatever the demo brain claimed to hold — set it to 0 and
+        // this stays green while the screen reports "0 connections closed" for a
+        // brain the app says has two connected tools. The number is the point:
+        // it is what the app can connect, Claude Code and Cursor.
+        assert_eq!(body["revoked"], 2);
         assert_eq!(body["failed"], 0);
 
         let (status, body) = post(&url, "/oauth/revoke-all").await;
@@ -1208,6 +1334,105 @@ mod tests {
         assert_eq!(demo.auth_token(), "new-password");
     }
 
+    /// The propagation delay belongs to a rotation and to nothing else.
+    ///
+    /// A fresh deploy carries `AUTH_TOKEN` in its upload metadata, so the Worker
+    /// comes up already holding it — there is nothing to propagate. Delaying it
+    /// anyway aims [`ROTATE_ENV`] at `provision`'s health poll, which treats a
+    /// 401 as terminal: with the variable exported, first-time demo setup died
+    /// with "Something went wrong" and the retry loop the variable exists to
+    /// exercise was never reached. A knob for demonstrating one screen must not
+    /// break the flow that leads to it.
+    #[tokio::test]
+    async fn a_password_that_arrives_with_a_deploy_is_live_at_once_even_with_the_delay_set() {
+        let (url, demo) = brain_and_handle(Some(3));
+
+        demo.deployed_with("deployed-password");
+        assert_eq!(
+            bearer_status(&url, "deployed-password").await,
+            200,
+            "a deployed password has nothing to propagate and must work at once"
+        );
+
+        // …and the knob still does its job on the path it is for.
+        demo.rotate_to("rotated-password");
+        assert_eq!(
+            bearer_status(&url, "rotated-password").await,
+            401,
+            "a rotation must still spend its refusals, or the retry loop the \
+             variable exists to exercise is never exercised"
+        );
+    }
+
+    /// Loading the demo dashboard page must not spend a propagation attempt.
+    ///
+    /// `is_authenticated` is a *write* while a rotation is in flight — it spends
+    /// one of the refusals the new password owes — and the placeholder page is
+    /// unguarded, so asking the question at all is pure cost. It used to be
+    /// asked before the page's early return, which made a window that happened to
+    /// load the page land the new password sooner than the demo was set up to
+    /// require.
+    #[tokio::test]
+    async fn loading_the_placeholder_page_does_not_spend_a_propagation_attempt() {
+        const REFUSALS: u64 = 2;
+        let (url, demo) = brain_and_handle(Some(REFUSALS));
+        demo.rotate_to("new-password");
+
+        let client = reqwest::Client::new();
+        for path in ["/", "/index.html", "/"] {
+            let resp = client
+                .get(format!("{url}{path}"))
+                .bearer_auth("new-password")
+                .send()
+                .await
+                .expect("request");
+            assert_eq!(resp.status().as_u16(), 200, "{path} is an unguarded page");
+        }
+
+        for attempt in 1..=REFUSALS {
+            assert_eq!(
+                bearer_status(&url, "new-password").await,
+                401,
+                "attempt {attempt} of {REFUSALS}: the page loads must not have \
+                 spent any of the refusals"
+            );
+        }
+        assert_eq!(bearer_status(&url, "new-password").await, 200);
+    }
+
+    /// The mechanism every password test outside this file relies on.
+    ///
+    /// A test that rotates the process-wide brain changes the password every
+    /// other test in the process is sending, and the harness runs them in
+    /// parallel — a race that only shows up on a machine with enough cores. A
+    /// scoped brain is how such a test stays local; if the binding silently
+    /// stopped taking effect, those tests would go back to rotating the global
+    /// one and the flake would return with nothing to point at.
+    #[tokio::test]
+    async fn a_scoped_brain_stands_in_for_the_process_wide_one() {
+        let process_wide = base_url();
+        {
+            let scoped = scoped_brain();
+            assert_ne!(scoped.base_url(), process_wide, "a brain of its own");
+            assert_eq!(base_url(), scoped.base_url(), "and the one handed out");
+
+            rotate_to("a-password-only-this-test-sets");
+            assert_eq!(auth_token(), "a-password-only-this-test-sets");
+            assert_eq!(
+                bearer_status(scoped.base_url(), "a-password-only-this-test-sets").await,
+                200,
+                "the rotation must have reached the scoped brain"
+            );
+        }
+
+        assert_eq!(base_url(), process_wide, "dropping the guard gives it back");
+        assert_ne!(
+            auth_token(),
+            "a-password-only-this-test-sets",
+            "the process-wide brain must not have been touched"
+        );
+    }
+
     #[test]
     fn the_rotation_delay_is_off_unless_the_env_var_names_an_attempt_count() {
         assert_eq!(parse_rotate_after(None), None);
@@ -1505,7 +1730,31 @@ mod tests {
         let url = base_url();
         assert!(url.starts_with("http://127.0.0.1:"), "got {url}");
         assert_eq!(url, base_url(), "the address must be stable across calls");
-        let (status, body) = get(&url, "/config").await;
+
+        // Polled rather than asserted once, and only past a 401.
+        //
+        // This is the *process-wide* brain, which one test has to rotate —
+        // `rotate_to_reaches_the_brain_the_app_is_handed`, whose whole subject is
+        // that `rotate_to` reaches the brain the app is handed. With
+        // `SECOND_BRAIN_DEMO_ROTATE_AFTER` exported that rotation opens a window
+        // several requests long in which the brain refuses exactly the token
+        // every other caller sends, and this test would then be reporting that
+        // test's timing rather than anything about `base_url`.
+        //
+        // Nothing is weakened: a 401 is itself proof that a brain answered, which
+        // is what this asserts, and an address with nothing behind it still fails
+        // — `get` panics on a connection that goes nowhere.
+        let mut status;
+        let mut body;
+        let mut attempts = 0;
+        loop {
+            (status, body) = get(&url, "/config").await;
+            if status != 401 {
+                break;
+            }
+            attempts += 1;
+            assert!(attempts < 20, "the address never authenticated anyone");
+        }
         assert_eq!(status, 200, "base_url returned an address nothing is serving");
         assert!(body["config"].is_object());
     }

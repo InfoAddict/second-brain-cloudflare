@@ -28,6 +28,26 @@ pub enum Step {
     Recall,
     /// Assets + Worker + schedule + smoke tests — "Finishing up"
     Finish,
+    // The three below belong to a password change (#235) and to nothing else.
+    // A rotation is not a shortened setup: it writes one secret and then waits,
+    // and the wait is the part the user is being asked to sit through — up to
+    // `HEALTH_ATTEMPTS × HEALTH_WAIT`, on a screen that says "Leave this window
+    // open". Reusing `Finish` for all of it was tried and is wrong twice over:
+    // the rotation screen's checklist is keyed by these ids, so every row would
+    // stay a static bullet for the whole run, and "Finishing up" describes the
+    // last stage of a deploy rather than the two distinct things that can fail
+    // here — the write going out, and the brain accepting what was written.
+    /// The secret PUT — "Sending the change to your Second Brain"
+    Secret,
+    /// Polling `/health` with the new password — "Waiting for it to take effect"
+    Confirm,
+    /// The local stores — "Updating this computer".
+    ///
+    /// Emitted by `commands::rotate_password` around `rotate::persist`, never
+    /// from here: nothing local may be written until [`rotate_secret`] has
+    /// returned, so the step does not exist inside it.
+    #[allow(dead_code)] // constructed outside this module, by the command
+    Local,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,7 +123,13 @@ pub trait Backend {
     /// effect at the edge a little after it returns — see [`rotate_secret`],
     /// which is the only caller that may treat it as done.
     async fn put_secret(&self, script: &str, name: &str, text: &str) -> Result<(), CfApiError>;
+    /// The full health contract: live *and* its vector index wired. What a
+    /// deploy has to wait for.
     async fn health_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError>;
+    /// Does this password open this brain — and nothing else. What a *rotation*
+    /// has to wait for; see [`super::api::worker_auth_ok`] for why the two must
+    /// not be merged, and [`rotate_secret`] for what merging them costs.
+    async fn auth_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError>;
     async fn capture_ok(&self, worker_url: &str, auth_token: &str) -> Result<bool, CfApiError>;
     /// The deployed script's current bindings (for a preserve-everything update).
     async fn get_script_bindings(&self, script: &str)
@@ -497,7 +523,8 @@ pub async fn update_worker<B: Backend>(
 ///
 /// The deployment is otherwise untouched: no assets are re-uploaded, no bindings
 /// are rewritten, and no code is redeployed. Progress is reported as
-/// [`Step::Finish`] — see the note on the emit below.
+/// [`Step::Secret`] then [`Step::Confirm`] — the two things that can fail, and
+/// the two rows the rotation screen draws.
 ///
 /// A failure here is *not* proof that the password is unchanged. The write and
 /// the confirmation are two separate operations, and only the second one can
@@ -510,16 +537,7 @@ pub async fn rotate_secret<B: Backend>(
     new_token: &str,
     progress: impl Fn(StepEvent),
 ) -> Result<(), ProvisionError> {
-    // One step for the whole rotation, and an existing one. A new `Step` variant
-    // would need copy in every locale and a case in the progress UI to describe a
-    // single API call and a wait; `Finish` already means "the remote change is
-    // going in, and we are verifying it", which is exactly this.
-    let emit = |status: StepStatus| {
-        progress(StepEvent {
-            step: Step::Finish,
-            status,
-        })
-    };
+    let emit = |step: Step, status: StepStatus| progress(StepEvent { step, status });
 
     // #257, and it bites harder here than it did there. The script name comes
     // from the address the user is actually connected to, never from the bundled
@@ -534,51 +552,61 @@ pub async fn rotate_secret<B: Backend>(
     let script =
         crate::worker_url::script_of(worker_url).ok_or(ProvisionError::NotAWorkersDevAddress)?;
 
-    emit(StepStatus::Running);
-    let result = async {
-        backend.put_secret(&script, "AUTH_TOKEN", new_token).await?;
-
-        // The write is asynchronous at the edge, so the point of this loop is to
-        // wait out the propagation with the *new* token. The secret is PUT once,
-        // above: re-sending it on every attempt would be a second write racing
-        // the first, and would tell us nothing new.
-        for attempt in 0..HEALTH_ATTEMPTS {
-            match backend.health_ok(worker_url, new_token).await {
-                Ok(true) => return Ok(()),
-                // Read this next to `update_worker`'s health poll before changing
-                // it: the two treat a 401 in opposite ways, on purpose.
-                //
-                // There, the poll uses the token the app already had, so a 401
-                // means the redeploy dropped the secret — retrying would only
-                // delay telling the user they are locked out, and it is terminal.
-                //
-                // Here the poll uses the token that was just written, so a 401
-                // means the edge is still serving the *old* secret and the change
-                // has not landed yet. It is the expected answer for the first few
-                // seconds of every rotation. Making it terminal turns any deploy
-                // slower than one probe into a reported failure — of a rotation
-                // that then succeeds seconds later, leaving the user with a
-                // password the app told them was not applied.
-                Err(CfApiError::Unauthorized) => {}
-                // Not live yet, or DNS/network still catching up.
-                Ok(false) | Err(_) => {}
-            }
-            if attempt + 1 < HEALTH_ATTEMPTS {
-                backend.sleep(HEALTH_WAIT).await;
-            }
-        }
-        // Every attempt used up. The password may still be in force — see the
-        // note on this function.
-        Err(ProvisionError::HealthCheckFailed)
+    emit(Step::Secret, StepStatus::Running);
+    if let Err(e) = backend.put_secret(&script, "AUTH_TOKEN", new_token).await {
+        emit(Step::Secret, StepStatus::Error);
+        return Err(e.into());
     }
-    .await;
+    emit(Step::Secret, StepStatus::Done);
 
-    emit(if result.is_ok() {
-        StepStatus::Done
-    } else {
-        StepStatus::Error
-    });
-    result
+    // The write is asynchronous at the edge, so the point of this loop is to wait
+    // out the propagation with the *new* token. The secret is PUT once, above:
+    // re-sending it on every attempt would be a second write racing the first,
+    // and would tell us nothing new.
+    emit(Step::Confirm, StepStatus::Running);
+    for attempt in 0..HEALTH_ATTEMPTS {
+        // `auth_ok`, not `health_ok`, and the difference is the difference
+        // between a recoverable rotation and an unrecoverable one.
+        //
+        // The full health check requires `ok && vectorize.ok`. A brain whose
+        // vector index is degraded fails it on every attempt forever — so a
+        // rotation gated on it writes the secret, never confirms, never persists,
+        // and leaves the keychain on the old password while the brain is on the
+        // new one. "Try again" then repeats that exact sequence for as long as
+        // the index stays broken. All this gate has to establish is that the new
+        // password opens the brain; the dashboard is where a degraded index gets
+        // reported, and it is not this flow's business.
+        match backend.auth_ok(worker_url, new_token).await {
+            Ok(true) => {
+                emit(Step::Confirm, StepStatus::Done);
+                return Ok(());
+            }
+            // Read this next to `update_worker`'s health poll before changing
+            // it: the two treat a 401 in opposite ways, on purpose.
+            //
+            // There, the poll uses the token the app already had, so a 401
+            // means the redeploy dropped the secret — retrying would only
+            // delay telling the user they are locked out, and it is terminal.
+            //
+            // Here the poll uses the token that was just written, so a 401
+            // means the edge is still serving the *old* secret and the change
+            // has not landed yet. It is the expected answer for the first few
+            // seconds of every rotation. Making it terminal turns any deploy
+            // slower than one probe into a reported failure — of a rotation
+            // that then succeeds seconds later, leaving the user with a
+            // password the app told them was not applied.
+            Err(CfApiError::Unauthorized) => {}
+            // Nothing answered yet — DNS/network still catching up.
+            Ok(false) | Err(_) => {}
+        }
+        if attempt + 1 < HEALTH_ATTEMPTS {
+            backend.sleep(HEALTH_WAIT).await;
+        }
+    }
+    // Every attempt used up. The password may still be in force — see the note on
+    // this function.
+    emit(Step::Confirm, StepStatus::Error);
+    Err(ProvisionError::HealthCheckFailed)
 }
 
 #[cfg(test)]
@@ -615,12 +643,17 @@ mod tests {
         existing_vectorize: bool,
         subdomain_rejections: Mutex<u32>,
         health_failures: Mutex<u32>,
-        /// Health probes to answer with a 401 before anything else, standing in
-        /// for a secret that has not propagated to the edge yet.
+        /// Probes to answer with a 401 before anything else, standing in for a
+        /// secret that has not propagated to the edge yet.
         health_unauthorized: Mutex<u32>,
-        /// Every health probe, answered or not — a count the log cannot give,
-        /// since the log only records the ones that pass.
-        health_calls: Mutex<u32>,
+        /// Every probe of either kind, answered or not — a count the log cannot
+        /// give, since the log only records the ones that pass.
+        probe_calls: Mutex<u32>,
+        /// A brain that is up and authenticating with a broken vector index:
+        /// `health_ok` answers no for as long as it lasts, `auth_ok` still says
+        /// the password is good. This is the state that made a rotation gated on
+        /// full health permanently unrecoverable.
+        degraded_vector_index: bool,
         script_bindings: Vec<serde_json::Value>,
         last_deploy_metadata: Mutex<Option<serde_json::Value>>,
     }
@@ -631,6 +664,23 @@ mod tests {
         }
         fn entries(&self) -> Vec<String> {
             self.log.lock().unwrap().clone()
+        }
+        /// The half both probes share: the scripted refusals, spent in order, and
+        /// the call count. `None` means nothing was scripted and the probe is
+        /// free to answer for itself.
+        fn scripted_probe(&self) -> Option<Result<bool, CfApiError>> {
+            *self.probe_calls.lock().unwrap() += 1;
+            let mut unauthorized = self.health_unauthorized.lock().unwrap();
+            if *unauthorized > 0 {
+                *unauthorized -= 1;
+                return Some(Err(CfApiError::Unauthorized));
+            }
+            let mut failures = self.health_failures.lock().unwrap();
+            if *failures > 0 {
+                *failures -= 1;
+                return Some(Ok(false));
+            }
+            None
         }
     }
 
@@ -714,18 +764,24 @@ mod tests {
             Ok(())
         }
         async fn health_ok(&self, _url: &str, _token: &str) -> Result<bool, CfApiError> {
-            *self.health_calls.lock().unwrap() += 1;
-            let mut unauthorized = self.health_unauthorized.lock().unwrap();
-            if *unauthorized > 0 {
-                *unauthorized -= 1;
-                return Err(CfApiError::Unauthorized);
+            if let Some(scripted) = self.scripted_probe() {
+                return scripted;
             }
-            let mut failures = self.health_failures.lock().unwrap();
-            if *failures > 0 {
-                *failures -= 1;
+            if self.degraded_vector_index {
+                // `ok && vectorize.ok` is what the real check requires, and this
+                // half of it never recovers on its own.
                 return Ok(false);
             }
             self.log("health_ok");
+            Ok(true)
+        }
+        async fn auth_ok(&self, _url: &str, _token: &str) -> Result<bool, CfApiError> {
+            if let Some(scripted) = self.scripted_probe() {
+                return scripted;
+            }
+            // Deliberately blind to `degraded_vector_index`: the only question
+            // this probe answers is whether the password was accepted.
+            self.log("auth_ok");
             Ok(true)
         }
         async fn put_secret(
@@ -1096,15 +1152,122 @@ mod tests {
         );
         // Confirmed against the Worker, not just written. Success is the caller's
         // signal that the new password is safe to store locally.
-        assert!(fake.entries().contains(&"health_ok".to_string()));
+        assert!(fake.entries().contains(&"auth_ok".to_string()));
 
+        // The two things that can fail, reported as two steps, in order. The
+        // rotation screen draws a row per step id and moves it on each status, so
+        // this sequence is the screen: collapsing it back to one event leaves the
+        // user watching static bullets for up to
+        // `HEALTH_ATTEMPTS × HEALTH_WAIT`.
         let events = events.into_inner().unwrap();
         assert_eq!(
             events,
             vec![
-                (Step::Finish, StepStatus::Running),
-                (Step::Finish, StepStatus::Done)
+                (Step::Secret, StepStatus::Running),
+                (Step::Secret, StepStatus::Done),
+                (Step::Confirm, StepStatus::Running),
+                (Step::Confirm, StepStatus::Done),
             ]
+        );
+    }
+
+    /// What actually crosses the IPC boundary. `installer/src/main.ts` keys the
+    /// rotation checklist by these exact strings, and until now nothing asserted
+    /// any of them — which is how a rotation shipped emitting `"finish"` at a
+    /// screen listening for `"secret"`, `"confirm"` and `"local"`, leaving every
+    /// row a static bullet for the whole run under copy reading "Leave this
+    /// window open".
+    ///
+    /// Renaming a variant or dropping the `rename_all` is a silent break: Rust
+    /// stays happy, the front end still compiles, and the only symptom is a
+    /// progress screen that never moves.
+    #[test]
+    fn the_step_ids_on_the_wire_are_the_ones_the_screens_key_on() {
+        assert_eq!(
+            serde_json::to_value(StepEvent {
+                step: Step::Secret,
+                status: StepStatus::Running,
+            })
+            .unwrap(),
+            serde_json::json!({ "step": "secret", "status": "running" }),
+            "the whole event shape, field names included"
+        );
+
+        for (step, id) in [
+            (Step::Space, "space"),
+            (Step::Memory, "memory"),
+            (Step::Recall, "recall"),
+            (Step::Finish, "finish"),
+            (Step::Secret, "secret"),
+            (Step::Confirm, "confirm"),
+            // Emitted by `commands::rotate_password`, not by this module — the
+            // string still has to be right, and this is where the wire format is
+            // pinned.
+            (Step::Local, "local"),
+        ] {
+            let event = StepEvent { step, status: StepStatus::Done };
+            assert_eq!(
+                serde_json::to_value(&event).unwrap()["step"],
+                serde_json::json!(id),
+                "{step:?} must reach the front end as {id:?}"
+            );
+        }
+
+        for (status, id) in [
+            (StepStatus::Running, "running"),
+            (StepStatus::Done, "done"),
+            (StepStatus::Error, "error"),
+        ] {
+            let event = StepEvent { step: Step::Secret, status };
+            assert_eq!(
+                serde_json::to_value(&event).unwrap()["status"],
+                serde_json::json!(id),
+                "{status:?} must reach the front end as {id:?}"
+            );
+        }
+    }
+
+    /// A brain whose vector index is broken must still be rotatable.
+    ///
+    /// This is the unrecoverable one. `health_ok` requires `ok && vectorize.ok`,
+    /// so against a degraded index the confirmation can *never* go green: the
+    /// secret is written on the first attempt and accepted, the poll fails twelve
+    /// times, `persist` never runs, and the keychain keeps the old password while
+    /// the brain is already on the new one. Every "Try again" repeats exactly
+    /// that, and nothing in the app can tell the user their password did change.
+    ///
+    /// So the gate asks the only question it needs answered — does the new
+    /// password open the brain — and this fake answers the two questions
+    /// differently to prove which one it asked.
+    #[tokio::test]
+    async fn a_rotation_completes_against_a_brain_whose_vector_index_is_unhealthy() {
+        let fake = Fake {
+            degraded_vector_index: true,
+            ..Default::default()
+        };
+        rotate_secret(
+            &&fake,
+            "https://second-brain.acme.workers.dev",
+            "new-pw-123456789",
+            |_| {},
+        )
+        .await
+        .expect("a broken vector index is not a wrong password");
+
+        assert_eq!(
+            *fake.probe_calls.lock().unwrap(),
+            1,
+            "the auth probe passed first time — there was nothing to retry"
+        );
+        assert!(
+            fake.entries().contains(&"auth_ok".to_string()),
+            "the gate must be the auth-only probe: {:?}",
+            fake.entries()
+        );
+        assert!(
+            !fake.entries().contains(&"health_ok".to_string()),
+            "the full health check would never go green here: {:?}",
+            fake.entries()
         );
     }
 
@@ -1129,7 +1292,7 @@ mod tests {
         .await
         .expect("a 401 while the secret propagates is not a failed rotation");
 
-        assert_eq!(*fake.health_calls.lock().unwrap(), 4, "3 × 401, then green");
+        assert_eq!(*fake.probe_calls.lock().unwrap(), 4, "3 × 401, then green");
         // Waiting is what fixes a 401 here — re-writing the secret would be a
         // second write racing the first and would tell us nothing new.
         assert_eq!(secret_writes(&fake).len(), 1);
@@ -1159,26 +1322,46 @@ mod tests {
             "expected HealthCheckFailed, got {err:?}"
         );
         assert_eq!(
-            *fake.health_calls.lock().unwrap(),
+            *fake.probe_calls.lock().unwrap(),
             HEALTH_ATTEMPTS,
             "every attempt is used, and no more"
         );
         assert_eq!(secret_writes(&fake).len(), 1, "one PUT, not one per poll");
-        assert!(events
-            .into_inner()
-            .unwrap()
-            .contains(&(Step::Finish, StepStatus::Error)));
+
+        // The write succeeded and the confirmation did not, and the screen has to
+        // show exactly that: it is the difference between "nothing happened" and
+        // "your new password may already be live", which are opposite
+        // instructions to the person reading them.
+        let events = events.into_inner().unwrap();
+        assert!(
+            events.contains(&(Step::Secret, StepStatus::Done)),
+            "the change did go out: {events:?}"
+        );
+        assert!(
+            events.contains(&(Step::Confirm, StepStatus::Error)),
+            "the confirmation is what failed: {events:?}"
+        );
     }
 
     /// A brain on its own domain yields no script name, so there is nothing to
     /// write the secret to. The refusal has to come *before* the write: guessing
     /// at a name would set AUTH_TOKEN on some other Worker in the account.
+    ///
+    /// And before any progress is reported, which is the half the events are
+    /// captured for. The documented property is that this is refused "without a
+    /// half-started progress screen"; with the callback thrown away, moving the
+    /// first emit above the refusal left this test green while the user got a
+    /// checklist that starts, stops on a spinner and is then replaced by an error
+    /// screen — the flicker that makes people believe something was written.
     #[tokio::test]
     async fn rotation_refuses_a_custom_domain_before_touching_the_password() {
         let fake = Fake::default();
-        let err = rotate_secret(&&fake, "https://brain.example.com", "new-pw-123456789", |_| {})
-            .await
-            .unwrap_err();
+        let events = Mutex::new(Vec::new());
+        let err = rotate_secret(&&fake, "https://brain.example.com", "new-pw-123456789", |e| {
+            events.lock().unwrap().push((e.step, e.status))
+        })
+        .await
+        .unwrap_err();
 
         assert!(
             matches!(err, ProvisionError::NotAWorkersDevAddress),
@@ -1188,6 +1371,11 @@ mod tests {
             fake.entries().is_empty(),
             "a refused rotation must not call Cloudflare at all: {:?}",
             fake.entries()
+        );
+        let events = events.into_inner().unwrap();
+        assert!(
+            events.is_empty(),
+            "a refusal must not start a progress screen it cannot finish: {events:?}"
         );
     }
 
