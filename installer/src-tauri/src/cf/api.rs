@@ -208,13 +208,6 @@ impl CfClient {
         let url = self.url(&self.account_path(&format!("/vectorize/v2/indexes/{name}")));
         let index: VectorizeIndex =
             Self::required(self.send(|h| h.get(&url)).await?, "vectorize index")?;
-        let index = VectorizeIndex {
-            name: index.name,
-            config: index.config.map(|c| VectorizeConfig {
-                dimensions: 384,
-                metric: c.metric,
-            }),
-        };
         index
             .config
             .ok_or_else(|| CfApiError::Other(format!("index {name} reported no configuration")))
