@@ -36,6 +36,7 @@ export const it: Messages = {
     sectionRecall: "Recupero",
     sectionRemember: "Ricorda",
     sectionAi: "AI",
+    sectionMatching: "Corrispondenze",
     custom: "Personalizzato",
     customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",
     reset: "Ripristina il valore predefinito",
@@ -146,6 +147,102 @@ export const it: Messages = {
       desc: "Usato per ordinare, riassumere e individuare contraddizioni nei tuoi ricordi — non per la ricerca in sé. Ogni modello elencato qui gira sul tuo account Cloudflare.",
       sizeNote: "I modelli più grandi scrivono riassunti migliori e costano più Neurons. Quelli più piccoli sono più rapidi ed economici.",
       neuronsNote: "I Neurons sono l'unità di consumo AI di Cloudflare. Il tuo piano include un'assegnazione giornaliera.",
+    },
+    migration: {
+      lede: "Come il tuo Second Brain legge i tuoi ricordi e li abbina a ciò che chiedi.",
+      label: "Come vengono letti i tuoi ricordi",
+      desc:
+        "Ogni ricordo viene letto una volta quando lo salvi, e le ricerche vengono " +
+        "confrontate con quella lettura. Una lettura diversa può trovare corrispondenze " +
+        "più precise, ma prima tutto ciò che hai già salvato va riletto.",
+      entries: "{entries} ricordi salvati, in almeno {chunks} parti da rileggere.",
+      pickLabel: "Leggi i miei ricordi con",
+      inUse: "{name} (in uso ora)",
+      pickNote:
+        "Le opzioni più in basso nell'elenco leggono i tuoi ricordi con più finezza e " +
+        "consumano una parte maggiore della tua assegnazione AI giornaliera. Girano tutte " +
+        "sul tuo account Cloudflare.",
+      sameAsCurrent: "È già quella in uso — non c'è nulla da fare.",
+      dirtyNote: "Salva o annulla prima le altre modifiche.",
+      startButton: "Ricostruisci con questa",
+      confirmTitle: "Prima di iniziare",
+      confirmBody:
+        "I tuoi ricordi sono al sicuro. Il testo di ciò che hai salvato non viene mai " +
+        "toccato: viene ricostruito solo ciò che il tuo Second Brain usa per cercare.",
+      point1:
+        "Durante la ricostruzione la ricerca è incompleta. I ricordi non ancora riletti " +
+        "non compaiono tra i risultati.",
+      point2:
+        "Può richiedere tempo: ci sono {chunks} parti da rileggere e si consuma la tua " +
+        "assegnazione AI giornaliera. Se l'assegnazione finisce, il lavoro si mette in " +
+        "pausa e riprende da dove era arrivato.",
+      point3:
+        "Lungo il percorso non viene cancellato nulla. I vecchi dati di ricerca restano " +
+        "finché non scegli tu di liberarli alla fine, e quell'ultimo passaggio è il solo " +
+        "che non si può annullare.",
+      targetLine: "Si passa a: {name}",
+      confirmButton: "Sì, ricostruisci",
+      cancelButton: "Non ora",
+      startingTitle: "Preparazione",
+      startingBody:
+        "Prepariamo il nuovo modo di leggere i tuoi ricordi, poi il tuo Second Brain " +
+        "inizia a usarlo. Ci vuole un minuto o due — lascia aperta questa finestra.",
+      runningTitle: "Rilettura dei tuoi ricordi",
+      runningBody:
+        "Finché non finisce, la ricerca è incompleta: ciò che non è ancora stato riletto " +
+        "non compare tra i risultati. Lascia aperta questa finestra; chiudendola la " +
+        "ricostruzione si mette in pausa e nulla di già fatto va perso.",
+      progress: "{done} di {total} completati",
+      progressPending: "Elaborazione in corso…",
+      skipped:
+        "Non è stato possibile rileggere: {failed}. Ciò che manca potrebbe non comparire " +
+        "nelle ricerche.",
+      stalledTitle: "In pausa per oggi",
+      stalledBody:
+        "L'assegnazione AI di oggi è esaurita. Tutto ciò che è stato fatto è salvato e " +
+        "riprendere non costa nulla per la parte già completata. Torna domani, o quando la " +
+        "tua assegnazione si rinnova.",
+      resumeButton: "Continua",
+      interruptedTitle: "Una ricostruzione è rimasta a metà",
+      interruptedBody:
+        "Una ricostruzione si è fermata a metà: {done} di {total} completati. La ricerca " +
+        "resta incompleta finché non finisce, e continuare non costa nulla per la parte " +
+        "già completata.",
+      failedTitle: "La ricostruzione si è fermata",
+      failedBody:
+        "I tuoi ricordi non sono stati toccati e tutto ciò che è stato fatto è salvato. " +
+        "Continuando, nulla verrà ripetuto.",
+      stuck:
+        "La ricostruzione ha smesso di avanzare, così l'abbiamo interrotta. Niente è " +
+        "andato perso — riprova tra qualche minuto.",
+      doneTitle: "I tuoi ricordi sono stati riletti tutti",
+      doneBody:
+        "La ricerca è di nuovo completa e il tuo Second Brain abbina i ricordi nel modo nuovo.",
+      freeLabel: "Libera i vecchi dati di ricerca",
+      freeDesc:
+        "I dati di ricerca precedenti alla ricostruzione sono ancora conservati e il tuo " +
+        "Second Brain potrebbe ancora tornare a usarli. Liberarli recupera lo spazio che " +
+        "occupano ed è il solo passaggio qui che non si può annullare.",
+      freeButton: "Libera i vecchi dati",
+      freeConfirm: "Sì, liberali — so che non si può annullare",
+      freeKeep: "Conservali per ora",
+      freeing: "Liberazione dei vecchi dati di ricerca",
+      freeingBody: "Ci vuole solo un momento.",
+      freedTitle: "Tutto fatto",
+      freedBody:
+        "Il tuo Second Brain legge e abbina i tuoi ricordi nel modo nuovo, e i vecchi dati " +
+        "di ricerca non ci sono più. Nient'altro è cambiato.",
+      freeUnknown:
+        "Sono ancora conservati alcuni dati di ricerca precedenti alla ricostruzione. Non " +
+        "influiscono su nulla e potranno essere liberati più avanti.",
+      loading: "Verifica di come vengono letti i tuoi ricordi…",
+      loadFailed: "Non è stato possibile verificare come vengono letti i tuoi ricordi.",
+      barRunning:
+        "Rilettura dei tuoi ricordi — {done} di {total} completati. Le altre impostazioni " +
+        "sono bloccate fino alla fine.",
+      barWorking:
+        "Operazione in corso sul tuo Second Brain. Le altre impostazioni sono bloccate " +
+        "fino alla fine.",
     },
   },
   welcome: {

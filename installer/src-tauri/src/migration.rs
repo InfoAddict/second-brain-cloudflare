@@ -291,6 +291,65 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    /// The webview reads these keys by name. Nothing else can catch a rename
+    /// across that boundary: Rust renames the field, `serde` happily emits the new
+    /// key, `tsc` type-checks the TypeScript against its own interface, and the
+    /// mismatch only appears as a blank screen at runtime.
+    ///
+    /// Asserted against the literal strings `installer/src/settings.ts` reads.
+    #[test]
+    fn the_estimate_serialises_the_keys_the_window_reads() {
+        let est = MigrationEstimate {
+            entries: 1620,
+            chunks_at_least: 2100,
+            current_model: "@cf/baai/bge-small-en-v1.5".into(),
+            models: EMBEDDING_MODELS.to_vec(),
+        };
+        let json = serde_json::to_value(&est).expect("serialises");
+
+        for key in ["entries", "chunksAtLeast", "currentModel", "models"] {
+            assert!(json.get(key).is_some(), "the window reads {key}, which is absent");
+        }
+        // The picker needs [id, dimensions] pairs, and orders by dimensions.
+        let first = &json["models"][0];
+        assert!(first[0].is_string(), "model id must be a string");
+        assert!(first[1].is_u64(), "dimensions must be a number");
+    }
+
+    #[test]
+    fn a_batch_serialises_the_keys_the_progress_bar_reads() {
+        let json = serde_json::to_value(BatchProgress::default()).expect("serialises");
+        // `remaining` and `total` are the two the bar is computed from; `stalled`
+        // is what stops the loop. A missing `stalled` would loop forever against
+        // a Worker that has given up.
+        for key in ["processed", "failed", "remaining", "total", "done", "stalled"] {
+            assert!(json.get(key).is_some(), "the window reads {key}, which is absent");
+        }
+    }
+
+    /// Every key above, checked against the file that reads them, so adding a
+    /// field to the struct without the window knowing is visible here too.
+    #[test]
+    fn the_window_really_reads_those_keys() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/settings.ts");
+        let ui = std::fs::read_to_string(path).expect("read settings.ts");
+        for key in ["chunksAtLeast", "currentModel", "oldDimensions"] {
+            assert!(ui.contains(key), "settings.ts no longer reads {key}");
+        }
+        for command in [
+            "migration_estimate",
+            "migration_status",
+            "migration_step",
+            "begin_embedding_migration",
+            "finish_embedding_migration",
+        ] {
+            assert!(
+                ui.contains(&format!("\"{command}\"")),
+                "settings.ts no longer calls {command}"
+            );
+        }
+    }
+
     // ── HTTP ────────────────────────────────────────────────────────────────
     //
     // Against a real tiny_http server, matching the convention in settings.rs

@@ -36,6 +36,7 @@ export const en: Messages = {
     sectionRecall: "Recall",
     sectionRemember: "Remember",
     sectionAi: "AI",
+    sectionMatching: "Matching",
     custom: "Custom",
     customNote: "These values were set outside the app and don't match a preset. Picking a level below will replace them.",
     reset: "Reset to default",
@@ -140,6 +141,96 @@ export const en: Messages = {
       desc: "Used for sorting, summarizing, and spotting contradictions in your memories — not for the search itself. Every model here runs on your own Cloudflare account.",
       sizeNote: "Larger models write better summaries and cost more neurons. Smaller ones are faster and cheaper.",
       neuronsNote: "Neurons are Cloudflare's usage unit for AI. Your plan includes a daily allowance.",
+    },
+    migration: {
+      lede: "How your Second Brain reads your memories and matches them to what you ask for.",
+      label: "How your memories are read",
+      desc:
+        "Each memory is read once when you save it, and searches are matched against that " +
+        "reading. A different reader can match more precisely, but everything you have " +
+        "already saved has to be read again first.",
+      entries: "{entries} memories saved, in at least {chunks} pieces to read again.",
+      pickLabel: "Read my memories with",
+      inUse: "{name} (in use now)",
+      pickNote:
+        "Options further down the list read your memories in finer detail and use more of " +
+        "your daily AI allowance. All of them run on your own Cloudflare account.",
+      sameAsCurrent: "That's the one in use now — nothing to do.",
+      dirtyNote: "Save or cancel your other changes first.",
+      startButton: "Rebuild with this",
+      confirmTitle: "Before you start",
+      confirmBody:
+        "Your memories are safe. The text of everything you have saved is never touched — " +
+        "only what your Second Brain uses to search gets rebuilt from it.",
+      point1:
+        "Search is incomplete while this runs. Memories that haven't been read again yet " +
+        "won't come back in results.",
+      point2:
+        "It can take a while — {chunks} pieces to read again, and it uses your daily AI " +
+        "allowance. If the allowance runs out, it pauses and picks up where it left off.",
+      point3:
+        "Nothing is deleted along the way. The old search data stays until you choose to " +
+        "free it up at the end, and that last step is the only one that can't be undone.",
+      targetLine: "Switching to: {name}",
+      confirmButton: "Yes, rebuild it",
+      cancelButton: "Not now",
+      startingTitle: "Getting ready",
+      startingBody:
+        "Setting up the new way of reading your memories, then pointing your Second Brain " +
+        "at it. This takes a minute or two — leave this window open.",
+      runningTitle: "Reading your memories again",
+      runningBody:
+        "Search is incomplete until this finishes — anything not read again yet won't show " +
+        "up in results. Leave this window open; closing it pauses the rebuild, and nothing " +
+        "already done is lost.",
+      progress: "{done} of {total} done",
+      progressPending: "Working through them now…",
+      // Label form on purpose: it reads correctly at any count, and it claims
+      // nothing about what the number counts.
+      skipped: "Couldn't be read again: {failed}. Anything missed may not show up in search.",
+      stalledTitle: "Paused for today",
+      stalledBody:
+        "Today's AI allowance is used up. Everything done so far is saved, and picking it " +
+        "up again costs nothing for what's already done. Come back tomorrow, or whenever " +
+        "your allowance resets.",
+      resumeButton: "Carry on",
+      interruptedTitle: "A rebuild was left unfinished",
+      interruptedBody:
+        "A rebuild stopped partway — {done} of {total} done. Search stays incomplete until " +
+        "it finishes, and carrying on costs nothing for what's already done.",
+      failedTitle: "The rebuild stopped",
+      failedBody:
+        "Your memories are untouched and everything done so far is saved. Carrying on " +
+        "won't repeat any of it.",
+      stuck:
+        "The rebuild stopped making progress, so we stopped it. Nothing is lost — try " +
+        "again in a few minutes.",
+      doneTitle: "Your memories have all been read again",
+      doneBody:
+        "Search is complete again, and your Second Brain is now matching memories the new way.",
+      freeLabel: "Free up the old search data",
+      freeDesc:
+        "The search data from before the rebuild is still stored, and your Second Brain " +
+        "could still go back to it. Freeing it up recovers the space it takes, and it is " +
+        "the one step here that can't be undone.",
+      freeButton: "Free up the old data",
+      freeConfirm: "Yes, free it up — I know this can't be undone",
+      freeKeep: "Keep it for now",
+      freeing: "Freeing up the old search data",
+      freeingBody: "This only takes a moment.",
+      freedTitle: "All done",
+      freedBody:
+        "Your Second Brain reads and matches your memories the new way, and the old search " +
+        "data is gone. Nothing else changed.",
+      freeUnknown:
+        "Some search data from before the rebuild is still stored. It doesn't affect " +
+        "anything, and it can be freed up later.",
+      loading: "Checking how your memories are read…",
+      loadFailed: "Couldn't check how your memories are being read right now.",
+      barRunning:
+        "Reading your memories again — {done} of {total} done. Other settings are locked " +
+        "until it finishes.",
+      barWorking: "Working on your Second Brain. Other settings are locked until this finishes.",
     },
   },
   welcome: {

@@ -43,6 +43,7 @@ export type Messages = {
     sectionRecall: string;
     sectionRemember: string;
     sectionAi: string;
+    sectionMatching: string;
     custom: string;
     customNote: string;
     reset: string;
@@ -60,6 +61,62 @@ export type Messages = {
     duplicates: { label: string; desc: string; note: string; levels: { permissive: LevelCopy; standard: LevelCopy; strict: LevelCopy } };
     compression: { label: string; desc: string; note: string; levels: { conservative: LevelCopy; standard: LevelCopy; aggressive: LevelCopy } };
     model: { label: string; desc: string; sizeNote: string; neuronsNote: string };
+    /**
+     * Rebuilding how memories are read (#248). The only destructive, multi-step
+     * flow in this window, so it carries a screen's worth of copy per step
+     * rather than one notice per level.
+     */
+    migration: {
+      lede: string;
+      label: string;
+      desc: string;
+      entries: string;
+      pickLabel: string;
+      inUse: string;
+      pickNote: string;
+      sameAsCurrent: string;
+      dirtyNote: string;
+      startButton: string;
+      confirmTitle: string;
+      confirmBody: string;
+      point1: string;
+      point2: string;
+      point3: string;
+      targetLine: string;
+      confirmButton: string;
+      cancelButton: string;
+      startingTitle: string;
+      startingBody: string;
+      runningTitle: string;
+      runningBody: string;
+      progress: string;
+      progressPending: string;
+      skipped: string;
+      stalledTitle: string;
+      stalledBody: string;
+      resumeButton: string;
+      interruptedTitle: string;
+      interruptedBody: string;
+      failedTitle: string;
+      failedBody: string;
+      stuck: string;
+      doneTitle: string;
+      doneBody: string;
+      freeLabel: string;
+      freeDesc: string;
+      freeButton: string;
+      freeConfirm: string;
+      freeKeep: string;
+      freeing: string;
+      freeingBody: string;
+      freedTitle: string;
+      freedBody: string;
+      freeUnknown: string;
+      loading: string;
+      loadFailed: string;
+      barRunning: string;
+      barWorking: string;
+    };
   };
   welcome: {
     title: string;

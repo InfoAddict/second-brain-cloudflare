@@ -730,7 +730,11 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/settings.ts");
         let src = std::fs::read_to_string(path).expect("read settings.ts");
         let start = src.find("const SECTIONS").expect("SECTIONS list");
-        let end = src[start..].find("];").expect("end of SECTIONS") + start;
+        // Anchored to a `];` at the start of a line. A bare `find("];")` matched
+        // inside the declaration's own type annotation (`controls: string[];`)
+        // once that was written across several lines, silently truncating the
+        // slice to nothing and failing on a file that was perfectly correct.
+        let end = src[start..].find("\n];").expect("end of SECTIONS") + start;
         let sections = &src[start..end];
         for c in CONTROLS {
             assert!(
