@@ -777,8 +777,19 @@ body.settings-page #app {
 }
 
 .settings-actions-status {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.82rem;
   color: var(--text-tertiary);
   line-height: 1.35;
+}
+
+/* .btn-primary is width:100% for the full-width setup buttons. Inside this
+   flex row that starves the status text, which wrapped to three lines. */
+.settings-actions .btn-primary,
+.settings-actions .btn-secondary {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.85rem;
 }
