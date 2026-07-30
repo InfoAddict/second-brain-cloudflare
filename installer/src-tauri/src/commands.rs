@@ -1400,9 +1400,27 @@ async fn confirm_target_is_a_brain(
         user_err(locale, Key::ErrorNotABrain)
     })?;
 
+    bindings_are_a_brains(&bindings, locale)
+}
+
+/// The #247 decision itself, over bindings that have already been read.
+///
+/// Split from the fetch above so a test can drive it, on the
+/// `blocked_by_migration` precedent. Every backend reachable from a test answers
+/// `get_script_bindings` with a brain's bindings — the live one needs a real
+/// Cloudflare account, and the dry-run one describes the demo brain — so with
+/// the decision inline the *refusal* had no way of being exercised at all, and
+/// replacing the whole of it with `Ok(())` passed the entire suite.
+///
+/// What that mutation ships is the harm the caller's doc describes: a Door B
+/// typo that lands on a different Worker of the user's own is in the right
+/// Cloudflare account, so nothing else in the flow can catch it, and it has its
+/// `AUTH_TOKEN` overwritten while the user is told their brain's password
+/// changed.
+fn bindings_are_a_brains(bindings: &[serde_json::Value], locale: Locale) -> Result<(), String> {
     brain_index_names()
         .iter()
-        .any(|name| discover::bindings_look_like_a_brain(&bindings, name))
+        .any(|name| discover::bindings_look_like_a_brain(bindings, name))
         .then_some(())
         .ok_or_else(|| user_err(locale, Key::ErrorNotABrain))
 }
@@ -1442,9 +1460,26 @@ pub async fn validate_brain_address(
 #[tauri::command]
 pub async fn disconnect_ai_tools(app: AppHandle) -> Result<serde_json::Value, String> {
     let (worker_url, token, locale) = settings_target(&app)?;
+    revoke_all_tools(&worker_url, &token, locale).await
+}
+
+/// The request [`disconnect_ai_tools`] makes, split out so it can be driven by a
+/// test — the command takes an `AppHandle`, which no unit test can construct, and
+/// this is the whole of what it does.
+///
+/// `bearer_auth` is not decoration. `/oauth/revoke-all` is guarded like every
+/// other route on the brain, so without the brain's password the Worker answers
+/// 401 and the button reports a failure for a door it never asked to close. It
+/// fails safe, which is why it had no test and why it is the last thing here
+/// nothing was watching.
+async fn revoke_all_tools(
+    worker_url: &str,
+    token: &str,
+    locale: Locale,
+) -> Result<serde_json::Value, String> {
     let resp = reqwest::Client::new()
         .post(format!("{}/oauth/revoke-all", worker_url.trim_end_matches('/')))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -1508,12 +1543,55 @@ fn rotation_block(locale: Locale) -> RotateError {
     RotateError::blocked(user_err(locale, Key::ErrorRotateBlocked))
 }
 
+/// Whether a rebuild is under way — or was abandoned — and a rotation has to
+/// wait for it, asked of the brain itself.
+///
+/// **Fails open, twice over, and both are the rule rather than an oversight.**
+///
+/// Door B has no password to ask with, so `current_password` is `None` and the
+/// answer is "not blocked" without a request: gating someone's only way back in
+/// on a question they are by definition unable to answer would be backwards.
+///
+/// And a check that could not be *made* is not a block either. A rebuild is a
+/// rare state; an unreachable brain is a Tuesday. Refusing on a failed
+/// `fetch_status` presents a network blip as "you may not change your password"
+/// on the one screen whose entire job is to change it, and leaves a Door A user
+/// with no connection unable to change theirs at all — while the block screen
+/// points them at Advanced Settings, which they cannot reach either.
+///
+/// So only a check that succeeded *and* came back blocked refuses. Split out of
+/// [`rotate_password`] so that rule can be driven by a test: that command takes
+/// an `AppHandle` and a Tauri `State`, and inverting this gate to refuse on
+/// failure compiled and passed the whole suite.
+async fn rebuild_blocks_rotation(
+    worker_url: &str,
+    current_password: Option<&str>,
+    locale: Locale,
+) -> bool {
+    let Some(password) = current_password else {
+        return false;
+    };
+    match crate::migration::fetch_status(worker_url, password, locale).await {
+        Ok(status) => blocked_by_migration(&status),
+        Err(e) => {
+            log::warn!("could not ask whether a rebuild is under way, so it is not a block: {e}");
+            false
+        }
+    }
+}
+
 /// Whether a rebuild is in flight (or was abandoned) and rotation must wait.
 ///
 /// Door A only. Door B cannot ask — checking needs a working password, which is
 /// by definition what that user does not have — and gating their only way back
 /// in on a check they cannot perform would be backwards. Someone who has lost
 /// their password is not driving a rebuild from that machine anyway.
+///
+/// Deliberately *not* [`rebuild_blocks_rotation`]: this one is the Connection
+/// pane asking in advance whether to offer the door, and a failure there has to
+/// reach the pane rather than be flattened into "no". The defensive gate inside
+/// the flow answers a different question — may this rotation proceed — where the
+/// same failure must never refuse.
 #[tauri::command]
 pub async fn rotation_blocked(app: AppHandle) -> Result<bool, String> {
     let (url, token, locale) = settings_target(&app)?;
@@ -1539,13 +1617,34 @@ pub async fn recheck_password(
         let session = app.state::<SetupSession>();
         rotation_target(&session, locale, address)?.0
     };
-    // `worker_auth_ok`, not `worker_health_ok`, for the same reason the rotation
-    // gate uses it: `/health` reports `ok` as the *vector index's* health, and
-    // this screen is asking one question only — does the brain let this password
-    // in? A brain whose index is degraded would answer "no" about a password that
-    // is live and is now the only one that opens it. That is the worst answer
-    // this button can give, on the one screen that exists to end the doubt.
-    match crate::cf::api::worker_auth_ok(&worker_url, password.trim()).await {
+    password_opens_brain(&worker_url, &password, locale).await
+}
+
+/// Does this password open this brain? The whole of [`recheck_password`], split
+/// out so it can be driven by a test — the command takes an `AppHandle`.
+///
+/// **Three answers, and the screen renders three different things.** Yes, no,
+/// and could-not-ask: `recheckUnreachable` exists to carry that third one, and
+/// it only has something to carry while the three stay distinct. A wrong
+/// password is `Ok(false)` and not an error, because on the screen this serves
+/// "no" is an answer rather than a fault; collapsing it into the error arm makes
+/// a refused password look like a broken connection and sends the user off
+/// checking their network instead of trying the other password. Collapsing the
+/// other way is worse still — an unreachable brain reported as `Ok(false)` tells
+/// someone their new password does not work when nothing was ever asked.
+///
+/// `worker_auth_ok`, not `worker_health_ok`, for the same reason the rotation
+/// gate uses it: `/health` reports `ok` as the *vector index's* health, and this
+/// screen is asking one question only. A brain whose index is degraded would
+/// answer "no" about a password that is live and is now the only one that opens
+/// it — the worst answer this button can give, on the one screen that exists to
+/// end the doubt.
+async fn password_opens_brain(
+    worker_url: &str,
+    password: &str,
+    locale: Locale,
+) -> Result<bool, String> {
+    match crate::cf::api::worker_auth_ok(worker_url, password.trim()).await {
         Ok(ok) => Ok(ok),
         Err(CfApiError::Unauthorized) => Ok(false),
         Err(e) => {
@@ -1629,16 +1728,11 @@ pub async fn rotate_password(
     //    already hides the door, but the flow can be open across the moment a
     //    rebuild starts on another machine.
     //
-    //    Only a check that *succeeds* and says "blocked" refuses. Door B has no
-    //    password to ask with, and a check that cannot be made is not a block: a
-    //    user who has lost their password must not be turned away by a question
-    //    they are unable to answer. A network blip must not either.
-    if let Some(password) = &current_password {
-        if let Ok(status) = crate::migration::fetch_status(&worker_url, password, locale).await {
-            if blocked_by_migration(&status) {
-                return Err(rotation_block(locale));
-            }
-        }
+    //    Only a check that *succeeds* and says "blocked" refuses — both halves of
+    //    that live in `rebuild_blocks_rotation`, which is where the reasoning is
+    //    and where a test can reach them.
+    if rebuild_blocks_rotation(&worker_url, current_password.as_deref(), locale).await {
+        return Err(rotation_block(locale));
     }
 
     // 3. The Cloudflare account that holds this brain, matched by the subdomain
@@ -2188,10 +2282,12 @@ pub fn open_settings_window(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_mode, blocked_by_migration, clear_pending_rotation, cloudflare_client_for_brain,
-        confirm_target_is_a_brain, dashboard_credentials, for_log, normalize_worker_url,
-        previous_index_for, rotate_demo_password, rotation_address, rotation_block,
-        rotation_failure, rotation_target, RotateError, SetupSession, LOG_DETAIL_MAX,
+        app_mode, bindings_are_a_brains, blocked_by_migration, brain_index_names,
+        clear_pending_rotation, cloudflare_client_for_brain, confirm_target_is_a_brain,
+        dashboard_credentials, for_log, normalize_worker_url, password_opens_brain,
+        previous_index_for, rebuild_blocks_rotation, revoke_all_tools, rotate_demo_password,
+        rotation_address, rotation_block, rotation_failure, rotation_target, RotateError,
+        SetupSession, LOG_DETAIL_MAX,
     };
     use crate::cf::oauth::Tokens;
     use crate::cf::provision::{ProvisionError, ProvisionOutcome};
@@ -2666,6 +2762,78 @@ mod tests {
         }
     }
 
+    /// A rebuild that could not be asked about is not a rebuild in progress.
+    ///
+    /// The gate has to fail **open**, and the only reason to state that as a rule
+    /// is that failing closed is the natural way to write it. A rebuild is a rare
+    /// state; a brain that cannot be reached for a moment is a Tuesday. Refusing
+    /// on a failed `fetch_status` turns every blip into "you may not change your
+    /// password" on the one screen that exists to change it, and hands an offline
+    /// Door A user a permanent refusal whose suggested escape — Advanced
+    /// Settings — is behind the same connection that just failed.
+    ///
+    /// Inverting that arm compiled and passed all 237 tests: the gate lived
+    /// inside `rotate_password`, which takes an `AppHandle` and a Tauri `State`,
+    /// so nothing could call it. It is its own function now for that reason.
+    #[tokio::test]
+    async fn a_rebuild_that_could_not_be_asked_about_does_not_block_a_rotation() {
+        // A brain of its own: this rotates its password, and the process-wide one
+        // is what every other test in the suite is mid-request against.
+        let brain = crate::demo_brain::scoped_brain();
+        const PASSWORD: &str = "the-password-this-rebuild-test-sets";
+        crate::demo_brain::rotate_to(PASSWORD);
+
+        // Asked and answered: a brain that has never been rebuilt does not block.
+        assert!(
+            !rebuild_blocks_rotation(brain.base_url(), Some(PASSWORD), Locale::En).await,
+            "a brain with no ledger at all was treated as mid-rebuild"
+        );
+
+        // The one that matters. Nothing is listening on port 1, so the request
+        // fails outright — and a question that could not be put is not a "yes".
+        assert!(
+            !rebuild_blocks_rotation("http://127.0.0.1:1", Some(PASSWORD), Locale::En).await,
+            "a brain that could not be reached was reported as mid-rebuild, so a \
+             network blip presents as a refusal to change a password and an \
+             offline user can never change theirs"
+        );
+
+        // The same rule for a password the brain refuses: `fetch_status` comes
+        // back as an error, and this computer holding a stale password is a
+        // reason to change it rather than grounds to forbid changing it.
+        assert!(
+            !rebuild_blocks_rotation(brain.base_url(), Some("not-this-brains-password"), Locale::En)
+                .await,
+            "a 401 from the rebuild check locked the user out of the flow that \
+             fixes exactly that"
+        );
+
+        // Door B has no password to ask with, so there is no question to put.
+        assert!(
+            !rebuild_blocks_rotation(brain.base_url(), None, Locale::En).await,
+            "someone who has lost their password was turned away by a check that \
+             needs the password they have lost"
+        );
+
+        // …and a rebuild that genuinely is outstanding still blocks, or the gate
+        // above is satisfied by a function that always says no. One batch of the
+        // demo brain's 1,620 entries leaves a ledger with no `finishedAt`, which
+        // is the in-progress state.
+        crate::migration::run_batch(brain.base_url(), PASSWORD, Locale::En)
+            .await
+            .expect("one re-embed batch against the demo brain");
+        assert!(
+            rebuild_blocks_rotation(brain.base_url(), Some(PASSWORD), Locale::En).await,
+            "a rebuild is under way and the rotation was allowed through. Caught \
+             half-way it leaves the next batch 401ing and the ledger stalling, so \
+             a recoverable password problem presents as a failed rebuild — the \
+             more frightening of the two, and the one that invites a destructive fix"
+        );
+
+        // Which Door B still cannot be asked about, rebuild or no rebuild.
+        assert!(!rebuild_blocks_rotation(brain.base_url(), None, Locale::En).await);
+    }
+
     /// Every in-memory mode is decided before secure storage is consulted.
     ///
     /// The rule this protects is not a style preference. `&&` and `else if` are
@@ -2984,6 +3152,89 @@ mod tests {
             .expect("the demo account's bindings look like a brain");
     }
 
+    /// …and a Worker that is not a brain is refused, however right its account is.
+    ///
+    /// The negative half of the test above, and the half that was missing. Both
+    /// cases it covered — a custom domain, and the app's own brain — are decided
+    /// before this check or by it saying yes, so replacing the decision itself
+    /// with `Ok(())` left all 237 tests green while removing the only thing
+    /// standing between a mistyped address and someone else's Worker.
+    ///
+    /// The account match cannot help here, which is the whole point: every script
+    /// listed below is in the user's *own* Cloudflare account, reached at their
+    /// own `workers.dev` subdomain, and a Door B typo — one letter of a script
+    /// name — is how a user lands on one. Accepted, the flow writes `AUTH_TOKEN`
+    /// onto it and reports that the brain's password has changed: the brain is
+    /// untouched and still on the old password, and something the user never
+    /// named has been altered.
+    ///
+    /// Driven through `bindings_are_a_brains` rather than
+    /// `confirm_target_is_a_brain` because there is no backend a test can reach
+    /// that answers with anything but a brain's bindings — the wire between the
+    /// two is asserted at the bottom.
+    #[test]
+    fn a_worker_that_is_not_a_brain_is_refused_however_right_its_account_is() {
+        let vectorize = |index: &str| {
+            serde_json::json!({ "type": "vectorize", "name": "VECTORIZE", "index_name": index })
+        };
+        let d1 = || serde_json::json!({ "type": "d1", "name": "DB", "database_id": "abc" });
+        let kv = || serde_json::json!({ "type": "kv_namespace", "name": "OAUTH_KV" });
+        let a_brains_index = brain_index_names()
+            .first()
+            .expect("this build knows what index its own brains are on")
+            .clone();
+
+        for (what, bindings) in [
+            ("a Worker with no bindings at all", vec![]),
+            ("their own API, with a database and no vector index", vec![d1(), kv()]),
+            (
+                "their own search Worker, on an index of its own",
+                vec![d1(), vectorize("acme-docs-vectors")],
+            ),
+            (
+                "a brain's index name with no database behind it",
+                vec![vectorize(&a_brains_index), kv()],
+            ),
+            (
+                "a database and a vector index that is not one a brain uses",
+                vec![d1(), vectorize("second-brain-vectors-backup")],
+            ),
+        ] {
+            assert_eq!(
+                bindings_are_a_brains(&bindings, Locale::En).unwrap_err(),
+                i18n::t(Locale::En, Key::ErrorNotABrain),
+                "{what} was accepted as a brain. A Door B typo then overwrites its \
+                 AUTH_TOKEN while telling the user their brain's password changed."
+            );
+        }
+
+        // …and every index one of this build's own brains could legitimately be
+        // on is accepted, including the ones an embedding migration moved it to.
+        // Refusing those tells a user who changed how their brain reads that
+        // their own brain is not a brain.
+        for name in brain_index_names() {
+            assert!(
+                bindings_are_a_brains(&[d1(), vectorize(&name), kv()], Locale::En).is_ok(),
+                "{name} is an index this app's own brains are on, and it was refused"
+            );
+        }
+
+        // The wire. The decision is only worth pinning while the command that
+        // reads the bindings still ends in it, and that is exactly what a test
+        // driving the decision directly cannot see.
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "async fn confirm_target_is_a_brain(");
+        assert!(
+            at(body, "get_script_bindings") < at(body, "bindings_are_a_brains(&bindings, locale)"),
+            "the brain check no longer decides on the bindings it just read"
+        );
+        assert!(
+            !body.contains("\n    Ok(())"),
+            "confirm_target_is_a_brain reports success without consulting anything \
+             — which is the mutation this whole test exists for"
+        );
+    }
+
     /// The order of `rotate_password`, which is the whole of its safety argument.
     ///
     /// Three mutations of this function compiled with all 208 tests passing:
@@ -3005,7 +3256,12 @@ mod tests {
 
         let door_b = at(body, "if door_b {");
         let confirm = at(body, "confirm_target_is_a_brain");
-        let blocked = at(body, "blocked_by_migration");
+        // The gate moved into `rebuild_blocks_rotation` so that its fail-open
+        // rule could be exercised at all — see
+        // `a_rebuild_that_could_not_be_asked_about_does_not_block_a_rotation`.
+        // The ordering it has to keep is unchanged, and this is still the only
+        // thing that can see it.
+        let blocked = at(body, "rebuild_blocks_rotation");
         let remote = at(body, "provision::rotate_secret");
         let persist = at(body, "rotate::persist");
 
@@ -3132,6 +3388,46 @@ mod tests {
         assert!(
             call.contains("windows::refresh_wrapper_token"),
             "…and the open dashboard window is no longer told either"
+        );
+    }
+
+    /// A finished rotation leaves the change-your-password flow — on the live
+    /// path as well as the demo one.
+    ///
+    /// `a_demo_rotation_runs_the_real_path_and_never_reads_the_keychain` asserts
+    /// this of `rotate_demo_password`, which a test can call. The live half
+    /// cannot be called at all: it takes an `AppHandle` and a Tauri `State`, and
+    /// reaching its last lines needs a real Cloudflare account. So deleting the
+    /// clear from *that* half left every test green, and what it ships is
+    /// `app_mode` returning `"change-password"` for the rest of the session and
+    /// the next launch reopening the password-change screen over a password that
+    /// has just been successfully changed. That is the wedge
+    /// `walking_away_from_a_password_change_does_not_wedge_the_next_flow`
+    /// exists to prevent, reached through the door that *worked* — and the user
+    /// has no way to tell that their change did land.
+    ///
+    /// Source-scanned for that reason, and both anchors are `expect`ed: an
+    /// ordering assertion whose landmark has been deleted must fail rather than
+    /// quietly compare a missing position against something.
+    #[test]
+    fn a_finished_rotation_leaves_the_password_change_flow_on_the_live_path_too() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn rotate_password(");
+
+        let persist = at(body, "rotate::persist");
+        let cleared = at(body, "clear_pending_rotation");
+        let ok = at(body, "Ok(outcome)");
+
+        assert!(
+            persist < cleared && cleared < ok,
+            "the flow is left before the rotation has finished doing its work, or \
+             not at all — it has to be cleared on the way out of the success path"
+        );
+        assert!(
+            persist < at(body, "*session.stale_password.lock().unwrap() = false"),
+            "a rotation is also the answer to \"your password was changed \
+             elsewhere\", and a flag nothing clears keeps telling the user that \
+             about the password they have just set themselves"
         );
     }
 
@@ -3278,6 +3574,145 @@ mod tests {
             !body.contains("get_account_subdomain"),
             "start_worker_update still enumerates accounts itself — that is the \
              copy rotation was meant to remove"
+        );
+    }
+
+    /// The re-check has three answers, and the screen renders three things.
+    ///
+    /// Yes, no, and could-not-ask. `recheckUnreachable` is copy written for that
+    /// third one, and it only has something to carry while the three stay apart —
+    /// turning the `Unauthorized` arm into an error compiled and passed
+    /// everything, which merges "your password is not the one that works" into
+    /// "we could not reach your brain" and sends a user who only had to try their
+    /// other password off to check their network instead.
+    ///
+    /// The last section is the probe itself, which was `worker_health_ok` until
+    /// this branch changed it. `/health` reports `ok` as the *vector index's*
+    /// health, so that call answered a question about Vectorize on the one screen
+    /// that exists to tell someone whether their password changed — and a brain
+    /// with a degraded index says "no" about a password that is live and is now
+    /// the only one that opens it.
+    #[tokio::test]
+    async fn the_password_recheck_has_three_answers_and_asks_only_about_the_password() {
+        let brain = crate::demo_brain::scoped_brain();
+        const PASSWORD: &str = "the-password-this-recheck-test-sets";
+        crate::demo_brain::rotate_to(PASSWORD);
+
+        assert_eq!(
+            password_opens_brain(brain.base_url(), PASSWORD, Locale::En).await,
+            Ok(true),
+            "the brain's own password did not open it"
+        );
+        assert_eq!(
+            password_opens_brain(brain.base_url(), "not-this-brains-password", Locale::En).await,
+            Ok(false),
+            "a refused password must come back as an answer, not a fault: this \
+             screen is asking a yes/no question and \"no\" is one of the answers \
+             it was opened to receive"
+        );
+        assert_eq!(
+            password_opens_brain("http://127.0.0.1:1", PASSWORD, Locale::En).await,
+            Err(i18n::t(Locale::En, Key::ErrorReachBrain).to_string()),
+            "\"could not ask\" is the third answer, and reporting it as `false` \
+             tells someone their new password does not work when nothing was ever \
+             asked — on the screen they opened because they did not know"
+        );
+
+        // Surrounding whitespace is not a wrong password. The field is one a user
+        // pastes into.
+        assert_eq!(
+            password_opens_brain(brain.base_url(), &format!("  {PASSWORD}\n"), Locale::En).await,
+            Ok(true),
+            "a pasted password with whitespace around it was reported as refused"
+        );
+
+        // The probe asks about the password and nothing else. A path the brain
+        // does not serve answers 404 *after* authenticating, so the password was
+        // accepted and the answer is still yes — where `worker_health_ok` would
+        // say no, because it reads any non-200 (and any `vectorize.ok: false`) as
+        // a refusal. Those are the same branch of the same function; the degraded
+        // index is the case that matters and no demo brain here can be made to
+        // report one, so this is the reachable half of it.
+        assert_eq!(
+            password_opens_brain(&format!("{}/not-a-route", brain.base_url()), PASSWORD, Locale::En)
+                .await,
+            Ok(true),
+            "the re-check answered \"your password does not work\" about a brain \
+             that had just accepted it, because it asked whether the brain was \
+             well rather than whether it was open"
+        );
+
+        // …and the probe named, because the case above is a stand-in for the one
+        // that cannot be staged.
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "async fn password_opens_brain(");
+        assert!(
+            body.contains("worker_auth_ok"),
+            "the re-check no longer asks whether the password is accepted"
+        );
+        assert!(
+            !body.contains("worker_health_ok"),
+            "the re-check is back on the full health contract, so a brain with a \
+             degraded vector index tells its owner their password did not change"
+        );
+    }
+
+    /// Disconnecting the AI tools: the one action whose whole value is that its
+    /// report can be believed, and the one command in this module that had no
+    /// test of any kind.
+    ///
+    /// Rotation deliberately does not reach these tools — they hold
+    /// provider-issued tokens validated against KV, not the brain's password —
+    /// which is why this is offered separately, and why what it reports is the
+    /// only evidence the user gets that a door was closed.
+    #[tokio::test]
+    async fn disconnecting_ai_tools_sends_the_password_and_passes_the_count_through() {
+        let brain = crate::demo_brain::scoped_brain();
+        const PASSWORD: &str = "the-password-this-revoke-test-sets";
+        crate::demo_brain::rotate_to(PASSWORD);
+
+        let body = revoke_all_tools(brain.base_url(), PASSWORD, Locale::En)
+            .await
+            .expect("the brain's own password opens the route that closes the tools");
+        assert_eq!(body["ok"], true);
+        assert_eq!(
+            body["revoked"], 2,
+            "the Worker's own count, passed through rather than summarised: it is \
+             what tells the user how many tools were holding access"
+        );
+        assert_eq!(
+            body["failed"], 0,
+            "`failed` is the case this control exists for — a tool that kept its \
+             access — so it has to survive the trip to the screen"
+        );
+
+        // Pressing it a second time reports nothing left, rather than closing the
+        // same two again. The pass-through is only worth anything if the number
+        // moves.
+        let again = revoke_all_tools(brain.base_url(), PASSWORD, Locale::En)
+            .await
+            .expect("nothing left to close is still a success");
+        assert_eq!(again["revoked"], 0);
+
+        // The brain's password is what makes the request. Without it this route
+        // 401s like every other, and the user is shown a failure for a door that
+        // was never even asked to close — which fails safe, and is why nothing
+        // noticed the token was gone.
+        let refused = revoke_all_tools(brain.base_url(), "not-this-brains-password", Locale::En)
+            .await
+            .expect_err("a brain must not revoke anything for a password it refuses");
+        assert!(
+            refused.contains("401"),
+            "the status the brain gave is what makes this diagnosable: {refused}"
+        );
+
+        // …and a brain that could not be reached at all says something else
+        // again, because the two send the user to different places.
+        assert_eq!(
+            revoke_all_tools("http://127.0.0.1:1", PASSWORD, Locale::En)
+                .await
+                .unwrap_err(),
+            i18n::t(Locale::En, Key::ErrorReachBrain),
         );
     }
 

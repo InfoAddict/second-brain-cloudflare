@@ -303,6 +303,53 @@ mod tests {
         );
     }
 
+    /// The CLI branch's other failure, and the one nothing could reach until
+    /// now: the file *is* there, so the write is attempted, and it does not take.
+    ///
+    /// `Some(true)` and `Some(false)` are different sentences on the done screen.
+    /// Reported as a success, the user is told the `brain` command is on the new
+    /// password; it then 401s from their next command onwards with nothing on
+    /// screen — and nothing in the outcome — to point at the cause. That is the
+    /// precise failure this module's own header says #235 would have shipped, so
+    /// the branch that reports it has to be pinned rather than merely written.
+    ///
+    /// The failure used here is a config file that is not JSON, for two reasons.
+    /// It is one `write_config` genuinely produces and refuses to clobber — its
+    /// own `malformed_config_is_not_clobbered` pins that — and it needs no
+    /// permissions: a read-only file or directory proves nothing under a CI
+    /// container running as root, where mode bits do not stop a write and this
+    /// test would silently invert into asserting that a *successful* write is
+    /// reported as a failure. It is also how a user really arrives here, by hand
+    /// editing the file or by a half-finished write.
+    #[test]
+    fn a_cli_config_that_could_not_be_rewritten_is_reported_as_not_rewritten() {
+        let home = temp_home("cli-unwritable");
+        let path = cli_config::config_path(&home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{ hand-edited, and no longer json").unwrap();
+
+        let outcome = persist(&home, URL, NEW, ok_store(), |_| true);
+
+        assert_eq!(
+            outcome.cli_config,
+            Some(false),
+            "the CLI is installed and the write did not take, which is a failed \
+             write and not an absent CLI. As `Some(true)` the done screen tells \
+             the user their `brain` command is on the new password, and the \
+             command then refuses them with no explanation available anywhere."
+        );
+        assert!(
+            !fs::read_to_string(&path).unwrap().contains(NEW),
+            "the report has to be true in the other direction too: the write \
+             failed, so the file must still hold what it held"
+        );
+        assert!(
+            outcome.keychain && outcome.dashboard,
+            "each store is independent — a CLI write that failed does not \
+             abandon the stores on either side of it"
+        );
+    }
+
     /// The dashboard result is reported, not assumed. An open window keeps the
     /// token it was created with, so "we told it" and "we could not" are
     /// different facts and the screen says different things about them.
