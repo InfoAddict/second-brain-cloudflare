@@ -853,11 +853,34 @@ body.settings-page #app {
   margin-bottom: 0.3rem;
 }
 
+/* The one sentence on the warning screen that carries full weight. The rest of
+   that screen is grey, and a wall of grey before a one-way operation is not
+   read at all. */
+.settings-migration-lead {
+  margin-top: 0.55rem;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* What is being switched to, by its named level. Not monospace any more: it
+   held a model id when it was written, and now it holds a human label. */
 .settings-migration-target {
-  margin-top: 0.6rem;
+  margin-top: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+/* The raw model id, kept for auditability on the screen that commits and
+   nowhere else. Sized and coloured so it reads as a footnote to the line above
+   rather than as the thing being chosen. */
+.settings-migration-model {
+  margin-top: 0.2rem;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
-  color: var(--text-secondary);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  word-break: break-all;
 }
 
 .settings-migration-actions {

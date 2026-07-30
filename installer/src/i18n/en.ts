@@ -149,29 +149,61 @@ export const en: Messages = {
         "Each memory is read once when you save it, and searches are matched against that " +
         "reading. A different reader can match more precisely, but everything you have " +
         "already saved has to be read again first.",
-      entries: "{entries} memories saved, in at least {chunks} pieces to read again.",
-      pickLabel: "Read my memories with",
+      // Counted in memories, the same unit the progress line uses. The piece
+      // count appears only where it is about the daily AI allowance, so the two
+      // screens never present the same job in two different units.
+      entries: "{entries} memories saved, all to be read again.",
+      entriesOne: "1 memory saved, to be read again.",
+      entriesNone: "No memories saved yet, so there is nothing to read again.",
+      pickLabel: "How to read your memories",
       inUse: "{name} (in use now)",
       pickNote:
-        "Options further down the list read your memories in finer detail and use more of " +
-        "your daily AI allowance. All of them run on your own Cloudflare account.",
+        "Reading in more detail matches more precisely and uses more of your daily AI " +
+        "allowance. All of these run on your own Cloudflare account.",
+      /**
+       * The picker shows these names and never the model id. This is the last
+       * label read before a one-way operation, and the position of an opaque
+       * string in a list is not something anyone can reason about well.
+       */
+      levels: {
+        standard: {
+          name: "Standard",
+          notice:
+            "Lightest on your daily AI allowance and the quickest to rebuild. Good enough " +
+            "for most searches.",
+        },
+        finer: {
+          name: "Finer detail",
+          notice:
+            "Catches more of what each memory is about, so near-misses sort better. Uses " +
+            "more of your daily AI allowance.",
+        },
+        finest: {
+          name: "Finest detail",
+          notice:
+            "The most precise matching, and the heaviest on both your daily AI allowance " +
+            "and your storage.",
+        },
+      },
       sameAsCurrent: "That's the one in use now — nothing to do.",
       dirtyNote: "Save or cancel your other changes first.",
       startButton: "Rebuild with this",
       confirmTitle: "Before you start",
+      // One full-weight sentence. The rest of this screen is a grey block, and a
+      // grey block before a one-way operation does not get read.
+      confirmLead: "Search will be incomplete until this finishes.",
       confirmBody:
-        "Your memories are safe. The text of everything you have saved is never touched — " +
-        "only what your Second Brain uses to search gets rebuilt from it.",
-      point1:
-        "Search is incomplete while this runs. Memories that haven't been read again yet " +
-        "won't come back in results.",
-      point2:
-        "It can take a while — {chunks} pieces to read again, and it uses your daily AI " +
-        "allowance. If the allowance runs out, it pauses and picks up where it left off.",
-      point3:
-        "Nothing is deleted along the way. The old search data stays until you choose to " +
-        "free it up at the end, and that last step is the only one that can't be undone.",
+        "Your memories are safe — only what your Second Brain uses to search gets rebuilt.",
+      point1: "Memories not read again yet won't come back in results.",
+      point2: "It uses your daily AI allowance, and pauses for the day if that runs out.",
+      // How long, in the only unit the app can honestly promise: batches are
+      // capped by pieces, and the rounds run one after another.
+      point3: "{chunks} pieces to read again — about {rounds} rounds, one after another.",
+      point4: "Nothing is deleted until you choose to free the old search data at the end.",
       targetLine: "Switching to: {name}",
+      // Secondary, and only here: the id earns its place on the screen that
+      // commits, where someone may want to check exactly what they are getting.
+      modelLine: "Model: {name}",
       confirmButton: "Yes, rebuild it",
       cancelButton: "Not now",
       startingTitle: "Getting ready",
@@ -180,39 +212,68 @@ export const en: Messages = {
         "at it. This takes a minute or two — leave this window open.",
       runningTitle: "Reading your memories again",
       runningBody:
-        "Search is incomplete until this finishes — anything not read again yet won't show " +
-        "up in results. Leave this window open; closing it pauses the rebuild, and nothing " +
-        "already done is lost.",
-      progress: "{done} of {total} done",
+        "Search is incomplete until this finishes. Leave this window open, or pause and " +
+        "come back — nothing already read again is lost either way. The total can go up " +
+        "if you save something new while this runs.",
+      pauseButton: "Pause for now",
+      pausing: "Pausing after this round…",
+      pausedTitle: "Paused",
+      pausedBody:
+        "Everything read again so far is saved. Search stays incomplete until you carry " +
+        "on, and carrying on costs nothing for what's already done.",
+      progress: "{done} of {total} memories read again",
       progressPending: "Working through them now…",
-      // Label form on purpose: it reads correctly at any count, and it claims
-      // nothing about what the number counts.
-      skipped: "Couldn't be read again: {failed}. Anything missed may not show up in search.",
+      // Label form on purpose: it reads correctly at any count. Worded as
+      // attempts because a memory that failed stays in front of the cursor and
+      // is tried again, so this is a count of tries and not a count of losses.
+      skipped:
+        "Memories that couldn't be read again yet: {failed}. They get another try as this " +
+        "carries on.",
       stalledTitle: "Paused for today",
       stalledBody:
         "Today's AI allowance is used up. Everything done so far is saved, and picking it " +
         "up again costs nothing for what's already done. Come back tomorrow, or whenever " +
         "your allowance resets.",
+      // The other stall. "Come back tomorrow" is advice that can never work here,
+      // and Carry on alone would rerun the identical failing round forever.
+      stalledFailingTitle: "One memory is blocking the rebuild",
+      stalledFailingBody:
+        "The same memory keeps failing, so the last round got nothing done. Waiting won't " +
+        "change that — the next try would run the identical round. Try again in case it " +
+        "was a blip, or start over to forget where it got to and read everything from the " +
+        "beginning.",
       resumeButton: "Carry on",
+      startOverButton: "Start over instead",
+      startOverNote:
+        "Starting over reads every memory again, including the ones already done, and " +
+        "spends your AI allowance on that work a second time.",
+      resettingTitle: "Starting over",
+      resettingBody:
+        "Clearing the record of what has been read again, then beginning from your first " +
+        "memory.",
       interruptedTitle: "A rebuild was left unfinished",
       interruptedBody:
         "A rebuild stopped partway — {done} of {total} done. Search stays incomplete until " +
         "it finishes, and carrying on costs nothing for what's already done.",
       failedTitle: "The rebuild stopped",
       failedBody:
-        "Your memories are untouched and everything done so far is saved. Carrying on " +
-        "won't repeat any of it.",
+        "Your memories are untouched and everything read again so far is saved. Carrying " +
+        "on picks up where it stopped — it won't start over.",
+      // Its own screen. Stacked under the failed copy this said the same thing
+      // twice, in two voices, the second in red arguing with the first.
+      stuckTitle: "The rebuild stopped making progress",
       stuck:
-        "The rebuild stopped making progress, so we stopped it. Nothing is lost — try " +
-        "again in a few minutes.",
+        "Nothing is lost, and everything read again so far is saved. Trying again in a few " +
+        "minutes often clears it; if it doesn't, start over.",
       doneTitle: "Your memories have all been read again",
       doneBody:
         "Search is complete again, and your Second Brain is now matching memories the new way.",
+      changeAgain: "Change this again",
       freeLabel: "Free up the old search data",
       freeDesc:
-        "The search data from before the rebuild is still stored, and your Second Brain " +
-        "could still go back to it. Freeing it up recovers the space it takes, and it is " +
-        "the one step here that can't be undone.",
+        "The search data from before the rebuild is still taking up space. Your memories " +
+        "aren't touched — this only removes the leftover search data your Second Brain no " +
+        "longer uses. It is the one step here that can't be undone.",
       freeButton: "Free up the old data",
       freeConfirm: "Yes, free it up — I know this can't be undone",
       freeKeep: "Keep it for now",
@@ -222,9 +283,6 @@ export const en: Messages = {
       freedBody:
         "Your Second Brain reads and matches your memories the new way, and the old search " +
         "data is gone. Nothing else changed.",
-      freeUnknown:
-        "Some search data from before the rebuild is still stored. It doesn't affect " +
-        "anything, and it can be freed up later.",
       loading: "Checking how your memories are read…",
       loadFailed: "Couldn't check how your memories are being read right now.",
       barRunning:

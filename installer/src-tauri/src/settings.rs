@@ -722,6 +722,66 @@ mod tests {
     }
 
 
+    /// Every `t("…")` the settings window asks for must exist in both locales.
+    ///
+    /// Nothing else checks this. `t`'s parameter type is
+    /// `keyof Messages | \`${keyof Messages}.${string}\``, so *any* dotted
+    /// sub-path type-checks — and on a miss `t` returns the path itself, so a
+    /// mistyped key renders `settingsPanel.migration.pauseButton` to the user as
+    /// though it were a sentence. The migration flow alone added 66 keys referenced
+    /// only by string.
+    #[test]
+    fn every_string_the_settings_window_asks_for_exists_in_both_locales() {
+        let ui = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../src/settings.ts"
+        ))
+        .expect("read settings.ts");
+
+        // Dotted paths the window looks up, e.g. settingsPanel.migration.doneTitle.
+        let mut wanted: Vec<&str> = Vec::new();
+        for (i, _) in ui.match_indices("t(\"") {
+            let rest = &ui[i + 3..];
+            let Some(end) = rest.find('"') else { continue };
+            let path = &rest[..end];
+            if path.starts_with("settingsPanel.") && path.contains('.') {
+                wanted.push(path);
+            }
+        }
+        wanted.sort();
+        wanted.dedup();
+        assert!(
+            wanted.len() > 40,
+            "expected to find the window's string lookups, found {} — the scan broke",
+            wanted.len()
+        );
+
+        for locale in ["en.ts", "it.ts"] {
+            let src = std::fs::read_to_string(format!(
+                "{}/../src/i18n/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                locale
+            ))
+            .expect("read locale");
+
+            let missing: Vec<&&str> = wanted
+                .iter()
+                .filter(|path| {
+                    // The leaf is what is declared; the parent objects are nesting.
+                    let leaf = path.rsplit('.').next().unwrap_or_default();
+                    !src.contains(&format!("{leaf}:"))
+                })
+                .collect();
+
+            assert!(
+                missing.is_empty(),
+                "{locale} is missing {} string(s) the window asks for: {:?}",
+                missing.len(),
+                missing
+            );
+        }
+    }
+
     /// The settings window groups controls into sections with a hardcoded list.
     /// A control missing from it would simply never render — no error, no blank
     /// space, just a setting the user cannot reach.

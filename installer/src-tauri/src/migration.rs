@@ -385,15 +385,28 @@ mod tests {
     fn the_window_really_reads_those_keys() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/settings.ts");
         let ui = std::fs::read_to_string(path).expect("read settings.ts");
-        for key in ["chunksAtLeast", "currentModel", "oldDimensions"] {
+        for key in ["chunksAtLeast", "currentModel", "level", "stalledReason"] {
             assert!(ui.contains(key), "settings.ts no longer reads {key}");
         }
+        // The window must NOT deal in dimensions. They size the index and order
+        // the picker; putting a number like 768 on a decision screen is what the
+        // named levels replaced, and a browser-stored dimension count was how the
+        // target of an irreversible delete used to be identified.
+        assert!(
+            !ui.contains("oldDimensions"),
+            "settings.ts is tracking dimensions again — that belongs on the Rust side"
+        );
         for command in [
             "migration_estimate",
             "migration_status",
             "migration_step",
             "begin_embedding_migration",
             "finish_embedding_migration",
+            // The abandon path, which existed with no command exposing it until
+            // a review noticed, and the outstanding-index question the window
+            // asks instead of tracking sizes itself.
+            "migration_reset",
+            "outstanding_old_index",
         ] {
             assert!(
                 ui.contains(&format!("\"{command}\"")),
