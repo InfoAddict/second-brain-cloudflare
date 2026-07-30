@@ -1539,7 +1539,13 @@ pub async fn recheck_password(
         let session = app.state::<SetupSession>();
         rotation_target(&session, locale, address)?.0
     };
-    match crate::cf::api::worker_health_ok(&worker_url, password.trim()).await {
+    // `worker_auth_ok`, not `worker_health_ok`, for the same reason the rotation
+    // gate uses it: `/health` reports `ok` as the *vector index's* health, and
+    // this screen is asking one question only — does the brain let this password
+    // in? A brain whose index is degraded would answer "no" about a password that
+    // is live and is now the only one that opens it. That is the worst answer
+    // this button can give, on the one screen that exists to end the doubt.
+    match crate::cf::api::worker_auth_ok(&worker_url, password.trim()).await {
         Ok(ok) => Ok(ok),
         Err(CfApiError::Unauthorized) => Ok(false),
         Err(e) => {
