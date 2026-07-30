@@ -15,7 +15,7 @@
 //! moved, and writing the new password here first would lock this computer out
 //! of a brain that is still working perfectly on the old one.
 
-use crate::{cli_config, secure_store};
+use crate::cli_config;
 use std::path::Path;
 
 /// What happened at each of the places this computer keeps the password.
@@ -51,18 +51,38 @@ pub struct RotateOutcome {
 /// specifies — secure storage first, because it is the store the app itself
 /// depends on and the one whose failure the user must be told about.
 ///
-/// `refresh_dashboard` is injected rather than called directly so this stays
-/// testable: reaching an open webview needs a Tauri `AppHandle`, which cannot be
-/// constructed in a unit test, and the ordering above is exactly the sort of
-/// thing that quietly rots when it is only exercised by hand.
+/// Both `save_secure` and `refresh_dashboard` are injected rather than called
+/// directly, for two reasons that turned out to be the same reason.
+///
+/// Reaching an open webview needs a Tauri `AppHandle`, which cannot be
+/// constructed in a unit test — so without the seam the ordering here is only
+/// ever exercised by hand, and an ordering nothing asserts is exactly the sort of
+/// thing that quietly rots.
+///
+/// Secure storage has the mirror-image problem. Under `cfg(test)` its backing map
+/// is *process-global*, so calling it from here wrote state that `secure_store`'s
+/// own end-to-end test was mid-way through asserting on: this module's tests
+/// failed that neighbour roughly one run in fifteen at default parallelism, and
+/// never at `--test-threads=1`, so CI would have blamed `secure_store` for a fault
+/// introduced here. The seam removes the shared state entirely rather than
+/// serialising against it, and it buys the thing serialising could not: a
+/// `save_setup` that *fails*, which the real test backend cannot do, and which is
+/// the difference between the done screen's "this computer is using the new
+/// password already" being a fact and being a guess.
+///
+/// `save_secure` returns `Result<(), String>` rather than `secure_store`'s own
+/// error type because that type's inner field is private to its module — a test
+/// here could not construct one, which would leave the failure branch as
+/// unreachable as it was before.
 pub fn persist(
     home: &Path,
     worker_url: &str,
     new_token: &str,
+    save_secure: impl FnOnce(&str, &str) -> Result<(), String>,
     refresh_dashboard: impl FnOnce(&str) -> bool,
 ) -> RotateOutcome {
     // 1. Secure storage.
-    let keychain = match secure_store::save_setup(worker_url, new_token) {
+    let keychain = match save_secure(worker_url, new_token) {
         Ok(()) => true,
         Err(e) => {
             log::error!("could not save the new password to secure storage: {e}");
@@ -82,8 +102,17 @@ pub fn persist(
     // So `None` means "not installed", which is not a failure, and the existence
     // check is the whole point of this branch. Collapsing it to an unconditional
     // write is the mutation this module's tests exist to catch.
+    //
+    // The check is on the *file*, deliberately, and `is_file` rather than
+    // `exists`. Widening it to the parent directory — which `~/.config` users
+    // very often have, because anything else may have created
+    // `~/.config/second-brain/` — hands a plaintext credential file to exactly
+    // the person this branch exists to protect. That widening is a one-token edit
+    // and it survived every test in this module until
+    // `a_cli_directory_without_a_config_file_is_still_not_an_installed_cli` was
+    // written, so the guard against it is behavioural and not a source scan.
     let cli_config = cli_config::config_path(home)
-        .exists()
+        .is_file()
         .then(|| match cli_config::write_config(home, worker_url, new_token) {
             Ok(_) => true,
             Err(e) => {
@@ -123,56 +152,73 @@ mod tests {
     const URL: &str = "https://second-brain.demo.workers.dev";
     const NEW: &str = "k7hpq-3mrxd-9wfty-2njca";
 
+    /// A `save_secure` seam that succeeds and records what it was handed.
+    fn ok_store() -> impl FnOnce(&str, &str) -> Result<(), String> {
+        |_, _| Ok(())
+    }
+
     /// The store the app itself reads at launch. A rotation that changed the
     /// brain and not this one leaves the computer locked out of its own brain.
     ///
-    /// Reads back through `secure_store` rather than trusting the returned flag:
-    /// the flag is what `persist` claims, and the claim is what the done screen
-    /// repeats to the user.
-    ///
-    /// Reading the store back is deliberately not attempted, and the reason is
-    /// worth writing down rather than rediscovering. `secure_store`'s backing map
-    /// is process-global, and its own test clears and rewrites it from end to
-    /// end; a save-then-load here is measuring that test as much as this one, in
-    /// both directions. A guard that fails one run in thirty gets deleted rather
-    /// than fixed, so this asserts the two things that are actually stable: that
-    /// the write is reported, and — below — that it goes through `secure_store`
-    /// at all.
+    /// The address and the password are both asserted, because `save_setup` takes
+    /// two `&str` in that order and swapping them is a silent, compiling change
+    /// that would store the password as the address.
     #[test]
     fn writes_the_new_password_to_secure_storage() {
         let home = temp_home("keychain");
-        let outcome = persist(&home, URL, NEW, |_| true);
+        let seen = std::cell::RefCell::new(None);
+        let outcome = persist(
+            &home,
+            URL,
+            NEW,
+            |url, token| {
+                *seen.borrow_mut() = Some((url.to_string(), token.to_string()));
+                Ok(())
+            },
+            |_| true,
+        );
         assert!(
             outcome.keychain,
             "the store the app itself reads at launch. A rotation that changed the \
              brain and not this one leaves the computer locked out of its own brain"
         );
+        assert_eq!(
+            *seen.borrow(),
+            Some((URL.to_string(), NEW.to_string())),
+            "secure storage must be handed this brain's address and the NEW password"
+        );
     }
 
-    /// …and the write is a real one, not a reported one.
+    /// `keychain: true` is a claim, and the done screen opens by repeating it to
+    /// the user — "this computer is using the new password already". A store that
+    /// refused the write must not be reported as one that took it, or the one
+    /// screen whose job is to say what is safe now says the opposite of the truth.
     ///
-    /// The other half of the test above: `keychain: true` is a claim, and the done
-    /// screen repeats that claim to the user, so something has to hold the call
-    /// that makes it true in place.
+    /// Only reachable because the store is injected. The `cfg(test)` backend
+    /// behind `secure_store::save_setup` cannot fail, so before the seam existed
+    /// this branch was dead code that any mutation could delete unnoticed.
     #[test]
-    fn the_keychain_write_goes_through_secure_store() {
-        let src = include_str!("rotate.rs");
-        let code = &src[..src.find("#[cfg(test)]").expect("test module")];
-        let start = code.find("pub fn persist(").expect("persist");
-        let body = &code[start..];
-        let body = &body[..body.find("\n}").expect("end of fn")];
-
-        assert!(
-            body.contains("secure_store::save_setup"),
-            "persist no longer writes secure storage, so `keychain: true` would be \
-             telling the user their computer holds a password it does not have"
+    fn a_refused_keychain_write_is_reported_as_refused() {
+        let home = temp_home("keychain-fail");
+        let outcome = persist(
+            &home,
+            URL,
+            NEW,
+            |_, _| Err("the login keychain is locked".into()),
+            |_| true,
         );
         assert!(
-            body.contains("cli_config::config_path") && body.contains("exists()"),
-            "persist no longer checks whether the CLI config is there before \
-             writing it, so changing a password would create a plaintext \
-             credential file for someone who never installed the CLI"
+            !outcome.keychain,
+            "a store that refused the write must not be reported as holding the new \
+             password — the done screen tells the user this computer is already \
+             using it, and the next launch would then ask for a password nothing here has"
         );
+        assert_eq!(
+            outcome.cli_config, None,
+            "a failed keychain write does not abandon the rest: each store is \
+             independent and the user is told which one did not take"
+        );
+        assert!(outcome.dashboard, "…including the ones that did work");
     }
 
     /// The bug #235's own analysis missed. A user who never installed the CLI
@@ -183,7 +229,7 @@ mod tests {
         let path = cli_config::config_path(&home);
         assert!(!path.exists(), "precondition: the CLI was never set up here");
 
-        let outcome = persist(&home, URL, NEW, |_| true);
+        let outcome = persist(&home, URL, NEW, ok_store(), |_| true);
 
         assert_eq!(
             outcome.cli_config, None,
@@ -196,6 +242,37 @@ mod tests {
         assert!(
             !home.join(".config").join("second-brain").exists(),
             "nor the directory that would hold one"
+        );
+    }
+
+    /// The half-installed case, and the one the previous source-scanning guard
+    /// could not see.
+    ///
+    /// That guard asserted only that the words `config_path` and `exists()`
+    /// appeared in `persist`, so widening the test from the file to its parent
+    /// directory kept it green — while handing a plaintext copy of the user's new
+    /// password to anyone whose `~/.config/second-brain/` exists without a
+    /// `config.json` in it. That directory is created by an uninstall that left
+    /// the folder behind, by a `brain` command that failed before its first write,
+    /// or by hand; the file is the only thing that means "the CLI is set up here".
+    #[test]
+    fn a_cli_directory_without_a_config_file_is_still_not_an_installed_cli() {
+        let home = temp_home("cli-dir-only");
+        let path = cli_config::config_path(&home);
+        let dir = path.parent().expect("the config file has a parent");
+        fs::create_dir_all(dir).unwrap();
+        assert!(dir.exists() && !path.exists(), "precondition: directory, no file");
+
+        let outcome = persist(&home, URL, NEW, ok_store(), |_| true);
+
+        assert_eq!(
+            outcome.cli_config, None,
+            "an empty config directory is not an installed CLI"
+        );
+        assert!(
+            !path.exists(),
+            "changing a password created a plaintext credential file for someone \
+             who never installed the CLI — the exact harm this branch exists to prevent"
         );
     }
 
@@ -213,7 +290,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = persist(&home, URL, NEW, |_| true);
+        let outcome = persist(&home, URL, NEW, ok_store(), |_| true);
 
         assert_eq!(outcome.cli_config, Some(true));
         let parsed: serde_json::Value =
@@ -233,7 +310,7 @@ mod tests {
     fn the_dashboard_result_is_passed_through_both_ways() {
         let home = temp_home("dash-ok");
         let seen = std::cell::RefCell::new(String::new());
-        let outcome = persist(&home, URL, NEW, |token| {
+        let outcome = persist(&home, URL, NEW, ok_store(), |token| {
             *seen.borrow_mut() = token.to_string();
             true
         });
@@ -245,8 +322,107 @@ mod tests {
         );
 
         let home = temp_home("dash-fail");
-        let outcome = persist(&home, URL, NEW, |_| false);
+        let outcome = persist(&home, URL, NEW, ok_store(), |_| false);
         assert!(!outcome.dashboard, "a refused refresh must not be reported as done");
+    }
+
+    /// The order of the three writes, asserted rather than described.
+    ///
+    /// The module doc calls this "exactly the sort of thing that quietly rots",
+    /// and it was right: moving the dashboard refresh above the keychain write
+    /// changed nothing any test could see. It matters because the stores are not
+    /// equal. Secure storage is the one the app itself reads at every launch, so
+    /// it goes first and its failure is the one the user must be told about; the
+    /// dashboard goes last because it is the only one the user can put right
+    /// themselves by closing the window and reopening it. Between them, the CLI
+    /// config — after the keychain, so a crash mid-run never leaves a plaintext
+    /// copy of a password that secure storage does not have.
+    ///
+    /// Each seam observes the *file* rather than a call log, so this pins all
+    /// three positions from two callbacks.
+    #[test]
+    fn the_stores_are_written_in_the_order_that_makes_a_half_finished_run_safe() {
+        let home = temp_home("order");
+        let path = cli_config::config_path(&home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"workerUrl":"x","authToken":"old"}"#).unwrap();
+
+        let calls = std::cell::RefCell::new(Vec::new());
+        let holds_new_password =
+            |p: &std::path::Path| fs::read_to_string(p).is_ok_and(|t| t.contains(NEW));
+
+        let outcome = persist(
+            &home,
+            URL,
+            NEW,
+            |_, _| {
+                calls.borrow_mut().push("keychain");
+                assert!(
+                    !holds_new_password(&path),
+                    "the CLI config was written before secure storage. A run that \
+                     stops in between then leaves a plaintext copy of a password \
+                     the app itself does not hold."
+                );
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("dashboard");
+                assert!(
+                    holds_new_password(&path),
+                    "the dashboard was refreshed before the CLI config was written"
+                );
+                true
+            },
+        );
+
+        assert_eq!(
+            *calls.borrow(),
+            vec!["keychain", "dashboard"],
+            "secure storage is written first: it is the store the app reads at every \
+             launch, and the only one whose failure locks this computer out"
+        );
+        assert_eq!(outcome.cli_config, Some(true));
+    }
+
+    /// The wire shape the done screen reads, pinned by name.
+    ///
+    /// `#[serde(rename_all = "camelCase")]` is one line, deleting it compiles, and
+    /// every test above reads the Rust field rather than the JSON one — so the UI
+    /// would start seeing `cli_config` where it looks for `cliConfig`, silently
+    /// render "the CLI was not installed" for a user whose CLI was just rewritten,
+    /// and nothing would fail.
+    #[test]
+    fn the_outcome_reaches_the_screen_under_the_names_it_reads() {
+        let outcome = RotateOutcome {
+            keychain: true,
+            cli_config: Some(false),
+            dashboard: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&outcome).expect("RotateOutcome serializes"),
+            serde_json::json!({
+                "keychain": true,
+                "cliConfig": false,
+                "dashboard": false,
+            })
+        );
+
+        // `None` has to arrive as an explicit null rather than a missing key: the
+        // screen distinguishes "the CLI was never installed" from "the CLI write
+        // failed", and an absent field reads as neither.
+        assert_eq!(
+            serde_json::to_value(RotateOutcome {
+                keychain: false,
+                cli_config: None,
+                dashboard: true,
+            })
+            .expect("RotateOutcome serializes"),
+            serde_json::json!({
+                "keychain": false,
+                "cliConfig": serde_json::Value::Null,
+                "dashboard": true,
+            })
+        );
     }
 
     /// The test that would have caught the CLI config.

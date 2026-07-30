@@ -46,7 +46,6 @@ pub enum Step {
     /// Emitted by `commands::rotate_password` around `rotate::persist`, never
     /// from here: nothing local may be written until [`rotate_secret`] has
     /// returned, so the step does not exist inside it.
-    #[allow(dead_code)] // constructed outside this module, by the command
     Local,
 }
 

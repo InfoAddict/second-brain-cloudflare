@@ -171,9 +171,13 @@ fn open_wrapper_window_impl(
         let _ = w.set_focus();
         return Ok(());
     }
-    let origin = worker_url.trim_end_matches('/');
+    // Through `brain_origin`, the same definition the refresh below uses. Two
+    // spellings of "origin" in one file is how they drift, and the guard in both
+    // injected scripts compares against `location.origin`, which carries no path
+    // and no trailing slash.
+    let origin = brain_origin(worker_url).ok_or(tauri::Error::WindowNotFound)?;
     // serde_json turns the values into safely-escaped JS string literals.
-    let origin_js = serde_json::to_string(origin).expect("string serializes");
+    let origin_js = serde_json::to_string(&origin).expect("string serializes");
     let token_js = serde_json::to_string(auth_token).expect("string serializes");
     let mut init = format!(
         r#"(function () {{
@@ -261,6 +265,40 @@ const REFRESH_TOKEN_JS: &str = r#"(function () {
   } catch (_) {}
 })();"#;
 
+/// A stored brain address as a browser origin: scheme, host, and port only.
+///
+/// `location.origin` never carries a path or a trailing slash, and a stored
+/// address very often does — `connect_existing` accepts one, and
+/// `details_from_anywhere` trims it back off for exactly this reason. Compared
+/// raw, `https://brain.workers.dev/` never equals `https://brain.workers.dev`, so
+/// the injected guard below would decline to write on every rotation for those
+/// users while this function went on reporting success. Parsing rather than
+/// trimming means that difference cannot be reintroduced by deleting one call.
+///
+/// `None` for anything that is not a real `scheme://host` — an opaque origin can
+/// never legitimately equal a brain's, and treating "unparseable" as "matches"
+/// is how a password reaches a page it does not belong on.
+fn brain_origin(worker_url: &str) -> Option<String> {
+    let origin = url::Url::parse(worker_url.trim()).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
+}
+
+/// Whether the page a window is currently showing is the user's own brain.
+///
+/// The `brain` window is not always on the brain: an integration's OAuth
+/// handshake navigates it to Notion, Google or Microsoft, and it stays there
+/// until the user finishes. Asked in Rust as well as in the injected script
+/// because the two answer different questions — the script decides whether to
+/// *write*, and this decides what the caller may be *told*, and until now the
+/// caller was told "done" whenever the script had been handed over successfully,
+/// whether or not it had written anything.
+fn showing_the_brain(window_url: &str, worker_url: &str) -> bool {
+    match (brain_origin(window_url), brain_origin(worker_url)) {
+        (Some(showing), Some(brain)) => showing == brain,
+        _ => false,
+    }
+}
+
 /// Hands the open dashboard window the new password and reloads it.
 ///
 /// The token reaches that window through an `initialization_script`, which runs
@@ -268,18 +306,51 @@ const REFRESH_TOKEN_JS: &str = r#"(function () {
 /// therefore goes on presenting the old one indefinitely: nothing about it looks
 /// broken, it simply starts 401ing, and the only route back is Disconnect.
 ///
-/// Returns whether the dashboard is now on the new password. `true` when there is
-/// no wrapper window at all — the caller is asking whether a stale copy is left
-/// anywhere, and with no window there is none.
+/// Returns whether the dashboard is now on the new password — not whether a
+/// script was handed over. Those came apart in the two cases that matter: a
+/// window sitting on a third-party OAuth page, where the injected guard correctly
+/// declines to write, and a stored address with a trailing slash, where the
+/// comparison could never succeed. `eval` is fire-and-forget and cannot report
+/// either back, so the origin is settled here, from what the window says it is
+/// showing, before the script is sent at all.
+///
+/// The guard inside the script stays regardless. This check and that one race —
+/// the window can navigate in between — and the one that runs in the same tick as
+/// the write is the one that keeps the password off someone else's origin.
+///
+/// `true` when there is no wrapper window at all: the caller is asking whether a
+/// stale copy is left anywhere, and with no window there is none.
 pub fn refresh_wrapper_token(app: &AppHandle, worker_url: &str, auth_token: &str) -> bool {
     let Some(window) = app.get_webview_window("brain") else {
         return true;
     };
-    let origin = worker_url.trim_end_matches('/');
+    let Some(origin) = brain_origin(worker_url) else {
+        log::warn!("cannot refresh the dashboard window: {worker_url} has no origin");
+        return false;
+    };
+    match window.url() {
+        Ok(showing) if showing_the_brain(showing.as_str(), &origin) => {}
+        Ok(showing) => {
+            // Not an error and not worth a scary message: the user is part-way
+            // through connecting an integration. The window will pick the new
+            // password up from the creation-time script on its next load, and the
+            // done screen says so rather than claiming it is already there.
+            log::info!(
+                "the dashboard window is on {} rather than the brain, so it keeps the \
+                 old password until it navigates back",
+                showing.origin().ascii_serialization()
+            );
+            return false;
+        }
+        Err(e) => {
+            log::warn!("could not read the dashboard window's address: {e}");
+            return false;
+        }
+    }
     // serde_json turns both values into safely-escaped JS string literals, the
     // same way the creation-time injection does.
     let script = REFRESH_TOKEN_JS
-        .replace("__ORIGIN__", &serde_json::to_string(origin).expect("string serializes"))
+        .replace("__ORIGIN__", &serde_json::to_string(&origin).expect("string serializes"))
         .replace("__TOKEN__", &serde_json::to_string(auth_token).expect("string serializes"));
     match window.eval(&script) {
         Ok(()) => true,
@@ -334,6 +405,52 @@ pub fn open_settings_window(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use super::{brain_origin, showing_the_brain};
+
+    /// This file's source, stopping at the test module.
+    ///
+    /// Every guard below reads the code and nothing but the code. A scan that
+    /// runs on past the last item finds the assertion strings written to describe
+    /// it and passes with the thing it guards deleted — which is not a
+    /// hypothetical here. `both_sentinel_paths_are_deferred` passed with
+    /// `SETTINGS_PATH` removed from the handler outright, because its end anchor
+    /// (`"\n        .build()"`) was neither unique nor tied to this window and its
+    /// `unwrap_or(rest.len())` fallback sent `end` to the end of the file, where
+    /// the literal `"SETTINGS_PATH"` in its own assertion satisfied it. That
+    /// pattern has now misfired four times in this repository, so: bounded source,
+    /// unique anchors, and `expect` everywhere. A guard that cannot find what it
+    /// is anchored to must fail, never widen.
+    fn code() -> &'static str {
+        let src = include_str!("windows.rs");
+        &src[..src
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("the test module is the boundary of the scannable source")]
+    }
+
+    /// The `brain` window's navigation handler, and only that.
+    ///
+    /// Anchored inside `open_wrapper_window_impl` first, so it is tied to the
+    /// window whose handler this is rather than to whichever `.on_navigation(`
+    /// happens to come first in the file.
+    fn navigation_handler() -> &'static str {
+        let code = code();
+        let builder = code
+            .find("fn open_wrapper_window_impl(")
+            .expect("the brain window's builder");
+        let scope = &code[builder..];
+        let scope = &scope[..scope
+            .find("\n}\n")
+            .expect("open_wrapper_window_impl ends at a closing brace in column zero")];
+        let start = scope
+            .find(".on_navigation(")
+            .expect("the brain window still installs a navigation handler");
+        let rest = &scope[start..];
+        let end = rest
+            .find("\n        })\n")
+            .expect("the navigation closure closes at eight spaces, before .build()");
+        &rest[..end]
+    }
+
     /// Windows 11 report: the Connections button in the injected sidebar hung the
     /// app ("Not Responding", unpainted window) while the same window opened fine
     /// from the menu bar.
@@ -349,11 +466,7 @@ mod tests {
     /// rather than doing it inline.
     #[test]
     fn navigation_handler_never_builds_a_window_inline() {
-        let src = include_str!("windows.rs");
-        let start = src.find(".on_navigation(").expect("on_navigation");
-        let rest = &src[start..];
-        let end = rest.find("\n        .build()").unwrap_or(rest.len()) + start;
-        let body = &src[start..end];
+        let body = navigation_handler();
 
         assert!(
             body.contains("run_on_main_thread"),
@@ -371,13 +484,101 @@ mod tests {
     /// covering only Connections would leave Advanced Settings hanging.
     #[test]
     fn both_sentinel_paths_are_deferred() {
-        let src = include_str!("windows.rs");
-        let start = src.find(".on_navigation(").expect("on_navigation");
-        let rest = &src[start..];
-        let end = rest.find("\n        .build()").unwrap_or(rest.len()) + start;
-        let body = &src[start..end];
-        assert!(body.contains("CONNECTIONS_PATH"));
-        assert!(body.contains("SETTINGS_PATH"));
+        let body = navigation_handler();
+        for path in ["CONNECTIONS_PATH", "SETTINGS_PATH"] {
+            assert!(
+                body.contains(path),
+                "{path} is no longer intercepted, so clicking that button navigates \
+                 the dashboard to a route it does not serve — and on Windows the \
+                 window it was meant to open never appears at all"
+            );
+        }
+    }
+
+    /// A stored address becomes the origin a browser would report, by parsing
+    /// rather than by trimming.
+    ///
+    /// The trailing slash is the whole point. `location.origin` never has one, and
+    /// stored addresses sometimes do, so `https://brain.workers.dev/` compared raw
+    /// against `location.origin` is never equal: the injected guard declines to
+    /// write on every rotation, the dashboard keeps the old password, and — before
+    /// this — the function reported `true` anyway. Deleting a `trim_end_matches`
+    /// used to be that bug and left every test green; there is now nothing to
+    /// delete, because the comparison is between parsed origins.
+    #[test]
+    fn a_stored_address_becomes_the_origin_the_page_will_report() {
+        for input in [
+            "https://second-brain.acme.workers.dev",
+            "https://second-brain.acme.workers.dev/",
+            "https://second-brain.acme.workers.dev/graph?tab=all",
+            "  https://second-brain.acme.workers.dev/  ",
+        ] {
+            assert_eq!(
+                brain_origin(input).as_deref(),
+                Some("https://second-brain.acme.workers.dev"),
+                "input: {input:?}"
+            );
+        }
+
+        // The port is part of the origin, and the demo brain lives on one.
+        assert_eq!(
+            brain_origin("http://127.0.0.1:8787/").as_deref(),
+            Some("http://127.0.0.1:8787")
+        );
+
+        // Nothing that is not a real scheme://host may produce an origin. An
+        // opaque one can never legitimately equal a brain's, and answering
+        // "matches" for an address nobody could parse is how a password reaches a
+        // page it does not belong on.
+        for input in ["", "not a url", "data:text/html,x", "https://"] {
+            assert_eq!(brain_origin(input), None, "input: {input:?}");
+        }
+    }
+
+    /// `dashboard: true` means "that window now has the new password", not "a
+    /// script was handed over".
+    ///
+    /// The two came apart wherever it mattered. `eval` is fire-and-forget: it
+    /// returns `Ok` as soon as the script has been posted to the webview, and
+    /// says nothing about whether the origin guard inside it decided to write. So
+    /// a `brain` window part-way through an integration's OAuth handshake — on
+    /// Notion, Google or Microsoft, which is where that window spends real time —
+    /// correctly refused the write and was reported to the user as done, leaving a
+    /// dashboard that 401s under a screen saying it had been updated.
+    #[test]
+    fn only_the_brains_own_page_counts_as_holding_the_new_password() {
+        let brain = "https://second-brain.acme.workers.dev";
+
+        for showing in [
+            brain,
+            "https://second-brain.acme.workers.dev/",
+            "https://second-brain.acme.workers.dev/graph?tab=all",
+        ] {
+            assert!(showing_the_brain(showing, brain), "showing: {showing:?}");
+        }
+
+        for showing in [
+            // Where the window actually goes during an integration handshake.
+            "https://api.notion.com/v1/oauth/authorize?client_id=x",
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            // A different brain, and a look-alike host.
+            "https://second-brain.other.workers.dev/",
+            "https://second-brain.acme.workers.dev.evil.example/",
+            // Same host, different scheme and different port: neither is the same
+            // origin, and `localStorage` is partitioned by all three.
+            "http://second-brain.acme.workers.dev/",
+            "https://second-brain.acme.workers.dev:8443/",
+            "about:blank",
+            "",
+        ] {
+            assert!(
+                !showing_the_brain(showing, brain),
+                "a window on {showing:?} was treated as the user's own dashboard — \
+                 which is both a false 'done' on the screen and, if the script's own \
+                 guard ever went, the user's brain password written to that origin"
+            );
+        }
     }
 
     /// A rotation re-injects the password into an already-open dashboard window.
@@ -394,9 +595,9 @@ mod tests {
     /// satisfy it.
     #[test]
     fn the_token_refresh_writes_nothing_outside_the_brains_own_origin() {
-        let src = include_str!("windows.rs");
-        let start = src.find("const REFRESH_TOKEN_JS").expect("REFRESH_TOKEN_JS");
-        let body = &src[start..];
+        let code = code();
+        let start = code.find("const REFRESH_TOKEN_JS").expect("REFRESH_TOKEN_JS");
+        let body = &code[start..];
         let body = &body[..body.find("\"#;").expect("end of the literal")];
 
         let guard = body
@@ -413,6 +614,53 @@ mod tests {
         assert!(
             guard < reload,
             "an unguarded reload discards a third-party sign-in that is mid-flight"
+        );
+
+        // The Rust half of the same rule. The script's guard decides whether to
+        // write; this one decides what the user is told, and it has to be settled
+        // before `eval` because `eval` cannot answer. Both stay: they race, and
+        // the one that runs in the same tick as the write is the one that keeps
+        // the password off someone else's origin.
+        let refresh = {
+            let start = code
+                .find("pub fn refresh_wrapper_token(")
+                .expect("the refresh function");
+            let rest = &code[start..];
+            &rest[..rest
+                .find("\n}\n")
+                .expect("refresh_wrapper_token ends at a closing brace in column zero")]
+        };
+        let asked = refresh
+            .find("window.url()")
+            .expect("the window is no longer asked where it is, so a refresh that \
+                     wrote nothing is reported as done");
+        let evaluated = refresh.find("window.eval").expect("the script is still sent");
+        assert!(
+            asked < evaluated,
+            "the origin has to be settled before the script is handed over — after \
+             it there is nothing left to decide, because `eval` returns `Ok` as soon \
+             as the script is posted and never says what it did"
+        );
+
+        // …and the answer has to be acted on. The comparison is unit-tested
+        // above; what only the source can show is that a window on someone else's
+        // page leaves this function as a `false`. Turning that into a `true` is a
+        // one-word edit that restores the original bug exactly: a screen telling
+        // the user their dashboard is on the new password when nothing wrote it.
+        let decision = &refresh[asked..evaluated];
+        assert!(
+            decision.contains("showing_the_brain"),
+            "the window's address is read and then ignored"
+        );
+        assert!(
+            decision.contains("return false"),
+            "a window that is not showing the brain must leave this function as a \
+             `false`: nothing was written, and the done screen repeats this flag to \
+             the user as \"your dashboard is already using the new password\""
+        );
+        assert!(
+            !decision.contains("return true"),
+            "something short-circuits to success before the script has been sent"
         );
     }
 }

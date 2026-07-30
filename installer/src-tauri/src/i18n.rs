@@ -131,6 +131,7 @@ pub enum Key {
     // the webview owns, never a screen of its own — every failure state in that
     // flow has to carry the new password, which a bare error string cannot do.
     ErrorRotateBlocked,
+    ErrorRotateNeedsHttps,
     ErrorRotateNotConfirmed,
     ErrorRotateSecureStore,
 }
@@ -292,6 +293,13 @@ Second Brain's address by hand instead."
         (Locale::En, Key::ErrorRotateBlocked) => {
             "Your Second Brain is rebuilding how it reads your memories, so its password \
 can't be changed just now."
+        }
+        // Deliberately not ErrorBadUrl: `http://my-brain.acme.workers.dev` is a
+        // perfectly good address, and telling someone it does not look like one
+        // sends them hunting for a typo that is not there.
+        (Locale::En, Key::ErrorRotateNeedsHttps) => {
+            "Your Second Brain's address has to start with https://. A plain http:// address \
+would send your new password unprotected."
         }
         (Locale::En, Key::ErrorRotateNotConfirmed) => {
             "Your Second Brain didn't confirm the new password in time."
@@ -467,6 +475,10 @@ Puoi inserire a mano l'indirizzo del tuo Second Brain."
             "Il tuo Second Brain sta ricostruendo il modo in cui legge i tuoi ricordi, \
 quindi la sua password non può essere cambiata adesso."
         }
+        (Locale::It, Key::ErrorRotateNeedsHttps) => {
+            "L'indirizzo del tuo Second Brain deve iniziare con https://. Un indirizzo http:// \
+invierebbe la tua nuova password senza protezione."
+        }
         (Locale::It, Key::ErrorRotateNotConfirmed) => {
             "Il tuo Second Brain non ha confermato la nuova password in tempo."
         }
@@ -614,6 +626,7 @@ mod tests {
             ErrorBrainUnexpected,
             ErrorNotionSyncFailed,
             ErrorRotateBlocked,
+            ErrorRotateNeedsHttps,
             ErrorRotateNotConfirmed,
             ErrorRotateSecureStore,
         ]

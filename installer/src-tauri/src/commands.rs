@@ -99,6 +99,25 @@ pub struct AppState {
 
 #[tauri::command]
 pub fn get_app_state(session: State<'_, SetupSession>) -> AppState {
+    AppState {
+        mode: app_mode(&session),
+        dry_run: session.dry_run,
+    }
+}
+
+/// Which screen the main window opens on.
+///
+/// Split out of the command so it can be *run* by a test rather than described
+/// by one. A Tauri `State` cannot be constructed in a unit test, and the property
+/// this function has to hold — that a demo launch performs zero keychain reads —
+/// is only observable by calling the thing that does the work. The source-scanning
+/// guard that used to stand in for that ordered three flag names against
+/// `load_setup` and said nothing at all about the `dry_run` term, so swapping
+/// `!session.dry_run && load_setup().is_some()` for
+/// `load_setup().is_some() && !session.dry_run` passed it — and that swap is #252
+/// exactly: `&&` short-circuits left to right, so the second form reads the
+/// keychain on every demo launch.
+fn app_mode(session: &SetupSession) -> &'static str {
     // Dry-run is checked before the keychain read so demo mode never touches
     // secure storage (each read can raise a macOS permission prompt for
     // unsigned dev builds, which would block the setup UI's first paint).
@@ -107,7 +126,7 @@ pub fn get_app_state(session: State<'_, SetupSession>) -> AppState {
     // reason, which is why the two #235 modes sit up here with the Worker
     // update rather than beside the branch they most resemble. A demo run
     // reaching `load_setup()` at all is the bug — see #252.
-    let mode = if *session.pending_rotation.lock().unwrap() {
+    if *session.pending_rotation.lock().unwrap() {
         "change-password"
     } else if *session.stale_password.lock().unwrap() {
         "stale-password"
@@ -117,10 +136,6 @@ pub fn get_app_state(session: State<'_, SetupSession>) -> AppState {
         "wrapper"
     } else {
         "setup"
-    };
-    AppState {
-        mode,
-        dry_run: session.dry_run,
     }
 }
 
@@ -452,6 +467,15 @@ pub async fn connect_existing(
             }
         }
     }
+
+    // This *is* the answer to "your password was changed on another computer"
+    // (#235 §5): the stale-password screen's first offer is to enter the new one,
+    // and it arrives here. Leaving the flag set means `get_app_state` keeps
+    // returning `"stale-password"` after the fix has landed, so the next
+    // `begin_worker_update` — or the next launch, before the health check has had
+    // a chance to disagree — tells the user again that their password was changed
+    // elsewhere, about a password that now works. Only a restart cleared it.
+    *session.stale_password.lock().unwrap() = false;
 
     let outcome = ProvisionOutcome {
         mcp_url: format!("{worker_url}/mcp"),
@@ -818,8 +842,32 @@ pub fn open_dashboard_impl(app: &AppHandle, session: &SetupSession) -> Result<()
     let (worker_url, token) = dashboard_credentials(session, locale)?;
     windows::open_wrapper_window(app, &worker_url, &token)
         .map_err(|_| user_err(locale, Key::OpenDashboardFailed))?;
+    // Reaching the dashboard is how a password change is abandoned — "Not now"
+    // on the change-password screen lands exactly here, and the setup window is
+    // closed on the next line.
+    //
+    // Cleared because `pending_rotation` was otherwise only unset on success or
+    // on logout, and `get_app_state` consults it first: the flag survived, so the
+    // next "Update your Second Brain" opened the *password-change* flow instead
+    // of the update, and nothing short of restarting the app put it right.
+    //
+    // `stale_password` is deliberately not cleared here. That flag records
+    // something about the brain — that the password this computer holds no longer
+    // opens it — and walking over to the dashboard does not make it untrue. It is
+    // cleared where it is actually resolved: `connect_existing` and a completed
+    // rotation.
+    clear_pending_rotation(session);
     close_setup_windows(app);
     Ok(())
+}
+
+/// Leaves the change-your-password flow without having changed anything.
+///
+/// One function rather than an assignment at each exit, because the flag is read
+/// by `app_mode` ahead of every other mode: an exit that forgets to clear it does
+/// not fail, it silently redirects the *next* thing the user asks for.
+fn clear_pending_rotation(session: &SetupSession) {
+    *session.pending_rotation.lock().unwrap() = false;
 }
 
 fn close_setup_windows(app: &AppHandle) {
@@ -1088,8 +1136,8 @@ pub async fn start_worker_update(
 
 // ── Changing the password (#235) ─────────────────────────────────────────────
 
-/// Why a password change did not finish, in the only three shapes that differ in
-/// what may honestly be said afterwards.
+/// Why a password change did not finish, in the only shapes that differ in what
+/// may honestly be said afterwards.
 ///
 /// `Result<(), String>` is not sufficient here, and that is load-bearing rather
 /// than fastidious. A string cannot separate "the change never reached
@@ -1104,8 +1152,10 @@ pub async fn start_worker_update(
 pub struct RotateError {
     /// Selects the screen, and with it what may be claimed:
     ///   `"notSent"`     — nothing reached Cloudflare; the old password still works.
-    ///   `"unconfirmed"` — the secret was accepted; health never went green. Never
-    ///                     tell the user the old password still works.
+    ///   `"unconfirmed"` — the secret may have been accepted; health never went
+    ///                     green. Never tell the user the old password still works.
+    ///   `"blocked"`     — refused on purpose, with somewhere to go. Nothing was
+    ///                     sent, but "try again" is the wrong offer.
     ///   `"local"`       — the brain has the new password; a local write failed.
     pub stage: &'static str,
     /// Already localised; rendered into the failure screen's detail slot rather
@@ -1121,38 +1171,140 @@ impl RotateError {
     fn unconfirmed(detail: String) -> Self {
         Self { stage: "unconfirmed", detail }
     }
+    /// A refusal this app made on purpose, with a route out of it.
+    ///
+    /// Its own stage rather than a `notSent` with an unusual detail. `notSent`'s
+    /// screen is "Nothing was changed / Try again", and for a rebuild that is in
+    /// flight *every part of that is wrong*: trying again in ten seconds fails the
+    /// same way, the real instruction (wait, or reset the rebuild from Advanced
+    /// Settings) arrives as a footnote under a button that will not work, and an
+    /// abandoned ledger blocks rotation permanently with no escape offered at all.
+    fn blocked(detail: String) -> Self {
+        Self { stage: "blocked", detail }
+    }
     fn local(detail: String) -> Self {
         Self { stage: "local", detail }
     }
 }
 
-/// Maps a `rotate_secret` failure onto what the user may be told.
+/// Maps a `rotate_secret` failure onto what the user may honestly be told.
 ///
-/// `HealthCheckFailed` is the only variant that means the secret was accepted.
-/// `rotate_secret` PUTs once and then polls, so it is the only error raised
-/// *after* the write; everything else is raised before it or by it.
+/// The dividing line is `put_secret`, not the error's variant, and every caller
+/// of this function is downstream of `rotate_secret` — so the question is only
+/// ever "was the PUT entered before this was raised?".
 ///
-/// One honest caveat, and it is why `notSent` claims no more than "nothing
-/// reached Cloudflare": a PUT that dies on the wire may still have been applied
-/// at the far end. That is rare, indistinguishable from here, and the retry the
-/// screen offers settles it either way — `PUT …/secrets` on one name is
-/// idempotent.
+/// `NotAWorkersDevAddress` is the one failure raised before it: the script name is
+/// derived from the address first, precisely so a custom-domain brain is refused
+/// without a half-started progress screen. Everything else comes out of
+/// `put_secret` or the health poll that follows it.
+///
+/// **Which is why the old catch-all was wrong.** It sent `CfApiError::Network`
+/// and `Http` to `notSent`, whose screen states in as many words that the old
+/// password still works and everything is exactly as it was. `send_impl` returns
+/// `Network` only after exhausting its retries, which includes the case where the
+/// PUT reached Cloudflare and only the *response* was lost — and `Http` is an
+/// unparseable body, which can arrive with any status at all. Neither supports a
+/// positive claim about remote state.
+///
+/// `Unauthorized` is the one that looks safe and is not. A 401 is an authorization
+/// decision made before the secrets handler runs, so *that attempt* changed
+/// nothing — but `send_impl` retries, and a first attempt that died on the wire
+/// with the PUT already applied, followed by a retry that 401s on an access token
+/// that expired in between, produces exactly this error over a brain whose
+/// password has already moved.
+///
+/// The asymmetry decides the doubtful cases. A wrong `unconfirmed` shows the
+/// password with "this may already be live, save it" and a re-check button that
+/// settles it in one request. A wrong `notSent` tells someone their old password
+/// still works, so they close the window without saving the new one, and the next
+/// launch locks them out of their own brain with nothing left to recover from.
+///
+/// Matched exhaustively on purpose. A new `ProvisionError` variant should not
+/// quietly inherit a default here; it should stop the build until someone decides
+/// which side of the PUT it is raised on.
 fn rotation_failure(error: ProvisionError, locale: Locale) -> RotateError {
     match error {
-        ProvisionError::HealthCheckFailed => {
-            RotateError::unconfirmed(user_err(locale, Key::ErrorRotateNotConfirmed))
-        }
-        // Refused before the PUT, by the same #257 guard the update path uses.
+        // Refused before the PUT, by the same #257 guard the update path uses —
+        // and the only failure in `rotate_secret` that is.
         ProvisionError::NotAWorkersDevAddress => {
             RotateError::not_sent(user_err(locale, Key::ErrorCustomDomain))
         }
-        // The case the three-way split exists for: an expired Cloudflare sign-in
-        // must read as "nothing happened", not as a hedge.
-        ProvisionError::Api(CfApiError::Unauthorized) => {
-            RotateError::not_sent(user_err(locale, Key::ErrorCfSignInExpired))
+        ProvisionError::HealthCheckFailed => {
+            RotateError::unconfirmed(user_err(locale, Key::ErrorRotateNotConfirmed))
         }
-        _ => RotateError::not_sent(user_err(locale, Key::ErrorFriendlyRetry)),
+        // From `put_secret`. The detail still names the real cause — the stage
+        // says what may be claimed, the detail says what went wrong, and those
+        // are different questions.
+        ProvisionError::Api(CfApiError::Unauthorized) => {
+            RotateError::unconfirmed(user_err(locale, Key::ErrorCfSignInExpired))
+        }
+        ProvisionError::Api(_) => {
+            RotateError::unconfirmed(user_err(locale, Key::ErrorRotateNotConfirmed))
+        }
+        // Not reachable from `rotate_secret`, which neither captures nor registers
+        // a subdomain. Listed rather than swept into a `_` so the exhaustiveness
+        // above is real, and sent to `unconfirmed` because an unreachable arm that
+        // becomes reachable should fail towards the claim that cannot lock anyone
+        // out.
+        ProvisionError::CaptureFailed | ProvisionError::SubdomainUnavailable => {
+            RotateError::unconfirmed(user_err(locale, Key::ErrorRotateNotConfirmed))
+        }
     }
+}
+
+/// How much of a failure a log line is allowed to carry.
+///
+/// `CfApiError::Http` holds up to 600 characters of whatever Cloudflare returned
+/// when the body would not parse, and `{e}` on a `ProvisionError` renders all of
+/// it. A password change is exactly the moment a user is likeliest to be asked
+/// for their log, so one failure pasting most of an edge error page — request
+/// ids, ray ids, whatever else the response echoed — into it is both unreadable
+/// and more than they meant to share.
+const LOG_DETAIL_MAX: usize = 160;
+
+/// Trims a diagnostic to [`LOG_DETAIL_MAX`] characters, on a character boundary,
+/// and says how much it dropped so a truncated line is never mistaken for the
+/// whole story.
+fn for_log(detail: impl std::fmt::Display) -> String {
+    let text = detail.to_string();
+    match text.char_indices().nth(LOG_DETAIL_MAX) {
+        None => text,
+        Some((cut, _)) => {
+            let dropped = text.chars().count() - LOG_DETAIL_MAX;
+            format!("{}… (+{dropped} more characters)", &text[..cut])
+        }
+    }
+}
+
+/// Normalises an address typed into the rotation flow, and refuses cleartext.
+///
+/// `normalize_worker_url` keeps a scheme the user typed, and `worker_url::labels`
+/// accepts `http` — both on purpose, for `http://localhost:8787` dev setups, and
+/// both wrong on this path. A rotation is the one operation that sends a password
+/// the user has never used before as a bearer token, and then *stores* the origin
+/// it sent it to: the keychain and the plaintext CLI config both take it, so a
+/// single mistyped `http://` makes every later request from the app and from the
+/// `brain` command cleartext too, indefinitely. `reqwest` does no HSTS, so nothing
+/// downstream will upgrade it.
+///
+/// Only the typed address goes through here. A Door A address came out of this
+/// app's own secure storage, where it was written after a successful connection,
+/// and demo mode runs against a loopback brain that has no certificate — neither
+/// is a user typing a scheme they did not think about.
+fn rotation_address(input: &str, locale: Locale) -> Result<String, String> {
+    let normalized = normalize_worker_url(input, locale)?;
+    let scheme = url::Url::parse(&normalized)
+        .map(|u| u.scheme().to_string())
+        .unwrap_or_default();
+    if scheme != "https" {
+        // Not ErrorBadUrl: `http://my-brain.acme.workers.dev` is a perfectly good
+        // address, and telling someone it does not look like one sends them
+        // hunting for a typo that is not there. The problem is the scheme, and
+        // the reason is worth stating — this is the one path that would put a
+        // brand-new password on the wire in the clear.
+        return Err(user_err(locale, Key::ErrorRotateNeedsHttps));
+    }
+    Ok(normalized)
 }
 
 /// The address a rotation should act on, and the password this computer already
@@ -1167,16 +1319,20 @@ fn rotation_failure(error: ProvisionError, locale: Locale) -> RotateError {
 /// address is resolved the way every other settings command resolves it: through
 /// `dashboard_credentials`, never `secure_store::load_setup()` directly, because
 /// that ignores dry-run and raises a Keychain prompt (#252).
+///
+/// Takes the session rather than the `AppHandle` it could pull the session out
+/// of, so it can be driven by a test — the cleartext refusal above is the sort of
+/// rule that is easy to write and easy to delete.
 fn rotation_target(
-    app: &AppHandle,
+    session: &SetupSession,
+    locale: Locale,
     address: Option<String>,
-) -> Result<(String, Option<String>, Locale), String> {
-    let locale = locale_of(app);
+) -> Result<(String, Option<String>), String> {
     match address {
-        Some(address) => Ok((normalize_worker_url(&address, locale)?, None, locale)),
+        Some(address) => Ok((rotation_address(&address, locale)?, None)),
         None => {
-            let (url, token, locale) = settings_target(app)?;
-            Ok((url, Some(token), locale))
+            let (url, token) = dashboard_credentials(session, locale)?;
+            Ok((url, Some(token)))
         }
     }
 }
@@ -1264,7 +1420,11 @@ pub async fn validate_brain_address(
     session: State<'_, SetupSession>,
 ) -> Result<(), String> {
     let locale = locale_of(&app);
-    let worker_url = normalize_worker_url(&address, locale)?;
+    // Through `rotation_address`, which is the general normaliser plus this
+    // path's refusal of cleartext. The screen has to refuse exactly what the
+    // command would refuse, or it waves an address through to the place where
+    // the user has already committed to it.
+    let worker_url = rotation_address(&address, locale)?;
     confirm_target_is_a_brain(&worker_url, &session, locale).await
 }
 
@@ -1334,6 +1494,20 @@ fn blocked_by_migration(status: &serde_json::Value) -> bool {
     }
 }
 
+/// The refusal [`blocked_by_migration`] produces, as its own screen.
+///
+/// Split out so the stage and the wording travel together and can be asserted
+/// without a `rotate_password` in the way. A rebuild that starts mid-flow — which
+/// is the only way this is reached, since the Connection pane already hides the
+/// door — used to come back as `notSent`, whose screen reads "Nothing was
+/// changed" over a "Try again" button, with the actual reason in the detail
+/// slot. Every word of that is unhelpful here: the retry fails identically, the
+/// instruction that would work (wait for the rebuild, or reset it from Advanced
+/// Settings) reads as a footnote, and an abandoned ledger blocks forever.
+fn rotation_block(locale: Locale) -> RotateError {
+    RotateError::blocked(user_err(locale, Key::ErrorRotateBlocked))
+}
+
 /// Whether a rebuild is in flight (or was abandoned) and rotation must wait.
 ///
 /// Door A only. Door B cannot ask — checking needs a working password, which is
@@ -1359,7 +1533,12 @@ pub async fn recheck_password(
     address: Option<String>,
     app: AppHandle,
 ) -> Result<bool, String> {
-    let (worker_url, _, locale) = rotation_target(&app, address)?;
+    let locale = locale_of(&app);
+    // Scoped so the `State` borrow is dropped before the await below.
+    let worker_url = {
+        let session = app.state::<SetupSession>();
+        rotation_target(&session, locale, address)?.0
+    };
     match crate::cf::api::worker_health_ok(&worker_url, password.trim()).await {
         Ok(ok) => Ok(ok),
         Err(CfApiError::Unauthorized) => Ok(false),
@@ -1413,14 +1592,22 @@ pub async fn rotate_password(
     };
 
     if session.dry_run {
-        return rotate_demo_password(&new_password, &session, locale, progress).await;
+        let refresh_app = app.clone();
+        return rotate_demo_password(&new_password, &session, locale, progress, move |token| {
+            // The demo brain's own address, for the same reason the live path
+            // uses the brain's: `refresh_wrapper_token` only writes where the
+            // window's origin matches, and demo mode's window is on loopback.
+            let url = crate::demo_brain::base_url();
+            windows::refresh_wrapper_token(&refresh_app, &url, token)
+        })
+        .await;
     }
 
     // 1. Which brain. Through the session-aware helper, never the keychain
     //    directly — see `rotation_target`.
     let door_b = address.is_some();
-    let (worker_url, current_password, locale) =
-        rotation_target(&app, address).map_err(RotateError::not_sent)?;
+    let (worker_url, current_password) =
+        rotation_target(&session, locale, address).map_err(RotateError::not_sent)?;
 
     // 1a. On Door B the address was typed or picked rather than read back from
     //     this computer's own store, so confirm it is a brain before writing a
@@ -1443,10 +1630,7 @@ pub async fn rotate_password(
     if let Some(password) = &current_password {
         if let Ok(status) = crate::migration::fetch_status(&worker_url, password, locale).await {
             if blocked_by_migration(&status) {
-                return Err(RotateError::not_sent(user_err(
-                    locale,
-                    Key::ErrorRotateBlocked,
-                )));
+                return Err(rotation_block(locale));
             }
         }
     }
@@ -1458,6 +1642,12 @@ pub async fn rotate_password(
         .map_err(RotateError::not_sent)?;
 
     // 4. The remote change, health-gated against the new password.
+    //
+    // `?`, not `.ok()`. Everything below writes the new password into stores this
+    // computer reads at launch, and doing that after a remote change that did not
+    // land is the one outcome #235 has no recovery for: the brain still answers to
+    // the old password, nothing here holds it any more, and the app has no way to
+    // ask for it back. That mutation compiled and passed the whole suite.
     provision::rotate_secret(
         &LiveBackend { client },
         &worker_url,
@@ -1466,12 +1656,26 @@ pub async fn rotate_password(
     )
     .await
     .map_err(|e| {
-        log::warn!("password rotation failed: {e}");
+        log::warn!("password rotation failed: {}", for_log(&e));
         rotation_failure(e, locale)
     })?;
 
     // 5. Only now is it safe to write anything locally.
     //
+    // The third row of the rotation screen's checklist, and the only one emitted
+    // from outside `rotate_secret` — which is not an oversight but the ordering
+    // itself. Nothing local may be written until the remote change has been
+    // confirmed, so the step cannot exist inside the function that does the
+    // confirming, and a row that nobody emits is a row that sits as a static
+    // bullet for the whole run.
+    let emit_local = |status: provision::StepStatus| {
+        let _ = app.emit(
+            "setup-progress",
+            provision::StepEvent { step: provision::Step::Local, status },
+        );
+    };
+    emit_local(provision::StepStatus::Running);
+
     // Without a home directory there is nowhere for `persist` to look, so it
     // cannot run at all and there is no outcome to report — which is what the
     // `"local"` stage is for. `ErrorRotateSecureStore` reads correctly here: the
@@ -1479,15 +1683,40 @@ pub async fn rotate_password(
     // the user needs to act on. Deliberately not `ErrorSecureStoreConnect`, which
     // opens "Connected, but…" — nothing was connected, a working password was
     // replaced.
-    let home = dirs::home_dir()
-        .ok_or_else(|| RotateError::local(user_err(locale, Key::ErrorRotateSecureStore)))?;
+    //
+    // The one hard failure this step has, and so the one place it ends in
+    // `Error`. Everything `persist` itself can get wrong comes back as a flag on
+    // the outcome instead — see below.
+    let Some(home) = dirs::home_dir() else {
+        emit_local(provision::StepStatus::Error);
+        return Err(RotateError::local(user_err(locale, Key::ErrorRotateSecureStore)));
+    };
     let refresh_app = app.clone();
     let refresh_url = worker_url.clone();
-    let outcome = rotate::persist(&home, &worker_url, &new_password, move |token| {
-        windows::refresh_wrapper_token(&refresh_app, &refresh_url, token)
-    });
+    let outcome = rotate::persist(
+        &home,
+        &worker_url,
+        &new_password,
+        // The one caller that supplies the real secure store. `persist` takes it
+        // as a seam so its own tests never write the process-global test map (and
+        // so the failure branch is reachable at all) — which means this line is
+        // the whole of "the keychain is actually written", and the guard below
+        // holds it in place.
+        |url, token| secure_store::save_setup(url, token).map_err(|e| e.to_string()),
+        move |token| windows::refresh_wrapper_token(&refresh_app, &refresh_url, token),
+    );
 
-    *session.pending_rotation.lock().unwrap() = false;
+    // `Done`, not a status derived from the outcome, and the distinction is the
+    // one the checklist is for. `persist` never fails as a whole — it writes each
+    // store independently and reports which ones took — so the *step* completed
+    // whatever the flags say. An `Error` row here would also contradict the screen
+    // it appears on: this returns `Ok`, the done screen renders, and it names any
+    // store that did not take in a sentence of its own. A red row above a
+    // successful screen tells the user two different things at once, and the one
+    // that is wrong is the one with no detail attached.
+    emit_local(provision::StepStatus::Done);
+
+    clear_pending_rotation(&session);
     // A rotation is also the answer to "your password was changed elsewhere".
     *session.stale_password.lock().unwrap() = false;
 
@@ -1517,6 +1746,7 @@ async fn rotate_demo_password(
     session: &SetupSession,
     locale: Locale,
     progress: impl Fn(provision::StepEvent),
+    refresh_dashboard: impl FnOnce(&str) -> bool,
 ) -> Result<RotateOutcome, RotateError> {
     // Resolved the same way every other demo screen resolves it, so this path
     // shares the no-keychain guarantee rather than restating it.
@@ -1534,23 +1764,34 @@ async fn rotate_demo_password(
     provision::rotate_secret(&DryRunBackend, worker_url, new_password, progress)
         .await
         .map_err(|e| {
-            log::warn!("demo password rotation failed: {e}");
+            log::warn!("demo password rotation failed: {}", for_log(&e));
             rotation_failure(e, locale)
         })?;
 
-    *session.pending_rotation.lock().unwrap() = false;
+    clear_pending_rotation(session);
     *session.stale_password.lock().unwrap() = false;
 
-    // No `rotate::persist`. Its first act is `secure_store::save_setup`, and a
-    // demo run must not write a demo password into the user's real keychain —
-    // nor a plaintext demo credential into their real CLI config. The demo brain
-    // is now answering to the new password, and `dashboard_credentials` asks it
-    // rather than remembering, so demo mode is genuinely on the new password
-    // from here without anything having been stored.
+    // No `rotate::persist`. Its first act is a secure-storage write, and a demo
+    // run must not put a demo password into the user's real keychain — nor a
+    // plaintext demo credential into their real CLI config. The demo brain is now
+    // answering to the new password, and `dashboard_credentials` asks it rather
+    // than remembering, so demo mode is genuinely on the new password from here
+    // without anything having been stored.
+    //
+    // The dashboard is the exception, and it is called rather than assumed. An
+    // open wrapper window holds the token it was created with in `localStorage`,
+    // which is true of the demo window exactly as it is of a real one — and it is
+    // the single behaviour the whole dry-run-fidelity argument exists to make
+    // demonstrable, since it is the one place a rotation can leave something
+    // visibly stale. Hard-coding `dashboard: true` here skipped it, so a demo
+    // rotation left the dashboard window 401ing against the demo brain and the
+    // done screen said it had not.
+    let dashboard = refresh_dashboard(new_password);
+
     Ok(RotateOutcome {
         keychain: true,
         cli_config: None,
-        dashboard: true,
+        dashboard,
     })
 }
 
@@ -1941,14 +2182,86 @@ pub fn open_settings_window(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocked_by_migration, cloudflare_client_for_brain, dashboard_credentials,
-        normalize_worker_url, previous_index_for, rotate_demo_password, rotation_failure,
-        RotateError, SetupSession,
+        app_mode, blocked_by_migration, clear_pending_rotation, cloudflare_client_for_brain,
+        confirm_target_is_a_brain, dashboard_credentials, for_log, normalize_worker_url,
+        previous_index_for, rotate_demo_password, rotation_address, rotation_block,
+        rotation_failure, rotation_target, RotateError, SetupSession, LOG_DETAIL_MAX,
     };
     use crate::cf::oauth::Tokens;
     use crate::cf::provision::{ProvisionError, ProvisionOutcome};
     use crate::cf::types::{Account, CfApiError};
     use crate::i18n::{self, Key, Locale};
+
+    /// The body of a top-level `fn`, read from the source *above* the test module.
+    ///
+    /// Both halves of that sentence are load-bearing, and both were learned by
+    /// this repo the expensive way. Reading only the code means a guard can never
+    /// be satisfied by the assertion text written to describe it — that has
+    /// silently disabled four guards here so far, including one that passed with
+    /// the thing it was guarding deleted. And every anchor is `expect`ed rather
+    /// than defaulted to "the rest of the file": a scan that fails open finds
+    /// whatever it is looking for and reports success.
+    fn fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
+        let code = &src[..src
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("the test module is the boundary of the scannable source")];
+        let start = code
+            .find(signature)
+            .unwrap_or_else(|| panic!("`{signature}` is not in this file any more"));
+        let body = &code[start..];
+        let end = body
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("`{signature}` has no closing brace in column zero"));
+        &body[..end]
+    }
+
+    /// Where `needle` appears in `body`, or a failure naming what was being
+    /// looked for. Never `unwrap_or(0)`: a missing anchor that sorts first
+    /// satisfies every ordering assertion made about it.
+    fn at(body: &str, needle: &str) -> usize {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` is gone from the function this test guards"))
+    }
+
+    /// How many keychain reads `run` performed, or `None` when another test
+    /// reset the counter mid-sample and the answer is unknowable.
+    ///
+    /// The counter is process-global and the suite runs in parallel, so a single
+    /// sample can pick up someone else's access — or, if they reset in between,
+    /// go backwards. The old form of this subtracted regardless, which underflows
+    /// on a decrease (a panic in debug) and, with `saturating_sub`, reports the
+    /// false zero that would make this whole check pass while the bug was live.
+    fn keychain_reads_during(run: impl FnOnce()) -> Option<usize> {
+        let before = crate::secure_store::probe::reads();
+        run();
+        let after = crate::secure_store::probe::reads();
+        after.checked_sub(before)
+    }
+
+    /// Asserts `run` never touches the keychain, sampling to survive the suite.
+    ///
+    /// A sample that caught another test's read proves nothing either way — but a
+    /// path that reads the keychain contaminates *every* sample, so one clean
+    /// sample is the proof and repeated dirty ones are the failure.
+    fn assert_never_reads_the_keychain(what: &str, mut run: impl FnMut()) {
+        // Reset once, outside the sampling loop: the counter is a `usize` that
+        // nothing else zeroes, and every reader here tolerates a decrease.
+        crate::secure_store::probe::reset();
+        let mut dirty = Vec::new();
+        let mut inconclusive = 0;
+        for _ in 0..8 {
+            match keychain_reads_during(&mut run) {
+                Some(0) => return,
+                Some(n) => dirty.push(n),
+                None => inconclusive += 1,
+            }
+        }
+        panic!(
+            "no sample of {what} came back clean (reads: {dirty:?}, {inconclusive} \
+             inconclusive) — a keychain read here is the OS password prompt users \
+             see, raised before the setup UI's first paint"
+        );
+    }
 
     #[test]
     fn normalizes_pasted_addresses() {
@@ -2031,42 +2344,34 @@ mod tests {
     /// countable, so this counts.
     #[test]
     fn demo_mode_never_reads_the_keychain() {
+        // A brain of its own. The token assertion below is about what a demo
+        // session is handed, not about what some other test happened to leave the
+        // process-wide brain answering to.
+        let _brain = crate::demo_brain::scoped_brain();
         let session = SetupSession::new(true);
         *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
             worker_url: "https://second-brain.demo.workers.dev".into(),
             mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
         });
 
-        crate::secure_store::probe::reset();
+        assert_never_reads_the_keychain("dashboard_credentials in demo mode", || {
+            let _ = dashboard_credentials(&session, Locale::En);
+        });
         let (url, token) = dashboard_credentials(&session, Locale::En).expect("demo credentials");
-        assert_eq!(
-            crate::secure_store::probe::reads(),
-            0,
-            "dashboard_credentials touched the keychain in demo mode — that is the \
-             prompt users see when they open the settings window"
-        );
         assert!(url.starts_with("http://127.0.0.1:"), "demo must use the local brain: {url}");
         assert_eq!(token, "demo");
 
         // The outstanding-index note is the other path that reached the keychain.
-        crate::secure_store::probe::reset();
-        let _ = previous_index_for(&session);
-        assert_eq!(
-            crate::secure_store::probe::reads(),
-            0,
-            "the outstanding-index note was read from the keychain in demo mode"
-        );
+        assert_never_reads_the_keychain("the outstanding-index note in demo mode", || {
+            let _ = previous_index_for(&session);
+        });
 
         // And with no session outcome either: the fallback is exactly where the
         // keychain read used to hide.
         let fresh = SetupSession::new(true);
-        crate::secure_store::probe::reset();
-        let _ = dashboard_credentials(&fresh, Locale::En);
-        assert_eq!(
-            crate::secure_store::probe::reads(),
-            0,
-            "an unconnected demo session fell back to the keychain"
-        );
+        assert_never_reads_the_keychain("an unconnected demo session", || {
+            let _ = dashboard_credentials(&fresh, Locale::En);
+        });
     }
 
     // ── Changing the password (#235) ─────────────────────────────────────────
@@ -2085,26 +2390,15 @@ mod tests {
         assert_eq!(
             rotation_failure(ProvisionError::HealthCheckFailed, Locale::En).stage,
             "unconfirmed",
-            "the only error raised after the secret was accepted"
-        );
-        assert_eq!(
-            rotation_failure(
-                ProvisionError::Api(CfApiError::Unauthorized),
-                Locale::En
-            )
-            .stage,
-            "notSent",
-            "an expired Cloudflare sign-in never reached the brain"
+            "the secret was accepted and only the confirmation ran out of attempts"
         );
         assert_eq!(
             rotation_failure(ProvisionError::NotAWorkersDevAddress, Locale::En).stage,
             "notSent",
-            "refused by the #257 guard before the write"
+            "refused by the #257 guard before the write — the script name is derived \
+             from the address before anything is emitted or sent"
         );
-        assert_eq!(
-            rotation_failure(ProvisionError::CaptureFailed, Locale::En).stage,
-            "notSent",
-        );
+        assert_eq!(rotation_block(Locale::En).stage, "blocked");
         assert_eq!(RotateError::local(String::new()).stage, "local");
 
         // Distinct strings, checked as a set: two stages that happen to be spelled
@@ -2113,12 +2407,173 @@ mod tests {
         let stages = [
             RotateError::not_sent(String::new()).stage,
             RotateError::unconfirmed(String::new()).stage,
+            RotateError::blocked(String::new()).stage,
             RotateError::local(String::new()).stage,
         ];
         let mut unique = stages.to_vec();
         unique.sort_unstable();
         unique.dedup();
-        assert_eq!(unique.len(), 3, "two stages collapsed into one: {stages:?}");
+        assert_eq!(unique.len(), 4, "two stages collapsed into one: {stages:?}");
+    }
+
+    /// Nothing raised from `put_secret` onwards may claim the old password still
+    /// works.
+    ///
+    /// `notSent`'s screen states, in as many words, that the old password still
+    /// works and everything is exactly as it was. That is a positive claim about
+    /// *remote* state, and there are only two errors this app can make it from:
+    /// one it raised itself before sending anything, and one Cloudflare raised
+    /// before the secrets handler ran. Everything else out of `rotate_secret`
+    /// comes from a request that was already in flight.
+    ///
+    /// The `_` arm that used to sit at the bottom of `rotation_failure` sent
+    /// `Network` and `Http` to `notSent`. `send_impl` returns `Network` only after
+    /// exhausting its retries — which includes a PUT that reached Cloudflare and
+    /// whose *response* was lost — and `Http` is an unparseable body that can
+    /// arrive with any status. Both were being reported as "nothing happened" over
+    /// a brain whose password may have already moved, and a user who believes that
+    /// closes the window without saving the password they now need.
+    #[test]
+    fn a_failure_after_the_put_never_claims_the_old_password_still_works() {
+        // `reqwest::Error` has no public constructor, so a request that cannot
+        // even be built stands in for the one `send_impl` returns after every
+        // attempt died on the wire — the case where the PUT may have been applied
+        // on any of them and only the response was lost.
+        let on_the_wire = CfApiError::Network(
+            reqwest::Client::new()
+                .get("http://[not a host]/")
+                .build()
+                .expect_err("an unparseable URL cannot be built into a request"),
+        );
+
+        let after_the_put = [
+            ProvisionError::Api(on_the_wire),
+            ProvisionError::Api(CfApiError::Http {
+                status: 200,
+                body: "[unparseable response] <html>…".into(),
+            }),
+            ProvisionError::Api(CfApiError::Api {
+                code: 10021,
+                message: "workers.api.error".into(),
+            }),
+            ProvisionError::Api(CfApiError::Other("Cloudflare returned no result".into())),
+            // The one that looks safe and is not. A 401 is decided before the
+            // secrets handler runs, so *that attempt* wrote nothing — but
+            // `send_impl` retries, and a first attempt that died on the wire with
+            // the PUT already applied, followed by a retry that 401s on a token
+            // that expired in between, arrives here over a brain that has moved.
+            ProvisionError::Api(CfApiError::Unauthorized),
+            ProvisionError::HealthCheckFailed,
+            // Unreachable from `rotate_secret`, and classified so that becoming
+            // reachable fails towards the claim that cannot lock anyone out.
+            ProvisionError::CaptureFailed,
+            ProvisionError::SubdomainUnavailable,
+        ];
+        for error in after_the_put {
+            let described = error.to_string();
+            assert_eq!(
+                rotation_failure(error, Locale::En).stage,
+                "unconfirmed",
+                "`{described}` was reported as notSent, whose screen tells the user \
+                 their old password still works — which this app cannot know"
+            );
+        }
+    }
+
+    /// A rebuild in flight is refused on purpose, and gets a screen that says so.
+    ///
+    /// As `notSent` it arrived as "Nothing was changed" over a "Try again" button,
+    /// with the real reason — and the only instruction that works — in the detail
+    /// slot underneath. Retrying fails identically, and an abandoned ledger blocks
+    /// rotation forever, so that screen offered a user in a permanent state a
+    /// button that could never get them out of it.
+    #[test]
+    fn a_deliberate_refusal_is_not_dressed_up_as_nothing_having_happened() {
+        let blocked = rotation_block(Locale::En);
+        assert_eq!(blocked.stage, "blocked");
+        assert_ne!(
+            blocked.stage,
+            RotateError::not_sent(String::new()).stage,
+            "a block is not a failure to send: the retry the notSent screen offers \
+             fails the same way, and an abandoned ledger never stops blocking"
+        );
+        assert_eq!(blocked.detail, i18n::t(Locale::En, Key::ErrorRotateBlocked));
+        assert_ne!(
+            rotation_block(Locale::It).detail,
+            blocked.detail,
+            "the detail must follow the app's locale"
+        );
+    }
+
+    /// The wire shape the failure screens read, pinned by name.
+    ///
+    /// `#[serde(rename_all = "camelCase")]` is one line and deleting it compiles.
+    /// Both fields here happen to be single words, so the rename is invisible
+    /// today — which is exactly why it is worth pinning before a third field
+    /// arrives and the front end starts reading `undefined` for it.
+    #[test]
+    fn the_failure_reaches_the_screen_under_the_names_it_reads() {
+        assert_eq!(
+            serde_json::to_value(RotateError::unconfirmed("nope".into()))
+                .expect("RotateError serializes"),
+            serde_json::json!({ "stage": "unconfirmed", "detail": "nope" })
+        );
+
+        // …and the attribute itself, which the assertion above genuinely cannot
+        // see. `stage` and `detail` are single lowercase words, so the rename is a
+        // no-op *today*: deleting it changes no byte of the JSON and no test can
+        // notice. The next field added will not be so lucky — `RotateOutcome`
+        // already carries `cli_config`/`cliConfig` — and the way that failure
+        // presents is a screen quietly rendering `undefined`, which nothing here
+        // would catch either. So the attribute is pinned, not inferred.
+        let src = include_str!("commands.rs");
+        let code = &src[..src
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("the test module is the boundary of the scannable source")];
+        let decl = code
+            .find("pub struct RotateError {")
+            .expect("RotateError is declared above the tests");
+        let attrs = &code[code[..decl]
+            .rfind("#[derive(")
+            .expect("RotateError still derives its traits")..decl];
+        assert!(
+            attrs.contains(r#"rename_all = "camelCase""#),
+            "RotateError no longer renames its fields. Harmless while every field \
+             is one word, and a field the front end reads as `undefined` the moment \
+             one is not — with nothing on either side of the bridge to say so."
+        );
+    }
+
+    /// A rotation failure is the moment a user is likeliest to be asked for their
+    /// log, and `CfApiError::Http` carries up to 600 characters of whatever
+    /// Cloudflare returned when the body would not parse. One failure used to put
+    /// most of an edge error page into the log — unreadable, and more than anyone
+    /// meant to share.
+    #[test]
+    fn a_logged_failure_is_bounded_and_says_when_it_was_cut() {
+        let short = "Cloudflare sign-in expired";
+        assert_eq!(for_log(short), short, "a short detail is left alone");
+
+        let long = "x".repeat(600);
+        let logged = for_log(&long);
+        assert!(
+            logged.chars().count() < long.chars().count(),
+            "a 600-character response body reached the log intact"
+        );
+        assert!(
+            logged.starts_with(&"x".repeat(LOG_DETAIL_MAX)),
+            "the kept part must be the beginning, where the useful diagnostic is"
+        );
+        assert!(
+            logged.contains("+440 more"),
+            "a truncated line that does not say it was truncated reads as the whole \
+             story: {logged}"
+        );
+
+        // Cut on a character boundary, not a byte one — Cloudflare's messages are
+        // UTF-8 and slicing one in half panics.
+        let multibyte = "é".repeat(600);
+        assert!(for_log(&multibyte).starts_with(&"é".repeat(LOG_DETAIL_MAX)));
     }
 
     /// The detail is what the front end drops into "What went wrong: …", so it
@@ -2207,37 +2662,49 @@ mod tests {
 
     /// Every in-memory mode is decided before secure storage is consulted.
     ///
-    /// `get_app_state` takes a Tauri `State`, which cannot be built in a unit
-    /// test, so this reads the source — but the rule it protects is not a style
-    /// preference. `&&`/`else if` are short-circuiting, and each of these
-    /// branches returns without falling through, so a mode moved below the
-    /// `load_setup()` branch performs a keychain read on the way past. That read
-    /// raises an OS password prompt on an unsigned dev build, before the setup
-    /// UI's first paint, which is #252 — and demo mode, which must never see one,
+    /// The rule this protects is not a style preference. `&&` and `else if` are
+    /// short-circuiting, so a term evaluated before `load_setup()` is a term that
+    /// costs no keychain read, and one evaluated after it is a term that costs an
+    /// OS password prompt on an unsigned dev build — raised before the setup UI's
+    /// first paint. That is #252, and demo mode, which must never see a prompt,
     /// reaches this function on every launch.
     ///
-    /// Scans only the function body, so the names written in this test cannot
-    /// satisfy it.
+    /// The previous version of this test ordered three flag *names* against
+    /// `load_setup` in the source, and never constrained the `dry_run` term at
+    /// all — so rewriting `!session.dry_run && load_setup().is_some()` as
+    /// `load_setup().is_some() && !session.dry_run` passed it while reintroducing
+    /// the exact bug the last release fixed. `app_mode` was split out of the
+    /// command so the counter can answer instead of a substring search: the
+    /// prompt is an OS dialog no test can see, but the read that causes it is
+    /// countable.
     #[test]
     fn every_in_memory_mode_is_decided_before_the_keychain_is_touched() {
-        let src = include_str!("commands.rs");
-        let start = src.find("pub fn get_app_state").expect("the command");
-        let body = &src[start..];
-        let body = &body[..body.find("\n}").expect("end of fn")];
+        // The plain demo launch: no flags, nothing stored, and the `dry_run` term
+        // is the only thing standing between it and the keychain.
+        let demo = SetupSession::new(true);
+        assert_never_reads_the_keychain("a demo launch deciding its mode", || {
+            assert_eq!(app_mode(&demo), "setup");
+        });
 
-        let keychain = body
-            .find("secure_store::load_setup")
-            .expect("get_app_state still reads the keychain somewhere");
-        for flag in ["pending_rotation", "stale_password", "pending_worker_update"] {
-            let at = body
-                .find(flag)
-                .unwrap_or_else(|| panic!("{flag} is not consulted at all"));
-            assert!(
-                at < keychain,
-                "{flag} is checked after the keychain read, so reaching that mode \
-                 costs an OS password prompt — and in demo mode there is nothing \
-                 in the keychain to have prompted for"
-            );
+        // And each in-memory mode, on a *real* session, where the flag is the only
+        // thing standing between it and the keychain. A mode moved below the
+        // `load_setup()` branch still returns the right string — it just charges
+        // the user a password prompt to get there, which no assertion on the
+        // returned mode can see.
+        fn flag_of<'a>(session: &'a SetupSession, mode: &str) -> &'a std::sync::Mutex<bool> {
+            match mode {
+                "change-password" => &session.pending_rotation,
+                "stale-password" => &session.stale_password,
+                "worker-update" => &session.pending_worker_update,
+                other => panic!("no in-memory flag selects {other}"),
+            }
+        }
+        for mode in ["change-password", "stale-password", "worker-update"] {
+            let live = SetupSession::new(false);
+            *flag_of(&live, mode).lock().unwrap() = true;
+            assert_never_reads_the_keychain(mode, || {
+                assert_eq!(app_mode(&live), mode);
+            });
         }
     }
 
@@ -2248,16 +2715,20 @@ mod tests {
     /// build, a source scan cannot express "not inside the dry-run branch", and a
     /// guard written that way passed while the bug was reintroduced.
     ///
-    /// The password is [`DEFAULT_TOKEN`] on purpose. The demo brain is
-    /// process-wide and outlives this test, so rotating it to anything else would
-    /// start 401ing whatever else in the suite is mid-request against it — the
-    /// reasoning `demo_brain`'s own rotation test sets out. Rotating it to the
-    /// token every other caller already sends changes nothing for them while
-    /// still driving the whole path: the secret write is recorded, the demo brain
-    /// takes the password, and `rotate_secret`'s health gate has to get a real
-    /// 200 back from it before this returns.
+    /// The brain is scoped to this test, which is what lets the password be a
+    /// real one. The process-wide demo brain outlives every test, so rotating
+    /// *that* to anything other than the token everyone else sends starts 401ing
+    /// whatever is mid-request against it — measured at 10 failures in 15 runs at
+    /// `RUST_TEST_THREADS=64`. Rotating it to `DEFAULT_TOKEN` was the way round
+    /// that, and it cost the assertion that matters most: a rotation that flipped
+    /// nothing looked identical to one that worked. With a brain of its own this
+    /// can set a password no other test has ever sent and then insist the brain is
+    /// holding it.
     #[tokio::test]
     async fn a_demo_rotation_runs_the_real_path_and_never_reads_the_keychain() {
+        let _brain = crate::demo_brain::scoped_brain();
+        const NEW: &str = "a-password-only-this-test-sets";
+
         let session = SetupSession::new(true);
         *session.pending_rotation.lock().unwrap() = true;
 
@@ -2267,30 +2738,44 @@ mod tests {
         // sample that caught someone else proves nothing either way — but a path
         // that reads the keychain contaminates *every* sample, so one clean
         // sample is the proof and repeated dirty ones are the failure.
+        //
+        // `checked_sub`, because another test resetting the counter mid-sample
+        // makes `after` smaller than `before`: the plain subtraction underflowed
+        // and panicked, and a saturating one would have reported the false zero
+        // that passes this test no matter what the code does.
+        crate::secure_store::probe::reset();
+        let refreshed_with = std::sync::Mutex::new(Vec::new());
         let mut outcome = None;
         let mut dirty = Vec::new();
+        let mut inconclusive = 0;
         for _ in 0..8 {
             let before = crate::secure_store::probe::reads();
             let attempt = rotate_demo_password(
-                crate::demo_brain::DEFAULT_TOKEN,
+                NEW,
                 &session,
                 Locale::En,
                 |_| {},
+                |token| {
+                    refreshed_with.lock().unwrap().push(token.to_string());
+                    true
+                },
             )
             .await
             .expect("the demo brain must accept the password the demo just set");
-            let reads = crate::secure_store::probe::reads() - before;
-            if reads == 0 {
-                outcome = Some(attempt);
-                break;
+            match crate::secure_store::probe::reads().checked_sub(before) {
+                Some(0) => {
+                    outcome = Some(attempt);
+                    break;
+                }
+                Some(n) => dirty.push(n),
+                None => inconclusive += 1,
             }
-            dirty.push(reads);
         }
         let outcome = outcome.unwrap_or_else(|| {
             panic!(
-                "every sample of a demo rotation touched the keychain ({dirty:?}) — \
-                 that is the OS password prompt users see, and a demo password has \
-                 no business in a real keychain"
+                "no sample of a demo rotation came back clean (reads: {dirty:?}, \
+                 {inconclusive} inconclusive) — that is the OS password prompt users \
+                 see, and a demo password has no business in a real keychain"
             )
         });
 
@@ -2302,17 +2787,405 @@ mod tests {
         );
         assert_eq!(
             crate::demo_brain::auth_token(),
+            NEW,
+            "the demo brain is still on the password it started with, so the \
+             rotation reported a change that did not happen — which is the one \
+             thing a demo of a password change has to get right"
+        );
+        assert_ne!(
+            NEW,
             crate::demo_brain::DEFAULT_TOKEN,
-            "the demo brain must be holding the password the rotation set"
+            "the assertion above is only worth making about a password no other \
+             caller in this suite already sends"
         );
         assert!(outcome.keychain);
         assert_eq!(
             outcome.cli_config, None,
             "a demo run must not write a plaintext credential file"
         );
+        // The dashboard is the one store a demo rotation genuinely has to touch,
+        // and it used to be hard-coded to `true` without anything being called.
+        // An open wrapper window keeps the token it was created with, in demo mode
+        // exactly as in a real one — so skipping it left the demo window 401ing
+        // against the demo brain while the done screen said it was fine, which is
+        // the single behaviour the dry-run-fidelity argument exists to demonstrate.
+        assert_eq!(
+            refreshed_with.lock().unwrap().last().map(String::as_str),
+            Some(NEW),
+            "the open dashboard window was never handed the new password"
+        );
+        assert!(outcome.dashboard, "…and the result is reported, not assumed");
         assert!(
             !*session.pending_rotation.lock().unwrap(),
             "a finished rotation must leave the flow"
+        );
+    }
+
+    /// A refused refresh is reported as refused, in demo mode too. The `true` that
+    /// used to be written here was a constant, so nothing could have told the
+    /// difference.
+    #[tokio::test]
+    async fn a_demo_rotation_reports_a_dashboard_it_could_not_reach() {
+        let _brain = crate::demo_brain::scoped_brain();
+        let session = SetupSession::new(true);
+        let outcome = rotate_demo_password(
+            "another-password-only-this-test-sets",
+            &session,
+            Locale::En,
+            |_| {},
+            |_| false,
+        )
+        .await
+        .expect("the demo brain must accept the password the demo just set");
+        assert!(!outcome.dashboard);
+    }
+
+    // ── The doors, the guards, and the order they run in ─────────────────────
+
+    /// A rotation is the one operation that sends a password the user has never
+    /// used before, as a bearer token, to an address they just typed — and then
+    /// *stores* that address. `http://` there is not a dev convenience, it is a
+    /// password in cleartext on the wire and an origin that makes every later
+    /// request from the app and from the `brain` command cleartext as well.
+    /// `reqwest` performs no HSTS upgrade, so nothing downstream corrects it.
+    #[test]
+    fn a_typed_rotation_address_may_not_be_cleartext() {
+        for input in [
+            "http://second-brain.acme.workers.dev",
+            "HTTP://second-brain.acme.workers.dev",
+            "http://localhost:8787",
+            "http://second-brain.acme.workers.dev/mcp",
+        ] {
+            assert!(
+                rotation_address(input, Locale::En).is_err(),
+                "{input} was accepted, so the new password goes out unprotected and \
+                 an http:// origin is written to the keychain and the plaintext CLI \
+                 config for every request after it"
+            );
+        }
+
+        // …and the ordinary case still works, including the bare host the manual
+        // entry screen invites.
+        for input in [
+            "https://second-brain.acme.workers.dev",
+            "second-brain.acme.workers.dev",
+            "  second-brain.acme.workers.dev/mcp  ",
+        ] {
+            assert_eq!(
+                rotation_address(input, Locale::En).unwrap(),
+                "https://second-brain.acme.workers.dev",
+                "input: {input:?}"
+            );
+        }
+
+        // The general normaliser still keeps http for the dev setups that need it,
+        // so this refusal has to live on the rotation path and cannot be delegated.
+        assert_eq!(
+            normalize_worker_url("http://localhost:8787/mcp", Locale::En).unwrap(),
+            "http://localhost:8787"
+        );
+    }
+
+    /// The two doors resolve their address from different places, and the typed
+    /// one carries the cleartext refusal with it.
+    ///
+    /// Door A goes through `dashboard_credentials`, never `secure_store` directly
+    /// (#252), and comes back with the password this computer already holds —
+    /// which is what the migration check below needs and Door B does not have.
+    #[test]
+    fn each_door_resolves_the_brain_it_is_allowed_to_resolve() {
+        // Door A resolves through the demo brain, so this needs one whose password
+        // no other test can move underneath it.
+        let _brain = crate::demo_brain::scoped_brain();
+        let session = SetupSession::new(true);
+
+        // Door B: the address is typed, so there is no current password…
+        let (url, current) =
+            rotation_target(&session, Locale::En, Some("second-brain.acme.workers.dev".into()))
+                .expect("a typed https address resolves");
+        assert_eq!(url, "https://second-brain.acme.workers.dev");
+        assert_eq!(
+            current, None,
+            "someone who has lost their password has none to offer, which is why \
+             every check that needs one is skipped for this door rather than failed"
+        );
+
+        // …and cleartext is refused here too, not only in the screen's validator.
+        assert!(
+            rotation_target(&session, Locale::En, Some("http://second-brain.acme.workers.dev".into()))
+                .is_err()
+        );
+
+        // Door A: resolved from the session, with the password this computer holds.
+        let (url, current) =
+            rotation_target(&session, Locale::En, None).expect("a connected computer resolves");
+        assert_eq!(url, crate::demo_brain::base_url());
+        assert_eq!(current.as_deref(), Some("demo"));
+    }
+
+    /// The screen that checks an address must refuse exactly what the command
+    /// would refuse.
+    ///
+    /// One implementation, two callers, is the whole point of `validate_brain_address`
+    /// — a screen that waves something through only moves the refusal several
+    /// screens later, to the place where the user has already committed. Pointing
+    /// it back at `normalize_worker_url` compiles, passes every behavioural test
+    /// here, and quietly re-opens the cleartext door on the one path where the
+    /// address is typed by hand.
+    #[test]
+    fn the_address_screen_refuses_exactly_what_the_command_refuses() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn validate_brain_address(");
+        assert!(
+            body.contains("rotation_address"),
+            "the screen's validator no longer shares the command's check"
+        );
+        assert!(
+            !body.contains("normalize_worker_url"),
+            "the screen normalises the address itself, so it accepts the `http://` \
+             the command would refuse — and reports the problem several screens \
+             after the one that could have prevented it"
+        );
+        assert!(
+            body.contains("confirm_target_is_a_brain"),
+            "…and it must still be the same brain check, not merely a URL parse"
+        );
+    }
+
+    /// Door B's address was typed or picked, so it is confirmed to be a brain from
+    /// Cloudflare's own record of the account before a secret is written to it.
+    ///
+    /// The Cloudflare account match cannot catch a typo that lands on a *different
+    /// Worker of the user's own* — that script is in the right account, so the only
+    /// thing left to check is what it is. Getting it wrong overwrites an unrelated
+    /// Worker's `AUTH_TOKEN` while telling the user their brain's password changed.
+    #[tokio::test]
+    async fn an_address_with_no_script_to_name_is_refused_before_any_secret_is_written() {
+        let session = SetupSession::new(true);
+
+        assert_eq!(
+            confirm_target_is_a_brain("https://brain.example.com", &session, Locale::En)
+                .await
+                .unwrap_err(),
+            i18n::t(Locale::En, Key::ErrorCustomDomain),
+            "a custom domain yields no script name, and #257 says the script name \
+             comes from the address or not at all"
+        );
+
+        // A real workers.dev address goes on to read the account's bindings.
+        confirm_target_is_a_brain("https://second-brain.demo.workers.dev", &session, Locale::En)
+            .await
+            .expect("the demo account's bindings look like a brain");
+    }
+
+    /// The order of `rotate_password`, which is the whole of its safety argument.
+    ///
+    /// Three mutations of this function compiled with all 208 tests passing:
+    /// deleting the Door B brain check, deleting the migration gate, and turning
+    /// the remote change's `?` into `.ok()` so the local writes ran even when the
+    /// remote change had failed. That last one is the outcome this module's own
+    /// doc calls unrecoverable — the brain keeps the old password, nothing on this
+    /// computer holds it, and the app has no way to ask for it back.
+    ///
+    /// Asserted on the source because the function takes an `AppHandle` and a
+    /// Tauri `State`, neither of which a unit test can construct, and because
+    /// reaching step 4 needs a live Cloudflare account. What each step *does* is
+    /// tested behaviourally elsewhere in this module; what nothing else can see is
+    /// that they are still wired together in this order.
+    #[test]
+    fn the_rotation_does_the_remote_change_first_and_only_persists_if_it_worked() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn rotate_password(");
+
+        let door_b = at(body, "if door_b {");
+        let confirm = at(body, "confirm_target_is_a_brain");
+        let blocked = at(body, "blocked_by_migration");
+        let remote = at(body, "provision::rotate_secret");
+        let persist = at(body, "rotate::persist");
+
+        assert!(
+            door_b < confirm && confirm < remote,
+            "the Door B brain check must run, and must run before the secret is \
+             written — a typo that lands on another Worker of the user's own is in \
+             the right Cloudflare account and passes every other check"
+        );
+        assert!(
+            blocked < remote,
+            "the rebuild gate must refuse before the secret is written: a rotation \
+             caught half-way leaves the next batch 401ing and a recoverable password \
+             problem presenting as a failed migration"
+        );
+        assert!(
+            at(body, "return Err(rotation_block") < remote,
+            "the rebuild gate no longer returns — it computes a block and carries on"
+        );
+        assert!(
+            remote < persist,
+            "the local stores are written before the brain has taken the new \
+             password. Reversing this is the one failure #235 cannot recover from."
+        );
+
+        // The `?` itself. `.ok()` here compiles, keeps the ordering above intact,
+        // and runs every local write over a remote change that failed.
+        //
+        // Read as one statement, bounded by the blank line that ends it, rather
+        // than as everything between the call and `persist`: the local step's
+        // progress emit sits in that gap and discards its own result on purpose,
+        // which a looser scan reads as the remote failure being swallowed.
+        let call = {
+            let tail = &body[remote..];
+            &tail[..tail
+                .find("\n\n")
+                .expect("the remote change is one statement, ending in a blank line")]
+        };
+        assert!(
+            call.contains("})?;"),
+            "the remote change's failure is no longer propagated, so `persist` runs \
+             whether or not the brain took the new password"
+        );
+        for swallowed in [".ok()", ".unwrap_or", "let _ ="] {
+            assert!(
+                !call.contains(swallowed),
+                "the remote change's failure is discarded with `{swallowed}`"
+            );
+        }
+    }
+
+    /// The checklist's third row is reported by this command or by nobody.
+    ///
+    /// `rotate_secret` emits `Secret` and `Confirm` itself; `Local` cannot live
+    /// there, because nothing local may be written until that function has
+    /// returned. So the emit sits here, and an emit that only one caller can make
+    /// is an emit that goes missing quietly: the row renders as a static bullet
+    /// for the whole run, on the screen whose entire job is to show the user which
+    /// part of a password change they are waiting on.
+    ///
+    /// `Step::Local` no longer carries an `#[allow(dead_code)]`, so deleting the
+    /// emit is also a warning — this pins the ordering, which the compiler cannot
+    /// see.
+    #[test]
+    fn the_local_writes_report_themselves_to_the_checklist() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn rotate_password(");
+
+        assert!(
+            at(body, "provision::Step::Local") < at(body, "rotate::persist"),
+            "the local step is declared after the writes it is meant to announce"
+        );
+        let running = at(body, "emit_local(provision::StepStatus::Running)");
+        let persist = at(body, "rotate::persist");
+        let done = at(body, "emit_local(provision::StepStatus::Done)");
+        assert!(
+            running < persist && persist < done,
+            "the row has to go Running *before* the writes and Done *after* them, \
+             or it reports a step the user has already sat through"
+        );
+
+        // The same channel as every other step. A different event name drops the
+        // row silently — the window is listening on one name and nothing errors.
+        assert!(
+            body[..running].contains(r#"app.emit(
+            "setup-progress","#),
+            "the local step is emitted on a channel the rotation screen is not \
+             listening to"
+        );
+
+        // And the one hard failure ends in `Error` rather than an unreported
+        // early return: `persist` cannot run at all without a home directory.
+        let hard_failure = at(body, "dirs::home_dir()");
+        assert!(
+            body[hard_failure..persist].contains("emit_local(provision::StepStatus::Error)"),
+            "a rotation that cannot write anything locally leaves the row spinning \
+             forever while the failure screen renders behind it"
+        );
+    }
+
+    /// `persist` takes its secure-storage write as a seam, so that one line in
+    /// `rotate_password` is the entire connection between a password change and
+    /// the store the app reads at every launch.
+    ///
+    /// The seam is what makes `persist`'s own failure branch reachable — the test
+    /// backend cannot fail — and what stops its tests writing the process-global
+    /// map that `secure_store`'s end-to-end test asserts on. The cost is this one
+    /// wire, which nothing else can see.
+    #[test]
+    fn the_rotation_hands_persist_the_real_secure_store() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn rotate_password(");
+        let persist = at(body, "rotate::persist");
+        let call = &body[persist..];
+        assert!(
+            call.contains("secure_store::save_setup"),
+            "`persist` is no longer given the real store, so `keychain: true` would \
+             tell the user their computer holds a password it does not have"
+        );
+        // Searched in the tail after `persist`, not in the whole body: the
+        // dry-run branch at the top of this function refreshes a window too, and
+        // an unanchored search would find that one and prove nothing about this
+        // call.
+        assert!(
+            call.contains("windows::refresh_wrapper_token"),
+            "…and the open dashboard window is no longer told either"
+        );
+    }
+
+    /// Abandoning a password change leaves the flow.
+    ///
+    /// `pending_rotation` was cleared only on success and on logout, and
+    /// `app_mode` consults it before everything else — so "Not now" left it set,
+    /// and the next "Update your Second Brain" opened the *password-change* screen
+    /// instead of the update. Nothing short of restarting the app put it right.
+    #[test]
+    fn walking_away_from_a_password_change_does_not_wedge_the_next_flow() {
+        let session = SetupSession::new(true);
+        *session.pending_rotation.lock().unwrap() = true;
+        assert_eq!(app_mode(&session), "change-password");
+
+        clear_pending_rotation(&session);
+        assert_eq!(
+            app_mode(&session),
+            "setup",
+            "the abandoned flow still owns the window"
+        );
+
+        // …and the exit the front end actually takes is wired to it. "Not now"
+        // opens the dashboard, which closes the setup window on the next line —
+        // `open_dashboard_impl` needs an `AppHandle`, so the wiring is what is
+        // checkable here and the clearing itself is asserted above.
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub fn open_dashboard_impl(");
+        assert!(
+            at(body, "clear_pending_rotation") < at(body, "close_setup_windows"),
+            "leaving for the dashboard must drop the password-change flow before the \
+             window that was running it is closed"
+        );
+    }
+
+    /// Fixing a stale password has to *fix* it.
+    ///
+    /// `stale_password` is set at launch when the brain refuses the password this
+    /// computer holds, and `connect_existing` is the screen's first offer — enter
+    /// the new one. Nothing cleared the flag, so after a successful reconnection
+    /// `app_mode` still returned `"stale-password"` and the next
+    /// `begin_worker_update` told the user again that their password had been
+    /// changed elsewhere, about a password that now works.
+    ///
+    /// Source-scanned because `connect_existing` takes an `AppHandle` and probes a
+    /// live Worker; what is checkable is that the clear happens on the success
+    /// path — after the probe and the store write, not before them.
+    #[test]
+    fn a_reconnection_clears_the_password_changed_elsewhere_flag() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn connect_existing(");
+        let cleared = at(body, "stale_password");
+        assert!(
+            at(body, "probe_worker") < cleared && at(body, "secure_store::save_setup") < cleared,
+            "the flag is cleared before the new password has been shown to work, so \
+             a wrong one would silently dismiss the screen that was asking for it"
+        );
+        assert!(
+            cleared < at(body, "*session.outcome.lock()"),
+            "the flag must be cleared on the way out of the success path"
         );
     }
 
@@ -2404,6 +3277,7 @@ mod tests {
 
     #[test]
     fn dashboard_credentials_dry_run_uses_the_local_demo_brain() {
+        let _brain = crate::demo_brain::scoped_brain();
         let session = SetupSession::new(true);
         *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
             worker_url: "https://second-brain.demo.workers.dev".into(),
