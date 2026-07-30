@@ -771,7 +771,7 @@ mod tests {
     #[tokio::test]
     async fn the_estimate_reports_a_plausible_brain_through_the_apps_own_parser() {
         let url = brain();
-        let est = crate::migration::fetch_estimate(&url, "demo", Locale::En)
+        let est = crate::migration::fetch_estimate(&url, "demo", 384, Locale::En)
             .await
             .expect("estimate");
         // Pinned as literals, not against the constants: comparing a constant to
@@ -927,7 +927,7 @@ mod tests {
         crate::migration::patch_embedding_model(&url, "demo", "@cf/baai/bge-large-en-v1.5", Locale::En)
             .await
             .expect("model write");
-        let est = crate::migration::fetch_estimate(&url, "demo", Locale::En).await.expect("estimate");
+        let est = crate::migration::fetch_estimate(&url, "demo", 384, Locale::En).await.expect("estimate");
         assert_eq!(est.current_model, "@cf/baai/bge-large-en-v1.5");
     }
 

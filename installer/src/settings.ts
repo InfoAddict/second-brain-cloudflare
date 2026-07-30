@@ -181,7 +181,9 @@ async function save(): Promise<void> {
  * picker shows. Dimensions are deliberately not in the payload: a number like
  * 768 on a decision screen is exactly what the named level replaces.
  */
-type EmbeddingChoice = { model: string; level: string };
+/** `exceedsFreeStorage` is computed on the Rust side, because the window
+ *  deliberately never sees dimension counts. */
+type EmbeddingChoice = { model: string; level: string; exceedsFreeStorage: boolean };
 
 type MigrationEstimate = {
   entries: number;
@@ -547,8 +549,12 @@ async function freeOldSearchData(): Promise<void> {
   render();
 }
 
-function migrationNote(text: string): HTMLElement {
-  return h("div", { class: "settings-migration-note" }, [text]);
+function migrationNote(text: string, tone: "plain" | "warn" = "plain"): HTMLElement {
+  const cls =
+    tone === "warn"
+      ? "settings-migration-note settings-migration-warn"
+      : "settings-migration-note";
+  return h("div", { class: cls }, [text]);
 }
 
 function migrationTitle(text: string): HTMLElement {
@@ -630,6 +636,18 @@ function migrationPicker(e: MigrationEstimate): HTMLElement[] {
     select.append(h("option", { value: e.currentModel }, [label(e.currentModel)]));
   }
   select.value = migration.target ?? e.currentModel;
+
+  // The one warning that is about a hard limit rather than a cost. On the free
+  // plan, running out of stored space makes writes fail — there is no billing to
+  // absorb it — and the peak comes during the rebuild, while both the old and new
+  // search data are kept so the change can still be undone.
+  const storageWarning = () => {
+    const target = select.value;
+    const chosen = e.models.find(m => m.model === target);
+    return chosen?.exceedsFreeStorage && target !== e.currentModel
+      ? t("settingsPanel.migration.storageWarning")
+      : null;
+  };
   select.disabled = locked();
   select.addEventListener("change", () => {
     migration.target = select.value;
@@ -667,6 +685,10 @@ function migrationPicker(e: MigrationEstimate): HTMLElement[] {
   const notice = levelNotice(migration.target ?? e.currentModel);
   if (notice) out.push(migrationNote(notice));
   out.push(migrationNote(t("settingsPanel.migration.pickNote")));
+  // Placed with the choice rather than on the warning screen: it is a reason to
+  // pick differently, not a step to acknowledge on the way past.
+  const storage = storageWarning();
+  if (storage) out.push(migrationNote(storage, "warn"));
   if (sameAsCurrent) out.push(migrationNote(t("settingsPanel.migration.sameAsCurrent")));
   else if (blockedByEdits) out.push(migrationNote(t("settingsPanel.migration.dirtyNote")));
   out.push(migrationActions(start));

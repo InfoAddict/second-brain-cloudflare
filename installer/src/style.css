@@ -919,3 +919,15 @@ body.settings-page #app {
   font-size: 0.6rem;
   vertical-align: middle;
 }
+
+/* The storage warning in the Matching pane. Every other note there is quiet
+   grey on purpose; this one is the single thing that says "this choice may not
+   work", so it carries the same accent the app uses for other cautions rather
+   than disappearing into the surrounding text. */
+.settings-migration-warn {
+  color: var(--text-primary);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.03));
+  border-left: 3px solid var(--danger, #c0392b);
+  padding: 8px 10px;
+  border-radius: 6px;
+}

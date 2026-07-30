@@ -1094,7 +1094,10 @@ pub async fn migration_estimate(
     app: AppHandle,
 ) -> Result<crate::migration::MigrationEstimate, String> {
     let (url, token, locale) = settings_target(&app)?;
-    crate::migration::fetch_estimate(&url, &token, locale).await
+    // The shipped dimension count is the fallback for a brain running a reading
+    // this build does not list.
+    let manifest = worker_bundle::manifest();
+    crate::migration::fetch_estimate(&url, &token, manifest.vectorize_dimensions, locale).await
 }
 
 /// Where an interrupted rebuild got to, so the app can offer to resume rather

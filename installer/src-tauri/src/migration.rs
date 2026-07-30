@@ -31,6 +31,20 @@ use std::time::Duration;
 /// Longer than the settings calls: a re-embed batch does real model work.
 const TIMEOUT: Duration = Duration::from_secs(120);
 
+/// What the Workers Free plan allows to be stored, counted in vector dimensions
+/// across the account.
+///
+/// This is a ceiling, not a cost: Cloudflare bills paid accounts for dimensions
+/// stored and queried, but a free account that reaches this limit starts failing
+/// writes, because there is no billing to absorb the overage. So it is worth
+/// warning about before someone chooses an option that would cross it — the
+/// finest reading is exactly the choice that can, and it is the one the window
+/// invites them to make.
+///
+/// Deliberately not counting the number of indexes: Cloudflare does not bill for
+/// those, and the free plan allows a hundred.
+const FREE_STORED_DIMENSIONS: u64 = 5_000_000;
+
 /// Embedding models offered, with the dimensions each produces.
 ///
 /// A curated list rather than a live catalogue fetch, for the same reason
@@ -102,7 +116,43 @@ pub struct MigrationEstimate {
     pub chunks_at_least: u64,
     pub current_model: String,
     /// The choices the picker offers, ordered coarsest first.
-    pub models: Vec<EmbeddingChoice>,
+    pub models: Vec<ChoiceView>,
+}
+
+/// A choice as the window sees it: what it is called, and whether taking it would
+/// cost more storage than a free account is allowed.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChoiceView {
+    pub model: &'static str,
+    pub level: &'static str,
+    /// True when rebuilding into this option would exceed the free plan's
+    /// storage allowance.
+    ///
+    /// Measured at the *peak*, which is during the rebuild rather than after it:
+    /// the old index is deliberately kept until the user frees it, so both are
+    /// stored at once. That peak is what fails first.
+    pub exceeds_free_storage: bool,
+}
+
+/// Dimensions stored while moving from one reading to another.
+///
+/// Both indexes exist for the length of the rebuild — that is the design, and it
+/// is what makes rollback possible — so the peak is the sum, not the larger.
+/// Returns the target's own cost when it is already the current one, since then
+/// there is nothing to move.
+pub fn peak_stored_dimensions(vectors: u64, current: u32, target: u32) -> u64 {
+    if current == target {
+        return vectors * u64::from(target);
+    }
+    vectors * u64::from(current) + vectors * u64::from(target)
+}
+
+/// Only this brain's own indexes are counted. An account may hold others from
+/// unrelated projects, so a `false` here means "this brain alone stays inside the
+/// allowance", not "you are definitely fine".
+pub fn exceeds_free_storage(vectors: u64, current: u32, target: u32) -> bool {
+    peak_stored_dimensions(vectors, current, target) > FREE_STORED_DIMENSIONS
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,15 +243,35 @@ async fn send_json<T: serde::de::DeserializeOwned>(
 pub async fn fetch_estimate(
     worker_url: &str,
     auth_token: &str,
+    shipped_dimensions: u32,
     locale: Locale,
 ) -> Result<MigrationEstimate, String> {
     let body: EstimateBody =
         get_json(worker_url, auth_token, "/migration/estimate", locale).await?;
+
+    // A brain running a reading this build does not list still has vectors of
+    // some size; fall back to what this build ships with rather than assuming
+    // zero, which would make every option look free.
+    let current_dimensions = dimensions_for(&body.model).unwrap_or(shipped_dimensions);
+
+    let models = EMBEDDING_MODELS
+        .iter()
+        .map(|c| ChoiceView {
+            model: c.model,
+            level: c.level,
+            exceeds_free_storage: exceeds_free_storage(
+                body.chunks_at_least,
+                current_dimensions,
+                c.dimensions,
+            ),
+        })
+        .collect();
+
     Ok(MigrationEstimate {
         entries: body.entries,
         chunks_at_least: body.chunks_at_least,
         current_model: body.model,
-        models: EMBEDDING_MODELS.to_vec(),
+        models,
     })
 }
 
@@ -349,7 +419,14 @@ mod tests {
             entries: 1620,
             chunks_at_least: 2100,
             current_model: "@cf/baai/bge-small-en-v1.5".into(),
-            models: EMBEDDING_MODELS.to_vec(),
+            models: EMBEDDING_MODELS
+                .iter()
+                .map(|c| ChoiceView {
+                    model: c.model,
+                    level: c.level,
+                    exceeds_free_storage: false,
+                })
+                .collect(),
         };
         let json = serde_json::to_value(&est).expect("serialises");
 
@@ -362,6 +439,10 @@ mod tests {
         let first = &json["models"][0];
         assert!(first["model"].is_string(), "model id must be present for auditing");
         assert!(first["level"].is_string(), "each choice needs a named level");
+        assert!(
+            first["exceedsFreeStorage"].is_boolean(),
+            "each choice must say whether it would exceed the free storage allowance"
+        );
         assert!(
             first.get("dimensions").is_none(),
             "dimensions must not reach the window: {first}"
@@ -413,6 +494,63 @@ mod tests {
                 "settings.ts no longer calls {command}"
             );
         }
+    }
+
+    /// Both indexes are stored during a rebuild — that is what makes rollback
+    /// possible — so the peak is the sum, and the peak is what fails first on a
+    /// free account.
+    #[test]
+    fn the_storage_peak_counts_both_indexes_at_once() {
+        // 2,100 vectors moving 384 → 768.
+        assert_eq!(peak_stored_dimensions(2_100, 384, 768), 2_419_200);
+        // Staying put stores one index, not two.
+        assert_eq!(peak_stored_dimensions(2_100, 384, 384), 806_400);
+    }
+
+    /// Rahil's brain: ~1,620 memories, ~2,100 vectors. Every option fits, which
+    /// is the case this feature actually ships into.
+    #[test]
+    fn a_typical_brain_stays_inside_the_free_allowance() {
+        for target in [384u32, 768, 1024] {
+            assert!(
+                !exceeds_free_storage(2_100, 384, target),
+                "2,100 vectors → {target} dims should fit in the free allowance"
+            );
+        }
+    }
+
+    /// The case worth warning about: the finest reading is what crosses the line
+    /// first, and it is the option the window invites the user to choose.
+    #[test]
+    fn a_large_brain_is_warned_before_choosing_the_finest_reading() {
+        // ~6,000 vectors: 384 + 1024 = 8.4M dimensions at the peak, past 5M.
+        assert!(exceeds_free_storage(6_000, 384, 1024));
+        // The same brain moving to the middle option: 384 + 768 = 6.9M, also past.
+        assert!(exceeds_free_storage(6_000, 384, 768));
+        // And staying put is fine, so the warning is about the move, not the size.
+        assert!(!exceeds_free_storage(6_000, 384, 384));
+    }
+
+    #[test]
+    fn the_boundary_is_exclusive_so_exactly_the_allowance_is_allowed() {
+        // 5,000,000 dimensions exactly: allowed. One more: not.
+        // Same reading on both sides, so the peak is vectors × dimensions.
+        assert!(!exceeds_free_storage(5_000_000, 1, 1));
+        assert!(exceeds_free_storage(5_000_001, 1, 1));
+    }
+
+    /// The window is told per choice, so it can mark the specific option that
+    /// would cross the line rather than warning about the whole feature.
+    #[test]
+    fn each_choice_carries_its_own_storage_verdict() {
+        let view = ChoiceView {
+            model: "@cf/baai/bge-large-en-v1.5",
+            level: "finest",
+            exceeds_free_storage: true,
+        };
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["exceedsFreeStorage"], true);
+        assert!(json.get("dimensions").is_none(), "dimensions must stay out of the window");
     }
 
     // ── HTTP ────────────────────────────────────────────────────────────────
@@ -468,7 +606,7 @@ mod tests {
     #[tokio::test]
     async fn the_estimate_carries_the_models_the_picker_needs() {
         let (url, seen) = spawn_worker(200);
-        let est = fetch_estimate(&url, "tok", Locale::En).await.expect("estimate");
+        let est = fetch_estimate(&url, "tok", 384, Locale::En).await.expect("estimate");
 
         assert_eq!(est.entries, 1620);
         assert_eq!(est.chunks_at_least, 2100);
@@ -497,7 +635,7 @@ mod tests {
     #[tokio::test]
     async fn an_older_brain_is_told_to_update_rather_than_shown_a_404() {
         let (url, _) = spawn_worker(404);
-        let err = fetch_estimate(&url, "tok", Locale::En).await.unwrap_err();
+        let err = fetch_estimate(&url, "tok", 384, Locale::En).await.unwrap_err();
         assert_eq!(
             err,
             i18n::t(Locale::En, Key::ErrorBrainNeedsUpdateForMigration)
@@ -508,7 +646,7 @@ mod tests {
     #[tokio::test]
     async fn a_server_error_does_not_leak_a_raw_body() {
         let (url, _) = spawn_worker(500);
-        let err = fetch_estimate(&url, "tok", Locale::En).await.unwrap_err();
+        let err = fetch_estimate(&url, "tok", 384, Locale::En).await.unwrap_err();
         assert!(err.contains("500"), "the status is useful here: {err}");
         assert!(!err.contains("{"), "leaked a response body: {err}");
     }
@@ -516,7 +654,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_brain_says_so() {
         // Nothing is listening on this port.
-        let err = fetch_estimate("http://127.0.0.1:1", "tok", Locale::En)
+        let err = fetch_estimate("http://127.0.0.1:1", "tok", 384, Locale::En)
             .await
             .unwrap_err();
         assert_eq!(err, i18n::t(Locale::En, Key::ErrorReachBrain));
@@ -525,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn a_trailing_slash_in_the_stored_address_does_not_double_up() {
         let (url, seen) = spawn_worker(200);
-        fetch_estimate(&format!("{url}/"), "tok", Locale::En)
+        fetch_estimate(&format!("{url}/"), "tok", 384, Locale::En)
             .await
             .expect("estimate");
         let log = seen.lock().unwrap();

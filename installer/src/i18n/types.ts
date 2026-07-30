@@ -76,6 +76,7 @@ export type Messages = {
       entriesNone: string;
       pickLabel: string;
       inUse: string;
+      storageWarning: string;
       pickNote: string;
       /**
        * Named levels, keyed by the `level` each choice carries. These are the

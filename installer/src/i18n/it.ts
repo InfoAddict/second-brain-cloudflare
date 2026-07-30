@@ -160,6 +160,13 @@ export const it: Messages = {
       entriesNone: "Non hai ancora salvato ricordi, quindi non c'è nulla da rileggere.",
       pickLabel: "Modo di leggere",
       inUse: "{name} (in uso ora)",
+      storageWarning:
+        "È più di quanto un account Cloudflare gratuito possa contenere per un " +
+        "Second Brain della tua dimensione. Durante la ricostruzione vengono " +
+        "conservati sia i vecchi sia i nuovi dati di ricerca, così puoi ancora " +
+        "cambiare idea — ed è lì che lo spazio finirebbe. Il salvataggio di nuovi " +
+        "ricordi inizierebbe a fallire. Un'opzione meno dettagliata, o un piano " +
+        "Cloudflare a pagamento, lo evita.",
       pickNote:
         "Leggere in modo più dettagliato trova corrispondenze più precise e consuma una " +
         "parte maggiore della tua assegnazione AI giornaliera. Girano tutte sul tuo " +

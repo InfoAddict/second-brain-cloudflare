@@ -157,6 +157,12 @@ export const en: Messages = {
       entriesNone: "No memories saved yet, so there is nothing to read again.",
       pickLabel: "How to read your memories",
       inUse: "{name} (in use now)",
+      storageWarning:
+        "This is more than a free Cloudflare account can hold for a brain your " +
+        "size. While the rebuild runs, both the old and new search data are kept " +
+        "so you can still change your mind — and that is when it would run out. " +
+        "Saving new memories would start failing. A coarser option, or a paid " +
+        "Cloudflare plan, avoids it.",
       pickNote:
         "Reading in more detail matches more precisely and uses more of your daily AI " +
         "allowance. All of these run on your own Cloudflare account.",
