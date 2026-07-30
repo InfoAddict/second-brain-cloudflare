@@ -33,8 +33,13 @@ export const DEFAULTS = {
   RECALL_WIDEN_THRESHOLD: 0.85,
 
   // ── Graph expansion (src/graph/traverse.ts) ──
+  // Hard cap on traversal depth. Deliberately not surfaced as a user control
+  // (#246) — it bounds fanout, it is not a preference.
   GRAPH_MAX_HOPS: 3,
   GRAPH_HOP_DECAY: 0.6,
+  // Applied only when a caller does not supply `hops`. An explicit value from
+  // an MCP client or API caller always wins, including an explicit 0.
+  DEFAULT_HOPS: 0,
 
   // ── Output budgeting (src/recall/snippet.ts) ──
   RECALL_OUTPUT_BUDGET: 12000,
@@ -90,6 +95,7 @@ export const RULES: Record<ConfigKey, Rule> = {
   // written against this ceiling.
   GRAPH_MAX_HOPS: { kind: "number", min: 0, max: 3, integer: true },
   GRAPH_HOP_DECAY: { kind: "number", min: 0, max: 1 },
+  DEFAULT_HOPS: { kind: "number", min: 0, max: 3, integer: true },
 
   RECALL_OUTPUT_BUDGET: { kind: "number", min: 1000, max: 100000, integer: true },
   SNIPPET_MAX_CHARS: { kind: "number", min: 100, max: 4000, integer: true },

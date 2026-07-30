@@ -30,6 +30,124 @@ export const it: Messages = {
     english: "English",
     italian: "Italiano",
   },
+  settingsPanel: {
+    title: "Impostazioni avanzate",
+    lede: "Come il tuo Second Brain ricorda e recupera. Le modifiche valgono dalla prossima ricerca.",
+    sectionRecall: "Recupero",
+    sectionRemember: "Ricorda",
+    sectionAi: "AI",
+    custom: "Personalizzato",
+    customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",
+    reset: "Ripristina il valore predefinito",
+    save: "Salva le modifiche",
+    cancel: "Annulla",
+    unsaved: "{count} modifiche non salvate",
+    unsavedOne: "1 modifica non salvata",
+    saving: "Salvataggio…",
+    saved: "Salvato",
+    loadFailed: "Non è stato possibile caricare le impostazioni.",
+    recency: {
+      label: "Quanto i ricordi recenti contano più di quelli vecchi",
+      desc: "I ricordi più vecchi perdono gradualmente terreno rispetto ai nuovi. Qui decidi con quanta rapidità — e quanta protezione ottengono i ricordi consolidati e importanti.",
+      levels: {
+        timeless: {
+          name: "Senza tempo",
+          notice: "L'età conta appena. Utile se il tuo Second Brain è soprattutto materiale di riferimento che vuoi ritrovare a prescindere da quando l'hai salvato.",
+        },
+        balanced: {
+          name: "Bilanciato",
+          notice: "Il valore predefinito. A parità vince il più recente, ma una buona corrispondenza vecchia batte comunque una debole recente.",
+        },
+        recent_first: {
+          name: "Priorità ai recenti",
+          notice: "I ricordi nuovi dominano. Utile per lavoro che cambia in fretta, al prezzo di seppellire il contesto più vecchio.",
+        },
+      },
+    },
+    variety: {
+      label: "Varietà nei risultati",
+      desc: "Quando più ricordi dicono quasi la stessa cosa, Second Brain può restituirli tutti oppure distribuire i risultati.",
+      levels: {
+        focused: { name: "Mirato", notice: "Le corrispondenze più vicine, anche se alcune si ripetono." },
+        balanced: { name: "Bilanciato", notice: "Il valore predefinito." },
+        varied: {
+          name: "Vario",
+          notice: "Una scelta più ampia di ricordi diversi. Alcune corrispondenze molto simili vengono escluse per fare spazio.",
+        },
+      },
+    },
+    connections: {
+      label: "Quanto seguire i collegamenti",
+      desc: "Oltre alle corrispondenze dirette, Second Brain può percorrere i collegamenti tra i ricordi e portare anche ciò a cui sono connessi.",
+      levels: {
+        off: { name: "Disattivato", notice: "Solo corrispondenze dirette." },
+        nearby: { name: "Vicini", notice: "Un passo più in là. Fa emergere contesto ovvio che non avevi cercato." },
+        extended: {
+          name: "Estesi",
+          notice: "Due passi più in là. Contesto più ricco e, di tanto in tanto, qualcosa di forzato.",
+        },
+      },
+    },
+    detail: {
+      label: "Quanto dettaglio viene restituito",
+      desc: "Definisce quanta parte di ogni ricordo viene inviata al tuo assistente.",
+      levels: {
+        compact: {
+          name: "Compatto",
+          notice: "Estratti brevi. Lascia più spazio nella finestra di contesto del tuo assistente.",
+        },
+        standard: {
+          name: "Standard",
+          notice: "Il valore predefinito. Testo completo per le prime corrispondenze, estratti per le altre.",
+        },
+        full: {
+          name: "Completo",
+          notice: "Più contenuto per ogni ricordo. Risposte migliori, con un consumo di contesto molto più alto.",
+        },
+      },
+    },
+    duplicates: {
+      label: "Blocco dei salvataggi quasi duplicati",
+      desc: "Quando qualcosa di molto simile è già salvato, Second Brain può bloccare il salvataggio o lasciarlo passare segnalandolo.",
+      note: "Vale per i nuovi salvataggi. I duplicati già presenti nel tuo Second Brain non vengono toccati.",
+      levels: {
+        permissive: { name: "Permissivo", notice: "Si salva quasi tutto. Le ripetizioni si accumulano." },
+        standard: {
+          name: "Standard",
+          notice: "Il valore predefinito. I salvataggi quasi identici vengono bloccati, quelli simili segnalati.",
+        },
+        strict: {
+          name: "Rigoroso",
+          notice: "Blocca in modo aggressivo. A volte rifiuta un aggiornamento legittimo a qualcosa che avevi già salvato.",
+        },
+      },
+    },
+    compression: {
+      label: "Compressione dei ricordi vecchi",
+      desc: "Ogni notte, i ricordi vecchi che recuperi raramente possono essere riassunti perché la ricerca resti efficace.",
+      note: "Ha effetto dall'esecuzione di questa notte. I ricordi già compressi restano compressi.",
+      levels: {
+        conservative: {
+          name: "Conservativo",
+          notice: "Protegge di più. Il tuo Second Brain cresce e le ricerche diventano via via più lente.",
+        },
+        standard: {
+          name: "Standard",
+          notice: "Il valore predefinito. I ricordi importanti o recuperati spesso non vengono mai compressi.",
+        },
+        aggressive: {
+          name: "Aggressivo",
+          notice: "Comprime prima. Cervello più snello, ma i dettagli dei ricordi vecchi vengono riassunti via.",
+        },
+      },
+    },
+    model: {
+      label: "Quale modello AI usare",
+      desc: "Usato per ordinare, riassumere e individuare contraddizioni nei tuoi ricordi — non per la ricerca in sé. Ogni modello elencato qui gira sul tuo account Cloudflare.",
+      sizeNote: "I modelli più grandi scrivono riassunti migliori e costano più Neurons. Quelli più piccoli sono più rapidi ed economici.",
+      neuronsNote: "I Neurons sono l'unità di consumo AI di Cloudflare. Il tuo piano include un'assegnazione giornaliera.",
+    },
+  },
   welcome: {
     title: "Configura il tuo Second Brain",
     lede:

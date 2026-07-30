@@ -1,5 +1,12 @@
 export type Locale = "en" | "it";
 
+/** One named level of a multi-value control (#246). */
+export type LevelCopy = {
+  name: string;
+  /** Names the downside as well as the upside — see #244 copy conventions. */
+  notice: string;
+};
+
 export type Messages = {
   common: {
     continue: string;
@@ -29,6 +36,30 @@ export type Messages = {
     languageDesc: string;
     english: string;
     italian: string;
+  };
+  settingsPanel: {
+    title: string;
+    lede: string;
+    sectionRecall: string;
+    sectionRemember: string;
+    sectionAi: string;
+    custom: string;
+    customNote: string;
+    reset: string;
+    save: string;
+    cancel: string;
+    unsaved: string;
+    unsavedOne: string;
+    saving: string;
+    saved: string;
+    loadFailed: string;
+    recency: { label: string; desc: string; levels: { timeless: LevelCopy; balanced: LevelCopy; recent_first: LevelCopy } };
+    variety: { label: string; desc: string; levels: { focused: LevelCopy; balanced: LevelCopy; varied: LevelCopy } };
+    connections: { label: string; desc: string; levels: { off: LevelCopy; nearby: LevelCopy; extended: LevelCopy } };
+    detail: { label: string; desc: string; levels: { compact: LevelCopy; standard: LevelCopy; full: LevelCopy } };
+    duplicates: { label: string; desc: string; note: string; levels: { permissive: LevelCopy; standard: LevelCopy; strict: LevelCopy } };
+    compression: { label: string; desc: string; note: string; levels: { conservative: LevelCopy; standard: LevelCopy; aggressive: LevelCopy } };
+    model: { label: string; desc: string; sizeNote: string; neuronsNote: string };
   };
   welcome: {
     title: string;

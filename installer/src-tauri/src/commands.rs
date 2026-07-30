@@ -905,6 +905,55 @@ pub fn perform_logout(app: &AppHandle) {
     let _ = windows::open_setup_window(app);
 }
 
+// ── Advanced Settings (#246) ───────────────────────────────────────────────────
+//
+// Every mutating command returns the freshly re-read view rather than echoing
+// what was requested. The Worker clamps and invariant-checks at resolve time,
+// so what it stored may differ from what was asked for — rendering from the
+// request would show the user a state their brain is not actually in.
+
+/// Resolves the brain to talk to, going through the same session-aware helper
+/// the dashboard commands use.
+///
+/// Deliberately NOT `secure_store::load_setup()` directly: that ignores
+/// dry-run, so it both breaks demoing the panel on a configured machine and
+/// raises a Keychain prompt for a value dry-run would discard — the bug fixed
+/// for launch in #252, which is easy to reintroduce one command at a time.
+fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
+    let locale = locale_of(app);
+    let session = app.state::<SetupSession>();
+    let (url, token) = dashboard_credentials(&session, locale)?;
+    Ok((url, token, locale))
+}
+
+#[tauri::command]
+pub async fn get_brain_settings(app: AppHandle) -> Result<crate::settings::SettingsView, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::settings::fetch_settings(&url, &token, locale).await
+}
+
+/// Commits staged changes from the Advanced Settings window.
+///
+/// Replaces the earlier save-on-change commands: settings that alter how recall
+/// behaves should not be written the instant a radio is clicked, because a
+/// mis-click silently retunes the user's brain with no way back.
+#[tauri::command]
+pub async fn save_brain_settings(
+    app: AppHandle,
+    levels: Vec<(String, String)>,
+    resets: Vec<String>,
+    model: Option<String>,
+) -> Result<crate::settings::SettingsView, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::settings::apply_settings(&url, &token, &levels, &resets, model, locale).await?;
+    crate::settings::fetch_settings(&url, &token, locale).await
+}
+
+#[tauri::command]
+pub fn open_settings_window(app: AppHandle) {
+    crate::windows::open_settings_window(&app);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{dashboard_credentials, normalize_worker_url, SetupSession};
@@ -951,6 +1000,26 @@ mod tests {
                 "input: {input:?}"
             );
         }
+    }
+
+
+    /// #252 fixed launch raising a Keychain prompt in dry-run. Every command
+    /// that resolves a brain must go through dashboard_credentials for the same
+    /// reason — bypassing it reintroduces the bug one command at a time.
+    #[test]
+    fn settings_commands_resolve_credentials_through_the_session_helper() {
+        let src = include_str!("commands.rs");
+        let start = src.find("fn settings_target").expect("settings_target");
+        let end = src[start..].find("\n}").expect("end of fn") + start;
+        let body = &src[start..end];
+        assert!(
+            body.contains("dashboard_credentials"),
+            "settings_target must use dashboard_credentials so dry-run is honoured"
+        );
+        assert!(
+            !body.contains("secure_store::load_setup"),
+            "settings_target must not read secure_store directly — it ignores dry-run and prompts the Keychain"
+        );
     }
 
     #[test]
