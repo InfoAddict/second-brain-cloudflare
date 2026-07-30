@@ -171,6 +171,34 @@ export const it: Messages = {
     footnote:
       "L'indirizzo è in Dettagli connessione sull'altro computer " +
       "o nell'email di conferma che hai inviato a te stesso.",
+    chooseLede:
+      "Nuovo computer? Collega il Second Brain che hai già — nulla verrà " +
+      "modificato o resettato.",
+    signInButton: "Accedi con Cloudflare",
+    signInHint: "Troveremo noi il tuo Second Brain — nessun indirizzo da cercare.",
+    signInFootnote:
+      "Il tuo Second Brain si trova nel tuo spazio su Cloudflare, quindi " +
+      "accediamo lì per trovarlo. Cloudflare ti chiederà di autorizzare " +
+      "l'accesso. Non vediamo mai la tua password Cloudflare e non conserviamo " +
+      "la chiave: accedi di nuovo ogni volta. Preferisci di no? " +
+      "\u201cInserisci l'indirizzo a mano\u201d non richiede l'accesso a Cloudflare.",
+    manualButton: "Inserisci l'indirizzo a mano",
+    accountPickerTitle: "In quale spazio cerchiamo?",
+    accountPickerLede: "Il tuo login ne ha più di uno — scegli dove si trova il tuo Second Brain.",
+    searchingTitle: "Ricerca del tuo Second Brain",
+    searchingLede: "Controlliamo il tuo spazio Cloudflare. Può richiedere fino a un minuto.",
+    searchingStep: "Analisi del tuo spazio",
+    pickTitleOne: "È questo il tuo Second Brain?",
+    pickTitleMany: "Quale è il tuo Second Brain?",
+    pickLedeOne: "Collegati, oppure inserisci a mano un altro indirizzo.",
+    pickLedeMany: "Scegli quello a cui vuoi collegarti.",
+    noneFound:
+      "Non abbiamo trovato un Second Brain in quello spazio. Se si trova " +
+      "altrove — un altro spazio o un tuo indirizzo web — inserisci l'indirizzo qui sotto.",
+    unlockTitle: "Inserisci la tua password",
+    unlockLede:
+      "È la password che hai scelto quando hai configurato il tuo Second Brain " +
+      "la prima volta. Nulla verrà modificato o resettato.",
   },
   password: {
     title: "Crea la tua password",

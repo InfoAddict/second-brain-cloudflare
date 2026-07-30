@@ -10,11 +10,29 @@
 
 const KEY_WORKER_URL: &str = "worker-url";
 const KEY_AUTH_TOKEN: &str = "auth-token";
+const KEY_CF_ACCOUNT_ID: &str = "cf-account-id";
+const KEY_CF_SUBDOMAIN: &str = "cf-subdomain";
 
 #[derive(Debug, Clone)]
 pub struct SetupInfo {
     pub worker_url: String,
     pub auth_token: String,
+}
+
+/// Non-secret Cloudflare facts worth remembering so later operations can skip
+/// account enumeration.
+///
+/// These are deliberately the *only* Cloudflare values that persist. The OAuth
+/// access token is not among them and must never be: the AUTH_TOKEN unlocks one
+/// brain, whereas a Cloudflare token carrying `workers:write` + `d1:write` +
+/// `vectorize:write` unlocks the whole account. Storing it would turn a stolen
+/// laptop from "someone reads my notes" into "someone controls my Cloudflare".
+/// The user signs in per operation instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // read by tests and by #248; written by discover_brains today
+pub struct CfHints {
+    pub account_id: String,
+    pub subdomain: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,9 +104,33 @@ pub fn load_setup() -> Option<SetupInfo> {
     })
 }
 
+/// Remembers which account and workers.dev subdomain the brain lives under.
+///
+/// Stored separately from [`save_setup`] and read separately, so a missing or
+/// unreadable hint can never make a connected brain look unconfigured — see
+/// [`load_setup`], whose two keys remain the only definition of "set up".
+pub fn save_cf_hints(account_id: &str, subdomain: &str) -> Result<(), StoreError> {
+    backend::set(KEY_CF_ACCOUNT_ID, account_id)?;
+    backend::set(KEY_CF_SUBDOMAIN, subdomain)?;
+    Ok(())
+}
+
+/// The read half of [`save_cf_hints`]. Exercised by the tests here; the
+/// operations that will consume it — skipping account enumeration on a repeat
+/// Cloudflare action — land with #248.
+#[allow(dead_code)]
+pub fn load_cf_hints() -> Option<CfHints> {
+    Some(CfHints {
+        account_id: backend::get(KEY_CF_ACCOUNT_ID)?,
+        subdomain: backend::get(KEY_CF_SUBDOMAIN)?,
+    })
+}
+
 pub fn clear_setup() {
     backend::delete(KEY_WORKER_URL);
     backend::delete(KEY_AUTH_TOKEN);
+    backend::delete(KEY_CF_ACCOUNT_ID);
+    backend::delete(KEY_CF_SUBDOMAIN);
 }
 
 #[cfg(test)]
@@ -113,5 +155,54 @@ mod tests {
         backend::set(super::KEY_WORKER_URL, "https://x.workers.dev").unwrap();
         assert!(load_setup().is_none(), "URL without token must not count as set up");
         clear_setup();
+
+        // ── Cloudflare hints ────────────────────────────────────────────────
+        // In the same test, not a second one: the backing map is process-global,
+        // so two tests mutating it race (a concurrent clear_setup() wipes the
+        // other's state mid-assertion).
+        assert!(load_cf_hints().is_none());
+        save_cf_hints("acct-123", "demo").unwrap();
+        assert_eq!(
+            load_cf_hints(),
+            Some(CfHints { account_id: "acct-123".into(), subdomain: "demo".into() })
+        );
+
+        // Hints alone must never read as a completed setup, or the app would boot
+        // into wrapper mode with no brain to talk to.
+        assert!(load_setup().is_none(), "hints are not credentials");
+
+        // And a brain connected without ever signing in to Cloudflare has no
+        // hints, which must not stop it being set up.
+        clear_setup();
+        save_setup("https://b.workers.dev", "hunter2hunter2").unwrap();
+        assert!(load_setup().is_some());
+        assert!(load_cf_hints().is_none());
+
+        clear_setup();
+        assert!(load_cf_hints().is_none(), "disconnect must clear hints too");
     }
+
+    /// The Cloudflare OAuth token is not persisted anywhere.
+    ///
+    /// Pins the complete set of keys rather than pattern-matching their names: a
+    /// future `KEY_CF_TOKEN` or `KEY_BEARER` would slip past a substring check,
+    /// but cannot slip past an exact list. Adding a key here is then a deliberate
+    /// act that forces a second look at what is being stored.
+    #[test]
+    fn the_stored_key_set_is_exactly_these_four() {
+        let src = include_str!("secure_store.rs");
+        let keys: Vec<&str> = src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("const KEY_"))
+            .filter_map(|l| l.split('"').nth(1))
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["worker-url", "auth-token", "cf-account-id", "cf-subdomain"],
+            "secure_store gained or lost a key. A Cloudflare access or refresh \
+             token must never be one of them: the AUTH_TOKEN unlocks one brain, \
+             a Cloudflare token unlocks the whole account."
+        );
+    }
+
 }

@@ -75,6 +75,23 @@ export type Messages = {
     passwordPlaceholder: string;
     connect: string;
     footnote: string;
+    chooseLede: string;
+    signInButton: string;
+    signInHint: string;
+    signInFootnote: string;
+    manualButton: string;
+    accountPickerTitle: string;
+    accountPickerLede: string;
+    searchingTitle: string;
+    searchingLede: string;
+    searchingStep: string;
+    pickTitleOne: string;
+    pickTitleMany: string;
+    pickLedeOne: string;
+    pickLedeMany: string;
+    noneFound: string;
+    unlockTitle: string;
+    unlockLede: string;
   };
   password: {
     title: string;
