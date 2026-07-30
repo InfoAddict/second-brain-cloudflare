@@ -7,6 +7,7 @@ const ROOT = resolve(import.meta.dirname, "../..");
 
 const DASHBOARD_SCRIPTS = [
   "public/utils.js",
+  "public/credits.js",
   "public/js/state.js",
   "public/js/api.js",
   "public/js/theme.js",
@@ -70,7 +71,7 @@ function makeFakeDocument() {
     documentElement: { setAttribute() {}, getAttribute: () => null },
     querySelector: () => el(),
     querySelectorAll: () => [],
-    getElementById: () => el(),
+    getElementById: (_id?: string) => el(),
     createElement: () => el(),
     body: { style: {}, appendChild() {} },
   };
@@ -109,5 +110,27 @@ describe("dashboard modules", () => {
     for (const name of requiredGlobals) {
       expect(typeof sandbox[name], `${name} should be a function`).toBe("function");
     }
+  });
+
+  it("renderAboutCredits populates #about-credits without throwing", () => {
+    const creditsRoot = {
+      innerHTML: "",
+    };
+    const sandbox: Record<string, unknown> = {
+      document: {
+        ...makeFakeDocument(),
+        getElementById: (id?: string) => (id === "about-credits" ? creditsRoot : makeFakeDocument().getElementById(id)),
+      },
+      module: undefined,
+      exports: undefined,
+    };
+    sandbox.window = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/credits.js"), "utf8"), sandbox);
+    expect(typeof sandbox.renderAboutCredits).toBe("function");
+    (sandbox.renderAboutCredits as () => void)();
+    expect(creditsRoot.innerHTML).toMatch(/Created by/);
+    expect(creditsRoot.innerHTML).toMatch(/Maintainers/);
+    expect(creditsRoot.innerHTML).toMatch(/Rahil Pirani/);
   });
 });
