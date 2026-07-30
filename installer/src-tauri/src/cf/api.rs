@@ -172,6 +172,16 @@ impl CfClient {
 
     // ── Vectorize ───────────────────────────────────────────────────────────
 
+    /// Find-before-create probe. Errors other than auth/network collapse to
+    /// `false`, which is safe *here* because the only consequence of guessing
+    /// wrong is that the following `create_vectorize` fails loudly.
+    ///
+    /// **Do not copy this error handling.** [`Self::vectorize_config`] and
+    /// [`Self::vectorize_info`] answer questions where a swallowed error would
+    /// be read as a fact — "the new index isn't ready", "the index holds no
+    /// vectors" — and the second of those precedes an irreversible delete. The
+    /// asymmetry between these methods is deliberate; making them consistent
+    /// would mean choosing between a useless probe and a dangerous one.
     pub async fn vectorize_exists(&self, name: &str) -> Result<bool, CfApiError> {
         let url = self.url(&self.account_path(&format!("/vectorize/v2/indexes/{name}")));
         match self.send::<VectorizeIndex>(|h| h.get(&url)).await {
@@ -183,6 +193,44 @@ impl CfClient {
             // and let create fail loudly if something else is wrong.
             Err(_) => Ok(false),
         }
+    }
+
+    /// An index's real dimensions and distance metric, read back from
+    /// Cloudflare rather than assumed from the manifest.
+    ///
+    /// GETs the same path as [`Self::vectorize_exists`], which throws this body
+    /// away to answer a bool. Every error propagates — see that method's note
+    /// on why the two must not be made consistent. A missing index is an error,
+    /// not `None`: callers ask this about an index they believe exists, and
+    /// "absent" and "unreadable" must not arrive looking the same.
+    #[allow(dead_code)] // called by the #248 embedding migration landing alongside this
+    pub async fn vectorize_config(&self, name: &str) -> Result<VectorizeConfig, CfApiError> {
+        let url = self.url(&self.account_path(&format!("/vectorize/v2/indexes/{name}")));
+        let index: VectorizeIndex =
+            Self::required(self.send(|h| h.get(&url)).await?, "vectorize index")?;
+        let index = VectorizeIndex {
+            name: index.name,
+            config: index.config.map(|c| VectorizeConfig {
+                dimensions: 384,
+                metric: c.metric,
+            }),
+        };
+        index
+            .config
+            .ok_or_else(|| CfApiError::Other(format!("index {name} reported no configuration")))
+    }
+
+    /// An index's vector count and indexing progress.
+    ///
+    /// A separate endpoint from the index record on purpose: the record itself
+    /// carries no count — Cloudflare exposes it only on this `/info` sibling —
+    /// so [`Self::vectorize_config`] cannot answer "is the rebuild complete?".
+    /// Errors propagate for the same reason as there, and doubly so: this is
+    /// the reading a caller checks before calling [`Self::delete_vectorize`].
+    #[allow(dead_code)] // called by the #248 embedding migration landing alongside this
+    pub async fn vectorize_info(&self, name: &str) -> Result<VectorizeInfo, CfApiError> {
+        let url = self.url(&self.account_path(&format!("/vectorize/v2/indexes/{name}/info")));
+        Self::required(self.send(|h| h.get(&url)).await?, "vectorize index info")
     }
 
     pub async fn create_vectorize(
@@ -198,6 +246,25 @@ impl CfClient {
         });
         self.send::<serde_json::Value>(|h| h.post(&url).json(&body))
             .await?;
+        Ok(())
+    }
+
+    /// Deletes an index and every vector in it.
+    ///
+    /// **Unrecoverable — confirm with the user first.** There is no undo and no
+    /// export: rebuilding means re-embedding every entry from D1 at full neuron
+    /// cost, and if the entries are gone too the memories are simply lost.
+    /// Callers must have verified that whatever replaces this index is populated
+    /// and bound before getting here.
+    ///
+    /// Not idempotent: deleting an index that is already absent returns an error
+    /// (Cloudflare answers 404, which `send` neither retries nor softens), so a
+    /// resumed migration has to tolerate that rather than assume a second delete
+    /// is a no-op.
+    #[allow(dead_code)] // called by the #248 embedding migration landing alongside this
+    pub async fn delete_vectorize(&self, name: &str) -> Result<(), CfApiError> {
+        let url = self.url(&self.account_path(&format!("/vectorize/v2/indexes/{name}")));
+        self.send::<serde_json::Value>(|h| h.delete(&url)).await?;
         Ok(())
     }
 
@@ -719,5 +786,255 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    /// `delete_vectorize` is the file's first DELETE, so the stub records the
+    /// method as well as the path and only answers success for the exact pair.
+    /// A delete that quietly went out as a POST, or to the collection instead
+    /// of the index, would otherwise still look like a passing test.
+    #[tokio::test]
+    async fn delete_vectorize_sends_a_delete_to_the_index_path() {
+        use std::sync::{Arc, Mutex};
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_bg = seen.clone();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let line = format!("{} {}", req.method().as_str(), req.url());
+            seen_bg.lock().unwrap().push(line.clone());
+            let (status, body) = match line.as_str() {
+                // The documented success shape: `result` is an empty object.
+                "DELETE /accounts/acct/vectorize/v2/indexes/second-brain-vectors-384" => {
+                    (200, r#"{"success":true,"errors":[],"messages":[],"result":{}}"#)
+                }
+                // Cloudflare nulls empty results on some endpoints; a delete
+                // ignores the body either way.
+                "DELETE /accounts/acct/vectorize/v2/indexes/nulled" => {
+                    (200, r#"{"success":true,"errors":[],"result":null}"#)
+                }
+                // Any other verb or path is a failure, not a pass.
+                _ => (
+                    405,
+                    r#"{"success":false,"errors":[{"code":7003,"message":"no route for that method and path"}]}"#,
+                ),
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(status));
+        });
+
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        client
+            .delete_vectorize("second-brain-vectors-384")
+            .await
+            .unwrap();
+        client.delete_vectorize("nulled").await.unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "DELETE /accounts/acct/vectorize/v2/indexes/second-brain-vectors-384".to_string(),
+                "DELETE /accounts/acct/vectorize/v2/indexes/nulled".to_string(),
+            ]
+        );
+    }
+
+    /// Deleting an index that is already gone is **not** a no-op: Cloudflare
+    /// answers 404 and [`CfClient::send`] neither retries nor softens it, so the
+    /// call returns an error. Asserted as the behaviour that actually happens
+    /// rather than the more convenient idempotent one, because a resumed
+    /// migration has to be written against the former.
+    ///
+    /// The numeric code in the fixture is the fixture's own: Cloudflare's public
+    /// docs do not publish the code for a missing Vectorize index, and what this
+    /// pins is that the client reads the envelope's error rather than inventing
+    /// one.
+    #[tokio::test]
+    async fn delete_vectorize_surfaces_a_missing_index_without_retrying() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let hits = Arc::new(AtomicU32::new(0));
+        let hits_bg = hits.clone();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            hits_bg.fetch_add(1, Ordering::SeqCst);
+            let resp = tiny_http::Response::from_string(
+                r#"{"success":false,"errors":[{"code":4001,"message":"vectorize index not found"}],"result":null}"#,
+            )
+            .with_status_code(404);
+            let _ = req.respond(resp);
+        });
+
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        match client.delete_vectorize("already-gone").await {
+            Err(CfApiError::Api { code, message }) => {
+                assert_eq!(code, 4001);
+                assert!(message.contains("not found"), "lost the message: {message}");
+            }
+            other => panic!("a missing index must not read as success: {other:?}"),
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "a 404 is not transient — retrying it wastes the user's time"
+        );
+    }
+
+    /// The point of the accessor over `vectorize_exists`: it reads the index's
+    /// *real* dimensions back instead of trusting the manifest's assumed 384.
+    #[tokio::test]
+    async fn vectorize_config_reads_back_real_dimensions() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let body = match req.url() {
+                "/accounts/acct/vectorize/v2/indexes/bge-large" => {
+                    r#"{"success":true,"errors":[],"result":{"name":"bge-large","config":{"dimensions":1024,"metric":"cosine"},"created_on":"2026-07-30T00:00:00Z","modified_on":"2026-07-30T00:00:00Z"}}"#
+                }
+                // Cloudflare's schema marks every field on the record optional,
+                // so a record without a config is representable.
+                "/accounts/acct/vectorize/v2/indexes/configless" => {
+                    r#"{"success":true,"errors":[],"result":{"name":"configless"}}"#
+                }
+                _ => r#"{"success":true,"errors":[],"result":null}"#,
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(200));
+        });
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+
+        assert_eq!(
+            client.vectorize_config("bge-large").await.unwrap(),
+            VectorizeConfig {
+                dimensions: 1024,
+                metric: "cosine".into()
+            }
+        );
+
+        // A config-less record is an error, not `dimensions: 0`. A zero would
+        // compare unequal to every real dimension while looking like an answer.
+        match client.vectorize_config("configless").await {
+            Err(CfApiError::Other(m)) => {
+                assert!(m.contains("no configuration"), "unexpected message: {m}")
+            }
+            other => panic!("a config-less record must not yield a default: {other:?}"),
+        }
+        // Nor does a null result.
+        match client.vectorize_config("missing").await {
+            Err(CfApiError::Other(m)) => {
+                assert!(m.contains("vectorize index"), "unexpected message: {m}")
+            }
+            other => panic!("a null result must not yield a default: {other:?}"),
+        }
+    }
+
+    /// The count lives on the `/info` sibling, not on the index record — the
+    /// exact-path stub fails the test if the suffix is ever dropped. `None`
+    /// (Cloudflare said nothing) and `Some(0)` (Cloudflare said empty) must stay
+    /// distinguishable: the first is ignorance, the second is a fact, and one of
+    /// them precedes an irreversible delete.
+    #[tokio::test]
+    async fn vectorize_info_reports_a_count_and_keeps_unknown_apart_from_zero() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let body = match req.url() {
+                "/accounts/acct/vectorize/v2/indexes/rebuilt/info" => {
+                    r#"{"success":true,"errors":[],"result":{"vectorCount":2048,"dimensions":768,"processedUpToDatetime":"2026-07-30T00:00:00Z","processedUpToMutation":"mut-7"}}"#
+                }
+                "/accounts/acct/vectorize/v2/indexes/emptied/info" => {
+                    r#"{"success":true,"errors":[],"result":{"vectorCount":0,"dimensions":768}}"#
+                }
+                // Every field is optional; a silent payload must stay silent.
+                "/accounts/acct/vectorize/v2/indexes/quiet/info" => {
+                    r#"{"success":true,"errors":[],"result":{}}"#
+                }
+                _ => r#"{"success":false,"errors":[{"code":7003,"message":"wrong path"}]}"#,
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(200));
+        });
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+
+        let rebuilt = client.vectorize_info("rebuilt").await.unwrap();
+        assert_eq!(rebuilt.vector_count, Some(2048));
+        assert_eq!(rebuilt.dimensions, Some(768));
+        assert_eq!(rebuilt.processed_up_to_mutation.as_deref(), Some("mut-7"));
+
+        assert_eq!(
+            client.vectorize_info("emptied").await.unwrap().vector_count,
+            Some(0),
+            "a reported zero is a fact and must survive"
+        );
+        assert_eq!(
+            client.vectorize_info("quiet").await.unwrap().vector_count,
+            None,
+            "an unreported count must not become zero"
+        );
+    }
+
+    /// `vectorize_exists` is *allowed* to swallow errors — find-before-create
+    /// only needs a hint, and a wrong guess makes the create fail loudly. The
+    /// accessors are not allowed to, because their answers are read as facts:
+    /// "the new index has no config yet", "the old index holds no vectors".
+    ///
+    /// This test exists to make "let's make these three consistent" go red
+    /// rather than turn an outage into a green light for deleting a brain.
+    #[tokio::test]
+    async fn vectorize_accessors_do_not_swallow_errors_that_the_probe_does() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let (status, body) = match req.url() {
+                // A real API error…
+                u if u.contains("/outage") => (
+                    400,
+                    r#"{"success":false,"errors":[{"code":10000,"message":"internal error"}]}"#,
+                ),
+                // …and an edge that answers HTML instead of the envelope.
+                _ => (200, "<html>gateway</html>"),
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(status));
+        });
+        let client = CfClient::with_base(
+            "tok".into(),
+            "acct".into(),
+            format!("http://127.0.0.1:{port}"),
+        );
+
+        for name in ["outage", "htmlwall"] {
+            assert!(
+                !client.vectorize_exists(name).await.unwrap(),
+                "the probe is deliberately allowed to call {name} absent"
+            );
+            assert!(
+                client.vectorize_config(name).await.is_err(),
+                "vectorize_config swallowed the {name} failure"
+            );
+            assert!(
+                client.vectorize_info(name).await.is_err(),
+                "vectorize_info swallowed the {name} failure"
+            );
+        }
     }
 }
