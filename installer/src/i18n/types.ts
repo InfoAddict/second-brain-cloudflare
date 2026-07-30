@@ -178,6 +178,8 @@ export type Messages = {
     noneFound: string;
     unlockTitle: string;
     unlockLede: string;
+    /** Door B into the password change (#235) — a ghost link on both screens. */
+    lostPassword: string;
   };
   password: {
     title: string;
@@ -194,6 +196,108 @@ export type Messages = {
     breachHint: string;
     mismatch: string;
     notice: string;
+    footnote: string;
+  };
+  /**
+   * Changing the password on an existing Second Brain (#235). Two doors reach
+   * the same sequence: a voluntary change from the Connection pane, and "I
+   * don't have my password" from the connect screens.
+   *
+   * Every failure state in here shows the new password, because once the
+   * change lands nothing can read it back — not the app, not Cloudflare. A
+   * screen that reports a failure without the password on it is how someone
+   * loses a brain.
+   */
+  changePassword: {
+    // Door A intro
+    title: string;
+    lede: string;
+    notice: string;
+    signInButton: string;
+    signInFootnote: string;
+    waitingLede: string;
+    // Blocked by a rebuild, rendered inside the Connection pane's card
+    blockedTitle: string;
+    blockedBody: string;
+    /** An abandoned rebuild blocks this forever without a way out on screen. */
+    blockedEscape: string;
+    blockedButton: string;
+    // Door B intro — one screen, two variants
+    lostTitle: string;
+    lostLede: string;
+    lostBodySignedIn: string;
+    lostBodySignIn: string;
+    lostNotice: string;
+    lostContinueButton: string;
+    lostSignInButton: string;
+    // Finding the brain again in lost mode
+    pickBrainLedeOne: string;
+    pickBrainLedeMany: string;
+    addressTitle: string;
+    addressLede: string;
+    /** Same screen, reached deliberately rather than because nothing was found. */
+    addressLedeManual: string;
+    // Choosing the new one
+    pickTitle: string;
+    pickLede: string;
+    generatedNote: string;
+    pickNotice: string;
+    // The save gate
+    saveTitle: string;
+    saveLede: string;
+    /** The label on the password card, shared with every failure screen. */
+    passwordLabel: string;
+    saveAdvice: string;
+    saveConfirm: string;
+    saveBack: string;
+    // Progress
+    progressTitle: string;
+    progressLede: string;
+    stepSend: string;
+    stepConfirm: string;
+    stepLocal: string;
+    // Done
+    doneTitle: string;
+    doneTitleLost: string;
+    doneLede: string;
+    doneNeedsHead: string;
+    doneNeeds1: string;
+    doneNeeds2: string;
+    doneNeeds3: string;
+    doneKeptHead: string;
+    doneKept: string;
+    /** Conditional, not a warning: most changes are hygiene, not a leak. */
+    doneLeak: string;
+    doneDisconnectButton: string;
+    doneShow: string;
+    doneHide: string;
+    // Nothing was changed
+    failNotSentTitle: string;
+    failNotSentBody: string;
+    /** Labelled by what it actually is here: a password that is not in use. */
+    failNotSentLabel: string;
+    failDetail: string;
+    // It may already be live — never says "failed"
+    failUnsureTitle: string;
+    failUnsureBody: string;
+    failUnsureRetry: string;
+    failUnsureFootnote: string;
+    failUnsureLeave: string;
+    recheckButton: string;
+    recheckConfirmed: string;
+    recheckUnconfirmed: string;
+    // Changed, but not saved on this computer
+    failLocalTitle: string;
+    failLocalBody: string;
+    failLocalCli: string;
+  };
+  /** The other machines, holding a password that was replaced elsewhere (#235 §5). */
+  passwordChangedElsewhere: {
+    title: string;
+    lede: string;
+    body: string;
+    findAgain: string;
+    findAgainHint: string;
     footnote: string;
   };
   cloudflare: {
@@ -247,6 +351,29 @@ export type Messages = {
     addressDesc: string;
     mcpLabel: string;
     mcpDesc: string;
+    /**
+     * The password card in the Connection pane. It has no value and no Copy
+     * button, unlike the two cards above it, so the description explains the
+     * absence rather than leaving it to be inferred.
+     */
+    passwordLabel: string;
+    passwordDesc: string;
+    passwordButton: string;
+    /**
+     * Disconnecting every AI tool (#235 §6). Deliberately not part of changing
+     * the password: tools that went through the connection link hold their own
+     * access and never used the password, so a rotation does not reach them.
+     */
+    disconnectLabel: string;
+    disconnectDesc: string;
+    disconnectButton: string;
+    disconnectConfirmDesc: string;
+    disconnectConfirm: string;
+    disconnectKeep: string;
+    disconnectWorking: string;
+    disconnectDone: string;
+    disconnectDoneNone: string;
+    disconnectFailed: string;
     connectToolsTitle: string;
     connectToolsDesc: string;
     integrationsTitle: string;

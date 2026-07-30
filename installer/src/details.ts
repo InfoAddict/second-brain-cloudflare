@@ -43,6 +43,11 @@ async function boot() {
   const update = await invoke<{ availableVersion: string } | null>(
     "worker_update_available",
   ).catch(() => null);
+  // A rebuild in flight blocks a password change (#235 §4). If the check itself
+  // can't run — offline, brain unreachable — the button stays enabled: a
+  // network blip must not present as "you may not change your password", and
+  // the command re-checks before it does anything anyway.
+  const rotationBlocked = await invoke<boolean>("rotation_blocked").catch(() => false);
 
   // One pane at a time, chosen from a rail. Everything used to be stacked in a
   // single column, so most of it was below the fold and the only way to find
@@ -60,7 +65,12 @@ async function boot() {
         h("h2", { class: "pane-title" }, [t("details.navConnection")]),
         h("p", { class: "pane-desc" }, [t("details.lede")]),
         ...detailCards(details),
+        // After both URL cards, never between them: "Copy both" copies exactly
+        // those two values, so anything inserted between them makes its label
+        // wrong.
+        passwordCard(rotationBlocked),
         h("div", { class: "actions-spread" }, [copyBothButton(details), emailButton(details)]),
+        disconnectSection(),
       ];
     }
     if (id === "tools") {
@@ -125,6 +135,104 @@ function updateCard(availableVersion: string): HTMLElement {
     h("div", { class: "url-desc" }, [t("details.updateDesc")]),
     button,
   ]);
+}
+
+/// The one card here with no value and no Copy button. That absence is the
+/// first thing a reader notices, so the description explains it rather than
+/// leaving it to be inferred: nothing can read the password back, so there is
+/// nothing to show.
+function passwordCard(blocked: boolean): HTMLElement {
+  const card = h("div", { class: "card url-card" }, [
+    h("div", { class: "url-label" }, [t("details.passwordLabel")]),
+    h("div", { class: "url-desc" }, [t("details.passwordDesc")]),
+  ]);
+
+  if (!blocked) {
+    const change = h("button", { class: "btn-secondary" }, [t("details.passwordButton")]);
+    change.addEventListener("click", () => void invoke("begin_password_change"));
+    card.append(h("div", { class: "row-actions", style: "justify-content:flex-end" }, [change]));
+    return card;
+  }
+
+  // In place of the button, inside the same card. Opening a window that
+  // immediately dead-ends is worse than never enabling the door, and the escape
+  // route has to be visible next to the thing it unblocks — an abandoned
+  // rebuild would otherwise block this forever with no on-screen reason.
+  const settings = h("button", { class: "btn-secondary" }, [t("changePassword.blockedButton")]);
+  settings.addEventListener("click", () => void invoke("open_settings_window"));
+  card.append(
+    h("div", { class: "notice" }, [
+      "⚠️",
+      h("div", {}, [
+        h("div", { class: "url-label" }, [t("changePassword.blockedTitle")]),
+        h("div", {}, [t("changePassword.blockedBody")]),
+        h("div", { style: "margin-top:8px" }, [t("changePassword.blockedEscape")]),
+      ]),
+    ]),
+    h("div", { class: "row-actions", style: "justify-content:flex-end" }, [settings]),
+  );
+  return card;
+}
+
+/// Deliberately not part of changing the password (#235 §6). Tools connected
+/// with the connection link hold their own access and never used the password,
+/// so a change does not reach them — and a change made after a leak would
+/// otherwise leave them open. Confirmation names what will need reconnecting.
+function disconnectSection(): HTMLElement {
+  const container = h("div", { class: "logout-section" });
+
+  // `note` replaces the description with what just happened, so a partial
+  // failure keeps the button it needs to be retried with.
+  const render = (confirming: boolean, note?: string) => {
+    const label = h("div", { class: "url-label" }, [t("details.disconnectLabel")]);
+    if (!confirming) {
+      const start = h("button", { class: "btn-danger" }, [t("details.disconnectButton")]);
+      start.addEventListener("click", () => render(true));
+      container.replaceChildren(
+        label,
+        h("div", { class: "url-desc" }, [note ?? t("details.disconnectDesc")]),
+        h("div", { class: "row-actions" }, [start]),
+      );
+      return;
+    }
+
+    const confirm = h("button", { class: "btn-danger" }, [t("details.disconnectConfirm")]);
+    const keep = h("button", { class: "btn-ghost" }, [t("details.disconnectKeep")]);
+    const status = h("div", { class: "url-desc" }, [t("details.disconnectConfirmDesc")]);
+    keep.addEventListener("click", () => render(false));
+    confirm.addEventListener("click", async () => {
+      confirm.disabled = true;
+      keep.disabled = true;
+      confirm.textContent = t("details.disconnectWorking");
+      try {
+        const result = await invoke<{ ok: boolean; revoked: number; failed: number }>(
+          "disconnect_ai_tools",
+        );
+        // `failed` is reported rather than swallowed: a tool that kept its
+        // access is the whole thing this control exists to close, so that case
+        // goes back to a state the user can run again.
+        if (!result.ok) {
+          render(false, t("details.disconnectFailed"));
+          return;
+        }
+        container.replaceChildren(
+          label,
+          h("div", { class: "url-desc" }, [
+            result.revoked === 0 ? t("details.disconnectDoneNone") : t("details.disconnectDone"),
+          ]),
+        );
+      } catch (e) {
+        status.textContent = String(e);
+        confirm.disabled = false;
+        keep.disabled = false;
+        confirm.textContent = t("details.disconnectConfirm");
+      }
+    });
+    container.replaceChildren(label, status, h("div", { class: "row-actions" }, [confirm, keep]));
+  };
+
+  render(false);
+  return container;
 }
 
 function logoutSection(): HTMLElement {

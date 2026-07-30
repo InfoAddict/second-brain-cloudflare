@@ -344,6 +344,7 @@ export const it: Messages = {
     unlockLede:
       "È la password che hai scelto quando hai configurato il tuo Second Brain " +
       "la prima volta. Nulla verrà modificato o resettato.",
+    lostPassword: "Non ho la mia password",
   },
   password: {
     title: "Crea la tua password",
@@ -369,6 +370,165 @@ export const it: Messages = {
     footnote:
       "Verifichiamo le password contro violazioni note senza inviare la password: " +
       "solo un frammento di impronta lascia questo computer.",
+  },
+  changePassword: {
+    title: "Cambia la tua password",
+    lede:
+      "Ne scegli una nuova, la salvi, e sostituisce la vecchia ovunque. " +
+      "I tuoi ricordi, il tuo indirizzo e gli strumenti AI collegati restano.",
+    notice:
+      "La vecchia password smette di funzionare appena questa operazione " +
+      "finisce. Gli altri tuoi computer chiederanno quella nuova alla prossima " +
+      "apertura.",
+    signInButton: "Accedi e continua",
+    signInFootnote:
+      "Il tuo Second Brain si trova nel tuo spazio su Cloudflare, quindi " +
+      "accediamo lì per cambiarla. Non vediamo mai la tua password Cloudflare.",
+    waitingLede:
+      "Completa l'accesso a Cloudflare nel browser aperto, poi torna qui.",
+    blockedTitle: "La password non può essere cambiata adesso",
+    blockedBody:
+      "Il tuo Second Brain sta ricostruendo il modo in cui legge i tuoi ricordi. " +
+      "Cambiare la password nel mezzo può fermare la ricostruzione a metà e far " +
+      "sembrare un problema di password una ricostruzione fallita, quindi si " +
+      "aspetta che finisca.",
+    blockedEscape:
+      "Se non c'è nessuna ricostruzione in corso, significa che ne è rimasta una " +
+      "a metà. Apri le Impostazioni avanzate per continuarla o ricominciarla da " +
+      "capo: in entrambi i casi questo blocco sparisce.",
+    blockedButton: "Apri le Impostazioni avanzate",
+    lostTitle: "I tuoi ricordi sono al sicuro",
+    lostLede:
+      "Non hai perso nulla. La tua password non può essere riletta — né da " +
+      "questa app né da Cloudflare — ma può essere sostituita, ed è così che " +
+      "rientri.",
+    lostBodySignedIn:
+      "Hai già effettuato l'accesso allo spazio Cloudflare in cui si trova il tuo " +
+      "Second Brain, ed è quello a decidere chi può entrare. Puoi quindi " +
+      "impostare subito una nuova password. Tutto ciò che hai salvato resta " +
+      "esattamente dov'è.",
+    lostBodySignIn:
+      "Il tuo Second Brain si trova nel tuo spazio su Cloudflare, ed è quello a " +
+      "decidere chi può entrare. Accedi lì e potrai impostare una nuova password. " +
+      "Tutto ciò che hai salvato resta esattamente dov'è.",
+    lostNotice:
+      "Tutto ciò che ha già la vecchia password chiederà quella nuova: gli altri " +
+      "tuoi computer, l'estensione del browser, il plugin di Obsidian.",
+    lostContinueButton: "Scegli una nuova password",
+    lostSignInButton: "Accedi con Cloudflare",
+    pickBrainLedeOne:
+      "Imposta una nuova password su questo, oppure torna indietro e scegline un altro.",
+    pickBrainLedeMany: "Scegli quello di cui hai perso la password.",
+    addressTitle: "Qual è l'indirizzo del tuo Second Brain?",
+    addressLede:
+      "Non l'abbiamo trovato in quello spazio. Inserisci l'indirizzo e " +
+      "imposteremo una nuova password: non serve quella attuale.",
+    addressLedeManual:
+      "Inserisci l'indirizzo del Second Brain a cui vuoi dare una nuova " +
+      "password: non serve quella attuale.",
+    pickTitle: "Scegli una nuova password",
+    pickLede:
+      "Questa sostituisce la vecchia. Dopo non potrà più essere riletta da " +
+      "nessuno, quindi la copia che conservi è l'unica.",
+    generatedNote:
+      "Ne abbiamo generata una robusta per te. Scrivici sopra se preferisci " +
+      "sceglierne una tua.",
+    pickNotice:
+      "La vecchia password smette di funzionare nel momento in cui questa entra in vigore.",
+    saveTitle: "Salvala da qualche parte",
+    saveLede:
+      "Una volta impostata, nessuno può più rileggerla: né questa app, né " +
+      "Cloudflare, né noi. Resta disponibile in questa finestra finché non la " +
+      "chiudi; dopo, l'unica copia è quella che hai conservato.",
+    passwordLabel: "La tua nuova password",
+    saveAdvice:
+      "Un gestore password è il posto giusto. Se la tieni altrove, tienila dove " +
+      "terresti la chiave di tutto ciò che hai scritto.",
+    saveConfirm: "L'ho salvata — cambia la password",
+    saveBack: "Scegline un'altra",
+    progressTitle: "Cambio della password",
+    progressLede: "Ci vogliono fino a un paio di minuti. Lascia aperta questa finestra.",
+    stepSend: "Impostazione della nuova password",
+    stepConfirm: "Attesa che il tuo Second Brain la accetti",
+    stepLocal: "Salvataggio su questo computer",
+    doneTitle: "La tua password è stata cambiata",
+    doneTitleLost: "Sei di nuovo dentro",
+    doneLede:
+      "Questo computer sta già usando la nuova password. I tuoi ricordi, il tuo " +
+      "indirizzo e tutto ciò che hai collegato non sono cambiati.",
+    doneNeedsHead: "Che cosa chiederà la nuova password",
+    doneNeeds1: "Gli altri tuoi computer, la prossima volta che ci apri Second Brain.",
+    doneNeeds2:
+      "L'estensione del browser, il plugin di Obsidian e il comando brain nel " +
+      "terminale di qualsiasi altro computer.",
+    doneNeeds3: "Le schede del browser in cui hai aperto la dashboard direttamente.",
+    doneKeptHead: "Che cosa resta collegato",
+    doneKept:
+      "Gli strumenti AI che hai collegato con il tuo link di connessione restano " +
+      "collegati e continuano a funzionare. Quando li hai collegati, ognuno ha " +
+      "ricevuto un accesso proprio: non hanno mai usato la tua password, quindi " +
+      "cambiarla non li tocca.",
+    doneLeak:
+      "Se hai cambiato la password perché qualcun altro potrebbe averla vista, " +
+      "quelle connessioni sono l'unica cosa che questa operazione non ha chiuso. " +
+      "Scollegarle fa sì che ogni strumento chieda di essere collegato di nuovo.",
+    doneDisconnectButton: "Scollega gli strumenti AI…",
+    doneShow: "Mostra la mia nuova password",
+    doneHide: "Nascondila",
+    failNotSentTitle: "Non è cambiato nulla",
+    failNotSentBody:
+      "La nuova password non è mai arrivata al tuo Second Brain, quindi la " +
+      "vecchia funziona ancora e tutto è rimasto com'era. Riprovare è sicuro.",
+    failNotSentLabel: "La password che hai scelto — non in uso",
+    failDetail: "Cosa è andato storto: {detail}",
+    failUnsureTitle: "La tua nuova password potrebbe essere già attiva",
+    failUnsureBody:
+      "La modifica è stata inviata al tuo Second Brain, ma non è arrivata " +
+      "conferma in tempo, quindi non possiamo dirti quale password sia in uso. " +
+      "Salva quella qui sotto prima di fare qualsiasi altra cosa: potrebbe essere " +
+      "quella che funziona adesso.",
+    failUnsureRetry:
+      "Riprova. Impostare la stessa password una seconda volta non cambia nulla " +
+      "se era già passata, e completa l'operazione se non lo era: in entrambi i " +
+      "casi saprai come stanno le cose.",
+    failUnsureFootnote:
+      "Questo computer non è ancora stato aggiornato, quindi potrebbe chiederti " +
+      "una password. Se succede, usa quella qui sopra.",
+    failUnsureLeave: "Lascia perdere per ora",
+    recheckButton: "Controlla di nuovo",
+    recheckConfirmed:
+      "Il tuo Second Brain risponde alla nuova password, quindi quella parte è " +
+      "fatta. Questo computer non l'ha ancora salvata: riprova per completare " +
+      "l'operazione, sul tuo Second Brain non cambierà nulla.",
+    recheckUnconfirmed:
+      "Il tuo Second Brain non risponde ancora alla nuova password. Forse serve " +
+      "ancora un momento, oppure la modifica non è arrivata: riprovare chiarisce " +
+      "la situazione in entrambi i casi.",
+    failLocalTitle: "La password è stata cambiata, ma non salvata su questo computer",
+    failLocalBody:
+      "Il tuo Second Brain sta usando la nuova password. Questo computer non è " +
+      "riuscito a memorizzarla, quindi te la chiederà: salvala ora, se non l'hai " +
+      "già fatto.",
+    failLocalCli:
+      "Il comando brain nel terminale usa ancora la vecchia password. Esegui " +
+      "brain setup per puntarlo a quella nuova.",
+  },
+  passwordChangedElsewhere: {
+    title: "La tua password è stata cambiata su un altro computer",
+    lede:
+      "Il tuo Second Brain ha una nuova password, quindi quella salvata su questo " +
+      "computer non lo apre più. Non è andato perso nulla e non è stato " +
+      "cancellato nulla: a questo computer serve solo quella nuova.",
+    body:
+      "La trovi dove l'hai salvata quando l'hai cambiata. È lo stesso Second " +
+      "Brain, allo stesso indirizzo.",
+    findAgain: "Ritrova il mio Second Brain",
+    findAgainHint:
+      "Accede a Cloudflare e lo cerca, nel caso tu stia collegando un Second " +
+      "Brain diverso.",
+    footnote:
+      "Non hai quella nuova — o non sei stato tu a cambiarla? Scegliendo una " +
+      "nuova password, la vecchia viene chiusa definitivamente.",
   },
   cloudflare: {
     title: "Collega il tuo account",
@@ -427,6 +587,32 @@ export const it: Messages = {
     addressDesc: "La dashboard web privata e dove collegi nuovi strumenti. Salvalo.",
     mcpLabel: "Link di connessione (per strumenti AI)",
     mcpDesc: "Incollalo in qualsiasi strumento AI che supporta i connettori.",
+    passwordLabel: "La tua password",
+    passwordDesc:
+      "È la chiave del tuo Second Brain. Qui non può essere mostrata: nessuno " +
+      "può rileggerla, nemmeno questa app. Se ne vuoi una diversa, puoi " +
+      "impostarla ora.",
+    passwordButton: "Cambia la password",
+    disconnectLabel: "Scollega i tuoi strumenti AI",
+    disconnectDesc:
+      "Ogni strumento AI che hai collegato con il tuo link di connessione ha " +
+      "ricevuto un accesso proprio, separato dalla tua password. Questa azione " +
+      "li chiude tutti insieme. I tuoi ricordi e la tua password non vengono " +
+      "toccati.",
+    disconnectButton: "Scollega gli strumenti AI…",
+    disconnectConfirmDesc:
+      "Ogni strumento AI che hai collegato con il tuo link di connessione — su " +
+      "questo computer e su qualsiasi altro — andrà collegato di nuovo, e ognuno " +
+      "ti chiederà la password quando lo farai.",
+    disconnectConfirm: "Sì, scollegali tutti",
+    disconnectKeep: "Lasciali collegati",
+    disconnectWorking: "Scollegamento…",
+    disconnectDone:
+      "Scollegati. Ogni strumento chiederà di essere collegato di nuovo alla prossima occasione.",
+    disconnectDoneNone: "Non c'era nulla di collegato da scollegare. Nulla è stato modificato.",
+    disconnectFailed:
+      "Non è stato possibile chiudere alcune connessioni. Quelle già chiuse " +
+      "restano chiuse, quindi riprovando si riprende solo da ciò che manca.",
     connectToolsTitle: "Collega i tuoi strumenti AI",
     connectToolsDesc:
       "Gli strumenti su questo computer si collegano con un clic. Per gli altri, " +
