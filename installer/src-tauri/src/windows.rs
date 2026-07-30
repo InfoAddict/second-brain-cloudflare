@@ -211,18 +211,32 @@ fn open_wrapper_window_impl(
         // The injected Connections button asks for a path the dashboard does not
         // route; turn that request into the native window and let the page stay
         // where it is.
+        // Runs inside the webview's navigation handler. On Windows that is a
+        // WebView2 NavigationStarting callback on the UI thread, and building a
+        // window from there has to pump the message loop, which re-enters and
+        // deadlocks — the app goes Not Responding with an unpainted window.
+        // macOS survives it because WKWebView dispatches its navigation
+        // delegate differently, which is why this only ever showed up on
+        // Windows.
+        //
+        // So cancel the navigation here and queue the window for the event
+        // loop, after this callback has returned.
         .on_navigation(move |target| {
-            match target.path() {
-                CONNECTIONS_PATH => {
-                    open_details_window(&nav_handle);
-                    false
+            let path = target.path().to_string();
+            let settings = match path.as_str() {
+                CONNECTIONS_PATH => false,
+                SETTINGS_PATH => true,
+                _ => return true,
+            };
+            let handle = nav_handle.clone();
+            let _ = nav_handle.run_on_main_thread(move || {
+                if settings {
+                    open_settings_window(&handle);
+                } else {
+                    open_details_window(&handle);
                 }
-                SETTINGS_PATH => {
-                    open_settings_window(&nav_handle);
-                    false
-                }
-                _ => true,
-            }
+            });
+            false
         })
         .build()?;
     Ok(())
@@ -268,4 +282,53 @@ pub fn open_settings_window(app: &AppHandle) {
         .min_inner_size(640.0, 560.0)
         .center()
         .build();
+}
+
+#[cfg(test)]
+mod tests {
+    /// Windows 11 report: the Connections button in the injected sidebar hung the
+    /// app ("Not Responding", unpainted window) while the same window opened fine
+    /// from the menu bar.
+    ///
+    /// The difference is dispatch context. on_navigation runs inside a WebView2
+    /// NavigationStarting callback on the UI thread, and building a window from
+    /// there pumps the message loop, re-enters, and deadlocks. The menu path is
+    /// dispatched from the event loop and is unaffected.
+    ///
+    /// Asserted on the source because the failure is a deadlock on a platform
+    /// this suite does not run a GUI on — there is no value to observe, only the
+    /// absence of a hang. What is checkable is that the callback queues the work
+    /// rather than doing it inline.
+    #[test]
+    fn navigation_handler_never_builds_a_window_inline() {
+        let src = include_str!("windows.rs");
+        let start = src.find(".on_navigation(").expect("on_navigation");
+        let rest = &src[start..];
+        let end = rest.find("\n        .build()").unwrap_or(rest.len()) + start;
+        let body = &src[start..end];
+
+        assert!(
+            body.contains("run_on_main_thread"),
+            "on_navigation must queue window creation on the event loop; building inline deadlocks WebView2 on Windows"
+        );
+        for direct in ["open_details_window(&nav_handle)", "open_settings_window(&nav_handle)"] {
+            assert!(
+                !body.contains(direct),
+                "on_navigation still calls {direct} inline, which is the deadlock"
+            );
+        }
+    }
+
+    /// Both injected sidebar buttons route through the same handler, so a fix
+    /// covering only Connections would leave Advanced Settings hanging.
+    #[test]
+    fn both_sentinel_paths_are_deferred() {
+        let src = include_str!("windows.rs");
+        let start = src.find(".on_navigation(").expect("on_navigation");
+        let rest = &src[start..];
+        let end = rest.find("\n        .build()").unwrap_or(rest.len()) + start;
+        let body = &src[start..end];
+        assert!(body.contains("CONNECTIONS_PATH"));
+        assert!(body.contains("SETTINGS_PATH"));
+    }
 }
