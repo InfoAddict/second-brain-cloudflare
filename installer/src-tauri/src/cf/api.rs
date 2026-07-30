@@ -342,6 +342,22 @@ impl CfClient {
 
     // ── workers.dev subdomain ───────────────────────────────────────────────
 
+    /// Every Worker script in the account, by deploy name.
+    ///
+    /// Used by brain discovery to build candidate workers.dev URLs. An account
+    /// with no Workers is a legitimate empty list, not an error — Cloudflare
+    /// returns `result: []`, and a null result is treated the same way.
+    pub async fn list_workers(&self) -> Result<Vec<String>, CfApiError> {
+        let url = self.url(&self.account_path("/workers/scripts"));
+        let res = self.send::<Vec<WorkerScript>>(|h| h.get(&url)).await?;
+        Ok(res
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.id)
+            .filter(|id| !id.is_empty())
+            .collect())
+    }
+
     pub async fn get_account_subdomain(&self) -> Result<Option<String>, CfApiError> {
         let url = self.url(&self.account_path("/workers/subdomain"));
         match self.send::<SubdomainResult>(|h| h.get(&url)).await {
@@ -575,6 +591,45 @@ mod tests {
         let res: Option<KvNamespace> = client.send(|h| h.get(&url)).await.unwrap();
         assert_eq!(res.unwrap().id, "kv1");
         assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    /// Brain discovery builds candidate addresses from this list, so an
+    /// account with no Workers and an account Cloudflare answers with
+    /// `result: null` must both come back as an empty list rather than an error
+    /// — otherwise discovery reports a failure for a perfectly normal account.
+    #[tokio::test]
+    async fn list_workers_returns_script_names_and_tolerates_empty_accounts() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || loop {
+            let Ok(req) = server.recv() else { return };
+            let body = match req.url() {
+                u if u.contains("/accounts/full/") => {
+                    r#"{"success":true,"errors":[],"result":[{"id":"second-brain"},{"id":"unrelated-api"},{"id":""}]}"#
+                }
+                u if u.contains("/accounts/empty/") => {
+                    r#"{"success":true,"errors":[],"result":[]}"#
+                }
+                // Cloudflare sends a null result on some endpoints rather than
+                // an empty array.
+                _ => r#"{"success":true,"errors":[],"result":null}"#,
+            };
+            let _ = req.respond(tiny_http::Response::from_string(body).with_status_code(200));
+        });
+        let base = format!("http://127.0.0.1:{port}");
+
+        let full = CfClient::with_base("tok".into(), "full".into(), base.clone());
+        // The blank id is dropped: it would build "https://.sub.workers.dev".
+        assert_eq!(
+            full.list_workers().await.unwrap(),
+            vec!["second-brain".to_string(), "unrelated-api".to_string()]
+        );
+
+        let empty = CfClient::with_base("tok".into(), "empty".into(), base.clone());
+        assert!(empty.list_workers().await.unwrap().is_empty());
+
+        let nulled = CfClient::with_base("tok".into(), "nulled".into(), base);
+        assert!(nulled.list_workers().await.unwrap().is_empty());
     }
 
     #[tokio::test]

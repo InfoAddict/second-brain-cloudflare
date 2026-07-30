@@ -61,8 +61,179 @@ function welcomeScreen() {
   );
 }
 
-function connectExistingScreen(errorMsg?: string, prefillAddress?: string) {
-  currentScreen = () => connectExistingScreen(errorMsg, prefillAddress);
+/** A Worker in the user's account that answered like a Second Brain. */
+interface DiscoveredBrain {
+  name: string;
+  url: string;
+}
+
+function notice(message: string, tone: "error" | "info" = "error"): HTMLElement {
+  return h("div", { class: `notice ${tone}` }, [
+    tone === "error" ? "⚠️" : "💡",
+    h("span", {}, [message]),
+  ]);
+}
+
+/// Two ways in. Signing in to Cloudflare is offered first because it removes
+/// the only genuinely hard step — finding the address — but manual entry is not
+/// a fallback for failures alone: a custom domain, a brain in someone else's
+/// account, or an unwillingness to grant scopes all need it, so it stays a
+/// first-class choice.
+function connectExistingScreen(errorMsg?: string) {
+  currentScreen = () => connectExistingScreen(errorMsg);
+
+  const signIn = h("button", { class: "btn-primary" }, [t("connectExisting.signInButton")]);
+  signIn.addEventListener("click", () => void discoverScreen());
+
+  const manual = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
+    t("connectExisting.manualButton"),
+  ]);
+  manual.addEventListener("click", () => manualEntryScreen());
+
+  const back = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [t("common.back")]);
+  back.addEventListener("click", welcomeScreen);
+
+  show(
+    brand(),
+    h("h1", {}, [t("connectExisting.title")]),
+    h("p", { class: "lede" }, [t("connectExisting.lede")]),
+    errorMsg ? notice(errorMsg) : "",
+    signIn,
+    h("p", { class: "footnote" }, [t("connectExisting.signInHint")]),
+    manual,
+    back,
+  );
+}
+
+function searchingScreen() {
+  show(
+    brand(),
+    h("h1", {}, [t("connectExisting.searchingTitle")]),
+    h("p", { class: "lede" }, [t("connectExisting.searchingLede")]),
+    h("div", { class: "checklist" }, [
+      h("li", { class: "running" }, [
+        h("span", { class: "check-icon" }, [h("span", { class: "spinner" })]),
+        t("connectExisting.searchingStep"),
+      ]),
+    ]),
+  );
+}
+
+async function discoverScreen() {
+  currentScreen = searchingScreen;
+  searchingScreen();
+  try {
+    accounts = await invoke<Account[]>("connect_cloudflare");
+    if (accounts.length === 1) {
+      chosenAccount = accounts[0];
+      await runDiscovery();
+    } else {
+      // More than one account, so the user picks before we scan — scanning all
+      // of them would be slower and would list brains they didn't ask about.
+      accountPickerScreen(() => void runDiscovery());
+    }
+  } catch (e) {
+    connectExistingScreen(String(e));
+  }
+}
+
+async function runDiscovery() {
+  currentScreen = searchingScreen;
+  searchingScreen();
+  try {
+    const found = await invoke<DiscoveredBrain[]>("discover_brains", {
+      accountId: chosenAccount?.id ?? "",
+    });
+    // Nothing found is not a failure — the brain may be on a custom domain or
+    // in another account — so it lands on manual entry with an explanation
+    // rather than a dead end.
+    if (found.length === 0) {
+      manualEntryScreen(t("connectExisting.noneFound"), undefined, "info");
+      return;
+    }
+    brainPickerScreen(found);
+  } catch (e) {
+    manualEntryScreen(String(e));
+  }
+}
+
+function brainPickerScreen(found: DiscoveredBrain[]) {
+  currentScreen = () => brainPickerScreen(found);
+  const list = h("ul", { class: "account-list" });
+  for (const brain of found) {
+    // The address is shown alongside the name: two Workers can have similar
+    // names, and the address is what actually gets connected to.
+    const btn = h("button", {}, [
+      h("span", {}, [brain.name]),
+      h("span", { class: "footnote", style: "display:block;margin:2px 0 0" }, [
+        brain.url.replace(/^https:\/\//, ""),
+      ]),
+    ]);
+    btn.addEventListener("click", () => unlockBrainScreen(brain));
+    list.append(h("li", {}, [btn]));
+  }
+  const manual = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [
+    t("connectExisting.manualButton"),
+  ]);
+  manual.addEventListener("click", () => manualEntryScreen());
+
+  show(
+    brand(),
+    h("h1", {}, [t("connectExisting.pickTitle")]),
+    h("p", { class: "lede" }, [t("connectExisting.pickLede")]),
+    list,
+    manual,
+  );
+}
+
+/// The address is known by this point, so only the password is asked for.
+/// Discovery cannot retrieve it: Cloudflare secrets are write-only, so an
+/// existing AUTH_TOKEN can never be read back — only overwritten, which would
+/// break every other client the user has connected.
+function unlockBrainScreen(brain: DiscoveredBrain, errorMsg?: string) {
+  currentScreen = () => unlockBrainScreen(brain, errorMsg);
+  const password = h("input", {
+    type: "password",
+    placeholder: t("connectExisting.passwordPlaceholder"),
+  });
+  const connect = h("button", { class: "btn-primary" }, [t("connectExisting.connect")]);
+  const back = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [t("common.back")]);
+  back.addEventListener("click", () => connectExistingScreen());
+
+  connect.addEventListener("click", async () => {
+    connect.disabled = true;
+    connect.textContent = t("common.checking");
+    try {
+      details = await invoke<ConnectionDetails>("connect_existing", {
+        address: brain.url,
+        password: password.value,
+      });
+      await toolsScreen();
+    } catch (e) {
+      unlockBrainScreen(brain, String(e));
+    }
+  });
+
+  show(
+    brand(),
+    h("h1", {}, [t("connectExisting.unlockTitle")]),
+    h("p", { class: "lede" }, [t("connectExisting.unlockLede", { name: brain.name })]),
+    errorMsg ? notice(errorMsg) : "",
+    h("div", { class: "field-stack" }, [password]),
+    connect,
+    back,
+  );
+  password.focus();
+}
+
+/// Unchanged from before discovery existed, deliberately: this path must keep
+/// working for anyone whose brain cannot be found automatically.
+function manualEntryScreen(
+  errorMsg?: string,
+  prefillAddress?: string,
+  tone: "error" | "info" = "error",
+) {
+  currentScreen = () => manualEntryScreen(errorMsg, prefillAddress, tone);
   const address = h("input", {
     type: "text",
     placeholder: t("connectExisting.addressPlaceholder"),
@@ -72,12 +243,9 @@ function connectExistingScreen(errorMsg?: string, prefillAddress?: string) {
   });
   if (prefillAddress) address.value = prefillAddress;
   const password = h("input", { type: "password", placeholder: t("connectExisting.passwordPlaceholder") });
-  const error = errorMsg
-    ? h("div", { class: "notice error" }, ["⚠️", h("span", {}, [errorMsg])])
-    : "";
   const connect = h("button", { class: "btn-primary" }, [t("connectExisting.connect")]);
   const back = h("button", { class: "btn-ghost", style: "width:100%;margin-top:8px" }, [t("common.back")]);
-  back.addEventListener("click", welcomeScreen);
+  back.addEventListener("click", () => connectExistingScreen());
 
   connect.addEventListener("click", async () => {
     connect.disabled = true;
@@ -89,7 +257,7 @@ function connectExistingScreen(errorMsg?: string, prefillAddress?: string) {
       });
       await toolsScreen();
     } catch (e) {
-      connectExistingScreen(String(e), address.value);
+      manualEntryScreen(String(e), address.value);
     }
   });
 
@@ -97,7 +265,7 @@ function connectExistingScreen(errorMsg?: string, prefillAddress?: string) {
     brand(),
     h("h1", {}, [t("connectExisting.title")]),
     h("p", { class: "lede" }, [t("connectExisting.lede")]),
-    error,
+    errorMsg ? notice(errorMsg, tone) : "",
     h("div", { class: "field-stack" }, [address, password]),
     connect,
     back,
@@ -279,14 +447,16 @@ function connectScreen(errorMsg?: string) {
   );
 }
 
-function accountPickerScreen() {
-  currentScreen = accountPickerScreen;
+/// `next` is what runs once an account is chosen. Provisioning goes straight to
+/// the progress screen; brain discovery scans the chosen account instead.
+function accountPickerScreen(next: () => void = progressScreen) {
+  currentScreen = () => accountPickerScreen(next);
   const list = h("ul", { class: "account-list" });
   for (const account of accounts) {
     const btn = h("button", {}, [account.name]);
     btn.addEventListener("click", () => {
       chosenAccount = account;
-      progressScreen();
+      next();
     });
     list.append(h("li", {}, [btn]));
   }

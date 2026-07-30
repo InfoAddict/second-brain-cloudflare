@@ -171,6 +171,21 @@ export const it: Messages = {
     footnote:
       "L'indirizzo è in Dettagli connessione sull'altro computer " +
       "o nell'email di conferma che hai inviato a te stesso.",
+    signInButton: "Accedi con Cloudflare",
+    signInHint: "Troveremo noi il tuo Second Brain — nessun indirizzo da cercare.",
+    manualButton: "Inserisco l'indirizzo a mano",
+    searchingTitle: "Stiamo cercando il tuo Second Brain",
+    searchingLede: "Controlliamo cosa c'è nel tuo account Cloudflare. Ci vuole un momento.",
+    searchingStep: "Stiamo esaminando il tuo account",
+    pickTitle: "È questo il tuo Second Brain?",
+    pickLede: "Scegli quello a cui vuoi collegarti.",
+    noneFound:
+      "Non abbiamo trovato un Second Brain in quell'account. Se si trova " +
+      "altrove — un altro account o un tuo indirizzo web — inseriscilo qui sotto.",
+    unlockTitle: "Inserisci la tua password",
+    unlockLede:
+      "È la password che hai scelto quando hai configurato {name} la prima volta. " +
+      "Nulla verrà modificato o resettato.",
   },
   password: {
     title: "Crea la tua password",

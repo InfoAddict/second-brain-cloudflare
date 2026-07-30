@@ -75,6 +75,17 @@ export type Messages = {
     passwordPlaceholder: string;
     connect: string;
     footnote: string;
+    signInButton: string;
+    signInHint: string;
+    manualButton: string;
+    searchingTitle: string;
+    searchingLede: string;
+    searchingStep: string;
+    pickTitle: string;
+    pickLede: string;
+    noneFound: string;
+    unlockTitle: string;
+    unlockLede: string;
   };
   password: {
     title: string;

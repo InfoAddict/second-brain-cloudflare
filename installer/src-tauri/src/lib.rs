@@ -163,6 +163,7 @@ pub fn run() {
             commands::submit_password,
             commands::connect_cloudflare,
             commands::connect_existing,
+            commands::discover_brains,
             commands::start_provisioning,
             commands::get_connection_details,
             commands::detect_tools,

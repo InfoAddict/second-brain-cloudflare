@@ -69,6 +69,14 @@ pub struct SubdomainResult {
     pub subdomain: Option<String>,
 }
 
+/// An entry from `GET /accounts/{id}/workers/scripts`. Cloudflare names the
+/// script in `id`; the field is the deploy name, which is also the workers.dev
+/// hostname label.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkerScript {
+    pub id: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UploadSession {
     pub jwt: Option<String>,

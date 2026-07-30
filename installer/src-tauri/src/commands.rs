@@ -5,6 +5,7 @@
 
 use crate::cf::api::CfClient;
 use crate::cf::backend::{DryRunBackend, LiveBackend};
+use crate::cf::discover;
 use crate::cf::oauth::{self, Tokens};
 use crate::cf::provision::{self, ProvisionError, ProvisionOutcome};
 use crate::cf::types::{Account, CfApiError};
@@ -159,6 +160,78 @@ pub async fn connect_cloudflare(
     *session.tokens.lock().unwrap() = Some(tokens);
     *session.accounts.lock().unwrap() = accounts.clone();
     Ok(accounts)
+}
+
+/// Looks through a Cloudflare account for Workers that answer like a Second
+/// Brain, so the user does not have to find and type their own address.
+///
+/// Requires a prior [`connect_cloudflare`]. Every probe is unauthenticated —
+/// the user's password is not involved and is not asked for until they have
+/// picked an address. An empty list is a normal outcome, not an error: it means
+/// the account holds no recognisable brain, and the UI falls back to manual
+/// entry.
+#[tauri::command]
+pub async fn discover_brains(
+    account_id: String,
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<Vec<discover::Candidate>, String> {
+    let locale = locale_of(&app);
+
+    if session.dry_run {
+        return Ok(vec![discover::Candidate {
+            name: "second-brain".into(),
+            url: "https://second-brain.demo.workers.dev".into(),
+        }]);
+    }
+
+    // Guards against a UI that forgot to sign in, and against an account id the
+    // session never saw — the same check start_provisioning makes.
+    if !session
+        .accounts
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|a| a.id == account_id)
+    {
+        return Err(user_err(locale, Key::ErrorCfSignInFirst));
+    }
+
+    let mut tokens = session
+        .tokens
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| user_err(locale, Key::ErrorCfSignInFirst))?;
+    if tokens.expires_at <= std::time::Instant::now() {
+        tokens = oauth::refresh(&tokens).await.map_err(|e| {
+            log::warn!("proactive token refresh failed: {e}");
+            user_err(locale, Key::ErrorCfSignInExpired)
+        })?;
+        *session.tokens.lock().unwrap() = Some(tokens.clone());
+    }
+
+    let client = CfClient::new(tokens.access_token.clone(), account_id.clone());
+
+    let found = discover::discover_in_account(&client).await.map_err(|e| match e {
+        // No workers.dev subdomain means no address to construct, which is a
+        // different problem from "found nothing" and gets its own message.
+        discover::DiscoverFailure::NoSubdomain => user_err(locale, Key::ErrorCfNoSubdomain),
+        discover::DiscoverFailure::Api(err) => {
+            log::warn!("brain discovery failed: {err}");
+            user_err(locale, Key::ErrorCfDiscoverFailed)
+        }
+    })?;
+
+    // Non-secret, and it lets a later operation skip account enumeration. Saved
+    // even when nothing matched — the account and subdomain are still correct.
+    // A failure here is not worth surfacing: it costs a lookup later, nothing
+    // more.
+    if let Err(e) = secure_store::save_cf_hints(&account_id, &found.subdomain) {
+        log::warn!("could not save Cloudflare hints: {e}");
+    }
+
+    Ok(found.brains)
 }
 
 #[tauri::command]
