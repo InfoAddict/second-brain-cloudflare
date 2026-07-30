@@ -178,8 +178,10 @@ export const it: Messages = {
     signInHint: "Troveremo noi il tuo Second Brain — nessun indirizzo da cercare.",
     signInFootnote:
       "Il tuo Second Brain si trova nel tuo spazio su Cloudflare, quindi " +
-      "accediamo lì per cercarlo. Cloudflare ti chiederà di autorizzarlo. Non " +
-      "vediamo mai la tua password Cloudflare e nulla nel tuo spazio viene modificato.",
+      "accediamo lì per trovarlo. Cloudflare ti chiederà di autorizzare " +
+      "l'accesso. Non vediamo mai la tua password Cloudflare e non conserviamo " +
+      "la chiave: accedi di nuovo ogni volta. Preferisci di no? " +
+      "\u201cInserisci l'indirizzo a mano\u201d non richiede l'accesso a Cloudflare.",
     manualButton: "Inserisci l'indirizzo a mano",
     accountPickerTitle: "In quale spazio cerchiamo?",
     accountPickerLede: "Il tuo login ne ha più di uno — scegli dove si trova il tuo Second Brain.",

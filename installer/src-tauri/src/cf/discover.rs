@@ -465,6 +465,68 @@ mod tests {
         std::fs::read_to_string(path).expect("read installer/src/main.ts")
     }
 
+    /// The sign-in footnote points the uneasy user at the manual route by
+    /// quoting that button's label. Two strings in two locales have to agree, so
+    /// renaming the button would silently leave the footnote naming something
+    /// that is no longer on screen.
+    #[test]
+    fn the_signin_footnote_names_the_manual_button_that_exists() {
+        for locale in ["en.ts", "it.ts"] {
+            let path = format!("{}/../src/i18n/{}", env!("CARGO_MANIFEST_DIR"), locale);
+            let src = std::fs::read_to_string(&path).expect("read locale file");
+
+            let label = string_value(&src, "manualButton");
+            let footnote = string_value(&src, "signInFootnote");
+            assert!(!label.is_empty(), "{locale}: no manualButton label");
+            assert!(!footnote.is_empty(), "{locale}: no signInFootnote");
+            assert!(
+                footnote.contains(&label),
+                "{locale}: the footnote must name the button the user can actually \
+                 click. Footnote says {footnote:?}, button is {label:?}"
+            );
+        }
+    }
+
+    /// The value of `key:` in a locale file, joining the concatenated string
+    /// literals that make it up.
+    ///
+    /// Scoped to that one entry — reading every literal in the file would make
+    /// the assertion above vacuous, since the label's own declaration is a
+    /// literal too.
+    fn string_value(src: &str, key: &str) -> String {
+        let lines: Vec<&str> = src.lines().collect();
+        let Some(first) = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with(&format!("{key}:")))
+        else {
+            return String::new();
+        };
+        // The entry runs until the next sibling key or the end of the block. A
+        // value written across several concatenated lines is continuation, not a
+        // new key, because it opens with a quote.
+        let mut block = String::new();
+        for (n, line) in lines[first..].iter().enumerate() {
+            let trimmed = line.trim_start();
+            let is_new_key = n > 0
+                && !trimmed.starts_with('"')
+                && trimmed
+                    .split(':')
+                    .next()
+                    .is_some_and(|k| !k.is_empty() && k.chars().all(|c| c.is_alphanumeric()))
+                && trimmed.contains(':');
+            if n > 0 && (is_new_key || trimmed.starts_with('}')) {
+                break;
+            }
+            block.push_str(line);
+        }
+        block
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     #[test]
     fn the_existing_brain_path_offers_cloudflare_sign_in() {
         let ui = setup_ui();

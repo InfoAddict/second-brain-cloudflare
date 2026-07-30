@@ -172,8 +172,10 @@ export const en: Messages = {
     signInHint: "We'll find your Second Brain for you — no address to look up.",
     signInFootnote:
       "Your Second Brain lives in your own space at Cloudflare, so we sign in " +
-      "there to look for it. Cloudflare will ask you to allow that. We never " +
-      "see your Cloudflare password, and nothing in your space is changed.",
+      "there to find it. Cloudflare will ask you to allow access. We never see " +
+      "your Cloudflare password, and we don't keep the key — you sign in again " +
+      "each time. Prefer not to? \u201cEnter the address myself\u201d needs no " +
+      "Cloudflare sign-in.",
     manualButton: "Enter the address myself",
     accountPickerTitle: "Which space should we look in?",
     accountPickerLede: "Your login has more than one — pick where your Second Brain lives.",
