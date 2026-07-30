@@ -228,6 +228,8 @@ Everything the installer ever calls, for auditability:
 
 OAuth: authorization-code + PKCE (S256) against `dash.cloudflare.com/oauth2/{auth,token}`, loopback redirect `http://localhost:8976/oauth/callback`. Scopes requested — `account:read user:read workers:write workers_scripts:write workers_kv:write d1:write ai:write vectorize:write offline_access`.
 
+One scope set is used for every OAuth flow, including the read-only brain lookup on the existing-brain path — which only issues the three `GET`s in the table above and needs none of the write scopes. That is a deliberate choice, not an oversight: splitting the set would mean guessing Cloudflare's read-scope names, and a wrong guess fails at runtime with a 403 that only a live sign-in reveals, on the one flow a user cannot get past. The sign-in screen says plainly that Cloudflare will ask for access before sending the user there, tokens are never persisted, and **Enter the address myself** reaches an existing brain with no Cloudflare sign-in at all.
+
 **Client ID note:** the app currently uses wrangler's published public OAuth client (`54d11594-84e4-41aa-b438-e81b8fa78ee7`) — the same well-known ID community tools like PartyKit embed — because its registered redirect is the localhost loopback above and it is permitted to request every scope we need. Cloudflare added [self-managed OAuth clients](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/) in June 2026; to switch to our own registered client (requires publishing the app via Cloudflare's domain-verification flow), change `CLIENT_ID`/`REDIRECT_URI` in `src-tauri/src/cf/oauth.rs` — nothing else about the flow changes.
 
 ## Project layout
