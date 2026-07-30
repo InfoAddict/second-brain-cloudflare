@@ -78,9 +78,26 @@ mod backend {
 mod backend {
     use super::StoreError;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     static MAP: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+    /// Counts reads so a test can assert that a code path never touches the
+    /// keychain at all.
+    ///
+    /// On a real build every read can raise an OS password prompt, and demo mode
+    /// must never do that — but a prompt is not something a unit test can observe,
+    /// and a source scan cannot express "not inside the dry-run branch". Counting
+    /// the reads can.
+    pub static READS: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn reads() -> usize {
+        READS.load(Ordering::SeqCst)
+    }
+    pub fn reset_reads() {
+        READS.store(0, Ordering::SeqCst);
+    }
 
     pub fn set(key: &str, value: &str) -> Result<(), StoreError> {
         MAP.lock()
@@ -91,6 +108,7 @@ mod backend {
     }
 
     pub fn get(key: &str) -> Option<String> {
+        READS.fetch_add(1, Ordering::SeqCst);
         MAP.lock().unwrap().as_ref()?.get(key).cloned()
     }
 
@@ -98,6 +116,17 @@ mod backend {
         if let Some(map) = MAP.lock().unwrap().as_mut() {
             map.remove(key);
         }
+    }
+}
+
+/// Test-only view of how many keychain reads have happened.
+#[cfg(test)]
+pub mod probe {
+    pub fn reads() -> usize {
+        super::backend::reads()
+    }
+    pub fn reset() {
+        super::backend::reset_reads()
     }
 }
 

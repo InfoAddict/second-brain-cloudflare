@@ -41,7 +41,12 @@ fn open_dashboard_from_menu(app: &AppHandle) {
                 .try_state::<AppLocale>()
                 .map(|l| l.get())
                 .unwrap_or(i18n::Locale::En);
-            if secure_store::load_setup().is_none() && !session.dry_run {
+            // dry_run first: `&&` is short-circuiting, so testing it second
+            // still performs the keychain read, and every read can raise an OS
+            // password prompt on an unsigned dev build. This fired at startup,
+            // before any window opened, which is why demo mode has always asked
+            // for the login keychain.
+            if !session.dry_run && secure_store::load_setup().is_none() {
                 let _ = windows::open_setup_window(app);
             } else {
                 app.dialog()

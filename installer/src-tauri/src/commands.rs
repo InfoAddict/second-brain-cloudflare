@@ -2,7 +2,6 @@
 //! Tokens and passwords flow IN through here (user input / OS keychain) but
 //! never back out to the webview; the UI only ever receives URLs, booleans,
 //! account names, and progress events.
-
 use crate::cf::api::CfClient;
 use crate::cf::backend::{DryRunBackend, LiveBackend};
 use crate::cf::discover;
@@ -34,6 +33,11 @@ pub struct SetupSession {
     /// a brain is actually connected. Non-secret, but pointless — and possibly
     /// wrong — to persist for a scan the user abandoned.
     cf_hints: Mutex<Option<(String, String)>>,
+    /// Demo mode's stand-in for the outstanding-index note. Dry-run must never
+    /// reach the keychain — every read there can raise an OS password prompt,
+    /// which is #252 all over again — so the demo keeps its note in memory and
+    /// the flow stays exercisable end to end.
+    demo_previous_index: Mutex<Option<String>>,
 }
 
 impl SetupSession {
@@ -46,6 +50,7 @@ impl SetupSession {
             outcome: Mutex::new(None),
             pending_worker_update: Mutex::new(false),
             cf_hints: Mutex::new(None),
+            demo_previous_index: Mutex::new(None),
         }
     }
 
@@ -56,6 +61,7 @@ impl SetupSession {
         *self.outcome.lock().unwrap() = None;
         *self.pending_worker_update.lock().unwrap() = false;
         *self.cf_hints.lock().unwrap() = None;
+        *self.demo_previous_index.lock().unwrap() = None;
     }
 }
 
@@ -753,10 +759,17 @@ fn dashboard_credentials(
     locale: Locale,
 ) -> Result<(String, String), String> {
     if session.dry_run {
-        // The same "is this computer connected yet?" check as a real run — demo
-        // mode should refuse here for the same reason and with the same message.
-        details_from_anywhere(session)
-            .ok_or_else(|| user_err(locale, Key::OpenDashboardNotSetup))?;
+        // No keychain read, and no connected-yet check.
+        //
+        // This used to call details_from_anywhere, which falls back to
+        // secure_store::load_setup() when the session has no outcome — so opening
+        // the settings window in demo mode raised an OS keychain password prompt.
+        // That is the same class of bug as #252, and it is why the window never
+        // worked in demo mode: the prompt appeared before any request was made.
+        //
+        // The check itself does not apply here either. In a real run it asks "is
+        // this computer connected to a brain yet?"; in demo mode the local demo
+        // brain *is* the brain, always present, so there is nothing to refuse.
         // The local demo brain, not `second-brain.demo.workers.dev`: that address
         // does not resolve, so every Worker-backed screen failed with "Couldn't
         // reach your Second Brain". Pointing at a real server on loopback means
@@ -1157,6 +1170,10 @@ pub async fn begin_embedding_migration(
         // old index stays "live", and the final free-up step is unreachable —
         // which would leave the most consequential screen untested.
         crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale).await?;
+        // In memory, never the keychain — see demo_previous_index.
+        if target_index != manifest.vectorize_name {
+            *session.demo_previous_index.lock().unwrap() = Some(manifest.vectorize_name.clone());
+        }
         return crate::migration::reset(&worker_url, &auth_token, locale).await;
     }
 
@@ -1244,7 +1261,20 @@ pub async fn migration_step(app: AppHandle) -> Result<crate::migration::BatchPro
 /// from an assumed dimension count and nothing lives in browser storage that a
 /// reset could lose.
 #[tauri::command]
-pub fn outstanding_old_index() -> Option<String> {
+pub fn outstanding_old_index(session: State<'_, SetupSession>) -> Option<String> {
+    previous_index_for(&session)
+}
+
+/// Split out of the command so it can be tested: a Tauri `State` cannot be
+/// constructed in a unit test, and the property that matters here — that demo
+/// mode performs no keychain read — is only observable by calling it.
+fn previous_index_for(session: &SetupSession) -> Option<String> {
+    if session.dry_run {
+        // Checked before the keychain read, exactly as get_app_state does: a read
+        // here raises an OS password prompt on unsigned dev builds, and demo mode
+        // must never do that.
+        return session.demo_previous_index.lock().unwrap().clone();
+    }
     secure_store::load_previous_index()
 }
 
@@ -1262,8 +1292,12 @@ pub async fn finish_embedding_migration(
     let locale = locale_of(&app);
     let (worker_url, auth_token, _) = settings_target(&app)?;
 
-    let old_index = secure_store::load_previous_index()
-        .ok_or_else(|| user_err(locale, Key::ErrorNoOldIndexToFree))?;
+    let old_index = if session.dry_run {
+        session.demo_previous_index.lock().unwrap().clone()
+    } else {
+        secure_store::load_previous_index()
+    }
+    .ok_or_else(|| user_err(locale, Key::ErrorNoOldIndexToFree))?;
 
     // Refuse to delete the index the brain is reading. The recorded name is
     // trustworthy, but a redeploy could have been rolled back since, and the cost
@@ -1305,7 +1339,11 @@ pub async fn finish_embedding_migration(
 
     // Only after the delete succeeded. Clearing it first would silently orphan
     // the index with nothing left pointing at it.
-    secure_store::clear_previous_index();
+    if session.dry_run {
+        *session.demo_previous_index.lock().unwrap() = None;
+    } else {
+        secure_store::clear_previous_index();
+    }
     Ok(())
 }
 
@@ -1346,7 +1384,7 @@ pub fn open_settings_window(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dashboard_credentials, normalize_worker_url, SetupSession};
+    use super::{dashboard_credentials, normalize_worker_url, previous_index_for, SetupSession};
     use crate::cf::provision::ProvisionOutcome;
     use crate::i18n::Locale;
 
@@ -1415,6 +1453,60 @@ mod tests {
     /// Demo mode is pointed at the local demo brain, not at
     /// `second-brain.demo.workers.dev` — that address does not resolve, so every
     /// Worker-backed screen failed before anything could be demonstrated.
+    /// Demo mode performs zero keychain reads.
+    ///
+    /// Counted rather than grepped. Two separate paths have now reached the
+    /// keychain in dry-run: `outstanding_old_index` read the note unconditionally,
+    /// and `dashboard_credentials` called `details_from_anywhere`, which falls
+    /// back to `secure_store::load_setup()` — so merely opening the settings
+    /// window raised an OS password prompt before any request was made. That
+    /// second one is why the window never worked in demo mode at all.
+    ///
+    /// A source scan cannot express the real rule, which is "not inside the
+    /// dry-run branch" rather than "the function mentions dry_run" — a guard I
+    /// wrote that way passed while the bug was reintroduced. The prompt itself is
+    /// an OS dialog no unit test can see, but the read that causes it is
+    /// countable, so this counts.
+    #[test]
+    fn demo_mode_never_reads_the_keychain() {
+        let session = SetupSession::new(true);
+        *session.outcome.lock().unwrap() = Some(ProvisionOutcome {
+            worker_url: "https://second-brain.demo.workers.dev".into(),
+            mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
+        });
+
+        crate::secure_store::probe::reset();
+        let (url, token) = dashboard_credentials(&session, Locale::En).expect("demo credentials");
+        assert_eq!(
+            crate::secure_store::probe::reads(),
+            0,
+            "dashboard_credentials touched the keychain in demo mode — that is the \
+             prompt users see when they open the settings window"
+        );
+        assert!(url.starts_with("http://127.0.0.1:"), "demo must use the local brain: {url}");
+        assert_eq!(token, "demo");
+
+        // The outstanding-index note is the other path that reached the keychain.
+        crate::secure_store::probe::reset();
+        let _ = previous_index_for(&session);
+        assert_eq!(
+            crate::secure_store::probe::reads(),
+            0,
+            "the outstanding-index note was read from the keychain in demo mode"
+        );
+
+        // And with no session outcome either: the fallback is exactly where the
+        // keychain read used to hide.
+        let fresh = SetupSession::new(true);
+        crate::secure_store::probe::reset();
+        let _ = dashboard_credentials(&fresh, Locale::En);
+        assert_eq!(
+            crate::secure_store::probe::reads(),
+            0,
+            "an unconnected demo session fell back to the keychain"
+        );
+    }
+
     #[test]
     fn dashboard_credentials_dry_run_uses_the_local_demo_brain() {
         let session = SetupSession::new(true);
