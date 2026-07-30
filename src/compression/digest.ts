@@ -81,7 +81,7 @@ export async function compressTag(
   }
 
   const rows = rawEntries.map(r => ({ id: r.id as string, content: r.content as string }));
-  const text = await synthesizeDigest(tag, rows, env);
+  const text = await synthesizeDigest(tag, rows, env, cfg);
   if (!text) return { synthesizedId: null, entriesUsed: 0, text: "" };
 
   const content = `[Synthesized from ${rows.length} entries tagged "${tag}"]\n\n${text}`;

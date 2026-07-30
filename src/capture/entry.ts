@@ -91,7 +91,7 @@ export async function captureEntry(
           await deleteStaleVectors(env, oldVectorIds, newVectorIds);
         } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
 
-        scheduleClassifyAndTag(targetId, newContent, env, ctx);
+        scheduleClassifyAndTag(targetId, newContent, env, ctx, cfg);
 
         return mergeAction.action === "merge"
           ? { status: "merged", id: targetId }
@@ -114,7 +114,7 @@ export async function captureEntry(
       .catch(e => console.error("Vectorize insert failed (non-fatal):", e))
   );
 
-  scheduleClassifyAndTag(id, c, env, ctx);
+  scheduleClassifyAndTag(id, c, env, ctx, cfg);
 
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictId = contradiction.conflicting_id;

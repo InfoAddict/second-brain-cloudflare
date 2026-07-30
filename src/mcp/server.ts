@@ -356,7 +356,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ id, type }) => {
-      const connections = await getConnections(id, type, env);
+      const connections = await getConnections(id, type, env, await resolveConfig(env));
       if (!connections.length) {
         return { content: [{ type: "text", text: `No connections found for ${id}.` }] };
       }

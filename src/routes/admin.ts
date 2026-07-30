@@ -138,7 +138,11 @@ export async function handleAdminRoutes(
           row.content as string,
           JSON.parse(row.tags as string),
           row.source as string,
-          row.created_at as number
+          row.created_at as number,
+          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
+          // capture and recall use the configured one, writing vectors from the
+          // wrong model into the index — scores go quietly wrong, nothing throws.
+          cfg
         );
         processed++;
       } catch (e) {
@@ -176,7 +180,9 @@ export async function handleAdminRoutes(
 
     for (const row of toProcess as Record<string, any>[]) {
       try {
-        const { canonical, kind } = await classifyEntry(row.content as string, env);
+        // cfg carries the user's LLM_MODEL choice; without it this backfill
+        // classifies with the shipped default and ignores their setting.
+        const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
         let tags: string[] = JSON.parse(row.tags as string);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null) tags = withStatus(tags, "canonical");

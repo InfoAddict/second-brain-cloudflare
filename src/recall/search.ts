@@ -90,12 +90,12 @@ export async function recallEntries(
     before = parsed.before;
     embedQuery = parsed.cleanQuery;
   }
-  embedQuery = await distillToRareTerms(embedQuery, env);
+  embedQuery = await distillToRareTerms(embedQuery, env, cfg);
 
   const tokens = tokenizeQuery(embedQuery);
   const [values, queryTags] = await Promise.all([
     embed(embedQuery, env, cfg),
-    inferQueryTags(embedQuery, env),
+    inferQueryTags(embedQuery, env, cfg),
   ]);
 
   let keywordRows: KeywordRow[] = [];
@@ -271,12 +271,12 @@ export async function recallEntries(
   if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;
 
   const insight = synthesize && matches.length > 1
-    ? await synthesizeInsight(embedQuery, matches.map(m => ({ id: m.id, content: m.content })), env)
+    ? await synthesizeInsight(embedQuery, matches.map(m => ({ id: m.id, content: m.content })), env, cfg)
     : "";
 
   if (d1Rows.length >= 5) {
     ctx.waitUntil(
-      derivePattern(d1Rows as { id: string; content: string }[], env, ctx)
+      derivePattern(d1Rows as { id: string; content: string }[], env, ctx, cfg)
         .catch(e => console.error("derivePattern failed (non-fatal):", e))
     );
   }
