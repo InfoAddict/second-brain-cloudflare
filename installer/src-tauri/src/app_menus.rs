@@ -168,21 +168,42 @@ fn about_metadata(app: &AppHandle) -> AboutMetadata<'_> {
     }
 }
 
-/// Registers credits with the native About dialog. Instantiating the predefined
-/// About item configures the macOS panel; on Windows/Linux we add Help › About.
+/// Gives the native About panel our metadata.
+///
+/// `Menu::default` builds its own About item with no metadata, and merely
+/// *instantiating* a configured `PredefinedMenuItem::about` does not reconfigure
+/// it — the metadata belongs to the item, not to the application. So the panel
+/// only shows credits if the item we built is the one the user actually clicks.
+///
+/// The previous version created the configured item and then dropped it unless
+/// no Help submenu existed. macOS always has Help, so on macOS the credits were
+/// never reachable: the panel fell back to the name and version macOS derives
+/// from the bundle.
 fn wire_about_dialog(app: &AppHandle, menu: &Menu<tauri::Wry>) -> tauri::Result<()> {
     let about = PredefinedMenuItem::about(app, None, Some(about_metadata(app)))?;
 
+    // macOS: the first submenu is the application menu and its first entry is
+    // About. Swap that entry for ours rather than rebuilding the whole submenu,
+    // which would risk dropping Services / Hide Others / Show All.
+    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+        let existing = app_menu.items()?;
+        // Only replace when the menu has the shape we expect; a surprise layout
+        // should leave the menu intact rather than be mangled.
+        if let Some(MenuItemKind::Predefined(first)) = existing.first() {
+            app_menu.remove(first)?;
+            app_menu.insert(&about, 0)?;
+            return Ok(());
+        }
+    }
+
+    // Windows / Linux: no application menu, so surface it under Help.
     let has_help = menu.items()?.iter().any(|item| {
         matches!(item, MenuItemKind::Submenu(s) if s.text().ok().as_deref() == Some("Help"))
     });
-
     if !has_help {
         let help = SubmenuBuilder::new(app, "Help").item(&about).build()?;
         menu.append(&help)?;
     }
-
-    let _ = about;
     Ok(())
 }
 
@@ -286,4 +307,47 @@ where
         .on_menu_event(on_menu_event)
         .build(app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The configured About item must be *attached* to a menu, not merely
+    /// created.
+    ///
+    /// #241 built it and then dropped it unless no Help submenu existed. macOS
+    /// always has Help, so the credits were unreachable there: the panel showed
+    /// only the name and version macOS derives from the bundle. Attaching the
+    /// item cannot be asserted without a running app, so this asserts on the
+    /// source instead — the specific mistake was a discard, and a discard is
+    /// visible in the text.
+    #[test]
+    fn the_configured_about_item_is_never_discarded() {
+        let src = include_str!("app_menus.rs");
+        let start = src.find("fn wire_about_dialog").expect("wire_about_dialog");
+        let end = src[start..].find("\n}\n").expect("end of fn") + start;
+        let body = &src[start..end];
+
+        assert!(
+            !body.contains("let _ = about"),
+            "the configured About item is being discarded — on macOS that leaves the panel with no credits"
+        );
+        assert!(
+            body.contains("insert(&about"),
+            "the configured About item must be inserted into the app menu, not just created"
+        );
+    }
+
+    /// The metadata is worthless if the roster is empty.
+    #[test]
+    fn about_metadata_carries_the_full_roster() {
+        let credits = crate::credits::credits_text();
+        assert!(credits.contains("Created by"), "credits text has no creator line");
+        for person in crate::credits::MAINTAINERS {
+            assert!(
+                credits.contains(person.name),
+                "credits text omits maintainer {}",
+                person.name
+            );
+        }
+    }
 }
