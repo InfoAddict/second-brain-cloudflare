@@ -84,8 +84,11 @@ apply_instructions() {
   fi
 
   case "$action" in
-    updated|updated-legacy)
+    updated)
       echo "[$label] Updated instructions in $target_file"
+      ;;
+    updated-legacy)
+      echo "[$label] Updated instructions in $target_file (replaced legacy block; backup at ${target_file}.bak)"
       ;;
     appended)
       echo "[$label] Appended instructions to $target_file"

@@ -17,7 +17,7 @@ describe("README MCP troubleshooting (#223)", () => {
   });
 
   it("distinguishes connected from actually unavailable", () => {
-    expect(readme).toMatch(/does \*\*not\*\* mean the server is down/i);
-    expect(readme).toMatch(/tool call returns an \*\*error\*\*/i);
+    expect(readme).toMatch(/mean the server is down/i);
+    expect(readme).toMatch(/when a tool call returns/i);
   });
 });

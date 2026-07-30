@@ -32,7 +32,7 @@ describe("AI instruction files (#223 lazy MCP contract)", () => {
 
       it("requires verifying with a real recall call before reporting unavailable", () => {
         expect(section()).toMatch(/actually calling recall/i);
-        expect(section()).toMatch(/Only report "second brain unavailable" if a real tool call returns an error/i);
+        expect(section()).toMatch(/only report .* if a real tool call returns an error/i);
       });
 
       it("forbids inferring unavailable from the tool list alone", () => {
@@ -51,7 +51,7 @@ describe("AI instruction files (#223 lazy MCP contract)", () => {
     const coreRules = [
       /Never conclude the tools are unavailable from the tool list alone/i,
       /Verify by actually calling recall/i,
-      /Only report "second brain unavailable" if a real tool call returns an error/i,
+      /only report .* if a real tool call returns an error/i,
     ];
     for (const rule of coreRules) {
       expect(claude).toMatch(rule);

@@ -74,13 +74,15 @@ describe("MCP tools contract (InMemoryTransport)", () => {
         name: "remember",
         arguments: { content: "Issue 223 verification memory", tags: ["test"] },
       });
-      expect(remember.isError).not.toBe(true);
+      expect(remember.isError).toBeFalsy();
+      const rememberText = (remember.content as { type: string; text: string }[])[0]?.text ?? "";
+      expect(rememberText.length).toBeGreaterThan(0);
 
       const recall = await client.callTool({
         name: "recall",
         arguments: { query: "User wants to verify MCP recall works — what was stored?" },
       });
-      expect(recall.isError).not.toBe(true);
+      expect(recall.isError).toBeFalsy();
       const text = (recall.content as { type: string; text: string }[])[0]?.text ?? "";
       expect(text).toMatch(/Issue 223 verification memory/i);
     });

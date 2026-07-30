@@ -78,8 +78,11 @@ function Apply-Instructions {
   }
 
   switch ($action) {
-    { $_ -in @("updated", "updated-legacy") } {
+    "updated" {
       Write-Host "[$Label] Updated instructions in $TargetFile"
+    }
+    "updated-legacy" {
+      Write-Host "[$Label] Updated instructions in $TargetFile (replaced legacy block; backup at ${TargetFile}.bak)"
     }
     "appended" {
       Write-Host "[$Label] Appended instructions to $TargetFile"
