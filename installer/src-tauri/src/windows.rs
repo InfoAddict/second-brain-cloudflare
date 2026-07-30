@@ -177,6 +177,11 @@ fn open_wrapper_window_impl(
     let token_js = serde_json::to_string(auth_token).expect("string serializes");
     let mut init = format!(
         r#"(function () {{
+  // Tells the dashboard it is running inside the desktop app, so it can hide
+  // the "download the app" button. Set unconditionally: unlike the auth keys
+  // below it carries nothing sensitive, and it must be true even when the
+  // origin check fails.
+  try {{ window.SB_DESKTOP = true; }} catch (_) {{}}
   try {{
     if (location.origin === {origin_js}) {{
       localStorage.setItem('sb_url', {origin_js});
