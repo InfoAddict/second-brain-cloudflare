@@ -906,7 +906,14 @@ pub async fn start_worker_update(
             worker_url: "https://second-brain.demo.workers.dev".into(),
             mcp_url: "https://second-brain.demo.workers.dev/mcp".into(),
         };
-        provision::update_worker(&DryRunBackend, manifest, &outcome.worker_url, "demo", progress)
+        provision::update_worker(
+            &DryRunBackend,
+            manifest,
+            &outcome.worker_url,
+            "demo",
+            provision::VectorizeTarget::shipped(manifest),
+            progress,
+        )
             .await
             .map_err(|e| {
                 log::warn!("dry-run worker update failed: {e}");
@@ -950,7 +957,16 @@ pub async fn start_worker_update(
     let backend = LiveBackend {
         client: CfClient::new(tokens.access_token.clone(), account_id),
     };
-    provision::update_worker(&backend, manifest, &info.worker_url, &info.auth_token, progress)
+    // A routine update stays on whatever index this build ships with. Only an
+    // embedding migration moves it, and that goes through its own command.
+    provision::update_worker(
+        &backend,
+        manifest,
+        &info.worker_url,
+        &info.auth_token,
+        provision::VectorizeTarget::shipped(manifest),
+        progress,
+    )
         .await
         .map_err(|e| {
             log::warn!("worker update failed: {e}");
@@ -1012,6 +1028,213 @@ pub fn perform_logout(app: &AppHandle) {
 /// dry-run, so it both breaks demoing the panel on a configured machine and
 /// raises a Keychain prompt for a value dry-run would discard — the bug fixed
 /// for launch in #252, which is easy to reintroduce one command at a time.
+/// Resolves the Cloudflare account that holds this brain, refreshing the sign-in
+/// if it aged out.
+///
+/// Shared by the worker update and the embedding migration: both need to act on
+/// the account the brain actually lives in, matched by the subdomain in its
+/// stored address rather than assumed.
+async fn cloudflare_client_for_brain(
+    worker_url: &str,
+    session: &SetupSession,
+    locale: Locale,
+) -> Result<CfClient, String> {
+    let expected_sub = crate::worker_url::subdomain_of(worker_url)
+        .ok_or_else(|| user_err(locale, Key::ErrorCustomDomain))?;
+
+    let mut tokens = session
+        .tokens
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| user_err(locale, Key::ErrorCfSignInFirst))?;
+    if tokens.expires_at <= std::time::Instant::now() {
+        tokens = oauth::refresh(&tokens).await.map_err(|e| {
+            log::warn!("token refresh failed: {e}");
+            user_err(locale, Key::ErrorCfSignInExpired)
+        })?;
+        *session.tokens.lock().unwrap() = Some(tokens.clone());
+    }
+
+    let accounts = session.accounts.lock().unwrap().clone();
+    for account in &accounts {
+        let client = CfClient::new(tokens.access_token.clone(), account.id.clone());
+        if let Ok(Some(sub)) = client.get_account_subdomain().await {
+            if sub == expected_sub {
+                return Ok(client);
+            }
+        }
+    }
+    Err(user_err(locale, Key::ErrorWrongCfAccount))
+}
+
+/// What a rebuild would involve, and which models can be chosen. Shown before
+/// anything is created.
+#[tauri::command]
+pub async fn migration_estimate(
+    app: AppHandle,
+) -> Result<crate::migration::MigrationEstimate, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::fetch_estimate(&url, &token, locale).await
+}
+
+/// Where an interrupted rebuild got to, so the app can offer to resume rather
+/// than start again.
+#[tauri::command]
+pub async fn migration_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::fetch_status(&url, &token, locale).await
+}
+
+/// Moves the brain onto a new embedding model: create the index it will use,
+/// redeploy the binding at it, then record the model.
+///
+/// Nothing is destroyed here. The previous index is left in place and populated,
+/// so every failure before [`finish_embedding_migration`] is recoverable by
+/// redeploying against it.
+///
+/// The order matters. The config write happens *after* the redeploy, because
+/// config lives in KV and takes effect on the very next request: writing it first
+/// would leave the Worker embedding at the new size against the old index, which
+/// fails every capture on upsert. Reversing them narrows that window to the gap
+/// between a successful deploy and one KV write. It cannot be closed entirely
+/// without the dual-binding scheme #248 defers, and the rebuild that follows
+/// leaves recall incomplete anyway — which the UI says plainly.
+#[tauri::command]
+pub async fn begin_embedding_migration(
+    model: String,
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
+    let locale = locale_of(&app);
+    let manifest = worker_bundle::manifest();
+
+    // Reject an unknown model before touching anything. Dimensions are fixed at
+    // index creation, so a model whose size we would have to guess could produce
+    // an index that rejects every vector — and an index cannot be altered.
+    let dimensions = crate::migration::dimensions_for(&model)
+        .ok_or_else(|| user_err(locale, Key::ErrorUnknownEmbeddingModel))?;
+    let target_index = crate::migration::index_name_for(
+        &manifest.vectorize_name,
+        dimensions,
+        manifest.vectorize_dimensions,
+    );
+
+    let (worker_url, auth_token, _) = settings_target(&app)?;
+
+    let progress_app = app.clone();
+    let progress = move |event: provision::StepEvent| {
+        let _ = progress_app.emit("setup-progress", &event);
+    };
+
+    if session.dry_run {
+        provision::update_worker(
+            &DryRunBackend,
+            manifest,
+            &worker_url,
+            "demo",
+            provision::VectorizeTarget { name: &target_index, dimensions },
+            progress,
+        )
+        .await
+        .map_err(|e| {
+            log::warn!("dry-run migration redeploy failed: {e}");
+            user_err(locale, Key::ErrorFriendlyRetry)
+        })?;
+        return Ok(());
+    }
+
+    let client = cloudflare_client_for_brain(&worker_url, &session, locale).await?;
+    let backend = LiveBackend { client };
+
+    // Creating the index is idempotent and non-destructive, and update_worker
+    // creates the target if it is missing — so a retry after a failed deploy
+    // costs nothing.
+    provision::update_worker(
+        &backend,
+        manifest,
+        &worker_url,
+        &auth_token,
+        provision::VectorizeTarget { name: &target_index, dimensions },
+        progress,
+    )
+    .await
+    .map_err(|e| {
+        log::warn!("migration redeploy failed: {e}");
+        match e {
+            ProvisionError::NotAWorkersDevAddress => user_err(locale, Key::ErrorCustomDomain),
+            _ => user_err(locale, Key::ErrorFriendlyRetry),
+        }
+    })?;
+
+    // Only now is the brain reading the new index, so only now is the new model
+    // safe to record.
+    crate::migration::patch_embedding_model(&worker_url, &auth_token, &model, locale).await?;
+
+    // Any ledger from a previous target is meaningless against this one.
+    crate::migration::reset(&worker_url, &auth_token, locale).await
+}
+
+/// One re-embed batch. The window loops on this until `done`, and stops if
+/// `stalled` — the day's model allowance is spent and the cursor is kept.
+#[tauri::command]
+pub async fn migration_step(app: AppHandle) -> Result<crate::migration::BatchProgress, String> {
+    let (url, token, locale) = settings_target(&app)?;
+    crate::migration::run_batch(&url, &token, locale).await
+}
+
+/// Deletes the superseded index. The one irreversible step, so the UI confirms it
+/// separately and only after a rebuild has finished.
+#[tauri::command]
+pub async fn finish_embedding_migration(
+    old_dimensions: u32,
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
+    let locale = locale_of(&app);
+    let manifest = worker_bundle::manifest();
+    let (worker_url, _, _) = settings_target(&app)?;
+
+    let old_index = crate::migration::index_name_for(
+        &manifest.vectorize_name,
+        old_dimensions,
+        manifest.vectorize_dimensions,
+    );
+
+    // Refuse to delete the index the brain is currently reading. The caller passes
+    // the size it is moving *from*, and a mistake there would drop the live one —
+    // so the live model is read back and checked rather than trusted.
+    let (_, auth_token, _) = settings_target(&app)?;
+    let status = crate::migration::fetch_status(&worker_url, &auth_token, locale).await?;
+    let live_model = status
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or_default();
+    let live_index = crate::migration::index_name_for(
+        &manifest.vectorize_name,
+        crate::migration::dimensions_for(live_model).unwrap_or(manifest.vectorize_dimensions),
+        manifest.vectorize_dimensions,
+    );
+    if old_index == live_index {
+        return Err(user_err(locale, Key::ErrorCannotDeleteLiveIndex));
+    }
+
+    // Through the Backend trait rather than the client directly, so demo mode
+    // exercises the same code path instead of returning early past it.
+    use provision::Backend;
+    let failed = |e: CfApiError| {
+        log::warn!("old index delete failed: {e}");
+        user_err(locale, Key::ErrorFriendlyRetry)
+    };
+    if session.dry_run {
+        return DryRunBackend.delete_vectorize(&old_index).await.map_err(failed);
+    }
+    let backend = LiveBackend {
+        client: cloudflare_client_for_brain(&worker_url, &session, locale).await?,
+    };
+    backend.delete_vectorize(&old_index).await.map_err(failed)
+}
+
 fn settings_target(app: &AppHandle) -> Result<(String, String, Locale), String> {
     let locale = locale_of(app);
     let session = app.state::<SetupSession>();

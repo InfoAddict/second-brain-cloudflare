@@ -13,6 +13,7 @@ mod commands;
 mod credits;
 mod i18n;
 mod mcp_config;
+mod migration;
 mod password_check;
 mod secure_store;
 mod settings;
@@ -165,6 +166,11 @@ pub fn run() {
             commands::connect_cloudflare,
             commands::connect_existing,
             commands::discover_brains,
+            commands::migration_estimate,
+            commands::migration_status,
+            commands::begin_embedding_migration,
+            commands::migration_step,
+            commands::finish_embedding_migration,
             commands::start_provisioning,
             commands::get_connection_details,
             commands::detect_tools,

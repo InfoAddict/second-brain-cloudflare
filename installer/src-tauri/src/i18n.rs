@@ -109,6 +109,9 @@ pub enum Key {
     ErrorNotionSynced,
     ErrorNotionUpToDate,
     ErrorCfAccountListFailed,
+    ErrorBrainNeedsUpdateForMigration,
+    ErrorUnknownEmbeddingModel,
+    ErrorCannotDeleteLiveIndex,
     ErrorCfNoSubdomain,
     ErrorCfDiscoverFailed,
     ErrorChoosePasswordFirst,
@@ -233,6 +236,17 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         (Locale::En, Key::ErrorNotionUpToDate) => "Notion is already up to date.",
         (Locale::En, Key::ErrorCfAccountListFailed) => {
             "Signed in, but we couldn't read your account. Please try again."
+        }
+        (Locale::En, Key::ErrorUnknownEmbeddingModel) => {
+            "That isn't a way of reading memories this app knows how to set up."
+        }
+        (Locale::En, Key::ErrorCannotDeleteLiveIndex) => {
+            "That's the search data your Second Brain is using right now, so it can't be \
+freed up. Nothing was changed."
+        }
+        (Locale::En, Key::ErrorBrainNeedsUpdateForMigration) => {
+            "Your Second Brain needs updating before it can change how it reads memories. \
+Update it first, then try again."
         }
         (Locale::En, Key::ErrorCfNoSubdomain) => {
             "We couldn't work out the web address for this Cloudflare space, so there's \
@@ -377,6 +391,17 @@ Second Brain's address by hand instead."
         (Locale::It, Key::ErrorCfAccountListFailed) => {
             "Accesso effettuato, ma non è stato possibile leggere l'account. Riprova."
         }
+        (Locale::It, Key::ErrorUnknownEmbeddingModel) => {
+            "Non è un modo di leggere i ricordi che questa app sappia configurare."
+        }
+        (Locale::It, Key::ErrorCannotDeleteLiveIndex) => {
+            "Sono i dati di ricerca che il tuo Second Brain sta usando in questo momento, \
+quindi non possono essere liberati. Nulla è stato modificato."
+        }
+        (Locale::It, Key::ErrorBrainNeedsUpdateForMigration) => {
+            "Il tuo Second Brain va aggiornato prima di poter cambiare il modo in cui legge \
+i ricordi. Aggiornalo, poi riprova."
+        }
         (Locale::It, Key::ErrorCfNoSubdomain) => {
             "Non siamo riusciti a determinare l'indirizzo web di questo spazio Cloudflare, \
 quindi non c'è nulla da cercare. Puoi comunque inserire a mano l'indirizzo del tuo Second Brain."
@@ -520,6 +545,9 @@ mod tests {
             ErrorCfNoAccount,
             ErrorCfSignInFirst,
             ErrorCfSignInExpired,
+            ErrorBrainNeedsUpdateForMigration,
+            ErrorUnknownEmbeddingModel,
+            ErrorCannotDeleteLiveIndex,
             ErrorCfNoSubdomain,
             ErrorCfDiscoverFailed,
             ErrorNotionSynced,

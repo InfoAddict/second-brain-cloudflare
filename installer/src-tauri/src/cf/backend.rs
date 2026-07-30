@@ -34,6 +34,9 @@ impl Backend for LiveBackend {
     async fn vectorize_exists(&self, name: &str) -> Result<bool, CfApiError> {
         self.client.vectorize_exists(name).await
     }
+    async fn delete_vectorize(&self, name: &str) -> Result<(), CfApiError> {
+        self.client.delete_vectorize(name).await
+    }
     async fn create_vectorize(
         &self,
         name: &str,
@@ -124,6 +127,10 @@ impl Backend for DryRunBackend {
         self.pause().await;
         Ok(())
     }
+    async fn delete_vectorize(&self, _name: &str) -> Result<(), CfApiError> {
+        self.pause().await;
+        Ok(())
+    }
     async fn upload_assets(&self, _script: &str) -> Result<String, CfApiError> {
         self.pause().await;
         Ok("dryrun-jwt".into())
@@ -158,6 +165,10 @@ impl Backend for DryRunBackend {
         Ok(vec![
             serde_json::json!({ "type": "d1", "name": "DB", "database_id": "dryrun-d1" }),
             serde_json::json!({ "type": "kv_namespace", "name": "OAUTH_KV", "namespace_id": "dryrun-kv" }),
+            // The vectorize binding matters in demo mode too: the embedding
+            // migration reads it to show which index is bound, and without it the
+            // demo silently falls through to "none".
+            serde_json::json!({ "type": "vectorize", "name": "VECTORIZE", "index_name": "second-brain-vectors" }),
         ])
     }
     async fn sleep(&self, _duration: Duration) {}

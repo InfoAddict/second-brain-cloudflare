@@ -218,7 +218,10 @@ Everything the installer ever calls, for auditability:
 | `GET/PUT /accounts/{a}/workers/subdomain` | read / register the account's `workers.dev` address |
 | `GET/POST /accounts/{a}/d1/database` | find-or-create the `second-brain-db` database |
 | `GET/POST /accounts/{a}/storage/kv/namespaces` | find-or-create the `second-brain-oauth` namespace |
-| `GET/POST /accounts/{a}/vectorize/v2/indexes` | find-or-create `second-brain-vectors` (384 dims, cosine) |
+| `GET/POST /accounts/{a}/vectorize/v2/indexes` | find-or-create the vector index the deploy binds (384 dims, cosine by default) |
+| `GET /accounts/{a}/vectorize/v2/indexes/{i}` | read an index's real dimensions and metric, rather than trusting the manifest |
+| `GET /accounts/{a}/vectorize/v2/indexes/{i}/info` | vector count and indexing progress — how a rebuild is verified before the old index is dropped |
+| `DELETE /accounts/{a}/vectorize/v2/indexes/{i}` | delete the superseded index after an embedding-model change, only on explicit confirmation |
 | `POST /accounts/{a}/workers/scripts/second-brain/assets-upload-session` | start the dashboard asset upload |
 | `POST /accounts/{a}/workers/assets/upload?base64=true` | upload dashboard files |
 | `PUT /accounts/{a}/workers/scripts/second-brain` | deploy the Worker (multipart: module + metadata with D1/Vectorize/KV/AI bindings, `VECTORIZE_GRACE_MS` var, `AUTH_TOKEN` secret, assets) |
