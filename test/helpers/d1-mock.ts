@@ -57,7 +57,10 @@ export class D1Mock {
     const makeStmt = (args: any[]) => ({
       async run() {
         if (s.startsWith("INSERT INTO entries")) {
-          if (args.length >= 8) {
+          if (args.length >= 11) {
+            const [id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses] = args;
+            db.entries.push({ id, content, tags, source, created_at, updated_at, vector_ids, recall_count: recall_count ?? 0, importance_score: importance_score ?? 0, contradiction_wins: contradiction_wins ?? 0, contradiction_losses: contradiction_losses ?? 0 });
+          } else if (args.length >= 8) {
             const [id, content, tags, source, created_at, updated_at, vector_ids, importance_score] = args;
             db.entries.push({ id, content, tags, source, created_at, updated_at, vector_ids, recall_count: 0, importance_score: importance_score ?? 0, contradiction_wins: 0, contradiction_losses: 0 });
           } else if (args.length === 7) {

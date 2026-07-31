@@ -1,0 +1,180 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import worker from "../../src/index";
+import { makeTestEnv, makeTestDb } from "../helpers/make-env";
+import { req } from "../helpers/make-request";
+import type { Env } from "../../src/env";
+import { D1Mock } from "../helpers/d1-mock";
+
+const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
+
+function seedEntry(
+  db: D1Mock,
+  id: string,
+  content: string,
+  tags: string[] = [],
+  created_at = 1000,
+  opts: { source?: string; vector_ids?: string; recall_count?: number; importance_score?: number } = {},
+) {
+  db.entries.push({
+    id,
+    content,
+    tags: JSON.stringify(tags),
+    source: opts.source ?? "api",
+    created_at,
+    updated_at: created_at,
+    vector_ids: opts.vector_ids ?? '["v1"]',
+    recall_count: opts.recall_count ?? 0,
+    importance_score: opts.importance_score ?? 0,
+    contradiction_wins: 0,
+    contradiction_losses: 0,
+  });
+}
+
+function exportPayload(db: D1Mock) {
+  return {
+    version: 2,
+    entries: db.entries.map(e => ({
+      id: e.id,
+      content: e.content,
+      tags: JSON.parse(e.tags ?? "[]"),
+      source: e.source,
+      created_at: e.created_at,
+      recall_count: e.recall_count ?? 0,
+      importance_score: e.importance_score ?? 0,
+      contradiction_wins: e.contradiction_wins ?? 0,
+      contradiction_losses: e.contradiction_losses ?? 0,
+    })),
+    edges: db.edges.map(e => ({
+      source_id: e.source_id,
+      target_id: e.target_id,
+      type: e.type,
+      weight: e.weight,
+      provenance: e.provenance,
+      created_at: e.created_at,
+    })),
+  };
+}
+
+describe("POST /import", () => {
+  let env: Env;
+  let db: D1Mock;
+
+  beforeEach(() => {
+    db = makeTestDb();
+    env = makeTestEnv(db);
+  });
+
+  it("requires auth", async () => {
+    const res = await worker.fetch(req("POST", "/import", { body: { version: 2, entries: [] }, token: null }), env, ctx);
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects invalid version", async () => {
+    const res = await worker.fetch(req("POST", "/import", { body: { version: 1, entries: [] } }), env, ctx);
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toMatch(/version must be 2/);
+  });
+
+  it("rejects missing entries array", async () => {
+    const res = await worker.fetch(req("POST", "/import", { body: { version: 2 } }), env, ctx);
+    expect(res.status).toBe(400);
+    const data = await res.json() as any;
+    expect(data.error).toMatch(/entries must be an array/);
+  });
+
+  it("round-trips export payload into an empty brain", async () => {
+    seedEntry(db, "a", "Memory A", ["work", "kind:semantic"], 5000, { source: "phone", recall_count: 3, importance_score: 4 });
+    seedEntry(db, "b", "Memory B", ["idea"], 4000);
+    db.edges.push({ id: "edge-1", source_id: "a", target_id: "b", type: "relates_to", weight: 0.7, provenance: "inferred", metadata: "{}", created_at: 1, updated_at: 1 });
+
+    const payload = exportPayload(db);
+    db.reset();
+
+    const res = await worker.fetch(req("POST", "/import", { body: payload }), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.ok).toBe(true);
+    expect(data.imported).toBe(2);
+    expect(data.skipped).toBe(0);
+    expect(data.failed).toBe(0);
+    expect(data.edges_imported).toBe(1);
+    expect(data.edges_failed).toBe(0);
+    expect(data.vectorize_hint).toMatch(/vectorize-pending/);
+
+    const a = db.entries.find(e => e.id === "a")!;
+    expect(a.content).toBe("Memory A");
+    expect(JSON.parse(a.tags)).toEqual(["work", "kind:semantic"]);
+    expect(a.source).toBe("phone");
+    expect(a.created_at).toBe(5000);
+    expect(a.recall_count).toBe(3);
+    expect(a.importance_score).toBe(4);
+    expect(a.vector_ids).toBe("[]");
+
+    expect(db.edges).toHaveLength(1);
+    expect(db.edges[0]).toMatchObject({ source_id: "a", target_id: "b", type: "relates_to" });
+  });
+
+  it("is idempotent — second import skips all entries", async () => {
+    const payload = {
+      version: 2,
+      entries: [{ id: "x", content: "Note", tags: ["t"], source: "api", created_at: 100 }],
+      edges: [],
+    };
+
+    const first = await worker.fetch(req("POST", "/import", { body: payload }), env, ctx);
+    const firstData = await first.json() as any;
+    expect(firstData.imported).toBe(1);
+
+    const second = await worker.fetch(req("POST", "/import", { body: payload }), env, ctx);
+    const secondData = await second.json() as any;
+    expect(secondData.imported).toBe(0);
+    expect(secondData.skipped).toBe(1);
+    expect(db.entries).toHaveLength(1);
+  });
+
+  it("fails edges with missing endpoints but still imports entries", async () => {
+    const payload = {
+      version: 2,
+      entries: [{ id: "a", content: "Only A", created_at: 1 }],
+      edges: [{ source_id: "a", target_id: "missing", type: "relates_to" }],
+    };
+
+    const res = await worker.fetch(req("POST", "/import", { body: payload }), env, ctx);
+    const data = await res.json() as any;
+    expect(data.imported).toBe(1);
+    expect(data.edges_imported).toBe(0);
+    expect(data.edges_failed).toBe(1);
+    expect(data.results).toContainEqual(expect.objectContaining({
+      source_id: "a",
+      target_id: "missing",
+      status: "failed",
+      reason: "missing_endpoint",
+    }));
+  });
+
+  it("does not trigger capture duplicate detection for similar content with a new id", async () => {
+    seedEntry(db, "existing", "The quick brown fox jumps over the lazy dog", ["note"]);
+
+    const payload = {
+      version: 2,
+      entries: [{ id: "new-id", content: "The quick brown fox jumps over the lazy dog", tags: ["note"], created_at: 2000 }],
+      edges: [],
+    };
+
+    const res = await worker.fetch(req("POST", "/import", { body: payload }), env, ctx);
+    const data = await res.json() as any;
+    expect(data.imported).toBe(1);
+    expect(db.entries).toHaveLength(2);
+    expect(db.entries.find(e => e.id === "new-id")?.vector_ids).toBe("[]");
+  });
+
+  it("reports failed entries with missing content", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: { version: 2, entries: [{ id: "bad", content: "  " }], edges: [] },
+    }), env, ctx);
+    const data = await res.json() as any;
+    expect(data.failed).toBe(1);
+    expect(data.results).toContainEqual({ id: "bad", status: "failed", reason: "missing_content" });
+  });
+});

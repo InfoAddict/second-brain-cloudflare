@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { importExportPayload, parseImportBody } from "../entries/import";
 import { json, requireAuth } from "../lib/http";
 import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
@@ -67,6 +68,24 @@ export async function handleEntriesRoutes(
       created_at: r.created_at,
     }));
     return json({ ok: true, exported_at: Date.now(), version: 2, entries, edges });
+  }
+
+  // POST /import — round-trip counterpart to GET /export (issue #217). Inserts by
+  // export id (skip if exists), preserves created_at/tags/source, defers embedding
+  // via vector_ids=[] so POST /vectorize-pending can backfill without burning the
+  // Workers AI quota in one request. Does NOT go through /capture.
+  if (url.pathname === "/import" && request.method === "POST") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    let body: unknown;
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+
+    const parsed = parseImportBody(body);
+    if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
+
+    const summary = await importExportPayload(env, parsed.payload);
+    return json(summary);
   }
 
   // POST /forget — delete-by-id, mirrors the MCP `forget` tool
