@@ -25,6 +25,18 @@ Prefer to run it yourself? Use the one-click **[Deploy to Cloudflare](https://de
 >
 > <a href="https://www.producthunt.com/products/second-brain-cloudflare?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-second-brain-for-ai" target="_blank" rel="noopener noreferrer"><img alt="Second Brain for AI: Persistent memory for Claude, ChatGPT, and Cursor" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1151393&theme=light&period=daily&t=1780357463637"></a>
 
+## What's new in v2.2
+
+* **Advanced Settings.** Seven plain-language controls for how your Second Brain remembers and recalls — how much recent memories outrank old ones, how varied results are, how far to follow connections, how much detail comes back, how strictly duplicates are blocked, how aggressively old memories are compressed, and which AI model does the thinking. Open it with ⌘, in the desktop app. Changes apply to your next search, with no redeploy.
+
+* **Change how your memories are read.** Pick a finer reading for more precise matching, and the app rebuilds your search data for you — resumable if your daily AI allowance runs out, and reversible until the final step. Your memories themselves are never touched.
+
+* **Lost your password?** The unlock screen is no longer a dead end. Sign in to Cloudflare and set a new one. You can also change your password deliberately from Connections, and disconnect every AI tool in one step.
+
+* **Find a brain you already have.** Setting up on a new computer? Sign in to Cloudflare and the app finds your Second Brain — identified from your account's own records, not by asking the Worker. Typing the address yourself still works exactly as before.
+
+* **Now in Italian**, with native menus on Mac and Windows, and a download button in the dashboard sidebar.
+
 ## What's new in v2.1
 
 * **Calendar sync.** Connect Google, Outlook, or iCloud calendars from **Settings → Integrations** by pasting your calendar's private iCal (`.ics`) link — no OAuth, no developer setup. Upcoming events sync into memory and stay current, so recall knows what's on your plate; past events are kept as a bounded history.
