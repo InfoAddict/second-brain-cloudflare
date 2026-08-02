@@ -100,6 +100,8 @@ describe("POST /import", () => {
     expect(data.failed).toBe(0);
     expect(data.edges_imported).toBe(1);
     expect(data.edges_failed).toBe(0);
+    expect(data.remaining_entries).toBe(0);
+    expect(data.remaining_edges).toBe(0);
     expect(data.vectorize_hint).toMatch(/vectorize-pending/);
 
     const a = db.entries.find(e => e.id === "a")!;
@@ -176,5 +178,73 @@ describe("POST /import", () => {
     const data = await res.json() as any;
     expect(data.failed).toBe(1);
     expect(data.results).toContainEqual({ id: "bad", status: "failed", reason: "missing_content" });
+  });
+
+  it("reports invalid_id for non-string ids without aborting the request", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [
+          { id: 123, content: "bad id type" },
+          { id: "good", content: "valid entry", created_at: 1 },
+        ],
+        edges: [],
+      },
+    }), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.failed).toBe(1);
+    expect(data.imported).toBe(1);
+    expect(data.results).toContainEqual({ id: "123", status: "failed", reason: "invalid_id" });
+    expect(db.entries).toHaveLength(1);
+    expect(db.entries[0].id).toBe("good");
+  });
+
+  it("respects ?limit= and reports remaining_entries", async () => {
+    const payload = {
+      version: 2,
+      entries: [
+        { id: "e1", content: "One", created_at: 1 },
+        { id: "e2", content: "Two", created_at: 2 },
+        { id: "e3", content: "Three", created_at: 3 },
+      ],
+      edges: [],
+    };
+
+    const first = await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx);
+    const firstData = await first.json() as any;
+    expect(firstData.imported).toBe(1);
+    expect(firstData.remaining_entries).toBe(2);
+
+    const second = await worker.fetch(req("POST", "/import?limit=10", { body: payload }), env, ctx);
+    const secondData = await second.json() as any;
+    expect(secondData.imported).toBe(2);
+    expect(secondData.skipped).toBe(1);
+    expect(secondData.remaining_entries).toBe(0);
+    expect(db.entries).toHaveLength(3);
+  });
+
+  it("defers edges until all entries are processed", async () => {
+    const payload = {
+      version: 2,
+      entries: [
+        { id: "a", content: "A", created_at: 1 },
+        { id: "b", content: "B", created_at: 2 },
+      ],
+      edges: [{ source_id: "a", target_id: "b", type: "relates_to" }],
+    };
+
+    const partial = await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx);
+    const partialData = await partial.json() as any;
+    expect(partialData.imported).toBe(1);
+    expect(partialData.remaining_entries).toBe(1);
+    expect(partialData.remaining_edges).toBe(1);
+    expect(partialData.edges_imported).toBe(0);
+    expect(db.edges).toHaveLength(0);
+
+    const finish = await worker.fetch(req("POST", "/import", { body: payload }), env, ctx);
+    const finishData = await finish.json() as any;
+    expect(finishData.edges_imported).toBe(1);
+    expect(db.edges).toHaveLength(1);
   });
 });

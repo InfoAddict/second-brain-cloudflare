@@ -63,6 +63,9 @@ export class D1Mock {
           } else if (args.length >= 8) {
             const [id, content, tags, source, created_at, updated_at, vector_ids, importance_score] = args;
             db.entries.push({ id, content, tags, source, created_at, updated_at, vector_ids, recall_count: 0, importance_score: importance_score ?? 0, contradiction_wins: 0, contradiction_losses: 0 });
+          } else if (args.length === 10) {
+            const [id, content, tags, source, created_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses] = args;
+            db.entries.push({ id, content, tags, source, created_at, updated_at: created_at, vector_ids, recall_count: recall_count ?? 0, importance_score: importance_score ?? 0, contradiction_wins: contradiction_wins ?? 0, contradiction_losses: contradiction_losses ?? 0 });
           } else if (args.length === 7) {
             const [id, content, tags, source, created_at, updated_at, vector_ids] = args;
             db.entries.push({ id, content, tags, source, created_at, updated_at, vector_ids, recall_count: 0, importance_score: 0, contradiction_wins: 0, contradiction_losses: 0 });
@@ -311,6 +314,9 @@ export class D1Mock {
           // with it. Fresh and partially-migrated brains are covered against real SQLite
           // in test/unit/db-init.test.ts.
           return { results: SCHEMA_PROBE_RESULTS };
+        }
+        if (s === "SELECT id FROM entries") {
+          return { results: db.entries.map((e: any) => ({ id: e.id })) };
         }
         if (
           sBare === "SELECT id FROM entries WHERE tags LIKE ?" ||

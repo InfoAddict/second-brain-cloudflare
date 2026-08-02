@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { importExportPayload, parseImportBody } from "../entries/import";
+import { importExportPayload, parseImportBody, parseImportLimit } from "../entries/import";
 import { json, requireAuth } from "../lib/http";
 import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
@@ -84,7 +84,8 @@ export async function handleEntriesRoutes(
     const parsed = parseImportBody(body);
     if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
 
-    const summary = await importExportPayload(env, parsed.payload);
+    const limit = parseImportLimit(url.searchParams.get("limit"));
+    const summary = await importExportPayload(env, parsed.payload, { limit });
     return json(summary);
   }
 
