@@ -1,7 +1,6 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
-  KEYWORD_CANDIDATE_LIMIT,
   VECTORIZE_GET_BY_IDS_BATCH,
   VECTORIZE_TOP_K_MULTIPLIER,
 } from "../constants";
@@ -13,26 +12,30 @@ import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { derivePattern } from "../compression/pattern";
 import { parseTimePhrase } from "../text/temporal";
 import { tokenizeQuery } from "../text/tokenize";
-import { distillToRareTerms, inferQueryTags } from "./distill";
+import { distillToRareTerms, inferQueryTags, type DistilledQuery } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import type { KeywordRow, RecallMatch, RecallSearchResult } from "./types";
 
-async function keywordSearch(tokens: string[], env: Env): Promise<KeywordRow[]> {
+async function keywordSearch(tokens: string[], env: Env, limit: number): Promise<KeywordRow[]> {
   if (!tokens.length) return [];
   const where = tokens.map(() => "content LIKE ?").join(" OR ");
   const { results } = await env.DB.prepare(
     `SELECT id, content, tags, source, created_at FROM entries WHERE ${where} ORDER BY created_at DESC LIMIT ?`
-  ).bind(...tokens.map(t => `%${t}%`), KEYWORD_CANDIDATE_LIMIT).all();
+  ).bind(...tokens.map(t => `%${t}%`), limit).all();
   return results as unknown as KeywordRow[];
 }
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function fuseDenseAndKeyword(
   denseMatches: VectorizeMatch[],
   keywordRows: KeywordRow[],
   tokens: string[],
-  allowKeywordOnly: boolean
+  allowKeywordOnly: boolean,
+  corpus: Pick<DistilledQuery, "df" | "total">,
+  substringWeight: number
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -42,11 +45,35 @@ function fuseDenseAndKeyword(
   const denseRanked = [...denseByParent.keys()];
 
   const kwLower = keywordRows.map(r => ({ row: r, lc: r.content.toLowerCase() }));
-  const kwN = kwLower.length || 1;
-  const kwDf = new Map(tokens.map(t => [t, kwLower.reduce((n, x) => n + (x.lc.includes(t) ? 1 : 0), 0)]));
-  const kwIdf = (t: string) => Math.log(1 + kwN / ((kwDf.get(t) ?? 0) + 1));
+
+  // IDF from the corpus-wide frequencies distillToRareTerms already computed,
+  // when they cover every token; otherwise the old estimate from the fetched
+  // rows. All-or-nothing rather than per-token, because the two denominators
+  // (corpus size vs fetch-window size) are different scales — mixing them in
+  // one weight sum would let the source of a token's IDF, not its rarity,
+  // decide the ranking.
+  let idf: (t: string) => number;
+  if (corpus.df && corpus.total && tokens.every(t => corpus.df!.has(t))) {
+    const { df, total } = corpus;
+    idf = t => Math.log(1 + total / ((df.get(t) ?? 0) + 1));
+  } else {
+    const kwN = kwLower.length || 1;
+    const kwDf = new Map(tokens.map(t => [t, kwLower.reduce((n, x) => n + (x.lc.includes(t) ? 1 : 0), 0)]));
+    idf = t => Math.log(1 + kwN / ((kwDf.get(t) ?? 0) + 1));
+  }
+
+  // A token found at a word boundary earns full IDF; found only inside a longer
+  // word ("cat" in "concatenate") it earns a configured fraction. Lookarounds
+  // rather than \b so identifier-shaped tokens ("#149", "v1.9") keep matching —
+  // \b treats their punctuation as the boundary itself.
+  const boundary = new Map(tokens.map(t => [t, new RegExp(`(?<![\\w])${escapeRegExp(t)}(?![\\w])`)]));
+  const tokenWeight = (lc: string, t: string) => {
+    if (!lc.includes(t)) return 0;
+    return boundary.get(t)!.test(lc) ? idf(t) : idf(t) * substringWeight;
+  };
+
   const keywordRanked = kwLower
-    .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + (x.lc.includes(t) ? kwIdf(t) : 0), 0) }))
+    .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + tokenWeight(x.lc, t), 0) }))
     .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)))
     .sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
 
@@ -90,7 +117,8 @@ export async function recallEntries(
     before = parsed.before;
     embedQuery = parsed.cleanQuery;
   }
-  embedQuery = await distillToRareTerms(embedQuery, env, cfg);
+  const distilled = await distillToRareTerms(embedQuery, env, cfg);
+  embedQuery = distilled.query;
 
   const tokens = tokenizeQuery(embedQuery);
   const [values, queryTags] = await Promise.all([
@@ -141,7 +169,7 @@ export async function recallEntries(
         return { matches: [] as VectorizeMatch[] };
       }
     };
-    const [denseResults, kwRows] = await Promise.all([denseQuery(), keywordSearch(tokens, env)]);
+    const [denseResults, kwRows] = await Promise.all([denseQuery(), keywordSearch(tokens, env, cfg.KEYWORD_CANDIDATE_LIMIT)]);
     results = denseResults;
     keywordRows = kwRows;
 
@@ -157,7 +185,7 @@ export async function recallEntries(
     }
   }
 
-  const fusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !tag || semanticUnavailable);
+  const fusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !tag || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
   if (!fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
   const candidateIds = [...new Set(fusedMatches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];

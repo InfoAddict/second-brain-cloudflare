@@ -20,7 +20,7 @@ describe("distillToRareTerms", () => {
     const order = ["second", "brain", "dictawiz", "reddit"];
     const env = envWith(100, { second: 80, brain: 85, dictawiz: 2, reddit: 6 }, order);
     const out = await distillToRareTerms("second brain dictawiz reddit", env);
-    expect(out).toBe("dictawiz reddit");
+    expect(out.query).toBe("dictawiz reddit");
   });
 
   it("caps the query at the rarest MAX_QUERY_TERMS (3)", async () => {
@@ -29,7 +29,7 @@ describe("distillToRareTerms", () => {
     const env = envWith(100, { quarterly: 4, review: 25, budget: 3, finance: 2 }, order);
     const out = await distillToRareTerms("quarterly review budget finance", env);
     // "review" (df 25) is the most common of the four → dropped; order preserved.
-    expect(out).toBe("quarterly budget finance");
+    expect(out.query).toBe("quarterly budget finance");
   });
 
   it("strips grammatical stopwords, then drops saturating content words", async () => {
@@ -38,17 +38,62 @@ describe("distillToRareTerms", () => {
     const order = ["happened", "trip", "cleveland"];
     const env = envWith(100, { happened: 45, trip: 12, cleveland: 3 }, order);
     const out = await distillToRareTerms("what happened on the trip to cleveland", env);
-    expect(out).toBe("trip cleveland");
+    expect(out.query).toBe("trip cleveland");
   });
 
   it("returns a single content word unchanged without touching the DB", async () => {
     const env = { DB: { prepare: () => { throw new Error("should not query"); } } } as any;
-    expect(await distillToRareTerms("dictawiz", env)).toBe("dictawiz");
+    const out = await distillToRareTerms("dictawiz", env);
+    expect(out.query).toBe("dictawiz");
   });
 
   it("falls back to the content words if the frequency scan fails", async () => {
     const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => { throw new Error("db down"); } }) }) } } as any;
     const out = await distillToRareTerms("alpha beta gamma", env);
-    expect(out).toBe("alpha beta gamma");
+    expect(out.query).toBe("alpha beta gamma");
+  });
+
+  // ── Corpus statistics passthrough ──────────────────────────────────────────
+  //
+  // The DF scan above is corpus-wide truth, and fuseDenseAndKeyword previously
+  // re-estimated the same statistic from its ≤LIMIT fetched rows — a biased
+  // sample. These tests pin the contract that lets fusion reuse the real
+  // numbers: on success df covers EVERY scanned term (dropped ones included,
+  // since fusion's tokens come from the distilled query but fallback paths can
+  // widen), and on any fallback both stats are null so fusion knows not to
+  // trust half a result.
+
+  it("returns corpus df and total for every scanned term on success", async () => {
+    const order = ["second", "brain", "dictawiz", "reddit"];
+    const env = envWith(100, { second: 80, brain: 85, dictawiz: 2, reddit: 6 }, order);
+    const out = await distillToRareTerms("second brain dictawiz reddit", env);
+    expect(out.total).toBe(100);
+    expect(out.df?.get("dictawiz")).toBe(2);
+    expect(out.df?.get("reddit")).toBe(6);
+    // Dropped terms still carry their frequencies — the scan already paid for them.
+    expect(out.df?.get("second")).toBe(80);
+    expect(out.df?.get("brain")).toBe(85);
+  });
+
+  it("returns null stats when the query never reaches the DB", async () => {
+    const env = { DB: { prepare: () => { throw new Error("should not query"); } } } as any;
+    const out = await distillToRareTerms("dictawiz", env);
+    expect(out.df).toBeNull();
+    expect(out.total).toBeNull();
+  });
+
+  it("returns null stats when the frequency scan fails", async () => {
+    const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => { throw new Error("db down"); } }) }) } } as any;
+    const out = await distillToRareTerms("alpha beta gamma", env);
+    expect(out.df).toBeNull();
+    expect(out.total).toBeNull();
+  });
+
+  it("returns null stats when the corpus is empty", async () => {
+    const env = envWith(0, {}, []);
+    const out = await distillToRareTerms("alpha beta gamma", env);
+    expect(out.query).toBe("alpha beta gamma");
+    expect(out.df).toBeNull();
+    expect(out.total).toBeNull();
   });
 });

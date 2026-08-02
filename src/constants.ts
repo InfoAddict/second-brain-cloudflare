@@ -40,7 +40,16 @@ export const VECTORIZE_GET_BY_IDS_BATCH = 20;
 export const D1_MAX_BOUND_PARAMS = 100;
 
 export const RRF_K = 60;
-export const KEYWORD_CANDIDATE_LIMIT = 100;
+// Candidate fetch window for the keyword arm. The query is still newest-first
+// (LIKE has no relevance ordering), so this bounds how far back a keyword match
+// can be found at all — 100 proved able to bury a genuine old match under
+// fresher substring noise once a term crossed 100 occurrences.
+export const KEYWORD_CANDIDATE_LIMIT = 500;
+// IDF fraction granted to a token that matches only as a substring of a longer
+// word ("cat" inside "concatenate"). Re-weighting rather than filtering: plural
+// and hyphenated near-matches stay retrievable, they just stop outranking
+// genuine word-boundary matches.
+export const SUBSTRING_MATCH_WEIGHT = 0.25;
 export const KEYWORD_MIN_TOKEN_LEN = 2;
 export const QUERY_SATURATION_FRACTION = 0.3;
 export const MAX_QUERY_TERMS = 3;
