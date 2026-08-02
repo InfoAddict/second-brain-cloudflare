@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
+    "predeploy": "node scripts/predeploy-guard.mjs",
     "deploy": "wrangler deploy",
     "deploy:worker": "node scripts/release.mjs worker",
     "deploy:app": "node scripts/release.mjs app",
