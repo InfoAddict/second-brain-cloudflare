@@ -60,6 +60,23 @@ export function urlCard(label: string, desc: string, value: string): HTMLElement
   ]);
 }
 
+/// A password on screen, with a Copy button and no description — the label
+/// carries the whole meaning, and it changes with the state (see #235 §4.1,
+/// where the same value is "not in use").
+///
+/// Deliberately separate from `urlCard`: once a password change lands, nothing
+/// can read that password back — not this app, not Cloudflare, not Wrangler —
+/// so every screen that reports what happened has to carry it. This is the card
+/// that does that, and there is no Email button anywhere near it.
+export function secretCard(label: string, value: string): HTMLElement {
+  const copyBtn = h("button", { class: "btn-secondary" }, [t("common.copy")]);
+  copyBtn.addEventListener("click", () => void copyText(value, copyBtn));
+  return h("div", { class: "card url-card" }, [
+    h("div", { class: "url-label" }, [label]),
+    h("div", { class: "url-line" }, [h("div", { class: "url-value" }, [value]), copyBtn]),
+  ]);
+}
+
 /// The two URL cards used on the final setup screen AND in Connection details.
 export function detailCards(details: ConnectionDetails): HTMLElement[] {
   return [

@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { DEFAULTS, type Config } from "../config";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { getKind } from "../memory/kind";
 import { getStatus } from "../memory/status";
@@ -30,8 +31,9 @@ export async function expandGraph(
   seedIds: string[],
   opts: { hops: number; fanoutCap?: number; maxNodes?: number; includeDeprecated?: boolean },
   env: Env,
+  config: Readonly<Config> = DEFAULTS,
 ): Promise<GraphNeighbor[]> {
-  const hops = Math.max(0, Math.min(GRAPH_MAX_HOPS, opts.hops));
+  const hops = Math.max(0, Math.min(config.GRAPH_MAX_HOPS, opts.hops));
   if (hops === 0 || seedIds.length === 0) return [];
   const fanoutCap = opts.fanoutCap ?? GRAPH_FANOUT_CAP;
   const maxNodes = opts.maxNodes ?? GRAPH_MAX_NODES;
@@ -99,8 +101,8 @@ async function hydrateGraphEntries(ids: string[], env: Env): Promise<Map<string,
   return map;
 }
 
-export async function getConnections(id: string, type: string | undefined, env: Env): Promise<Connection[]> {
-  let neighbors = await expandGraph([id], { hops: 1 }, env);
+export async function getConnections(id: string, type: string | undefined, env: Env, config: Readonly<Config> = DEFAULTS): Promise<Connection[]> {
+  let neighbors = await expandGraph([id], { hops: 1 }, env, config);
   if (type) neighbors = neighbors.filter(n => n.viaType === type);
   if (!neighbors.length) return [];
 
@@ -125,12 +127,12 @@ export async function getConnections(id: string, type: string | undefined, env: 
   return out;
 }
 
-export async function buildGraph(opts: { seed?: string; limit?: number }, env: Env): Promise<GraphView> {
+export async function buildGraph(opts: { seed?: string; limit?: number }, env: Env, config: Readonly<Config> = DEFAULTS): Promise<GraphView> {
   const limit = opts.limit && opts.limit > 0 ? opts.limit : Infinity;
 
   let nodeIds: string[];
   if (opts.seed) {
-    const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true }, env);
+    const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true }, env, config);
     nodeIds = [opts.seed, ...neighbors.map(n => n.id)].slice(0, limit);
   } else {
     const sql = Number.isFinite(limit)

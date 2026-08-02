@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Built with Cloudflare Workers](https://img.shields.io/badge/Built%20with-Cloudflare%20Workers-F38020?logo=cloudflare\&logoColor=white)](https://workers.cloudflare.com/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-8B5CF6)](https://modelcontextprotocol.io/)
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Frahilp%2Fsecond-brain-cloudflare.svg)](https://mcptoplist.com/server/glama%2Frahilp%2Fsecond-brain-cloudflare)
 
 You use Claude for some things, ChatGPT for others, and Cursor for code. But your context, including your projects, decisions, and preferences, does not move with you. You end up explaining yourself again and again.
 
@@ -23,6 +24,18 @@ Prefer to run it yourself? Use the one-click **[Deploy to Cloudflare](https://de
 > ## #3 Product of the Day on Product Hunt
 >
 > <a href="https://www.producthunt.com/products/second-brain-cloudflare?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-second-brain-for-ai" target="_blank" rel="noopener noreferrer"><img alt="Second Brain for AI: Persistent memory for Claude, ChatGPT, and Cursor" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1151393&theme=light&period=daily&t=1780357463637"></a>
+
+## What's new in v2.2
+
+* **Advanced Settings.** Seven plain-language controls for how your Second Brain remembers and recalls — how much recent memories outrank old ones, how varied results are, how far to follow connections, how much detail comes back, how strictly duplicates are blocked, how aggressively old memories are compressed, and which AI model does the thinking. Open it with ⌘, in the desktop app. Changes apply to your next search, with no redeploy.
+
+* **Change how your memories are read.** Pick a finer reading for more precise matching, and the app rebuilds your search data for you — resumable if your daily AI allowance runs out, and reversible until the final step. Your memories themselves are never touched.
+
+* **Lost your password?** The unlock screen is no longer a dead end. Sign in to Cloudflare and set a new one. You can also change your password deliberately from Connections, and disconnect every AI tool in one step.
+
+* **Find a brain you already have.** Setting up on a new computer? Sign in to Cloudflare and the app finds your Second Brain — identified from your account's own records, not by asking the Worker. Typing the address yourself still works exactly as before.
+
+* **Now in Italian**, with native menus on Mac and Windows, and a download button in the dashboard sidebar.
 
 ## What's new in v2.1
 
@@ -288,6 +301,14 @@ Attach a domain you control under **Worker → Settings → Domains & Routes**. 
 ### Stale OAuth registration in Cursor
 
 If the browser opens a plain error instead of the sign-in form (“invalid authorization request” or similar), Cursor may be using an old OAuth `client_id`. Remove the Second Brain MCP entry, add it again with the correct Worker URL, then authenticate once more.
+
+### Claude Code says Second Brain is “not available”
+
+Some MCP clients (notably **Claude Code**) load tool schemas **lazily**. `/mcp` can show **connected** while `remember` / `recall` do not appear in the session’s visible tool list at first. That does **not** mean the server is down.
+
+**Verify with a real tool call** — ask the agent to run `recall` with a natural-language query. If it returns results (or “no memories found”), MCP is working.
+
+Only treat Second Brain as unavailable when a tool call returns an **error** (auth failure, network error, 5xx). Re-run `scripts/connect-ai-clients.sh` or `.ps1` if your global instructions still tell the agent to report unavailable without calling a tool.
 
 </details>
 

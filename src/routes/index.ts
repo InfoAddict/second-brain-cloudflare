@@ -8,6 +8,9 @@ import { handleEntriesRoutes } from "./entries";
 import { handleGraphRoutes } from "./graph";
 import { handleIntegrationsRoutes } from "./integrations";
 import { handleAdminRoutes } from "./admin";
+import { handleConfigRoutes } from "./config";
+import { handleMigrationRoutes } from "./migration";
+import { handleOAuthRevokeRoutes } from "./oauth-revoke";
 
 type RouteHandler = (
   request: Request,
@@ -23,6 +26,9 @@ const routeHandlers: RouteHandler[] = [
   handleGraphRoutes,
   handleIntegrationsRoutes,
   handleAdminRoutes,
+  handleConfigRoutes,
+  handleMigrationRoutes,
+  handleOAuthRevokeRoutes,
 ];
 
 export function createDefaultHandler() {

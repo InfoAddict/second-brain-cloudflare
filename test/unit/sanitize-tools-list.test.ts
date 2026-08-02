@@ -108,4 +108,35 @@ describe("sanitizeToolsListResponse()", () => {
     const out = await sanitizeToolsListResponse(broken);
     expect(out).toBe(broken);
   });
+
+  it("sanitizes only parseable data lines in multi-line SSE payloads", async () => {
+    const good = JSON.stringify(toolsListPayload([TOOL_WITH_EXECUTION]));
+    const sse = [
+      "event: message",
+      `data: ${good}`,
+      "data: not-json",
+      ": comment",
+      "",
+    ].join("\n");
+    const response = new Response(sse, { headers: { "content-type": "text/event-stream" } });
+
+    const sanitized = await sanitizeToolsListResponse(response);
+    const lines = (await sanitized.text()).split("\n");
+
+    const payload = JSON.parse(lines[1].slice("data: ".length));
+    expect(payload.result.tools[0].execution).toBeUndefined();
+    expect(lines[2]).toBe("data: not-json");
+    expect(lines[3]).toBe(": comment");
+  });
+
+  it("handles application/json with charset in content-type", async () => {
+    const body = JSON.stringify(toolsListPayload([TOOL_WITH_EXECUTION]));
+    const response = new Response(body, {
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+
+    const sanitized = await sanitizeToolsListResponse(response);
+    const payload = await sanitized.json() as { result: { tools: { execution?: unknown }[] } };
+    expect(payload.result.tools[0].execution).toBeUndefined();
+  });
 });

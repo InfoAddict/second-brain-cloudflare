@@ -58,15 +58,68 @@ pub struct KvNamespace {
     pub title: String,
 }
 
+/// One index record, as returned by `GET .../vectorize/v2/indexes/{name}`.
+///
+/// Cloudflare's v4 schema marks *every* field on this record optional, but
+/// `name` is kept required here: the provisioning find-or-create path has
+/// always parsed this record successfully, and a parse failure there would
+/// have made it try to create an index that already exists and fail loudly.
+/// The other documented fields (`created_on`, `modified_on`, `description`)
+/// are deliberately not modelled — nothing needs them.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VectorizeIndex {
     #[allow(dead_code)] // deserialization target — presence of the record is the signal
     pub name: String,
+    /// Optional per Cloudflare's schema. `CfClient::vectorize_config` turns
+    /// an absent config into an error rather than a default: a fabricated
+    /// `dimensions: 0` would quietly pass for "not the dimensions I wanted"
+    /// while looking like a real answer.
+    pub config: Option<VectorizeConfig>,
+}
+
+/// The immutable half of a Vectorize index. Cloudflare fixes both values at
+/// creation — "the configuration of an index cannot be changed after
+/// creation" — which is the whole reason an embedding-model switch needs a new
+/// index and a redeploy rather than a config edit.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct VectorizeConfig {
+    pub dimensions: u32,
+    pub metric: String,
+}
+
+/// `GET .../vectorize/v2/indexes/{name}/info` — the *sibling* of the index
+/// record, and the only documented place a vector count is exposed.
+///
+/// Note the casing flip: the index record uses snake_case (`created_on`),
+/// this endpoint uses camelCase. That is Cloudflare's schema, not a typo,
+/// hence the explicit renames. `processedUpToDatetime` is also documented but
+/// not modelled — the mutation id is the useful settling signal.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // read by tests and by the #248 migration flow landing alongside this
+pub struct VectorizeInfo {
+    /// `None` means Cloudflare did not report a count — **not** that the index
+    /// is empty. Never collapse it to 0 to decide a rebuild finished, because
+    /// that reads as "verified empty" right before an irreversible delete.
+    #[serde(rename = "vectorCount")]
+    pub vector_count: Option<u64>,
+    pub dimensions: Option<u32>,
+    /// Id of the last mutation batch folded into the index. Vectorize applies
+    /// upserts asynchronously, so a count can lag a just-finished re-embed.
+    #[serde(rename = "processedUpToMutation")]
+    pub processed_up_to_mutation: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubdomainResult {
     pub subdomain: Option<String>,
+}
+
+/// An entry from `GET /accounts/{id}/workers/scripts`. Cloudflare names the
+/// script in `id`; the field is the deploy name, which is also the workers.dev
+/// hostname label.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkerScript {
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

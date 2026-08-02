@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql } from "../compression/eligibility";
 import { json, requireAuth } from "../lib/http";
@@ -16,6 +17,7 @@ export async function handleAdminRoutes(
   env: Env,
   _ctx: ExecutionContext,
 ): Promise<Response | null> {
+  const cfg = await resolveConfig(env);
   // GET /stats
   if (url.pathname === "/stats" && request.method === "GET") {
     const authErr = requireAuth(request, env);
@@ -38,12 +40,12 @@ export async function handleAdminRoutes(
           AND entries.tags NOT LIKE '%"rolled-up"%'
           AND entries.tags NOT LIKE '%"synthesized"%'
           AND entries.tags NOT LIKE '%"auto-pattern"%'
-          AND ${compressionEligibilitySql("entries.")}
+          AND ${compressionEligibilitySql("entries.", cfg)}
         GROUP BY value
         HAVING count > 10
         ORDER BY count DESC
         LIMIT 10
-      `).bind(Date.now() - COMPRESSION_MIN_AGE_MS).all(),
+      `).bind(Date.now() - cfg.COMPRESSION_MIN_AGE_MS).all(),
     ]);
 
     const cutoff = Date.now() - 86400000;
@@ -136,7 +138,11 @@ export async function handleAdminRoutes(
           row.content as string,
           JSON.parse(row.tags as string),
           row.source as string,
-          row.created_at as number
+          row.created_at as number,
+          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
+          // capture and recall use the configured one, writing vectors from the
+          // wrong model into the index — scores go quietly wrong, nothing throws.
+          cfg
         );
         processed++;
       } catch (e) {
@@ -174,7 +180,9 @@ export async function handleAdminRoutes(
 
     for (const row of toProcess as Record<string, any>[]) {
       try {
-        const { canonical, kind } = await classifyEntry(row.content as string, env);
+        // cfg carries the user's LLM_MODEL choice; without it this backfill
+        // classifies with the shipped default and ignores their setting.
+        const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
         let tags: string[] = JSON.parse(row.tags as string);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null) tags = withStatus(tags, "canonical");
