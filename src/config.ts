@@ -32,6 +32,10 @@ export const DEFAULTS = {
   // ── Recall widening (src/recall/search.ts) ──
   RECALL_WIDEN_THRESHOLD: 0.85,
 
+  // ── Keyword arm (src/recall/search.ts) ──
+  KEYWORD_CANDIDATE_LIMIT: 500,
+  SUBSTRING_MATCH_WEIGHT: 0.25,
+
   // ── Graph expansion (src/graph/traverse.ts) ──
   // Hard cap on traversal depth. Deliberately not surfaced as a user control
   // (#246) — it bounds fanout, it is not a preference.
@@ -90,6 +94,11 @@ export const RULES: Record<ConfigKey, Rule> = {
   DUPLICATE_BLOCK_THRESHOLD: { kind: "number", min: 0, max: 1 },
   DUPLICATE_FLAG_THRESHOLD: { kind: "number", min: 0, max: 1 },
   RECALL_WIDEN_THRESHOLD: { kind: "number", min: 0, max: 1 },
+
+  // Floor of 50 keeps the keyword arm alive; the 2000 cap bounds the newest-
+  // first scan and the per-request rows shipped out of D1.
+  KEYWORD_CANDIDATE_LIMIT: { kind: "number", min: 50, max: 2000, integer: true },
+  SUBSTRING_MATCH_WEIGHT: { kind: "number", min: 0, max: 1 },
 
   // Hops above 3 explode the fanout without improving results; traverse.ts is
   // written against this ceiling.

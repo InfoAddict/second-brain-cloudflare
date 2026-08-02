@@ -44,21 +44,37 @@ export async function inferQueryTags(query: string, env: Env, config: Readonly<C
   }
 }
 
-export async function distillToRareTerms(query: string, env: Env, config: Readonly<Config> = DEFAULTS): Promise<string> {
+/**
+ * The distilled query plus the corpus statistics the distillation already paid
+ * for. `df` maps every scanned (normalized, lowercase) term to the number of
+ * entries containing it, and `total` is the corpus row count — the real IDF
+ * inputs, which fuseDenseAndKeyword would otherwise re-estimate from its
+ * fetched sample. Both are null on every path that skipped or lost the scan,
+ * so a consumer can trust that non-null stats are complete.
+ */
+export interface DistilledQuery {
+  query: string;
+  df: Map<string, number> | null;
+  total: number | null;
+}
+
+export async function distillToRareTerms(query: string, env: Env, config: Readonly<Config> = DEFAULTS): Promise<DistilledQuery> {
   const words = query.split(/\s+/).filter(Boolean);
   const norm = (w: string) => w.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "");
   const content = words.filter(w => {
     const n = norm(w);
     return n.length >= KEYWORD_MIN_TOKEN_LEN && !KEYWORD_STOPWORDS.has(n);
   });
-  if (content.length <= 1) return content.length ? content.join(" ") : query;
+  if (content.length <= 1) {
+    return { query: content.length ? content.join(" ") : query, df: null, total: null };
+  }
 
   const uniq = [...new Set(content.map(norm))].slice(0, 16);
   try {
     const sums = uniq.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
     const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries`)
       .bind(...uniq.map(t => `%${t}%`)).first() as Record<string, number> | null;
-    if (!row || !row.total) return content.join(" ");
+    if (!row || !row.total) return { query: content.join(" "), df: null, total: null };
     const total = row.total;
     const df = new Map(uniq.map((t, i) => [t, (row[`d${i}`] as number) ?? 0]));
     let candidates = uniq.filter(t => (df.get(t) ?? 0) / total <= QUERY_SATURATION_FRACTION);
@@ -67,8 +83,8 @@ export async function distillToRareTerms(query: string, env: Env, config: Readon
       [...candidates].sort((a, b) => (df.get(a) ?? 0) - (df.get(b) ?? 0)).slice(0, MAX_QUERY_TERMS)
     );
     const rebuilt = [...new Set(content.filter(w => keep.has(norm(w))))];
-    return rebuilt.length ? rebuilt.join(" ") : content.join(" ");
+    return { query: rebuilt.length ? rebuilt.join(" ") : content.join(" "), df, total };
   } catch {
-    return content.join(" ");
+    return { query: content.join(" "), df: null, total: null };
   }
 }
