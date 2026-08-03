@@ -115,6 +115,7 @@ describe("POST /import", () => {
 
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0]).toMatchObject({ source_id: "a", target_id: "b", type: "relates_to" });
+    expect(db.edges[0].created_at).toBe(1);
   });
 
   it("is idempotent — second import skips all entries", async () => {
@@ -132,6 +133,7 @@ describe("POST /import", () => {
     const secondData = await second.json() as any;
     expect(secondData.imported).toBe(0);
     expect(secondData.skipped).toBe(1);
+    expect(secondData.results).toHaveLength(0);
     expect(db.entries).toHaveLength(1);
   });
 
@@ -246,5 +248,71 @@ describe("POST /import", () => {
     const finishData = await finish.json() as any;
     expect(finishData.edges_imported).toBe(1);
     expect(db.edges).toHaveLength(1);
+  });
+
+  it("rejects null entries without aborting the request", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [null, { id: "good", content: "valid", created_at: 1 }],
+        edges: [],
+      },
+    }), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.failed).toBe(1);
+    expect(data.imported).toBe(1);
+    expect(data.results).toContainEqual({ id: "", status: "failed", reason: "invalid_entry" });
+    expect(db.entries).toHaveLength(1);
+  });
+
+  it("rejects non-string tags", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [{ id: "bad", content: "Note", tags: [42], created_at: 1 }],
+        edges: [],
+      },
+    }), env, ctx);
+    const data = await res.json() as any;
+    expect(data.failed).toBe(1);
+    expect(data.results).toContainEqual({ id: "bad", status: "failed", reason: "invalid_tag" });
+    expect(db.entries).toHaveLength(0);
+  });
+
+  it("paginates edges under ?limit= with idempotent skip", async () => {
+    const entries = [
+      { id: "a", content: "A", created_at: 1 },
+      { id: "b", content: "B", created_at: 2 },
+      { id: "c", content: "C", created_at: 3 },
+    ];
+    const edges = [
+      { source_id: "a", target_id: "b", type: "relates_to", created_at: 100 },
+      { source_id: "b", target_id: "c", type: "relates_to", created_at: 200 },
+    ];
+
+    const seedEntries = await worker.fetch(req("POST", "/import", {
+      body: { version: 2, entries, edges: [] },
+    }), env, ctx);
+    expect((await seedEntries.json() as any).imported).toBe(3);
+
+    const payload = { version: 2, entries, edges };
+
+    const firstEdge = await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx);
+    const firstEdgeData = await firstEdge.json() as any;
+    expect(firstEdgeData.skipped).toBe(3);
+    expect(firstEdgeData.edges_imported).toBe(1);
+    expect(firstEdgeData.remaining_edges).toBe(1);
+    expect(firstEdgeData.results).toHaveLength(1);
+    expect(db.edges).toHaveLength(1);
+    expect(db.edges[0].created_at).toBe(100);
+
+    const secondEdge = await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx);
+    const secondEdgeData = await secondEdge.json() as any;
+    expect(secondEdgeData.edges_imported).toBe(1);
+    expect(secondEdgeData.edges_skipped).toBe(1);
+    expect(secondEdgeData.remaining_edges).toBe(0);
+    expect(db.edges).toHaveLength(2);
+    expect(db.edges.find((e: any) => e.source_id === "b" && e.target_id === "c")?.created_at).toBe(200);
   });
 });

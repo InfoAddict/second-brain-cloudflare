@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { createEdge, isValidEdgeType } from "../graph/edges";
+import { createEdge, isSymmetric, isValidEdgeType } from "../graph/edges";
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 
@@ -26,7 +26,7 @@ export const ENTRY_INSERT_COLUMNS = [
 export const ENTRY_INSERT_SQL = `INSERT INTO entries (${ENTRY_INSERT_COLUMNS.join(", ")}) VALUES (${ENTRY_INSERT_COLUMNS.map(() => "?").join(", ")})`;
 
 export type ImportEntryStatus = "imported" | "skipped" | "failed";
-export type ImportEdgeStatus = "imported" | "failed";
+export type ImportEdgeStatus = "imported" | "skipped" | "failed";
 
 export interface ImportEntryResult {
   id: string;
@@ -83,6 +83,7 @@ export interface ImportSummary {
   skipped: number;
   failed: number;
   edges_imported: number;
+  edges_skipped: number;
   edges_failed: number;
   remaining_entries: number;
   remaining_edges: number;
@@ -104,6 +105,28 @@ interface PendingInsert {
 
 function isValidProvenance(p: string): p is EdgeProvenance {
   return (PROVENANCE_VALUES as readonly string[]).includes(p);
+}
+
+export function isImportRecordObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseTags(
+  tags: unknown,
+): { ok: true; tags: string[] } | { ok: false; reason: "invalid_tag" } {
+  if (tags === undefined || tags === null) return { ok: true, tags: [] };
+  if (!Array.isArray(tags)) return { ok: false, reason: "invalid_tag" };
+  if (!tags.every(t => typeof t === "string")) return { ok: false, reason: "invalid_tag" };
+  return { ok: true, tags };
+}
+
+export function normalizedEdgeKey(sourceId: string, targetId: string, type: string): string {
+  let source = sourceId;
+  let target = targetId;
+  if (isValidEdgeType(type) && isSymmetric(type) && source > target) {
+    [source, target] = [target, source];
+  }
+  return `${source}\0${target}\0${type}`;
 }
 
 export function parseRequiredString(
@@ -154,6 +177,28 @@ export function parseImportLimit(raw: string | null): number {
 async function loadExistingIds(env: Env): Promise<Set<string>> {
   const { results } = await env.DB.prepare(`SELECT id FROM entries`).all() as { results: { id: string }[] };
   return new Set(results.map(r => r.id));
+}
+
+async function loadExistingEdgeKeys(env: Env): Promise<Set<string>> {
+  const { results } = await env.DB.prepare(`SELECT source_id, target_id, type FROM edges`).all() as {
+    results: { source_id: string; target_id: string; type: string }[];
+  };
+  return new Set(results.map(r => normalizedEdgeKey(r.source_id, r.target_id, r.type)));
+}
+
+function countNewEdgesInPayload(edges: ExportEdge[], existingEdgeKeys: Set<string>): number {
+  let count = 0;
+  for (const edge of edges) {
+    if (!isImportRecordObject(edge)) continue;
+    const type = typeof edge.type === "string" ? edge.type.trim() || "relates_to" : "relates_to";
+    if (!isValidEdgeType(type)) continue;
+    const sourceParsed = parseRequiredString(edge.source_id, "missing", "invalid");
+    const targetParsed = parseRequiredString(edge.target_id, "missing", "invalid");
+    if (!sourceParsed.ok || !targetParsed.ok) continue;
+    const key = normalizedEdgeKey(sourceParsed.value, targetParsed.value, type);
+    if (!existingEdgeKeys.has(key)) count++;
+  }
+  return count;
 }
 
 function bindInsert(env: Env, row: PendingInsert) {
@@ -219,16 +264,24 @@ export async function importExportPayload(
   let skipped = 0;
   let failed = 0;
   let edges_imported = 0;
+  let edges_skipped = 0;
   let edges_failed = 0;
   let remaining_entries = 0;
   let remaining_edges = 0;
 
   const existingIds = await loadExistingIds(env);
+  const existingEdgeKeys = await loadExistingEdgeKeys(env);
   const pendingBatch: PendingInsert[] = [];
   let newInsertAttempts = 0;
   const batchCounters = { imported: 0, failed: 0 };
 
   for (const entry of body.entries) {
+    if (!isImportRecordObject(entry)) {
+      failed++;
+      results.push({ id: "", status: "failed", reason: "invalid_entry" });
+      continue;
+    }
+
     const idParsed = parseRequiredString(entry.id, "missing_id", "invalid_id");
     if (!idParsed.ok) {
       failed++;
@@ -250,11 +303,17 @@ export async function importExportPayload(
 
     if (existingIds.has(id)) {
       skipped++;
-      results.push({ id, status: "skipped", reason: "already_exists" });
       continue;
     }
 
-    const tags = Array.isArray(entry.tags) ? entry.tags : [];
+    const tagsParsed = parseTags(entry.tags);
+    if (!tagsParsed.ok) {
+      failed++;
+      results.push({ id, status: "failed", reason: tagsParsed.reason });
+      continue;
+    }
+    const tags = tagsParsed.tags;
+
     let source = "import";
     if (entry.source !== undefined && entry.source !== null) {
       if (typeof entry.source !== "string") {
@@ -302,9 +361,22 @@ export async function importExportPayload(
 
   const edges = body.edges ?? [];
   if (remaining_entries > 0) {
-    remaining_edges = edges.length;
+    remaining_edges = countNewEdgesInPayload(edges, existingEdgeKeys);
   } else {
+    let newEdgeAttempts = 0;
     for (const edge of edges) {
+      if (!isImportRecordObject(edge)) {
+        edges_failed++;
+        results.push({
+          source_id: "",
+          target_id: "",
+          type: "",
+          status: "failed",
+          reason: "invalid_edge",
+        });
+        continue;
+      }
+
       const sourceParsed = parseRequiredString(edge.source_id, "missing_endpoint", "invalid_endpoint");
       const targetParsed = parseRequiredString(edge.target_id, "missing_endpoint", "invalid_endpoint");
       const type = typeof edge.type === "string" ? edge.type.trim() || "relates_to" : "relates_to";
@@ -339,6 +411,18 @@ export async function importExportPayload(
         continue;
       }
 
+      const edgeKey = normalizedEdgeKey(source_id, target_id, type);
+      if (existingEdgeKeys.has(edgeKey)) {
+        edges_skipped++;
+        continue;
+      }
+
+      if (newEdgeAttempts >= limit) {
+        remaining_edges++;
+        continue;
+      }
+      newEdgeAttempts++;
+
       const provenance = edge.provenance && typeof edge.provenance === "string" && isValidProvenance(edge.provenance)
         ? edge.provenance
         : "explicit";
@@ -347,12 +431,14 @@ export async function importExportPayload(
         const created = await createEdge(source_id, target_id, type, {
           weight: edge.weight,
           provenance,
+          created_at: typeof edge.created_at === "number" ? edge.created_at : undefined,
         }, env);
         if (!created) {
           edges_failed++;
           results.push({ source_id, target_id, type, status: "failed", reason: "create_failed" });
           continue;
         }
+        existingEdgeKeys.add(edgeKey);
         edges_imported++;
         results.push({ source_id, target_id, type, status: "imported" });
       } catch (e) {
@@ -375,6 +461,7 @@ export async function importExportPayload(
     skipped,
     failed,
     edges_imported,
+    edges_skipped,
     edges_failed,
     remaining_entries,
     remaining_edges,
