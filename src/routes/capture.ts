@@ -1,8 +1,9 @@
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
+import { VECTORIZE_FIX_HINT } from "../constants";
 import { json, requireAuth } from "../lib/http";
 import { captureEntry } from "../capture/entry";
-import { appendToEntry, deleteStaleVectors, reembedOrThrow } from "../capture/store";
+import { appendToEntry, deleteStaleVectors, reembedOrDegrade } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { extractHashtags } from "../text/hashtags";
 
@@ -86,8 +87,9 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: mirrorEditError(source) }, 409);
     }
 
+    let indexed: boolean;
     try {
-      await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env));
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env));
     } catch (e) {
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
@@ -95,7 +97,10 @@ export async function handleCaptureRoutes(
     return json({
       ok: true,
       id,
-      message: "Update appended successfully with timestamp",
+      semantic_unavailable: !indexed,
+      message: indexed
+        ? "Update appended successfully with timestamp"
+        : `Update appended, but not indexed for semantic search (Vectorize unavailable) — it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
     });
   }
 
@@ -132,22 +137,36 @@ export async function handleCaptureRoutes(
     // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors
     // untouched and surface an error, instead of committing new content and then
     // deleting every vector — which would leave the entry silently unsearchable.
-    let newVectorIds: string[];
+    // null means Vectorize is unreachable (#270), not that this embed failed.
+    let newVectorIds: string[] | null;
     try {
-      newVectorIds = await reembedOrThrow(env, id, finalContent, mergedTags, source, await resolveConfig(env));
+      newVectorIds = await reembedOrDegrade(env, id, finalContent, mergedTags, source, await resolveConfig(env));
     } catch (e) {
       console.error("Re-embed failed — entry left unchanged:", e);
       return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
     }
 
-    // Embed succeeded → safe to commit the new content and retire stale vectors.
+    // Safe to commit: either the embed succeeded, or Vectorize is unavailable and
+    // the old vectors are kept below rather than retired.
     await env.DB.prepare(`UPDATE entries SET content = ?, tags = ? WHERE id = ?`)
       .bind(finalContent, JSON.stringify(mergedTags), id).run();
 
-    try {
-      await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-    } catch (e) {
-      console.error("Old vector cleanup failed (non-fatal):", e);
+    if (newVectorIds) {
+      try {
+        await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+      } catch (e) {
+        console.error("Old vector cleanup failed (non-fatal):", e);
+      }
+    }
+
+    if (!newVectorIds) {
+      return json({
+        ok: true,
+        id,
+        vectors: 0,
+        semantic_unavailable: true,
+        message: `Updated, but not re-indexed for semantic search (Vectorize unavailable) — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
+      });
     }
 
     return json({ ok: true, id, vectors: newVectorIds.length });
