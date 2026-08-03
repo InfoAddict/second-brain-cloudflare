@@ -90,8 +90,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         return { content: [{ type: "text", text: mirrorEditError(source) }] };
       }
 
+      let indexed: boolean;
       try {
-        await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env));
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env));
       } catch (e) {
         console.error("Append failed:", e);
         return {
@@ -102,7 +103,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       return {
         content: [{
           type: "text",
-          text: `Appended to entry ${id}. The original content is preserved and your update has been added with today's date.`,
+          text: `Appended to entry ${id}. The original content is preserved and your update has been added with today's date.`
+            + (indexed ? "" : ` Note: it was not indexed for semantic search because the Vectorize index is missing, so it is findable by keyword only. Fix: ${VECTORIZE_FIX_HINT}.`),
         }],
       };
     }
