@@ -1,10 +1,11 @@
 import type { Env } from "../env";
-import { createEdge, isSymmetric, isValidEdgeType } from "../graph/edges";
+import { D1_MAX_BOUND_PARAMS } from "../constants";
+import { isSymmetric, isValidEdgeType } from "../graph/edges";
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 
 /** Max new entry inserts attempted per request (skipped rows do not count). */
-export const IMPORT_DEFAULT_LIMIT = 100;
+export const IMPORT_DEFAULT_LIMIT = 40;
 export const IMPORT_MAX_LIMIT = 1000;
 /** D1 batch chunk size for inserts. */
 export const IMPORT_D1_BATCH_SIZE = 50;
@@ -91,6 +92,17 @@ export interface ImportSummary {
   vectorize_hint: string;
 }
 
+interface PendingEdge {
+  source_id: string;
+  target_id: string;
+  type: string;
+  weight: number;
+  provenance: EdgeProvenance;
+  created_at: number;
+}
+
+const DEFAULT_EDGE_WEIGHT = 0.5;
+
 interface PendingInsert {
   id: string;
   content: string;
@@ -174,16 +186,64 @@ export function parseImportLimit(raw: string | null): number {
   return Math.min(n, IMPORT_MAX_LIMIT);
 }
 
-async function loadExistingIds(env: Env): Promise<Set<string>> {
-  const { results } = await env.DB.prepare(`SELECT id FROM entries`).all() as { results: { id: string }[] };
-  return new Set(results.map(r => r.id));
+async function loadExistingIds(env: Env, ids: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  if (!ids.length) return found;
+  for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMS) {
+    const batch = ids.slice(i, i + D1_MAX_BOUND_PARAMS);
+    const placeholders = batch.map(() => "?").join(", ");
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM entries WHERE id IN (${placeholders})`,
+    ).bind(...batch).all() as { results: { id: string }[] };
+    for (const row of results) found.add(row.id);
+  }
+  return found;
 }
 
-async function loadExistingEdgeKeys(env: Env): Promise<Set<string>> {
-  const { results } = await env.DB.prepare(`SELECT source_id, target_id, type FROM edges`).all() as {
-    results: { source_id: string; target_id: string; type: string }[];
-  };
-  return new Set(results.map(r => normalizedEdgeKey(r.source_id, r.target_id, r.type)));
+async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
+  const keys = new Set<string>();
+  if (!endpoints.length) return keys;
+  for (let i = 0; i < endpoints.length; i += D1_MAX_BOUND_PARAMS) {
+    const batch = endpoints.slice(i, i + D1_MAX_BOUND_PARAMS);
+    const placeholders = batch.map(() => "?").join(", ");
+    const { results } = await env.DB.prepare(
+      `SELECT source_id, target_id, type FROM edges WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`,
+    ).bind(...batch, ...batch).all() as {
+      results: { source_id: string; target_id: string; type: string }[];
+    };
+    for (const row of results) keys.add(normalizedEdgeKey(row.source_id, row.target_id, row.type));
+  }
+  return keys;
+}
+
+function collectPayloadEntryIds(entries: ExportEntry[]): string[] {
+  const ids: string[] = [];
+  for (const entry of entries) {
+    if (!isImportRecordObject(entry)) continue;
+    const parsed = parseRequiredString(entry.id, "missing", "invalid");
+    if (parsed.ok) ids.push(parsed.value);
+  }
+  return ids;
+}
+
+function collectEdgeEndpoints(edges: ExportEdge[]): string[] {
+  const endpoints = new Set<string>();
+  for (const edge of edges) {
+    if (!isImportRecordObject(edge)) continue;
+    const sourceParsed = parseRequiredString(edge.source_id, "missing", "invalid");
+    const targetParsed = parseRequiredString(edge.target_id, "missing", "invalid");
+    if (sourceParsed.ok) endpoints.add(sourceParsed.value);
+    if (targetParsed.ok) endpoints.add(targetParsed.value);
+  }
+  return [...endpoints];
+}
+
+export function parseEdgeWeight(
+  weight: unknown,
+): { ok: true; value: number } | { ok: false; reason: "invalid_weight" } {
+  if (weight === undefined || weight === null) return { ok: true, value: DEFAULT_EDGE_WEIGHT };
+  if (typeof weight !== "number" || !Number.isFinite(weight)) return { ok: false, reason: "invalid_weight" };
+  return { ok: true, value: Math.max(0, Math.min(1, weight)) };
 }
 
 function countNewEdgesInPayload(edges: ExportEdge[], existingEdgeKeys: Set<string>): number {
@@ -253,6 +313,71 @@ async function flushInsertBatch(
   }
 }
 
+function bindEdgeInsert(env: Env, edge: PendingEdge) {
+  let source = edge.source_id;
+  let target = edge.target_id;
+  if (isValidEdgeType(edge.type) && isSymmetric(edge.type) && source > target) {
+    [source, target] = [target, source];
+  }
+  const now = Date.now();
+  return env.DB.prepare(
+    `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+     ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`,
+  ).bind(crypto.randomUUID(), source, target, edge.type, edge.weight, edge.provenance, "{}", edge.created_at, now);
+}
+
+async function flushEdgeBatch(
+  env: Env,
+  batch: PendingEdge[],
+  existingEdgeKeys: Set<string>,
+  results: ImportResultItem[],
+  counters: { imported: number; failed: number },
+): Promise<void> {
+  if (!batch.length) return;
+
+  const stmts = batch.map(row => bindEdgeInsert(env, row));
+  try {
+    await env.DB.batch(stmts);
+    for (const row of batch) {
+      const key = normalizedEdgeKey(row.source_id, row.target_id, row.type);
+      existingEdgeKeys.add(key);
+      counters.imported++;
+      results.push({
+        source_id: row.source_id,
+        target_id: row.target_id,
+        type: row.type,
+        status: "imported",
+      });
+    }
+  } catch {
+    for (const row of batch) {
+      try {
+        await bindEdgeInsert(env, row).run();
+        const key = normalizedEdgeKey(row.source_id, row.target_id, row.type);
+        existingEdgeKeys.add(key);
+        counters.imported++;
+        results.push({
+          source_id: row.source_id,
+          target_id: row.target_id,
+          type: row.type,
+          status: "imported",
+        });
+      } catch (e) {
+        counters.failed++;
+        results.push({
+          source_id: row.source_id,
+          target_id: row.target_id,
+          type: row.type,
+          status: "failed",
+          reason: "create_failed",
+          detail: formatDbError(e),
+        });
+      }
+    }
+  }
+}
+
 export async function importExportPayload(
   env: Env,
   body: ExportPayload,
@@ -269,8 +394,11 @@ export async function importExportPayload(
   let remaining_entries = 0;
   let remaining_edges = 0;
 
-  const existingIds = await loadExistingIds(env);
-  const existingEdgeKeys = await loadExistingEdgeKeys(env);
+  const payloadEntryIds = collectPayloadEntryIds(body.entries);
+  const edges = body.edges ?? [];
+  const edgeEndpoints = collectEdgeEndpoints(edges);
+
+  const existingIds = await loadExistingIds(env, payloadEntryIds);
   const pendingBatch: PendingInsert[] = [];
   let newInsertAttempts = 0;
   const batchCounters = { imported: 0, failed: 0 };
@@ -359,11 +487,15 @@ export async function importExportPayload(
     failed += batchCounters.failed;
   }
 
-  const edges = body.edges ?? [];
   if (remaining_entries > 0) {
+    const existingEdgeKeys = await loadExistingEdgeKeys(env, edgeEndpoints);
     remaining_edges = countNewEdgesInPayload(edges, existingEdgeKeys);
   } else {
+    const existingEdgeKeys = await loadExistingEdgeKeys(env, edgeEndpoints);
     let newEdgeAttempts = 0;
+    const pendingEdgeBatch: PendingEdge[] = [];
+    const edgeBatchCounters = { imported: 0, failed: 0 };
+
     for (const edge of edges) {
       if (!isImportRecordObject(edge)) {
         edges_failed++;
@@ -417,6 +549,13 @@ export async function importExportPayload(
         continue;
       }
 
+      const weightParsed = parseEdgeWeight(edge.weight);
+      if (!weightParsed.ok) {
+        edges_failed++;
+        results.push({ source_id, target_id, type, status: "failed", reason: weightParsed.reason });
+        continue;
+      }
+
       if (newEdgeAttempts >= limit) {
         remaining_edges++;
         continue;
@@ -427,31 +566,28 @@ export async function importExportPayload(
         ? edge.provenance
         : "explicit";
 
-      try {
-        const created = await createEdge(source_id, target_id, type, {
-          weight: edge.weight,
-          provenance,
-          created_at: typeof edge.created_at === "number" ? edge.created_at : undefined,
-        }, env);
-        if (!created) {
-          edges_failed++;
-          results.push({ source_id, target_id, type, status: "failed", reason: "create_failed" });
-          continue;
-        }
-        existingEdgeKeys.add(edgeKey);
-        edges_imported++;
-        results.push({ source_id, target_id, type, status: "imported" });
-      } catch (e) {
-        edges_failed++;
-        results.push({
-          source_id,
-          target_id,
-          type,
-          status: "failed",
-          reason: "create_failed",
-          detail: formatDbError(e),
-        });
+      pendingEdgeBatch.push({
+        source_id,
+        target_id,
+        type,
+        weight: weightParsed.value,
+        provenance,
+        created_at: typeof edge.created_at === "number" ? edge.created_at : Date.now(),
+      });
+
+      if (pendingEdgeBatch.length >= IMPORT_D1_BATCH_SIZE) {
+        await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters);
+        edges_imported += edgeBatchCounters.imported;
+        edges_failed += edgeBatchCounters.failed;
+        edgeBatchCounters.imported = 0;
+        edgeBatchCounters.failed = 0;
       }
+    }
+
+    if (pendingEdgeBatch.length) {
+      await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters);
+      edges_imported += edgeBatchCounters.imported;
+      edges_failed += edgeBatchCounters.failed;
     }
   }
 

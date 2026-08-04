@@ -365,6 +365,19 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content }));
           return { results: rows };
         }
+        if (s.includes("SELECT id FROM entries WHERE id IN")) {
+          const results = db.entries
+            .filter((e: any) => args.includes(e.id))
+            .map((e: any) => ({ id: e.id }));
+          return { results };
+        }
+        if (s.includes("SELECT source_id, target_id, type FROM edges WHERE source_id IN") && s.includes("OR target_id IN")) {
+          const ids = new Set(args.map((a: any) => String(a)));
+          const results = db.edges
+            .filter((e: any) => ids.has(e.source_id) || ids.has(e.target_id))
+            .map((e: any) => ({ source_id: e.source_id, target_id: e.target_id, type: e.type }));
+          return { results };
+        }
         if (s.includes("FROM edges WHERE source_id IN") && s.includes("OR target_id IN")) {
           // expandGraph BFS / graph edge fetch: every edge touching the frontier, strongest
           // first. Args are the frontier id list bound twice (source_id IN …, target_id IN …).

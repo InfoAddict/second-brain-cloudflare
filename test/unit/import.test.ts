@@ -9,6 +9,7 @@ import {
   parseImportLimit,
   parseRequiredString,
   parseTags,
+  parseEdgeWeight,
 } from "../../src/entries/import";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
@@ -91,8 +92,8 @@ describe("import helpers", () => {
   });
 
   it("parseImportLimit clamps invalid and oversized values", () => {
-    expect(parseImportLimit(null)).toBe(100);
-    expect(parseImportLimit("0")).toBe(100);
+    expect(parseImportLimit(null)).toBe(40);
+    expect(parseImportLimit("0")).toBe(40);
     expect(parseImportLimit("50")).toBe(50);
     expect(parseImportLimit("99999")).toBe(1000);
   });
@@ -100,5 +101,10 @@ describe("import helpers", () => {
   it("formatDbError truncates long messages", () => {
     const long = "x".repeat(300);
     expect(formatDbError(new Error(long)).length).toBe(200);
+  });
+
+  it("parseEdgeWeight rejects non-finite values", () => {
+    expect(parseEdgeWeight({ nested: 1 })).toEqual({ ok: false, reason: "invalid_weight" });
+    expect(parseEdgeWeight(0.5)).toEqual({ ok: true, value: 0.5 });
   });
 });
