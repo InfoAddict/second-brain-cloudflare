@@ -48,7 +48,7 @@ export async function handleRecallRoutes(
     const full = ["1", "true", "yes"].includes((url.searchParams.get("full") ?? "").toLowerCase());
 
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens } = await recallEntries({ query, topK, tag, after, before, kind, hops }, env, ctx, cfg);
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops }, env, ctx, cfg);
 
     if (!matches.length) {
       return json({
@@ -65,6 +65,7 @@ export async function handleRecallRoutes(
     return json({
       ok: true,
       query_used: queryUsed,
+      compound_stale: compoundStale ?? null,
       results: matches.map((m, i) => {
         const s = full
           ? { text: m.content, truncated: false, fullLength: (m.content ?? "").length }
@@ -78,6 +79,8 @@ export async function handleRecallRoutes(
           tags: m.tags,
           source: m.source,
           created_at: m.createdAt,
+          updated_at: m.updatedAt,
+          stale_as_of: m.staleAsOf,
           updated: m.isUpdate,
           hop: m.hop,
           via_provenance: m.viaProvenance ?? null,

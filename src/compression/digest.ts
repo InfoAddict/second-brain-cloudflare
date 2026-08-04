@@ -5,6 +5,8 @@ import { DIGEST_MAX_TOKENS, LLM_MODEL } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { KIND_PREFIX } from "../memory/kind";
 import { STATUS_PREFIX } from "../memory/status";
+import { VOLATILITY_PREFIX } from "../memory/volatility";
+import { STALE_AS_OF } from "../memory/stale";
 import {
   compressionEligibilitySql,
 } from "./eligibility";
@@ -49,7 +51,7 @@ export async function compressTag(
   ctx: ExecutionContext
 ): Promise<{ synthesizedId: string | null; entriesUsed: number; text: string }> {
   const cfg = await resolveConfig(env);
-  if (tag.startsWith(STATUS_PREFIX) || tag.startsWith(KIND_PREFIX)) {
+  if (tag.startsWith(STATUS_PREFIX) || tag.startsWith(KIND_PREFIX) || tag.startsWith(VOLATILITY_PREFIX) || tag === STALE_AS_OF) {
     return { synthesizedId: null, entriesUsed: 0, text: "" };
   }
 

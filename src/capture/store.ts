@@ -6,6 +6,7 @@ import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
 import { isVectorizeUnavailable } from "../vectorize/health";
+import { tagsAfterWrite } from "../memory/stale";
 
 export async function storeEntry(
   env: Env,
@@ -105,9 +106,11 @@ export async function appendToEntry(
 
   if (newContent.length > CHUNK_MAX_CHARS) {
     const newVectorIds = await reembedOrDegrade(env, id, newContent, tags, source, config);
+    const refreshedTags = tagsAfterWrite(tags);
+    const now = Date.now();
 
-    await env.DB.prepare(`UPDATE entries SET content = ? WHERE id = ?`)
-      .bind(newContent, id).run();
+    await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+      .bind(newContent, JSON.stringify(refreshedTags), now, id).run();
 
     // Skipped when Vectorize is unavailable: the old vectors are the entry's only
     // remaining semantic index, and retiring them would leave it unsearchable.
@@ -161,9 +164,12 @@ export async function appendToEntry(
     indexed = false;
   }
 
+  const refreshedTags = tagsAfterWrite(tags);
+  const now = Date.now();
+
   await env.DB.prepare(
-    `UPDATE entries SET content = ?, vector_ids = ? WHERE id = ?`
-  ).bind(newContent, JSON.stringify(indexed ? [...existingVectorIds, newChunkId] : existingVectorIds), id).run();
+    `UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ? WHERE id = ?`
+  ).bind(newContent, JSON.stringify(indexed ? [...existingVectorIds, newChunkId] : existingVectorIds), JSON.stringify(refreshedTags), now, id).run();
 
   try {
     await inferEdgesOnWrite(id, await neighborsFromVectorQuery(values, env), env);

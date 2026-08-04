@@ -224,4 +224,43 @@ describe("rerankWithTimeDecay", () => {
     ], new Map());
     expect(result[0].id).toBe("canonical");
   });
+
+  it("volatility:volatile floor beats ordinary old memory", () => {
+    const age = NOW - 365 * MS_DAY;
+    const [volatile] = rerankWithTimeDecay([match("v", 1.0, age, ["volatility:volatile"])], new Map());
+    const [state] = rerankWithTimeDecay([match("s", 1.0, age, ["volatility:state"])], new Map());
+    expect(state.score).toBeGreaterThan(volatile.score);
+  });
+
+  it("status:canonical durable floor overrides volatility:volatile", () => {
+    const age = NOW - 365 * MS_DAY;
+    const [canonicalVolatile] = rerankWithTimeDecay(
+      [match("cv", 0.8, age, ["status:canonical", "volatility:volatile"])],
+      new Map(),
+    );
+    const [ordinary] = rerankWithTimeDecay(
+      [match("plain", 0.8, age)],
+      new Map(),
+    );
+    expect(canonicalVolatile.score).toBeGreaterThan(ordinary.score);
+  });
+
+  it("prefers D1 tags over Vectorize metadata for recency floor", () => {
+    const age = NOW - 365 * MS_DAY;
+    const d1Tags = new Map<string, string[]>([["cv", ["volatility:volatile"]]]);
+    const [withD1Volatile] = rerankWithTimeDecay(
+      [match("cv", 0.8, age, ["status:canonical"])],
+      new Map(),
+      new Map(),
+      [],
+      new Map(),
+      new Map(),
+      d1Tags,
+    );
+    const [canonicalMeta] = rerankWithTimeDecay(
+      [match("cv2", 0.8, age, ["status:canonical"])],
+      new Map(),
+    );
+    expect(withD1Volatile.score).toBeLessThan(canonicalMeta.score);
+  });
 });

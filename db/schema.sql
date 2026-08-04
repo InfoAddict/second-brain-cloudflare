@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS entries (
   importance_score     INTEGER DEFAULT 0,
   contradiction_wins   INTEGER DEFAULT 0,
   contradiction_losses INTEGER DEFAULT 0
+  -- Runtime ALTER columns (see src/db/init.ts): updated_at, staleness_checked_at
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC);

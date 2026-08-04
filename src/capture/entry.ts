@@ -7,6 +7,7 @@ import { scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
 import { deleteStaleVectors, reembedOrThrow, storeEntry } from "./store";
+import { tagsAfterWrite } from "../memory/stale";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -86,7 +87,10 @@ export async function captureEntry(
       }
 
       if (newVectorIds) {
-        await env.DB.prepare(`UPDATE entries SET content = ? WHERE id = ?`).bind(newContent, targetId).run();
+        const refreshedTags = tagsAfterWrite(existingTags);
+        const now = Date.now();
+        await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+          .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
         try {
           await deleteStaleVectors(env, oldVectorIds, newVectorIds);
         } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
@@ -106,8 +110,8 @@ export async function captureEntry(
   const finalTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
 
   await env.DB.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(id, c, JSON.stringify(finalTags), source, now, "[]").run();
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, c, JSON.stringify(finalTags), source, now, now, "[]").run();
 
   ctx.waitUntil(
     storeEntry(env, id, c, finalTags, source, now, cfg)

@@ -968,6 +968,11 @@
         opacity: 0.65;
       }
 
+      .memory-card.card--stale {
+        border-left: 3px solid #f59e0b;
+        background: #fffbeb;
+      }
+
       .memory-card.card--synthesized {
         border-left: 3px solid var(--accent);
       }

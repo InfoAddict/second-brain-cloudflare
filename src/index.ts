@@ -8,6 +8,7 @@ import type { Env } from "./env";
 import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { runScheduledIntegrationSync } from "./integrations/mirror";
+import { runStalenessPass } from "./staleness/pass";
 import { apiHandler } from "./mcp/handler";
 import { augmentOAuthRegistrationRequest } from "./oauth/register";
 import { defaultHandler } from "./routes";
@@ -43,5 +44,6 @@ export default {
     ctx.waitUntil(runNightlyCompression(env, ctx));
     ctx.waitUntil(runGraphPass(env, ctx));
     ctx.waitUntil(runScheduledIntegrationSync(env));
+    ctx.waitUntil(runStalenessPass(env, ctx));
   },
 };

@@ -21,9 +21,9 @@ describe("rerankWithTimeDecay() config threading", () => {
   it("applies the volatile floor from the passed config to an aged task", async () => {
     const matches = [match("t", 1.0, ["task"])];
 
-    const withDefaults = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), DEFAULTS);
+    const withDefaults = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), new Map(), DEFAULTS);
     const withHighFloor = rerankWithTimeDecay(
-      matches, new Map(), new Map(), [], new Map(), new Map(),
+      matches, new Map(), new Map(), [], new Map(), new Map(), new Map(),
       { ...DEFAULTS, RECENCY_FLOOR_VOLATILE: 1.0 },
     );
 
@@ -37,11 +37,11 @@ describe("rerankWithTimeDecay() config threading", () => {
     const queryTags = ["work", "second-brain", "recall"];
 
     const capped = rerankWithTimeDecay(
-      matches, new Map(), new Map(), queryTags, new Map(), new Map(),
+      matches, new Map(), new Map(), queryTags, new Map(), new Map(), new Map(),
       { ...DEFAULTS, TAG_BOOST_MAX: 1.0 },
     );
     const uncapped = rerankWithTimeDecay(
-      matches, new Map(), new Map(), queryTags, new Map(), new Map(),
+      matches, new Map(), new Map(), queryTags, new Map(), new Map(), new Map(),
       { ...DEFAULTS, TAG_BOOST_MAX: 5.0, TAG_BOOST_STEP: 0.5 },
     );
 
@@ -52,7 +52,7 @@ describe("rerankWithTimeDecay() config threading", () => {
     const matches = [match("t", 1.0, ["task"])];
 
     const implicit = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map());
-    const explicit = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), DEFAULTS);
+    const explicit = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), new Map(), DEFAULTS);
 
     expect(implicit[0].score).toBe(explicit[0].score);
   });
@@ -73,8 +73,8 @@ describe("rerankWithTimeDecay() config threading", () => {
       const matches = [match("a", 0.9, ["work"]), match("b", 0.8, ["task"])];
       const snapshot = JSON.parse(JSON.stringify(matches));
 
-      const first = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), DEFAULTS);
-      const second = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), DEFAULTS);
+      const first = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), new Map(), DEFAULTS);
+      const second = rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), new Map(), DEFAULTS);
 
       expect(first.map(m => [m.id, m.score])).toEqual(second.map(m => [m.id, m.score]));
       expect(JSON.parse(JSON.stringify(matches))).toEqual(snapshot);
@@ -88,7 +88,7 @@ describe("rerankWithTimeDecay() config threading", () => {
   it("keeps ordering stable across calls even as the clock advances", async () => {
     const matches = [match("a", 0.9, ["work"]), match("b", 0.8, ["task"])];
     const ids = () =>
-      rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), DEFAULTS)
+      rerankWithTimeDecay(matches, new Map(), new Map(), [], new Map(), new Map(), new Map(), DEFAULTS)
         .map(m => m.id);
     expect(ids()).toEqual(ids());
   });

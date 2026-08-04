@@ -6,6 +6,7 @@ import { captureEntry } from "../capture/entry";
 import { appendToEntry, deleteStaleVectors, reembedOrDegrade } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { extractHashtags } from "../text/hashtags";
+import { tagsAfterWrite } from "../memory/stale";
 
 export async function handleCaptureRoutes(
   request: Request,
@@ -129,7 +130,7 @@ export async function handleCaptureRoutes(
 
     const tags: string[] = JSON.parse(row.tags ?? "[]");
     const { cleanContent, hashtags: newHashtags } = extractHashtags(newContent);
-    const mergedTags = [...new Set([...tags, ...newHashtags])];
+    const mergedTags = tagsAfterWrite([...new Set([...tags, ...newHashtags])]);
     const source = row.source as string;
     const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
     const finalContent = cleanContent || newContent;
@@ -148,8 +149,8 @@ export async function handleCaptureRoutes(
 
     // Safe to commit: either the embed succeeded, or Vectorize is unavailable and
     // the old vectors are kept below rather than retired.
-    await env.DB.prepare(`UPDATE entries SET content = ?, tags = ? WHERE id = ?`)
-      .bind(finalContent, JSON.stringify(mergedTags), id).run();
+    await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+      .bind(finalContent, JSON.stringify(mergedTags), Date.now(), id).run();
 
     if (newVectorIds) {
       try {

@@ -20,7 +20,17 @@ export async function initializeDatabase(env: Env): Promise<void> {
     `ALTER TABLE entries ADD COLUMN importance_score INTEGER DEFAULT 0`,
     `ALTER TABLE entries ADD COLUMN contradiction_wins INTEGER DEFAULT 0`,
     `ALTER TABLE entries ADD COLUMN contradiction_losses INTEGER DEFAULT 0`,
+    `ALTER TABLE entries ADD COLUMN updated_at INTEGER`,
+    `ALTER TABLE entries ADD COLUMN staleness_checked_at INTEGER`,
   ]) {
     try { await env.DB.exec(alter); } catch { /* column already exists — no-op */ }
+  }
+  try {
+    const row = await env.DB.prepare(`SELECT 1 AS n FROM entries WHERE updated_at IS NULL LIMIT 1`).first() as { n: number } | null;
+    if (row) {
+      await env.DB.exec(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
+    }
+  } catch (e) {
+    console.error("updated_at backfill failed (non-fatal):", e);
   }
 }
