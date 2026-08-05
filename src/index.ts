@@ -8,6 +8,7 @@ import type { Env } from "./env";
 import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { runScheduledIntegrationSync } from "./integrations/mirror";
+import { runStalenessPass } from "./staleness/pass";
 import { apiHandler } from "./mcp/handler";
 import { augmentOAuthRegistrationRequest } from "./oauth/register";
 import { defaultHandler } from "./routes";
@@ -40,8 +41,14 @@ export default {
     return oauthProvider.fetch(req, env as any, ctx);
   },
   scheduled: async (_event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
-    ctx.waitUntil(runNightlyCompression(env, ctx));
-    ctx.waitUntil(runGraphPass(env, ctx));
-    ctx.waitUntil(runScheduledIntegrationSync(env));
+    // The jobs are independent, and each begins by awaiting the shared schema init. One
+    // of them failing — including on that init — must not take the others down or surface
+    // as an unhandled rejection inside waitUntil.
+    const job = (name: string, run: Promise<void>) =>
+      ctx.waitUntil(run.catch((e) => console.error(`${name} failed (non-fatal):`, e)));
+    job("nightly compression", runNightlyCompression(env, ctx));
+    job("graph pass", runGraphPass(env, ctx));
+    job("integration sync", runScheduledIntegrationSync(env));
+    job("staleness pass", runStalenessPass(env, ctx));
   },
 };

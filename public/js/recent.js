@@ -90,6 +90,7 @@ function makeRecentCard(entry) {
   } catch {}
   const isSynthesized = tags.includes('synthesized')
   const isRolledUp = tags.includes('rolled-up')
+  const isStale = tags.includes('stale:as-of')
 
   let vectorIds = []
   try {
@@ -108,7 +109,7 @@ function makeRecentCard(entry) {
         : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
 
   const card = document.createElement('div')
-  card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '')
+  card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '')
   card.dataset.id = entry.id
   card.innerHTML = `
 <div class="card-content" style="cursor: pointer;">${escHtml(entry.content)}</div>

@@ -13,6 +13,12 @@ export function setDbReady(ready: boolean): void {
 
 export function ensureDbReady(ctx: ExecutionContext, env: Env): void {
   if (!dbReady) {
-    ctx.waitUntil(initializeDatabase(env).then(() => { dbReady = true; }));
+    ctx.waitUntil(
+      initializeDatabase(env)
+        .then(() => { dbReady = true; })
+        // Leave dbReady false so the next request tries again. Latching it after a failed
+        // init would leave this isolate serving a database whose schema never got applied.
+        .catch((e) => { console.error("Database initialization failed; will retry:", e); }),
+    );
   }
 }

@@ -119,7 +119,8 @@ function makeRecallCard(entry) {
   const card = document.createElement('div')
   const isSynthesized = entry.tags.includes('synthesized')
   const isRolledUp = entry.tags.includes('rolled-up')
-  card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '')
+  const isStale = entry.stale_as_of || entry.tags.includes('stale:as-of')
+  card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '')
   card.innerHTML = `
     <div class="match-line">
 <span class="match-pct">${entry.score}%</span>

@@ -3,7 +3,7 @@ import { renderRecallText } from "../../src/recall/render";
 import type { RecallMatch } from "../../src/recall/types";
 
 function m(over: Partial<RecallMatch> = {}): RecallMatch {
-  return { id: "entry-123", content: "A memory", score: 1, createdAt: 1700000000000, tags: ["work"], source: "claude", isUpdate: false, hop: 0, ...over };
+  return { id: "entry-123", content: "A memory", score: 1, createdAt: 1700000000000, updatedAt: 1700000000000, tags: ["work"], source: "claude", isUpdate: false, hop: 0, ...over };
 }
 
 describe("renderRecallText", () => {

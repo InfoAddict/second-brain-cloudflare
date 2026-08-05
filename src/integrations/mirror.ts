@@ -13,6 +13,7 @@ import { deleteStaleVectors, storeEntry } from "../capture/store";
 import { classifyEntry } from "../capture/classify";
 import { withKind } from "../memory/kind";
 import { withStatus } from "../memory/status";
+import { tagsAfterWrite } from "../memory/stale";
 
 export function makeMirrorStore(env: Env): MirrorStore {
   return {
@@ -37,8 +38,8 @@ export function makeMirrorStore(env: Env): MirrorStore {
         console.error("Mirror classify failed (non-fatal):", e);
       }
       await env.DB.prepare(
-        `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, importance_score) VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, content, JSON.stringify(finalTags), source, now, "[]", importance).run();
+        `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, content, JSON.stringify(finalTags), source, now, now, "[]", importance).run();
       try {
         await storeEntry(env, id, content, finalTags, source, now, cfg);
       } catch (e) {
@@ -55,10 +56,14 @@ export function makeMirrorStore(env: Env): MirrorStore {
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
-      await env.DB.prepare(`UPDATE entries SET content = ? WHERE id = ?`).bind(content, id).run();
+      const refreshedTags = tagsAfterWrite(tags);
+      const now = Date.now();
+
+      await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+        .bind(content, JSON.stringify(refreshedTags), now, id).run();
       let newVectorIds: string[] = [];
       try {
-        newVectorIds = await storeEntry(env, id, content, tags, row.source as string, Date.now(), await resolveConfig(env));
+        newVectorIds = await storeEntry(env, id, content, refreshedTags, row.source as string, now, await resolveConfig(env));
       } catch (e) {
         console.error("Vectorize re-embed failed (non-fatal):", e);
       }

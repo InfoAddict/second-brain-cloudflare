@@ -14,8 +14,10 @@ import { parseTimePhrase } from "../text/temporal";
 import { tokenizeQuery } from "../text/tokenize";
 import { distillToRareTerms, inferQueryTags, type DistilledQuery } from "./distill";
 import { synthesizeInsight } from "./insight";
+import { hasStaleAsOf } from "../memory/stale";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
+import { computeCompoundStale } from "./compound-stale";
 import type { KeywordRow, RecallMatch, RecallSearchResult } from "./types";
 
 async function keywordSearch(tokens: string[], env: Env, limit: number): Promise<KeywordRow[]> {
@@ -189,21 +191,22 @@ export async function recallEntries(
   if (!fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
   const candidateIds = [...new Set(fusedMatches.map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
-  const rcRows: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number }[] = [];
+  const rcRows: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number; tags: string }[] = [];
   for (let i = 0; i < candidateIds.length; i += D1_MAX_BOUND_PARAMS) {
     const batch = candidateIds.slice(i, i + D1_MAX_BOUND_PARAMS);
     const rcPlaceholders = batch.map(() => "?").join(", ");
     const { results: rows } = await env.DB.prepare(
-      `SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE id IN (${rcPlaceholders})`
-    ).bind(...batch).all() as { results: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number }[] };
+      `SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags FROM entries WHERE id IN (${rcPlaceholders})`
+    ).bind(...batch).all() as { results: { id: string; recall_count: number; importance_score: number; contradiction_wins: number; contradiction_losses: number; tags: string }[] };
     rcRows.push(...rows);
   }
   const recallCounts = new Map(rcRows.map(r => [r.id, r.recall_count ?? 0]));
   const importanceScores = new Map(rcRows.map(r => [r.id, r.importance_score ?? 0]));
   const contradictionWins = new Map(rcRows.map(r => [r.id, r.contradiction_wins ?? 0]));
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
+  const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
 
-  const reranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, cfg);
+  const reranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
 
   const seen = new Set<string>();
   const dedupedAll = reranked.filter((m) => {
@@ -236,7 +239,7 @@ export async function recallEntries(
   const allParentIds = [...seedParentIds, ...expandedScored.map(e => e.parentId)];
   const placeholders = allParentIds.map(() => "?").join(", ");
   const d1Bindings: (string | number)[] = [...allParentIds];
-  let d1Sql = `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${placeholders}) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  let d1Sql = `SELECT id, content, tags, source, created_at, updated_at FROM entries WHERE id IN (${placeholders}) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"status:deprecated"%'`;
   if (kind && (KIND_VALUES as readonly string[]).includes(kind)) {
     d1Sql += ` AND tags LIKE '%"kind:${kind}"%'`;
   }
@@ -265,10 +268,12 @@ export async function recallEntries(
       content: row.content as string,
       score: m.score,
       createdAt: row.created_at as number,
+      updatedAt: (row.updated_at as number | null) ?? (row.created_at as number),
       tags: JSON.parse(row.tags ?? "[]"),
       source: row.source as string,
       isUpdate: !!meta?.isUpdate,
       hop: 0,
+      staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
     }];
   });
 
@@ -280,10 +285,12 @@ export async function recallEntries(
       content: row.content as string,
       score: e.score,
       createdAt: row.created_at as number,
+      updatedAt: (row.updated_at as number | null) ?? (row.created_at as number),
       tags: JSON.parse(row.tags ?? "[]"),
       source: row.source as string,
       isUpdate: false,
       hop: e.hop,
+      staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
       viaProvenance: e.viaProvenance,
       viaType: e.viaType,
       viaLinkedAt: e.viaLinkedAt,
@@ -298,6 +305,8 @@ export async function recallEntries(
   const maxScore = matches.reduce((mx, m) => Math.max(mx, m.score), 0);
   if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;
 
+  const compoundStale = computeCompoundStale(matches);
+
   const insight = synthesize && matches.length > 1
     ? await synthesizeInsight(embedQuery, matches.map(m => ({ id: m.id, content: m.content })), env, cfg)
     : "";
@@ -309,5 +318,5 @@ export async function recallEntries(
     );
   }
 
-  return { matches, insight, semanticUnavailable, queryUsed: embedQuery, queryTokens: tokens };
+  return { matches, insight, semanticUnavailable, queryUsed: embedQuery, queryTokens: tokens, compoundStale };
 }

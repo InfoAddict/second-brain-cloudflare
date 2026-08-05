@@ -33,6 +33,7 @@ Incremental split of the former monolithic `index.ts`. Entry point remains `src/
 | recall search pipeline | `recall/*` |
 | capture write path | `capture/*` |
 | compression nightly/digest | `compression/*` |
+| staleness pass + classifier | `staleness/*` |
 | integration mirror | `integrations/mirror.ts` |
 | OAuth pages/register/authorize | `oauth/*` |
 | MCP server + sanitize | `mcp/*` |

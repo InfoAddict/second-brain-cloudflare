@@ -43,6 +43,7 @@
         --accent-soft: rgba(253, 84, 10, 0.09);
         --accent-ink: #c43d00;
         --good: #18794e;
+        --warn: #b45309;
         --danger: #b42318;
         --danger-soft: rgba(180, 35, 24, 0.08);
         --on-accent: #161616;
@@ -96,6 +97,7 @@
         --accent-soft: rgba(253, 111, 18, 0.16);
         --accent-ink: #ffab6e;
         --good: #7bae8a;
+        --warn: #d9a15c;
         --danger: #d9806b;
         --danger-soft: rgba(217, 128, 107, 0.14);
         --on-accent: #161616;
@@ -966,6 +968,16 @@
 
       .memory-card.card--rolled-up {
         opacity: 0.65;
+      }
+
+      /* Dashed rather than tinted, so it reads as provisional next to card--synthesized
+         without touching the card background. --text-tertiary is already below WCAG AA
+         on --bg-card — 4.4987 in dark, 3.0457 in light — so there is no headroom to
+         spend: a lightening tint pushes dark further down, and a darkening tint (which
+         would raise dark to ~4.58) pushes light further down instead. A border changes
+         neither, and matches how the other card modifiers signal state. */
+      .memory-card.card--stale {
+        border-left: 3px dashed var(--warn);
       }
 
       .memory-card.card--synthesized {

@@ -11,11 +11,25 @@ export class D1Mock {
     const makeStmt = (args: any[]) => ({
       async run() {
         if (s.startsWith("INSERT INTO entries")) {
-          const [id, content, tags, source, created_at, vector_ids] = args;
-          db.entries.push({ id, content, tags, source, created_at, vector_ids, recall_count: 0, importance_score: 0, contradiction_wins: 0, contradiction_losses: 0 });
+          if (args.length >= 8) {
+            const [id, content, tags, source, created_at, updated_at, vector_ids, importance_score] = args;
+            db.entries.push({ id, content, tags, source, created_at, updated_at, vector_ids, recall_count: 0, importance_score: importance_score ?? 0, contradiction_wins: 0, contradiction_losses: 0 });
+          } else if (args.length === 7) {
+            const [id, content, tags, source, created_at, updated_at, vector_ids] = args;
+            db.entries.push({ id, content, tags, source, created_at, updated_at, vector_ids, recall_count: 0, importance_score: 0, contradiction_wins: 0, contradiction_losses: 0 });
+          } else {
+            const [id, content, tags, source, created_at, vector_ids] = args;
+            db.entries.push({ id, content, tags, source, created_at, updated_at: created_at, vector_ids, recall_count: 0, importance_score: 0, contradiction_wins: 0, contradiction_losses: 0 });
+          }
           return { meta: { changes: 1 } };
         }
-        if (s.startsWith("UPDATE entries SET content = ?, vector_ids")) {
+        if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ? WHERE id")) {
+          const [content, vector_ids, tags, updated_at, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { row.content = content; row.vector_ids = vector_ids; row.tags = tags; row.updated_at = updated_at; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ? WHERE id")) {
           const [content, vector_ids, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) { row.content = content; row.vector_ids = vector_ids; }
@@ -33,10 +47,49 @@ export class D1Mock {
           if (row) row.vector_ids = vector_ids;
           return { meta: { changes: row ? 1 : 0 } };
         }
+        if (s.startsWith("UPDATE entries SET tags = ? WHERE id = ? AND tags = ?")) {
+          const [tags, id, expectedTags] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row && row.tags === expectedTags) {
+            row.tags = tags;
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ? WHERE id = ? AND tags = ? AND content = ?")) {
+          // Staleness CAS: guards content as well as tags, because the verdict being
+          // written is derived from content and the tag mutation is often a no-op.
+          const [tags, staleness_checked_at, id, expectedTags, expectedContent] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row && row.tags === expectedTags && row.content === expectedContent) {
+            row.tags = tags;
+            row.staleness_checked_at = staleness_checked_at;
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET staleness_checked_at = ? WHERE id = ?")) {
+          const [staleness_checked_at, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) row.staleness_checked_at = staleness_checked_at;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
         if (s.startsWith("UPDATE entries SET tags = ? WHERE id")) {
           const [tags, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) row.tags = tags;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id")) {
+          const [content, tags, updated_at, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET content = ?, updated_at = ? WHERE id")) {
+          const [content, updated_at, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { row.content = content; row.updated_at = updated_at; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET content = ?, tags")) {
@@ -45,7 +98,7 @@ export class D1Mock {
           if (row) { row.content = content; row.tags = tags; }
           return { meta: { changes: row ? 1 : 0 } };
         }
-        if (s.startsWith("UPDATE entries SET content")) {
+        if (s.startsWith("UPDATE entries SET content = ? WHERE id")) {
           const [content, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) row.content = content;
@@ -279,7 +332,70 @@ export class D1Mock {
         if (s.includes("SELECT id, recall_count, importance_score") && s.includes("WHERE id IN")) {
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
-            .map((e: any) => ({ id: e.id, recall_count: e.recall_count ?? 0, importance_score: e.importance_score ?? 0, contradiction_wins: e.contradiction_wins ?? 0, contradiction_losses: e.contradiction_losses ?? 0 }));
+            .map((e: any) => ({
+              id: e.id,
+              recall_count: e.recall_count ?? 0,
+              importance_score: e.importance_score ?? 0,
+              contradiction_wins: e.contradiction_wins ?? 0,
+              contradiction_losses: e.contradiction_losses ?? 0,
+              tags: e.tags ?? "[]",
+            }));
+          return { results };
+        }
+        if (s.includes("SELECT tags FROM entries WHERE id = ?")) {
+          const row = db.entries.find((e: any) => e.id === args[0]);
+          return { results: row ? [{ tags: row.tags }] : [] };
+        }
+        if (s.includes("COALESCE(updated_at, created_at) < ?") && s.includes("SELECT id, content, tags FROM entries")) {
+          const cutoff = Number(args[0]);
+          const limitMatch = s.match(/LIMIT (\d+)/);
+          const limit = limitMatch ? parseInt(limitMatch[1], 10) : 25;
+          const results = [...db.entries]
+            .filter((e: any) => {
+              const tags: string[] = JSON.parse(e.tags ?? "[]");
+              if (tags.includes("status:deprecated")) return false;
+              if (tags.includes("auto-pattern")) return false;
+              if (tags.includes("synthesized")) return false;
+              if (tags.includes("rolled-up")) return false;
+              const touched = e.updated_at ?? e.created_at;
+              return touched < cutoff;
+            })
+            .sort((a: any, b: any) => (a.staleness_checked_at ?? 0) - (b.staleness_checked_at ?? 0))
+            .slice(0, limit)
+            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags }));
+          return { results };
+        }
+        if (s.includes("SELECT id, content, tags, source, created_at, updated_at FROM entries WHERE id IN")) {
+          const inMatch = s.match(/WHERE id IN \(([^)]*)\)/);
+          const idCount = inMatch ? inMatch[1].split(",").length : 0;
+          const ids = args.slice(0, idCount);
+          const rest = args.slice(idCount);
+          let argIdx = 0;
+          const kindMatch = s.match(/tags LIKE '%"(kind:(?:episodic|semantic))"%'/);
+          let rows = db.entries.filter((e: any) => {
+            const tags: string[] = JSON.parse(e.tags ?? "[]");
+            if (!ids.includes(e.id)) return false;
+            if (tags.includes("auto-pattern")) return false;
+            if (s.includes('"status:deprecated"') && tags.includes("status:deprecated")) return false;
+            if (kindMatch && !tags.includes(kindMatch[1])) return false;
+            return true;
+          });
+          if (s.includes("created_at >= ?")) {
+            const after = Number(rest[argIdx++]);
+            rows = rows.filter((e: any) => e.created_at >= after);
+          }
+          if (s.includes("created_at <= ?")) {
+            const before = Number(rest[argIdx++]);
+            rows = rows.filter((e: any) => e.created_at <= before);
+          }
+          const results = rows.map((e: any) => ({
+            id: e.id,
+            content: e.content,
+            tags: e.tags,
+            source: e.source,
+            created_at: e.created_at,
+            updated_at: e.updated_at ?? e.created_at,
+          }));
           return { results };
         }
         if (s.includes("FROM entries WHERE id IN") && s.includes("tags NOT LIKE")) {

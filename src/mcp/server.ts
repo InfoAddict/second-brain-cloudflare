@@ -203,7 +203,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
     },
     async ({ query, topK, tag, after, before, kind, hops }) => {
       const cfg = await resolveConfig(env);
-      const { matches, insight, semanticUnavailable, queryTokens } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false }, env, ctx, cfg);
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false }, env, ctx, cfg);
 
       const notice = semanticUnavailable
         ? `Note: semantic search is unavailable because the Vectorize index is missing, so these are keyword matches only. Fix: ${VECTORIZE_FIX_HINT}.\n\n`
@@ -213,7 +213,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         return { content: [{ type: "text", text: notice + "Nothing found matching that query." }] };
       }
 
-      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg }) }] };
+      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale }) }] };
     }
   );
 
