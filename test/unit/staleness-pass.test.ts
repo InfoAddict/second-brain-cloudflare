@@ -150,9 +150,15 @@ describe("runStalenessPass", () => {
 
     await runStalenessPass(env, {} as ExecutionContext);
 
-    const tags: string[] = JSON.parse(db.entries.find(e => e.id === "user-vol")!.tags);
+    const row = db.entries.find(e => e.id === "user-vol")!;
+    const tags: string[] = JSON.parse(row.tags);
     expect(tags).toContain("volatility:volatile");
     expect(tags).not.toContain("volatility:durable");
+    // The seeded tag surviving proves nothing on its own — a pass that did nothing at all
+    // would satisfy that. Pin evidence that the row was actually processed and written:
+    // volatile entries get flagged, and the cursor advanced.
+    expect(tags).toContain("stale:as-of");
+    expect(row.staleness_checked_at).toBeGreaterThan(0);
   });
 
   it("advances staleness_checked_at even when classification is null", async () => {
@@ -218,6 +224,200 @@ describe("runStalenessPass", () => {
 
     const tags: string[] = JSON.parse(db.entries.find(e => e.id === "task-entry")!.tags);
     expect(tags).toContain("volatility:volatile");
+    expect(tags).toContain("stale:as-of");
+  });
+});
+
+// A free-plan Worker invocation gets 50 subrequests, and every D1 statement spends one.
+// The nightly cron already runs several jobs against that budget, so the staleness pass
+// has to be cheap or it never gets to run at all on a free deployment.
+describe("runStalenessPass D1 round-trip cost", () => {
+  const SUBREQUEST_BUDGET = 50;
+
+  function countingEnv(db: D1Mock) {
+    const prepared: string[] = [];
+    const execd: string[] = [];
+    const DB = {
+      prepare(sql: string) { prepared.push(sql); return db.prepare(sql); },
+      exec(sql: string) { execd.push(sql); return db.exec(sql); },
+      batch: (stmts: any[]) => db.batch(stmts),
+    } as unknown as D1Database;
+    return { env: makeTestEnv(db, { DB }), prepared, execd };
+  }
+
+  function seedAged(db: D1Mock, n: number) {
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    for (let i = 0; i < n; i++) {
+      db.entries.push({
+        id: `job-${i}`,
+        content: `Person ${i} works at Company ${i}`,
+        tags: "[]",
+        source: "api",
+        created_at: old + i,
+        updated_at: old + i,
+        vector_ids: "[]",
+      });
+    }
+  }
+
+  it("re-reads no tags it already selected", async () => {
+    const db = makeTestDb();
+    seedAged(db, STALENESS_PASS_LIMIT);
+    const { env, prepared } = countingEnv(db);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    // The candidate query already returned tags for all 25 rows; a per-row SELECT is
+    // pure duplication. Optimistic concurrency is preserved by the CAS guard instead.
+    expect(prepared.filter(s => s.startsWith("SELECT tags, content FROM entries WHERE id = ?"))).toEqual([]);
+    expect(db.entries.filter(e => e.staleness_checked_at != null)).toHaveLength(STALENESS_PASS_LIMIT);
+  });
+
+  it("spends nothing per row beyond the write it has to make", async () => {
+    const db = makeTestDb();
+    seedAged(db, STALENESS_PASS_LIMIT);
+    const { env, prepared, execd } = countingEnv(db);
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    // One candidate query plus one CAS write per entry — nothing per-row on the read side.
+    expect(prepared.filter(s => s.includes("COALESCE(updated_at, created_at) <"))).toHaveLength(1);
+    expect(prepared.filter(s => s.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ?")))
+      .toHaveLength(STALENESS_PASS_LIMIT);
+    // The pass's own cost: 1 candidate query + 25 CAS writes. The DDL is not counted
+    // here because it is memoised across the whole invocation — see the cron budget test
+    // in test/unit/cron-subrequest-budget.test.ts, which is where the 50 actually binds.
+    expect(prepared).toHaveLength(STALENESS_PASS_LIMIT + 1);
+    expect(execd.length).toBeLessThanOrEqual(SUBREQUEST_BUDGET);
+  });
+
+  // The classification is derived from content, but the tag mutation is a no-op for an
+  // entry carrying neither a volatility: nor a stale:as-of tag — the common case. Without
+  // content in the CAS guard, a concurrent rewrite would leave tags identical, the CAS
+  // would succeed, and the pass would commit a verdict about content that no longer
+  // exists. It does not self-correct: the concurrent write bumps updated_at past the
+  // 90-day cutoff, so the row drops out of future passes still wrongly flagged.
+  it("does not flag an entry whose content was rewritten mid-pass", async () => {
+    const db = makeTestDb();
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    db.entries.push({
+      id: "rewritten",
+      content: "Alice works at Acme Corp", // volatility:state — would be flagged stale
+      tags: "[]",
+      source: "api",
+      created_at: old,
+      updated_at: old,
+      vector_ids: "[]",
+    });
+    const { env } = countingEnv(db);
+    const original = db.prepare.bind(db);
+    let rewritten = false;
+    (db as any).prepare = (sql: string) => {
+      // Land the concurrent rewrite between the candidate query and the CAS write.
+      if (!rewritten && sql.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ?")) {
+        rewritten = true;
+        db.entries[0].content = "Birthday is March 12"; // now durable
+        db.entries[0].updated_at = Date.now();
+      }
+      return original(sql);
+    };
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    const tags: string[] = JSON.parse(db.entries[0].tags);
+    expect(tags).not.toContain("stale:as-of");
+    expect(tags).not.toContain("volatility:state");
+    // The retry re-read the fresh content and classified that instead.
+    expect(tags).toContain("volatility:durable");
+  });
+
+  it("re-reads both fields when content and tags change together mid-pass", async () => {
+    const db = makeTestDb();
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    db.entries.push({
+      id: "both",
+      content: "Alice works at Acme Corp",
+      tags: '["work"]',
+      source: "api",
+      created_at: old,
+      updated_at: old,
+      vector_ids: "[]",
+    });
+    const { env } = countingEnv(db);
+    const original = db.prepare.bind(db);
+    let raced = false;
+    (db as any).prepare = (sql: string) => {
+      if (!raced && sql.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ?")) {
+        raced = true;
+        db.entries[0].content = "Birthday is March 12";
+        db.entries[0].tags = '["personal"]';
+        db.entries[0].updated_at = Date.now();
+      }
+      return original(sql);
+    };
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    const tags: string[] = JSON.parse(db.entries[0].tags);
+    expect(tags).toContain("personal");       // the concurrent tag write survived
+    expect(tags).not.toContain("work");       // and was not clobbered by the stale snapshot
+    expect(tags).toContain("volatility:durable");
+    expect(tags).not.toContain("stale:as-of");
+  });
+
+  // The candidate query orders by COALESCE(staleness_checked_at, 0) ASC, so a row left
+  // with a NULL cursor sorts first on every subsequent pass — permanently occupying one
+  // of the 25 slots. A row that loses every CAS attempt must still have its cursor moved.
+  it("advances the cursor even when every CAS attempt is lost", async () => {
+    const db = makeTestDb();
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    db.entries.push({
+      id: "hot",
+      content: "Alice works at Acme Corp",
+      tags: "[]",
+      source: "api",
+      created_at: old,
+      updated_at: old,
+      vector_ids: "[]",
+    });
+    const { env } = countingEnv(db);
+    const original = db.prepare.bind(db);
+    let rewrites = 0;
+    (db as any).prepare = (sql: string) => {
+      // Rewrite before every attempt, so no CAS can ever land.
+      if (sql.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ?")) {
+        db.entries[0].content = `rewritten ${++rewrites}`;
+      }
+      return original(sql);
+    };
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    expect(rewrites).toBeGreaterThanOrEqual(3); // all attempts consumed
+    expect(db.entries[0].staleness_checked_at).toBeGreaterThan(0);
+  });
+
+  it("still re-reads tags when a concurrent write makes the CAS lose", async () => {
+    const db = makeTestDb();
+    seedAged(db, 1);
+    const { env, prepared } = countingEnv(db);
+    // Flip the row's tags out from under the pass on the first CAS attempt, exactly as a
+    // concurrent writer would. The retry must go back to the database for fresh tags.
+    const original = db.prepare.bind(db);
+    let flipped = false;
+    (db as any).prepare = (sql: string) => {
+      if (!flipped && sql.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ?")) {
+        flipped = true;
+        db.entries[0].tags = '["touched-by-someone-else"]';
+      }
+      return original(sql);
+    };
+
+    await runStalenessPass(env, {} as ExecutionContext);
+
+    expect(prepared.filter(s => s.startsWith("SELECT tags, content FROM entries WHERE id = ?"))).toHaveLength(1);
+    const tags: string[] = JSON.parse(db.entries[0].tags);
+    expect(tags).toContain("touched-by-someone-else"); // retry built on the fresh tags
     expect(tags).toContain("stale:as-of");
   });
 });

@@ -56,10 +56,12 @@ export class D1Mock {
           }
           return { meta: { changes: 0 } };
         }
-        if (s.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ? WHERE id = ? AND tags = ?")) {
-          const [tags, staleness_checked_at, id, expectedTags] = args;
+        if (s.startsWith("UPDATE entries SET tags = ?, staleness_checked_at = ? WHERE id = ? AND tags = ? AND content = ?")) {
+          // Staleness CAS: guards content as well as tags, because the verdict being
+          // written is derived from content and the tag mutation is often a no-op.
+          const [tags, staleness_checked_at, id, expectedTags, expectedContent] = args;
           const row = db.entries.find((e: any) => e.id === id);
-          if (row && row.tags === expectedTags) {
+          if (row && row.tags === expectedTags && row.content === expectedContent) {
             row.tags = tags;
             row.staleness_checked_at = staleness_checked_at;
             return { meta: { changes: 1 } };

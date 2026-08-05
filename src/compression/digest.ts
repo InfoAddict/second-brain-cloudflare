@@ -50,10 +50,12 @@ export async function compressTag(
   env: Env,
   ctx: ExecutionContext
 ): Promise<{ synthesizedId: string | null; entriesUsed: number; text: string }> {
-  const cfg = await resolveConfig(env);
+  // Guard before resolveConfig: that is a KV read, and a system tag never compresses, so
+  // paying for it first is a wasted subrequest per skipped tag per night.
   if (tag.startsWith(STATUS_PREFIX) || tag.startsWith(KIND_PREFIX) || tag.startsWith(VOLATILITY_PREFIX) || tag === STALE_AS_OF) {
     return { synthesizedId: null, entriesUsed: 0, text: "" };
   }
+  const cfg = await resolveConfig(env);
 
   const recentSynth = await env.DB.prepare(`
     SELECT id FROM entries
