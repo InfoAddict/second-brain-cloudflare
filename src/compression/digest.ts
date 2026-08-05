@@ -45,6 +45,41 @@ State of "${tag}":`;
   return digest.trim();
 }
 
+/**
+ * Mark the entries a digest was built from, so they stop being eligible for compression.
+ *
+ * One statement per source used to be issued serially, which was roughly 88% of the whole
+ * nightly cron's D1 cost — all four jobs share one invocation and therefore one subrequest
+ * budget (#278). A batch is a single subrequest whatever it carries.
+ *
+ * batch() is atomic, and that matters more than it looks here: the digest entry has already
+ * been written by this point, so a source that misses its `rolled-up` mark stays eligible
+ * and gets compressed again on a later night, producing a duplicate digest. Letting one bad
+ * row roll back the whole batch would turn one duplicate into a tag's worth, so a failed
+ * batch falls back to per-row writes — the behaviour this replaced, at the cost it used to
+ * pay, on the path that used to be the only path.
+ */
+async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): Promise<void> {
+  if (!ids.length) return;
+  const note = `\n\n[Digest: ${digestId}]`;
+  const mark = (id: string) => env.DB.prepare(
+    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ?`
+  ).bind(note, id);
+
+  try {
+    await env.DB.batch(ids.map(mark));
+  } catch (e) {
+    console.error("Batched rolled-up mark failed; retrying per row (non-fatal):", e);
+    for (const id of ids) {
+      try {
+        await mark(id).run();
+      } catch (err) {
+        console.error(`Failed to update source entry ${id} (non-fatal):`, err);
+      }
+    }
+  }
+}
+
 export async function compressTag(
   tag: string,
   env: Env,
@@ -95,15 +130,7 @@ export async function compressTag(
     return { synthesizedId: null, entriesUsed: 0, text };
   }
 
-  for (const id of rows.map(r => r.id)) {
-    try {
-      await env.DB.prepare(
-        `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ?`
-      ).bind(`\n\n[Digest: ${result.id}]`, id).run();
-    } catch (e) {
-      console.error(`Failed to update source entry ${id} (non-fatal):`, e);
-    }
-  }
+  await markSourcesRolledUp(env, rows.map(r => r.id), result.id);
 
   return { synthesizedId: result.id, entriesUsed: rows.length, text };
 }
