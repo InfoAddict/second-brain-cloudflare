@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import {
+  KEYWORD_MAX_TOKENS,
   KEYWORD_MIN_TOKEN_LEN,
   KEYWORD_STOPWORDS,
   MAX_QUERY_TERMS,
@@ -8,15 +9,32 @@ import {
 } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { extractHashtags } from "../text/hashtags";
+import { isTopicTag } from "../compression/eligibility";
+import { getTagVocabulary } from "../tags/vocabulary";
 
-export async function inferQueryTags(query: string, env: Env, config: Readonly<Config> = DEFAULTS): Promise<string[]> {
+/**
+ * `ctx` is optional only so this stays callable from tests and any future internal
+ * caller; pass it wherever there is one, or an aged-out vocabulary is rebuilt on the
+ * request's own critical path instead of behind it.
+ */
+export async function inferQueryTags(query: string, env: Env, config: Readonly<Config> = DEFAULTS, ctx?: ExecutionContext): Promise<string[]> {
   const { hashtags } = extractHashtags(query);
   if (hashtags.length) return hashtags;
 
-  const { results: tagRows } = await env.DB.prepare(
-    `SELECT DISTINCT value FROM entries, json_each(entries.tags) ORDER BY value`
-  ).all();
-  const knownTags = (tagRows as { value: string }[]).map(r => r.value);
+  // Cached (#288): this used to be a full table scan expanded per tag per row, on
+  // every recall, and it was 82% of a recall's read cost.
+  //
+  // System tags are dropped rather than matched against. They say what the system
+  // did to an entry, not what it is about, and the only thing a query tag does is
+  // boost entries whose subject overlaps the question. Two of them — `auto-pattern`
+  // and `status:deprecated` — name entries that recall's hydration filter removes
+  // outright, so a boost they win is spent on rows that are then discarded. They are
+  // also applied in bulk (the staleness pass alone writes `volatility:` and
+  // `stale:as-of` across up to 25 entries a night), which makes them the highest-
+  // count tags in a mature brain and exactly the ones that would crowd real topics
+  // out of the 50 the LLM below is shown. The same predicate #278 used to keep them
+  // out of digest candidates, so the two agree by construction.
+  const knownTags = (await getTagVocabulary(env, ctx)).filter(isTopicTag);
 
   const lowerQuery = query.toLowerCase();
   const keywordMatches = knownTags.filter(t =>
@@ -69,7 +87,11 @@ export async function distillToRareTerms(query: string, env: Env, config: Readon
     return { query: content.length ? content.join(" ") : query, df: null, total: null };
   }
 
-  const uniq = [...new Set(content.map(norm))].slice(0, 16);
+  // One bound parameter and one SUM column per term, so this scan is bounded by
+  // the same ceiling as the keyword clause it feeds. Sharing the constant is
+  // what makes that true rather than coincidental: the widest set ranked here
+  // is the widest set search.ts can carry, in either direction.
+  const uniq = [...new Set(content.map(norm))].slice(0, KEYWORD_MAX_TOKENS);
   try {
     const sums = uniq.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
     const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries`)

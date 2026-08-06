@@ -8,6 +8,8 @@ import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
 import { deleteStaleVectors, reembedOrThrow, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
+import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { rememberTags } from "../tags/vocabulary";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -17,7 +19,11 @@ export function buildEntryFilterQuery(params: {
 }): { sql: string; bindings: (string | number)[] } {
   const conds: string[] = [];
   const bindings: (string | number)[] = [];
-  if (params.tag) { conds.push(`tags LIKE ?`); bindings.push(`%"${params.tag}"%`); }
+  // Escaped for the same reason as the recall path: `_` and `%` in a tag are LIKE
+  // wildcards, so `#q3_planning` would also list `q3-planning` entries and `?tag=%` would
+  // list everything. A read, so over-broad rather than destructive — but a filter that
+  // silently stops filtering is worse than one that returns nothing.
+  if (params.tag) { conds.push(`tags LIKE ? ${TAG_LIKE_ESCAPE}`); bindings.push(tagLikePattern(params.tag)); }
   if (params.after !== undefined) { conds.push(`created_at >= ?`); bindings.push(params.after); }
   if (params.before !== undefined) { conds.push(`created_at <= ?`); bindings.push(params.before); }
 
@@ -117,6 +123,13 @@ export async function captureEntry(
     storeEntry(env, id, c, finalTags, source, now, cfg)
       .catch(e => console.error("Vectorize insert failed (non-fatal):", e))
   );
+
+  // Capture is where a tag string nobody wrote into the source first exists, so it is
+  // one of the two places the cached vocabulary has to learn one (#288). Deferred, so
+  // the capture does not wait on KV — which means the tag is admitted once this
+  // settles rather than by the time the response lands, and a `GET /tags` fired
+  // straight off the back of the save can miss it by one refresh.
+  ctx.waitUntil(rememberTags(env, finalTags));
 
   scheduleClassifyAndTag(id, c, env, ctx, cfg);
 
