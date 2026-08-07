@@ -4,13 +4,17 @@ import { describe, it, expect } from "vitest";
 import {
   ENTRY_INSERT_COLUMNS,
   ENTRY_INSERT_SQL,
+  EDGE_ENDPOINT_QUERY_BATCH,
   formatDbError,
   isImportRecordObject,
+  parseCreatedAt,
   parseImportLimit,
+  parseOptionalNumber,
   parseRequiredString,
   parseTags,
   parseEdgeWeight,
 } from "../../src/entries/import";
+import { D1_MAX_BOUND_PARAMS } from "../../src/constants";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
@@ -54,12 +58,21 @@ function parseAlterColumns(initSource: string, table: string): string[] {
   return cols;
 }
 
+function parseSchemaRuntimeColumns(schemaSql: string): string[] {
+  const match = schemaSql.match(/Runtime ALTER columns.*?:\s*([^\n]+)/);
+  if (!match) return [];
+  return match[1].split(",").map(s => s.trim()).filter(Boolean);
+}
+
 describe("import helpers", () => {
   it("ENTRY_INSERT_COLUMNS are a subset of schema.sql and init.ts columns", () => {
     const schemaSql = readFileSync(resolve(repoRoot, "db/schema.sql"), "utf-8");
     const initTs = readFileSync(resolve(repoRoot, "src/db/init.ts"), "utf-8");
 
-    const schemaCols = parseCreateTableColumns(schemaSql, "entries");
+    const schemaCols = [
+      ...parseCreateTableColumns(schemaSql, "entries"),
+      ...parseSchemaRuntimeColumns(schemaSql),
+    ];
     const initCols = [
       ...parseCreateTableColumns(initTs, "entries"),
       ...parseAlterColumns(initTs, "entries"),
@@ -71,7 +84,11 @@ describe("import helpers", () => {
     }
 
     expect(ENTRY_INSERT_SQL).toContain("INSERT INTO entries (");
-    expect(ENTRY_INSERT_SQL).not.toContain("updated_at");
+    expect(ENTRY_INSERT_SQL).toContain("updated_at");
+  });
+
+  it("EDGE_ENDPOINT_QUERY_BATCH halves D1_MAX_BOUND_PARAMS for double-bound lookups", () => {
+    expect(EDGE_ENDPOINT_QUERY_BATCH).toBe(Math.floor(D1_MAX_BOUND_PARAMS / 2));
   });
 
   it("parseRequiredString rejects non-string values without throwing", () => {
@@ -106,5 +123,21 @@ describe("import helpers", () => {
   it("parseEdgeWeight rejects non-finite values", () => {
     expect(parseEdgeWeight({ nested: 1 })).toEqual({ ok: false, reason: "invalid_weight" });
     expect(parseEdgeWeight(0.5)).toEqual({ ok: true, value: 0.5 });
+  });
+
+  it("parseOptionalNumber rejects non-finite values and defaults nullish to 0", () => {
+    expect(parseOptionalNumber(undefined, "invalid_recall_count")).toEqual({ ok: true, value: 0 });
+    expect(parseOptionalNumber(null, "invalid_recall_count")).toEqual({ ok: true, value: 0 });
+    expect(parseOptionalNumber("3", "invalid_recall_count")).toEqual({ ok: false, reason: "invalid_recall_count" });
+    expect(parseOptionalNumber(4, "invalid_importance_score")).toEqual({ ok: true, value: 4 });
+  });
+
+  it("parseCreatedAt rejects non-finite values and defaults nullish to now", () => {
+    const now = Date.now();
+    const parsed = parseCreatedAt(undefined);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value).toBeGreaterThanOrEqual(now);
+    expect(parseCreatedAt("yesterday")).toEqual({ ok: false, reason: "invalid_created_at" });
+    expect(parseCreatedAt(1234)).toEqual({ ok: true, value: 1234 });
   });
 });

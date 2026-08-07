@@ -109,12 +109,13 @@ describe("POST /import", () => {
     expect(JSON.parse(a.tags)).toEqual(["work", "kind:semantic"]);
     expect(a.source).toBe("phone");
     expect(a.created_at).toBe(5000);
+    expect(a.updated_at).toBe(5000);
     expect(a.recall_count).toBe(3);
     expect(a.importance_score).toBe(4);
     expect(a.vector_ids).toBe("[]");
 
     expect(db.edges).toHaveLength(1);
-    expect(db.edges[0]).toMatchObject({ source_id: "a", target_id: "b", type: "relates_to" });
+    expect(db.edges[0]).toMatchObject({ source_id: "a", target_id: "b", type: "relates_to", metadata: "{}" });
     expect(db.edges[0].created_at).toBe(1);
   });
 
@@ -314,5 +315,47 @@ describe("POST /import", () => {
     expect(secondEdgeData.remaining_edges).toBe(0);
     expect(db.edges).toHaveLength(2);
     expect(db.edges.find((e: any) => e.source_id === "b" && e.target_id === "c")?.created_at).toBe(200);
+  });
+
+  it("reports invalid_recall_count without aborting the request", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [
+          { id: "bad", content: "Note", recall_count: "lots", created_at: 1 },
+          { id: "good", content: "valid", created_at: 2 },
+        ],
+        edges: [],
+      },
+    }), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.failed).toBe(1);
+    expect(data.imported).toBe(1);
+    expect(data.results).toContainEqual({ id: "bad", status: "failed", reason: "invalid_recall_count" });
+    expect(db.entries).toHaveLength(1);
+    expect(db.entries[0].id).toBe("good");
+  });
+
+  it("imports edges when the payload has more than 50 distinct endpoints", async () => {
+    const entries = Array.from({ length: 52 }, (_, i) => ({
+      id: `n${i}`,
+      content: `Memory ${i}`,
+      created_at: i + 1,
+    }));
+    const edges = Array.from({ length: 51 }, (_, i) => ({
+      source_id: `n${i}`,
+      target_id: `n${i + 1}`,
+      type: "relates_to",
+      created_at: 1000 + i,
+    }));
+
+    const res = await worker.fetch(req("POST", "/import?limit=100", { body: { version: 2, entries, edges } }), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.imported).toBe(52);
+    expect(data.edges_imported).toBe(51);
+    expect(data.edges_failed).toBe(0);
+    expect(db.edges).toHaveLength(51);
   });
 });

@@ -107,7 +107,7 @@ function rawSqlReads(sql: string, relPath: string): Finding[] {
     if (inAny(i, declarations) || inAny(i, coalesced) || inAny(i, insertColumns)) continue;
     // In a SET clause and followed by `=` — an assignment target.
     if (inAny(i, setClauses) && /^\s*=/.test(sql.slice(i + "updated_at".length))) continue;
-    if (relPath === HYDRATION_EXEMPTION.file && sql.includes(HYDRATION_EXEMPTION.marker)) continue;
+    if (relPath.replace(/\\/g, "/") === HYDRATION_EXEMPTION.file && sql.includes(HYDRATION_EXEMPTION.marker)) continue;
 
     const at = sql.slice(Math.max(0, i - 45), i + 45);
     const clause = /\bORDER\s+BY\b/i.test(sql.slice(0, i)) ? "ORDER BY"

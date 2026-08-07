@@ -207,6 +207,10 @@ export class D1Mock {
           return { meta: { changes: before - db.entries.length } };
         }
         if (s.startsWith("INSERT INTO edges")) {
+          const placeholderCount = (s.match(/\?/g) ?? []).length;
+          if (placeholderCount !== args.length) {
+            throw new Error(`INSERT INTO edges placeholder/bind mismatch: ${placeholderCount} vs ${args.length}`);
+          }
           const [id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at] = args;
           const existing = db.edges.find((e: any) => e.source_id === source_id && e.target_id === target_id && e.type === type);
           if (existing) {

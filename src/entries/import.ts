@@ -9,22 +9,20 @@ export const IMPORT_DEFAULT_LIMIT = 40;
 export const IMPORT_MAX_LIMIT = 1000;
 /** D1 batch chunk size for inserts. */
 export const IMPORT_D1_BATCH_SIZE = 50;
+/** Edge endpoint lookups bind each id twice (source IN + target IN). */
+export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
-// Matches `main` schema today (no `updated_at` — add that column when #263 lands).
-export const ENTRY_INSERT_COLUMNS = [
-  "id",
-  "content",
-  "tags",
-  "source",
-  "created_at",
-  "vector_ids",
-  "recall_count",
-  "importance_score",
-  "contradiction_wins",
-  "contradiction_losses",
-] as const;
+const ENTRY_INSERT_SQL_TEMPLATE =
+  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-export const ENTRY_INSERT_SQL = `INSERT INTO entries (${ENTRY_INSERT_COLUMNS.join(", ")}) VALUES (${ENTRY_INSERT_COLUMNS.map(() => "?").join(", ")})`;
+function parseInsertColumns(sql: string): readonly string[] {
+  const match = sql.match(/INSERT INTO entries \(([^)]+)\)/i);
+  if (!match) throw new Error("INSERT INTO entries missing column list");
+  return match[1].split(",").map(c => c.trim());
+}
+
+export const ENTRY_INSERT_COLUMNS = parseInsertColumns(ENTRY_INSERT_SQL_TEMPLATE);
+export const ENTRY_INSERT_SQL = ENTRY_INSERT_SQL_TEMPLATE;
 
 export type ImportEntryStatus = "imported" | "skipped" | "failed";
 export type ImportEdgeStatus = "imported" | "skipped" | "failed";
@@ -203,8 +201,8 @@ async function loadExistingIds(env: Env, ids: string[]): Promise<Set<string>> {
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
   const keys = new Set<string>();
   if (!endpoints.length) return keys;
-  for (let i = 0; i < endpoints.length; i += D1_MAX_BOUND_PARAMS) {
-    const batch = endpoints.slice(i, i + D1_MAX_BOUND_PARAMS);
+  for (let i = 0; i < endpoints.length; i += EDGE_ENDPOINT_QUERY_BATCH) {
+    const batch = endpoints.slice(i, i + EDGE_ENDPOINT_QUERY_BATCH);
     const placeholders = batch.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
       `SELECT source_id, target_id, type FROM edges WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`,
@@ -246,6 +244,29 @@ export function parseEdgeWeight(
   return { ok: true, value: Math.max(0, Math.min(1, weight)) };
 }
 
+type NumericFieldReason =
+  | "invalid_recall_count"
+  | "invalid_importance_score"
+  | "invalid_contradiction_wins"
+  | "invalid_contradiction_losses";
+
+export function parseOptionalNumber(
+  value: unknown,
+  invalidReason: NumericFieldReason,
+): { ok: true; value: number } | { ok: false; reason: NumericFieldReason } {
+  if (value === undefined || value === null) return { ok: true, value: 0 };
+  if (typeof value !== "number" || !Number.isFinite(value)) return { ok: false, reason: invalidReason };
+  return { ok: true, value };
+}
+
+export function parseCreatedAt(
+  value: unknown,
+): { ok: true; value: number } | { ok: false; reason: "invalid_created_at" } {
+  if (value === undefined || value === null) return { ok: true, value: Date.now() };
+  if (typeof value !== "number" || !Number.isFinite(value)) return { ok: false, reason: "invalid_created_at" };
+  return { ok: true, value };
+}
+
 function countNewEdgesInPayload(edges: ExportEdge[], existingEdgeKeys: Set<string>): number {
   let count = 0;
   for (const edge of edges) {
@@ -267,6 +288,7 @@ function bindInsert(env: Env, row: PendingInsert) {
     row.content,
     JSON.stringify(row.tags),
     row.source,
+    row.created_at,
     row.created_at,
     "[]",
     row.recall_count,
@@ -322,7 +344,7 @@ function bindEdgeInsert(env: Env, edge: PendingEdge) {
   const now = Date.now();
   return env.DB.prepare(
     `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`,
   ).bind(crypto.randomUUID(), source, target, edge.type, edge.weight, edge.provenance, "{}", edge.created_at, now);
 }
@@ -458,7 +480,38 @@ export async function importExportPayload(
     }
     newInsertAttempts++;
 
-    const created_at = typeof entry.created_at === "number" ? entry.created_at : Date.now();
+    const createdAtParsed = parseCreatedAt(entry.created_at);
+    if (!createdAtParsed.ok) {
+      failed++;
+      results.push({ id, status: "failed", reason: createdAtParsed.reason });
+      continue;
+    }
+    const created_at = createdAtParsed.value;
+
+    const recallCountParsed = parseOptionalNumber(entry.recall_count, "invalid_recall_count");
+    if (!recallCountParsed.ok) {
+      failed++;
+      results.push({ id, status: "failed", reason: recallCountParsed.reason });
+      continue;
+    }
+    const importanceParsed = parseOptionalNumber(entry.importance_score, "invalid_importance_score");
+    if (!importanceParsed.ok) {
+      failed++;
+      results.push({ id, status: "failed", reason: importanceParsed.reason });
+      continue;
+    }
+    const winsParsed = parseOptionalNumber(entry.contradiction_wins, "invalid_contradiction_wins");
+    if (!winsParsed.ok) {
+      failed++;
+      results.push({ id, status: "failed", reason: winsParsed.reason });
+      continue;
+    }
+    const lossesParsed = parseOptionalNumber(entry.contradiction_losses, "invalid_contradiction_losses");
+    if (!lossesParsed.ok) {
+      failed++;
+      results.push({ id, status: "failed", reason: lossesParsed.reason });
+      continue;
+    }
 
     pendingBatch.push({
       id,
@@ -466,10 +519,10 @@ export async function importExportPayload(
       tags,
       source,
       created_at,
-      recall_count: entry.recall_count ?? 0,
-      importance_score: entry.importance_score ?? 0,
-      contradiction_wins: entry.contradiction_wins ?? 0,
-      contradiction_losses: entry.contradiction_losses ?? 0,
+      recall_count: recallCountParsed.value,
+      importance_score: importanceParsed.value,
+      contradiction_wins: winsParsed.value,
+      contradiction_losses: lossesParsed.value,
     });
 
     if (pendingBatch.length >= IMPORT_D1_BATCH_SIZE) {
