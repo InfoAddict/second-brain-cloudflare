@@ -39,6 +39,7 @@ function exportPayload(db: D1Mock) {
       tags: JSON.parse(e.tags ?? "[]"),
       source: e.source,
       created_at: e.created_at,
+      updated_at: e.updated_at ?? e.created_at,
       recall_count: e.recall_count ?? 0,
       importance_score: e.importance_score ?? 0,
       contradiction_wins: e.contradiction_wins ?? 0,
@@ -281,7 +282,7 @@ describe("POST /import", () => {
     expect(db.entries).toHaveLength(0);
   });
 
-  it("paginates edges under ?limit= with idempotent skip", async () => {
+  it("pages entries then edges by cursor, with idempotent re-runs", async () => {
     const entries = [
       { id: "a", content: "A", created_at: 1 },
       { id: "b", content: "B", created_at: 2 },
@@ -291,30 +292,41 @@ describe("POST /import", () => {
       { source_id: "a", target_id: "b", type: "relates_to", created_at: 100 },
       { source_id: "b", target_id: "c", type: "relates_to", created_at: 200 },
     ];
-
-    const seedEntries = await worker.fetch(req("POST", "/import", {
-      body: { version: 2, entries, edges: [] },
-    }), env, ctx);
-    expect((await seedEntries.json() as any).imported).toBe(3);
-
     const payload = { version: 2, entries, edges };
 
-    const firstEdge = await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx);
-    const firstEdgeData = await firstEdge.json() as any;
-    expect(firstEdgeData.skipped).toBe(3);
-    expect(firstEdgeData.edges_imported).toBe(1);
-    expect(firstEdgeData.remaining_edges).toBe(1);
-    expect(firstEdgeData.results).toHaveLength(1);
+    // Entry pages at limit=1: edges wait until the entries array is exhausted.
+    const p1 = await (await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx)).json() as any;
+    expect(p1.imported).toBe(1);
+    expect(p1.next_offset).toBe(1);
+    expect(p1.remaining_entries).toBe(2);
+    expect(p1.edges_imported).toBe(0);
+    expect(p1.remaining_edges).toBe(2);
+
+    const p2 = await (await worker.fetch(req("POST", "/import?limit=1&offset=1", { body: payload }), env, ctx)).json() as any;
+    expect(p2.imported).toBe(1);
+    expect(db.edges).toHaveLength(0);
+
+    // The final entries page and the first edge page share a call.
+    const p3 = await (await worker.fetch(req("POST", "/import?limit=1&offset=2", { body: payload }), env, ctx)).json() as any;
+    expect(p3.imported).toBe(1);
+    expect(p3.remaining_entries).toBe(0);
+    expect(p3.edges_imported).toBe(1);
+    expect(p3.next_edge_offset).toBe(1);
+    expect(p3.remaining_edges).toBe(1);
     expect(db.edges).toHaveLength(1);
     expect(db.edges[0].created_at).toBe(100);
 
-    const secondEdge = await worker.fetch(req("POST", "/import?limit=1", { body: payload }), env, ctx);
-    const secondEdgeData = await secondEdge.json() as any;
-    expect(secondEdgeData.edges_imported).toBe(1);
-    expect(secondEdgeData.edges_skipped).toBe(1);
-    expect(secondEdgeData.remaining_edges).toBe(0);
+    const p4 = await (await worker.fetch(req("POST", "/import?limit=1&offset=3&edge_offset=1", { body: payload }), env, ctx)).json() as any;
+    expect(p4.edges_imported).toBe(1);
+    expect(p4.remaining_edges).toBe(0);
     expect(db.edges).toHaveLength(2);
     expect(db.edges.find((e: any) => e.source_id === "b" && e.target_id === "c")?.created_at).toBe(200);
+
+    // Re-running a page is a skip, not a duplicate or an error.
+    const rerun = await (await worker.fetch(req("POST", "/import?limit=1&offset=3&edge_offset=1", { body: payload }), env, ctx)).json() as any;
+    expect(rerun.edges_skipped).toBe(1);
+    expect(rerun.edges_imported).toBe(0);
+    expect(db.edges).toHaveLength(2);
   });
 
   it("reports invalid_recall_count without aborting the request", async () => {
@@ -335,6 +347,77 @@ describe("POST /import", () => {
     expect(data.results).toContainEqual({ id: "bad", status: "failed", reason: "invalid_recall_count" });
     expect(db.entries).toHaveLength(1);
     expect(db.entries[0].id).toBe("good");
+  });
+
+  it("preserves updated_at across the round trip, and defaults it for old exports", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [
+          { id: "edited", content: "Edited later", created_at: 1000, updated_at: 9000 },
+          { id: "old-export", content: "From a pre-updated_at export", created_at: 2000 },
+        ],
+      },
+    }), env, ctx);
+    expect((await res.json() as any).imported).toBe(2);
+
+    expect(db.entries.find(e => e.id === "edited")!.updated_at).toBe(9000);
+    // The field is what recall and the staleness pass read as the entry's age;
+    // created_at is what the column would have coalesced to anyway.
+    expect(db.entries.find(e => e.id === "old-export")!.updated_at).toBe(2000);
+  });
+
+  it("reports invalid_updated_at without laundering it into a fresh timestamp", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [
+          { id: "bad", content: "X", created_at: 1000, updated_at: "yesterday" },
+          { id: "good", content: "Y", created_at: 1000 },
+        ],
+      },
+    }), env, ctx);
+    const data = await res.json() as any;
+    expect(data.imported).toBe(1);
+    expect(data.failed).toBe(1);
+    expect(data.results).toContainEqual({ id: "bad", status: "failed", reason: "invalid_updated_at" });
+    expect(db.entries.map(e => e.id)).toEqual(["good"]);
+  });
+
+  it("skips a duplicate id within one payload instead of failing the batch", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [
+          { id: "dup", content: "First occurrence", created_at: 1000 },
+          { id: "dup", content: "Second occurrence", created_at: 2000 },
+        ],
+      },
+    }), env, ctx);
+    const data = await res.json() as any;
+    // Without the queue-time skip both rows enter one batch and the PRIMARY KEY
+    // conflict fails the whole batch into the per-row fallback.
+    expect(data.imported).toBe(1);
+    expect(data.skipped).toBe(1);
+    expect(data.failed).toBe(0);
+    expect(db.entries).toHaveLength(1);
+    expect(db.entries[0].content).toBe("First occurrence");
+  });
+
+  it("rejects self-edges the way the capture path does", async () => {
+    const res = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [{ id: "a", content: "A", created_at: 1 }],
+        edges: [{ source_id: "a", target_id: "a", type: "relates_to" }],
+      },
+    }), env, ctx);
+    const data = await res.json() as any;
+    expect(data.edges_failed).toBe(1);
+    expect(data.results).toContainEqual({
+      source_id: "a", target_id: "a", type: "relates_to", status: "failed", reason: "self_edge",
+    });
+    expect(db.edges).toHaveLength(0);
   });
 
   it("imports edges when endpoints were imported in a prior request", async () => {

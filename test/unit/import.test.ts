@@ -5,11 +5,11 @@ import {
   ENTRY_INSERT_COLUMNS,
   ENTRY_INSERT_SQL,
   EDGE_ENDPOINT_QUERY_BATCH,
-  ensureIdResolved,
   formatDbError,
   isImportRecordObject,
   parseCreatedAt,
   parseImportLimit,
+  parseImportOffset,
   parseOptionalNumber,
   parseRequiredString,
   parseTags,
@@ -142,18 +142,11 @@ describe("import helpers", () => {
     expect(parseCreatedAt(1234)).toEqual({ ok: true, value: 1234 });
   });
 
-  it("ensureIdResolved looks up pending ids before returning", async () => {
-    const prepare = vi.fn(() => ({
-      bind: (...args: string[]) => ({
-        all: async () => ({ results: args.includes("exists") ? [{ id: "exists" }] : [] }),
-      }),
-    }));
-    const env = { DB: { prepare } } as unknown as import("../../src/env").Env;
-    const existing = new Set<string>();
-    const pending: string[] = [];
-    await ensureIdResolved(env, "exists", existing, pending);
-    expect(prepare).toHaveBeenCalledTimes(1);
-    expect(existing.has("exists")).toBe(true);
-    expect(pending).toHaveLength(0);
+  it("parseImportOffset defaults absent, invalid, and negative values to 0", () => {
+    expect(parseImportOffset(null)).toBe(0);
+    expect(parseImportOffset("")).toBe(0);
+    expect(parseImportOffset("abc")).toBe(0);
+    expect(parseImportOffset("-5")).toBe(0);
+    expect(parseImportOffset("120")).toBe(120);
   });
 });

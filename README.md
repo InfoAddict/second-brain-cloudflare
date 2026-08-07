@@ -213,7 +213,7 @@ A successful response will look like:
 {"ok":true,"id":"..."}
 ```
 
-**Bulk migration:** export with `GET /export`, restore with `POST /import` (same JSON shape, `version: 2`). Large dumps can be split across calls with `?limit=` (default 100) — repeat until `remaining_entries` is `0`, then backfill embeddings via `POST /vectorize-pending` until `remaining` is `0`.
+**Bulk migration:** export with `GET /export`, restore with `POST /import` (same JSON shape, `version: 2`). Imports are paged: each call handles `?limit=` array positions (default 40, sized for the D1 free plan) starting at `?offset=` — resend the same file with the `next_offset` (and, once entries are done, `next_edge_offset`) from the previous response until both `remaining` counts are `0`, then backfill embeddings via `POST /vectorize-pending` until `remaining` is `0`.
 
 <details>
 <summary><strong>How OAuth authentication works</strong></summary>

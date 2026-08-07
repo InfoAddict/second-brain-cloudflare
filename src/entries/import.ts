@@ -4,7 +4,12 @@ import { isSymmetric, isValidEdgeType } from "../graph/edges";
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 
-/** Max new entry inserts attempted per request (skipped rows do not count). */
+/**
+ * Default page size: array positions examined per call, inserts and skips alike.
+ * Sized so a worst-case page (one existence lookup + one insert batch, then the
+ * same again for edges) stays well inside the D1 free plan's ~50 queries per
+ * invocation, with room for the schema-init probe on a cold isolate.
+ */
 export const IMPORT_DEFAULT_LIMIT = 40;
 export const IMPORT_MAX_LIMIT = 1000;
 /** D1 batch chunk size for inserts. */
@@ -51,6 +56,7 @@ export interface ExportEntry {
   tags?: string[];
   source?: string;
   created_at?: number;
+  updated_at?: number;
   recall_count?: number;
   importance_score?: number;
   contradiction_wins?: number;
@@ -73,7 +79,12 @@ export interface ExportPayload {
 }
 
 export interface ImportOptions {
+  /** Page size — how many array positions of `entries` (then `edges`) one call examines. */
   limit?: number;
+  /** Index into `entries` where this call's page starts. */
+  offset?: number;
+  /** Index into `edges` where this call's page starts. */
+  edgeOffset?: number;
 }
 
 export interface ImportSummary {
@@ -86,6 +97,10 @@ export interface ImportSummary {
   edges_failed: number;
   remaining_entries: number;
   remaining_edges: number;
+  /** Pass back as ?offset= to continue. Equals entries.length when entries are done. */
+  next_offset: number;
+  /** Pass back as ?edge_offset= to continue. Advances only once entries are done. */
+  next_edge_offset: number;
   results: ImportResultItem[];
   vectorize_hint: string;
 }
@@ -107,6 +122,8 @@ interface PendingInsert {
   tags: string[];
   source: string;
   created_at: number;
+  /** Validated payload value, defaulted to created_at — camelCase per the in-memory convention (see recall's updatedAt). */
+  updatedAt: number;
   recall_count: number;
   importance_score: number;
   contradiction_wins: number;
@@ -177,6 +194,13 @@ export function parseImportBody(
   };
 }
 
+export function parseImportOffset(raw: string | null): number {
+  if (!raw) return 0;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
 export function parseImportLimit(raw: string | null): number {
   if (!raw) return IMPORT_DEFAULT_LIMIT;
   const n = Number.parseInt(raw, 10);
@@ -214,28 +238,6 @@ async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<
   return keys;
 }
 
-function collectPayloadEntryIds(entries: ExportEntry[]): string[] {
-  const ids: string[] = [];
-  for (const entry of entries) {
-    if (!isImportRecordObject(entry)) continue;
-    const parsed = parseRequiredString(entry.id, "missing", "invalid");
-    if (parsed.ok) ids.push(parsed.value);
-  }
-  return ids;
-}
-
-function collectEdgeEndpoints(edges: ExportEdge[]): string[] {
-  const endpoints = new Set<string>();
-  for (const edge of edges) {
-    if (!isImportRecordObject(edge)) continue;
-    const sourceParsed = parseRequiredString(edge.source_id, "missing", "invalid");
-    const targetParsed = parseRequiredString(edge.target_id, "missing", "invalid");
-    if (sourceParsed.ok) endpoints.add(sourceParsed.value);
-    if (targetParsed.ok) endpoints.add(targetParsed.value);
-  }
-  return [...endpoints];
-}
-
 export function parseEdgeWeight(
   weight: unknown,
 ): { ok: true; value: number } | { ok: false; reason: "invalid_weight" } {
@@ -267,73 +269,6 @@ export function parseCreatedAt(
   return { ok: true, value };
 }
 
-async function flushPendingIdLookups(
-  env: Env,
-  pending: string[],
-  existingIds: Set<string>,
-): Promise<void> {
-  while (pending.length) {
-    const batch = pending.splice(0, D1_MAX_BOUND_PARAMS);
-    const found = await loadExistingIds(env, batch);
-    for (const id of found) existingIds.add(id);
-  }
-}
-
-/** Resolve one id against D1, batching lookups to stay within query budget. */
-export async function ensureIdResolved(
-  env: Env,
-  id: string,
-  existingIds: Set<string>,
-  pending: string[],
-): Promise<void> {
-  if (existingIds.has(id)) return;
-  if (!pending.includes(id)) pending.push(id);
-  while (pending.length >= D1_MAX_BOUND_PARAMS) {
-    const batch = pending.splice(0, D1_MAX_BOUND_PARAMS);
-    const found = await loadExistingIds(env, batch);
-    for (const foundId of found) existingIds.add(foundId);
-  }
-  if (pending.includes(id)) {
-    await flushPendingIdLookups(env, pending, existingIds);
-  }
-}
-
-async function ensureIdsResolved(
-  env: Env,
-  ids: string[],
-  existingIds: Set<string>,
-  pending: string[],
-): Promise<void> {
-  for (const id of ids) {
-    if (existingIds.has(id)) continue;
-    if (!pending.includes(id)) pending.push(id);
-  }
-  await flushPendingIdLookups(env, pending, existingIds);
-}
-
-async function mergeExistingEdgeKeys(
-  env: Env,
-  endpoints: string[],
-  into: Set<string>,
-): Promise<void> {
-  const found = await loadExistingEdgeKeys(env, endpoints);
-  for (const key of found) into.add(key);
-}
-
-function countValidEdgesInPayload(edges: ExportEdge[]): number {
-  let count = 0;
-  for (const edge of edges) {
-    if (!isImportRecordObject(edge)) continue;
-    const type = typeof edge.type === "string" ? edge.type.trim() || "relates_to" : "relates_to";
-    if (!isValidEdgeType(type)) continue;
-    const sourceParsed = parseRequiredString(edge.source_id, "missing", "invalid");
-    const targetParsed = parseRequiredString(edge.target_id, "missing", "invalid");
-    if (!sourceParsed.ok || !targetParsed.ok) continue;
-    count++;
-  }
-  return count;
-}
-
 function bindInsert(env: Env, row: PendingInsert) {
   return env.DB.prepare(ENTRY_INSERT_SQL).bind(
     row.id,
@@ -341,7 +276,7 @@ function bindInsert(env: Env, row: PendingInsert) {
     JSON.stringify(row.tags),
     row.source,
     row.created_at,
-    row.created_at,
+    row.updatedAt,
     "[]",
     row.recall_count,
     row.importance_score,
@@ -452,12 +387,33 @@ async function flushEdgeBatch(
   }
 }
 
+/**
+ * One page of a restore. `offset`/`edgeOffset` are positions in the payload arrays,
+ * and a call examines exactly one page: entries[offset .. offset+limit), then — only
+ * once the entries array is exhausted — edges[edgeOffset .. edgeOffset+limit).
+ *
+ * Positional paging is what keeps the cost flat on the D1 free plan (~50 queries per
+ * invocation). Each page resolves only its own ids: one chunked existence lookup plus
+ * one insert batch, so a default page costs 2-3 round trips whether the file holds
+ * 40 entries or 50,000, and page 500 costs the same as page 1. The alternative —
+ * scanning from the top and skipping — re-resolves every already-imported id on
+ * every call, which is how a 5,000-entry restore spends its whole daily budget
+ * before finishing.
+ *
+ * Re-running a page is safe: existing ids and edge keys are skipped, and the
+ * ON CONFLICT upsert makes a re-inserted edge a weight merge rather than an error.
+ */
 export async function importExportPayload(
   env: Env,
   body: ExportPayload,
   opts: ImportOptions = {},
 ): Promise<ImportSummary> {
   const limit = opts.limit ?? IMPORT_DEFAULT_LIMIT;
+  const entries = body.entries;
+  const edges = body.edges ?? [];
+  const offset = Math.min(Math.max(opts.offset ?? 0, 0), entries.length);
+  const edgeOffset = Math.min(Math.max(opts.edgeOffset ?? 0, 0), edges.length);
+
   const results: ImportResultItem[] = [];
   let imported = 0;
   let skipped = 0;
@@ -465,243 +421,105 @@ export async function importExportPayload(
   let edges_imported = 0;
   let edges_skipped = 0;
   let edges_failed = 0;
-  let remaining_entries = 0;
-  let remaining_edges = 0;
 
-  const edges = body.edges ?? [];
-  const existingIds = new Set<string>();
-  const pendingIdLookups: string[] = [];
+  // ---- entries page ------------------------------------------------------------
+  const page = entries.slice(offset, offset + limit);
+  const next_offset = offset + page.length;
+
+  // Parse the whole page before touching D1, so the existence lookup can be one
+  // chunked query over exactly the ids that might insert.
+  const parsedPage: ({ row: PendingInsert } | { failure: ImportEntryResult })[] = [];
+  for (const entry of page) {
+    parsedPage.push(parseEntryRow(entry));
+  }
+
+  const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
+  const existingIds = await loadExistingIds(env, pageIds);
+
   const pendingBatch: PendingInsert[] = [];
-  let newInsertAttempts = 0;
   const batchCounters = { imported: 0, failed: 0 };
-
-  for (const entry of body.entries) {
-    if (!isImportRecordObject(entry)) {
+  for (const p of parsedPage) {
+    if ("failure" in p) {
       failed++;
-      results.push({ id: "", status: "failed", reason: "invalid_entry" });
+      results.push(p.failure);
       continue;
     }
-
-    const idParsed = parseRequiredString(entry.id, "missing_id", "invalid_id");
-    if (!idParsed.ok) {
-      failed++;
-      results.push({
-        id: typeof entry.id === "string" ? entry.id : String(entry.id ?? ""),
-        status: "failed",
-        reason: idParsed.reason,
-      });
-      continue;
-    }
-    const id = idParsed.value;
-
-    const contentParsed = parseRequiredString(entry.content, "missing_content", "invalid_content");
-    if (!contentParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: contentParsed.reason });
-      continue;
-    }
-
-    if (newInsertAttempts >= limit) {
-      remaining_entries++;
-      continue;
-    }
-
-    await ensureIdResolved(env, id, existingIds, pendingIdLookups);
-
-    if (existingIds.has(id)) {
+    if (existingIds.has(p.row.id)) {
       skipped++;
       continue;
     }
-
-    const tagsParsed = parseTags(entry.tags);
-    if (!tagsParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: tagsParsed.reason });
-      continue;
-    }
-    const tags = tagsParsed.tags;
-
-    let source = "import";
-    if (entry.source !== undefined && entry.source !== null) {
-      if (typeof entry.source !== "string") {
-        failed++;
-        results.push({ id, status: "failed", reason: "invalid_source" });
-        continue;
-      }
-      source = entry.source.trim() || "import";
-    }
-
-    const createdAtParsed = parseCreatedAt(entry.created_at);
-    if (!createdAtParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: createdAtParsed.reason });
-      continue;
-    }
-    const created_at = createdAtParsed.value;
-
-    const recallCountParsed = parseOptionalNumber(entry.recall_count, "invalid_recall_count");
-    if (!recallCountParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: recallCountParsed.reason });
-      continue;
-    }
-    const importanceParsed = parseOptionalNumber(entry.importance_score, "invalid_importance_score");
-    if (!importanceParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: importanceParsed.reason });
-      continue;
-    }
-    const winsParsed = parseOptionalNumber(entry.contradiction_wins, "invalid_contradiction_wins");
-    if (!winsParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: winsParsed.reason });
-      continue;
-    }
-    const lossesParsed = parseOptionalNumber(entry.contradiction_losses, "invalid_contradiction_losses");
-    if (!lossesParsed.ok) {
-      failed++;
-      results.push({ id, status: "failed", reason: lossesParsed.reason });
-      continue;
-    }
-
-    pendingBatch.push({
-      id,
-      content: contentParsed.value,
-      tags,
-      source,
-      created_at,
-      recall_count: recallCountParsed.value,
-      importance_score: importanceParsed.value,
-      contradiction_wins: winsParsed.value,
-      contradiction_losses: lossesParsed.value,
-    });
-
-    newInsertAttempts++;
+    // Marking the id as seen at queue time makes a duplicate later in the same page
+    // a skip; letting it into the batch would be a PRIMARY KEY conflict that fails
+    // the whole batch into the per-row fallback.
+    existingIds.add(p.row.id);
+    pendingBatch.push(p.row);
 
     if (pendingBatch.length >= IMPORT_D1_BATCH_SIZE) {
       await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters);
-      imported += batchCounters.imported;
-      failed += batchCounters.failed;
-      batchCounters.imported = 0;
-      batchCounters.failed = 0;
     }
   }
-
   if (pendingBatch.length) {
     await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters);
-    imported += batchCounters.imported;
-    failed += batchCounters.failed;
   }
+  imported += batchCounters.imported;
+  failed += batchCounters.failed;
 
-  await flushPendingIdLookups(env, pendingIdLookups, existingIds);
+  const remaining_entries = entries.length - next_offset;
 
-  if (remaining_entries > 0) {
-    remaining_edges = countValidEdgesInPayload(edges);
-  } else {
-    const existingEdgeKeys = new Set<string>();
-    let newEdgeAttempts = 0;
+  // ---- edges page --------------------------------------------------------------
+  // Deferred until the entries array is exhausted, so every endpoint an edge can
+  // name either predates this import or was written by an earlier page.
+  let next_edge_offset = edgeOffset;
+  if (remaining_entries === 0) {
+    const edgePage = edges.slice(edgeOffset, edgeOffset + limit);
+    next_edge_offset = edgeOffset + edgePage.length;
+
+    type ParsedEdge = { edge: PendingEdge } | { failure: ImportEdgeResult };
+    const parsedEdges: ParsedEdge[] = [];
+    for (const edge of edgePage) {
+      parsedEdges.push(parseEdgeRow(edge));
+    }
+
+    // Endpoints this call has not already proven to exist (entries imported above
+    // are in existingIds), resolved in one chunked query.
+    const endpoints = [
+      ...new Set(parsedEdges.flatMap(p => ("edge" in p ? [p.edge.source_id, p.edge.target_id] : []))),
+    ];
+    const unknown = endpoints.filter(id => !existingIds.has(id));
+    for (const id of await loadExistingIds(env, unknown)) existingIds.add(id);
+    const existingEdgeKeys = await loadExistingEdgeKeys(env, endpoints);
+
     const pendingEdgeBatch: PendingEdge[] = [];
     const edgeBatchCounters = { imported: 0, failed: 0 };
-
-    for (const edge of edges) {
-      if (!isImportRecordObject(edge)) {
+    for (const p of parsedEdges) {
+      if ("failure" in p) {
         edges_failed++;
-        results.push({
-          source_id: "",
-          target_id: "",
-          type: "",
-          status: "failed",
-          reason: "invalid_edge",
-        });
+        results.push(p.failure);
         continue;
       }
-
-      const sourceParsed = parseRequiredString(edge.source_id, "missing_endpoint", "invalid_endpoint");
-      const targetParsed = parseRequiredString(edge.target_id, "missing_endpoint", "invalid_endpoint");
-      const type = typeof edge.type === "string" ? edge.type.trim() || "relates_to" : "relates_to";
-
-      if (!sourceParsed.ok || !targetParsed.ok) {
-        edges_failed++;
-        let reason = "missing_endpoint";
-        if (!sourceParsed.ok) reason = sourceParsed.reason;
-        else if (!targetParsed.ok) reason = targetParsed.reason;
-        results.push({
-          source_id: typeof edge.source_id === "string" ? edge.source_id : String(edge.source_id ?? ""),
-          target_id: typeof edge.target_id === "string" ? edge.target_id : String(edge.target_id ?? ""),
-          type,
-          status: "failed",
-          reason,
-        });
-        continue;
-      }
-
-      const source_id = sourceParsed.value;
-      const target_id = targetParsed.value;
-
-      if (!isValidEdgeType(type)) {
-        edges_failed++;
-        results.push({ source_id, target_id, type, status: "failed", reason: "invalid_type" });
-        continue;
-      }
-
-      if (newEdgeAttempts >= limit) {
-        remaining_edges++;
-        continue;
-      }
-
-      await ensureIdsResolved(env, [source_id, target_id], existingIds, pendingIdLookups);
-
+      const { source_id, target_id, type } = p.edge;
       if (!existingIds.has(source_id) || !existingIds.has(target_id)) {
         edges_failed++;
         results.push({ source_id, target_id, type, status: "failed", reason: "missing_endpoint" });
         continue;
       }
-
       const edgeKey = normalizedEdgeKey(source_id, target_id, type);
-      if (!existingEdgeKeys.has(edgeKey)) {
-        await mergeExistingEdgeKeys(env, [source_id, target_id], existingEdgeKeys);
-      }
       if (existingEdgeKeys.has(edgeKey)) {
         edges_skipped++;
         continue;
       }
-
-      const weightParsed = parseEdgeWeight(edge.weight);
-      if (!weightParsed.ok) {
-        edges_failed++;
-        results.push({ source_id, target_id, type, status: "failed", reason: weightParsed.reason });
-        continue;
-      }
-
-      newEdgeAttempts++;
-
-      const provenance = edge.provenance && typeof edge.provenance === "string" && isValidProvenance(edge.provenance)
-        ? edge.provenance
-        : "explicit";
-
-      pendingEdgeBatch.push({
-        source_id,
-        target_id,
-        type,
-        weight: weightParsed.value,
-        provenance,
-        created_at: typeof edge.created_at === "number" ? edge.created_at : Date.now(),
-      });
+      existingEdgeKeys.add(edgeKey);
+      pendingEdgeBatch.push(p.edge);
 
       if (pendingEdgeBatch.length >= IMPORT_D1_BATCH_SIZE) {
         await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters);
-        edges_imported += edgeBatchCounters.imported;
-        edges_failed += edgeBatchCounters.failed;
-        edgeBatchCounters.imported = 0;
-        edgeBatchCounters.failed = 0;
       }
     }
-
     if (pendingEdgeBatch.length) {
       await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters);
-      edges_imported += edgeBatchCounters.imported;
-      edges_failed += edgeBatchCounters.failed;
     }
+    edges_imported += edgeBatchCounters.imported;
+    edges_failed += edgeBatchCounters.failed;
   }
 
   return {
@@ -713,8 +531,126 @@ export async function importExportPayload(
     edges_skipped,
     edges_failed,
     remaining_entries,
-    remaining_edges,
+    remaining_edges: edges.length - next_edge_offset,
+    next_offset,
+    next_edge_offset,
     results,
     vectorize_hint: "POST /vectorize-pending until remaining is 0",
+  };
+}
+
+/** Parse one entry row into an insertable record, or the failure to report. */
+function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: ImportEntryResult } {
+  if (!isImportRecordObject(entry)) {
+    return { failure: { id: "", status: "failed", reason: "invalid_entry" } };
+  }
+  const idParsed = parseRequiredString(entry.id, "missing_id", "invalid_id");
+  if (!idParsed.ok) {
+    const id = typeof entry.id === "string" ? entry.id : String(entry.id ?? "");
+    return { failure: { id, status: "failed", reason: idParsed.reason } };
+  }
+  const id = idParsed.value;
+
+  const contentParsed = parseRequiredString(entry.content, "missing_content", "invalid_content");
+  if (!contentParsed.ok) return { failure: { id, status: "failed", reason: contentParsed.reason } };
+
+  const tagsParsed = parseTags(entry.tags);
+  if (!tagsParsed.ok) return { failure: { id, status: "failed", reason: tagsParsed.reason } };
+
+  let source = "import";
+  if (entry.source !== undefined && entry.source !== null) {
+    if (typeof entry.source !== "string") {
+      return { failure: { id, status: "failed", reason: "invalid_source" } };
+    }
+    source = entry.source.trim() || "import";
+  }
+
+  const createdAtParsed = parseCreatedAt(entry.created_at);
+  if (!createdAtParsed.ok) return { failure: { id, status: "failed", reason: createdAtParsed.reason } };
+  const created_at = createdAtParsed.value;
+
+  // Absent in exports taken before /export carried the field; created_at is what the
+  // column would have coalesced to anyway. A restore must not launder a bad value into
+  // a "recently touched" ranking signal, so a malformed one fails the row instead.
+  const updatedAt = entry.updated_at ?? created_at;
+  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) {
+    return { failure: { id, status: "failed", reason: "invalid_updated_at" } };
+  }
+
+  const recallCountParsed = parseOptionalNumber(entry.recall_count, "invalid_recall_count");
+  if (!recallCountParsed.ok) return { failure: { id, status: "failed", reason: recallCountParsed.reason } };
+  const importanceParsed = parseOptionalNumber(entry.importance_score, "invalid_importance_score");
+  if (!importanceParsed.ok) return { failure: { id, status: "failed", reason: importanceParsed.reason } };
+  const winsParsed = parseOptionalNumber(entry.contradiction_wins, "invalid_contradiction_wins");
+  if (!winsParsed.ok) return { failure: { id, status: "failed", reason: winsParsed.reason } };
+  const lossesParsed = parseOptionalNumber(entry.contradiction_losses, "invalid_contradiction_losses");
+  if (!lossesParsed.ok) return { failure: { id, status: "failed", reason: lossesParsed.reason } };
+
+  return {
+    row: {
+      id,
+      content: contentParsed.value,
+      tags: tagsParsed.tags,
+      source,
+      created_at,
+      updatedAt,
+      recall_count: recallCountParsed.value,
+      importance_score: importanceParsed.value,
+      contradiction_wins: winsParsed.value,
+      contradiction_losses: lossesParsed.value,
+    },
+  };
+}
+
+/** Parse one edge row into an insertable record, or the failure to report. */
+function parseEdgeRow(edge: ExportEdge): { edge: PendingEdge } | { failure: ImportEdgeResult } {
+  if (!isImportRecordObject(edge)) {
+    return { failure: { source_id: "", target_id: "", type: "", status: "failed", reason: "invalid_edge" } };
+  }
+  const sourceParsed = parseRequiredString(edge.source_id, "missing_endpoint", "invalid_endpoint");
+  const targetParsed = parseRequiredString(edge.target_id, "missing_endpoint", "invalid_endpoint");
+  const type = typeof edge.type === "string" ? edge.type.trim() || "relates_to" : "relates_to";
+
+  if (!sourceParsed.ok || !targetParsed.ok) {
+    const reason = !sourceParsed.ok ? sourceParsed.reason : !targetParsed.ok ? targetParsed.reason : "missing_endpoint";
+    return {
+      failure: {
+        source_id: typeof edge.source_id === "string" ? edge.source_id : String(edge.source_id ?? ""),
+        target_id: typeof edge.target_id === "string" ? edge.target_id : String(edge.target_id ?? ""),
+        type,
+        status: "failed",
+        reason,
+      },
+    };
+  }
+  const source_id = sourceParsed.value;
+  const target_id = targetParsed.value;
+
+  if (!isValidEdgeType(type)) {
+    return { failure: { source_id, target_id, type, status: "failed", reason: "invalid_type" } };
+  }
+  // The capture path never creates these (graph/edges.ts returns null), so one in a
+  // payload is hand-edited data the graph should not inherit.
+  if (source_id === target_id) {
+    return { failure: { source_id, target_id, type, status: "failed", reason: "self_edge" } };
+  }
+  const weightParsed = parseEdgeWeight(edge.weight);
+  if (!weightParsed.ok) {
+    return { failure: { source_id, target_id, type, status: "failed", reason: weightParsed.reason } };
+  }
+  const provenance =
+    edge.provenance && typeof edge.provenance === "string" && isValidProvenance(edge.provenance)
+      ? edge.provenance
+      : "explicit";
+
+  return {
+    edge: {
+      source_id,
+      target_id,
+      type,
+      weight: weightParsed.value,
+      provenance,
+      created_at: typeof edge.created_at === "number" ? edge.created_at : Date.now(),
+    },
   };
 }

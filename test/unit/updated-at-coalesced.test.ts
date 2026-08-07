@@ -131,7 +131,7 @@ function rawTsReads(source: string): { text: string; coalesced: boolean }[] {
   for (const m of code.matchAll(/\bupdated_at\b/g)) {
     const at = m.index! + "updated_at".length;
     const after = code.slice(at);
-    if (/^\s*:/.test(after)) continue; // object-literal key, not a read
+    if (/^\s*\??:/.test(after)) continue; // object-literal key or property declaration, not a read
     // The fallback has to be attached to THIS read. A created_at mention anywhere on the
     // line is not enough: an adjacent field in the same object literal, or a sort
     // tiebreaker, satisfies that while coalescing nothing. Require `?? … created_at`
