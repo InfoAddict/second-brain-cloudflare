@@ -337,6 +337,33 @@ describe("POST /import", () => {
     expect(db.entries[0].id).toBe("good");
   });
 
+  it("imports edges when endpoints were imported in a prior request", async () => {
+    const entriesRes = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [
+          { id: "a", content: "Memory A", created_at: 1 },
+          { id: "b", content: "Memory B", created_at: 2 },
+        ],
+        edges: [],
+      },
+    }), env, ctx);
+    expect((await entriesRes.json() as any).imported).toBe(2);
+
+    const edgesRes = await worker.fetch(req("POST", "/import", {
+      body: {
+        version: 2,
+        entries: [],
+        edges: [{ source_id: "a", target_id: "b", type: "relates_to", created_at: 100 }],
+      },
+    }), env, ctx);
+    expect(edgesRes.status).toBe(200);
+    const edgeData = await edgesRes.json() as any;
+    expect(edgeData.edges_imported).toBe(1);
+    expect(edgeData.edges_failed).toBe(0);
+    expect(db.edges).toHaveLength(1);
+  });
+
   it("imports edges when the payload has more than 50 distinct endpoints", async () => {
     const entries = Array.from({ length: 52 }, (_, i) => ({
       id: `n${i}`,

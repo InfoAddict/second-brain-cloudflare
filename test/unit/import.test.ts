@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   ENTRY_INSERT_COLUMNS,
   ENTRY_INSERT_SQL,
   EDGE_ENDPOINT_QUERY_BATCH,
+  ensureIdResolved,
   formatDbError,
   isImportRecordObject,
   parseCreatedAt,
@@ -139,5 +140,20 @@ describe("import helpers", () => {
     if (parsed.ok) expect(parsed.value).toBeGreaterThanOrEqual(now);
     expect(parseCreatedAt("yesterday")).toEqual({ ok: false, reason: "invalid_created_at" });
     expect(parseCreatedAt(1234)).toEqual({ ok: true, value: 1234 });
+  });
+
+  it("ensureIdResolved looks up pending ids before returning", async () => {
+    const prepare = vi.fn(() => ({
+      bind: (...args: string[]) => ({
+        all: async () => ({ results: args.includes("exists") ? [{ id: "exists" }] : [] }),
+      }),
+    }));
+    const env = { DB: { prepare } } as unknown as import("../../src/env").Env;
+    const existing = new Set<string>();
+    const pending: string[] = [];
+    await ensureIdResolved(env, "exists", existing, pending);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(existing.has("exists")).toBe(true);
+    expect(pending).toHaveLength(0);
   });
 });

@@ -267,7 +267,60 @@ export function parseCreatedAt(
   return { ok: true, value };
 }
 
-function countNewEdgesInPayload(edges: ExportEdge[], existingEdgeKeys: Set<string>): number {
+async function flushPendingIdLookups(
+  env: Env,
+  pending: string[],
+  existingIds: Set<string>,
+): Promise<void> {
+  while (pending.length) {
+    const batch = pending.splice(0, D1_MAX_BOUND_PARAMS);
+    const found = await loadExistingIds(env, batch);
+    for (const id of found) existingIds.add(id);
+  }
+}
+
+/** Resolve one id against D1, batching lookups to stay within query budget. */
+export async function ensureIdResolved(
+  env: Env,
+  id: string,
+  existingIds: Set<string>,
+  pending: string[],
+): Promise<void> {
+  if (existingIds.has(id)) return;
+  if (!pending.includes(id)) pending.push(id);
+  while (pending.length >= D1_MAX_BOUND_PARAMS) {
+    const batch = pending.splice(0, D1_MAX_BOUND_PARAMS);
+    const found = await loadExistingIds(env, batch);
+    for (const foundId of found) existingIds.add(foundId);
+  }
+  if (pending.includes(id)) {
+    await flushPendingIdLookups(env, pending, existingIds);
+  }
+}
+
+async function ensureIdsResolved(
+  env: Env,
+  ids: string[],
+  existingIds: Set<string>,
+  pending: string[],
+): Promise<void> {
+  for (const id of ids) {
+    if (existingIds.has(id)) continue;
+    if (!pending.includes(id)) pending.push(id);
+  }
+  await flushPendingIdLookups(env, pending, existingIds);
+}
+
+async function mergeExistingEdgeKeys(
+  env: Env,
+  endpoints: string[],
+  into: Set<string>,
+): Promise<void> {
+  const found = await loadExistingEdgeKeys(env, endpoints);
+  for (const key of found) into.add(key);
+}
+
+function countValidEdgesInPayload(edges: ExportEdge[]): number {
   let count = 0;
   for (const edge of edges) {
     if (!isImportRecordObject(edge)) continue;
@@ -276,8 +329,7 @@ function countNewEdgesInPayload(edges: ExportEdge[], existingEdgeKeys: Set<strin
     const sourceParsed = parseRequiredString(edge.source_id, "missing", "invalid");
     const targetParsed = parseRequiredString(edge.target_id, "missing", "invalid");
     if (!sourceParsed.ok || !targetParsed.ok) continue;
-    const key = normalizedEdgeKey(sourceParsed.value, targetParsed.value, type);
-    if (!existingEdgeKeys.has(key)) count++;
+    count++;
   }
   return count;
 }
@@ -416,11 +468,9 @@ export async function importExportPayload(
   let remaining_entries = 0;
   let remaining_edges = 0;
 
-  const payloadEntryIds = collectPayloadEntryIds(body.entries);
   const edges = body.edges ?? [];
-  const edgeEndpoints = collectEdgeEndpoints(edges);
-
-  const existingIds = await loadExistingIds(env, payloadEntryIds);
+  const existingIds = new Set<string>();
+  const pendingIdLookups: string[] = [];
   const pendingBatch: PendingInsert[] = [];
   let newInsertAttempts = 0;
   const batchCounters = { imported: 0, failed: 0 };
@@ -451,6 +501,13 @@ export async function importExportPayload(
       continue;
     }
 
+    if (newInsertAttempts >= limit) {
+      remaining_entries++;
+      continue;
+    }
+
+    await ensureIdResolved(env, id, existingIds, pendingIdLookups);
+
     if (existingIds.has(id)) {
       skipped++;
       continue;
@@ -473,12 +530,6 @@ export async function importExportPayload(
       }
       source = entry.source.trim() || "import";
     }
-
-    if (newInsertAttempts >= limit) {
-      remaining_entries++;
-      continue;
-    }
-    newInsertAttempts++;
 
     const createdAtParsed = parseCreatedAt(entry.created_at);
     if (!createdAtParsed.ok) {
@@ -525,6 +576,8 @@ export async function importExportPayload(
       contradiction_losses: lossesParsed.value,
     });
 
+    newInsertAttempts++;
+
     if (pendingBatch.length >= IMPORT_D1_BATCH_SIZE) {
       await flushInsertBatch(env, pendingBatch.splice(0), existingIds, results, batchCounters);
       imported += batchCounters.imported;
@@ -540,11 +593,12 @@ export async function importExportPayload(
     failed += batchCounters.failed;
   }
 
+  await flushPendingIdLookups(env, pendingIdLookups, existingIds);
+
   if (remaining_entries > 0) {
-    const existingEdgeKeys = await loadExistingEdgeKeys(env, edgeEndpoints);
-    remaining_edges = countNewEdgesInPayload(edges, existingEdgeKeys);
+    remaining_edges = countValidEdgesInPayload(edges);
   } else {
-    const existingEdgeKeys = await loadExistingEdgeKeys(env, edgeEndpoints);
+    const existingEdgeKeys = new Set<string>();
     let newEdgeAttempts = 0;
     const pendingEdgeBatch: PendingEdge[] = [];
     const edgeBatchCounters = { imported: 0, failed: 0 };
@@ -590,6 +644,13 @@ export async function importExportPayload(
         continue;
       }
 
+      if (newEdgeAttempts >= limit) {
+        remaining_edges++;
+        continue;
+      }
+
+      await ensureIdsResolved(env, [source_id, target_id], existingIds, pendingIdLookups);
+
       if (!existingIds.has(source_id) || !existingIds.has(target_id)) {
         edges_failed++;
         results.push({ source_id, target_id, type, status: "failed", reason: "missing_endpoint" });
@@ -597,6 +658,9 @@ export async function importExportPayload(
       }
 
       const edgeKey = normalizedEdgeKey(source_id, target_id, type);
+      if (!existingEdgeKeys.has(edgeKey)) {
+        await mergeExistingEdgeKeys(env, [source_id, target_id], existingEdgeKeys);
+      }
       if (existingEdgeKeys.has(edgeKey)) {
         edges_skipped++;
         continue;
@@ -609,10 +673,6 @@ export async function importExportPayload(
         continue;
       }
 
-      if (newEdgeAttempts >= limit) {
-        remaining_edges++;
-        continue;
-      }
       newEdgeAttempts++;
 
       const provenance = edge.provenance && typeof edge.provenance === "string" && isValidProvenance(edge.provenance)
