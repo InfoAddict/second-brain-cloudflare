@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { json, requireAuth } from "../lib/http";
+import { INDEXABLE_SQL } from "../capture/lifecycle";
 
 /**
  * GET /brief — what the brain did while you were away.
@@ -124,9 +125,14 @@ export async function handleBriefRoutes(
     // The two things that make recall quietly worse, counted together so they
     // cost one query: memories recall cannot see, and memories the staleness
     // pass has flagged as possibly out of date.
+    //
+    // Deprecated entries are excluded from the first count. Their vectors were
+    // deleted on purpose — dismissing a pattern is the common way — so counting
+    // them as "not searchable" reported the user's own decision back to them as
+    // a problem, and grew the number every time they dismissed one.
     env.DB.prepare(
       `SELECT
-         SUM(CASE WHEN vector_ids = '[]' THEN 1 ELSE 0 END) AS unindexed,
+         SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
          SUM(CASE WHEN tags LIKE '%stale:as-of%' THEN 1 ELSE 0 END) AS stale,
          COUNT(*) AS total
        FROM entries`,

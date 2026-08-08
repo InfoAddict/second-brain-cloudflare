@@ -6,7 +6,7 @@ import { json, requireAuth } from "../lib/http";
 import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
 import { storeEntry } from "../capture/store";
-import { deprecateEntry } from "../capture/lifecycle";
+import { deprecateEntry, INDEXABLE_SQL } from "../capture/lifecycle";
 import { getStatus, withStatus } from "../memory/status";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
@@ -26,8 +26,11 @@ export async function handleAdminRoutes(
     const graceCutoff = Date.now() - graceMs(env);
     const [summary, tagRows, candidateRows] = await Promise.all([
       env.DB.prepare(
+        // unvectorized skips deprecated entries: their vectors were deleted
+        // deliberately, so counting them here offered the user a repair for
+        // something that is not broken.
         `SELECT COUNT(*) as count, AVG(importance_score) as avg_importance,
-         SUM(CASE WHEN vector_ids = '[]' AND created_at < ? THEN 1 ELSE 0 END) as unvectorized,
+         SUM(CASE WHEN vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) as unvectorized,
          SUM(CASE WHEN tags NOT LIKE '%"status:%' AND tags NOT LIKE '%"kind:%' THEN 1 ELSE 0 END) as unclassified
          FROM entries`
       ).bind(graceCutoff).first() as Promise<Record<string, any> | null>,
@@ -132,9 +135,15 @@ export async function handleAdminRoutes(
 
     const graceCutoff = Date.now() - graceMs(env);
 
+    // Deprecated entries are skipped, matching the migration path
+    // (src/migration/embedding.ts). Without this, dismissing a pattern deleted
+    // its vectors and then this button put them straight back — spending the
+    // daily embedding budget to reindex something the user had just told the
+    // brain to drop, and crowding the vector query with candidates that recall
+    // discards at hydration anyway.
     const { results: toProcess } = await env.DB.prepare(
       `SELECT id, content, tags, source, created_at FROM entries
-       WHERE vector_ids = '[]' AND created_at < ?
+       WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}
        ORDER BY created_at DESC LIMIT 25`
     ).bind(graceCutoff).all();
 
@@ -162,8 +171,11 @@ export async function handleAdminRoutes(
       }
     }
 
+    // Same filter as the select above, or the loop never reaches zero: the
+    // dashboard presses this until `remaining` is 0, so counting rows the select
+    // refuses to process would spin until the batch-made-no-progress guard.
     const remaining = await env.DB.prepare(
-      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ?`
+      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}`
     ).bind(graceCutoff).first() as Record<string, any> | null;
 
     return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });

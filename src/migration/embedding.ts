@@ -40,6 +40,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import { storeEntry } from "../capture/store";
+import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { chunkText } from "../text/chunk";
 import {
   MIGRATION_CHUNK_BUDGET,
@@ -100,8 +101,12 @@ export interface BatchResult {
  * `deprecateEntry` and recall filters them out at hydration, so re-embedding
  * them would spend the scarce resource of the whole operation on rebuilding
  * something nothing reads.
+ *
+ * This was the only path that knew it. `/vectorize-pending` and the two
+ * "not searchable" counts did not, so a dismissed pattern was reported as
+ * broken and repaired back into the index.
  */
-const NOT_DEPRECATED = `tags NOT LIKE '%"status:deprecated"%'`;
+const NOT_DEPRECATED = INDEXABLE_SQL;
 
 export async function readMigration(env: Env): Promise<MigrationState | null> {
   try {
