@@ -89,13 +89,21 @@ function autoResize(el) {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 80) + 'px'
 }
-function clearRemember() {
-  const msgs = document.getElementById('remember-messages')
-  msgs.innerHTML = `<div class="recall-hero" id="remember-intro"><div class="eyebrow">Remember</div><div class="hero-line">What's worth keeping? Write it down &mdash; add <span class="hashtag">#tags</span> anywhere and I'll file it.</div></div>`
-  document.getElementById('remember-clear-btn').style.display = 'none'
-}
+/**
+ * The parts of the recall column that are not the conversation, and so must
+ * survive clearing it.
+ *
+ * Wiping innerHTML was safe when this container held nothing but bubbles. Home
+ * and the brief moved in with them, and the wipe took both — permanently, in a
+ * desktop window that has no reload to recover with.
+ */
+const RECALL_FURNITURE = new Set(['home', 'brief', 'recall-welcome'])
+
 function clearRecall() {
   const msgs = document.getElementById('recall-messages')
-  msgs.innerHTML = `<div class="recall-hero" id="recall-welcome"><div class="eyebrow">Recall</div><div class="hero-line">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div></div>`
+  for (const el of [...msgs.children]) {
+    if (!RECALL_FURNITURE.has(el.id)) el.remove()
+  }
   document.getElementById('recall-clear-btn').style.display = 'none'
+  if (typeof returnHome === 'function') returnHome()
 }

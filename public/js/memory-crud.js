@@ -5,9 +5,17 @@ function openAppend(id, preview) {
   document.getElementById('append-sheet').classList.add('open')
   setTimeout(() => document.getElementById('append-textarea').focus(), 100)
 }
+// Some memories arrive without an id — recall results from an older Worker, and
+// the synthesized rows the digest writes — so there is nothing to append to.
+// Writing a fresh memory is the honest fallback, which used to mean the Remember
+// tab and now means home, with the mode already set so the field does not guess.
 function openAppendFromContent() {
-  switchTab('remember')
-  document.getElementById('remember-input').focus()
+  switchTab('home')
+  returnHome()
+  const field = document.getElementById('home-field')
+  if (!field) return
+  lockHomeMode('remember')
+  field.focus()
 }
 function closeAppend() {
   document.getElementById('append-sheet').classList.remove('open')
@@ -22,8 +30,7 @@ async function saveAppend() {
   try {
     await apiMcp('append', { id: pendingAppendId, addition })
     closeAppend()
-    loadRecent()
-    updateStatus()
+    refreshAll()
   } catch (e) {
     btn.disabled = false
     btn.textContent = 'Update'
@@ -31,21 +38,53 @@ async function saveAppend() {
   }
 }
 
+// The tags the sheet is currently offering to save. Held separately from the
+// entry so that removing one and then cancelling changes nothing.
+let pendingEditTags = []
+
 function openEdit(id, content, tags) {
   pendingEditId = id
-  const tagsEl = document.getElementById('edit-existing-tags')
-  tagsEl.innerHTML = tags && tags.length ? tags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('') : ''
+  // The brain's own bookkeeping — kind:, volatility:, status: — was rendering
+  // as chips here long after every other surface learned to hide it. It is also
+  // not the user's to delete, so it is neither shown nor sent.
+  pendingEditTags = humanTags(tags)
+  renderEditTags()
+  const sub = document.getElementById('edit-sub')
+  if (sub) sub.textContent = titleLine(content, 60)
+
   const ta = document.getElementById('edit-textarea')
   ta.value = content
-  ta.style.height = 'auto'
-  ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'
   document.getElementById('edit-sheet').classList.add('open')
-  setTimeout(() => ta.focus(), 100)
+  setTimeout(() => {
+    ta.focus()
+    // Focusing a textarea whose value was just set puts the caret at the end and
+    // scrolls there, which on a long memory opened the editor somewhere in the
+    // middle of the text. Editing should start where reading starts.
+    ta.setSelectionRange(0, 0)
+    ta.scrollTop = 0
+  }, 100)
+}
+
+function renderEditTags() {
+  const el = document.getElementById('edit-existing-tags')
+  if (!el) return
+  el.innerHTML = pendingEditTags
+    .map(
+      (t, i) =>
+        `<button type="button" class="tag-chip tag-chip--removable" onclick="removeEditTag(${i})" aria-label="Remove tag ${escAttr(t)}">${escHtml(t)}<i class="ti ti-x"></i></button>`,
+    )
+    .join('')
+}
+
+function removeEditTag(i) {
+  pendingEditTags.splice(i, 1)
+  renderEditTags()
 }
 
 function closeEdit() {
   document.getElementById('edit-sheet').classList.remove('open')
   pendingEditId = null
+  pendingEditTags = []
 }
 
 async function saveEdit() {
@@ -58,11 +97,13 @@ async function saveEdit() {
     const res = await fetch(`${WORKER_URL}/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ id: pendingEditId, content: newContent }),
+      // Only the user's own tags travel. The Worker keeps its own — see
+      // src/tags/system.ts — so an edit cannot delete a conclusion the brain reached.
+      body: JSON.stringify({ id: pendingEditId, content: newContent, tags: pendingEditTags }),
     })
     if (!res.ok) throw new Error(`Server error: ${res.status}`)
     closeEdit()
-    loadRecent()
+    refreshAll()
   } catch (e) {
     btn.disabled = false
     btn.textContent = 'Save'
@@ -99,8 +140,10 @@ async function confirmForget() {
       setTimeout(() => cardElement?.remove(), 400)
     }
     allEntries = allEntries.filter((e) => e.id !== idToForget)
-    updateStatus()
-    loadTags()
+    // Everything except the list, which the row animation and the local filter
+    // above have already handled — reloading it here would swap the element out
+    // from under its own exit animation.
+    refreshAll({ list: false })
   } catch (e) {
     alert('Could not forget: ' + e.message)
   } finally {

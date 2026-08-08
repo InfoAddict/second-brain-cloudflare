@@ -1,5 +1,8 @@
 function init() {
   applyTheme()
+  // Before anything renders, so the Memories screen is already showing the
+  // projection this user last chose rather than snapping to it after paint.
+  initMemoryView()
   if (typeof renderAboutCredits === 'function') renderAboutCredits()
   if (typeof renderDownloadButton === 'function') renderDownloadButton()
   // Auto-populate URL from the current page origin (UI is hosted on the same Worker)

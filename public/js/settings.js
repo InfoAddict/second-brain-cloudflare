@@ -20,25 +20,40 @@ function backToMenu() {
   openMenu()
 }
 
+// The count, the week, the most-used tags and the sources all live on home now
+// (GET /brief), so this no longer renders any of them — showing the same numbers
+// in two places just meant they could disagree, which is exactly what happened
+// after a delete. What is left is the chore queue.
 async function loadMenuStats() {
   try {
     const res = await fetch(`${WORKER_URL}/stats`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     const data = await res.json()
-    document.getElementById('stats-count').textContent = (data.count ?? 0).toLocaleString()
-    document.getElementById('stats-importance').textContent = data.avg_importance != null ? data.avg_importance.toFixed(1) + ' / 5' : '—'
-    const tagsEl = document.getElementById('stats-tags')
-    // The Worker filters its own bookkeeping out of top_tags, but an older
-    // deploy behind a newer dashboard would still send them.
-    const topTags = humanTags(data.top_tags ?? [])
-    tagsEl.innerHTML = topTags.length
-      ? topTags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
-      : '<span style="font-size:13px;color:var(--text-tertiary)">No tags yet</span>'
     vectorizeGraceMs = data.vectorize_grace_ms ?? vectorizeGraceMs
     renderDigestSection(data.digest_candidates ?? [])
     renderVectorizeSection(data.unvectorized ?? 0)
     renderClassifySection(data.unclassified ?? 0)
-    loadPatterns()
-  } catch {}
+    await loadPatterns()
+  } catch {
+  } finally {
+    syncUpkeepGroup()
+  }
+}
+
+/** The five chore panels, in the order they appear under "Upkeep". */
+const UPKEEP_SECTIONS = ['patterns-section', 'digest-section', 'vectorize-section', 'classify-section', 'restore-section']
+
+/**
+ * A heading over nothing reads as a broken screen, and a brain with no chores
+ * pending is the normal case — so the whole group goes when every panel inside
+ * it has hidden itself.
+ */
+function syncUpkeepGroup() {
+  const group = document.getElementById('upkeep-group')
+  if (!group) return
+  group.hidden = !UPKEEP_SECTIONS.some((id) => {
+    const el = document.getElementById(id)
+    return el && el.style.display !== 'none'
+  })
 }
 
 // ── Patterns panel: system proposes, human ratifies ───────────────────────
@@ -116,6 +131,20 @@ async function resolvePattern(id, action, btn) {
   }
 }
 
+/** How many compression candidates to show before the list becomes a chore wall. */
+const DIGEST_VISIBLE = 4
+
+function digestCandidateRow(c) {
+  return `
+      <div class="digest-candidate-row" id="digest-row-${escAttr(c.tag)}">
+        <div class="digest-candidate-label">
+          <span>${escHtml(c.tag)}</span>
+          <span class="digest-candidate-count">${c.count} entries</span>
+        </div>
+        <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">Digest →</button>
+      </div>`
+}
+
 function renderDigestSection(candidates) {
   const el = document.getElementById('digest-section')
   if (!candidates.length) {
@@ -123,23 +152,29 @@ function renderDigestSection(candidates) {
     return
   }
   el.style.display = ''
+  // Candidates arrive largest-first, and the tail is always the least worth
+  // doing. Nine identical rows read as a backlog someone is failing to keep up
+  // with; four read as a suggestion, with the rest one tap away.
+  const shown = candidates.slice(0, DIGEST_VISIBLE)
+  const rest = candidates.slice(DIGEST_VISIBLE)
   el.innerHTML = `
     <div class="digest-section-label">Ready to compress</div>
     <p class="digest-note">Originals are never deleted — digest adds a summary and ranks originals lower in recall so they don't crowd results.</p>
-    ${candidates
-      .map(
-        (c) => `
-      <div class="digest-candidate-row" id="digest-row-${escAttr(c.tag)}">
-        <div class="digest-candidate-label">
-          <span>${escHtml(c.tag)}</span>
-          <span class="digest-candidate-count">${c.count} entries</span>
-        </div>
-        <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">Digest →</button>
-      </div>
-    `,
-      )
-      .join('')}
+    ${shown.map(digestCandidateRow).join('')}
+    ${
+      rest.length
+        ? `<div id="digest-rest" hidden>${rest.map(digestCandidateRow).join('')}</div>
+           <button class="digest-more" id="digest-more" onclick="showAllDigestCandidates()">${rest.length} more &rsaquo;</button>`
+        : ''
+    }
   `
+}
+
+function showAllDigestCandidates() {
+  const rest = document.getElementById('digest-rest')
+  const btn = document.getElementById('digest-more')
+  if (rest) rest.hidden = false
+  if (btn) btn.remove()
 }
 
 async function runDigest(tag, btn) {
@@ -217,7 +252,7 @@ async function runVectorize(btn) {
     btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} re-indexed`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
-    loadRecent()
+    refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
@@ -265,7 +300,7 @@ async function runClassify(btn) {
     btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} classified`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
-    loadRecent()
+    refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
@@ -329,8 +364,13 @@ async function runImportLoop(payload, post, onProgress) {
   }
 }
 
+// Revealing the panel has to reveal the group above it, or a restore in progress
+// renders under a heading that is still hidden.
 function restoreSection() {
-  return document.getElementById('restore-section')
+  const el = document.getElementById('restore-section')
+  el.style.display = ''
+  syncUpkeepGroup()
+  return el
 }
 
 function renderRestoreProgress(label, done, total) {
@@ -405,7 +445,7 @@ async function indexRestored(btn) {
       btn.style.color = 'var(--good)'
     }
     await loadMenuStats()
-    loadRecent()
+    refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.disabled = false
@@ -460,7 +500,7 @@ async function restoreFromBackup() {
     )
     renderRestoreDone(totals)
     await loadMenuStats()
-    loadRecent()
+    refreshAll()
   } catch (e) {
     renderRestoreFailure('The restore stopped partway.')
   }

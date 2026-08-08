@@ -60,6 +60,16 @@ function toggleHomeMode() {
   applyHomeMode(homeMode === 'ask' ? 'remember' : 'ask')
 }
 
+/**
+ * Set the mode from elsewhere and hold it — for callers that already know which
+ * verb the user is here for, so an empty field does not read as "will remember"
+ * only to flip on the first typed word.
+ */
+function lockHomeMode(mode) {
+  homeModeLocked = true
+  applyHomeMode(mode)
+}
+
 function handleHomeKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
@@ -90,7 +100,8 @@ async function submitHome() {
     return
   }
 
-  // Capture in place, with the receipt the Remember tab shows.
+  // Capture in place, with the receipt that was the deleted Remember tab's one
+  // good idea (captureReceipt, still in remember.js).
   field.disabled = true
   const receipts = document.getElementById('home-more')
   try {
@@ -109,8 +120,7 @@ async function submitHome() {
       receipts.innerHTML = ''
       receipts.appendChild(captureReceipt(result, tags))
     }
-    updateStatus()
-    loadRecent()
+    refreshAll()
   } catch {
     receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>could not save</div><div class="receipt-note">Nothing was lost — the text is still in the box. Try again.</div></div>`
   } finally {
@@ -123,12 +133,37 @@ async function submitHome() {
 function leaveHome() {
   // Without dropping this class the old input bar stays hidden and the
   // conversation has nothing to type into.
-  const screen = document.getElementById('screen-recall')
+  const screen = document.getElementById('screen-home')
   if (screen) screen.classList.remove('home-visible')
   const home = document.getElementById('home')
   if (home) home.style.display = 'none'
   const brief = document.getElementById('brief')
   if (brief) brief.style.display = 'none'
+}
+
+/**
+ * And back again. A conversation is a state home enters, not a place the user
+ * travels to, so it needs an exit — before this, asking one question replaced
+ * home for the rest of the session and the only way back was pressing the tab
+ * you were already on.
+ */
+function returnHome() {
+  const screen = document.getElementById('screen-home')
+  if (screen) screen.classList.add('home-visible')
+  const home = document.getElementById('home')
+  if (home) home.style.display = ''
+
+  // A fresh start, so the field makes no claim about a sentence nobody has
+  // written yet — coming back from a question otherwise left "will search"
+  // sitting under an empty box, and any earlier override still in force.
+  homeModeLocked = false
+  applyHomeMode(null)
+  // Re-rendered rather than merely re-shown: the brief may have gone stale
+  // while the conversation was on top of it.
+  if (typeof briefData !== 'undefined' && briefData) {
+    renderHome(briefData)
+    renderBrief(briefData)
+  }
 }
 
 /**
@@ -148,7 +183,7 @@ function greetingFor(date) {
 
 /** Fills the greeting and the one number worth putting above the input. */
 function renderHome(data) {
-  const screen = document.getElementById('screen-recall')
+  const screen = document.getElementById('screen-home')
   if (screen) screen.classList.add('home-visible')
   const greet = document.getElementById('home-greeting')
   if (greet) greet.textContent = greetingFor(new Date())

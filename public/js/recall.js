@@ -36,7 +36,7 @@ async function sendRecall() {
     if (!recallRes.ok || !data.ok) throw new Error(data.error || 'recall failed')
     loadingEl.remove()
     if (!data.results || !data.results.length) {
-      appendBrainBubble(msgs, "I couldn't find anything matching that. Try different words, or check Recent.", 'recall-sys')
+      appendBrainBubble(msgs, "I couldn't find anything matching that. Try different words, or browse Memories.", 'recall-sys')
     } else {
       // REST scores are already 0–100 (one decimal); map directly rather than via
       // normalizeEntry, whose 0–1 rescale heuristic would turn a 0.8% match into 80%

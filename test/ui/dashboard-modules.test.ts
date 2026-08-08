@@ -23,6 +23,7 @@ const DASHBOARD_SCRIPTS = [
   "public/js/brief.js",
   "public/js/home.js",
   "public/js/nav.js",
+  "public/js/refresh.js",
   "public/js/auth.js",
   "public/js/download-app.js",
   "public/js/app.js",

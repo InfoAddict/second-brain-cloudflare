@@ -25,7 +25,7 @@ function onTagChange(tag) {
     const el = document.getElementById(id)
     if (el) el.value = tag
   })
-  if (currentTab === 'recent') applyRecentFilters()
+  if (currentTab === 'memories') applyRecentFilters()
 }
 
 function onTimeRangeChange(val) {
@@ -71,8 +71,58 @@ function switchTab(tab) {
   document.getElementById('tab-' + tab).classList.add('active')
   const sbTab = document.getElementById('sb-tab-' + tab)
   if (sbTab) sbTab.classList.add('active')
-  if (tab === 'recent') loadRecent()
-  if (tab === 'graph') loadGraph()
+  // Only the projection on screen pays for itself; the graph is the expensive
+  // one and stays unfetched until someone asks to see it.
+  if (tab === 'memories') memoryView === 'graph' ? loadGraph() : loadRecent()
+  // Home shows counts and a brief that were fetched at startup, so arriving
+  // back at it is exactly when they are most likely to be out of date. Rate
+  // limited, so tab-flicking does not re-run the brief's queries each time.
+  if (tab === 'home') refreshIfStale()
+}
+
+/**
+ * List or graph — the same memories, ordered by time or by connection.
+ *
+ * The choice sticks, because it is a statement about how someone thinks about
+ * their own brain rather than a per-visit decision, and being dropped back into
+ * the other one every time would be a small argument on every visit.
+ */
+function setMemoryView(mode) {
+  memoryView = mode === 'graph' ? 'graph' : 'list'
+  try {
+    localStorage.setItem('sb_memory_view', memoryView)
+  } catch {}
+  const graphing = memoryView === 'graph'
+
+  document.getElementById('recent-list').hidden = graphing
+  document.getElementById('mem-graph').hidden = !graphing
+  // Time and tag narrow a list; the graph draws its own slice of the corpus and
+  // would silently ignore them, so they step aside for the legend.
+  document.getElementById('mem-filters').hidden = graphing
+  document.getElementById('mem-legend').hidden = !graphing
+
+  const listBtn = document.getElementById('mem-view-list')
+  const graphBtn = document.getElementById('mem-view-graph')
+  listBtn.classList.toggle('active', !graphing)
+  graphBtn.classList.toggle('active', graphing)
+  listBtn.setAttribute('aria-selected', String(!graphing))
+  graphBtn.setAttribute('aria-selected', String(graphing))
+
+  // A user whose stored choice is the graph never triggers a list load, so
+  // switching over would otherwise land on an empty list that looks like an
+  // empty brain. Re-filtering is enough once the entries are in hand.
+  if (graphing) loadGraph()
+  else if (allEntries.length) applyRecentFilters()
+  else loadRecent()
+}
+
+/** Restores the remembered projection before the first paint of the screen. */
+function initMemoryView() {
+  let saved = null
+  try {
+    saved = localStorage.getItem('sb_memory_view')
+  } catch {}
+  setMemoryView(saved === 'graph' ? 'graph' : 'list')
 }
 
 async function updateStatus() {

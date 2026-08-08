@@ -153,16 +153,47 @@ describe("greeting", () => {
   });
 });
 
-describe("leaving home", () => {
+describe("leaving home, and coming back", () => {
   it("gives the conversation its input bar back", () => {
     const ctx = load();
     ctx.renderHome(null);
-    expect(ctx.document.getElementById("screen-recall").classList.contains("home-visible")).toBe(true);
+    expect(ctx.document.getElementById("screen-home").classList.contains("home-visible")).toBe(true);
 
     ctx.leaveHome();
     // The class hides the old input bar; leaving it on would strand the user in
     // a conversation with nothing to type into.
-    expect(ctx.document.getElementById("screen-recall").classList.contains("home-visible")).toBe(false);
+    expect(ctx.document.getElementById("screen-home").classList.contains("home-visible")).toBe(false);
     expect(ctx.document.getElementById("home").style.display).toBe("none");
+  });
+
+  it("comes back making no claim about a sentence nobody has written", () => {
+    // Returning from a question left "will search" under an empty box, with the
+    // lock from any earlier override still on.
+    const ctx = load();
+    const field = ctx.document.getElementById("home-field");
+    field.value = "what did I decide?";
+    ctx.onHomeInput(field);
+    ctx.toggleHomeMode();
+    ctx.leaveHome();
+
+    ctx.returnHome();
+    expect(ctx.document.getElementById("home-mode").style.visibility).toBe("hidden");
+
+    // And the override is gone, so typing predicts again.
+    field.value = "what did I decide?";
+    ctx.onHomeInput(field);
+    expect(ctx.document.getElementById("home-mode-label").textContent).toBe("will search");
+  });
+
+  it("puts home back", () => {
+    // A conversation is a state home enters, not a place you travel to. Asking
+    // one question used to replace home for the rest of the session, and in a
+    // desktop window with no reload that was the rest of the session.
+    const ctx = load();
+    ctx.renderHome(null);
+    ctx.leaveHome();
+    ctx.returnHome();
+    expect(ctx.document.getElementById("screen-home").classList.contains("home-visible")).toBe(true);
+    expect(ctx.document.getElementById("home").style.display).toBe("");
   });
 });

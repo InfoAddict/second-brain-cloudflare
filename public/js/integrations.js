@@ -215,9 +215,7 @@ async function syncIntegration(provider, btn) {
     btn.innerHTML = `<i class="ti ti-check"></i> ${processed} synced`
     btn.style.color = 'var(--good)'
     setTimeout(loadIntegrations, 900)
-    loadRecent()
-    loadTags()
-    updateStatus()
+    refreshAll()
   } catch (e) {
     btn.classList.remove('digest-btn--loading')
     btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Sync failed'
@@ -246,7 +244,7 @@ async function disconnectIntegration(provider, btn) {
     const data = await res.json()
     if (!res.ok || !data.ok) throw new Error(data.error || 'Disconnect failed')
     await loadIntegrations()
-    if (purge) { loadRecent(); loadTags(); updateStatus() }
+    if (purge) refreshAll()
   } catch (e) {
     btn.disabled = false
     btn.textContent = 'Disconnect'

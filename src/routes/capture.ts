@@ -135,13 +135,24 @@ export async function handleCaptureRoutes(
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
 
-    let body: { id?: string; content?: string; volatility?: unknown };
+    let body: { id?: string; content?: string; volatility?: unknown; tags?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
 
     const updateVol = readVolatility(body.volatility);
     if (updateVol.error) return json({ ok: false, error: updateVol.error }, 400);
+
+    // Absent means "leave the tags alone" — every client but the editor omits the
+    // key, and reading a missing key as an empty list would have them all wiping
+    // tags on save. An explicit [] does mean the user removed the last one.
+    let replaceTags: string[] | undefined;
+    if (body.tags !== undefined) {
+      if (!Array.isArray(body.tags) || body.tags.some(t => typeof t !== "string")) {
+        return json({ ok: false, error: "tags must be an array of strings" }, 400);
+      }
+      replaceTags = body.tags as string[];
+    }
 
     const id = body.id.trim();
     const newContent = body.content.trim();
@@ -159,7 +170,7 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: mirrorEditError(row.source as string) }, 409);
     }
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value);
+    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {

@@ -422,8 +422,7 @@
         }
       }
 
-      #recall-messages,
-      #remember-messages {
+      #recall-messages {
         flex: 1;
         overflow-y: auto;
         overflow-x: hidden;
@@ -623,15 +622,14 @@
       }
 
       /* ============================================================
-       JOURNAL EDITORIAL — Recall reads as prose, Remember as writing
+       JOURNAL EDITORIAL — the conversation reads as prose
        ============================================================ */
-      #recall-messages,
-      #remember-messages {
+      #recall-messages {
         gap: 0;
         padding: 20px 20px 10px;
       }
 
-      /* opening hero (welcome / remember intro) */
+      /* opening hero */
       .recall-hero {
         padding: 6px 0 2px;
         animation: bubble-in 0.4s var(--ease) both;
@@ -845,13 +843,8 @@
         animation: bubble-in 0.36s var(--ease) both;
       }
 
-      #remember-messages .confirm-block {
-        margin: 8px 0 4px 16px;
-      }
-
-      /* ---- underline "writing" inputs for both composers ---- */
-      #screen-recall .input-inner,
-      #screen-remember .input-inner {
+      /* ---- underline "writing" input ---- */
+      #screen-home .input-inner {
         background: transparent;
         border: none;
         border-bottom: 1.5px solid var(--accent);
@@ -863,47 +856,40 @@
         gap: 10px;
       }
 
-      #screen-recall .input-inner:focus-within,
-      #screen-remember .input-inner:focus-within {
+      #screen-home .input-inner:focus-within {
         box-shadow: none;
         border-bottom-color: var(--accent-press);
       }
 
-      #screen-recall .input-field,
-      #screen-remember .input-field {
+      #screen-home .input-field {
         font-family: var(--font-serif);
         font-size: 16.5px;
         padding: 6px 0;
       }
 
-      #screen-recall .input-field::placeholder,
-      #screen-remember .input-field::placeholder {
+      #screen-home .input-field::placeholder {
         font-style: italic;
         color: var(--text-tertiary);
       }
 
-      #screen-recall .send-btn,
-      #screen-remember .send-btn {
+      #screen-home .send-btn {
         background: transparent;
         width: auto;
         height: auto;
         padding: 4px;
       }
 
-      #screen-recall .send-btn:hover,
-      #screen-remember .send-btn:hover {
+      #screen-home .send-btn:hover {
         background: transparent;
         transform: translateY(-1px);
       }
 
-      #screen-recall .send-btn i,
-      #screen-remember .send-btn i {
+      #screen-home .send-btn i {
         font-size: 23px;
         color: var(--accent);
       }
 
-      #screen-recall .send-btn:disabled,
-      #screen-remember .send-btn:disabled {
+      #screen-home .send-btn:disabled {
         opacity: 0.4;
       }
 
@@ -1212,6 +1198,86 @@
         background: var(--bg);
       }
 
+      /* ── v2.3 Memories: one corpus, two projections ──────────────────────
+         Filters sit above the list they narrow. They used to be pinned to the
+         bottom, so scanning top-down and deciding to narrow meant travelling to
+         the far end of the screen and back. */
+      .mem-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 18px;
+        flex-shrink: 0;
+        background: var(--bg);
+        border-bottom: 0.5px solid var(--border);
+      }
+
+      /* Grows to fill a phone, stops well short of it on a wide window — two
+         dropdowns stretched across 1,300px read as a form, not a filter. */
+      .mem-filters {
+        flex: 1;
+        min-width: 0;
+        max-width: 420px;
+      }
+
+      .mem-filters[hidden],
+      #mem-legend[hidden] {
+        display: none;
+      }
+
+      #mem-legend {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .mem-caption {
+        font-size: 12.5px;
+        color: var(--text-tertiary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .view-toggle {
+        display: flex;
+        gap: 2px;
+        padding: 2px;
+        background: var(--surface-2);
+        border-radius: var(--radius-pill);
+        flex-shrink: 0;
+      }
+
+      .view-toggle-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border: none;
+        background: none;
+        border-radius: var(--radius-pill);
+        cursor: pointer;
+        color: var(--text-secondary);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+
+      .view-toggle-btn i {
+        font-size: 16px;
+      }
+
+      .view-toggle-btn.active {
+        background: var(--bg-card);
+        color: var(--text-primary);
+        box-shadow: var(--shadow-card);
+      }
+
+      #recent-list[hidden] {
+        display: none;
+      }
+
       .filter-inner {
         display: flex;
         align-items: center;
@@ -1275,7 +1341,8 @@
         color: var(--text-primary);
       }
 
-      .refresh-btn.spinning i {
+      .refresh-btn.spinning i,
+      .refresh-now.spinning i {
         animation: spin 0.7s linear infinite;
       }
 
@@ -1823,6 +1890,97 @@
         color: var(--accent-ink);
       }
 
+      /* ── v2.3: the editor claims the height it needs ──────────────────────
+         This is the only sheet whose whole job is a long piece of text, so it
+         takes the screen rather than being sized to fit around its own
+         furniture. It used to read the textarea's scrollHeight while the sheet
+         was still display:none — which is 0 — and cap the result at 200px, so a
+         two-thousand-character memory was edited through about three visible
+         lines. Height is CSS's job now and nothing measures anything. */
+      .edit-inner {
+        display: flex;
+        flex-direction: column;
+        max-height: 90vh;
+      }
+
+      .edit-header {
+        flex-shrink: 0;
+      }
+
+      .edit-inner .edit-header h3 {
+        margin-bottom: 3px;
+      }
+
+      /* Which memory this is, since the sheet is otherwise identical whichever
+         row opened it. */
+      .edit-sub {
+        font-size: 12.5px;
+        color: var(--text-tertiary);
+        margin-bottom: 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .edit-input-wrap {
+        flex: 1 1 auto;
+        min-height: 32vh;
+        display: flex;
+        overflow: hidden;
+      }
+
+      .edit-input-wrap textarea {
+        flex: 1 1 auto;
+        height: 100%;
+        overflow-y: auto;
+        overflow-wrap: anywhere;
+      }
+
+      /* Sized to its contents, with a safety valve rather than a tight cap. A
+         fixed 62px clipped the third row of chips halfway through, which reads
+         as a broken layout rather than as something that scrolls — and the
+         editor above is protected by its own min-height either way. */
+      .edit-existing-tags {
+        flex-shrink: 0;
+        max-height: 25vh;
+        overflow-y: auto;
+        margin-top: 14px;
+      }
+
+      .edit-hint,
+      .edit-inner .append-actions {
+        flex-shrink: 0;
+      }
+
+      /* Tags could be added but never removed anywhere in the product, while
+         these chips sat next to a hint about adding them — so they looked like
+         a control and were not one. */
+      .tag-chip--removable {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 0.5px solid var(--border);
+        cursor: pointer;
+        font-family: var(--font-sans);
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+
+      .tag-chip--removable i {
+        font-size: 12px;
+        opacity: 0.5;
+      }
+
+      .tag-chip--removable:hover {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .tag-chip--removable:hover i {
+        opacity: 1;
+      }
+
       /* ============ MENU SHEET ============ */
       .menu-inner h3 {
         margin-bottom: 18px;
@@ -1961,65 +2119,34 @@
         text-decoration: underline;
       }
 
-      .stats-panel {
-        padding: 2px 0 10px;
-        margin-bottom: 4px;
+      /* ── v2.3 settings sheet: grouped by what the thing is ───────────────
+         It was fourteen items in one stack — a stats panel, five chore panels, a
+         theme toggle, three data actions and an about block — with nothing
+         saying which was which. The Tauri Advanced Settings window groups by
+         what a control affects; this borrows that and nothing else, because its
+         staged Save/Cancel model would be wrong for a sheet whose controls are
+         all immediate verbs. The stats panel is gone entirely: home shows the
+         count, the week, the sources and the tags. */
+      .menu-group {
+        margin-bottom: 18px;
       }
 
-      .stats-kpi-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-        margin-bottom: 12px;
+      .menu-group[hidden] {
+        display: none;
       }
 
-      .stats-kpi-card {
-        background: var(--bg-card);
-        border: 0.5px solid var(--border-card);
-        border-radius: var(--radius-card);
-        padding: 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-
-      .stats-kpi-value {
+      /* Deliberately unlike .digest-section-label, which is the 11px uppercase
+         tertiary style used *inside* a group. Two identically-styled labels
+         stacked ("UPKEEP" over "READY TO COMPRESS") read as two peers rather
+         than as a heading and its contents. */
+      .menu-group-label {
         font-family: var(--font-serif);
-        font-size: 26px;
+        font-size: 15px;
         font-weight: 500;
-        color: var(--accent-ink);
-        font-variant-numeric: tabular-nums;
-        line-height: 1.05;
-      }
-
-      .stats-kpi-label {
-        font-size: 11px;
-        color: var(--text-tertiary);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 500;
-      }
-
-      .stats-top-tags {
-        background: var(--bg-card);
-        border: 0.5px solid var(--border-card);
-        border-radius: var(--radius-card);
-        padding: 14px;
-      }
-
-      .stats-top-tags-label {
-        font-size: 11px;
-        color: var(--text-tertiary);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 500;
-        margin-bottom: 9px;
-      }
-
-      .stats-tags {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
+        color: var(--text-primary);
+        margin-bottom: 10px;
+        padding-bottom: 7px;
+        border-bottom: 0.5px solid var(--border);
       }
 
       .digest-section {
@@ -2033,6 +2160,20 @@
         letter-spacing: 0.06em;
         font-weight: 500;
         margin-bottom: 9px;
+      }
+
+      .digest-more {
+        background: none;
+        border: none;
+        padding: 6px 0;
+        cursor: pointer;
+        color: var(--text-secondary);
+        font-family: var(--font-sans);
+        font-size: 13px;
+      }
+
+      .digest-more:hover {
+        color: var(--accent-ink);
       }
 
       .digest-candidate-row {
@@ -3044,10 +3185,24 @@
 
       /* On the home screen the old bottom bars are redundant: the input above
          is the input, and a tag filter with nothing to filter is furniture. */
-      #screen-recall.home-visible .input-bar,
-      #screen-recall.home-visible .suggestions-row,
-      #screen-recall.home-visible .filter-bar {
+      #screen-home.home-visible .input-bar,
+      #screen-home.home-visible .suggestions-row,
+      #screen-home.home-visible .filter-bar {
         display: none;
+      }
+
+      /* The hashtag lesson, inherited from the deleted Remember tab — which was
+         the only place the product ever taught it. */
+      .home-hint {
+        font-size: 12.5px;
+        color: var(--text-tertiary);
+        text-align: center;
+        margin-top: 10px;
+      }
+
+      .home-hint .hashtag {
+        color: var(--accent-ink);
+        font-style: italic;
       }
 
       @media (min-width: 768px) {
@@ -3153,6 +3308,14 @@
              flat dark bar under the panel. Use the floating elevation instead. */
           box-shadow: var(--shadow-float);
           border: 0.5px solid var(--border-card);
+        }
+
+        /* The editor is the exception to the 420px modal width. Every other
+           sheet presents something to read or a short list to pick from; this
+           one is a writing surface, and 420px on a 1,500px window meant editing
+           a long memory through a column narrower than the row it came from. */
+        .edit-inner {
+          max-width: 680px;
         }
 
         .open .confirm-sheet,

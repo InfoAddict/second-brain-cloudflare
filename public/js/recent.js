@@ -1,18 +1,27 @@
+// Loads the list and nothing else. It used to also refresh the count and the
+// tags, which made it the de-facto "refresh the app" call and left everything
+// it did not know about — the brief, and so the greeting's count — permanently
+// stale. Refreshing the shell is refreshAll()'s job now; this owns one list.
 async function loadRecent() {
   const list = document.getElementById('recent-list')
-  const btn = document.getElementById('refresh-btn')
-  btn.classList.add('spinning')
-  list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>Loading...</span></div>`
+  // Only show the loading state on a cold list. A refresh after a capture
+  // would otherwise blank out rows the user is reading and snap them back.
+  if (!allEntries.length) {
+    list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>Loading...</span></div>`
+  }
   try {
     allEntries = await apiList(50)
-    renderRecent(allEntries)
+    // Through the filters, not straight to render: reloading used to reset the
+    // list to everything while the filter controls still read "work" and
+    // "past 7 days", which now happens after every capture rather than only
+    // when someone pressed refresh.
+    applyRecentFilters()
     showFirstRunIfEmpty(allEntries.length === 0)
-    updateStatus()
-    loadTags()
   } catch {
-    list.innerHTML = `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>Could not load memories.</span></div>`
+    if (!allEntries.length) {
+      list.innerHTML = `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>Could not load memories.</span></div>`
+    }
   }
-  btn.classList.remove('spinning')
 }
 
 // A brand-new brain has nothing to recall, so the usual prompt and its
@@ -32,8 +41,11 @@ function showFirstRunIfEmpty(isEmpty) {
     `<div class="eyebrow">Getting started</div>` +
     `<div class="hero-line">Your Second Brain is empty. Here is where everything lives.</div>` +
     `<ol class="first-run-steps">` +
-    `<li><b>Remember</b> saves something. Try it with a decision you made this week.</li>` +
-    `<li><b>Recall</b> finds it later by meaning, so you do not need the words you used.</li>` +
+    // Named after what is on screen. This used to point at a Remember tab and a
+    // Recall tab, both of which are now the one box above.
+    `<li><b>The box above</b> does both: write a statement and it is saved, ask a question and it is answered. ` +
+    `It says which one it is about to do before you send.</li>` +
+    `<li><b>Memories</b> is everything you have kept — as a list by date, or as a graph of how it connects.</li>` +
     `<li><b>Settings</b> is where you connect Claude, ChatGPT, Cursor, your email and calendar, ` +
     `so they read from and add to this same memory.</li>` +
     `</ol>`

@@ -169,6 +169,72 @@ describe("POST /update", () => {
     expect(tags.filter((t: string) => t === "work")).toHaveLength(1);
   });
 
+  // ── Tag replacement ─────────────────────────────────────────────────────────
+  //
+  // Every write path unioned new tags onto old ones, so a tag could be added
+  // from anywhere and removed from nowhere. The editor's remove control is the
+  // first caller that means "these and not the others", and the risk it
+  // introduces is that a replacement also throws away the brain's own
+  // conclusions — which the user never saw and cannot re-derive.
+
+  it("removes a tag the user dropped", async () => {
+    seedEntry(db, { tags: '["work","pricing"]' });
+    await worker.fetch(
+      req("POST", "/update", { body: { id: "entry-abc", content: "New content", tags: ["work"] } }),
+      env, ctx
+    );
+    expect(JSON.parse(db.entries[0].tags)).toEqual(["work"]);
+  });
+
+  it("keeps the Worker's own tags through a replacement", async () => {
+    // kind: is the classifier's verdict, status: the contradiction pass's, and
+    // neither is shown in the editor — so neither can appear in what it sends,
+    // and dropping "anything not sent" would silently destroy both.
+    seedEntry(db, { tags: '["work","kind:semantic","status:canonical","auto-pattern"]' });
+    await worker.fetch(
+      req("POST", "/update", { body: { id: "entry-abc", content: "New content", tags: [] } }),
+      env, ctx
+    );
+    const tags = JSON.parse(db.entries[0].tags);
+    expect(tags).toContain("kind:semantic");
+    expect(tags).toContain("status:canonical");
+    expect(tags).toContain("auto-pattern");
+    expect(tags).not.toContain("work");
+  });
+
+  it("leaves tags untouched when the caller says nothing about them", async () => {
+    // The MCP update tool, the CLI and every integration omit the key. Reading a
+    // missing key as an empty list would have all of them wiping tags on save.
+    seedEntry(db, { tags: '["work","pricing"]' });
+    await worker.fetch(
+      req("POST", "/update", { body: { id: "entry-abc", content: "New content" } }),
+      env, ctx
+    );
+    expect(JSON.parse(db.entries[0].tags).sort()).toEqual(["pricing", "work"]);
+  });
+
+  it("still accepts a #hashtag added in the same edit that removed one", async () => {
+    seedEntry(db, { tags: '["work","pricing"]' });
+    await worker.fetch(
+      req("POST", "/update", { body: { id: "entry-abc", content: "New content #signpath", tags: ["work"] } }),
+      env, ctx
+    );
+    const tags = JSON.parse(db.entries[0].tags);
+    expect(tags.sort()).toEqual(["signpath", "work"]);
+  });
+
+  it("rejects a tags field that is not a list of strings", async () => {
+    seedEntry(db);
+    const res = await worker.fetch(
+      req("POST", "/update", { body: { id: "entry-abc", content: "New content", tags: [1, 2] } }),
+      env, ctx
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toMatch(/tags/);
+    // Refused before the write, not after it.
+    expect(db.entries[0].content).toBe("Original content");
+  });
+
   it("re-embeds on update via upsert (overwrites the reused vector id)", async () => {
     // The re-embed must use upsert, not insert: a single-chunk entry's vector
     // id equals the entry id, and Vectorize insert() skips ids that already
