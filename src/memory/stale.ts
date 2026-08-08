@@ -39,6 +39,7 @@ export function tagsAfterAppend(tags: string[]): string[] {
 }
 
 export function formatAsOfQualifier(updatedAt: number): string {
-  const date = new Date(updatedAt).toLocaleDateString();
+  // Spelled month: assistants read this qualifier and act on the date.
+  const date = new Date(updatedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   return `true as of ${date}, verify before asserting`;
 }

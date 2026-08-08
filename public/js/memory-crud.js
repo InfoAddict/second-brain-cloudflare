@@ -308,7 +308,7 @@ async function loadRelated(id, el) {
         .map(
           (c) => {
             const who = c.provenance === 'explicit' ? 'you linked' : c.provenance === 'system' ? 'system-linked' : 'auto-linked'
-            const when = c.linkedAt ? ' · ' + new Date(c.linkedAt).toLocaleDateString() : ''
+            const when = c.linkedAt ? ' · ' + new Date(c.linkedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : ''
             return `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)} · ${who}${when}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="Remove link"><i class="ti ti-unlink"></i></button></div>`
           },
         )

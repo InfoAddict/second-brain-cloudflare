@@ -2683,6 +2683,44 @@
         mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);
       }
 
+      /* ── Sheet proportions ────────────────────────────────────────────────
+         The memory is the point of this sheet, and it was losing: three rows of
+         tags, the verdict panel and three related cards left the text about
+         four lines in a 90vh sheet. The content now takes the space and the
+         supporting sections are capped. */
+      .view-content {
+        flex: 1 1 auto;
+        min-height: 34vh;
+      }
+
+      /* One scrolling line, like the tag rows on cards — a memory with a dozen
+         tags should not cost three lines of the reading area. */
+      .view-tags {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);
+        mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent 100%);
+        margin-bottom: 14px;
+      }
+
+      .view-tags::-webkit-scrollbar {
+        display: none;
+      }
+
+      .view-tags .tag-chip {
+        flex: 0 0 auto;
+      }
+
+      /* Related is context, not the subject: it scrolls within its own bounds
+         rather than pushing the memory off the top of the sheet. */
+      .view-related {
+        max-height: 26vh;
+        overflow-y: auto;
+        flex-shrink: 0;
+      }
+
       @media (min-width: 768px) {
         /* Wide enough for one row again: badge, tags, actions. */
         .card-footer {

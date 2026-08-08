@@ -398,7 +398,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       const text = connections
         .map(c => {
           const who = c.provenance === "explicit" ? "you linked" : c.provenance === "system" ? "system-linked" : "auto-linked";
-          const when = c.linkedAt ? ` · ${new Date(c.linkedAt).toLocaleDateString()}` : "";
+          const when = c.linkedAt ? ` · ${new Date(c.linkedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}` : "";
           return `- (${c.label} · ${who}${when}) ${c.id}: ${c.content.slice(0, 120)}`;
         })
         .join("\n");

@@ -119,6 +119,22 @@ describe("dates handed to the model", () => {
     expect(formatted).not.toMatch(/^\d+\/\d+/);
   });
 
+  it("leaves no locale-dependent date anywhere a model or reader will see it", () => {
+    // Every one of these ends up in text an assistant reads back: recall
+    // blocks, staleness qualifiers, link provenance, and the "[Update <date>]"
+    // separator written into stored content.
+    for (const f of [
+      "src/recall/render.ts",
+      "src/memory/stale.ts",
+      "src/mcp/server.ts",
+      "src/capture/store.ts",
+      "public/js/recall.js",
+      "public/js/memory-crud.js",
+    ]) {
+      expect(readFileSync(resolve(ROOT, f), "utf8"), f).not.toMatch(/toLocaleDateString\(\)/);
+    }
+  });
+
   it("is the format the client serializer actually uses", () => {
     const src = readFileSync(resolve(ROOT, "public/js/recall.js"), "utf8");
     // The line that builds the /chat payload must not fall back to the

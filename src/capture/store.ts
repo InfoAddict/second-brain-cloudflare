@@ -205,7 +205,9 @@ export async function appendToEntry(
 
   const existingVectorIds: string[] = JSON.parse(row?.vector_ids ?? "[]");
 
-  const timestamp = new Date().toLocaleDateString();
+  // Spelled month, like every other date this app hands to a reader or a
+  // model: "8/2/2026" is two different days depending on where you live.
+  const timestamp = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   const separator = `\n\n[Update ${timestamp}]: `;
   const newContent = existingContent + separator + addition;
 
