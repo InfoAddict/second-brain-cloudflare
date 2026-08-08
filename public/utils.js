@@ -67,6 +67,37 @@ function titleLine(content, max = 90) {
 }
 
 /**
+ * Source text laid out for reading, without changing what is stored.
+ *
+ * Emails arrive wrapped and indented by whatever client sent them, and
+ * `white-space: pre-wrap` reproduces every bit of it: paragraphs that start
+ * two-thirds of the way across the screen, runs of blank lines, and a leading
+ * `#` from a subject line the sync wrote as a markdown heading. The row
+ * preview strips all structure (stripToPlainText); this keeps paragraphs and
+ * lists, and removes only the accidents of transport.
+ *
+ * Render-time only. The stored content stays byte-identical, because export,
+ * restore and the embeddings all read it.
+ */
+function normalizeForDisplay(text) {
+  const src = String(text ?? '').replace(/\r\n?/g, '\n')
+  let inFence = false
+  const lines = src.split('\n').map((line) => {
+    if (/^\s*```/.test(line)) inFence = !inFence
+    // Inside a fence the indentation is the content.
+    if (inFence) return line.replace(/\s+$/, '')
+    return line.replace(/^[ \t]+/, '').replace(/\s+$/, '')
+  })
+  return lines
+    .join('\n')
+    // A subject line the mail sync wrote as a heading reads better as a title.
+    .replace(/^#{1,6}\s+/, '')
+    // Mail clients pad with blank lines; more than one says nothing extra.
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/**
  * The preview line: what is left after the title has already said its piece.
  *
  * Rendering the full stripped text under a title derived from its first
@@ -101,18 +132,57 @@ function relativeTime(ts) {
   return `${Math.round(days / 365)}y ago`
 }
 
-/** Tabler icon + label for a memory's source, for the row meta line. */
+/**
+ * Icon and label for where a memory came from.
+ *
+ * Real brand marks wherever the icon font has one — Tabler ships OpenAI,
+ * GitHub, Google, Apple and Notion, and a recognisable logo reads faster than
+ * any glyph. Where it has none (Anthropic, Obsidian) the fallback describes
+ * the *kind* of source honestly rather than reaching for a generic AI sparkle:
+ * a Claude memory came from a conversation, so it gets a conversation icon.
+ *
+ * Ordered most specific first — "claude-code" is a terminal, not a chat, and
+ * "email-gmail" is Google before it is mail.
+ */
+const SOURCE_BADGES = [
+  // Terminals and code tools. `cli` is the Second Brain CLI; an earlier version
+  // of this table matched it to GitHub, which was simply wrong.
+  [/claude-code/, 'ti-terminal-2', 'claude code'],
+  [/^cli$|command-line|terminal/, 'ti-terminal-2', 'cli'],
+  [/git-hook|github|^git$/, 'ti-brand-github', 'github'],
+  // Mail, branded by provider where we know it.
+  [/gmail/, 'ti-brand-google', 'gmail'],
+  [/icloud/, 'ti-brand-apple', 'icloud'],
+  [/mail/, 'ti-mail', 'email'],
+  // Assistants. OpenAI has a brand mark; Anthropic does not, so Claude takes
+  // the conversation icon rather than a sparkle that means nothing.
+  [/chatgpt|openai|codex/, 'ti-brand-openai', 'chatgpt'],
+  [/claude/, 'ti-message-2', 'claude'],
+  [/conversation|^chat$/, 'ti-message-2', 'chat'],
+  // Surfaces.
+  [/notion/, 'ti-brand-notion', 'notion'],
+  [/obsidian/, 'ti-notes', 'obsidian'],
+  [/extension|browser/, 'ti-browser', 'browser'],
+  [/web-ui|dashboard/, 'ti-browser', 'dashboard'],
+  [/phone|ios|shortcut/, 'ti-device-mobile', 'phone'],
+  [/voice|microphone/, 'ti-microphone', 'voice'],
+  [/import|restore/, 'ti-upload', 'import'],
+  // Written by the brain itself: compression, pattern mining, digests.
+  [/^system$|^auto/, 'ti-cpu', 'system'],
+  [/^user$|manual|^api$/, 'ti-writing', 'manual'],
+]
+
 function sourceBadge(source) {
-  const s = String(source ?? '').toLowerCase()
-  if (s.includes('email') || s.includes('gmail') || s.includes('icloud')) return { icon: 'ti-mail', label: s.includes('gmail') ? 'gmail' : s.includes('icloud') ? 'icloud' : 'email' }
-  if (s.includes('github') || s === 'cli') return { icon: 'ti-brand-github', label: s === 'cli' ? 'cli' : 'github' }
-  if (s.includes('claude')) return { icon: 'ti-sparkles', label: 'claude' }
-  if (s.includes('codex') || s.includes('chatgpt') || s.includes('openai')) return { icon: 'ti-sparkles', label: 'chatgpt' }
-  if (s.includes('phone') || s.includes('ios') || s.includes('shortcut')) return { icon: 'ti-device-mobile', label: 'phone' }
-  if (s.includes('browser') || s.includes('extension')) return { icon: 'ti-browser', label: 'browser' }
-  if (s.includes('import')) return { icon: 'ti-upload', label: 'import' }
-  if (s.includes('obsidian')) return { icon: 'ti-notebook', label: 'obsidian' }
-  return { icon: 'ti-writing', label: s || 'manual' }
+  const raw = String(source ?? '').trim().toLowerCase()
+  if (!raw) return { icon: 'ti-writing', label: 'manual' }
+  for (const [pattern, icon, label] of SOURCE_BADGES) {
+    if (pattern.test(raw)) return { icon, label }
+  }
+  // Some rows carry a whole sentence as their source ("ChatGPT conversation on
+  // AI-native SDLC"). Show something rather than nothing, but never let it set
+  // the width of the meta line.
+  const label = raw.length > 18 ? raw.slice(0, 17) + '…' : raw
+  return { icon: 'ti-writing', label }
 }
 
 function toDateStr(d) {

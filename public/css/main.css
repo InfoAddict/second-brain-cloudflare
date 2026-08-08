@@ -1626,6 +1626,11 @@
         overflow-y: auto;
         margin-bottom: 18px;
         white-space: pre-wrap;
+        /* pre-wrap wraps at spaces but will not break a long unbroken token, so
+           one file path or URL pushed the whole sheet sideways and the text
+           scrolled off the left edge on a phone. */
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
 
       .view-tags {

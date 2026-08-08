@@ -112,11 +112,16 @@ async function confirmForget() {
 }
 
 function openView(entry, cardElement) {
-  document.getElementById('view-content-text').textContent = entry.content
+  document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
   const tagsContainer = document.getElementById('view-tags-container')
   tagsContainer.innerHTML = ''
-  if (entry.tags && entry.tags.length > 0) {
-    tagsContainer.innerHTML = entry.tags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
+  // Commit SHAs, colour codes and issue numbers are noise wherever they appear.
+  // The brain's own namespaces (kind:, status:, volatility:) are kept here on
+  // purpose — this is the one view that should say what the brain thinks — and
+  // v2.3 tier 2 gives them a labelled section of their own.
+  const viewTags = (entry.tags || []).filter((t) => !isMachineIdentifier(String(t).trim().toLowerCase()))
+  if (viewTags.length > 0) {
+    tagsContainer.innerHTML = viewTags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
   }
   const relatedEl = document.getElementById('view-related')
   relatedEl.style.display = 'none'

@@ -36,12 +36,21 @@ describe("isSystemTag / humanTags", () => {
     }
   });
 
-  it("hides legacy numeric tags from synced issue references", () => {
-    expect(isSystemTag("5118")).toBe(true);
-    expect(isSystemTag("298")).toBe(true);
-    // A number is only noise on its own — these are real topics.
-    expect(isSystemTag("v2")).toBe(false);
-    expect(isSystemTag("q3-2026")).toBe(false);
+  it("hides the machine identifiers a #token scan mistook for tags", () => {
+    // Issue references, colour codes, short commit SHAs — the tag filter was
+    // pages of these on a real brain.
+    for (const t of ["5118", "298", "fd540a", "002b49", "0f3d3e", "41ace39"]) {
+      expect(isSystemTag(t), t).toBe(true);
+    }
+  });
+
+  it("keeps tags that only look like identifiers", () => {
+    // Digits are required, so hex-lookalike words survive; six characters are
+    // required, so short technical tags survive; the whole string must be hex,
+    // so anything with other characters survives.
+    for (const t of ["facade", "decade", "d1", "v2", "12v-battery", "14-day-plan", "q3-2026"]) {
+      expect(isSystemTag(t), t).toBe(false);
+    }
   });
 
   it("keeps the user's own vocabulary, in order", () => {
@@ -109,6 +118,21 @@ describe("stripToPlainText / titleLine", () => {
     expect(preview.length).toBeGreaterThan(100);
   });
 
+  it("normalizes an email for reading without rewriting what is stored", () => {
+    const { normalizeForDisplay } = load();
+    const email = "# Happy Friday!\nFrom: DEV <yo@dev.to>\n\n\n\nHey there,\n\n\t\t\tTwo weeks left.\n";
+    const out = normalizeForDisplay(email);
+    expect(out.startsWith("Happy Friday!")).toBe(true);   // heading marker gone
+    expect(out).not.toMatch(/\n{3,}/);                    // padding collapsed
+    expect(out).not.toMatch(/\n[ \t]+\S/);                 // no stray indents
+    expect(out).toContain("Two weeks left.");
+  });
+
+  it("leaves indentation alone inside a code fence", () => {
+    const { normalizeForDisplay } = load();
+    expect(normalizeForDisplay("Run:\n```sh\n  npm ci\n```\n")).toContain("\n  npm ci");
+  });
+
   it("never renders an empty title", () => {
     expect(titleLine("")).toBe("Untitled memory");
     expect(titleLine("***")).toBe("Untitled memory");
@@ -122,10 +146,30 @@ describe("stripToPlainText / titleLine", () => {
     expect(relativeTime(0)).toBe("");
   });
 
-  it("maps sources to a badge, falling back rather than blanking", () => {
-    expect(sourceBadge("email-gmail").label).toBe("gmail");
-    expect(sourceBadge("claude-desktop").label).toBe("claude");
-    expect(sourceBadge("cli").label).toBe("cli");
+  it("uses a real brand mark wherever the icon font has one", () => {
+    expect(sourceBadge("email-gmail")).toEqual({ icon: "ti-brand-google", label: "gmail" });
+    expect(sourceBadge("email-icloud")).toEqual({ icon: "ti-brand-apple", label: "icloud" });
+    expect(sourceBadge("chatgpt").icon).toBe("ti-brand-openai");
+    expect(sourceBadge("codex").icon).toBe("ti-brand-openai");
+    expect(sourceBadge("git-hook").icon).toBe("ti-brand-github");
+    expect(sourceBadge("notion").icon).toBe("ti-brand-notion");
+  });
+
+  it("describes the kind of source honestly where no brand mark exists", () => {
+    // Anthropic is not in the icon font; a conversation icon says more than a
+    // generic AI sparkle, and claude-code is a terminal rather than a chat.
+    expect(sourceBadge("claude-desktop")).toEqual({ icon: "ti-message-2", label: "claude" });
+    expect(sourceBadge("claude-code").icon).toBe("ti-terminal-2");
+    expect(sourceBadge("obsidian").icon).toBe("ti-notes");
+  });
+
+  it("does not mistake the CLI for GitHub", () => {
+    expect(sourceBadge("cli")).toEqual({ icon: "ti-terminal-2", label: "cli" });
+  });
+
+  it("truncates a source that is really a sentence", () => {
+    const badge = sourceBadge("User uploaded markdown on 2026-05-30");
+    expect(badge.label.length).toBeLessThanOrEqual(18);
     expect(sourceBadge(undefined).label).toBe("manual");
   });
 });

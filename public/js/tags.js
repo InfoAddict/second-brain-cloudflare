@@ -17,20 +17,34 @@ const SYSTEM_TAG_PREFIXES = ['kind:', 'status:', 'volatility:', 'stale:']
 const SYSTEM_TAG_NAMES = new Set(['auto-pattern', 'synthesized', 'rolled-up', 'duplicate-candidate'])
 
 /**
+ * Machine identifiers that a `#token` scan mistook for tags: `#5118` issue
+ * references, `#fd540a` colour codes, `#0f3d3e` short commit SHAs. The tag
+ * filter on a real brain was pages of these before anything readable.
+ *
+ * The hex rule is deliberately narrow, because plenty of real tags look
+ * numeric at a glance:
+ *   - a digit is required, so `facade`, `decade` and `added` stay tags;
+ *   - six characters minimum, so `d1` (Cloudflare D1) and `v2` stay tags;
+ *   - the whole string must be hex, so `12v-battery` and `14-day-plan` stay.
+ */
+function isMachineIdentifier(t) {
+  if (/^\d+$/.test(t)) return true
+  return /^[0-9a-f]{6,40}$/.test(t) && /\d/.test(t)
+}
+
+/**
  * Is this tag the brain talking to itself?
  *
- * Pure-numeric tags count too. They are not a namespace but a capture artifact:
- * a GitHub PR body full of `#5118` issue references arrives as twenty numeric
- * "tags". v2.3 stops extracting those (src/text/hashtags.ts), but rows captured
- * before that fix keep theirs, and no backfill is worth rewriting history for.
- * Hiding them here cleans up the past without touching stored data.
+ * v2.3 stops extracting these at capture (src/text/hashtags.ts), but rows
+ * written before that keep theirs, and no backfill is worth rewriting history
+ * for. Hiding them cleans up the past without touching stored data.
  */
 function isSystemTag(tag) {
   if (typeof tag !== 'string') return true
   const t = tag.trim().toLowerCase()
   if (!t) return true
   if (SYSTEM_TAG_NAMES.has(t)) return true
-  if (/^\d+$/.test(t)) return true
+  if (isMachineIdentifier(t)) return true
   return SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))
 }
 
