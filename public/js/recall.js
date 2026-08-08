@@ -40,7 +40,18 @@ async function sendRecall() {
     } else {
       // REST scores are already 0–100 (one decimal); map directly rather than via
       // normalizeEntry, whose 0–1 rescale heuristic would turn a 0.8% match into 80%
-      const entries = data.results.map((m) => ({ id: m.id, content: m.content, tags: m.tags || [], score: Math.min(100, Math.round(m.score)), hop: m.hop || 0 }))
+      // created_at and source travel with the card now: a source you cannot
+      // date or place is hard to weigh, and the answer above cites these by
+      // number, so each card has to be able to say which number it is.
+      const entries = data.results.map((m) => ({
+        id: m.id,
+        content: m.content,
+        tags: m.tags || [],
+        score: Math.min(100, Math.round(m.score)),
+        hop: m.hop || 0,
+        created_at: m.created_at,
+        source: m.source,
+      }))
       const answerBubble = document.createElement('div')
       answerBubble.className = 'ex-a-row'
       const answerEl = document.createElement('div')
@@ -54,7 +65,10 @@ async function sendRecall() {
         (data.insight ? `Insight: ${data.insight}\n\n` : '') +
         data.results
           .map((m, i) => {
-            const date = new Date(m.created_at).toLocaleDateString()
+            // Month by name, never 8/2/2026: the answer prompt asks the model
+            // to date its claims, and a numeric date is read as D/M in half the
+            // world. It reported an August memory as "8 February 2026".
+            const date = new Date(m.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
             const tagList = m.tags && m.tags.length ? ` [${m.tags.join(', ')}]` : ''
             const src = m.source ? ` · ${m.source}` : ''
             const related = m.hop > 0 ? ` [related, ${m.hop} hop${m.hop > 1 ? 's' : ''}]` : ''
@@ -108,7 +122,7 @@ async function sendRecall() {
     <div class="brain-cards-wrapper" style="display:none"></div>`
       const wrapper = sourcesToggle.querySelector('.brain-cards-wrapper')
       entries.forEach((e, i) => {
-        const card = makeRecallCard(e)
+        const card = makeRecallCard(e, i + 1)
         // The model cites by position in the list it was handed, which is this
         // order — so [2] and the second card are the same memory by construction.
         card.dataset.cite = String(i + 1)
@@ -146,7 +160,7 @@ async function sendRecall() {
   msgs.scrollTop = msgs.scrollHeight
 }
 
-function makeRecallCard(entry) {
+function makeRecallCard(entry, citeIndex) {
   const card = document.createElement('div')
   const isSynthesized = entry.tags.includes('synthesized')
   const isRolledUp = entry.tags.includes('rolled-up')
@@ -154,11 +168,21 @@ function makeRecallCard(entry) {
   card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '')
   card.innerHTML = `
     <div class="match-line">
+${citeIndex ? `<span class="cite-badge" title="Cited as [${citeIndex}] in the answer">${citeIndex}</span>` : ''}
 <span class="match-pct">${entry.score}%</span>
 ${entry.hop > 0 ? `<span class="tag-chip" style="background:var(--accent-soft);color:var(--accent);flex-shrink:0">related · ${entry.hop} hop${entry.hop > 1 ? 's' : ''}</span>` : ''}
 <div class="match-bar-bg"><div class="match-bar-fill" style="width:${entry.score}%"></div></div>
     </div>
     <div class="card-content" style="cursor: pointer;">${escHtml(stripToPlainText(entry.content))}</div>
+    ${(() => {
+      const badge = sourceBadge(entry.source)
+      const at = Number(entry.created_at) || 0
+      if (!entry.source && !at) return ''
+      return `<div class="card-meta">
+        <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
+        ${at ? `<span class="card-time" title="${escAttr(new Date(at).toLocaleString())}">${escHtml(relativeTime(at))}</span>` : ''}
+      </div>`
+    })()}
     <div class="card-footer">
 <div class="card-tags">${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
 <div class="card-actions">

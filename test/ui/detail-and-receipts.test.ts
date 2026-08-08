@@ -106,6 +106,28 @@ describe("citation chips", () => {
   });
 });
 
+describe("dates handed to the model", () => {
+  it("names the month, because 8/2/2026 is two different days", () => {
+    // The answer prompt asks for dated claims. With a numeric date the model
+    // read an August memory as "8 February 2026" and said so to the user.
+    const formatted = new Date(Date.UTC(2026, 7, 2, 12)).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    expect(formatted).toBe("Aug 2, 2026");
+    expect(formatted).not.toMatch(/^\d+\/\d+/);
+  });
+
+  it("is the format the client serializer actually uses", () => {
+    const src = readFileSync(resolve(ROOT, "public/js/recall.js"), "utf8");
+    // The line that builds the /chat payload must not fall back to the
+    // locale-dependent default.
+    expect(src).toMatch(/toLocaleDateString\('en-US', \{ year: 'numeric', month: 'short', day: 'numeric' \}\)/);
+    expect(src).not.toMatch(/toLocaleDateString\(\)/);
+  });
+});
+
 describe("capture receipts", () => {
   const headline = (result: any, typed: string[] = []) => {
     const ctx = load();

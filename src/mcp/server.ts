@@ -279,7 +279,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       const rows = results as Record<string, any>[];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const date = new Date(row.created_at as number).toLocaleDateString();
+        const date = new Date(row.created_at as number).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
         const tags: string[] = JSON.parse(row.tags ?? "[]");
         const tagStr = tags.length ? ` · ${tags.join(", ")}` : "";
         const s = snippetOf(row.content as string, (await resolveConfig(env)).SNIPPET_MAX_CHARS);
@@ -319,7 +319,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       }
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       const tagStr = tags.length ? ` · ${tags.join(", ")}` : "";
-      const date = new Date(row.created_at as number).toLocaleDateString();
+      const date = new Date(row.created_at as number).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
       return {
         content: [{ type: "text", text: `[${date} · ${row.source}${tagStr}]\nID: ${row.id}\n${row.content}` }],
       };

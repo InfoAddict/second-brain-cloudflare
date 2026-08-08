@@ -19,7 +19,9 @@ export function renderRecallText(
 
   for (let i = 0; i < matches.length; i++) {
     const m = matches[i];
-    const date = new Date(m.createdAt).toLocaleDateString();
+    // Spelled month: this text is read by assistants, and a numeric date is
+    // ambiguous between US and international order.
+    const date = new Date(m.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
     const tagList = m.tags.length ? ` [${m.tags.join(", ")}]` : "";
     const src = m.source ? ` · ${m.source}` : "";
     const score = (m.score * 100).toFixed(0);
