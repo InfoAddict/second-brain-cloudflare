@@ -2379,14 +2379,39 @@
       }
 
       /* Tags scroll sideways rather than stacking into a tall wrap — a row's
-         height should not depend on how many tags it carries. */
+         height should not depend on how many tags it carries.
+         `flex-wrap: nowrap` is doing real work: the base rule above wraps, and
+         inside the footer's narrow middle column that put every chip on its own
+         line — a memory with nine tags became a nine-line row on a phone. */
       .card-tags {
         display: flex;
+        flex-wrap: nowrap;
         gap: 6px;
         overflow-x: auto;
         scrollbar-width: none;
         -webkit-overflow-scrolling: touch;
         padding-bottom: 2px;
+      }
+
+      /* Phones give the tags their own full-width line. Squeezing them between
+         the source badge and the action buttons leaves ~120px, which truncates
+         chips mid-word ("second-brain-cl…") no matter how they wrap. */
+      .card-footer {
+        flex-wrap: wrap;
+      }
+
+      .card-meta {
+        order: 1;
+      }
+
+      .card-actions {
+        order: 2;
+        margin-left: auto;
+      }
+
+      .card-tags {
+        order: 3;
+        flex: 1 0 100%;
       }
 
       .card-tags::-webkit-scrollbar {
@@ -2471,6 +2496,23 @@
         .memory-card:focus-within .card-actions,
         .memory-card.card--menu-open .card-actions {
           opacity: 1;
+        }
+      }
+
+      @media (min-width: 768px) {
+        /* Wide enough for one row again: badge, tags, actions. */
+        .card-footer {
+          flex-wrap: nowrap;
+        }
+
+        .card-tags {
+          order: 2;
+          flex: 1 1 auto;
+        }
+
+        .card-actions {
+          order: 3;
+          margin-left: 0;
         }
       }
 
