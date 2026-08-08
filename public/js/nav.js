@@ -1,7 +1,9 @@
 async function loadTags() {
   try {
     const res = await fetch(`${WORKER_URL}/tags`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
-    const tags = await res.json()
+    // Filtering by `kind:episodic` is a thing the brain does, not a thing a
+    // person browses by — the dropdown offers the user's own vocabulary only.
+    const tags = humanTags(await res.json())
     ;['tag-filter-recent', 'tag-filter-recall'].forEach((id) => {
       const sel = document.getElementById(id)
       if (!sel) return
@@ -98,3 +100,16 @@ async function checkVectorize() {
 function renderVectorizeBanner(banner) {
   syncVectorizeBanner(document, banner)
 }
+
+// Row overflow menus close on any outside click or Escape — they are transient
+// affordances, not state, and leaving one open behind a scroll is a trap.
+document.addEventListener('click', () => {
+  document.querySelectorAll('.card-overflow-menu').forEach((m) => (m.hidden = true))
+  document.querySelectorAll('.card--menu-open').forEach((c) => c.classList.remove('card--menu-open'))
+  document.querySelectorAll('.overflow-btn').forEach((b) => b.setAttribute('aria-expanded', 'false'))
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return
+  document.querySelectorAll('.card-overflow-menu').forEach((m) => (m.hidden = true))
+  document.querySelectorAll('.card--menu-open').forEach((c) => c.classList.remove('card--menu-open'))
+})

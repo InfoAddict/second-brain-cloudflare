@@ -31,7 +31,19 @@ export async function handleAdminRoutes(
          SUM(CASE WHEN tags NOT LIKE '%"status:%' AND tags NOT LIKE '%"kind:%' THEN 1 ELSE 0 END) as unclassified
          FROM entries`
       ).bind(graceCutoff).first() as Promise<Record<string, any> | null>,
-      env.DB.prepare(`SELECT value, COUNT(*) as n FROM entries, json_each(entries.tags) GROUP BY value ORDER BY n DESC LIMIT 5`).all(),
+      // Reserved namespaces and pipeline markers are excluded here rather than
+      // hidden in the client: this panel answers "what is my brain about?", and
+      // kind:episodic outranked every real topic on a production brain. Numeric
+      // tags are legacy issue references (see src/text/hashtags.ts). LIMIT is
+      // raised because the filter now discards rows the ORDER BY ranked first.
+      env.DB.prepare(
+        `SELECT value, COUNT(*) as n FROM entries, json_each(entries.tags)
+         WHERE value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
+           AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
+           AND value NOT IN ('auto-pattern', 'synthesized', 'rolled-up', 'duplicate-candidate')
+           AND value NOT GLOB '[0-9]*'
+         GROUP BY value ORDER BY n DESC LIMIT 5`,
+      ).all(),
       env.DB.prepare(`
         SELECT value as tag, COUNT(*) as count
         FROM entries, json_each(entries.tags)

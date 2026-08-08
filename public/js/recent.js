@@ -108,19 +108,56 @@ function makeRecentCard(entry) {
         ? `<span class="tag-chip vec-chip vec-chip--pending" title="Vectorizing… (just captured)"><i class="ti ti-clock"></i></span>`
         : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
 
+  const shown = humanTags(tags)
+  const badge = sourceBadge(entry.source)
+  const created = Number(entry.created_at) || 0
   const card = document.createElement('div')
   card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '')
   card.dataset.id = entry.id
   card.innerHTML = `
-<div class="card-content" style="cursor: pointer;">${escHtml(entry.content)}</div>
+<div class="card-content" style="cursor: pointer;">
+  <div class="card-title">${escHtml(titleLine(entry.content))}</div>
+  <div class="card-preview">${escHtml(stripToPlainText(entry.content))}</div>
+</div>
 <div class="card-footer">
-  <div class="card-tags">${tags.map((t) => `<span class="tag-chip${t === 'synthesized' ? ' tag-chip--synthesized' : ''}">${escHtml(t)}</span>`).join('')}${vecChip}</div>
+  <div class="card-meta">
+    <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
+    ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString())}">${escHtml(relativeTime(created))}</span>` : ''}
+  </div>
+  <div class="card-tags">${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${vecChip}</div>
   <div class="card-actions">
     <button class="card-action-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> Append</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> Edit</button>
-    <button class="card-action-btn" onclick="openConfirm('${escAttr(entry.id)}', this)"><i class="ti ti-x"></i> Forget</button>
+    <div class="card-overflow">
+      <button class="card-action-btn overflow-btn" aria-label="More actions" aria-haspopup="true" aria-expanded="false"><i class="ti ti-dots"></i></button>
+      <div class="card-overflow-menu" hidden>
+        <button class="card-overflow-item danger forget-btn"><i class="ti ti-trash"></i> Forget this memory</button>
+      </div>
+    </div>
   </div>
 </div>`
+  // Forget is permanent and used to sit at equal weight beside Edit on every
+  // row. It lives behind the overflow now — one deliberate extra tap, and the
+  // only destructive control in the list.
+  const overflow = card.querySelector('.card-overflow')
+  const overflowBtn = card.querySelector('.overflow-btn')
+  const overflowMenu = card.querySelector('.card-overflow-menu')
+  overflowBtn.onclick = (ev) => {
+    ev.stopPropagation()
+    const open = !overflowMenu.hidden
+    document.querySelectorAll('.card-overflow-menu').forEach((m) => (m.hidden = true))
+    overflowMenu.hidden = open
+    overflowBtn.setAttribute('aria-expanded', String(!open))
+    if (!open) card.classList.add('card--menu-open')
+    else card.classList.remove('card--menu-open')
+  }
+  card.querySelector('.forget-btn').onclick = (ev) => {
+    ev.stopPropagation()
+    overflowMenu.hidden = true
+    card.classList.remove('card--menu-open')
+    openConfirm(entry.id, overflowBtn)
+  }
+  overflow.addEventListener('click', (ev) => ev.stopPropagation())
   card.querySelector('.card-content').onclick = () => openView({ id: entry.id, content: entry.content, tags }, card)
   card.querySelector('.edit-btn').onclick = () => openEdit(entry.id, entry.content, tags)
   return card

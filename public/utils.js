@@ -26,6 +26,79 @@ function escAttr(s) {
 }
 
 /* yyyy-mm-dd in local time, for day-grouping. */
+/**
+ * Source text as a person would read it.
+ *
+ * Captured memories arrive as whatever the source sent: email bodies with
+ * `*****` rules and `[Sign in to your account]` link text, GitHub PR bodies
+ * full of markdown headers. Rendering that raw made every Recent row start
+ * with punctuation instead of meaning.
+ *
+ * Deliberately lossy and deliberately not a markdown parser — the goal is a
+ * readable first impression, and the full text is one tap away.
+ */
+function stripToPlainText(s) {
+  return String(s ?? '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, ' ')
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * The line a row leads with: the first sentence, or the first clause long
+ * enough to mean something. Falls back to a hard truncation so a wall of
+ * text without punctuation still yields a title.
+ */
+function titleLine(content, max = 90) {
+  const plain = stripToPlainText(content)
+  if (!plain) return 'Untitled memory'
+  const sentence = plain.match(/^.{10,}?[.!?](\s|$)/)
+  const line = (sentence ? sentence[0] : plain).trim()
+  return line.length > max ? line.slice(0, max - 1).trimEnd() + '…' : line
+}
+
+/** "2h ago" — absolute dates stay available on hover via title attributes. */
+function relativeTime(ts) {
+  const then = Number(ts)
+  if (!Number.isFinite(then) || then <= 0) return ''
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.round(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  const months = Math.round(days / 30)
+  if (months < 12) return `${months}mo ago`
+  return `${Math.round(days / 365)}y ago`
+}
+
+/** Tabler icon + label for a memory's source, for the row meta line. */
+function sourceBadge(source) {
+  const s = String(source ?? '').toLowerCase()
+  if (s.includes('email') || s.includes('gmail') || s.includes('icloud')) return { icon: 'ti-mail', label: s.includes('gmail') ? 'gmail' : s.includes('icloud') ? 'icloud' : 'email' }
+  if (s.includes('github') || s === 'cli') return { icon: 'ti-brand-github', label: s === 'cli' ? 'cli' : 'github' }
+  if (s.includes('claude')) return { icon: 'ti-sparkles', label: 'claude' }
+  if (s.includes('codex') || s.includes('chatgpt') || s.includes('openai')) return { icon: 'ti-sparkles', label: 'chatgpt' }
+  if (s.includes('phone') || s.includes('ios') || s.includes('shortcut')) return { icon: 'ti-device-mobile', label: 'phone' }
+  if (s.includes('browser') || s.includes('extension')) return { icon: 'ti-browser', label: 'browser' }
+  if (s.includes('import')) return { icon: 'ti-upload', label: 'import' }
+  if (s.includes('obsidian')) return { icon: 'ti-notebook', label: 'obsidian' }
+  return { icon: 'ti-writing', label: s || 'manual' }
+}
+
 function toDateStr(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');

@@ -2337,6 +2337,143 @@
       }
 
       /* ============ DESKTOP ============ */
+      /* ── v2.3 Recent rows: title, meta, and a hidden destructive action ──
+         Mobile-first. Actions are always present on touch (the overflow is the
+         primary affordance); the hover reveal below is a desktop enhancement. */
+      .card-title {
+        font-weight: 500;
+        font-size: 15px;
+        line-height: 1.4;
+        color: var(--text-primary);
+        margin-bottom: 4px;
+      }
+
+      .card-preview {
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--text-secondary);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .card-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text-tertiary);
+        margin-bottom: 6px;
+      }
+
+      .card-source {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .card-source i {
+        font-size: 13px;
+      }
+
+      /* Tags scroll sideways rather than stacking into a tall wrap — a row's
+         height should not depend on how many tags it carries. */
+      .card-tags {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 2px;
+      }
+
+      .card-tags::-webkit-scrollbar {
+        display: none;
+      }
+
+      .card-tags .tag-chip {
+        flex: 0 0 auto;
+      }
+
+      .card-overflow {
+        position: relative;
+      }
+
+      .overflow-btn {
+        min-width: 44px;
+        min-height: 44px;
+        justify-content: center;
+      }
+
+      .card-overflow-menu {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 6px);
+        z-index: 20;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        padding: 4px;
+        min-width: 200px;
+      }
+
+      .card-overflow-menu[hidden] {
+        display: none;
+      }
+
+      .card-overflow-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-height: 44px;
+        padding: 0 12px;
+        background: none;
+        border: 0;
+        border-radius: 8px;
+        font-size: 14px;
+        color: var(--text-primary);
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .card-overflow-item.danger {
+        color: var(--danger);
+      }
+
+      .card-overflow-item.danger:hover {
+        background: var(--danger-soft);
+      }
+
+      /* ── Safe areas ──────────────────────────────────────────────────────
+         Installed as a PWA the app owns the whole screen, so the bottom bars
+         sat under the iPhone home indicator. Paired with viewport-fit=cover. */
+      .input-bar,
+      .filter-bar {
+        padding-bottom: max(env(safe-area-inset-bottom), 0px);
+      }
+
+      #menu-sheet .menu-inner,
+      #integrations-sheet .menu-inner {
+        padding-bottom: max(env(safe-area-inset-bottom), 16px);
+      }
+
+      @media (hover: hover) {
+        .card-actions {
+          opacity: 0;
+          transition: opacity 0.15s ease;
+        }
+
+        .memory-card:hover .card-actions,
+        .memory-card:focus-within .card-actions,
+        .memory-card.card--menu-open .card-actions {
+          opacity: 1;
+        }
+      }
+
       @media (min-width: 768px) {
         html,
         body {

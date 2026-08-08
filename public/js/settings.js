@@ -27,8 +27,11 @@ async function loadMenuStats() {
     document.getElementById('stats-count').textContent = (data.count ?? 0).toLocaleString()
     document.getElementById('stats-importance').textContent = data.avg_importance != null ? data.avg_importance.toFixed(1) + ' / 5' : '—'
     const tagsEl = document.getElementById('stats-tags')
-    tagsEl.innerHTML = data.top_tags?.length
-      ? data.top_tags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
+    // The Worker filters its own bookkeeping out of top_tags, but an older
+    // deploy behind a newer dashboard would still send them.
+    const topTags = humanTags(data.top_tags ?? [])
+    tagsEl.innerHTML = topTags.length
+      ? topTags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
       : '<span style="font-size:13px;color:var(--text-tertiary)">No tags yet</span>'
     vectorizeGraceMs = data.vectorize_grace_ms ?? vectorizeGraceMs
     renderDigestSection(data.digest_candidates ?? [])

@@ -8,6 +8,7 @@ const ROOT = resolve(import.meta.dirname, "../..");
 const DASHBOARD_SCRIPTS = [
   "public/utils.js",
   "public/credits.js",
+  "public/js/tags.js",
   "public/js/state.js",
   "public/js/api.js",
   "public/js/theme.js",
@@ -74,6 +75,11 @@ function makeFakeDocument() {
     querySelectorAll: () => [],
     getElementById: (_id?: string) => el(),
     createElement: () => el(),
+    // Document-level listeners are real: v2.3 registers outside-click and
+    // Escape handlers to dismiss row overflow menus at load time, and a
+    // document without these throws before any handler is defined.
+    addEventListener() {},
+    removeEventListener() {},
     body: { style: {}, appendChild() {} },
   };
 }
