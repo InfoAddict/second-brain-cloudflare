@@ -72,23 +72,6 @@ function briefSources(sources) {
     </div>`
 }
 
-/** What the brain has been about lately — tappable, because each is a question. */
-function briefTopicChips(topics) {
-  const shown = (topics || []).filter((t) => !isSystemTag(t.tag)).slice(0, 6)
-  if (!shown.length) return ''
-  return `<div class="brief-panel">
-      <div class="brief-label">Lately about</div>
-      <div class="topic-chips">
-        ${shown
-          .map(
-            (t) =>
-              `<button class="topic-chip" onclick="sendSuggestion('What did I decide about ${escAttr(t.tag)}?')">${escHtml(t.tag)}<span>${t.count}</span></button>`,
-          )
-          .join('')}
-      </div>
-    </div>`
-}
-
 /**
  * The only row that asks for anything. Silent when there is nothing to do,
  * because a dashboard that always shows a chore invents chores.
@@ -110,7 +93,10 @@ function renderBrief(data) {
   const el = document.getElementById('brief')
   const hero = document.getElementById('recall-welcome')
 
-  const panels = [briefActivity(data.activity), briefSources(data.sources), briefTopicChips(data.topics)].filter(Boolean)
+  // Topics live under the home input, where they read as questions worth
+  // asking. Repeating them here as a panel said the same thing twice on one
+  // screen.
+  const panels = [briefActivity(data.activity), briefSources(data.sources)].filter(Boolean)
 
   const cards = []
   // Patterns are excluded from recall until ruled on, so one sitting unseen in

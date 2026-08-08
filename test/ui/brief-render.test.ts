@@ -113,13 +113,12 @@ describe("the daily brief", () => {
     expect(html).toContain("Feb 8, 2026");
   });
 
-  it("turns this week's topics into questions worth asking", () => {
+  it("leaves topics to the home input rather than repeating them", () => {
     const ctx = load();
-    ctx.renderBrief({ ...empty, topics: [{ tag: "signpath", count: 7 }, { tag: "pricing", count: 3 }] });
-    const html = ctx.__els.get("brief").innerHTML;
-    expect(html).toContain("Lately about");
-    expect(html).toContain("What did I decide about signpath?");
-    expect(html).toContain(">7<");
+    ctx.renderBrief({ ...empty, topics: [{ tag: "signpath", count: 7 }], attention: { unindexed: 1, stale: 0, patterns: 0 } });
+    // The chips under the greeting already offer these as questions; a second
+    // copy in a panel is the same thing twice on one screen.
+    expect(ctx.__els.get("brief").innerHTML).not.toContain("Lately about");
   });
 
   it("keeps the days nothing happened in the activity strip", () => {
