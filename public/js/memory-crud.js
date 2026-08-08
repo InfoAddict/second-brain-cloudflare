@@ -239,11 +239,11 @@ function openView(entry, cardElement) {
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
   tagsContainer.innerHTML = ''
-  // Commit SHAs, colour codes and issue numbers are noise wherever they appear.
-  // The brain's own namespaces (kind:, status:, volatility:) are kept here on
-  // purpose — this is the one view that should say what the brain thinks — and
-  // v2.3 tier 2 gives them a labelled section of their own.
-  const viewTags = (entry.tags || []).filter((t) => !isMachineIdentifier(String(t).trim().toLowerCase()))
+  // Only the user's own vocabulary here. The brain's namespaces used to be
+  // shown as raw chips for want of anywhere better; "What your brain knows"
+  // below now states each one in words, and printing `volatility:state` beside
+  // "Lifespan · Current" says the same thing twice, once unreadably.
+  const viewTags = humanTags(entry.tags || [])
   if (viewTags.length > 0) {
     tagsContainer.innerHTML = viewTags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
   }

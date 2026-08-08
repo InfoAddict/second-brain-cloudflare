@@ -116,6 +116,14 @@ async function sendRecall() {
       })
       msgs.appendChild(sourcesToggle)
 
+      // Models sometimes cite past the end of the list they were given — [8]
+      // against five sources. A chip that leads nowhere is worse than plain
+      // text, so those revert to the literal marker they came from.
+      answerEl.querySelectorAll('.cite').forEach((chip) => {
+        const n = Number(chip.dataset.cite)
+        if (!(n >= 1 && n <= entries.length)) chip.replaceWith(`[${chip.dataset.cite}]`)
+      })
+
       // A citation chip opens the sources (they start collapsed) and walks the
       // reader to the memory the claim came from.
       answerEl.querySelectorAll('.cite').forEach((chip) => {

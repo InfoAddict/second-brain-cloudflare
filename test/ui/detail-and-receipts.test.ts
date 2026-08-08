@@ -86,6 +86,26 @@ describe("memory detail — what the brain knows", () => {
   });
 });
 
+describe("citation chips", () => {
+  function render(text: string) {
+    const ctx: any = { console };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/js/ui-chat.js"), "utf8"), ctx);
+    return ctx.renderAnswerMarkdown(text) as string;
+  }
+
+  it("turns a bracketed number into a chip carrying its source index", () => {
+    const html = render("On Aug 6 you shipped 2.2.3 [1], then fixed import [3].");
+    expect(html).toContain('data-cite="1"');
+    expect(html).toContain('data-cite="3"');
+  });
+
+  it("leaves prose untouched when there is nothing to cite", () => {
+    expect(render("No citations here.")).not.toContain("cite");
+  });
+});
+
 describe("capture receipts", () => {
   const headline = (result: any, typed: string[] = []) => {
     const ctx = load();
