@@ -2737,41 +2737,6 @@
         margin-bottom: 14px;
       }
 
-      /* The marketing site's stat idiom: big sans numeral, italic serif unit. */
-      .brief-stat {
-        display: flex;
-        align-items: baseline;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-bottom: 18px;
-      }
-
-      .brief-num {
-        font-size: 30px;
-        font-weight: 600;
-        color: var(--text-primary);
-        line-height: 1;
-      }
-
-      .brief-unit {
-        font-family: var(--font-serif);
-        font-style: italic;
-        font-size: 19px;
-        color: var(--accent);
-      }
-
-      .brief-sep {
-        color: var(--text-tertiary);
-        margin: 0 4px;
-      }
-
-      .brief-since {
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 11px;
-        color: var(--text-tertiary);
-        margin-left: 4px;
-      }
-
       .brief-card {
         background: var(--bg-card);
         border: 1px solid var(--border-card);
@@ -2816,13 +2781,6 @@
       }
 
       /* ── Brief dashboard panels ───────────────────────────────────────── */
-      .brief-total {
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 11px;
-        color: var(--text-tertiary);
-        margin-left: auto;
-      }
-
       .brief-grid {
         display: grid;
         grid-template-columns: 1fr;
@@ -2957,6 +2915,139 @@
 
       .attn:hover {
         background: var(--surface-2);
+      }
+
+      /* ── v2.4 home: greeting and one input, composed as a unit ──────────
+         The old layout pinned a hero to the top and the input to the bottom
+         and left a trench between them, which is what made a brain holding
+         two thousand memories feel empty. */
+      .home {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 58vh;
+        padding: 24px 4px 8px;
+        text-align: center;
+      }
+
+      .home-greet {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: var(--font-serif);
+        font-size: 30px;
+        color: var(--text-primary);
+      }
+
+      .home-mark {
+        color: var(--accent);
+        font-size: 24px;
+        display: inline-flex;
+      }
+
+      .home-sub {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        color: var(--text-tertiary);
+        margin-top: 10px;
+      }
+
+      .home-input {
+        width: 100%;
+        max-width: 620px;
+        margin-top: 26px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-input);
+        border-radius: 18px;
+        padding: 14px 16px 10px;
+        text-align: left;
+        transition: border-color 0.15s;
+      }
+
+      .home-input:focus-within {
+        border-color: var(--accent);
+      }
+
+      .home-field {
+        width: 100%;
+        border: 0;
+        background: none;
+        resize: none;
+        outline: none;
+        font-family: var(--font-serif);
+        font-size: 16px;
+        line-height: 1.5;
+        color: var(--text-primary);
+        max-height: 40vh;
+      }
+
+      .home-field::placeholder {
+        color: var(--text-tertiary);
+      }
+
+      .home-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      /* The prediction, always visible and always one tap from being overridden.
+         Hidden only while the field is empty, when there is nothing to predict. */
+      .home-mode {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: none;
+        border: 1px solid var(--border-input);
+        border-radius: 999px;
+        padding: 5px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        visibility: hidden;
+      }
+
+      .home-mode:hover {
+        border-color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .home-mode-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--text-tertiary);
+      }
+
+      .home-mode--remember .home-mode-dot {
+        background: var(--accent);
+      }
+
+      .home-topics {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .home-more {
+        width: 100%;
+        max-width: 620px;
+        margin-top: 14px;
+        text-align: left;
+      }
+
+      /* On the home screen the old bottom bars are redundant: the input above
+         is the input, and a tag filter with nothing to filter is furniture. */
+      #screen-recall.home-visible .input-bar,
+      #screen-recall.home-visible .suggestions-row,
+      #screen-recall.home-visible .filter-bar {
+        display: none;
       }
 
       @media (min-width: 768px) {
