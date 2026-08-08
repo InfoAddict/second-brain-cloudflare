@@ -2815,6 +2815,156 @@
         margin-top: 14px;
       }
 
+      /* ── Brief dashboard panels ───────────────────────────────────────── */
+      .brief-total {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text-tertiary);
+        margin-left: auto;
+      }
+
+      .brief-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .brief-panel {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: 12px;
+        padding: 12px 14px;
+      }
+
+      /* Activity strip. No axes: the shape is the point, and the counts are in
+         the tooltips. */
+      .spark {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 46px;
+        margin-top: 4px;
+      }
+
+      .spark-bar {
+        flex: 1 1 0;
+        min-width: 0;
+        background: var(--accent);
+        border-radius: 2px 2px 0 0;
+        opacity: 0.85;
+      }
+
+      /* A day with nothing is a fact worth seeing, so it keeps its slot. */
+      .spark-bar--empty {
+        background: var(--surface-3);
+        opacity: 1;
+      }
+
+      .src-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 7px;
+        font-size: 12.5px;
+        color: var(--text-secondary);
+      }
+
+      .src-name {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 88px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+
+      .src-bar {
+        flex: 1;
+        height: 6px;
+        background: var(--surface-2);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+
+      .src-fill {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        opacity: 0.8;
+      }
+
+      .src-n {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text-tertiary);
+        min-width: 22px;
+        text-align: right;
+      }
+
+      .topic-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .topic-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--bg-tag);
+        color: var(--text-tag);
+        border: 0;
+        border-radius: var(--radius-tag);
+        padding: 5px 10px;
+        font-size: 12px;
+        font-family: var(--font-sans);
+        cursor: pointer;
+      }
+
+      .topic-chip span {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        color: var(--text-tertiary);
+      }
+
+      .topic-chip:hover {
+        background: var(--accent-soft);
+        color: var(--accent-ink);
+      }
+
+      .brief-attention {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .attn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: none;
+        border: 1px solid var(--border-input);
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12.5px;
+        color: var(--warn);
+        cursor: pointer;
+        font-family: var(--font-sans);
+      }
+
+      .attn:hover {
+        background: var(--surface-2);
+      }
+
+      @media (min-width: 768px) {
+        .brief-grid {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+
       @media (min-width: 768px) {
         /* Wide enough for one row again: badge, tags, actions. */
         .card-footer {

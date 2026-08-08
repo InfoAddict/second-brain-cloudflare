@@ -45,7 +45,18 @@ function load() {
   return ctx;
 }
 
-const empty = { ok: true, window_hours: 48, captured: 0, sources: [], patterns: [], resurface: null };
+const empty = {
+  ok: true,
+  window_hours: 48,
+  captured: 0,
+  sources: [],
+  patterns: [],
+  resurface: null,
+  activity: [],
+  topics: [],
+  total: 0,
+  attention: { unindexed: 0, stale: 0, patterns: 0 },
+};
 
 describe("the daily brief", () => {
   it("renders nothing at all on a quiet day", () => {
@@ -110,20 +121,55 @@ describe("the daily brief", () => {
     expect(html).toContain("Feb 8, 2026");
   });
 
-  it("builds suggestions from the brain's own topics, not a fixed list", () => {
+  it("turns this week's topics into questions worth asking", () => {
+    const ctx = load();
+    ctx.renderBrief({ ...empty, topics: [{ tag: "signpath", count: 7 }, { tag: "pricing", count: 3 }] });
+    const html = ctx.__els.get("brief").innerHTML;
+    expect(html).toContain("Lately about");
+    expect(html).toContain("What did I decide about signpath?");
+    expect(html).toContain(">7<");
+  });
+
+  it("keeps the days nothing happened in the activity strip", () => {
     const ctx = load();
     ctx.renderBrief({
       ...empty,
-      patterns: [{ id: "p", content: "You keep deferring #signpath and #pricing decisions." }],
+      activity: [
+        { day: 1, count: 0 },
+        { day: 2, count: 8 },
+        { day: 3, count: 0 },
+      ],
     });
     const html = ctx.__els.get("brief").innerHTML;
-    expect(html).toContain("What about signpath?");
-    expect(html).toContain("What did I decide about signpath?");
+    // Dropping empty days would turn a quiet fortnight into a busy-looking one.
+    // Counting elements, not the substring: "spark-bar" also appears inside
+    // "spark-bar--empty".
+    expect(html.match(/<span class="spark-bar/g)).toHaveLength(3);
+    expect(html.match(/spark-bar--empty/g)).toHaveLength(2);
   });
 
-  it("offers no suggestions rather than generic ones when it has no topics", () => {
+  it("shows where memories came from in proportion", () => {
     const ctx = load();
-    ctx.renderBrief({ ...empty, captured: 4, sources: [{ source: "cli", count: 4 }] });
-    expect(ctx.__els.get("brief").innerHTML).not.toContain("suggestion-pill");
+    ctx.renderBrief({
+      ...empty,
+      captured: 10,
+      sources: [{ source: "claude-desktop", count: 8 }, { source: "cli", count: 2 }],
+    });
+    const html = ctx.__els.get("brief").innerHTML;
+    expect(html).toContain("Where from");
+    expect(html).toContain("ti-message-2");   // Claude's badge
+    expect(html).toContain("ti-terminal-2");  // and the CLI is a terminal
+    expect(html).toContain("width:80%");
+  });
+
+  it("asks for attention only when something actually needs it", () => {
+    const ctx = load();
+    ctx.renderBrief({ ...empty, captured: 3, attention: { unindexed: 0, stale: 0, patterns: 0 } });
+    expect(ctx.__els.get("brief").innerHTML).not.toContain("class=\"attn\"");
+
+    ctx.renderBrief({ ...empty, captured: 3, attention: { unindexed: 2, stale: 5, patterns: 0 } });
+    const html = ctx.__els.get("brief").innerHTML;
+    expect(html).toContain("2 not searchable");
+    expect(html).toContain("5 may be out of date");
   });
 });

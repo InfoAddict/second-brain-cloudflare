@@ -41,55 +41,100 @@ function briefStatLine(data) {
       <span class="brief-sep">·</span>
       <span class="brief-num">${sources}</span><span class="brief-unit">${sources === 1 ? 'source' : 'sources'}</span>
       <span class="brief-since">in the last ${data.window_hours || 48} hours</span>
+      ${data.total ? `<span class="brief-total">${data.total.toLocaleString()} in total</span>` : ''}
     </div>`
 }
 
 /**
- * Questions built from the brain's own vocabulary rather than a fixed list.
- * "What did I decide about signpath?" is worth asking; "Show my tasks" is
- * what every brain shows every user forever.
+ * Two weeks of captures as a bar strip. Deliberately unlabelled: the shape is
+ * the information — whether the last fortnight was steady, bursty, or quiet —
+ * and axis furniture would cost more space than it explains. Exact counts live
+ * in the tooltips.
  */
-function briefSuggestions(data) {
-  const tags = humanTags(briefTopics(data))
-  if (!tags.length) return ''
-  return `
-    <div class="brief-suggestions">
-      ${tags
-        .slice(0, 3)
-        .map(
-          (t) =>
-            `<button class="suggestion-pill" onclick="sendSuggestion('What did I decide about ${escAttr(t)}?')">What about ${escHtml(t)}?</button>`,
-        )
-        .join('')}
+function briefActivity(activity) {
+  if (!activity || !activity.length) return ''
+  const peak = Math.max(...activity.map((d) => d.count), 1)
+  const bars = activity
+    .map((d) => {
+      const pct = Math.round((d.count / peak) * 100)
+      const when = new Date(d.day * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      return `<span class="spark-bar${d.count ? '' : ' spark-bar--empty'}" style="height:${Math.max(pct, 3)}%" title="${escAttr(when)}: ${d.count} ${d.count === 1 ? 'memory' : 'memories'}"></span>`
+    })
+    .join('')
+  return `<div class="brief-panel">
+      <div class="brief-label">Last ${activity.length} days</div>
+      <div class="spark">${bars}</div>
     </div>`
 }
 
-/** Topic tags seen on the patterns and resurfaced memory the brief already has. */
-function briefTopics(data) {
-  const seen = []
-  for (const p of data.patterns || []) {
-    for (const t of extractInlineTags(p.content)) if (!seen.includes(t)) seen.push(t)
-  }
-  return seen
+/** Where memories came from, as proportion rather than a list of numbers. */
+function briefSources(sources) {
+  if (!sources || !sources.length) return ''
+  const total = sources.reduce((sum, s) => sum + s.count, 0) || 1
+  const rows = sources
+    .slice(0, 4)
+    .map((s) => {
+      const badge = sourceBadge(s.source)
+      const pct = Math.round((s.count / total) * 100)
+      return `<div class="src-row">
+        <span class="src-name"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
+        <span class="src-bar"><span class="src-fill" style="width:${pct}%"></span></span>
+        <span class="src-n">${s.count}</span>
+      </div>`
+    })
+    .join('')
+  return `<div class="brief-panel">
+      <div class="brief-label">Where from</div>
+      ${rows}
+    </div>`
 }
 
-/** Hashtags a pattern's own text carries — no extra request to learn a topic. */
-function extractInlineTags(content) {
-  return (String(content || '').match(/#([a-zA-Z][\w-]{2,})/g) || []).map((t) => t.slice(1).toLowerCase())
+/** What the brain has been about lately — tappable, because each is a question. */
+function briefTopicChips(topics) {
+  const shown = (topics || []).filter((t) => !isSystemTag(t.tag)).slice(0, 6)
+  if (!shown.length) return ''
+  return `<div class="brief-panel">
+      <div class="brief-label">Lately about</div>
+      <div class="topic-chips">
+        ${shown
+          .map(
+            (t) =>
+              `<button class="topic-chip" onclick="sendSuggestion('What did I decide about ${escAttr(t.tag)}?')">${escHtml(t.tag)}<span>${t.count}</span></button>`,
+          )
+          .join('')}
+      </div>
+    </div>`
+}
+
+/**
+ * The only row that asks for anything. Silent when there is nothing to do,
+ * because a dashboard that always shows a chore invents chores.
+ */
+function briefAttention(a) {
+  if (!a) return ''
+  const items = []
+  if (a.unindexed > 0) {
+    items.push(`<button class="attn" onclick="openMenu()"><i class="ti ti-eye-off"></i>${a.unindexed} not searchable</button>`)
+  }
+  if (a.stale > 0) {
+    items.push(`<button class="attn" onclick="sendSuggestion('What might be out of date?')"><i class="ti ti-clock-exclamation"></i>${a.stale} may be out of date</button>`)
+  }
+  if (!items.length) return ''
+  return `<div class="brief-attention">${items.join('')}</div>`
 }
 
 function renderBrief(data) {
   const el = document.getElementById('brief')
   const hero = document.getElementById('recall-welcome')
-  const blocks = []
 
   const stat = briefStatLine(data)
-  if (stat) blocks.push(stat)
+  const panels = [briefActivity(data.activity), briefSources(data.sources), briefTopicChips(data.topics)].filter(Boolean)
 
+  const cards = []
   // Patterns are excluded from recall until ruled on, so one sitting unseen in
   // a settings menu is the same as one thrown away.
   for (const p of (data.patterns || []).slice(0, 2)) {
-    blocks.push(`
+    cards.push(`
       <div class="brief-card" data-pattern="${escAttr(p.id)}">
         <div class="brief-label">Pattern noticed</div>
         <div class="brief-body">${escHtml(titleLine(p.content, 140))}</div>
@@ -99,23 +144,27 @@ function renderBrief(data) {
         </div>
       </div>`)
   }
-
   if (data.resurface) {
     const when = data.resurface.created_at
       ? new Date(data.resurface.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
       : ''
-    blocks.push(`
+    cards.push(`
       <div class="brief-card brief-card--quiet">
         <div class="brief-label">Worth re-reading${when ? ` · from ${escHtml(when)}` : ''}</div>
         <div class="brief-body">${escHtml(titleLine(data.resurface.content, 180))}</div>
       </div>`)
   }
 
-  if (!blocks.length) return // nothing happened; the hero says it better
+  if (!stat && !panels.length && !cards.length) return // nothing happened
 
   if (hero) hero.style.display = 'none'
   el.style.display = ''
-  el.innerHTML = `<div class="brief-eyebrow">Your brain, lately</div>${blocks.join('')}${briefSuggestions(data)}`
+  el.innerHTML =
+    `<div class="brief-eyebrow">Your brain, lately</div>` +
+    stat +
+    briefAttention(data.attention) +
+    (panels.length ? `<div class="brief-grid">${panels.join('')}</div>` : '') +
+    cards.join('')
 }
 
 /** Confirm or dismiss without leaving the brief; the row settles in place. */

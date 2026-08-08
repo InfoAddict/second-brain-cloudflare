@@ -73,10 +73,10 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
     expect(res.status).toBe(200);
 
-    // Three reads, run concurrently. If this number goes up, the endpoint got
+    // Six reads, run concurrently. If this number goes up, the endpoint got
     // more expensive for every user on every app open — that is the decision
     // this assertion is asking you to make deliberately.
-    expect(sq.issued).toHaveLength(3);
+    expect(sq.issued).toHaveLength(6);
   });
 
   it("reports what arrived and where it came from", async () => {
@@ -115,6 +115,43 @@ describe("GET /brief", () => {
 
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
     expect(data.resurface?.id).toBe("old-important");
+  });
+
+  it("returns a complete activity strip, including the days nothing happened", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "today", content: "Today", createdAt: now - HOUR });
+    sq.seed({ id: "older", content: "Four days ago", createdAt: now - 4 * DAY });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    // Absent days would compress a quiet fortnight into a busy-looking one.
+    expect(data.activity).toHaveLength(14);
+    expect(data.activity.at(-1).count).toBe(1);
+    expect(data.activity.filter((d: any) => d.count === 0).length).toBe(12);
+  });
+
+  it("reports this week's topics in the user's own vocabulary", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "t1", content: "A", createdAt: now - HOUR, tags: ["signpath", "kind:episodic", "5118"] });
+    sq.seed({ id: "t2", content: "B", createdAt: now - 2 * HOUR, tags: ["signpath", "status:canonical"] });
+    sq.seed({ id: "old", content: "C", createdAt: now - 30 * DAY, tags: ["ancient-topic"] });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    expect(data.topics).toEqual([{ tag: "signpath", count: 2 }]);
+  });
+
+  it("counts what quietly degrades recall", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "u", content: "Never embedded", createdAt: now - HOUR, vectorIds: [] });
+    sq.seed({ id: "s", content: "Possibly out of date", createdAt: now - HOUR, vectorIds: ["v"], tags: ["stale:as-of:2026-01-01"] });
+    sq.seed({ id: "ok", content: "Fine", createdAt: now - HOUR, vectorIds: ["v"] });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    expect(data.attention.unindexed).toBe(1);
+    expect(data.attention.stale).toBe(1);
+    expect(data.total).toBe(3);
   });
 
   it("keeps resurfacing something when there are fewer candidates than days", async () => {

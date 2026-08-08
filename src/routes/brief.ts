@@ -9,15 +9,22 @@ import { json, requireAuth } from "../lib/http";
  * compressing, linking and judging. Everything below is already-produced work
  * being read back; nothing here computes, embeds, or calls a model.
  *
- * BUDGET. Four D1 queries, no AI, no Vectorize, and one HTTP round trip
- * because the alternative — the client asking four endpoints — spends four of
+ * BUDGET. Six D1 queries, no AI, no Vectorize, and one HTTP round trip
+ * because the alternative — the client asking six endpoints — spends six of
  * the ~50 subrequests a free-plan invocation gets, on every app open. Each
  * query is either indexed (created_at DESC) or bounded by a small LIMIT. The
- * count is pinned by test/integration/brief-budget.test.ts.
+ * count is pinned by test/integration/brief-budget.test.ts, and that pin is
+ * the point: this endpoint is the one thing every user runs every time.
  */
 
 /** Yesterday and today, so an early-morning open still has something to show. */
 const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+/** Two weeks of activity: enough to show a rhythm, short enough to read. */
+const ACTIVITY_DAYS = 14;
+
+/** What the brain has been about lately, rather than all-time. */
+const TOPIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Old enough that resurfacing it is a genuine reminder rather than an echo. */
 const RESURFACE_MIN_AGE_MS = 60 * 24 * 60 * 60 * 1000;
@@ -49,7 +56,7 @@ export async function handleBriefRoutes(
   const since = now - RECENT_WINDOW_MS;
   const resurfaceBefore = now - RESURFACE_MIN_AGE_MS;
 
-  const [recentRows, patternRows, resurfaceRows] = await Promise.all([
+  const [recentRows, patternRows, resurfaceRows, activityRows, topicRows, attentionRow] = await Promise.all([
     // What arrived, and from where. Grouped rather than listed: the point is
     // "your brain grew, from these places", not another feed of rows.
     env.DB.prepare(
@@ -91,6 +98,39 @@ export async function handleBriefRoutes(
       dayNumber(now),
       resurfaceBefore, RESURFACE_MIN_IMPORTANCE,
     ).all(),
+
+    // Captures per day. Bucketed in SQL rather than by shipping timestamps and
+    // grouping in the client, because the row count is the whole point and
+    // there is no reason to send two weeks of rows to count them.
+    env.DB.prepare(
+      `SELECT CAST(created_at / 86400000 AS INTEGER) AS day, COUNT(*) AS n
+       FROM entries WHERE created_at >= ?
+       GROUP BY day ORDER BY day`,
+    ).bind(now - ACTIVITY_DAYS * 86400000).all(),
+
+    // What the brain has been about this week, in the user's own vocabulary.
+    // Same exclusions as /stats: the reserved namespaces are bookkeeping, and
+    // hex-shaped tags are commit SHAs and colour codes a #token scan collected.
+    env.DB.prepare(
+      `SELECT value AS tag, COUNT(*) AS n FROM entries, json_each(entries.tags)
+       WHERE entries.created_at >= ?
+         AND value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
+         AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
+         AND value NOT IN ('auto-pattern', 'synthesized', 'rolled-up', 'duplicate-candidate')
+         AND value NOT GLOB '[0-9]*'
+       GROUP BY value ORDER BY n DESC LIMIT 6`,
+    ).bind(now - TOPIC_WINDOW_MS).all(),
+
+    // The two things that make recall quietly worse, counted together so they
+    // cost one query: memories recall cannot see, and memories the staleness
+    // pass has flagged as possibly out of date.
+    env.DB.prepare(
+      `SELECT
+         SUM(CASE WHEN vector_ids = '[]' THEN 1 ELSE 0 END) AS unindexed,
+         SUM(CASE WHEN tags LIKE '%stale:as-of%' THEN 1 ELSE 0 END) AS stale,
+         COUNT(*) AS total
+       FROM entries`,
+    ).first() as Promise<Record<string, any> | null>,
   ]);
 
   const bySource = (recentRows.results as { source: string | null; n: number }[]).map(r => ({
@@ -106,6 +146,19 @@ export async function handleBriefRoutes(
 
   const resurfaceRow = (resurfaceRows.results as { id: string; content: string; created_at: number }[])[0];
 
+  // Days with no captures are absent from the GROUP BY and have to be filled
+  // in, or the strip would silently compress a quiet week into a busy-looking
+  // one — the shape of the rhythm is the information.
+  const byDay = new Map<number, number>();
+  for (const r of activityRows.results as { day: number; n: number }[]) byDay.set(r.day, r.n);
+  const today = Math.floor(now / 86400000);
+  const activity: { day: number; count: number }[] = [];
+  for (let d = today - (ACTIVITY_DAYS - 1); d <= today; d++) {
+    activity.push({ day: d, count: byDay.get(d) ?? 0 });
+  }
+
+  const topics = (topicRows.results as { tag: string; n: number }[]).map(r => ({ tag: r.tag, count: r.n }));
+
   return json({
     ok: true,
     window_hours: RECENT_WINDOW_MS / 3600000,
@@ -115,6 +168,14 @@ export async function handleBriefRoutes(
     resurface: resurfaceRow
       ? { id: resurfaceRow.id, content: resurfaceRow.content, created_at: resurfaceRow.created_at }
       : null,
+    activity,
+    topics,
+    total: (attentionRow?.total as number) ?? 0,
+    attention: {
+      unindexed: (attentionRow?.unindexed as number) ?? 0,
+      stale: (attentionRow?.stale as number) ?? 0,
+      patterns: patterns.length,
+    },
   });
 }
 
