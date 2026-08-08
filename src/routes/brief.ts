@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { json, requireAuth } from "../lib/http";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
+import { PENDING_PATTERN_SQL } from "../memory/patterns";
 
 /**
  * GET /brief — what the brain did while you were away.
@@ -70,7 +71,7 @@ export async function handleBriefRoutes(
     // is the same as throwing them away.
     env.DB.prepare(
       `SELECT id, content FROM entries
-       WHERE tags LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"status:deprecated"%'
+       WHERE ${PENDING_PATTERN_SQL}
        ORDER BY created_at DESC LIMIT 3`,
     ).all(),
 

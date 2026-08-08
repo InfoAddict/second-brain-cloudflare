@@ -274,11 +274,18 @@
           <h3>Memory</h3>
           <button class="btn-close-icon" onclick="closeView()"><i class="ti ti-x"></i></button>
         </div>
-        <div class="view-meta" id="view-meta"></div>
-        <div class="view-content" id="view-content-text"></div>
-        <div class="view-tags" id="view-tags-container"></div>
-        <div class="view-brain" id="view-brain" style="display: none"></div>
-        <div class="view-related" id="view-related" style="display: none"></div>
+        <!-- One scroll region between a fixed header and fixed actions. These
+             were five siblings of the actions, each with its own min- or
+             max-height, and their sum could exceed the sheet's own max-height —
+             at which point the actions overflowed the padding box and sat flush
+             against the bottom edge of the card. -->
+        <div class="view-scroll">
+          <div class="view-meta" id="view-meta"></div>
+          <div class="view-content" id="view-content-text"></div>
+          <div class="view-tags" id="view-tags-container"></div>
+          <div class="view-brain" id="view-brain" style="display: none"></div>
+          <div class="view-related" id="view-related" style="display: none"></div>
+        </div>
         <div class="view-actions">
           <button class="btn-view-append" id="view-btn-append"><i class="ti ti-writing"></i> Append</button>
           <button class="btn-view-edit" id="view-btn-edit"><i class="ti ti-pencil"></i> Edit</button>
@@ -355,6 +362,36 @@
       </div>
     </div>
 
+    <!-- The whole pattern queue. Two cards on the home brief is a daily nudge;
+         a brain that has been running for months has a backlog, and ruling on it
+         two at a time is the reason this exists. -->
+    <div id="patterns-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <button class="btn-close-icon" onclick="backToMenuFromPatterns()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
+            <h3 style="margin-bottom: 0">Patterns noticed</h3>
+          </div>
+          <button class="btn-close-icon" onclick="closePatternsSheet()"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note" id="patterns-intro">
+          Your brain spotted these across several memories. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.
+        </p>
+        <div class="patterns-bulkbar" id="patterns-bulkbar" hidden>
+          <label class="patterns-selectall">
+            <input type="checkbox" id="patterns-select-all" onchange="togglePatternSelectAll(this.checked)" />
+            <span id="patterns-selected-label">Select all</span>
+          </label>
+          <div class="patterns-bulk-actions">
+            <button class="digest-btn" id="patterns-confirm-btn" onclick="resolveSelectedPatterns('confirm', this)" disabled>Confirm</button>
+            <button class="digest-btn danger" id="patterns-dismiss-btn" onclick="resolveSelectedPatterns('dismiss', this)" disabled>Dismiss</button>
+          </div>
+        </div>
+        <div id="patterns-list"><p class="digest-note">Loading&hellip;</p></div>
+        <button class="digest-more" id="patterns-more" hidden onclick="loadMorePatterns(this)"></button>
+      </div>
+    </div>
+
     <script src="utils.js"></script>
     <script src="credits.js"></script>
     <script src="js/tags.js"></script>
@@ -367,6 +404,7 @@
     <script src="js/remember.js"></script>
     <script src="js/memory-crud.js"></script>
     <script src="js/settings.js"></script>
+    <script src="js/patterns.js"></script>
     <script src="js/integrations.js"></script>
     <script src="js/graph-canvas.js"></script>
     <script src="js/brief.js"></script>

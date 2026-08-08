@@ -32,7 +32,7 @@ async function loadMenuStats() {
     renderDigestSection(data.digest_candidates ?? [])
     renderVectorizeSection(data.unvectorized ?? 0)
     renderClassifySection(data.unclassified ?? 0)
-    await loadPatterns()
+    await loadPatternCount()
   } catch {
   } finally {
     syncUpkeepGroup()
@@ -54,81 +54,6 @@ function syncUpkeepGroup() {
     const el = document.getElementById(id)
     return el && el.style.display !== 'none'
   })
-}
-
-// ── Patterns panel: system proposes, human ratifies ───────────────────────
-// Auto-derived patterns are excluded from recall until confirmed; confirming
-// strips the auto-pattern tag (which is the exclusion), dismissing deprecates.
-async function loadPatterns() {
-  const el = document.getElementById('patterns-section')
-  try {
-    const res = await fetch(`${WORKER_URL}/list?n=20&tag=auto-pattern`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
-    const rows = await res.json()
-    const patterns = (Array.isArray(rows) ? rows : []).filter((e) => {
-      let tags = []
-      try {
-        tags = JSON.parse(e.tags || '[]')
-      } catch {}
-      return !tags.includes('status:deprecated') // dismissed patterns linger in /list
-    })
-    if (!patterns.length) {
-      el.style.display = 'none'
-      el.innerHTML = ''
-      return
-    }
-    el.style.display = ''
-    el.innerHTML = `
-      <div class="digest-section-label">Patterns noticed</div>
-      <p class="digest-note">Your brain spotted these across multiple memories. Confirm to make one a trusted, recallable fact; dismiss to discard it.</p>
-      ${patterns
-        .map(
-          (p) => `
-        <div class="digest-result" id="pattern-row-${escAttr(p.id)}">
-          ${escHtml(p.content)}
-          <div style="display: flex; gap: 8px; margin-top: 10px">
-            <button class="digest-btn" onclick="resolvePattern('${escAttr(p.id)}', 'confirm', this)">Confirm</button>
-            <button class="digest-btn danger" onclick="resolvePattern('${escAttr(p.id)}', 'dismiss', this)">Dismiss</button>
-          </div>
-        </div>`,
-        )
-        .join('')}
-    `
-  } catch {}
-}
-
-async function resolvePattern(id, action, btn) {
-  const row = document.getElementById('pattern-row-' + id)
-  row.querySelectorAll('button').forEach((b) => (b.disabled = true))
-  btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
-  try {
-    const res = await fetch(`${WORKER_URL}/patterns/resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ id, action }),
-    })
-    const data = await res.json()
-    if (!data.ok) throw new Error(data.error || 'failed')
-    if (action === 'dismiss') {
-      row.classList.add('explode-out')
-      setTimeout(() => {
-        row.innerHTML = `<div class="digest-result-meta">Dismissed</div>`
-        row.classList.remove('explode-out')
-        row.style.opacity = '1'
-      }, 400)
-    } else {
-      row.style.transition = 'opacity 0.4s'
-      row.style.opacity = '0'
-      setTimeout(() => {
-        row.innerHTML = `<div class="digest-result-meta"><i class="ti ti-check"></i> Saved as a trusted memory</div>`
-        row.style.opacity = '1'
-      }, 400)
-    }
-  } catch {
-    btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Failed'
-    setTimeout(() => loadPatterns(), 2000)
-  }
 }
 
 /** How many compression candidates to show before the list becomes a chore wall. */

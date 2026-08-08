@@ -36,5 +36,8 @@ document.getElementById('view-sheet').addEventListener('click', (e) => {
 document.getElementById('edit-sheet').addEventListener('click', (e) => {
   if (e.target === document.getElementById('edit-sheet')) closeEdit()
 })
+document.getElementById('patterns-sheet').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('patterns-sheet')) closePatternsSheet()
+})
 
 init()

@@ -18,6 +18,7 @@ const DASHBOARD_SCRIPTS = [
   "public/js/remember.js",
   "public/js/memory-crud.js",
   "public/js/settings.js",
+  "public/js/patterns.js",
   "public/js/integrations.js",
   "public/js/graph-canvas.js",
   "public/js/brief.js",

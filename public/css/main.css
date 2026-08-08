@@ -1115,7 +1115,10 @@
       #recent-list {
         flex: 1;
         overflow-y: auto;
-        padding: 14px 18px 8px;
+        /* The last row used to stop 8px above whatever follows — the tab bar on
+           a phone, the panel edge on a desktop — which reads as the list being
+           cut off rather than ended. */
+        padding: 14px 18px 22px;
         counter-reset: memo;
         -webkit-overflow-scrolling: touch;
       }
@@ -1245,6 +1248,10 @@
         background: var(--surface-2);
         border-radius: var(--radius-pill);
         flex-shrink: 0;
+        /* Pinned right in both views. Capping the filters at 420px stopped them
+           filling the bar, which left the toggle stranded mid-row in list view
+           while graph view — whose caption does stretch — kept it at the edge. */
+        margin-left: auto;
       }
 
       .view-toggle-btn {
@@ -1568,6 +1575,7 @@
       #edit-sheet,
       #menu-sheet,
       #integrations-sheet,
+      #patterns-sheet,
       #view-sheet {
         display: none;
         position: fixed;
@@ -1587,6 +1595,7 @@
       #edit-sheet.open,
       #menu-sheet.open,
       #integrations-sheet.open,
+      #patterns-sheet.open,
       #view-sheet.open {
         display: flex;
         opacity: 1;
@@ -1711,8 +1720,14 @@
       .view-actions {
         display: flex;
         gap: 8px;
-        margin-top: auto;
         flex-shrink: 0;
+        /* Separated from the scrolling region above rather than pushed down by
+           margin-top:auto, which did nothing once the content overflowed. The
+           rule is not decoration: a long memory scrolls underneath this row, and
+           without it the text simply stopped mid-sentence at the buttons with
+           nothing saying the rest was still there. */
+        padding-top: 14px;
+        border-top: 0.5px solid var(--border);
       }
 
       .btn-view-append,
@@ -1897,10 +1912,22 @@
          was still display:none — which is 0 — and cap the result at 200px, so a
          two-thousand-character memory was edited through about three visible
          lines. Height is CSS's job now and nothing measures anything. */
+      /* A definite height, not a max-height, and that is the whole trick.
+         flex-grow only hands out *free* space, and a container sized by its own
+         content has none — so `flex: 1 1 auto` on the editor below did nothing
+         and the textarea fell back to a 60px floor on a 20,000-character
+         memory. Fixed rather than content-sized is also the right shape for a
+         work surface: the box should not jump size between memories.
+
+         overflow:hidden so nothing can escape the padding box. Without it a
+         sheet whose children declare more height than it has renders them over
+         its own padding, flush to the card's edge. */
       .edit-inner {
         display: flex;
         flex-direction: column;
-        max-height: 90vh;
+        height: 82vh;
+        max-height: 82vh;
+        overflow: hidden;
       }
 
       .edit-header {
@@ -1922,16 +1949,21 @@
         white-space: nowrap;
       }
 
+      /* Takes everything the tags, hint and buttons do not. The min-height is
+         only a floor for a very short window; the height comes from the grow. */
       .edit-input-wrap {
         flex: 1 1 auto;
-        min-height: 32vh;
+        min-height: 120px;
         display: flex;
         overflow: hidden;
       }
 
       .edit-input-wrap textarea {
         flex: 1 1 auto;
-        height: 100%;
+        /* `height: 100%` resolved against the wrapper in a way that left the
+           textarea at its own 60px minimum; plain stretch fills it. */
+        height: auto;
+        align-self: stretch;
         overflow-y: auto;
         overflow-wrap: anywhere;
       }
@@ -1942,7 +1974,7 @@
          editor above is protected by its own min-height either way. */
       .edit-existing-tags {
         flex-shrink: 0;
-        max-height: 25vh;
+        max-height: 20vh;
         overflow-y: auto;
         margin-top: 14px;
       }
@@ -2160,6 +2192,113 @@
         letter-spacing: 0.06em;
         font-weight: 500;
         margin-bottom: 9px;
+      }
+
+      /* ── v2.3 pattern review queue ────────────────────────────────────────
+         Home shows two patterns as a daily nudge; this is the backlog, which on
+         a brain that has been running a while is hundreds long. It is its own
+         sheet rather than a panel inside settings for that reason. */
+      .patterns-inner {
+        display: flex;
+        flex-direction: column;
+        max-height: 88vh;
+      }
+
+      .patterns-bulkbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-shrink: 0;
+        padding: 10px 0;
+        margin-bottom: 4px;
+        border-top: 0.5px solid var(--border);
+        border-bottom: 0.5px solid var(--border);
+        position: sticky;
+        top: 0;
+        background: var(--bg);
+        z-index: 1;
+      }
+
+      .patterns-bulkbar[hidden] {
+        display: none;
+      }
+
+      .patterns-selectall {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 13.5px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        min-width: 0;
+      }
+
+      .patterns-bulk-actions {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      #patterns-list {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        min-height: 0;
+        padding-bottom: 6px;
+      }
+
+      /* The whole row is the label, so tapping anywhere on a pattern ticks it —
+         a checkbox-sized target is the wrong size for a phone. */
+      .pattern-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 11px;
+        padding: 12px 2px;
+        border-bottom: 0.5px solid var(--border);
+        cursor: pointer;
+      }
+
+      .pattern-row:last-child {
+        border-bottom: none;
+      }
+
+      .pattern-check,
+      #patterns-select-all {
+        flex-shrink: 0;
+        width: 17px;
+        height: 17px;
+        margin: 2px 0 0;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+
+      .pattern-body {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .pattern-text {
+        font-family: var(--font-serif);
+        font-size: 15px;
+        line-height: 1.5;
+        color: var(--text-primary);
+        overflow-wrap: anywhere;
+      }
+
+      .pattern-when {
+        font-size: 11.5px;
+        color: var(--text-tertiary);
+      }
+
+      #patterns-more {
+        flex-shrink: 0;
+        align-self: flex-start;
+      }
+
+      #patterns-more[hidden] {
+        display: none;
       }
 
       .digest-more {
@@ -2829,9 +2968,22 @@
          tags, the verdict panel and three related cards left the text about
          four lines in a 90vh sheet. The content now takes the space and the
          supporting sections are capped. */
-      .view-content {
+      /* The middle of the sheet scrolls as one, so the memory renders at its
+         natural length instead of through a keyhole while the panels below it
+         each keep their own scrollbar — and, more importantly, so nothing can
+         push the action row past the sheet's own padding. */
+      .view-scroll {
         flex: 1 1 auto;
-        min-height: 34vh;
+        min-height: 0;
+        overflow-y: auto;
+        /* Room for the fixed action row below, which would otherwise sit right
+           on top of the last line of text as it scrolls under. */
+        padding-bottom: 4px;
+      }
+
+      .view-content {
+        flex: 0 0 auto;
+        overflow-y: visible;
       }
 
       /* One scrolling line, like the tag rows on cards — a memory with a dozen
@@ -2856,9 +3008,10 @@
 
       /* Related is context, not the subject: it scrolls within its own bounds
          rather than pushing the memory off the top of the sheet. */
+      /* No longer its own scroll area: the region above scrolls, and a panel
+         that scrolled inside a scrolling panel meant two gestures to read one
+         memory. */
       .view-related {
-        max-height: 26vh;
-        overflow-y: auto;
         flex-shrink: 0;
       }
 
@@ -3291,6 +3444,7 @@
         #edit-sheet,
         #menu-sheet,
         #integrations-sheet,
+        #patterns-sheet,
         #view-sheet {
           align-items: center;
           justify-content: center;
