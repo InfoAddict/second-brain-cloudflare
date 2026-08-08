@@ -171,6 +171,7 @@ function renderViewBrain(entry) {
   const status = tagValue(tags, 'status:')
   const volatility = tagValue(tags, 'volatility:')
   const rows = []
+  const notes = []
 
   if (typeof entry.importance_score === 'number') {
     rows.push(`<div class="view-brain-row"><span>Importance</span>${importanceDots(entry.importance_score)}</div>`)
@@ -184,7 +185,9 @@ function renderViewBrain(entry) {
   if (volatility && VIEW_VOLATILITY[volatility]) {
     const [label, gloss] = VIEW_VOLATILITY[volatility]
     rows.push(`<div class="view-brain-row"><span>Lifespan</span><strong>${escHtml(label)}</strong></div>`)
-    rows.push(`<div class="view-brain-note">${escHtml(gloss)}</div>`)
+    // Held back to the end: a sentence between two rows breaks the list it is
+    // explaining, and the panel reads as facts first, then the caveats.
+    notes.push(gloss)
   }
   if (typeof entry.recall_count === 'number' && entry.recall_count > 0) {
     rows.push(`<div class="view-brain-row"><span>Recalled</span><strong>${entry.recall_count} time${entry.recall_count === 1 ? '' : 's'}</strong></div>`)
@@ -193,7 +196,10 @@ function renderViewBrain(entry) {
   // when it has never happened; it is not a scoreboard.
   const losses = Number(entry.contradiction_losses) || 0
   if (losses > 0) {
-    rows.push(`<div class="view-brain-note">Something newer has disagreed with this ${losses} time${losses === 1 ? '' : 's'}.</div>`)
+    notes.push(`Something newer has disagreed with this ${losses} time${losses === 1 ? '' : 's'}.`)
+  }
+  for (const note of notes) {
+    rows.push(`<div class="view-brain-note">${escHtml(note)}</div>`)
   }
   if (entry.indexed === false) {
     rows.push(`<div class="view-brain-note view-brain-note--warn">Not indexed yet — recall cannot find this memory.</div>`)

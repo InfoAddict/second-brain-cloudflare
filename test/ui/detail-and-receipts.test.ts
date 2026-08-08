@@ -79,6 +79,20 @@ describe("memory detail — what the brain knows", () => {
     expect(ctx.__els.get("view-brain").innerHTML).toContain("Not indexed");
   });
 
+  it("keeps the facts together and the caveats after them", () => {
+    const ctx = load();
+    ctx.renderViewBrain({
+      tags: ["volatility:state"],
+      importance_score: 3,
+      recall_count: 5,
+      contradiction_losses: 1,
+    });
+    const html = ctx.__els.get("view-brain").innerHTML;
+    // A sentence between two rows breaks the list it is explaining.
+    expect(html.indexOf("Recalled")).toBeLessThan(html.indexOf("verify"));
+    expect(html.indexOf("verify")).toBeLessThan(html.indexOf("disagreed"));
+  });
+
   it("hides itself entirely when there is nothing to report", () => {
     const ctx = load();
     ctx.renderViewBrain({ tags: [] });
@@ -103,6 +117,16 @@ describe("citation chips", () => {
 
   it("leaves prose untouched when there is nothing to cite", () => {
     expect(render("No citations here.")).not.toContain("cite");
+  });
+
+  it("renders every bullet marker a model actually emits", () => {
+    // Observed live: the answer used "+" and the list rendered as literal
+    // "+ Achieve nearly 40% of the annual target" paragraphs.
+    for (const marker of ["*", "-", "+", "•"]) {
+      const html = render(`Goals:\n${marker} First\n${marker} Second`);
+      expect(html, marker).toContain("<ul>");
+      expect(html, marker).toContain("<li>First</li>");
+    }
   });
 });
 

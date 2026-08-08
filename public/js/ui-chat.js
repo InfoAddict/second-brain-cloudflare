@@ -23,7 +23,7 @@ function renderAnswerMarkdown(src) {
   // Some models stream lists inline ("... tools: * a * b * c") with no newlines.
   // Re-break a run of " * " markers onto their own lines so they parse as a list.
   let text = String(src || '').replace(/\r/g, '')
-  if (!/\n\s*[*-]\s/.test(text) && (text.match(/\s\*\s/g) || []).length >= 2) {
+  if (!/\n\s*[*\-+]\s/.test(text) && (text.match(/\s\*\s/g) || []).length >= 2) {
     text = text.replace(/\s\*\s+/g, '\n* ')
   }
 
@@ -49,7 +49,7 @@ function renderAnswerMarkdown(src) {
       closeList()
       const lvl = Math.min(m[1].length + 2, 4) // h3/h4
       html += `<h${lvl}>${inline(m[2])}</h${lvl}>`
-    } else if ((m = t.match(/^[*\-•]\s+(.*)$/))) {
+    } else if ((m = t.match(/^[*\-+•]\s+(.*)$/))) {
       if (listType !== 'ul') {
         closeList()
         html += '<ul>'
