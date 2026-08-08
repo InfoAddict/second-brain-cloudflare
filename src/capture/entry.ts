@@ -38,7 +38,7 @@ export function buildEntryFilterQuery(params: {
 
 export type CaptureResult =
   | { status: "blocked"; matchId: string; score: number }
-  | { status: "stored"; id: string }
+  | { status: "stored"; id: string; tags: string[] }
   | { status: "flagged"; id: string; matchId: string; score: number }
   | { status: "contradiction"; id: string; resolvedConflict: string; reason?: string }
   | { status: "contradiction_protected"; id: string; canonicalId: string; reason?: string }
@@ -189,5 +189,9 @@ export async function captureEntry(
     return { status: "flagged", id, matchId: dup.matchId, score: dup.score };
   }
 
-  return { status: "stored", id };
+  // finalTags is what actually landed on the row — hashtags pulled out of the
+  // content, plus anything the caller passed. The dashboard shows it back as a
+  // capture receipt, so a person can see what the brain did with what they
+  // wrote rather than trusting it silently.
+  return { status: "stored", id, tags: finalTags };
 }

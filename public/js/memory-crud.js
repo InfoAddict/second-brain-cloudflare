@@ -111,8 +111,132 @@ async function confirmForget() {
   }
 }
 
+// ── What the brain thinks about one memory ────────────────────────────────
+//
+// The pipeline decides a great deal per entry — how important it is, whether
+// it is a fact or an event, whether it has been superseded, how long it stays
+// true, how often it has been recalled — and until v2.3 none of it was
+// reachable from the UI. This is the one place that shows it, in plain
+// language rather than the tag syntax it is stored as.
+
+/** `kind:semantic` → "Fact", and so on. Unknown values render as themselves. */
+const VIEW_KIND_LABELS = { semantic: 'Fact', episodic: 'Event' }
+
+const VIEW_STATUS_LABELS = {
+  canonical: 'Trusted',
+  draft: 'Unconfirmed',
+  deprecated: 'Superseded',
+}
+
+/** Volatility is a promise about the future, so it is worth spelling out. */
+const VIEW_VOLATILITY = {
+  durable: ['Durable', 'Not expected to change.'],
+  state: ['Current', 'True for now — assistants verify this before relying on it.'],
+  volatile: ['Short-lived', 'True only briefly — assistants treat it as possibly stale.'],
+}
+
+function tagValue(tags, prefix) {
+  const hit = (tags || []).find((t) => String(t).toLowerCase().startsWith(prefix))
+  return hit ? String(hit).slice(prefix.length).toLowerCase() : null
+}
+
+/** Importance as five dots — a number out of five means nothing on its own. */
+function importanceDots(score) {
+  const n = Math.max(0, Math.min(5, Math.round(Number(score) || 0)))
+  return `<span class="dots" title="Importance ${n} of 5">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`
+}
+
+function renderViewMeta(entry) {
+  const el = document.getElementById('view-meta')
+  const badge = sourceBadge(entry.source)
+  const created = Number(entry.created_at) || 0
+  const updated = Number(entry.updated_at) || 0
+  const parts = [`<span class="view-meta-item"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>`]
+  if (created) {
+    parts.push(`<span class="view-meta-item" title="${escAttr(new Date(created).toLocaleString())}">captured ${escHtml(relativeTime(created))}</span>`)
+  }
+  // Only worth saying when it actually differs — every row has an updated_at.
+  if (updated && created && Math.abs(updated - created) > 60000) {
+    parts.push(`<span class="view-meta-item" title="${escAttr(new Date(updated).toLocaleString())}">edited ${escHtml(relativeTime(updated))}</span>`)
+  }
+  el.innerHTML = parts.join('')
+}
+
+function renderViewBrain(entry) {
+  const el = document.getElementById('view-brain')
+  // Rendered from the tags when /entry has not been consulted (recall cards
+  // pass what they already have), so the section degrades rather than vanishing.
+  const tags = entry.tags || []
+  const kind = tagValue(tags, 'kind:')
+  const status = tagValue(tags, 'status:')
+  const volatility = tagValue(tags, 'volatility:')
+  const rows = []
+
+  if (typeof entry.importance_score === 'number') {
+    rows.push(`<div class="view-brain-row"><span>Importance</span>${importanceDots(entry.importance_score)}</div>`)
+  }
+  if (kind) {
+    rows.push(`<div class="view-brain-row"><span>Kind</span><strong>${escHtml(VIEW_KIND_LABELS[kind] || kind)}</strong></div>`)
+  }
+  if (status) {
+    rows.push(`<div class="view-brain-row"><span>Status</span><strong>${escHtml(VIEW_STATUS_LABELS[status] || status)}</strong></div>`)
+  }
+  if (volatility && VIEW_VOLATILITY[volatility]) {
+    const [label, gloss] = VIEW_VOLATILITY[volatility]
+    rows.push(`<div class="view-brain-row"><span>Lifespan</span><strong>${escHtml(label)}</strong></div>`)
+    rows.push(`<div class="view-brain-note">${escHtml(gloss)}</div>`)
+  }
+  if (typeof entry.recall_count === 'number' && entry.recall_count > 0) {
+    rows.push(`<div class="view-brain-row"><span>Recalled</span><strong>${entry.recall_count} time${entry.recall_count === 1 ? '' : 's'}</strong></div>`)
+  }
+  // Losing a contradiction means something newer disagreed with this. Silence
+  // when it has never happened; it is not a scoreboard.
+  const losses = Number(entry.contradiction_losses) || 0
+  if (losses > 0) {
+    rows.push(`<div class="view-brain-note">Something newer has disagreed with this ${losses} time${losses === 1 ? '' : 's'}.</div>`)
+  }
+  if (entry.indexed === false) {
+    rows.push(`<div class="view-brain-note view-brain-note--warn">Not indexed yet — recall cannot find this memory.</div>`)
+  }
+
+  if (!rows.length) {
+    el.style.display = 'none'
+    el.innerHTML = ''
+    return
+  }
+  el.style.display = ''
+  el.innerHTML = `<div class="view-brain-label">What your brain knows</div>${rows.join('')}`
+}
+
+/**
+ * Fill in what the caller could not know.
+ *
+ * Recall cards and graph nodes hand over the fields they happen to hold, so
+ * the sheet renders immediately from those and then upgrades in place once
+ * /entry answers. One request, only when there is an id to ask about.
+ */
+async function hydrateView(id) {
+  try {
+    const res = await fetch(`${WORKER_URL}/entry?id=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+    })
+    const data = await res.json()
+    if (!data.ok || !data.entry) return
+    if (viewOpenId !== id) return // the sheet moved on while this was in flight
+    renderViewMeta(data.entry)
+    renderViewBrain(data.entry)
+  } catch {}
+}
+
+/** Which memory the sheet is currently showing, so a late response can tell. */
+let viewOpenId = null
+
 function openView(entry, cardElement) {
+  viewOpenId = entry.id || null
   document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
+  renderViewMeta(entry)
+  renderViewBrain(entry)
+  if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
   tagsContainer.innerHTML = ''
   // Commit SHAs, colour codes and issue numbers are noise wherever they appear.

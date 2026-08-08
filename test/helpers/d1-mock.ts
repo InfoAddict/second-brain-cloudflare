@@ -250,6 +250,13 @@ export class D1Mock {
         return { meta: {} };
       },
       async first() {
+        // GET /entry. Models the COALESCE alias: a row written before the
+        // updated_at column exists carries no value, and the route must see
+        // created_at rather than undefined.
+        if (s.includes("COALESCE(updated_at, created_at) AS last_updated") && s.includes("FROM entries WHERE id = ?")) {
+          const row = db.entries.find((e: any) => e.id === args[0]);
+          return row ? { ...row, last_updated: row.updated_at ?? row.created_at } : null;
+        }
         if (s.includes("SELECT vector_ids FROM entries WHERE id")) {
           const row = db.entries.find((e: any) => e.id === args[0]);
           return row ? { vector_ids: row.vector_ids } : null;

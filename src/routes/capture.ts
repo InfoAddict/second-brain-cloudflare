@@ -76,7 +76,9 @@ export async function handleCaptureRoutes(
         message: "Stored but similar entry exists — tagged as duplicate-candidate",
       });
     }
-    return json({ ok: true, id: result.id });
+    // Additive: older clients ignore the extra field, and the dashboard uses it
+    // to show what was filed under what.
+    return json({ ok: true, id: result.id, tags: result.tags ?? [] });
   }
 
   // POST /append

@@ -100,12 +100,35 @@ async function sendRecall() {
       // 2. Sources toggle
       const sourcesToggle = document.createElement('div')
       sourcesToggle.className = 'sources-toggle'
+      // "found · N sources" is the phrasing the marketing site uses for exactly
+      // this moment; the dashboard should not invent a different one.
       sourcesToggle.innerHTML = `<button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'flex' : 'none'">
-      <i class="ti ti-files"></i> ${entries.length} source${entries.length === 1 ? '' : 's'}
+      <i class="ti ti-files"></i> found · ${entries.length} source${entries.length === 1 ? '' : 's'}
     </button>
     <div class="brain-cards-wrapper" style="display:none"></div>`
-      entries.forEach((e) => sourcesToggle.querySelector('.brain-cards-wrapper').appendChild(makeRecallCard(e)))
+      const wrapper = sourcesToggle.querySelector('.brain-cards-wrapper')
+      entries.forEach((e, i) => {
+        const card = makeRecallCard(e)
+        // The model cites by position in the list it was handed, which is this
+        // order — so [2] and the second card are the same memory by construction.
+        card.dataset.cite = String(i + 1)
+        wrapper.appendChild(card)
+      })
       msgs.appendChild(sourcesToggle)
+
+      // A citation chip opens the sources (they start collapsed) and walks the
+      // reader to the memory the claim came from.
+      answerEl.querySelectorAll('.cite').forEach((chip) => {
+        chip.onclick = () => {
+          const n = chip.dataset.cite
+          const target = wrapper.querySelector(`[data-cite="${n}"]`)
+          if (!target) return
+          wrapper.style.display = 'flex'
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          target.classList.add('memory-card--cited')
+          setTimeout(() => target.classList.remove('memory-card--cited'), 1600)
+        }
+      })
       document.getElementById('recall-clear-btn').style.display = 'flex'
     }
   } catch {

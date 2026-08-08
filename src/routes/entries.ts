@@ -145,10 +145,19 @@ export async function handleEntriesRoutes(
     const id = url.searchParams.get("id")?.trim();
     if (!id) return json({ ok: false, error: "id is required" }, 400);
 
+    // Everything the brain knows about one memory, in the one row read it was
+    // already doing. The dashboard's detail view shows what the pipeline
+    // decided — importance, how often this was recalled, whether it has ever
+    // lost a contradiction — and none of it was reachable before v2.3.
     const row = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE id = ?`
+      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated,
+              importance_score, recall_count, contradiction_wins, contradiction_losses, vector_ids
+       FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
     if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+
+    let vectorIds: unknown[] = [];
+    try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
     return json({
       ok: true,
@@ -158,6 +167,14 @@ export async function handleEntriesRoutes(
         tags: JSON.parse(row.tags ?? "[]"),
         source: row.source,
         created_at: row.created_at,
+        updated_at: row.last_updated ?? row.created_at,
+        importance_score: row.importance_score ?? 0,
+        recall_count: row.recall_count ?? 0,
+        contradiction_wins: row.contradiction_wins ?? 0,
+        contradiction_losses: row.contradiction_losses ?? 0,
+        // Whether recall can see it at all — the dashboard already surfaces
+        // "not indexed" in lists, and the detail view should agree.
+        indexed: Array.isArray(vectorIds) && vectorIds.length > 0,
       },
     });
   }

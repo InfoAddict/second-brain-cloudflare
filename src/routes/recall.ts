@@ -112,7 +112,26 @@ export async function handleRecallRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.query?.trim()) return json({ ok: false, error: "query is required" }, 400);
 
-    const systemPrompt = `You are a personal memory assistant. Answer the user's question using ONLY the memories provided. Even if the match scores are low, extract any relevant facts and answer directly. Never say you don't have enough information if the answer exists anywhere in the memories. Be concise.`;
+    // The memories arrive numbered, dated and attributed (see the client's
+    // serializer in public/js/recall.js and the MCP tool's mirror of it), so
+    // the model has everything it needs to be specific — it just has to be
+    // asked. The previous prompt ended "Be concise", and on a brain holding
+    // three days of dense decisions "What did I decide recently?" came back as
+    // one sentence about an unrelated email: the top match, summarised, with
+    // the other four sources ignored.
+    const systemPrompt = `You are a personal memory assistant. Answer the user's question using ONLY the memories provided.
+
+Draw on every memory that bears on the question, not only the closest match — a question about decisions or plans usually has several answers, and reporting one of them is a wrong answer.
+
+Anchor claims in time. The memories are dated; say "On 12 March you decided…" rather than "you decided…". If two memories disagree, say so and lead with the more recent one.
+
+When the answer has several parts, give them as short bullets rather than one crowded sentence.
+
+Cite as you go with the memory's number in square brackets, like [2], matching the numbered list you were given. Cite every claim.
+
+Even if the match scores are low, extract any relevant facts and answer directly. Never say you don't have enough information if the answer exists anywhere in the memories.
+
+Be specific and complete. Concision means leaving out filler, never leaving out facts.`;
 
     const userMessage = `Question: ${body.query}\n\nRelevant memories:\n${body.memories}`;
     const cfg = await resolveConfig(env);

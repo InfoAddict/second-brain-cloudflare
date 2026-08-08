@@ -14,6 +14,11 @@ function renderAnswerMarkdown(src) {
       .replace(/__([^_]+)__/g, '<strong>$1</strong>')
       .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
       .replace(/`([^`]+)`/g, '<code>$1</code>')
+      // Citations the answer prompt asks for: [2] refers to the second memory
+      // in the numbered list the model was given, which is the second source
+      // card. Rendered as a chip that reveals and highlights that card, so a
+      // claim can be checked against the memory it came from in one tap.
+      .replace(/\[(\d{1,2})\]/g, '<button class="cite" data-cite="$1" title="Show source $1">$1</button>')
 
   // Some models stream lists inline ("... tools: * a * b * c") with no newlines.
   // Re-break a run of " * " markers onto their own lines so they parse as a list.
