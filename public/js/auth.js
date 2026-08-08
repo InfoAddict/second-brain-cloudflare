@@ -33,6 +33,7 @@ function showApp() {
   loadTags()
   updateStatus()
   checkVectorize()
+  if (typeof renderHome === 'function') renderHome(null) // greeting before the network
   loadBrief()
 }
 

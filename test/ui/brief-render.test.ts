@@ -69,7 +69,7 @@ describe("the daily brief", () => {
     expect(ctx.__els.get("recall-welcome").style.display).not.toBe("none");
   });
 
-  it("leads with what grew, in the site's numeral-and-unit idiom", () => {
+  it("leaves the headline count to the greeting and shows the panels", () => {
     const ctx = load();
     ctx.renderBrief({
       ...empty,
@@ -77,19 +77,11 @@ describe("the daily brief", () => {
       sources: [{ source: "claude-desktop", count: 9 }, { source: "email-gmail", count: 3 }],
     });
     const html = ctx.__els.get("brief").innerHTML;
-    expect(html).toContain('class="brief-num">12<');
-    expect(html).toContain("memories");
-    expect(html).toContain('class="brief-num">2<');
-    expect(html).toContain("sources");
+    // The home greeting carries "N memories · N this week"; a second count
+    // here was the same fact twice.
+    expect(html).toContain("Where from");
+    expect(html).toContain("Your brain, lately");
     expect(ctx.__els.get("recall-welcome").style.display).toBe("none");
-  });
-
-  it("says memory and source in the singular when there is one of each", () => {
-    const ctx = load();
-    ctx.renderBrief({ ...empty, captured: 1, sources: [{ source: "cli", count: 1 }] });
-    const html = ctx.__els.get("brief").innerHTML;
-    expect(html).toContain(">memory<");
-    expect(html).toContain(">source<");
   });
 
   it("puts pending patterns where they can actually be decided", () => {
@@ -121,13 +113,12 @@ describe("the daily brief", () => {
     expect(html).toContain("Feb 8, 2026");
   });
 
-  it("turns this week's topics into questions worth asking", () => {
+  it("leaves topics to the home input rather than repeating them", () => {
     const ctx = load();
-    ctx.renderBrief({ ...empty, topics: [{ tag: "signpath", count: 7 }, { tag: "pricing", count: 3 }] });
-    const html = ctx.__els.get("brief").innerHTML;
-    expect(html).toContain("Lately about");
-    expect(html).toContain("What did I decide about signpath?");
-    expect(html).toContain(">7<");
+    ctx.renderBrief({ ...empty, topics: [{ tag: "signpath", count: 7 }], attention: { unindexed: 1, stale: 0, patterns: 0 } });
+    // The chips under the greeting already offer these as questions; a second
+    // copy in a panel is the same thing twice on one screen.
+    expect(ctx.__els.get("brief").innerHTML).not.toContain("Lately about");
   });
 
   it("keeps the days nothing happened in the activity strip", () => {
@@ -167,7 +158,9 @@ describe("the daily brief", () => {
     ctx.renderBrief({ ...empty, captured: 3, attention: { unindexed: 0, stale: 0, patterns: 0 } });
     expect(ctx.__els.get("brief").innerHTML).not.toContain("class=\"attn\"");
 
-    ctx.renderBrief({ ...empty, captured: 3, attention: { unindexed: 2, stale: 5, patterns: 0 } });
+    // Reason enough to render on its own: a brain whose only news is
+    // "2 not searchable" still has to say so, with no panels to carry it.
+    ctx.renderBrief({ ...empty, attention: { unindexed: 2, stale: 5, patterns: 0 } });
     const html = ctx.__els.get("brief").innerHTML;
     expect(html).toContain("2 not searchable");
     expect(html).toContain("5 may be out of date");

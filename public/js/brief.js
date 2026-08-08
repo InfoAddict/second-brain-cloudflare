@@ -21,28 +21,11 @@ async function loadBrief() {
     if (!res.ok) return // an older Worker has no /brief; the hero stays
     briefData = await res.json()
     if (!briefData.ok) return
+    if (typeof renderHome === 'function') renderHome(briefData)
     renderBrief(briefData)
   } catch {
     // Offline or a stale deploy — the welcome hero is a fine fallback.
   }
-}
-
-/**
- * The stat line, in the marketing site's own idiom: a big sans numeral with an
- * italic serif unit ("2 min", "100%"). It is the one line that has to earn the
- * space, so it says what grew and where it came from.
- */
-function briefStatLine(data) {
-  if (!data.captured) return ''
-  const sources = (data.sources || []).length
-  return `
-    <div class="brief-stat">
-      <span class="brief-num">${data.captured}</span><span class="brief-unit">${data.captured === 1 ? 'memory' : 'memories'}</span>
-      <span class="brief-sep">·</span>
-      <span class="brief-num">${sources}</span><span class="brief-unit">${sources === 1 ? 'source' : 'sources'}</span>
-      <span class="brief-since">in the last ${data.window_hours || 48} hours</span>
-      ${data.total ? `<span class="brief-total">${data.total.toLocaleString()} in total</span>` : ''}
-    </div>`
 }
 
 /**
@@ -89,23 +72,6 @@ function briefSources(sources) {
     </div>`
 }
 
-/** What the brain has been about lately — tappable, because each is a question. */
-function briefTopicChips(topics) {
-  const shown = (topics || []).filter((t) => !isSystemTag(t.tag)).slice(0, 6)
-  if (!shown.length) return ''
-  return `<div class="brief-panel">
-      <div class="brief-label">Lately about</div>
-      <div class="topic-chips">
-        ${shown
-          .map(
-            (t) =>
-              `<button class="topic-chip" onclick="sendSuggestion('What did I decide about ${escAttr(t.tag)}?')">${escHtml(t.tag)}<span>${t.count}</span></button>`,
-          )
-          .join('')}
-      </div>
-    </div>`
-}
-
 /**
  * The only row that asks for anything. Silent when there is nothing to do,
  * because a dashboard that always shows a chore invents chores.
@@ -127,8 +93,10 @@ function renderBrief(data) {
   const el = document.getElementById('brief')
   const hero = document.getElementById('recall-welcome')
 
-  const stat = briefStatLine(data)
-  const panels = [briefActivity(data.activity), briefSources(data.sources), briefTopicChips(data.topics)].filter(Boolean)
+  // Topics live under the home input, where they read as questions worth
+  // asking. Repeating them here as a panel said the same thing twice on one
+  // screen.
+  const panels = [briefActivity(data.activity), briefSources(data.sources)].filter(Boolean)
 
   const cards = []
   // Patterns are excluded from recall until ruled on, so one sitting unseen in
@@ -155,14 +123,20 @@ function renderBrief(data) {
       </div>`)
   }
 
-  if (!stat && !panels.length && !cards.length) return // nothing happened
+  const attention = briefAttention(data.attention)
+  // Attention is the most actionable thing here, so it decides on its own
+  // whether the brief has something to say. Gating it behind the panels meant a
+  // brain whose only news was "2 not searchable" showed nothing at all.
+  if (!attention && !panels.length && !cards.length) return
 
+  // The home composition owns the top of the screen now, so the brief renders
+  // below it and leads with the row that asks for something rather than with
+  // the headline count, which the greeting already carries.
   if (hero) hero.style.display = 'none'
   el.style.display = ''
   el.innerHTML =
+    attention +
     `<div class="brief-eyebrow">Your brain, lately</div>` +
-    stat +
-    briefAttention(data.attention) +
     (panels.length ? `<div class="brief-grid">${panels.join('')}</div>` : '') +
     cards.join('')
 }

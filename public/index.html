@@ -81,8 +81,35 @@
         <div id="screens">
           <div class="screen active" id="screen-recall">
             <div id="recall-messages">
+              <!-- The home composition: greeting + one input, centred as a unit.
+                   Hidden the moment a conversation starts. -->
+              <div class="home" id="home">
+                <div class="home-greet">
+                  <span class="home-mark"><i class="ti ti-sparkles"></i></span>
+                  <span id="home-greeting">Hello</span>
+                </div>
+                <div class="home-sub" id="home-sub"></div>
+                <div class="home-input">
+                  <textarea
+                    class="home-field"
+                    id="home-field"
+                    placeholder="Ask, or tell me something to remember"
+                    rows="1"
+                    onkeydown="handleHomeKey(event)"
+                    oninput="onHomeInput(this)"
+                  ></textarea>
+                  <div class="home-row">
+                    <button class="home-mode" id="home-mode" onclick="toggleHomeMode()" title="Switch between asking and remembering">
+                      <span class="home-mode-dot"></span><span id="home-mode-label">will search</span>
+                    </button>
+                    <button class="send-btn" onclick="submitHome()"><i class="ti ti-arrow-up"></i></button>
+                  </div>
+                </div>
+                <div class="home-topics" id="home-topics"></div>
+                <div class="home-more" id="home-more"></div>
+              </div>
               <div class="brief" id="brief" style="display: none"></div>
-              <div class="recall-hero" id="recall-welcome">
+              <div class="recall-hero" id="recall-welcome" style="display: none">
                 <div class="eyebrow">Recall</div>
                 <div class="hero-line">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div>
               </div>
@@ -337,6 +364,7 @@
     <script src="js/integrations.js"></script>
     <script src="js/graph-canvas.js"></script>
     <script src="js/brief.js"></script>
+    <script src="js/home.js"></script>
     <script src="js/nav.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/download-app.js"></script>

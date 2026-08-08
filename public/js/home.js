@@ -1,0 +1,186 @@
+// One input for both halves of the product.
+//
+// Recall and Remember were separate tabs because they are separate verbs, but
+// nobody arrives at their own brain thinking "I am now in capture mode" — they
+// arrive with a sentence. The sentence itself says which verb it is, most of
+// the time, and this reads that intent and shows its guess before acting on it.
+//
+// SHOWING the guess is the whole design. Getting it wrong silently is
+// asymmetric: a question stored as a memory is junk in the brain forever, while
+// a memory searched instead of stored is a strange answer and nothing lost. So
+// the mode is always visible and always one tap from being overridden — a
+// prediction the user can veto, never a guess acted on behind their back.
+
+/** 'ask' | 'remember' — null until the field has enough to judge. */
+let homeMode = null
+/** Set once the user overrides, after which typing never changes it back. */
+let homeModeLocked = false
+
+/** Leading words that make a sentence a question even without a question mark. */
+const ASK_OPENERS = /^(who|what|when|where|why|how|which|whose|did|do|does|is|are|was|were|can|could|should|would|will|have|has|had|am|tell me|show me|find|search|remind me what|list)\b/i
+
+/**
+ * Read the sentence, not the user's mind.
+ *
+ * Ordered by how strong the signal is. A trailing question mark is the closest
+ * thing to certainty; an interrogative opener is nearly as good. Everything
+ * else is a memory, because that is the safer default on a tie: an unwanted
+ * search costs a moment, an unwanted memory costs a cleanup.
+ */
+function detectHomeMode(text) {
+  const t = String(text || '').trim()
+  if (!t) return null
+  if (t.endsWith('?')) return 'ask'
+  if (ASK_OPENERS.test(t)) return 'ask'
+  // "remember that…" / "note:" are explicit the other way.
+  if (/^(remember|note|todo|remind me to|log)\b/i.test(t)) return 'remember'
+  return 'remember'
+}
+
+function applyHomeMode(mode) {
+  homeMode = mode
+  const btn = document.getElementById('home-mode')
+  const label = document.getElementById('home-mode-label')
+  if (!btn || !label) return
+  const asking = mode === 'ask'
+  label.textContent = asking ? 'will search' : 'will remember'
+  btn.classList.toggle('home-mode--remember', !asking)
+  btn.style.visibility = mode ? 'visible' : 'hidden'
+}
+
+function onHomeInput(el) {
+  autoResize(el)
+  if (homeModeLocked) return
+  applyHomeMode(detectHomeMode(el.value))
+}
+
+/** The override. Locks the mode so the next keystroke does not undo the choice. */
+function toggleHomeMode() {
+  homeModeLocked = true
+  applyHomeMode(homeMode === 'ask' ? 'remember' : 'ask')
+}
+
+function handleHomeKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    submitHome()
+  }
+}
+
+/**
+ * Hand the sentence to whichever half of the app owns it.
+ *
+ * Asking leaves home behind and becomes the conversation; remembering keeps
+ * you here, because capture is a thing you do repeatedly and being thrown into
+ * another view each time would be hostile.
+ */
+async function submitHome() {
+  const field = document.getElementById('home-field')
+  const text = field.value.trim()
+  if (!text) return
+  const mode = homeMode || detectHomeMode(text) || 'remember'
+
+  if (mode === 'ask') {
+    field.value = ''
+    autoResize(field)
+    leaveHome()
+    const input = document.getElementById('recall-input')
+    input.value = text
+    sendRecall()
+    return
+  }
+
+  // Capture in place, with the receipt the Remember tab shows.
+  field.disabled = true
+  const receipts = document.getElementById('home-more')
+  try {
+    const tags = []
+    const tagRe = /#([a-zA-Z][\w-]*)/g
+    let m
+    while ((m = tagRe.exec(text)) !== null) tags.push(m[1])
+    const content = text.replace(/#[a-zA-Z][\w-]*/g, '').trim() || text
+
+    const result = await apiCapture(content, tags, 'web-ui')
+    field.value = ''
+    autoResize(field)
+    if (result.duplicate) {
+      receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>already kept</div><div class="receipt-note">Something very similar is already in your brain, so this was skipped.</div></div>`
+    } else {
+      receipts.innerHTML = ''
+      receipts.appendChild(captureReceipt(result, tags))
+    }
+    updateStatus()
+    loadRecent()
+  } catch {
+    receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>could not save</div><div class="receipt-note">Nothing was lost — the text is still in the box. Try again.</div></div>`
+  } finally {
+    field.disabled = false
+    field.focus()
+  }
+}
+
+/** Home gives way to the conversation, and the brief goes with it. */
+function leaveHome() {
+  // Without dropping this class the old input bar stays hidden and the
+  // conversation has nothing to type into.
+  const screen = document.getElementById('screen-recall')
+  if (screen) screen.classList.remove('home-visible')
+  const home = document.getElementById('home')
+  if (home) home.style.display = 'none'
+  const brief = document.getElementById('brief')
+  if (brief) brief.style.display = 'none'
+}
+
+/**
+ * The greeting. Time of day is reliable and never wrong about you, which is
+ * what a greeting has to be — a brain-derived line ("you have been on signpath
+ * all week") is more charming and occasionally says something false about how
+ * someone spent their week.
+ */
+function greetingFor(date) {
+  const h = date.getHours()
+  if (h < 5) return 'Still up'
+  if (h < 12) return 'Good morning'
+  if (h < 17) return 'Good afternoon'
+  if (h < 22) return 'Good evening'
+  return 'Late one'
+}
+
+/** Fills the greeting and the one number worth putting above the input. */
+function renderHome(data) {
+  const screen = document.getElementById('screen-recall')
+  if (screen) screen.classList.add('home-visible')
+  const greet = document.getElementById('home-greeting')
+  if (greet) greet.textContent = greetingFor(new Date())
+
+  const sub = document.getElementById('home-sub')
+  if (sub && data) {
+    const bits = []
+    if (data.total) bits.push(`${data.total.toLocaleString()} ${data.total === 1 ? 'memory' : 'memories'}`)
+    // Summed from the activity strip rather than reusing `captured`, which is a
+    // 48-hour count and would have been labelled "this week" incorrectly.
+    const week = (data.activity || []).slice(-7).reduce((n, d) => n + (d.count || 0), 0)
+    if (week) bits.push(`${week} this week`)
+    sub.textContent = bits.join(' · ')
+  }
+
+  const topics = document.getElementById('home-topics')
+  if (topics && data && (data.topics || []).length) {
+    // What you could ask, drawn from what you have actually been writing about.
+    topics.innerHTML = data.topics
+      .filter((t) => !isSystemTag(t.tag))
+      .slice(0, 4)
+      .map(
+        (t) =>
+          `<button class="topic-chip" onclick="askAbout('${escAttr(t.tag)}')">${escHtml(t.tag)}<span>${t.count}</span></button>`,
+      )
+      .join('')
+  }
+}
+
+function askAbout(tag) {
+  leaveHome()
+  const input = document.getElementById('recall-input')
+  input.value = `What did I decide about ${tag}?`
+  sendRecall()
+}
