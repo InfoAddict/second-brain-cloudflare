@@ -6,6 +6,7 @@ import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
 import { rememberTags } from "../tags/vocabulary";
+import { applyTagReplacement } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { tagsAfterWrite, tagsAfterAppend } from "../memory/stale";
@@ -121,7 +122,14 @@ export async function updateEntryContent(
   id: string,
   newContent: string,
   config: Readonly<Config> = DEFAULTS,
-  volatility?: Volatility
+  volatility?: Volatility,
+  /**
+   * The user's tags for this entry, replacing the ones it has. `undefined` means
+   * "leave them alone" and is what every caller but the editor passes; `[]` means
+   * the user removed the last one. The two must stay distinguishable — collapsing
+   * them would let any caller that omits tags wipe them.
+   */
+  replaceTags?: string[]
 ): Promise<UpdateEntryResult> {
   // vector_ids has to be read before any mutation: storeEntry overwrites it, and the
   // cleanup below needs to know which vectors the entry had on the way in.
@@ -144,7 +152,12 @@ export async function updateEntryContent(
   const finalContent = cleanContent || newContent;
   // A caller-supplied verdict is applied after the strip, not before: tagsAfterWrite
   // removes every volatility tag, so applying it first would throw the value away.
-  const strippedTags = tagsAfterWrite([...new Set([...existingTags, ...hashtags])]);
+  // A replacement starts from the tags the Worker owns rather than from every tag
+  // the entry has, so removing "pricing" in the editor cannot also remove the
+  // classifier's `kind:semantic`. Without a replacement this is the union it has
+  // always been, which is why nothing could be removed before.
+  const baseTags = replaceTags ? applyTagReplacement(existingTags, replaceTags) : existingTags;
+  const strippedTags = tagsAfterWrite([...new Set([...baseTags, ...hashtags])]);
   const mergedTags = (volatility ? withVolatility(strippedTags, volatility) : strippedTags)
     // `rolled-up` is a claim about content that no longer exists: the nightly digest wrote
     // it in the same statement that appended a `[Digest: <id>]` marker to the body, and a
@@ -205,7 +218,9 @@ export async function appendToEntry(
 
   const existingVectorIds: string[] = JSON.parse(row?.vector_ids ?? "[]");
 
-  const timestamp = new Date().toLocaleDateString();
+  // Spelled month, like every other date this app hands to a reader or a
+  // model: "8/2/2026" is two different days depending on where you live.
+  const timestamp = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   const separator = `\n\n[Update ${timestamp}]: `;
   const newContent = existingContent + separator + addition;
 

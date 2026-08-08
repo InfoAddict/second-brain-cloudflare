@@ -29,9 +29,8 @@ async function connect() {
 function showApp() {
   document.getElementById('auth-overlay').style.display = 'none'
   document.getElementById('app').style.display = 'flex'
-  loadRecent()
-  loadTags()
-  updateStatus()
+  if (typeof renderHome === 'function') renderHome(null) // greeting before the network
+  refreshAll()
   checkVectorize()
 }
 

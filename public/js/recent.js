@@ -1,18 +1,27 @@
+// Loads the list and nothing else. It used to also refresh the count and the
+// tags, which made it the de-facto "refresh the app" call and left everything
+// it did not know about — the brief, and so the greeting's count — permanently
+// stale. Refreshing the shell is refreshAll()'s job now; this owns one list.
 async function loadRecent() {
   const list = document.getElementById('recent-list')
-  const btn = document.getElementById('refresh-btn')
-  btn.classList.add('spinning')
-  list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>Loading...</span></div>`
+  // Only show the loading state on a cold list. A refresh after a capture
+  // would otherwise blank out rows the user is reading and snap them back.
+  if (!allEntries.length) {
+    list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>Loading...</span></div>`
+  }
   try {
     allEntries = await apiList(50)
-    renderRecent(allEntries)
+    // Through the filters, not straight to render: reloading used to reset the
+    // list to everything while the filter controls still read "work" and
+    // "past 7 days", which now happens after every capture rather than only
+    // when someone pressed refresh.
+    applyRecentFilters()
     showFirstRunIfEmpty(allEntries.length === 0)
-    updateStatus()
-    loadTags()
   } catch {
-    list.innerHTML = `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>Could not load memories.</span></div>`
+    if (!allEntries.length) {
+      list.innerHTML = `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>Could not load memories.</span></div>`
+    }
   }
-  btn.classList.remove('spinning')
 }
 
 // A brand-new brain has nothing to recall, so the usual prompt and its
@@ -32,8 +41,11 @@ function showFirstRunIfEmpty(isEmpty) {
     `<div class="eyebrow">Getting started</div>` +
     `<div class="hero-line">Your Second Brain is empty. Here is where everything lives.</div>` +
     `<ol class="first-run-steps">` +
-    `<li><b>Remember</b> saves something. Try it with a decision you made this week.</li>` +
-    `<li><b>Recall</b> finds it later by meaning, so you do not need the words you used.</li>` +
+    // Named after what is on screen. This used to point at a Remember tab and a
+    // Recall tab, both of which are now the one box above.
+    `<li><b>The box above</b> does both: write a statement and it is saved, ask a question and it is answered. ` +
+    `It says which one it is about to do before you send.</li>` +
+    `<li><b>Memories</b> is everything you have kept — as a list by date, or as a graph of how it connects.</li>` +
     `<li><b>Settings</b> is where you connect Claude, ChatGPT, Cursor, your email and calendar, ` +
     `so they read from and add to this same memory.</li>` +
     `</ol>`
@@ -108,19 +120,58 @@ function makeRecentCard(entry) {
         ? `<span class="tag-chip vec-chip vec-chip--pending" title="Vectorizing… (just captured)"><i class="ti ti-clock"></i></span>`
         : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
 
+  const title = titleLine(entry.content)
+  const preview = previewAfterTitle(entry.content, title)
+  const shown = humanTags(tags)
+  const badge = sourceBadge(entry.source)
+  const created = Number(entry.created_at) || 0
   const card = document.createElement('div')
   card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '')
   card.dataset.id = entry.id
   card.innerHTML = `
-<div class="card-content" style="cursor: pointer;">${escHtml(entry.content)}</div>
+<div class="card-content" style="cursor: pointer;">
+  <div class="card-title">${escHtml(title)}</div>
+  ${preview ? `<div class="card-preview">${escHtml(preview)}</div>` : ''}
+</div>
 <div class="card-footer">
-  <div class="card-tags">${tags.map((t) => `<span class="tag-chip${t === 'synthesized' ? ' tag-chip--synthesized' : ''}">${escHtml(t)}</span>`).join('')}${vecChip}</div>
+  <div class="card-meta">
+    <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
+    ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString())}">${escHtml(relativeTime(created))}</span>` : ''}
+  </div>
+  <div class="card-tags">${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${vecChip}</div>
   <div class="card-actions">
     <button class="card-action-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> Append</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> Edit</button>
-    <button class="card-action-btn" onclick="openConfirm('${escAttr(entry.id)}', this)"><i class="ti ti-x"></i> Forget</button>
+    <div class="card-overflow">
+      <button class="card-action-btn overflow-btn" aria-label="More actions" aria-haspopup="true" aria-expanded="false"><i class="ti ti-dots"></i></button>
+      <div class="card-overflow-menu" hidden>
+        <button class="card-overflow-item danger forget-btn"><i class="ti ti-trash"></i> Forget this memory</button>
+      </div>
+    </div>
   </div>
 </div>`
+  // Forget is permanent and used to sit at equal weight beside Edit on every
+  // row. It lives behind the overflow now — one deliberate extra tap, and the
+  // only destructive control in the list.
+  const overflow = card.querySelector('.card-overflow')
+  const overflowBtn = card.querySelector('.overflow-btn')
+  const overflowMenu = card.querySelector('.card-overflow-menu')
+  overflowBtn.onclick = (ev) => {
+    ev.stopPropagation()
+    const open = !overflowMenu.hidden
+    document.querySelectorAll('.card-overflow-menu').forEach((m) => (m.hidden = true))
+    overflowMenu.hidden = open
+    overflowBtn.setAttribute('aria-expanded', String(!open))
+    if (!open) card.classList.add('card--menu-open')
+    else card.classList.remove('card--menu-open')
+  }
+  card.querySelector('.forget-btn').onclick = (ev) => {
+    ev.stopPropagation()
+    overflowMenu.hidden = true
+    card.classList.remove('card--menu-open')
+    openConfirm(entry.id, overflowBtn)
+  }
+  overflow.addEventListener('click', (ev) => ev.stopPropagation())
   card.querySelector('.card-content').onclick = () => openView({ id: entry.id, content: entry.content, tags }, card)
   card.querySelector('.edit-btn').onclick = () => openEdit(entry.id, entry.content, tags)
   return card

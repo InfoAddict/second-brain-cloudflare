@@ -1,53 +1,152 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+/**
+ * The pattern review queue: listing it, and ruling on it.
+ *
+ * Run against real SQLite rather than the SQL-matching mock. The queue is
+ * defined by a WHERE clause — an auto-pattern that is not deprecated — and a
+ * mock that recognises queries by substring cannot tell a correct predicate
+ * from a broken one. That is exactly how the dashboard's own pattern panel came
+ * to render empty on any brain with more than a page of dismissals.
+ */
+import { describe, it, expect, afterEach, vi } from "vitest";
 import worker from "../../src/index";
-import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
+import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { setDbReady } from "../../src/runtime/state";
 import type { Env } from "../../src/env";
-import { D1Mock } from "../helpers/d1-mock";
 
-const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
+const ctx = { waitUntil: (_: Promise<unknown>) => {} } as any;
 
-function seedPattern(db: D1Mock, id: string, content: string) {
-  db.entries.push({ id, content, tags: '["auto-pattern"]', source: "system", created_at: 1000, vector_ids: `["${id}"]`, recall_count: 0, importance_score: 0 });
+let sq: SqliteD1 | null = null;
+afterEach(() => { sq?.close(); sq = null; setDbReady(false); });
+
+function dbOf(s: SqliteD1) {
+  return {
+    prepare: (sql: string) => s.db.prepare(sql),
+    exec: (sql: string) => s.db.exec(sql),
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      for (const st of stmts) await st.run();
+      // Collapsed to one entry in the issued log, because that is what D1 does:
+      // a batch is a single subrequest however many statements it carries. The
+      // per-statement rows would make a correctly batched write look like N.
+      s.issued.splice(s.issued.length - stmts.length, stmts.length, `BATCH(${stmts.length})`);
+      return stmts.map(() => ({ meta: { changes: 1 } }));
+    },
+  };
 }
 
-describe("POST /patterns/resolve", () => {
-  let env: Env;
-  let db: D1Mock;
+async function migrated(): Promise<SqliteD1> {
+  const s = makeSqliteD1();
+  resetDatabaseInit();
+  await initializeDatabase({ DB: dbOf(s) } as unknown as Env);
+  setDbReady(true);
+  return s;
+}
 
-  beforeEach(() => {
-    db = makeTestDb();
-    env = makeTestEnv(db);
+const envOf = (s: SqliteD1, overrides: Record<string, unknown> = {}): Env =>
+  makeTestEnv(dbOf(s) as any, overrides as any);
+
+function seedPattern(s: SqliteD1, id: string, content: string, extraTags: string[] = []) {
+  s.seed({ id, content, createdAt: 1000, tags: ["auto-pattern", ...extraTags], source: "system", vectorIds: [id] });
+}
+
+const rowOf = (s: SqliteD1, id: string) => s.rows().find(r => r.id === id) as Record<string, any>;
+const tagsOf = (s: SqliteD1, id: string) => JSON.parse(rowOf(s, id).tags ?? "[]") as string[];
+const vectorsOf = (s: SqliteD1, id: string) => JSON.parse(rowOf(s, id).vector_ids ?? "[]") as string[];
+
+describe("GET /patterns", () => {
+  it("requires auth", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("GET", "/patterns", { token: null }), envOf(sq), ctx);
+    expect(res.status).toBe(401);
   });
 
+  it("returns only the patterns still waiting on a decision", async () => {
+    sq = await migrated();
+    seedPattern(sq, "pending-1", "You tend to ship on Fridays");
+    seedPattern(sq, "dismissed", "Not a real pattern", ["status:deprecated"]);
+    sq.seed({ id: "normal", content: "Just a memory", createdAt: 1000, tags: ["work"] });
+
+    const data = await (await worker.fetch(req("GET", "/patterns"), envOf(sq), ctx)).json() as any;
+    expect(data.patterns.map((p: any) => p.id)).toEqual(["pending-1"]);
+    expect(data.total).toBe(1);
+  });
+
+  it("counts the whole queue, not the page", async () => {
+    // The number the user is told is waiting has to be the real one, or paging
+    // through a backlog gives no sense of how much is left.
+    sq = await migrated();
+    for (let i = 0; i < 30; i++) {
+      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["auto-pattern"], source: "system" });
+    }
+
+    const data = await (await worker.fetch(req("GET", "/patterns?limit=10"), envOf(sq), ctx)).json() as any;
+    expect(data.patterns).toHaveLength(10);
+    expect(data.total).toBe(30);
+  });
+
+  it("pages without repeating or skipping", async () => {
+    sq = await migrated();
+    for (let i = 0; i < 25; i++) {
+      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["auto-pattern"], source: "system" });
+    }
+
+    const first = await (await worker.fetch(req("GET", "/patterns?limit=10&offset=0"), envOf(sq), ctx)).json() as any;
+    const second = await (await worker.fetch(req("GET", "/patterns?limit=10&offset=10"), envOf(sq), ctx)).json() as any;
+    const third = await (await worker.fetch(req("GET", "/patterns?limit=10&offset=20"), envOf(sq), ctx)).json() as any;
+
+    const seen = [...first.patterns, ...second.patterns, ...third.patterns].map((p: any) => p.id);
+    expect(seen).toHaveLength(25);
+    expect(new Set(seen).size).toBe(25);
+  });
+
+  it("rejects a malformed limit rather than falling back to everything", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("GET", "/patterns?limit=all"), envOf(sq), ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("answers cleanly on a brain with no patterns", async () => {
+    sq = await migrated();
+    const data = await (await worker.fetch(req("GET", "/patterns"), envOf(sq), ctx)).json() as any;
+    expect(data).toMatchObject({ ok: true, patterns: [], total: 0 });
+  });
+});
+
+describe("POST /patterns/resolve — one at a time", () => {
   it("requires auth", async () => {
-    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p1", action: "confirm" }, token: null }), env, ctx);
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p1", action: "confirm" }, token: null }), envOf(sq), ctx);
     expect(res.status).toBe(401);
   });
 
   it("404s for an unknown id", async () => {
-    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "ghost", action: "confirm" } }), env, ctx);
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "ghost", action: "confirm" } }), envOf(sq), ctx);
     expect(res.status).toBe(404);
   });
 
   it("400s for an entry that is not an auto-derived pattern", async () => {
-    db.entries.push({ id: "normal", content: "Just a memory", tags: '["work"]', source: "api", created_at: 1000, vector_ids: "[]" });
+    sq = await migrated();
+    sq.seed({ id: "normal", content: "Just a memory", createdAt: 1000, tags: ["work"] });
 
-    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "normal", action: "confirm" } }), env, ctx);
+    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "normal", action: "confirm" } }), envOf(sq), ctx);
     expect(res.status).toBe(400);
-    const data = await res.json() as any;
-    expect(data.error).toContain("not an auto-derived pattern");
+    expect((await res.json() as any).error).toContain("not an auto-derived pattern");
   });
 
   it("400s for an invalid action", async () => {
-    seedPattern(db, "p1", "You tend to test things");
-    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p1", action: "promote" } }), env, ctx);
+    sq = await migrated();
+    seedPattern(sq, "p1", "You tend to test things");
+    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p1", action: "promote" } }), envOf(sq), ctx);
     expect(res.status).toBe(400);
   });
 
   it("confirm strips auto-pattern, adds kind:semantic + status:canonical, and the entry becomes recallable", async () => {
-    seedPattern(db, "p1", "You tend to write tests before shipping");
-    env = makeTestEnv(db, {
+    sq = await migrated();
+    seedPattern(sq, "p1", "You tend to write tests before shipping");
+    const env = envOf(sq, {
       VECTORIZE: makeVectorizeMock({
         query: vi.fn().mockResolvedValue({
           matches: [{ id: "p1", score: 0.9, metadata: { parentId: "p1", isUpdate: false } }],
@@ -56,39 +155,146 @@ describe("POST /patterns/resolve", () => {
     });
 
     // Before confirmation the pattern is excluded from recall at D1 hydration.
-    let recall = await worker.fetch(req("GET", "/recall?query=tests"), env, ctx);
-    let recallData = await recall.json() as any;
+    let recallData = await (await worker.fetch(req("GET", "/recall?query=tests"), env, ctx)).json() as any;
     expect(recallData.results ?? []).toHaveLength(0);
 
     const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p1", action: "confirm" } }), env, ctx);
     expect(res.status).toBe(200);
-    const data = await res.json() as any;
-    expect(data).toMatchObject({ ok: true, id: "p1", action: "confirm" });
+    expect(await res.json()).toMatchObject({ ok: true, id: "p1", action: "confirm" });
 
-    const tags = JSON.parse(db.entries.find((e: any) => e.id === "p1").tags);
+    const tags = tagsOf(sq, "p1");
     expect(tags).not.toContain("auto-pattern");
     expect(tags).toContain("kind:semantic");
     expect(tags).toContain("status:canonical");
 
     // After confirmation the same query returns it.
-    recall = await worker.fetch(req("GET", "/recall?query=tests"), env, ctx);
-    recallData = await recall.json() as any;
+    recallData = await (await worker.fetch(req("GET", "/recall?query=tests"), env, ctx)).json() as any;
     expect(recallData.results).toHaveLength(1);
     expect(recallData.results[0].id).toBe("p1");
   });
 
   it("dismiss deprecates: vectors deleted, status:deprecated applied, row kept", async () => {
-    seedPattern(db, "p1", "You tend to dismiss patterns");
+    sq = await migrated();
+    seedPattern(sq, "p1", "You tend to dismiss patterns");
     const deleteByIds = vi.fn().mockResolvedValue({ mutationId: "m" });
-    env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ deleteByIds }) });
 
-    const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p1", action: "dismiss" } }), env, ctx);
+    const res = await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { id: "p1", action: "dismiss" } }),
+      envOf(sq, { VECTORIZE: makeVectorizeMock({ deleteByIds }) }), ctx,
+    );
     expect(res.status).toBe(200);
 
-    const row = db.entries.find((e: any) => e.id === "p1");
-    expect(row).toBeDefined(); // audit row kept
-    expect(JSON.parse(row.tags)).toContain("status:deprecated");
-    expect(row.vector_ids).toBe("[]");
+    expect(rowOf(sq, "p1")).toBeDefined(); // audit row kept
+    expect(tagsOf(sq, "p1")).toContain("status:deprecated");
+    expect(vectorsOf(sq, "p1")).toEqual([]);
     expect(deleteByIds).toHaveBeenCalledWith(["p1"]);
+  });
+});
+
+describe("POST /patterns/resolve — in bulk", () => {
+  it("dismisses many in one request", async () => {
+    // The complaint this answers: ruling on a backlog two at a time.
+    sq = await migrated();
+    for (let i = 0; i < 12; i++) seedPattern(sq, `p${i}`, `Pattern ${i}`);
+    const deleteByIds = vi.fn().mockResolvedValue({ mutationId: "m" });
+
+    const ids = Array.from({ length: 12 }, (_, i) => `p${i}`);
+    const data = await (await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { ids, action: "dismiss" } }),
+      envOf(sq, { VECTORIZE: makeVectorizeMock({ deleteByIds }) }), ctx,
+    )).json() as any;
+
+    expect(data).toMatchObject({ ok: true, action: "dismiss", resolved: 12, skipped: 0 });
+    for (const id of ids) {
+      expect(tagsOf(sq, id)).toContain("status:deprecated");
+      expect(vectorsOf(sq, id)).toEqual([]);
+    }
+    // One Vectorize call carrying every id, not one call per pattern.
+    expect(deleteByIds).toHaveBeenCalledTimes(1);
+    expect(deleteByIds.mock.calls[0][0].sort()).toEqual(ids.sort());
+  });
+
+  it("confirms many in one request", async () => {
+    sq = await migrated();
+    for (let i = 0; i < 5; i++) seedPattern(sq, `p${i}`, `Pattern ${i}`);
+
+    const ids = Array.from({ length: 5 }, (_, i) => `p${i}`);
+    const data = await (await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { ids, action: "confirm" } }), envOf(sq), ctx,
+    )).json() as any;
+
+    expect(data.resolved).toBe(5);
+    for (const id of ids) {
+      expect(tagsOf(sq, id)).not.toContain("auto-pattern");
+      expect(tagsOf(sq, id)).toContain("status:canonical");
+      // Confirming must not touch the vectors — the entry is becoming
+      // recallable, so it needs the ones it has.
+      expect(vectorsOf(sq, id)).toEqual([id]);
+    }
+  });
+
+  it("costs a fixed number of round trips however many patterns are in it", async () => {
+    // The reason bulk exists at all: a free-plan invocation gets roughly 50 D1
+    // queries, so a per-id loop would put a ceiling on the batch size.
+    sq = await migrated();
+    for (let i = 0; i < 40; i++) seedPattern(sq, `p${i}`, `Pattern ${i}`);
+    sq.issued.length = 0;
+
+    await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { ids: Array.from({ length: 40 }, (_, i) => `p${i}`), action: "dismiss" } }),
+      envOf(sq), ctx,
+    );
+
+    // One SELECT and one batched write, regardless of the 40.
+    expect(sq.issued.filter(s => !s.startsWith("BATCH"))).toHaveLength(1);
+  });
+
+  it("skips what someone else already ruled on rather than failing the batch", async () => {
+    // A list the user was looking at can race the nightly pass or a second tab.
+    sq = await migrated();
+    seedPattern(sq, "still-pending", "Pattern A");
+    seedPattern(sq, "already-dismissed", "Pattern B", ["status:deprecated"]);
+    sq.seed({ id: "not-a-pattern", content: "Just a memory", createdAt: 1000, tags: ["work"] });
+
+    const data = await (await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { ids: ["still-pending", "already-dismissed", "not-a-pattern", "ghost"], action: "dismiss" } }),
+      envOf(sq), ctx,
+    )).json() as any;
+
+    expect(data.resolved).toBe(1);
+    expect(data.ids).toEqual(["still-pending"]);
+    expect(data.skipped).toBe(3);
+    // The already-dismissed one keeps its original tags; nothing was re-written.
+    expect(tagsOf(sq, "not-a-pattern")).toEqual(["work"]);
+  });
+
+  it("refuses a batch larger than D1 can bind, rather than truncating it", async () => {
+    // Silent truncation would report "resolved" for patterns still waiting.
+    sq = await migrated();
+    const res = await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { ids: Array.from({ length: 101 }, (_, i) => `p${i}`), action: "dismiss" } }),
+      envOf(sq), ctx,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error).toMatch(/100/);
+  });
+
+  it("rejects a malformed ids list", async () => {
+    sq = await migrated();
+    for (const ids of [[1, 2], "p1", []]) {
+      const res = await worker.fetch(
+        req("POST", "/patterns/resolve", { body: { ids, action: "dismiss" } }), envOf(sq), ctx,
+      );
+      expect(res.status, JSON.stringify(ids)).toBe(400);
+    }
+  });
+
+  it("counts a repeated id once", async () => {
+    sq = await migrated();
+    seedPattern(sq, "p1", "Pattern");
+    const data = await (await worker.fetch(
+      req("POST", "/patterns/resolve", { body: { ids: ["p1", "p1", "p1"], action: "dismiss" } }), envOf(sq), ctx,
+    )).json() as any;
+    expect(data).toMatchObject({ resolved: 1, skipped: 0 });
   });
 });

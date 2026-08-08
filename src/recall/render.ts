@@ -19,7 +19,9 @@ export function renderRecallText(
 
   for (let i = 0; i < matches.length; i++) {
     const m = matches[i];
-    const date = new Date(m.createdAt).toLocaleDateString();
+    // Spelled month: this text is read by assistants, and a numeric date is
+    // ambiguous between US and international order.
+    const date = new Date(m.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
     const tagList = m.tags.length ? ` [${m.tags.join(", ")}]` : "";
     const src = m.source ? ` · ${m.source}` : "";
     const score = (m.score * 100).toFixed(0);
@@ -46,7 +48,7 @@ export function renderRecallText(
   const compoundStale = opts.compoundStale ?? computeCompoundStale(renderedMatches);
   let prefix = "";
   if (compoundStale) {
-    const oldest = new Date(compoundStale.oldestUpdatedAt).toLocaleDateString();
+    const oldest = new Date(compoundStale.oldestUpdatedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
     prefix = `**Staleness warning:** ${compoundStale.count} sources are marked stale as-of (oldest touch: ${oldest}). Verify before combining them into a single claim.\n\n---\n\n`;
   }
 
@@ -65,7 +67,7 @@ function hopProvenance(m: RecallMatch, contentById: Map<string, string>): string
     m.viaProvenance === "explicit" ? "you linked" :
     m.viaProvenance === "system" ? "system-linked" :
     "auto-linked";
-  const when = m.viaLinkedAt ? ` · ${new Date(m.viaLinkedAt).toLocaleDateString()}` : "";
+  const when = m.viaLinkedAt ? ` · ${new Date(m.viaLinkedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}` : "";
   const fromContent = m.viaFrom ? contentById.get(m.viaFrom) : undefined;
   const from = fromContent ? ` · from "${snippet(fromContent)}"` : "";
   return `${who}${when}${from}`;

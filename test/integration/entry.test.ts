@@ -40,7 +40,33 @@ describe("GET /entry", () => {
       tags: ["work", "kind:semantic"],
       source: "api",
       created_at: 1234,
+      // What the pipeline decided about this memory. The detail view shows all
+      // of it, and none of it was reachable before v2.3 — /entry answered with
+      // five fields while the row carried ten.
+      updated_at: 1234, // coalesced: this row predates the column
+      importance_score: 4,
+      recall_count: 3,
+      contradiction_wins: 0,
+      contradiction_losses: 0,
+      indexed: true,
     });
+  });
+
+  it("reports a memory recall cannot see as unindexed", async () => {
+    db.entries.push({ id: "pending", content: "Just captured", tags: "[]", source: "api", created_at: 1, vector_ids: "[]" });
+
+    const res = await worker.fetch(req("GET", "/entry?id=pending"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.entry.indexed).toBe(false);
+  });
+
+  it("prefers updated_at when the memory has been edited since capture", async () => {
+    db.entries.push({ id: "edited", content: "Changed", tags: "[]", source: "api", created_at: 1000, updated_at: 9000, vector_ids: '["v"]' });
+
+    const res = await worker.fetch(req("GET", "/entry?id=edited"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.entry.created_at).toBe(1000);
+    expect(data.entry.updated_at).toBe(9000);
   });
 
   it("404s for an unknown id", async () => {

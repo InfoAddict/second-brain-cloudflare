@@ -269,17 +269,21 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
       expect: (s) => {
         // Spelled out because it is destructive and, for the MCP path, new: the private copy
         // stored content verbatim. extractHashtags collapses every whitespace run to one
-        // space and removes every #token unconditionally, so line breaks, list structure and
-        // code fences do not survive a replacement, and a bare issue reference becomes a tag.
-        // This is not a regression — captureEntry has always done it, so `remember` through
-        // this same transport produces a byte-identical row, and POST /update already did it.
-        // Divergence was the bug; this is what agreeing with the rest of the write path costs.
+        // space and removes named #tokens, so line breaks, list structure and code fences do
+        // not survive a replacement. This is not a regression — captureEntry has always done
+        // it, so `remember` through this same transport produces a byte-identical row, and
+        // POST /update already did it. Divergence was the bug; this is what agreeing with
+        // the rest of the write path costs.
+        //
+        // `#4821` stays in the content and does NOT become a tag: a bare number is an issue
+        // reference, and reading it as a tag produced rows carrying twenty numeric "tags"
+        // from synced PR bodies (src/text/hashtags.ts).
         //
         // `append` deliberately does NOT flatten: it embeds the addition verbatim after a
         // "[Update <date>]: " separator (src/capture/store.ts), so newlines survive there.
         // Reach for append, not update, when the text's shape matters.
-        expect(s.row!.content).toBe("Runbook: 1. drain 2. deploy ```sh npm run deploy ``` Ticket");
-        expect(tagsOf(s)).toEqual(["ops", "4821"]);
+        expect(s.row!.content).toBe("Runbook: 1. drain 2. deploy ```sh npm run deploy ``` Ticket #4821");
+        expect(tagsOf(s)).toEqual(["ops"]);
       },
     },
     {

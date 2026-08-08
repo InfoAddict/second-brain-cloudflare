@@ -26,6 +26,165 @@ function escAttr(s) {
 }
 
 /* yyyy-mm-dd in local time, for day-grouping. */
+/**
+ * Source text as a person would read it.
+ *
+ * Captured memories arrive as whatever the source sent: email bodies with
+ * `*****` rules and `[Sign in to your account]` link text, GitHub PR bodies
+ * full of markdown headers. Rendering that raw made every Recent row start
+ * with punctuation instead of meaning.
+ *
+ * Deliberately lossy and deliberately not a markdown parser — the goal is a
+ * readable first impression, and the full text is one tap away.
+ */
+function stripToPlainText(s) {
+  return String(s ?? '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, ' ')
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * The line a row leads with: the first sentence, or the first clause long
+ * enough to mean something. Falls back to a hard truncation so a wall of
+ * text without punctuation still yields a title.
+ */
+function titleLine(content, max = 90) {
+  const plain = stripToPlainText(content)
+  if (!plain) return 'Untitled memory'
+  const sentence = plain.match(/^.{10,}?[.!?](\s|$)/)
+  const line = (sentence ? sentence[0] : plain).trim()
+  return line.length > max ? line.slice(0, max - 1).trimEnd() + '…' : line
+}
+
+/**
+ * Source text laid out for reading, without changing what is stored.
+ *
+ * Emails arrive wrapped and indented by whatever client sent them, and
+ * `white-space: pre-wrap` reproduces every bit of it: paragraphs that start
+ * two-thirds of the way across the screen, runs of blank lines, and a leading
+ * `#` from a subject line the sync wrote as a markdown heading. The row
+ * preview strips all structure (stripToPlainText); this keeps paragraphs and
+ * lists, and removes only the accidents of transport.
+ *
+ * Render-time only. The stored content stays byte-identical, because export,
+ * restore and the embeddings all read it.
+ */
+function normalizeForDisplay(text) {
+  const src = String(text ?? '').replace(/\r\n?/g, '\n')
+  let inFence = false
+  const lines = src.split('\n').map((line) => {
+    if (/^\s*```/.test(line)) inFence = !inFence
+    // Inside a fence the indentation is the content.
+    if (inFence) return line.replace(/\s+$/, '')
+    return line.replace(/^[ \t]+/, '').replace(/\s+$/, '')
+  })
+  return lines
+    .join('\n')
+    // A subject line the mail sync wrote as a heading reads better as a title.
+    .replace(/^#{1,6}\s+/, '')
+    // Mail clients pad with blank lines; more than one says nothing extra.
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/**
+ * The preview line: what is left after the title has already said its piece.
+ *
+ * Rendering the full stripped text under a title derived from its first
+ * sentence showed the same words twice — the top of a row was pure
+ * duplication. Empty means the title said everything, and the caller should
+ * render no preview at all rather than a blank line.
+ */
+function previewAfterTitle(content, title) {
+  const plain = stripToPlainText(content)
+  if (!plain) return ''
+  const head = String(title ?? '').replace(/…$/, '').trim()
+  if (head && plain.startsWith(head)) return plain.slice(head.length).trim()
+  return plain
+}
+
+/** "2h ago" — absolute dates stay available on hover via title attributes. */
+function relativeTime(ts) {
+  const then = Number(ts)
+  if (!Number.isFinite(then) || then <= 0) return ''
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.round(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  const months = Math.round(days / 30)
+  if (months < 12) return `${months}mo ago`
+  return `${Math.round(days / 365)}y ago`
+}
+
+/**
+ * Icon and label for where a memory came from.
+ *
+ * Real brand marks wherever the icon font has one — Tabler ships OpenAI,
+ * GitHub, Google, Apple and Notion, and a recognisable logo reads faster than
+ * any glyph. Where it has none (Anthropic, Obsidian) the fallback describes
+ * the *kind* of source honestly rather than reaching for a generic AI sparkle:
+ * a Claude memory came from a conversation, so it gets a conversation icon.
+ *
+ * Ordered most specific first — "claude-code" is a terminal, not a chat, and
+ * "email-gmail" is Google before it is mail.
+ */
+const SOURCE_BADGES = [
+  // Terminals and code tools. `cli` is the Second Brain CLI; an earlier version
+  // of this table matched it to GitHub, which was simply wrong.
+  [/claude-code/, 'ti-terminal-2', 'claude code'],
+  [/^cli$|command-line|terminal/, 'ti-terminal-2', 'cli'],
+  [/git-hook|github|^git$/, 'ti-brand-github', 'github'],
+  // Mail, branded by provider where we know it.
+  [/gmail/, 'ti-brand-google', 'gmail'],
+  [/icloud/, 'ti-brand-apple', 'icloud'],
+  [/mail/, 'ti-mail', 'email'],
+  // Assistants. OpenAI has a brand mark; Anthropic does not, so Claude takes
+  // the conversation icon rather than a sparkle that means nothing.
+  [/chatgpt|openai|codex/, 'ti-brand-openai', 'chatgpt'],
+  [/claude/, 'ti-message-2', 'claude'],
+  [/conversation|^chat$/, 'ti-message-2', 'chat'],
+  // Surfaces.
+  [/notion/, 'ti-brand-notion', 'notion'],
+  [/obsidian/, 'ti-notes', 'obsidian'],
+  [/extension|browser/, 'ti-browser', 'browser'],
+  [/web-ui|dashboard/, 'ti-browser', 'dashboard'],
+  [/phone|ios|shortcut/, 'ti-device-mobile', 'phone'],
+  [/voice|microphone/, 'ti-microphone', 'voice'],
+  [/import|restore/, 'ti-upload', 'import'],
+  // Written by the brain itself: compression, pattern mining, digests.
+  [/^system$|^auto/, 'ti-cpu', 'system'],
+  [/^user$|manual|^api$/, 'ti-writing', 'manual'],
+]
+
+function sourceBadge(source) {
+  const raw = String(source ?? '').trim().toLowerCase()
+  if (!raw) return { icon: 'ti-writing', label: 'manual' }
+  for (const [pattern, icon, label] of SOURCE_BADGES) {
+    if (pattern.test(raw)) return { icon, label }
+  }
+  // Some rows carry a whole sentence as their source ("ChatGPT conversation on
+  // AI-native SDLC"). Show something rather than nothing, but never let it set
+  // the width of the meta line.
+  const label = raw.length > 18 ? raw.slice(0, 17) + '…' : raw
+  return { icon: 'ti-writing', label }
+}
+
 function toDateStr(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');

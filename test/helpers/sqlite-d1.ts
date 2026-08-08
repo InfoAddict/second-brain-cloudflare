@@ -74,6 +74,8 @@ export interface SqliteD1 {
     tags?: string[];
     source?: string;
     vectorIds?: string[];
+    /** Drives the compression and resurfacing rules; defaults to 0. */
+    importanceScore?: number;
   }): void;
   /** Every row, for assertions about what the code under test wrote. */
   rows(): Record<string, unknown>[];
@@ -135,13 +137,13 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
       return (raw.prepare(`SELECT name FROM pragma_table_info('entries')`).all() as { name: string }[])
         .map(r => r.name);
     },
-    seed({ id, content, createdAt, tags = [], source = "api", vectorIds = [] }) {
+    seed({ id, content, createdAt, tags = [], source = "api", vectorIds = [], importanceScore = 0 }) {
       raw
         .prepare(
           `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, recall_count, importance_score)
-           VALUES (?, ?, ?, ?, ?, ?, 0, 0)`,
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
         )
-        .run(id, content, JSON.stringify(tags), source, createdAt, JSON.stringify(vectorIds));
+        .run(id, content, JSON.stringify(tags), source, createdAt, JSON.stringify(vectorIds), importanceScore);
     },
     rows() {
       return raw
