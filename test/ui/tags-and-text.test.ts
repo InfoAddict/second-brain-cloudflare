@@ -88,6 +88,27 @@ describe("stripToPlainText / titleLine", () => {
     expect(title.endsWith("…")).toBe(true);
   });
 
+  it("does not repeat the title in the preview", () => {
+    const { previewAfterTitle } = load();
+    const content = "Decided to close the account. The balance was zero, so nothing else was owed.";
+    const title = titleLine(content);
+    expect(title).toBe("Decided to close the account.");
+    expect(previewAfterTitle(content, title)).toBe("The balance was zero, so nothing else was owed.");
+  });
+
+  it("returns an empty preview when the title already said everything", () => {
+    const { previewAfterTitle } = load();
+    const content = "Renewed the domain.";
+    expect(previewAfterTitle(content, titleLine(content))).toBe("");
+  });
+
+  it("keeps the whole text when the title was truncated mid-stream", () => {
+    const { previewAfterTitle } = load();
+    const long = "y".repeat(200);
+    const preview = previewAfterTitle(long, titleLine(long));
+    expect(preview.length).toBeGreaterThan(100);
+  });
+
   it("never renders an empty title", () => {
     expect(titleLine("")).toBe("Untitled memory");
     expect(titleLine("***")).toBe("Untitled memory");

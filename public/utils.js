@@ -66,6 +66,22 @@ function titleLine(content, max = 90) {
   return line.length > max ? line.slice(0, max - 1).trimEnd() + '…' : line
 }
 
+/**
+ * The preview line: what is left after the title has already said its piece.
+ *
+ * Rendering the full stripped text under a title derived from its first
+ * sentence showed the same words twice — the top of a row was pure
+ * duplication. Empty means the title said everything, and the caller should
+ * render no preview at all rather than a blank line.
+ */
+function previewAfterTitle(content, title) {
+  const plain = stripToPlainText(content)
+  if (!plain) return ''
+  const head = String(title ?? '').replace(/…$/, '').trim()
+  if (head && plain.startsWith(head)) return plain.slice(head.length).trim()
+  return plain
+}
+
 /** "2h ago" — absolute dates stay available on hover via title attributes. */
 function relativeTime(ts) {
   const then = Number(ts)

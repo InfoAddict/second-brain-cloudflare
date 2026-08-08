@@ -108,6 +108,8 @@ function makeRecentCard(entry) {
         ? `<span class="tag-chip vec-chip vec-chip--pending" title="Vectorizing… (just captured)"><i class="ti ti-clock"></i></span>`
         : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
 
+  const title = titleLine(entry.content)
+  const preview = previewAfterTitle(entry.content, title)
   const shown = humanTags(tags)
   const badge = sourceBadge(entry.source)
   const created = Number(entry.created_at) || 0
@@ -116,8 +118,8 @@ function makeRecentCard(entry) {
   card.dataset.id = entry.id
   card.innerHTML = `
 <div class="card-content" style="cursor: pointer;">
-  <div class="card-title">${escHtml(titleLine(entry.content))}</div>
-  <div class="card-preview">${escHtml(stripToPlainText(entry.content))}</div>
+  <div class="card-title">${escHtml(title)}</div>
+  ${preview ? `<div class="card-preview">${escHtml(preview)}</div>` : ''}
 </div>
 <div class="card-footer">
   <div class="card-meta">
