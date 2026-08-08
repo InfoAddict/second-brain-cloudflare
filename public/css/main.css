@@ -2721,6 +2721,100 @@
         flex-shrink: 0;
       }
 
+      /* ── v2.3 daily brief ─────────────────────────────────────────────────
+         The home surface. Quiet by construction: when nothing happened it does
+         not render, and the welcome hero stands in its place. */
+      .brief {
+        padding: 4px 0 8px;
+      }
+
+      .brief-eyebrow {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 14px;
+      }
+
+      /* The marketing site's stat idiom: big sans numeral, italic serif unit. */
+      .brief-stat {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 18px;
+      }
+
+      .brief-num {
+        font-size: 30px;
+        font-weight: 600;
+        color: var(--text-primary);
+        line-height: 1;
+      }
+
+      .brief-unit {
+        font-family: var(--font-serif);
+        font-style: italic;
+        font-size: 19px;
+        color: var(--accent);
+      }
+
+      .brief-sep {
+        color: var(--text-tertiary);
+        margin: 0 4px;
+      }
+
+      .brief-since {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text-tertiary);
+        margin-left: 4px;
+      }
+
+      .brief-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+      }
+
+      /* Nothing to decide here — context, not a prompt for action. */
+      .brief-card--quiet {
+        background: none;
+        border-style: dashed;
+      }
+
+      .brief-label {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+        margin-bottom: 6px;
+      }
+
+      .brief-body {
+        font-family: var(--font-serif);
+        font-size: 15px;
+        line-height: 1.55;
+        color: var(--text-primary);
+      }
+
+      .brief-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .brief-suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
       @media (min-width: 768px) {
         /* Wide enough for one row again: badge, tags, actions. */
         .card-footer {

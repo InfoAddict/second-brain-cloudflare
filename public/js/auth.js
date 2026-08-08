@@ -33,6 +33,7 @@ function showApp() {
   loadTags()
   updateStatus()
   checkVectorize()
+  loadBrief()
 }
 
 function logout() {

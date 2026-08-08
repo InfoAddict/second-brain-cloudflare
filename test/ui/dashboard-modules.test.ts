@@ -20,6 +20,7 @@ const DASHBOARD_SCRIPTS = [
   "public/js/settings.js",
   "public/js/integrations.js",
   "public/js/graph-canvas.js",
+  "public/js/brief.js",
   "public/js/nav.js",
   "public/js/auth.js",
   "public/js/download-app.js",
