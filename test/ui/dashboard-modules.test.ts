@@ -8,7 +8,6 @@ const ROOT = resolve(import.meta.dirname, "../..");
 const DASHBOARD_SCRIPTS = [
   "public/utils.js",
   "public/credits.js",
-  "public/js/tags.js",
   "public/js/state.js",
   "public/js/api.js",
   "public/js/theme.js",

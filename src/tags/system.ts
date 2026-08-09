@@ -10,20 +10,29 @@
 // Those are conclusions the brain reached, not labels the user typed, and they
 // are not the editor's to delete.
 //
-// public/js/tags.js draws the same line for display and additionally hides
-// machine identifiers (`#5118`, `#fd540a`). That extra rule is deliberately
-// absent here: hiding a junk tag costs nothing, but treating it as unowned
-// would let an edit silently delete a tag that is genuinely stored.
+// public/utils.js draws the same line for display and for graph clustering, and
+// additionally hides machine identifiers (`#5118`, `#fd540a`). That extra rule is
+// deliberately absent here: hiding a junk tag costs nothing, but treating it as
+// unowned would let an edit silently delete a tag that is genuinely stored.
 
 /** Namespaces the Worker writes and owns; `prefix:value` shaped. */
 const RESERVED_TAG_PREFIXES = ["kind:", "status:", "volatility:", "stale:"];
 
-/** Bare markers the nightly pipeline writes: compression, pattern mining, dedupe. */
+/**
+ * Bare markers the Worker writes: compression, pattern mining, dedupe, and the
+ * contradiction pass. Keep in step with SYSTEM_TAG_NAMES in public/utils.js.
+ *
+ * `contradiction-resolved` is written by captureEntry (src/capture/entry.ts) the
+ * moment a contradiction is detected, exactly like the rest of these — but it was
+ * missing from both this list and the display one, so it rendered as a tag the user
+ * had chosen and an edit could delete it.
+ */
 const PIPELINE_TAG_NAMES = new Set([
   "auto-pattern",
   "synthesized",
   "rolled-up",
   "duplicate-candidate",
+  "contradiction-resolved",
 ]);
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */

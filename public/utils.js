@@ -313,6 +313,75 @@ function syncVectorizeBanner(doc, banner) {
   return el;
 }
 
+/* ---- System tags ----------------------------------------------------------------------
+ *
+ * Which tags are the brain's own bookkeeping, and which are the person's words.
+ *
+ * This used to live in its own js/tags.js and serve display only, while the graph
+ * clusterer below carried a second, shorter list of its own. The two drifted: the
+ * clusterer's omitted `rolled-up` and had no machine-identifier rule, so tags hidden
+ * from every chip in the app could still name a whole region of the graph.
+ *
+ * One copy, here, because utils.js is the file the unit tests require directly and the
+ * file the dashboard loads first — so it is the one nothing else has to be loaded for.
+ * js/tags.js is gone; its callers pick these up as globals exactly as before.
+ */
+
+/** Namespaces the Worker owns. Anything `prefix:value` shaped and reserved. */
+const SYSTEM_TAG_PREFIXES = ['kind:', 'status:', 'volatility:', 'stale:']
+
+/**
+ * Bare markers the Worker writes: compression, pattern mining, dedupe, and the
+ * contradiction pass (src/capture/entry.ts). Keep in step with PIPELINE_TAG_NAMES
+ * in src/tags/system.ts.
+ */
+const SYSTEM_TAG_NAMES = new Set([
+  'auto-pattern',
+  'synthesized',
+  'rolled-up',
+  'duplicate-candidate',
+  'contradiction-resolved',
+])
+
+/**
+ * Machine identifiers that a `#token` scan mistook for tags: `#5118` issue
+ * references, `#fd540a` colour codes, `#0f3d3e` short commit SHAs.
+ *
+ * Deliberately narrow, because plenty of real tags look numeric at a glance:
+ *   - a digit is required, so `facade`, `decade` and `added` stay tags;
+ *   - six characters minimum, so `d1` and `v2` stay tags;
+ *   - the whole string must be hex, so `12v-battery` and `14-day-plan` stay.
+ */
+function isMachineIdentifier(t) {
+  if (/^\d+$/.test(t)) return true
+  return /^[0-9a-f]{6,40}$/.test(t) && /\d/.test(t)
+}
+
+/**
+ * Is this tag the brain talking to itself?
+ *
+ * v2.3 stops extracting machine identifiers at capture (src/text/hashtags.ts), but
+ * rows written before that keep theirs, and no backfill is worth rewriting history
+ * for. Hiding them cleans up the past without touching stored data.
+ *
+ * These stay visible in exactly one place — the memory detail view, labelled as what
+ * they are. Everywhere else the answer to "what is this memory about?" should be the
+ * user's own words, and no cluster in the graph should be named after one.
+ */
+function isSystemTag(tag) {
+  if (typeof tag !== 'string') return true
+  const t = tag.trim().toLowerCase()
+  if (!t) return true
+  if (SYSTEM_TAG_NAMES.has(t)) return true
+  if (isMachineIdentifier(t)) return true
+  return SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))
+}
+
+/** The tags worth showing a person, in their original order. */
+function humanTags(tags) {
+  return (Array.isArray(tags) ? tags : []).filter((t) => !isSystemTag(t))
+}
+
 /* ---- Graph view: topic clustering + static packed layout ------------------------------
  *
  * The dashboard graph groups memories into topic clusters derived from their tags, at two
@@ -511,5 +580,5 @@ function packGraphCircles(radii, gap) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, assignGraphClusters, packGraphNodes, packGraphCircles };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, isSystemTag, humanTags, assignGraphClusters, packGraphNodes, packGraphCircles };
 }

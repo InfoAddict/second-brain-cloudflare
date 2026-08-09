@@ -33,7 +33,7 @@ function load(): any {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  for (const f of ["public/js/tags.js", "public/utils.js", "public/js/memory-crud.js", "public/js/remember.js"]) {
+  for (const f of ["public/utils.js", "public/js/memory-crud.js", "public/js/remember.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;

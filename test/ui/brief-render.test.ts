@@ -38,7 +38,7 @@ function load() {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  for (const f of ["public/js/tags.js", "public/utils.js", "public/js/brief.js"]) {
+  for (const f of ["public/utils.js", "public/js/brief.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;
