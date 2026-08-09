@@ -35,6 +35,7 @@ const WORKER_SRC = resolve(ROOT, WORKER_SRC_REL);
 const APP_VERSION_FILES = {
   tauriConf: resolve(ROOT, "installer/src-tauri/tauri.conf.json"),
   installerPkg: resolve(ROOT, "installer/package.json"),
+  installerLock: resolve(ROOT, "installer/package-lock.json"),
   cargoToml: resolve(ROOT, "installer/src-tauri/Cargo.toml"),
 };
 
@@ -113,6 +114,20 @@ function writeAppVersion(v) {
     json.version = v;
     writeFileSync(path, JSON.stringify(json, null, 2) + "\n");
   }
+  // package-lock.json carries the version twice — the top-level field and the
+  // root package entry — and npm treats a mismatch with package.json as an
+  // out-of-sync lockfile. Written here rather than by running `npm install`,
+  // which would also pull dependency churn into a release commit.
+  //
+  // This was missed until 1.3.1: every bump moved package.json and left the
+  // lockfile behind, so it sat two releases stale at 1.2.3 while the app shipped
+  // 1.3.1. Nothing failed loudly, which is why it survived — see the matching
+  // assertion in test/unit/version-consistency.test.ts.
+  const lock = JSON.parse(readFileSync(APP_VERSION_FILES.installerLock, "utf8"));
+  lock.version = v;
+  if (lock.packages?.[""]) lock.packages[""].version = v;
+  writeFileSync(APP_VERSION_FILES.installerLock, JSON.stringify(lock, null, 2) + "\n");
+
   const toml = readFileSync(APP_VERSION_FILES.cargoToml, "utf8");
   writeFileSync(
     APP_VERSION_FILES.cargoToml,
