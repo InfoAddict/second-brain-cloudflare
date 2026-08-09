@@ -43,7 +43,7 @@ function backToMenuFromPatterns() {
 
 async function loadPatternQueue({ append = false } = {}) {
   const list = document.getElementById('patterns-list')
-  if (!append) list.innerHTML = `<p class="digest-note">Loading&hellip;</p>`
+  if (!append) list.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loading'))}</p>`
   try {
     const res = await fetch(`${WORKER_URL}/patterns?limit=${PATTERNS_PAGE}&offset=${append ? loadedPatterns.length : 0}`, {
       headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
@@ -55,20 +55,20 @@ async function loadPatternQueue({ append = false } = {}) {
     renderPatternQueue()
   } catch {
     if (!append) {
-      list.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> Could not load your patterns.</p>`
+      list.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> ${escHtml(t('patterns.loadFailed'))}</p>`
     }
   }
 }
 
 function loadMorePatterns(btn) {
   btn.disabled = true
-  btn.textContent = 'Loading…'
+  btn.textContent = t('integrations.loading')
   loadPatternQueue({ append: true })
 }
 
 function patternRow(p) {
   const when = p.created_at
-    ? new Date(p.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+    ? formatDateUI(p.created_at, { year: 'numeric', month: 'short', day: 'numeric' })
     : ''
   return `
     <label class="pattern-row" id="pattern-row-${escAttr(p.id)}">
@@ -77,7 +77,7 @@ function patternRow(p) {
              onchange="togglePatternSelection('${escAttr(p.id)}', this.checked)" />
       <span class="pattern-body">
         <span class="pattern-text">${escHtml(p.content)}</span>
-        ${when ? `<span class="pattern-when">noticed ${escHtml(when)}</span>` : ''}
+        ${when ? `<span class="pattern-when">${escHtml(t('patterns.noticedWhen', { date: when }))}</span>` : ''}
       </span>
     </label>`
 }
@@ -91,8 +91,8 @@ function renderPatternQueue() {
   if (!loadedPatterns.length) {
     bar.hidden = true
     more.hidden = true
-    intro.textContent = 'Nothing is waiting on you.'
-    list.innerHTML = `<p class="digest-note"><i class="ti ti-check"></i> Every pattern your brain noticed has been ruled on.</p>`
+    intro.textContent = t('patterns.emptyIntro')
+    list.innerHTML = `<p class="digest-note"><i class="ti ti-check"></i> ${escHtml(t('patterns.emptyBody'))}</p>`
     // Still synced, even though the bar is hidden: the buttons keep whatever
     // state they had, and an emptied page that refills would otherwise show
     // "Dismiss 5" over a fresh selection of nothing.
@@ -100,15 +100,14 @@ function renderPatternQueue() {
     return
   }
 
-  intro.textContent =
-    `Your brain spotted these across several memories. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.`
+  intro.textContent = t('patterns.intro')
   bar.hidden = false
   list.innerHTML = loadedPatterns.map(patternRow).join('')
 
   const remaining = patternsTotal - loadedPatterns.length
   more.hidden = remaining <= 0
   more.disabled = false
-  if (remaining > 0) more.textContent = `${remaining} more ›`
+  if (remaining > 0) more.textContent = t('patterns.more', { n: remaining })
 
   syncPatternSelection()
 }
@@ -139,14 +138,14 @@ function syncPatternSelection() {
   const confirmBtn = document.getElementById('patterns-confirm-btn')
   const dismissBtn = document.getElementById('patterns-dismiss-btn')
 
-  label.textContent = n ? `${n} selected` : 'Select all'
+  label.textContent = n ? t('patterns.nSelected', { n }) : t('patterns.selectAll')
   all.checked = n > 0 && n === loadedPatterns.length
   // Some-but-not-all reads as neither ticked nor empty, which is the truth.
   all.indeterminate = n > 0 && n < loadedPatterns.length
   confirmBtn.disabled = !n
   dismissBtn.disabled = !n
-  confirmBtn.textContent = n > 1 ? `Confirm ${n}` : 'Confirm'
-  dismissBtn.textContent = n > 1 ? `Dismiss ${n}` : 'Dismiss'
+  confirmBtn.textContent = n > 1 ? t('patterns.confirmN', { n }) : t('brief.confirm')
+  dismissBtn.textContent = n > 1 ? t('patterns.dismissN', { n }) : t('brief.dismiss')
 }
 
 /**
@@ -163,7 +162,7 @@ async function resolveSelectedPatterns(action, btn) {
   bar.querySelectorAll('button, input').forEach((b) => (b.disabled = true))
   const original = btn.textContent
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.working'))}`
 
   try {
     const res = await fetch(`${WORKER_URL}/patterns/resolve`, {
@@ -187,7 +186,7 @@ async function resolveSelectedPatterns(action, btn) {
     if (!loadedPatterns.length && patternsTotal > 0) loadPatternQueue()
   } catch {
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Failed'
+    btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('patterns.failed'))}`
     setTimeout(() => {
       btn.innerHTML = original
       bar.querySelectorAll('input').forEach((b) => (b.disabled = false))
@@ -209,9 +208,9 @@ function renderPatternsSection(total) {
   }
   el.style.display = ''
   el.innerHTML = `
-    <div class="digest-section-label">Patterns noticed</div>
-    <p class="digest-note">${total} ${total === 1 ? 'pattern is' : 'patterns are'} waiting on a decision. They stay out of recall until confirmed.</p>
-    <button class="digest-btn" onclick="openPatternsSheet()">Review ${total === 1 ? 'it' : 'all'} &rarr;</button>
+    <div class="digest-section-label">${escHtml(t('patterns.title'))}</div>
+    <p class="digest-note">${escHtml(tPlural('patterns.upkeepNote', total))}</p>
+    <button class="digest-btn" onclick="openPatternsSheet()">${escHtml(total === 1 ? t('patterns.reviewOne') : t('patterns.reviewAll'))}</button>
   `
 }
 

@@ -7,12 +7,12 @@ async function loadTags() {
     ;['tag-filter-recent', 'tag-filter-recall'].forEach((id) => {
       const sel = document.getElementById(id)
       if (!sel) return
-      sel.innerHTML = '<option value="">All tags</option>'
-      tags.forEach((t) => {
+      sel.innerHTML = `<option value="">${escHtml(t('recall.allTags'))}</option>`
+      tags.forEach((tagName) => {
         const opt = document.createElement('option')
-        opt.value = t
-        opt.textContent = t
-        if (t === selectedTag) opt.selected = true
+        opt.value = tagName
+        opt.textContent = tagName
+        if (tagName === selectedTag) opt.selected = true
         sel.appendChild(opt)
       })
     })
@@ -130,7 +130,10 @@ async function updateStatus() {
     const res = await fetch(`${WORKER_URL}/count`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     const data = await res.json()
     currentCount = data.count ?? 0
-    const text = currentCount === 0 ? 'always remembers' : `${currentCount} memor${currentCount === 1 ? 'y' : 'ies'} stored`
+    const text =
+      currentCount === 0
+        ? t('nav.statusEmpty')
+        : tPlural('nav.statusCount', currentCount, { n: formatNumberUI(currentCount) })
     document.getElementById('topbar-status').textContent = text
     const sb = document.getElementById('sb-status')
     if (sb) sb.textContent = text

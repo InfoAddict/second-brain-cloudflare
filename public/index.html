@@ -26,8 +26,8 @@
         <div class="brain-logo">
           <i class="ti ti-brain"></i>
         </div>
-        <h1>Second Brain</h1>
-        <p>Enter your Bearer token to connect to your personal memory layer. This is the password you chose when you set up Second Brain.</p>
+        <h1 data-i18n="auth.brand">Second Brain</h1>
+        <p data-i18n="auth.subtitle">Enter your Bearer token to connect to your personal memory layer. This is the password you chose when you set up Second Brain.</p>
         <form
           class="field-group"
           onsubmit="
@@ -37,8 +37,8 @@
         >
           <input type="text" name="username" value="user" autocomplete="username" style="display: none" />
           <input type="url" id="auth-url" autocomplete="off" autocapitalize="none" />
-          <input type="password" id="auth-token" placeholder="Bearer token (your setup password)" autocomplete="current-password" />
-          <button id="auth-connect" type="submit">Connect</button>
+          <input type="password" id="auth-token" placeholder="Bearer token (your setup password)" data-i18n="auth.tokenPlaceholder" data-i18n-attr="placeholder" autocomplete="current-password" />
+          <button id="auth-connect" type="submit" data-i18n="auth.connect">Connect</button>
         </form>
         <div id="auth-error"></div>
       </div>
@@ -52,21 +52,21 @@
           </div>
           <div>
             <div class="sb-brand-name">Second Brain</div>
-            <div class="sb-brand-status" id="sb-status">always remembers</div>
+            <div class="sb-brand-status" id="sb-status" data-i18n="nav.statusEmpty">always remembers</div>
           </div>
         </div>
         <!-- Two destinations, not four. Recall and Remember were verbs and the
              home input does both; Recent and Graph were two projections of one
              corpus, so they are one place with a view toggle. -->
         <nav class="sb-nav">
-          <button class="sb-tab active" id="sb-tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span>Home</span></button>
-          <button class="sb-tab" id="sb-tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span>Memories</span></button>
+          <button class="sb-tab active" id="sb-tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
+          <button class="sb-tab" id="sb-tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
         </nav>
         <div class="sb-footer">
           <!-- In the desktop app there is no address bar and no reload, so this
                is the only way to get fresh data without quitting. -->
-          <button class="sb-footer-btn refresh-now" onclick="refreshAll()" title="Refresh"><i class="ti ti-refresh"></i><span>Refresh</span></button>
-          <button class="sb-footer-btn" onclick="openMenu()"><i class="ti ti-settings"></i><span>Settings</span></button>
+          <button class="sb-footer-btn refresh-now" onclick="refreshAll()" title="Refresh" data-i18n="nav.refresh" data-i18n-attr="title"><i class="ti ti-refresh"></i><span data-i18n="nav.refresh">Refresh</span></button>
+          <button class="sb-footer-btn" onclick="openMenu()"><i class="ti ti-settings"></i><span data-i18n="nav.settings">Settings</span></button>
         </div>
       </div>
 
@@ -77,9 +77,9 @@
           </div>
           <div class="topbar-info">
             <div class="topbar-name">Second Brain</div>
-            <div class="topbar-status" id="topbar-status">always remembers</div>
+            <div class="topbar-status" id="topbar-status" data-i18n="nav.statusEmpty">always remembers</div>
           </div>
-          <button class="topbar-menu refresh-now" onclick="refreshAll()" aria-label="Refresh"><i class="ti ti-refresh"></i></button>
+          <button class="topbar-menu refresh-now" onclick="refreshAll()" aria-label="Refresh" data-i18n="nav.refresh" data-i18n-attr="aria-label"><i class="ti ti-refresh"></i></button>
           <button class="topbar-menu" onclick="openMenu()"><i class="ti ti-dots"></i></button>
         </div>
 
@@ -91,35 +91,35 @@
               <div class="home" id="home">
                 <div class="home-greet">
                   <span class="home-mark"><i class="ti ti-sparkles"></i></span>
-                  <span id="home-greeting">Hello</span>
+                  <span id="home-greeting" data-i18n="home.greetingDefault">Hello</span>
                 </div>
                 <div class="home-sub" id="home-sub"></div>
                 <div class="home-input">
                   <textarea
                     class="home-field"
                     id="home-field"
-                    placeholder="Ask, or tell me something to remember"
+                    placeholder="Ask, or tell me something to remember" data-i18n="home.placeholder" data-i18n-attr="placeholder"
                     rows="1"
                     onkeydown="handleHomeKey(event)"
                     oninput="onHomeInput(this)"
                   ></textarea>
                   <div class="home-row">
-                    <button class="home-mode" id="home-mode" onclick="toggleHomeMode()" title="Switch between asking and remembering">
-                      <span class="home-mode-dot"></span><span id="home-mode-label">will search</span>
+                    <button class="home-mode" id="home-mode" onclick="toggleHomeMode()" title="Switch between asking and remembering" data-i18n="home.modeTitle" data-i18n-attr="title">
+                      <span class="home-mode-dot"></span><span id="home-mode-label" data-i18n="home.willSearch">will search</span>
                     </button>
                     <button class="send-btn" onclick="submitHome()"><i class="ti ti-arrow-up"></i></button>
                   </div>
                 </div>
                 <!-- The one thing worth keeping from the deleted Remember tab:
                      it was the only place hashtags were ever taught. -->
-                <div class="home-hint">Add <span class="hashtag">#tags</span> anywhere to file it</div>
+                <div class="home-hint" data-i18n="home.hintHtml" data-i18n-html>Add <span class="hashtag">#tags</span> anywhere to file it</div>
                 <div class="home-topics" id="home-topics"></div>
                 <div class="home-more" id="home-more"></div>
               </div>
               <div class="brief" id="brief" style="display: none"></div>
               <div class="recall-hero" id="recall-welcome" style="display: none">
-                <div class="eyebrow">Recall</div>
-                <div class="hero-line">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div>
+                <div class="eyebrow" data-i18n="recall.eyebrow">Recall</div>
+                <div class="hero-line" data-i18n="recall.hero">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div>
               </div>
               <!-- Answers append after this point. Home, the brief and the hero
                    above are siblings of the conversation, not part of it — see
@@ -129,30 +129,30 @@
               <div class="filter-inner">
                 <i class="ti ti-tag" style="color: var(--text-tertiary); font-size: 13px; flex-shrink: 0"></i>
                 <select class="filter-field" id="tag-filter-recall" onchange="onTagChange(this.value)">
-                  <option value="">All tags</option>
+                  <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
               </div>
             </div>
             <div class="suggestions-row">
-              <button class="suggestion-pill" onclick="sendSuggestion('What am I working on?')">What am I working on?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion('What did I decide recently?')">What did I decide recently?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion('Show my tasks')">Show my tasks</button>
-              <button class="suggestion-pill" onclick="sendSuggestion('What are my goals?')">What are my goals?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion('What ideas do I have?')">What ideas do I have?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion('What happened last week?')">Last week</button>
-              <button class="suggestion-pill" onclick="sendSuggestion('What did I decide this month?')">This month</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugWorkingOn'))" data-i18n="recall.sugWorkingOn">What am I working on?</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugDecidedRecently'))" data-i18n="recall.sugDecidedRecently">What did I decide recently?</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugTasks'))" data-i18n="recall.sugTasks">Show my tasks</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugGoals'))" data-i18n="recall.sugGoals">What are my goals?</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugIdeas'))" data-i18n="recall.sugIdeas">What ideas do I have?</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugLastWeekQuery'))" data-i18n="recall.sugLastWeek">Last week</button>
+              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugThisMonthQuery'))" data-i18n="recall.sugThisMonth">This month</button>
             </div>
             <div class="input-bar">
               <div class="input-inner">
                 <!-- The way out of a conversation. Without it the only route
                      back to home was pressing the tab you were already on. -->
-                <button id="recall-clear-btn" class="refresh-btn" onclick="clearRecall()" style="display: none" title="Back to home">
+                <button id="recall-clear-btn" class="refresh-btn" onclick="clearRecall()" style="display: none" title="Back to home" data-i18n="recall.backHome" data-i18n-attr="title">
                   <i class="ti ti-home"></i>
                 </button>
                 <textarea
                   class="input-field"
                   id="recall-input"
-                  placeholder="Ask your brain..."
+                  placeholder="Ask your brain..." data-i18n="recall.placeholder" data-i18n-attr="placeholder"
                   rows="1"
                   onkeydown="handleRecallKey(event)"
                   oninput="autoResize(this)"
@@ -172,14 +172,14 @@
               <div class="filter-inner mem-filters" id="mem-filters">
                 <i class="ti ti-tag" style="color: var(--text-tertiary); font-size: 13px; flex-shrink: 0"></i>
                 <select class="filter-field" id="tag-filter-recent" onchange="onTagChange(this.value)">
-                  <option value="">All tags</option>
+                  <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
                 <select class="filter-field" id="time-filter-recent" onchange="onTimeRangeChange(this.value)" style="min-width: 0">
-                  <option value="">All time</option>
-                  <option value="today">Today</option>
-                  <option value="7">Last 7 days</option>
-                  <option value="30">Last 30 days</option>
-                  <option value="month">This month</option>
+                  <option value="" data-i18n="memories.allTime">All time</option>
+                  <option value="today" data-i18n="memories.today">Today</option>
+                  <option value="7" data-i18n="memories.last7">Last 7 days</option>
+                  <option value="30" data-i18n="memories.last30">Last 30 days</option>
+                  <option value="month" data-i18n="memories.thisMonth">This month</option>
                 </select>
               </div>
               <!-- This used to read "Knowledge / Events / Unsorted", which stopped
@@ -187,64 +187,64 @@
                    palette (graph-canvas.js). The canvas draws its own legend with
                    the real colours and counts, so this says what the picture is
                    instead of mislabelling it. -->
-              <div class="mem-caption" id="mem-legend" hidden>Grouped by tag &middot; tap a memory to open it</div>
-              <div class="view-toggle" role="tablist" aria-label="How to view your memories">
-                <button class="view-toggle-btn active" id="mem-view-list" role="tab" aria-selected="true" onclick="setMemoryView('list')" title="By time">
-                  <i class="ti ti-list"></i><span>List</span>
+              <div class="mem-caption" id="mem-legend" hidden data-i18n="memories.legend">Grouped by tag · tap a memory to open it</div>
+              <div class="view-toggle" role="tablist" aria-label="How to view your memories" data-i18n="memories.viewAria" data-i18n-attr="aria-label">
+                <button class="view-toggle-btn active" id="mem-view-list" role="tab" aria-selected="true" onclick="setMemoryView('list')" title="By time" data-i18n="memories.viewListTitle" data-i18n-attr="title">
+                  <i class="ti ti-list"></i><span data-i18n="memories.viewList">List</span>
                 </button>
-                <button class="view-toggle-btn" id="mem-view-graph" role="tab" aria-selected="false" onclick="setMemoryView('graph')" title="By connection">
-                  <i class="ti ti-affiliate"></i><span>Graph</span>
+                <button class="view-toggle-btn" id="mem-view-graph" role="tab" aria-selected="false" onclick="setMemoryView('graph')" title="By connection" data-i18n="memories.viewGraphTitle" data-i18n-attr="title">
+                  <i class="ti ti-affiliate"></i><span data-i18n="memories.viewGraph">Graph</span>
                 </button>
               </div>
             </div>
 
             <div id="recent-list">
-              <div class="empty-state"><i class="ti ti-clock"></i><span>Loading memories...</span></div>
+              <div class="empty-state"><i class="ti ti-clock"></i><span data-i18n="memories.loading">Loading memories...</span></div>
             </div>
 
             <div class="mem-graph" id="mem-graph" hidden>
               <canvas id="graph-canvas"></canvas>
-              <div class="graph-empty" id="graph-empty" style="display: none">No connections yet — link memories, or let them auto-connect as you add more.</div>
+              <div class="graph-empty" id="graph-empty" style="display: none" data-i18n="graph.empty">No connections yet — link memories, or let them auto-connect as you add more.</div>
               <!-- Floating over the canvas rather than in the bar: the bar is
                    already carrying the legend and the view toggle on a phone. -->
               <div class="graph-controls">
-                <button class="graph-btn" onclick="graphZoom(0.8)" title="Zoom out"><i class="ti ti-minus"></i></button>
-                <button class="graph-btn" onclick="graphZoom(1.25)" title="Zoom in"><i class="ti ti-plus"></i></button>
-                <button class="graph-btn" onclick="graphFit()" title="Fit to view"><i class="ti ti-maximize"></i></button>
-                <button class="graph-btn" onclick="loadGraph()" title="Re-lay out"><i class="ti ti-refresh"></i></button>
+                <button class="graph-btn" onclick="graphZoom(0.8)" title="Zoom out" data-i18n="graph.zoomOut" data-i18n-attr="title"><i class="ti ti-minus"></i></button>
+                <button class="graph-btn" onclick="graphZoom(1.25)" title="Zoom in" data-i18n="graph.zoomIn" data-i18n-attr="title"><i class="ti ti-plus"></i></button>
+                <button class="graph-btn" onclick="graphFit()" title="Fit to view" data-i18n="graph.fit" data-i18n-attr="title"><i class="ti ti-maximize"></i></button>
+                <button class="graph-btn" onclick="loadGraph()" title="Re-lay out" data-i18n="graph.relayout" data-i18n-attr="title"><i class="ti ti-refresh"></i></button>
               </div>
             </div>
           </div>
         </div>
 
         <div id="navbar">
-          <button class="nav-tab active" id="tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span>Home</span></button>
-          <button class="nav-tab" id="tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span>Memories</span></button>
+          <button class="nav-tab active" id="tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
+          <button class="nav-tab" id="tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
         </div>
       </div>
     </div>
 
     <div id="confirm-dialog">
       <div class="confirm-sheet">
-        <h3>Forget this memory?</h3>
-        <p>This can't be undone. The memory will be removed from your brain.</p>
+        <h3 data-i18n="memories.confirmTitle">Forget this memory?</h3>
+        <p data-i18n="memories.confirmBody">This can't be undone. The memory will be removed from your brain.</p>
         <div class="confirm-actions">
-          <button class="btn-cancel" onclick="closeConfirm()">Cancel</button>
-          <button class="btn-delete" onclick="confirmForget()">Forget</button>
+          <button class="btn-cancel" onclick="closeConfirm()" data-i18n="memories.cancel">Cancel</button>
+          <button class="btn-delete" onclick="confirmForget()" data-i18n="memories.forget">Forget</button>
         </div>
       </div>
     </div>
 
     <div id="append-sheet">
       <div class="append-inner">
-        <h3>Add an update</h3>
+        <h3 data-i18n="memories.appendTitle">Add an update</h3>
         <div class="append-context" id="append-context-preview"></div>
         <div class="append-input-wrap">
-          <textarea id="append-textarea" placeholder="What's changed or new?" rows="3"></textarea>
+          <textarea id="append-textarea" placeholder="What's changed or new?" data-i18n="memories.appendPlaceholder" data-i18n-attr="placeholder" rows="3"></textarea>
         </div>
         <div class="append-actions">
-          <button class="btn-append-cancel" onclick="closeAppend()">Cancel</button>
-          <button class="btn-append-save" id="append-save-btn" onclick="saveAppend()">Update</button>
+          <button class="btn-append-cancel" onclick="closeAppend()" data-i18n="memories.cancel">Cancel</button>
+          <button class="btn-append-save" id="append-save-btn" onclick="saveAppend()" data-i18n="memories.appendSave">Update</button>
         </div>
       </div>
     </div>
@@ -252,17 +252,17 @@
     <div id="edit-sheet">
       <div class="edit-inner">
         <div class="edit-header">
-          <h3>Edit memory</h3>
+          <h3 data-i18n="memories.editTitle">Edit memory</h3>
           <div class="edit-sub" id="edit-sub"></div>
         </div>
         <div class="append-input-wrap edit-input-wrap">
-          <textarea id="edit-textarea" placeholder="Edit your memory..."></textarea>
+          <textarea id="edit-textarea" placeholder="Edit your memory..." data-i18n="memories.editPlaceholder" data-i18n-attr="placeholder"></textarea>
         </div>
         <div class="edit-existing-tags" id="edit-existing-tags"></div>
-        <div class="edit-hint">Tap a tag to remove it. Use <span style="font-style: italic">#hashtags</span> in the text to add one.</div>
+        <div class="edit-hint" data-i18n="memories.editHintHtml" data-i18n-html>Tap a tag to remove it. Use <span style="font-style: italic">#hashtags</span> in the text to add one.</div>
         <div class="append-actions">
-          <button class="btn-append-cancel" onclick="closeEdit()">Cancel</button>
-          <button class="btn-append-save" id="edit-save-btn" onclick="saveEdit()">Save</button>
+          <button class="btn-append-cancel" onclick="closeEdit()" data-i18n="memories.cancel">Cancel</button>
+          <button class="btn-append-save" id="edit-save-btn" onclick="saveEdit()" data-i18n="memories.editSave">Save</button>
         </div>
       </div>
     </div>
@@ -271,7 +271,7 @@
     <div id="view-sheet">
       <div class="view-inner">
         <div class="view-header">
-          <h3>Memory</h3>
+          <h3 data-i18n="memories.viewTitle">Memory</h3>
           <button class="btn-close-icon" onclick="closeView()"><i class="ti ti-x"></i></button>
         </div>
         <!-- One scroll region between a fixed header and fixed actions. These
@@ -287,9 +287,9 @@
           <div class="view-related" id="view-related" style="display: none"></div>
         </div>
         <div class="view-actions">
-          <button class="btn-view-append" id="view-btn-append"><i class="ti ti-writing"></i> Append</button>
-          <button class="btn-view-edit" id="view-btn-edit"><i class="ti ti-pencil"></i> Edit</button>
-          <button class="btn-view-forget" id="view-btn-forget"><i class="ti ti-trash"></i> Forget</button>
+          <button class="btn-view-append" id="view-btn-append"><i class="ti ti-writing"></i> <span data-i18n="memories.append">Append</span></button>
+          <button class="btn-view-edit" id="view-btn-edit"><i class="ti ti-pencil"></i> <span data-i18n="memories.edit">Edit</span></button>
+          <button class="btn-view-forget" id="view-btn-forget"><i class="ti ti-trash"></i> <span data-i18n="memories.forget">Forget</span></button>
         </div>
       </div>
     </div>
@@ -307,12 +307,12 @@
            control here is an immediate verb — Digest, Restore, Export — and a
            "Save" that fired nine irreversible actions at once would be a trap. -->
       <div class="menu-inner">
-        <h3>Your brain</h3>
+        <h3 data-i18n="menu.title">Your brain</h3>
 
         <!-- Chores. Each section hides itself when there is nothing to do, so
              on a healthy brain this whole group disappears. -->
         <div class="menu-group" id="upkeep-group" hidden>
-          <div class="menu-group-label">Upkeep</div>
+          <div class="menu-group-label" data-i18n="menu.groupUpkeep">Upkeep</div>
           <div class="digest-section" id="patterns-section" style="display: none"></div>
           <div class="digest-section" id="digest-section" style="display: none"></div>
           <div class="digest-section" id="vectorize-section" style="display: none"></div>
@@ -321,29 +321,29 @@
         </div>
 
         <div class="menu-group">
-          <div class="menu-group-label">Data</div>
-          <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> Back up as JSON</button>
-          <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> Export as Markdown</button>
-          <button class="menu-item" id="restore-btn" onclick="restoreFromBackup()"><i class="ti ti-upload"></i> Restore from backup</button>
+          <div class="menu-group-label" data-i18n="menu.groupData">Data</div>
+          <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> <span data-i18n="menu.backupJson">Back up as JSON</span></button>
+          <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> <span data-i18n="menu.exportMarkdown">Export as Markdown</span></button>
+          <button class="menu-item" id="restore-btn" onclick="restoreFromBackup()"><i class="ti ti-upload"></i> <span data-i18n="menu.restore">Restore from backup</span></button>
         </div>
 
         <div class="menu-group">
-          <div class="menu-group-label">Connections</div>
-          <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> Integrations</button>
+          <div class="menu-group-label" data-i18n="menu.groupConnections">Connections</div>
+          <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> <span data-i18n="menu.integrations">Integrations</span></button>
         </div>
 
         <div class="menu-group">
-          <div class="menu-group-label">This app</div>
+          <div class="menu-group-label" data-i18n="menu.groupThisApp">This app</div>
           <div class="theme-row">
-            <span class="theme-row-label">Appearance</span>
+            <span class="theme-row-label" data-i18n="menu.appearance">Appearance</span>
             <div class="theme-toggle" id="theme-toggle">
-              <button data-theme-val="light" onclick="setTheme('light')" title="Light"><i class="ti ti-sun"></i></button>
-              <button data-theme-val="dark" onclick="setTheme('dark')" title="Dark"><i class="ti ti-moon"></i></button>
-              <button data-theme-val="auto" onclick="setTheme('auto')" title="Match system">Auto</button>
+              <button data-theme-val="light" onclick="setTheme('light')" title="Light" data-i18n="menu.themeLight" data-i18n-attr="title"><i class="ti ti-sun"></i></button>
+              <button data-theme-val="dark" onclick="setTheme('dark')" title="Dark" data-i18n="menu.themeDark" data-i18n-attr="title"><i class="ti ti-moon"></i></button>
+              <button data-theme-val="auto" onclick="setTheme('auto')" title="Match system" data-i18n="menu.themeMatchSystem" data-i18n-attr="title"><span data-i18n="menu.themeAuto">Auto</span></button>
             </div>
           </div>
-          <div class="about-credits" id="about-credits" aria-label="About Second Brain"></div>
-          <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> Disconnect</button>
+          <div class="about-credits" id="about-credits" aria-label="About Second Brain" data-i18n="menu.aboutAria" data-i18n-attr="aria-label"></div>
+          <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> <span data-i18n="menu.disconnect">Disconnect</span></button>
         </div>
       </div>
     </div>
@@ -352,13 +352,13 @@
       <div class="menu-inner">
         <div class="view-header">
           <div style="display: flex; align-items: center; gap: 10px">
-            <button class="btn-close-icon" id="integrations-back" onclick="backToMenu()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
-            <h3 style="margin-bottom: 0" id="integrations-title">Integrations</h3>
+            <button class="btn-close-icon" id="integrations-back" onclick="backToMenu()" title="Back to settings" data-i18n="integrations.backSettings" data-i18n-attr="title"><i class="ti ti-arrow-left"></i></button>
+            <h3 style="margin-bottom: 0" id="integrations-title" data-i18n="menu.integrations">Integrations</h3>
           </div>
           <button class="btn-close-icon" onclick="closeIntegrations()"><i class="ti ti-x"></i></button>
         </div>
-        <p class="digest-note" id="integrations-intro">Connect the tools where your context already lives. Synced content stays up to date and surfaces in recall like any other memory.</p>
-        <div id="integrations-list"><p class="digest-note">Loading&hellip;</p></div>
+        <p class="digest-note" id="integrations-intro" data-i18n="integrations.intro">Connect the tools where your context already lives. Synced content stays up to date and surfaces in recall like any other memory.</p>
+        <div id="integrations-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
       </div>
     </div>
 
@@ -369,29 +369,28 @@
       <div class="menu-inner patterns-inner">
         <div class="view-header">
           <div style="display: flex; align-items: center; gap: 10px">
-            <button class="btn-close-icon" onclick="backToMenuFromPatterns()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
-            <h3 style="margin-bottom: 0">Patterns noticed</h3>
+            <button class="btn-close-icon" onclick="backToMenuFromPatterns()" title="Back to settings" data-i18n="integrations.backSettings" data-i18n-attr="title"><i class="ti ti-arrow-left"></i></button>
+            <h3 style="margin-bottom: 0" data-i18n="patterns.title">Patterns noticed</h3>
           </div>
           <button class="btn-close-icon" onclick="closePatternsSheet()"><i class="ti ti-x"></i></button>
         </div>
-        <p class="digest-note" id="patterns-intro">
-          Your brain spotted these across several memories. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.
-        </p>
+        <p class="digest-note" id="patterns-intro" data-i18n="patterns.intro">Your brain spotted these across several memories. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.</p>
         <div class="patterns-bulkbar" id="patterns-bulkbar" hidden>
           <label class="patterns-selectall">
             <input type="checkbox" id="patterns-select-all" onchange="togglePatternSelectAll(this.checked)" />
-            <span id="patterns-selected-label">Select all</span>
+            <span id="patterns-selected-label" data-i18n="patterns.selectAll">Select all</span>
           </label>
           <div class="patterns-bulk-actions">
-            <button class="digest-btn" id="patterns-confirm-btn" onclick="resolveSelectedPatterns('confirm', this)" disabled>Confirm</button>
-            <button class="digest-btn danger" id="patterns-dismiss-btn" onclick="resolveSelectedPatterns('dismiss', this)" disabled>Dismiss</button>
+            <button class="digest-btn" id="patterns-confirm-btn" onclick="resolveSelectedPatterns('confirm', this)" disabled data-i18n="brief.confirm">Confirm</button>
+            <button class="digest-btn danger" id="patterns-dismiss-btn" onclick="resolveSelectedPatterns('dismiss', this)" disabled data-i18n="brief.dismiss">Dismiss</button>
           </div>
         </div>
-        <div id="patterns-list"><p class="digest-note">Loading&hellip;</p></div>
+        <div id="patterns-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
         <button class="digest-more" id="patterns-more" hidden onclick="loadMorePatterns(this)"></button>
       </div>
     </div>
 
+    <script src="js/i18n.js"></script>
     <script src="utils.js"></script>
     <script src="credits.js"></script>
     <script src="js/state.js"></script>

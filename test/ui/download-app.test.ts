@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
+import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const SOURCE = readFileSync(resolve(ROOT, "public/js/download-app.js"), "utf8");
@@ -38,9 +39,12 @@ function run(opts: {
       platform: opts.platform ?? "",
       userAgent: opts.userAgent ?? "",
       maxTouchPoints: opts.maxTouchPoints ?? 0,
+      language: "en-US",
     },
     document: {
+      documentElement: { lang: "en" },
       querySelector: (sel: string) => (sel === ".sb-footer" && opts.footer !== false ? footer : null),
+      querySelectorAll: () => [],
       getElementById: (id: string) =>
         opts.existing && id === "sb-download-app" ? ({} as unknown) : null,
       createElement: () =>
@@ -52,6 +56,7 @@ function run(opts: {
   sandbox.window = sandbox;
   if (opts.desktop) sandbox.SB_DESKTOP = true;
   vm.createContext(sandbox);
+  installI18n(sandbox as any, "en");
   vm.runInContext(SOURCE + "\n;renderDownloadButton();", sandbox);
   return { prepended, sandbox };
 }
@@ -123,9 +128,17 @@ describe("download button — OS detection", () => {
   it("prefers userAgentData.platform when present", () => {
     const prepended: Anchor[] = [];
     const sandbox: Record<string, unknown> = {
-      navigator: { userAgentData: { platform: "Windows" }, platform: "", userAgent: "", maxTouchPoints: 0 },
+      navigator: {
+        userAgentData: { platform: "Windows" },
+        platform: "",
+        userAgent: "",
+        maxTouchPoints: 0,
+        language: "en-US",
+      },
       document: {
+        documentElement: { lang: "en" },
         querySelector: () => ({ prepend: (el: Anchor) => prepended.push(el) }),
+        querySelectorAll: () => [],
         getElementById: () => null,
         createElement: () => ({ id: "", className: "", href: "", target: "", rel: "", title: "", innerHTML: "" }),
       },
@@ -134,6 +147,7 @@ describe("download button — OS detection", () => {
     };
     sandbox.window = sandbox;
     vm.createContext(sandbox);
+    installI18n(sandbox as any, "en");
     vm.runInContext(SOURCE + "\n;renderDownloadButton();", sandbox);
     expect(prepended[0].innerHTML).toContain("ti-brand-windows");
   });
@@ -243,5 +257,7 @@ describe("download button — wiring", () => {
   it("the desktop app sets the flag that suppresses it", () => {
     const rs = readFileSync(resolve(ROOT, "installer/src-tauri/src/windows.rs"), "utf8");
     expect(rs).toContain("window.SB_DESKTOP = true");
+    expect(rs).toContain("sb-locale");
+    expect(rs).toContain("sync_brain_locale");
   });
 });

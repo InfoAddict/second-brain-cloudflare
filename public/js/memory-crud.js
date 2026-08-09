@@ -26,15 +26,15 @@ async function saveAppend() {
   if (!addition || !pendingAppendId) return
   const btn = document.getElementById('append-save-btn')
   btn.disabled = true
-  btn.textContent = 'Saving...'
+  btn.textContent = t('memories.saving')
   try {
     await apiMcp('append', { id: pendingAppendId, addition })
     closeAppend()
     refreshAll()
   } catch (e) {
     btn.disabled = false
-    btn.textContent = 'Update'
-    alert('Append failed: ' + e.message)
+    btn.textContent = t('memories.appendSave')
+    alert(t('memories.appendFailed', { message: e.message }))
   }
 }
 
@@ -70,8 +70,8 @@ function renderEditTags() {
   if (!el) return
   el.innerHTML = pendingEditTags
     .map(
-      (t, i) =>
-        `<button type="button" class="tag-chip tag-chip--removable" onclick="removeEditTag(${i})" aria-label="Remove tag ${escAttr(t)}">${escHtml(t)}<i class="ti ti-x"></i></button>`,
+      (tag, i) =>
+        `<button type="button" class="tag-chip tag-chip--removable" onclick="removeEditTag(${i})" aria-label="${escAttr(t('memories.removeTag', { tag }))}">${escHtml(tag)}<i class="ti ti-x"></i></button>`,
     )
     .join('')
 }
@@ -92,7 +92,7 @@ async function saveEdit() {
   if (!newContent || !pendingEditId) return
   const btn = document.getElementById('edit-save-btn')
   btn.disabled = true
-  btn.textContent = 'Saving...'
+  btn.textContent = t('memories.saving')
   try {
     const res = await fetch(`${WORKER_URL}/update`, {
       method: 'POST',
@@ -101,13 +101,13 @@ async function saveEdit() {
       // src/tags/system.ts — so an edit cannot delete a conclusion the brain reached.
       body: JSON.stringify({ id: pendingEditId, content: newContent, tags: pendingEditTags }),
     })
-    if (!res.ok) throw new Error(`Server error: ${res.status}`)
+    if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
     closeEdit()
     refreshAll()
   } catch (e) {
     btn.disabled = false
-    btn.textContent = 'Save'
-    alert('Edit failed: ' + e.message)
+    btn.textContent = t('memories.editSave')
+    alert(t('memories.editFailed', { message: e.message }))
   }
 }
 
@@ -128,7 +128,7 @@ async function confirmForget() {
   const btn = document.querySelector('#confirm-dialog .btn-delete')
   if (btn) {
     btn.disabled = true
-    btn.textContent = 'Forgetting...'
+    btn.textContent = t('memories.forgetting')
   }
 
   try {
@@ -145,11 +145,11 @@ async function confirmForget() {
     // from under its own exit animation.
     refreshAll({ list: false })
   } catch (e) {
-    alert('Could not forget: ' + e.message)
+    alert(t('memories.forgetFailed', { message: e.message }))
   } finally {
     if (btn) {
       btn.disabled = false
-      btn.textContent = 'Forget'
+      btn.textContent = t('memories.forget')
     }
   }
 }
@@ -162,20 +162,26 @@ async function confirmForget() {
 // reachable from the UI. This is the one place that shows it, in plain
 // language rather than the tag syntax it is stored as.
 
-/** `kind:semantic` → "Fact", and so on. Unknown values render as themselves. */
-const VIEW_KIND_LABELS = { semantic: 'Fact', episodic: 'Event' }
+/** `kind:semantic` → localized label. Unknown values render as themselves. */
+function viewKindLabel(kind) {
+  if (kind === 'semantic') return t('memories.kindFact')
+  if (kind === 'episodic') return t('memories.kindEvent')
+  return kind
+}
 
-const VIEW_STATUS_LABELS = {
-  canonical: 'Trusted',
-  draft: 'Unconfirmed',
-  deprecated: 'Superseded',
+function viewStatusLabel(status) {
+  if (status === 'canonical') return t('memories.statusTrusted')
+  if (status === 'draft') return t('memories.statusUnconfirmed')
+  if (status === 'deprecated') return t('memories.statusSuperseded')
+  return status
 }
 
 /** Volatility is a promise about the future, so it is worth spelling out. */
-const VIEW_VOLATILITY = {
-  durable: ['Durable', 'Not expected to change.'],
-  state: ['Current', 'True for now — assistants verify this before relying on it.'],
-  volatile: ['Short-lived', 'True only briefly — assistants treat it as possibly stale.'],
+function viewVolatility(volatility) {
+  if (volatility === 'durable') return [t('memories.volDurable'), t('memories.volDurableGloss')]
+  if (volatility === 'state') return [t('memories.volCurrent'), t('memories.volCurrentGloss')]
+  if (volatility === 'volatile') return [t('memories.volShortLived'), t('memories.volShortLivedGloss')]
+  return null
 }
 
 function tagValue(tags, prefix) {
@@ -186,7 +192,7 @@ function tagValue(tags, prefix) {
 /** Importance as five dots — a number out of five means nothing on its own. */
 function importanceDots(score) {
   const n = Math.max(0, Math.min(5, Math.round(Number(score) || 0)))
-  return `<span class="dots" title="Importance ${n} of 5">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`
+  return `<span class="dots" title="${escAttr(t('memories.importanceTitle', { n }))}">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`
 }
 
 function renderViewMeta(entry) {
@@ -196,11 +202,11 @@ function renderViewMeta(entry) {
   const updated = Number(entry.updated_at) || 0
   const parts = [`<span class="view-meta-item"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>`]
   if (created) {
-    parts.push(`<span class="view-meta-item" title="${escAttr(new Date(created).toLocaleString())}">captured ${escHtml(relativeTime(created))}</span>`)
+    parts.push(`<span class="view-meta-item" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(t('memories.metaCaptured', { relative: relativeTime(created) }))}</span>`)
   }
   // Only worth saying when it actually differs — every row has an updated_at.
   if (updated && created && Math.abs(updated - created) > 60000) {
-    parts.push(`<span class="view-meta-item" title="${escAttr(new Date(updated).toLocaleString())}">edited ${escHtml(relativeTime(updated))}</span>`)
+    parts.push(`<span class="view-meta-item" title="${escAttr(new Date(updated).toLocaleString(localeTag()))}">${escHtml(t('memories.metaEdited', { relative: relativeTime(updated) }))}</span>`)
   }
   el.innerHTML = parts.join('')
 }
@@ -217,35 +223,36 @@ function renderViewBrain(entry) {
   const notes = []
 
   if (typeof entry.importance_score === 'number') {
-    rows.push(`<div class="view-brain-row"><span>Importance</span>${importanceDots(entry.importance_score)}</div>`)
+    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.importance'))}</span>${importanceDots(entry.importance_score)}</div>`)
   }
   if (kind) {
-    rows.push(`<div class="view-brain-row"><span>Kind</span><strong>${escHtml(VIEW_KIND_LABELS[kind] || kind)}</strong></div>`)
+    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.kind'))}</span><strong>${escHtml(viewKindLabel(kind))}</strong></div>`)
   }
   if (status) {
-    rows.push(`<div class="view-brain-row"><span>Status</span><strong>${escHtml(VIEW_STATUS_LABELS[status] || status)}</strong></div>`)
+    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.status'))}</span><strong>${escHtml(viewStatusLabel(status))}</strong></div>`)
   }
-  if (volatility && VIEW_VOLATILITY[volatility]) {
-    const [label, gloss] = VIEW_VOLATILITY[volatility]
-    rows.push(`<div class="view-brain-row"><span>Lifespan</span><strong>${escHtml(label)}</strong></div>`)
+  const volPair = volatility ? viewVolatility(volatility) : null
+  if (volPair) {
+    const [label, gloss] = volPair
+    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.lifespan'))}</span><strong>${escHtml(label)}</strong></div>`)
     // Held back to the end: a sentence between two rows breaks the list it is
     // explaining, and the panel reads as facts first, then the caveats.
     notes.push(gloss)
   }
   if (typeof entry.recall_count === 'number' && entry.recall_count > 0) {
-    rows.push(`<div class="view-brain-row"><span>Recalled</span><strong>${entry.recall_count} time${entry.recall_count === 1 ? '' : 's'}</strong></div>`)
+    rows.push(`<div class="view-brain-row"><span>${escHtml(t('memories.recalled'))}</span><strong>${escHtml(tPlural('memories.recalledTimes', entry.recall_count))}</strong></div>`)
   }
   // Losing a contradiction means something newer disagreed with this. Silence
   // when it has never happened; it is not a scoreboard.
   const losses = Number(entry.contradiction_losses) || 0
   if (losses > 0) {
-    notes.push(`Something newer has disagreed with this ${losses} time${losses === 1 ? '' : 's'}.`)
+    notes.push(tPlural('memories.disagreed', losses))
   }
   for (const note of notes) {
     rows.push(`<div class="view-brain-note">${escHtml(note)}</div>`)
   }
   if (entry.indexed === false) {
-    rows.push(`<div class="view-brain-note view-brain-note--warn">Not indexed yet — recall cannot find this memory.</div>`)
+    rows.push(`<div class="view-brain-note view-brain-note--warn">${escHtml(t('memories.notIndexedYet'))}</div>`)
   }
 
   if (!rows.length) {
@@ -254,7 +261,7 @@ function renderViewBrain(entry) {
     return
   }
   el.style.display = ''
-  el.innerHTML = `<div class="view-brain-label">What your brain knows</div>${rows.join('')}`
+  el.innerHTML = `<div class="view-brain-label">${escHtml(t('memories.brainLabel'))}</div>${rows.join('')}`
 }
 
 /**
@@ -352,13 +359,20 @@ async function loadRelated(id, el) {
       return
     }
     el.innerHTML =
-      `<div class="view-related-label">Related</div>` +
+      `<div class="view-related-label">${escHtml(t('memories.related'))}</div>` +
       data.connections
         .map(
           (c) => {
-            const who = c.provenance === 'explicit' ? 'you linked' : c.provenance === 'system' ? 'system-linked' : 'auto-linked'
-            const when = c.linkedAt ? ' · ' + new Date(c.linkedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : ''
-            return `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)} · ${who}${when}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="Remove link"><i class="ti ti-unlink"></i></button></div>`
+            const who =
+              c.provenance === 'explicit'
+                ? t('memories.youLinked')
+                : c.provenance === 'system'
+                  ? t('memories.systemLinked')
+                  : t('memories.autoLinked')
+            const when = c.linkedAt
+              ? ' · ' + formatDateUI(c.linkedAt, { year: 'numeric', month: 'short', day: 'numeric' })
+              : ''
+            return `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)} · ${escHtml(who)}${escHtml(when)}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="${escAttr(t('memories.removeLink'))}"><i class="ti ti-unlink"></i></button></div>`
           },
         )
         .join('')
@@ -369,7 +383,7 @@ async function loadRelated(id, el) {
         if (c) openView({ id: c.id, content: c.content, tags: c.tags }, null)
       }
       row.querySelector('.related-unlink').onclick = async () => {
-        if (!confirm('Remove this link? The memories stay; only the connection is deleted.')) return
+        if (!confirm(t('memories.removeLinkConfirm'))) return
         try {
           await fetch(`${WORKER_URL}/unlink`, {
             method: 'POST',

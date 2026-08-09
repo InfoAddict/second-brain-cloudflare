@@ -163,6 +163,9 @@ fn open_wrapper_window_impl(
         .map(|l| l.get())
         .unwrap_or(Locale::En);
     if let Some(w) = app.get_webview_window("brain") {
+        // Align dashboard locale with the app without reloading when it already
+        // matches — reopening the brain otherwise would flash a full reload.
+        sync_brain_locale(app, worker_url, locale, false);
         if open_integrations {
             let _ = w.eval("try { openIntegrations() } catch (_) {}");
         }
@@ -179,6 +182,7 @@ fn open_wrapper_window_impl(
     // serde_json turns the values into safely-escaped JS string literals.
     let origin_js = serde_json::to_string(&origin).expect("string serializes");
     let token_js = serde_json::to_string(auth_token).expect("string serializes");
+    let locale_js = serde_json::to_string(locale.as_str()).expect("string serializes");
     let mut init = format!(
         r#"(function () {{
   // Tells the dashboard it is running inside the desktop app, so it can hide
@@ -190,6 +194,7 @@ fn open_wrapper_window_impl(
     if (location.origin === {origin_js}) {{
       localStorage.setItem('sb_url', {origin_js});
       localStorage.setItem('sb_token', {token_js});
+      localStorage.setItem('sb-locale', {locale_js});
     }}
   }} catch (_) {{}}
 }})();"#
@@ -244,6 +249,49 @@ fn open_wrapper_window_impl(
         })
         .build()?;
     Ok(())
+}
+
+/// Writes `sb-locale` into an open brain window (origin-guarded) and reloads
+/// when the stored value differs — or always when `force_reload` is set (language
+/// change from Settings). Same pattern as token refresh: never write off-origin.
+pub fn sync_brain_locale(
+    app: &AppHandle,
+    worker_url: &str,
+    locale: Locale,
+    force_reload: bool,
+) {
+    let Some(window) = app.get_webview_window("brain") else {
+        return;
+    };
+    let Some(origin) = brain_origin(worker_url) else {
+        return;
+    };
+    match window.url() {
+        Ok(showing) if showing_the_brain(showing.as_str(), &origin) => {}
+        Ok(_) => return,
+        Err(e) => {
+            log::warn!("could not read the dashboard window's address: {e}");
+            return;
+        }
+    }
+    let locale_js = serde_json::to_string(locale.as_str()).expect("string serializes");
+    let origin_js = serde_json::to_string(&origin).expect("string serializes");
+    let force = if force_reload { "true" } else { "false" };
+    let script = format!(
+        r#"(function () {{
+  try {{
+    if (location.origin !== {origin_js}) return;
+    var next = {locale_js};
+    var prev = localStorage.getItem('sb-locale');
+    if (prev === next && !{force}) return;
+    localStorage.setItem('sb-locale', next);
+    location.reload();
+  }} catch (_) {{}}
+}})();"#
+    );
+    if let Err(e) = window.eval(&script) {
+        log::warn!("could not sync the dashboard window's locale: {e}");
+    }
 }
 
 /// Re-points an already-open dashboard window at a new password, then reloads it.

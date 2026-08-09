@@ -1,4 +1,30 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import vm from "node:vm";
+
+const ROOT = resolve(import.meta.dirname, "../..");
+const i18nCtx: any = {
+  localStorage: {
+    _m: new Map(),
+    getItem(k: string) {
+      return this._m.get(k) ?? null;
+    },
+    setItem(k: string, v: string) {
+      this._m.set(k, v);
+    },
+  },
+  navigator: { language: "en-US" },
+  document: { documentElement: { lang: "en" }, querySelectorAll: () => [] },
+};
+vm.createContext(i18nCtx);
+vm.runInContext(readFileSync(resolve(ROOT, "public/js/i18n.js"), "utf8"), i18nCtx);
+i18nCtx.initI18n("en");
+(globalThis as any).t = i18nCtx.t;
+(globalThis as any).tPlural = i18nCtx.tPlural;
+(globalThis as any).formatNumberUI = i18nCtx.formatNumberUI;
+(globalThis as any).localeTag = i18nCtx.localeTag;
+(globalThis as any).getLocale = i18nCtx.getLocale;
 
 const { parseRecallResult, escHtml, escAttr, toDateStr, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
 

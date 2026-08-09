@@ -47,9 +47,9 @@ function sbDownloadIcon(os) {
 }
 
 function sbDownloadLabel(os) {
-  if (os === 'mac') return 'Download for Mac'
-  if (os === 'windows') return 'Download for Windows'
-  return 'Download the app'
+  if (os === 'mac') return t('download.mac')
+  if (os === 'windows') return t('download.windows')
+  return t('download.generic')
 }
 
 /** Swaps the href for the exact installer. Silent no-op on any failure. */
@@ -67,7 +67,7 @@ async function upgradeDownloadHref(os, anchor) {
     )
     if (asset && asset.browser_download_url) {
       anchor.href = asset.browser_download_url
-      if (release.tag_name) anchor.title = `${sbDownloadLabel(os)} (${release.tag_name})`
+      if (release.tag_name) anchor.title = t('download.withTag', { label: sbDownloadLabel(os), tag: release.tag_name })
     }
   } catch {
     // Offline, rate limited, or blocked — the releases page href still stands.

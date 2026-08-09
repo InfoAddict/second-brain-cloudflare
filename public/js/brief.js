@@ -40,12 +40,13 @@ function briefActivity(activity) {
   const bars = activity
     .map((d) => {
       const pct = Math.round((d.count / peak) * 100)
-      const when = new Date(d.day * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      return `<span class="spark-bar${d.count ? '' : ' spark-bar--empty'}" style="height:${Math.max(pct, 3)}%" title="${escAttr(when)}: ${d.count} ${d.count === 1 ? 'memory' : 'memories'}"></span>`
+      const when = formatDateUI(d.day * 86400000, { month: 'short', day: 'numeric' })
+      const title = tPlural('brief.activityTitle', d.count, { date: when })
+      return `<span class="spark-bar${d.count ? '' : ' spark-bar--empty'}" style="height:${Math.max(pct, 3)}%" title="${escAttr(title)}"></span>`
     })
     .join('')
   return `<div class="brief-panel">
-      <div class="brief-label">Last ${activity.length} days</div>
+      <div class="brief-label">${escHtml(t('brief.lastDays', { n: activity.length }))}</div>
       <div class="spark">${bars}</div>
     </div>`
 }
@@ -67,7 +68,7 @@ function briefSources(sources) {
     })
     .join('')
   return `<div class="brief-panel">
-      <div class="brief-label">Where from</div>
+      <div class="brief-label">${escHtml(t('brief.whereFrom'))}</div>
       ${rows}
     </div>`
 }
@@ -80,10 +81,10 @@ function briefAttention(a) {
   if (!a) return ''
   const items = []
   if (a.unindexed > 0) {
-    items.push(`<button class="attn" onclick="openMenu()"><i class="ti ti-eye-off"></i>${a.unindexed} not searchable</button>`)
+    items.push(`<button class="attn" onclick="openMenu()"><i class="ti ti-eye-off"></i>${escHtml(t('brief.attentionUnindexed', { n: a.unindexed }))}</button>`)
   }
   if (a.stale > 0) {
-    items.push(`<button class="attn" onclick="sendSuggestion('What might be out of date?')"><i class="ti ti-clock-exclamation"></i>${a.stale} may be out of date</button>`)
+    items.push(`<button class="attn" onclick="sendSuggestion('${escAttr(t('recall.sugOutOfDate'))}')"><i class="ti ti-clock-exclamation"></i>${escHtml(t('brief.attentionStale', { n: a.stale }))}</button>`)
   }
   if (!items.length) return ''
   return `<div class="brief-attention">${items.join('')}</div>`
@@ -104,21 +105,21 @@ function renderBrief(data) {
   for (const p of (data.patterns || []).slice(0, 2)) {
     cards.push(`
       <div class="brief-card" data-pattern="${escAttr(p.id)}">
-        <div class="brief-label">Pattern noticed</div>
+        <div class="brief-label">${escHtml(t('brief.patternNoticed'))}</div>
         <div class="brief-body">${escHtml(titleLine(p.content, 140))}</div>
         <div class="brief-actions">
-          <button class="digest-btn" onclick="briefResolvePattern('${escAttr(p.id)}', 'confirm', this)">Confirm</button>
-          <button class="digest-btn danger" onclick="briefResolvePattern('${escAttr(p.id)}', 'dismiss', this)">Dismiss</button>
+          <button class="digest-btn" onclick="briefResolvePattern('${escAttr(p.id)}', 'confirm', this)">${escHtml(t('brief.confirm'))}</button>
+          <button class="digest-btn danger" onclick="briefResolvePattern('${escAttr(p.id)}', 'dismiss', this)">${escHtml(t('brief.dismiss'))}</button>
         </div>
       </div>`)
   }
   if (data.resurface) {
     const when = data.resurface.created_at
-      ? new Date(data.resurface.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+      ? formatDateUI(data.resurface.created_at, { year: 'numeric', month: 'short', day: 'numeric' })
       : ''
     cards.push(`
       <div class="brief-card brief-card--quiet">
-        <div class="brief-label">Worth re-reading${when ? ` · from ${escHtml(when)}` : ''}</div>
+        <div class="brief-label">${escHtml(when ? `${t('brief.worthRereading')}${t('brief.fromDate', { date: when })}` : t('brief.worthRereading'))}</div>
         <div class="brief-body">${escHtml(titleLine(data.resurface.content, 180))}</div>
       </div>`)
   }
@@ -136,7 +137,7 @@ function renderBrief(data) {
   el.style.display = ''
   el.innerHTML =
     attention +
-    `<div class="brief-eyebrow">Your brain, lately</div>` +
+    `<div class="brief-eyebrow">${escHtml(t('brief.eyebrow'))}</div>` +
     (panels.length ? `<div class="brief-grid">${panels.join('')}</div>` : '') +
     cards.join('')
 }
@@ -146,7 +147,7 @@ async function briefResolvePattern(id, action, btn) {
   const card = btn.closest('.brief-card')
   card.querySelectorAll('button').forEach((b) => (b.disabled = true))
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.working'))}`
   try {
     const res = await fetch(`${WORKER_URL}/patterns/resolve`, {
       method: 'POST',
@@ -155,11 +156,11 @@ async function briefResolvePattern(id, action, btn) {
     })
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
-    card.innerHTML = `<div class="brief-label">${action === 'confirm' ? 'Confirmed — now recallable' : 'Dismissed'}</div>`
+    card.innerHTML = `<div class="brief-label">${escHtml(action === 'confirm' ? t('brief.confirmed') : t('brief.dismissed'))}</div>`
     card.classList.add('brief-card--quiet')
   } catch {
     card.querySelectorAll('button').forEach((b) => (b.disabled = false))
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = 'Failed — retry'
+    btn.innerHTML = escHtml(t('brief.failedRetry'))
   }
 }

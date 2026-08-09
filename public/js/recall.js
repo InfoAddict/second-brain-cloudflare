@@ -36,7 +36,7 @@ async function sendRecall() {
     if (!recallRes.ok || !data.ok) throw new Error(data.error || 'recall failed')
     loadingEl.remove()
     if (!data.results || !data.results.length) {
-      appendBrainBubble(msgs, "I couldn't find anything matching that. Try different words, or browse Memories.", 'recall-sys')
+      appendBrainBubble(msgs, t('recall.empty'), 'recall-sys')
     } else {
       // REST scores are already 0–100 (one decimal); map directly rather than via
       // normalizeEntry, whose 0–1 rescale heuristic would turn a 0.8% match into 80%
@@ -117,7 +117,7 @@ async function sendRecall() {
       // "found · N sources" is the phrasing the marketing site uses for exactly
       // this moment; the dashboard should not invent a different one.
       sourcesToggle.innerHTML = `<button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'flex' : 'none'">
-      <i class="ti ti-files"></i> found · ${entries.length} source${entries.length === 1 ? '' : 's'}
+      <i class="ti ti-files"></i> ${escHtml(tPlural('recall.sourcesFound', entries.length))}
     </button>
     <div class="brain-cards-wrapper" style="display:none"></div>`
       const wrapper = sourcesToggle.querySelector('.brain-cards-wrapper')
@@ -155,7 +155,7 @@ async function sendRecall() {
     }
   } catch {
     loadingEl.remove()
-    appendBrainBubble(msgs, 'Something went wrong. Check your connection and try again.', 'recall-sys')
+    appendBrainBubble(msgs, t('recall.error'), 'recall-sys')
   }
   msgs.scrollTop = msgs.scrollHeight
 }
@@ -168,9 +168,9 @@ function makeRecallCard(entry, citeIndex) {
   card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '')
   card.innerHTML = `
     <div class="match-line">
-${citeIndex ? `<span class="cite-badge" title="Cited as [${citeIndex}] in the answer">${citeIndex}</span>` : ''}
+${citeIndex ? `<span class="cite-badge" title="${escAttr(t('recall.citedAs', { n: citeIndex }))}">${citeIndex}</span>` : ''}
 <span class="match-pct">${entry.score}%</span>
-${entry.hop > 0 ? `<span class="tag-chip" style="background:var(--accent-soft);color:var(--accent);flex-shrink:0">related · ${entry.hop} hop${entry.hop > 1 ? 's' : ''}</span>` : ''}
+${entry.hop > 0 ? `<span class="tag-chip" style="background:var(--accent-soft);color:var(--accent);flex-shrink:0">${escHtml(tPlural('recall.relatedHop', entry.hop))}</span>` : ''}
 <div class="match-bar-bg"><div class="match-bar-fill" style="width:${entry.score}%"></div></div>
     </div>
     <div class="card-content" style="cursor: pointer;">${escHtml(stripToPlainText(entry.content))}</div>
@@ -180,7 +180,7 @@ ${entry.hop > 0 ? `<span class="tag-chip" style="background:var(--accent-soft);c
       if (!entry.source && !at) return ''
       return `<div class="card-meta">
         <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
-        ${at ? `<span class="card-time" title="${escAttr(new Date(at).toLocaleString())}">${escHtml(relativeTime(at))}</span>` : ''}
+        ${at ? `<span class="card-time" title="${escAttr(new Date(at).toLocaleString(localeTag()))}">${escHtml(relativeTime(at))}</span>` : ''}
       </div>`
     })()}
     <div class="card-footer">
@@ -188,8 +188,8 @@ ${entry.hop > 0 ? `<span class="tag-chip" style="background:var(--accent-soft);c
 <div class="card-actions">
   ${
     entry.id
-      ? `<button class="card-action-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> Append</button>`
-      : `<button class="card-action-btn" onclick="openAppendFromContent('${escAttr(entry.content)}')"><i class="ti ti-writing"></i> Append</button>`
+      ? `<button class="card-action-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>`
+      : `<button class="card-action-btn" onclick="openAppendFromContent('${escAttr(entry.content)}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>`
   }
 </div>
     </div>`

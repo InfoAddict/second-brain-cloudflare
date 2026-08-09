@@ -7,7 +7,7 @@ async function loadRecent() {
   // Only show the loading state on a cold list. A refresh after a capture
   // would otherwise blank out rows the user is reading and snap them back.
   if (!allEntries.length) {
-    list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>Loading...</span></div>`
+    list.innerHTML = `<div class="empty-state"><i class="ti ti-clock"></i><span>${escHtml(t('memories.loadingShort'))}</span></div>`
   }
   try {
     allEntries = await apiList(50)
@@ -19,7 +19,7 @@ async function loadRecent() {
     showFirstRunIfEmpty(allEntries.length === 0)
   } catch {
     if (!allEntries.length) {
-      list.innerHTML = `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>Could not load memories.</span></div>`
+      list.innerHTML = `<div class="empty-state"><i class="ti ti-wifi-off"></i><span>${escHtml(t('memories.loadFailed'))}</span></div>`
     }
   }
 }
@@ -38,23 +38,21 @@ function showFirstRunIfEmpty(isEmpty) {
   if (suggestions) suggestions.style.display = 'none'
   welcome.classList.add('first-run')
   welcome.innerHTML =
-    `<div class="eyebrow">Getting started</div>` +
-    `<div class="hero-line">Your Second Brain is empty. Here is where everything lives.</div>` +
+    `<div class="eyebrow">${escHtml(t('home.firstRunEyebrow'))}</div>` +
+    `<div class="hero-line">${escHtml(t('home.firstRunHero'))}</div>` +
     `<ol class="first-run-steps">` +
     // Named after what is on screen. This used to point at a Remember tab and a
     // Recall tab, both of which are now the one box above.
-    `<li><b>The box above</b> does both: write a statement and it is saved, ask a question and it is answered. ` +
-    `It says which one it is about to do before you send.</li>` +
-    `<li><b>Memories</b> is everything you have kept — as a list by date, or as a graph of how it connects.</li>` +
-    `<li><b>Settings</b> is where you connect Claude, ChatGPT, Cursor, your email and calendar, ` +
-    `so they read from and add to this same memory.</li>` +
+    `<li>${escHtml(t('home.firstRunStep1'))}</li>` +
+    `<li>${escHtml(t('home.firstRunStep2'))}</li>` +
+    `<li>${escHtml(t('home.firstRunStep3'))}</li>` +
     `</ol>`
 }
 
 function renderRecent(entries) {
   const list = document.getElementById('recent-list')
   if (!entries.length) {
-    list.innerHTML = `<div class="empty-state"><i class="ti ti-brain"></i><span>No memories yet.<br>Use Remember to save your first one.</span></div>`
+    list.innerHTML = `<div class="empty-state"><i class="ti ti-brain"></i><span>${escHtml(t('memories.empty'))}</span></div>`
     return
   }
   const groups = {},
@@ -67,17 +65,17 @@ function renderRecent(entries) {
       ds = toDateStr(d)
     let label
     if (ds === today) {
-      label = 'Today'
+      label = t('memories.today')
     } else if (ds === yesterday) {
-      label = 'Yesterday'
+      label = t('memories.yesterday')
     } else if (entry.created_at >= sevenDaysAgo) {
-      label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      label = formatDateUI(d, { month: 'short', day: 'numeric' })
     } else {
       // Group by week: find the Monday of that week
       const dow = d.getDay()
       const diff = dow === 0 ? -6 : 1 - dow
       const weekStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff)
-      label = 'Week of ' + weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      label = t('memories.weekOf', { date: formatDateUI(weekStart, { month: 'short', day: 'numeric' }) })
     }
     if (!groups[label]) groups[label] = []
     groups[label].push(entry)
@@ -115,10 +113,10 @@ function makeRecentCard(entry) {
 
   const vecChip =
     vec === 'on'
-      ? `<span class="tag-chip vec-chip vec-chip--on" title="Vectorized — searchable via recall"><i class="ti ti-circle-check"></i></span>`
+      ? `<span class="tag-chip vec-chip vec-chip--on" title="${escAttr(t('memories.vecOnTitle'))}"><i class="ti ti-circle-check"></i></span>`
       : vec === 'pending'
-        ? `<span class="tag-chip vec-chip vec-chip--pending" title="Vectorizing… (just captured)"><i class="ti ti-clock"></i></span>`
-        : `<span class="tag-chip vec-chip vec-chip--off" title="Not vectorized — won't appear in recall">Not indexed</span>`
+        ? `<span class="tag-chip vec-chip vec-chip--pending" title="${escAttr(t('memories.vecPendingTitle'))}"><i class="ti ti-clock"></i></span>`
+        : `<span class="tag-chip vec-chip vec-chip--off" title="${escAttr(t('memories.vecOffTitle'))}">${escHtml(t('memories.vecNotIndexed'))}</span>`
 
   const title = titleLine(entry.content)
   const preview = previewAfterTitle(entry.content, title)
@@ -136,16 +134,16 @@ function makeRecentCard(entry) {
 <div class="card-footer">
   <div class="card-meta">
     <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
-    ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString())}">${escHtml(relativeTime(created))}</span>` : ''}
+    ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(relativeTime(created))}</span>` : ''}
   </div>
   <div class="card-tags">${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${vecChip}</div>
   <div class="card-actions">
-    <button class="card-action-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> Append</button>
-    <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> Edit</button>
+    <button class="card-action-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
+    <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>
     <div class="card-overflow">
-      <button class="card-action-btn overflow-btn" aria-label="More actions" aria-haspopup="true" aria-expanded="false"><i class="ti ti-dots"></i></button>
+      <button class="card-action-btn overflow-btn" aria-label="${escAttr(t('memories.moreActions'))}" aria-haspopup="true" aria-expanded="false"><i class="ti ti-dots"></i></button>
       <div class="card-overflow-menu" hidden>
-        <button class="card-overflow-item danger forget-btn"><i class="ti ti-trash"></i> Forget this memory</button>
+        <button class="card-overflow-item danger forget-btn"><i class="ti ti-trash"></i> ${escHtml(t('memories.forgetThis'))}</button>
       </div>
     </div>
   </div>

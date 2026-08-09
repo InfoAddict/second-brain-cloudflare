@@ -45,8 +45,21 @@ function load() {
       querySelectorAll: () => [],
     },
   };
+  ctx.localStorage = {
+    _m: new Map<string, string>(),
+    getItem(k: string) {
+      return this._m.get(k) ?? null;
+    },
+    setItem(k: string, v: string) {
+      this._m.set(k, v);
+    },
+  };
+  ctx.navigator = { language: "en-US" };
+  ctx.document.documentElement = { lang: "en" };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  vm.runInContext(readFileSync(resolve(ROOT, "public/js/i18n.js"), "utf8"), ctx);
+  ctx.initI18n("en");
   vm.runInContext(readFileSync(resolve(ROOT, "public/js/home.js"), "utf8"), ctx);
   ctx.__els = els;
   return ctx;
@@ -69,6 +82,8 @@ describe("what the sentence is asking for", () => {
       "did I ever decide on the floor",
       "show me my tasks",
       "find the pricing note",
+      "cosa ho deciso sul prezzo",
+      "quando ho spedito 2.2.3",
     ]) {
       expect(detectHomeMode(q), q).toBe("ask");
     }

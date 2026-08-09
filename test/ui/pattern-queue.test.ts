@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import { describe, it, expect, vi } from "vitest";
+import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -63,6 +64,7 @@ function load(pages: any[] = []) {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  installI18n(ctx, "en");
   for (const f of ["public/utils.js", "public/js/patterns.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
