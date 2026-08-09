@@ -16,13 +16,19 @@ function load(): any {
   const ctx: any = { console };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(readFileSync(resolve(ROOT, "public/js/tags.js"), "utf8"), ctx);
   vm.runInContext(readFileSync(resolve(ROOT, "public/utils.js"), "utf8"), ctx);
   return ctx;
 }
 
 describe("isSystemTag / humanTags", () => {
   const { isSystemTag, humanTags } = load();
+
+  it("treats the contradiction marker as the brain's own bookkeeping", () => {
+    // captureEntry writes this the moment a contradiction is detected, exactly like
+    // the other pipeline markers — it was simply missing from the list.
+    expect(isSystemTag("contradiction-resolved")).toBe(true);
+    expect(humanTags(["cycling", "contradiction-resolved"])).toEqual(["cycling"]);
+  });
 
   it("hides every reserved namespace the Worker writes", () => {
     for (const t of ["kind:episodic", "status:canonical", "volatility:volatile", "stale:as-of"]) {

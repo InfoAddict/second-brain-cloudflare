@@ -313,6 +313,75 @@ function syncVectorizeBanner(doc, banner) {
   return el;
 }
 
+/* ---- System tags ----------------------------------------------------------------------
+ *
+ * Which tags are the brain's own bookkeeping, and which are the person's words.
+ *
+ * This used to live in its own js/tags.js and serve display only, while the graph
+ * clusterer below carried a second, shorter list of its own. The two drifted: the
+ * clusterer's omitted `rolled-up` and had no machine-identifier rule, so tags hidden
+ * from every chip in the app could still name a whole region of the graph.
+ *
+ * One copy, here, because utils.js is the file the unit tests require directly and the
+ * file the dashboard loads first — so it is the one nothing else has to be loaded for.
+ * js/tags.js is gone; its callers pick these up as globals exactly as before.
+ */
+
+/** Namespaces the Worker owns. Anything `prefix:value` shaped and reserved. */
+const SYSTEM_TAG_PREFIXES = ['kind:', 'status:', 'volatility:', 'stale:']
+
+/**
+ * Bare markers the Worker writes: compression, pattern mining, dedupe, and the
+ * contradiction pass (src/capture/entry.ts). Keep in step with PIPELINE_TAG_NAMES
+ * in src/tags/system.ts.
+ */
+const SYSTEM_TAG_NAMES = new Set([
+  'auto-pattern',
+  'synthesized',
+  'rolled-up',
+  'duplicate-candidate',
+  'contradiction-resolved',
+])
+
+/**
+ * Machine identifiers that a `#token` scan mistook for tags: `#5118` issue
+ * references, `#fd540a` colour codes, `#0f3d3e` short commit SHAs.
+ *
+ * Deliberately narrow, because plenty of real tags look numeric at a glance:
+ *   - a digit is required, so `facade`, `decade` and `added` stay tags;
+ *   - six characters minimum, so `d1` and `v2` stay tags;
+ *   - the whole string must be hex, so `12v-battery` and `14-day-plan` stay.
+ */
+function isMachineIdentifier(t) {
+  if (/^\d+$/.test(t)) return true
+  return /^[0-9a-f]{6,40}$/.test(t) && /\d/.test(t)
+}
+
+/**
+ * Is this tag the brain talking to itself?
+ *
+ * v2.3 stops extracting machine identifiers at capture (src/text/hashtags.ts), but
+ * rows written before that keep theirs, and no backfill is worth rewriting history
+ * for. Hiding them cleans up the past without touching stored data.
+ *
+ * These stay visible in exactly one place — the memory detail view, labelled as what
+ * they are. Everywhere else the answer to "what is this memory about?" should be the
+ * user's own words, and no cluster in the graph should be named after one.
+ */
+function isSystemTag(tag) {
+  if (typeof tag !== 'string') return true
+  const t = tag.trim().toLowerCase()
+  if (!t) return true
+  if (SYSTEM_TAG_NAMES.has(t)) return true
+  if (isMachineIdentifier(t)) return true
+  return SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))
+}
+
+/** The tags worth showing a person, in their original order. */
+function humanTags(tags) {
+  return (Array.isArray(tags) ? tags : []).filter((t) => !isSystemTag(t))
+}
+
 /* ---- Graph view: topic clustering + static packed layout ------------------------------
  *
  * The dashboard graph groups memories into topic clusters derived from their tags, at two
@@ -321,80 +390,115 @@ function syncVectorizeBanner(doc, banner) {
  * force-simulated or animated.
  */
 
-/* Group graph nodes into topic clusters by tag. Mutates each node, setting:
- *   n.cluster - the node's broad category: a tag, or one of the reserved sentinel ids
- *               '__other__' | '__untagged__' | '__autopattern__'
+/**
+ * The "what kind of thing is this" tags every file in AI_Instructions/ tells an
+ * assistant to write, alongside a topic tag. They answer a different question from a
+ * topic tag but land in the same flat array, so without this the clusterer cannot
+ * tell the two axes apart — and since one of them is on almost every memory, it wins
+ * on frequency alone and names most of the graph.
+ *
+ * Second refusal rather than exclusion: a memory carrying nothing else really is
+ * best described by one of these, and dropping them outright just promotes the
+ * next-broadest topic tag and strands everything that had only an axis tag.
+ *
+ * Update this together with AI_Instructions/*.md.
+ */
+const GRAPH_AXIS_TAGS = new Set([
+  'personal',
+  'work',
+  'task',
+  'idea',
+  'context',
+  'claude-response',
+  'codex-response',
+])
+
+/* Group graph nodes into topic clusters. Mutates each node, setting:
+ *   n.cluster - the node's category: a tag, or the sentinel id '__loose__'
  *   n.sub     - a sub-topic tag shared with other members of the same category, or null
  *
+ * `edges` is optional — [{ source, target, weight }] — and is used only by the
+ * structural fallback below. Without it, nodes tags cannot place stay loose.
+ *
  * Rules (all thresholds scale with the store, so this works for small and large stores):
- * - Reserved (kind:/status:) and system tags never define clusters; entries tagged
- *   'auto-pattern' get their own bucket instead of polluting Untagged.
+ * - System tags never define a cluster or a sub-topic: see isSystemTag. Entries
+ *   *tagged* auto-pattern or synthesized never arrive here at all — the Worker leaves
+ *   them out of the node set (src/graph/traverse.ts).
  * - A tag must be shared by >= 2 nodes to define a cluster (no lone-tag singletons).
- * - Nodes join the broadest of their tags that still distinguishes them: a near-universal
- *   tag (on >= half the store) does not distinguish anything, so it is skipped in favor of
- *   more focused tags. This keeps one dominant tag from swallowing the whole graph. Only
- *   when every eligible tag is near-universal does the node fall back to the least
- *   universal one.
+ * - Nodes join whichever of their tags is nearest sqrt(N) uses, measured in log space:
+ *   a tag on nearly everything characterises nothing, a tag on one thing groups
+ *   nothing, and the useful one is in between. Topic tags are considered first and
+ *   the axis tags in GRAPH_AXIS_TAGS only if there is no topic tag to be had.
  * - Tiny categories (fewer than ~1% of nodes, floor 3) fold into the node's largest
- *   surviving alternative category, or Other, so the graph does not scatter into dozens
- *   of one- and two-node circles.
+ *   surviving alternative category, so the graph does not scatter into dozens of one-
+ *   and two-node circles.
+ * - Whatever the tags could not place then adopts the cluster its graph neighbours
+ *   weigh most heavily toward, over three batched rounds. What is still unplaced is
+ *   genuinely unconnected, and stays '__loose__'.
  * - Sub-topics: within a category, a non-category tag shared by >= 2 members that lives
- *   mostly inside the category (>= half its global uses) becomes a sub-group. A 'japan'
- *   tag concentrated in a 'travel' category qualifies; a cross-cutting 'urgent' tag
- *   spread across many categories does not. Each member takes the dominant such tag.
- * - Ties break deterministically (higher share, then more specific, then alphabetical).
+ *   mostly inside the category (>= half its global uses) becomes a sub-group. A
+ *   'microblog' tag concentrated in a 'bluesky' category qualifies; a cross-cutting
+ *   'urgent' tag spread across many categories does not. Each member takes the
+ *   dominant such tag. Note this fills in the opposite direction from the outer ring:
+ *   the outer tag is a middling-frequency one and a *broader* tag becomes its
+ *   sub-topic, where a naive reading would expect the narrower tag to nest.
+ * - Ties break deterministically (nearer target, then higher share, then alphabetical).
  */
-function assignGraphClusters(nodes) {
-  const RESERVED_TAG = /^(kind|status):/;
-  const SYSTEM_TAGS = new Set(['duplicate-candidate', 'synthesized', 'auto-pattern']);
-  const SENTINELS = new Set(['__other__', '__untagged__', '__autopattern__']);
+function assignGraphClusters(nodes, edges) {
+  const SENTINELS = new Set(['__loose__']);
   const MIN_CLUSTER_SIZE = 2;
   const MIN_SUB = 2;
-  const candidateTags = (n) => (n.tags || []).filter((t) => !RESERVED_TAG.test(t) && !SYSTEM_TAGS.has(t) && !SENTINELS.has(t));
+  const candidateTags = (n) => (n.tags || []).filter((t) => !isSystemTag(t) && !SENTINELS.has(t));
+  const topicTags = (n) => candidateTags(n).filter((t) => !GRAPH_AXIS_TAGS.has(t));
 
   const df = new Map();
   for (const n of nodes) for (const t of new Set(candidateTags(n))) df.set(t, (df.get(t) || 0) + 1);
-  const GENERIC_CEIL = Math.max(MIN_CLUSTER_SIZE + 1, Math.round(nodes.length * 0.5));
+
+  // A tag on nearly every memory says nothing about any of them, and a tag on one
+  // memory cannot group anything; the tag that characterises a memory sits between
+  // those extremes. So pick the tag whose frequency is nearest an ideal cluster
+  // size, measured in log space so being three times too big and three times too
+  // small cost the same.
+  //
+  // sqrt(N) is the scale-free choice: it balances how many clusters there are
+  // against how big each one is, and needs no constant fitted to a particular
+  // brain — which matters, because this ships to brains of every size.
+  //
+  // The previous rule dropped any tag on at least half the store as too generic and
+  // then took the *highest* frequency of whatever was left. Those two compose
+  // badly: a brain's most informative tag is usually its most frequent, so it was
+  // discarded for being popular, and the next most frequent is by construction the
+  // vaguest thing remaining — which then labelled every memory carrying it.
+  // Lowering the ceiling does not help; it only promotes the next vague tag down
+  // the list. The ordering was the defect, not the threshold.
+  const TARGET_CLUSTER_SIZE = Math.sqrt(nodes.length);
+  const distanceFromTarget = (d) => Math.abs(Math.log(d / TARGET_CLUSTER_SIZE));
 
   // Outer category per node.
   for (const n of nodes) {
-    if ((n.tags || []).includes('auto-pattern')) {
-      n.cluster = '__autopattern__';
-      continue;
-    }
     const cands = [...new Set(candidateTags(n))];
-    const eligible = cands.filter((t) => df.get(t) >= MIN_CLUSTER_SIZE);
-    if (!eligible.length) {
-      n.cluster = cands.length ? '__other__' : '__untagged__';
-      continue;
-    }
-    const focused = eligible.filter((t) => df.get(t) < GENERIC_CEIL);
-    if (focused.length) {
-      let best = focused[0];
-      let bestDf = -1;
-      for (const t of focused) {
-        const d = df.get(t);
-        if (d > bestDf || (d === bestDf && t < best)) {
-          bestDf = d;
-          best = t;
-        }
-      }
-      n.cluster = best;
-    } else {
+    // Topic tags get first refusal; the axis tags are a fallback and never beat a
+    // real topic. See GRAPH_AXIS_TAGS.
+    let chosen = null;
+    for (const tier of [[...new Set(topicTags(n))], cands]) {
+      const eligible = tier.filter((t) => df.get(t) >= MIN_CLUSTER_SIZE);
+      if (!eligible.length) continue;
       let best = eligible[0];
-      let bestDf = Infinity;
+      let bestD = Infinity;
       for (const t of eligible) {
-        const d = df.get(t);
-        if (d < bestDf || (d === bestDf && t < best)) {
-          bestDf = d;
+        const d = distanceFromTarget(df.get(t));
+        if (d < bestD || (d === bestD && t < best)) {
+          bestD = d;
           best = t;
         }
       }
-      n.cluster = best;
+      chosen = best;
+      break;
     }
+    n.cluster = chosen !== null ? chosen : '__loose__';
   }
 
-  // Fold tiny categories into a larger alternative, or Other.
+  // Fold tiny categories into a larger alternative, or leave them loose.
   const MIN_OUTER = Math.max(3, Math.round(nodes.length / 100));
   const csz = new Map();
   for (const n of nodes) csz.set(n.cluster, (csz.get(n.cluster) || 0) + 1);
@@ -410,7 +514,59 @@ function assignGraphClusters(nodes) {
         alt = t;
       }
     }
-    n.cluster = alt || '__other__';
+    n.cluster = alt || '__loose__';
+  }
+
+  // Let the graph place what the tags could not.
+  //
+  // Tags do not reach every memory. Measured across brain sizes, roughly a quarter
+  // of nodes share no tag with anything else, and on a young brain — where almost
+  // nothing has been tagged twice yet — it is most of them. Pooling those into a
+  // category called "Other" labels a quarter of the canvas with a word that
+  // describes nothing.
+  //
+  // The edges already know better: a memory linked mostly to cycling memories
+  // belongs among them whatever its own tags say. So an unplaced node adopts the
+  // cluster its neighbours weigh most heavily toward.
+  //
+  // Three rounds, so a chain of unplaced nodes resolves inward from whichever end
+  // is anchored; beyond that the assignments have stopped moving on any real graph.
+  // Each round reads the previous round's clusters and applies its own in a batch
+  // at the end, so no node can see a decision made earlier in the same pass — which
+  // is what keeps the result independent of the order nodes arrive in. Ties break
+  // alphabetically for the same reason.
+  const FALLBACK_ROUNDS = 3;
+  const adjacency = new Map();
+  for (const e of edges || []) {
+    if (!adjacency.has(e.source)) adjacency.set(e.source, []);
+    if (!adjacency.has(e.target)) adjacency.set(e.target, []);
+    adjacency.get(e.source).push([e.target, e.weight || 1]);
+    adjacency.get(e.target).push([e.source, e.weight || 1]);
+  }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (let round = 0; round < FALLBACK_ROUNDS; round++) {
+    const pending = [];
+    for (const n of nodes) {
+      if (n.cluster !== '__loose__') continue;
+      const weightByCluster = new Map();
+      for (const [otherId, w] of adjacency.get(n.id) || []) {
+        const c = nodeById.get(otherId)?.cluster;
+        if (!c || c === '__loose__') continue;
+        weightByCluster.set(c, (weightByCluster.get(c) || 0) + w);
+      }
+      if (!weightByCluster.size) continue;
+      let best = null;
+      let bestW = -Infinity;
+      for (const [c, w] of weightByCluster) {
+        if (w > bestW || (w === bestW && c < best)) {
+          bestW = w;
+          best = c;
+        }
+      }
+      pending.push([n, best]);
+    }
+    if (!pending.length) break;
+    for (const [n, c] of pending) n.cluster = c;
   }
 
   // Sub-topic within each category.
@@ -511,5 +667,5 @@ function packGraphCircles(radii, gap) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, assignGraphClusters, packGraphNodes, packGraphCircles };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, isSystemTag, humanTags, assignGraphClusters, packGraphNodes, packGraphCircles };
 }
