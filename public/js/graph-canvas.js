@@ -456,15 +456,37 @@ function initGraphSim(canvas, nodes, edges) {
       }
     }
     // Cluster labels: a bold, cluster-colored pill above each cluster's top edge.
-    if (cam.scale >= 0.4) {
+    //
+    // Drawn in world space but with every pixel dimension divided by cam.scale, the
+    // same trick the ring strokes above use — so the pill is a constant size on
+    // screen however far out the view is zoomed.
+    //
+    // It used to be a flat 13px, which meant the label shrank with the graph and
+    // stopped being readable, so it was gated at cam.scale >= 0.4. That gate was
+    // set when the clustering produced eight or so large categories. It now
+    // produces two dozen smaller ones, so fit-to-view settles below 0.4 even on a
+    // wide desktop canvas and every label silently vanished — which is what made
+    // the legend the only key, and the legend is what will not fit on a phone.
+    // Screen-constant text removes the reason for the gate; what is left of it is a
+    // floor for genuinely huge graphs, where the pills would collide into mush.
+    if (cam.scale >= 0.12) {
+      const k = 1 / cam.scale
       for (const c of clusterList) {
         const cx = c.cx
-        const cy = c.cy - c.R - 16
-        ctx.font = '700 13px "Geist", system-ui, sans-serif'
+        const cy = c.cy - c.R - 16 * k
+        ctx.font = `700 ${13 * k}px "Geist", system-ui, sans-serif`
         const tw = ctx.measureText(c.label).width
-        const padX = 7
-        const h = 20
-        const rr = 6
+        const padX = 7 * k
+        const h = 20 * k
+        const rr = 6 * k
+        // A cluster has to be wide enough to own its name: the pill may overhang its
+        // ring by half again, no more. Both sides are world units here, but the pill
+        // is screen-constant so its world width grows as the view zooms out, while
+        // the ring's does not — which is what makes this a zoom test rather than a
+        // fixed one. Zoomed out on a phone the mid-sized labels are wider than the
+        // clusters themselves and pile up on their neighbours; they drop out, and
+        // come back as you zoom in. On a desktop canvas almost all of them clear it.
+        if (tw + padX * 2 > c.R * 2 * 1.6) continue
         const x = cx - tw / 2 - padX
         const w = tw + padX * 2
         const topY = cy - h / 2
@@ -523,12 +545,17 @@ function initGraphSim(canvas, nodes, edges) {
     // fixed while the graph pans/zooms. Ivory pill + dark text reads on both themes.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     if (clusterLegend.length) {
-      // Ten rows covered the eight-or-so categories the old clustering rule produced.
-      // The current one produces two dozen and more, so take the rows the canvas
-      // actually has and say how many were dropped — a silent slice reads as "that
-      // is all there is", which is the same failure the clustering itself had.
+      // The legend is an overlay sitting on top of the graph, so its size is a claim
+      // on the canvas, not on the window. Bounding it by available height alone was
+      // wrong: a phone is tall, so all two dozen rows fitted and buried most of the
+      // graph behind them.
+      //
+      // A third of the height at most, and fewer rows again on a narrow canvas —
+      // the pill is a fixed ~180px wide, which is half a phone screen whatever its
+      // height. The clusters each carry their own label on the canvas now, so a
+      // short legend costs a summary rather than the key itself.
       const rowH = 17
-      const maxRows = Math.max(3, Math.floor((H - 40) / rowH) - 1)
+      const maxRows = Math.max(3, Math.min(W < 520 ? 6 : 12, Math.floor(H / 3 / rowH)))
       const hidden = clusterLegend.length - maxRows
       const rows =
         hidden > 0
