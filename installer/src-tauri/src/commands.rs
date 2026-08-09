@@ -780,8 +780,14 @@ pub async fn sync_notion(app: AppHandle) -> Result<String, String> {
 
 /// Opens the dashboard and drops the user straight into the Integrations panel.
 /// If the dashboard is already open, just opens the panel there.
+///
+/// `async` on purpose: on Windows, `WebviewWindowBuilder::build` deadlocks when
+/// called from a synchronous Tauri command (wry#583) — the command holds the
+/// WebView2 UI thread that the new window needs to finish creating, so the app
+/// goes Not Responding with an unpainted window. Menu/tray paths call the
+/// window helpers from the event loop and stay sync.
 #[tauri::command]
-pub fn open_dashboard_integrations(
+pub async fn open_dashboard_integrations(
     app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<(), String> {
@@ -878,8 +884,17 @@ fn close_setup_windows(app: &AppHandle) {
     }
 }
 
+/// IPC entry for opening the dashboard after setup ("Apri il mio Second Brain").
+///
+/// Must stay `async`: a sync command runs on the WebView2 UI thread on Windows,
+/// and `WebviewWindowBuilder::build` then deadlocks waiting for that same thread
+/// (wry#583) — blank window, Not Responding. `open_dashboard_impl` remains sync
+/// for menu/tray, which are dispatched from the event loop instead of IPC.
 #[tauri::command]
-pub fn open_dashboard(app: AppHandle, session: State<'_, SetupSession>) -> Result<(), String> {
+pub async fn open_dashboard(
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
     open_dashboard_impl(&app, &session)
 }
 
@@ -899,8 +914,11 @@ pub fn set_locale(locale: String, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Opens the native Connections window. `async` so IPC creation cannot deadlock
+/// WebView2 on Windows the way a sync command + `WebviewWindowBuilder::build`
+/// does (wry#583); menu/tray keep calling `windows::open_details_window` sync.
 #[tauri::command]
-pub fn open_details_window(app: AppHandle) {
+pub async fn open_details_window(app: AppHandle) {
     windows::open_details_window(&app);
 }
 
@@ -2274,8 +2292,11 @@ pub async fn save_brain_settings(
     crate::settings::fetch_settings(&url, &token, locale).await
 }
 
+/// Opens Advanced Settings. `async` for the same Windows WebView2 IPC deadlock
+/// as `open_dashboard` (wry#583); menu/tray call `windows::open_settings_window`
+/// sync from the event loop.
 #[tauri::command]
-pub fn open_settings_window(app: AppHandle) {
+pub async fn open_settings_window(app: AppHandle) {
     crate::windows::open_settings_window(&app);
 }
 
@@ -3460,6 +3481,64 @@ mod tests {
             at(body, "clear_pending_rotation") < at(body, "close_setup_windows"),
             "leaving for the dashboard must drop the password-change flow before the \
              window that was running it is closed"
+        );
+    }
+
+    /// Windows report: "Apri il mio Second Brain" after setup opened a blank
+    /// Not Responding window. Root cause is wry#583 — `WebviewWindowBuilder::build`
+    /// deadlocks when called from a synchronous Tauri command on the WebView2 UI
+    /// thread. Menu/tray stay sync because they are not IPC.
+    ///
+    /// Source-scanned: there is no GUI in this suite, only the absence of a hang
+    /// to preserve. `fn_body` panics if a signature regresses to `pub fn`.
+    #[test]
+    fn ipc_window_openers_are_async_to_avoid_webview2_deadlock() {
+        let src = include_str!("commands.rs");
+        for (signature, must_call) in [
+            (
+                "pub async fn open_dashboard(",
+                "open_dashboard_impl",
+            ),
+            (
+                "pub async fn open_dashboard_integrations(",
+                "windows::open_wrapper_window_integrations",
+            ),
+            (
+                "pub async fn open_details_window(",
+                "windows::open_details_window",
+            ),
+            (
+                "pub async fn open_settings_window(",
+                "windows::open_settings_window",
+            ),
+        ] {
+            let body = fn_body(src, signature);
+            assert!(
+                body.contains(must_call),
+                "{signature} no longer opens its window via `{must_call}`"
+            );
+        }
+        // A sync twin left beside the async IPC entry would reintroduce the hang
+        // for any caller that picked the wrong name. `fn_body` already requires
+        // the async signatures; also refuse a non-async `open_dashboard(` command.
+        let code = &src[..src
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("the test module is the boundary of the scannable source")];
+        assert!(
+            !code.contains("pub fn open_dashboard("),
+            "open_dashboard must not regain a sync IPC signature (WebView2 deadlock on Windows)"
+        );
+        assert!(
+            !code.contains("pub fn open_dashboard_integrations("),
+            "open_dashboard_integrations must not regain a sync IPC signature"
+        );
+        assert!(
+            !code.contains("pub fn open_details_window("),
+            "open_details_window must not regain a sync IPC signature"
+        );
+        assert!(
+            !code.contains("pub fn open_settings_window("),
+            "open_settings_window must not regain a sync IPC signature"
         );
     }
 
