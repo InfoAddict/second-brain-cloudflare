@@ -390,6 +390,29 @@ function humanTags(tags) {
  * force-simulated or animated.
  */
 
+/**
+ * The "what kind of thing is this" tags every file in AI_Instructions/ tells an
+ * assistant to write, alongside a topic tag. They answer a different question from a
+ * topic tag but land in the same flat array, so without this the clusterer cannot
+ * tell the two axes apart — and since one of them is on almost every memory, it wins
+ * on frequency alone and names most of the graph.
+ *
+ * Second refusal rather than exclusion: a memory carrying nothing else really is
+ * best described by one of these, and dropping them outright just promotes the
+ * next-broadest topic tag and strands everything that had only an axis tag.
+ *
+ * Update this together with AI_Instructions/*.md.
+ */
+const GRAPH_AXIS_TAGS = new Set([
+  'personal',
+  'work',
+  'task',
+  'idea',
+  'context',
+  'claude-response',
+  'codex-response',
+])
+
 /* Group graph nodes into topic clusters by tag. Mutates each node, setting:
  *   n.cluster - the node's broad category: a tag, or one of the reserved sentinel ids
  *               '__other__' | '__untagged__' | '__autopattern__'
@@ -414,53 +437,57 @@ function humanTags(tags) {
  * - Ties break deterministically (higher share, then more specific, then alphabetical).
  */
 function assignGraphClusters(nodes) {
-  const RESERVED_TAG = /^(kind|status):/;
-  const SYSTEM_TAGS = new Set(['duplicate-candidate', 'synthesized', 'auto-pattern']);
-  const SENTINELS = new Set(['__other__', '__untagged__', '__autopattern__']);
+  const SENTINELS = new Set(['__other__', '__untagged__']);
   const MIN_CLUSTER_SIZE = 2;
   const MIN_SUB = 2;
-  const candidateTags = (n) => (n.tags || []).filter((t) => !RESERVED_TAG.test(t) && !SYSTEM_TAGS.has(t) && !SENTINELS.has(t));
+  const candidateTags = (n) => (n.tags || []).filter((t) => !isSystemTag(t) && !SENTINELS.has(t));
+  const topicTags = (n) => candidateTags(n).filter((t) => !GRAPH_AXIS_TAGS.has(t));
 
   const df = new Map();
   for (const n of nodes) for (const t of new Set(candidateTags(n))) df.set(t, (df.get(t) || 0) + 1);
-  const GENERIC_CEIL = Math.max(MIN_CLUSTER_SIZE + 1, Math.round(nodes.length * 0.5));
+
+  // A tag on nearly every memory says nothing about any of them, and a tag on one
+  // memory cannot group anything; the tag that characterises a memory sits between
+  // those extremes. So pick the tag whose frequency is nearest an ideal cluster
+  // size, measured in log space so being three times too big and three times too
+  // small cost the same.
+  //
+  // sqrt(N) is the scale-free choice: it balances how many clusters there are
+  // against how big each one is, and needs no constant fitted to a particular
+  // brain — which matters, because this ships to brains of every size.
+  //
+  // The previous rule dropped any tag on at least half the store as too generic and
+  // then took the *highest* frequency of whatever was left. Those two compose
+  // badly: a brain's most informative tag is usually its most frequent, so it was
+  // discarded for being popular, and the next most frequent is by construction the
+  // vaguest thing remaining — which then labelled every memory carrying it.
+  // Lowering the ceiling does not help; it only promotes the next vague tag down
+  // the list. The ordering was the defect, not the threshold.
+  const TARGET_CLUSTER_SIZE = Math.sqrt(nodes.length);
+  const distanceFromTarget = (d) => Math.abs(Math.log(d / TARGET_CLUSTER_SIZE));
 
   // Outer category per node.
   for (const n of nodes) {
-    if ((n.tags || []).includes('auto-pattern')) {
-      n.cluster = '__autopattern__';
-      continue;
-    }
     const cands = [...new Set(candidateTags(n))];
-    const eligible = cands.filter((t) => df.get(t) >= MIN_CLUSTER_SIZE);
-    if (!eligible.length) {
-      n.cluster = cands.length ? '__other__' : '__untagged__';
-      continue;
-    }
-    const focused = eligible.filter((t) => df.get(t) < GENERIC_CEIL);
-    if (focused.length) {
-      let best = focused[0];
-      let bestDf = -1;
-      for (const t of focused) {
-        const d = df.get(t);
-        if (d > bestDf || (d === bestDf && t < best)) {
-          bestDf = d;
-          best = t;
-        }
-      }
-      n.cluster = best;
-    } else {
+    // Topic tags get first refusal; the axis tags are a fallback and never beat a
+    // real topic. See GRAPH_AXIS_TAGS.
+    let chosen = null;
+    for (const tier of [[...new Set(topicTags(n))], cands]) {
+      const eligible = tier.filter((t) => df.get(t) >= MIN_CLUSTER_SIZE);
+      if (!eligible.length) continue;
       let best = eligible[0];
-      let bestDf = Infinity;
+      let bestD = Infinity;
       for (const t of eligible) {
-        const d = df.get(t);
-        if (d < bestDf || (d === bestDf && t < best)) {
-          bestDf = d;
+        const d = distanceFromTarget(df.get(t));
+        if (d < bestD || (d === bestD && t < best)) {
+          bestD = d;
           best = t;
         }
       }
-      n.cluster = best;
+      chosen = best;
+      break;
     }
+    n.cluster = chosen !== null ? chosen : cands.length ? '__other__' : '__untagged__';
   }
 
   // Fold tiny categories into a larger alternative, or Other.
