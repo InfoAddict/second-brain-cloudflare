@@ -180,9 +180,6 @@ const I18N_EN = {
     zoomIn: 'Zoom in',
     fit: 'Fit to view',
     relayout: 'Re-lay out',
-    clusterOther: 'Other',
-    clusterUntagged: 'Untagged',
-    clusterAutoPatterns: 'Auto-patterns',
   },
   menu: {
     title: 'Your brain',
@@ -195,6 +192,9 @@ const I18N_EN = {
     restore: 'Restore from backup',
     integrations: 'Integrations',
     appearance: 'Appearance',
+    language: 'Language',
+    localeEn: 'English',
+    localeIt: 'Italian',
     themeLight: 'Light',
     themeDark: 'Dark',
     themeAuto: 'Auto',
@@ -296,22 +296,24 @@ const I18N_EN = {
     notionPlaceholder: 'Integration secret (ntn_…)',
     urlPlaceholder: 'https://…',
     notionHint:
-      'Create an internal <strong>connection</strong> (not a personal access token) at notion.so/my-integrations, share the pages you want synced with that connection, then paste its secret here.',
+      'Create an internal <strong>connection</strong> (not a personal access token) at <a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener">app.notion.com/developers/connections</a>, share the pages you want synced with that connection, then paste its secret here.',
     needEmailPw: 'Enter your email and app password.',
     needSecret: 'Paste your secret first.',
     couldNotConnectShort: 'Could not connect',
     syncNow: 'Sync now',
     syncing: 'Syncing…',
     syncingProgress: 'Syncing… {n} {noun} so far',
-    synced: '{n} synced',
+    synced: { one: '{n} synced', other: '{n} synced' },
     syncFailed: 'Sync failed',
     lastSyncFailed: 'Last sync failed: {error}',
-    countSynced: '{n} {noun} synced',
+    countSynced: { one: '{n} {noun} synced', other: '{n} {noun} synced' },
     lastSync: 'Last sync: {when}',
     never: 'never',
     disconnectConfirm: 'Disconnect {name}? It will stop syncing.',
-    purgeConfirm:
-      'Also delete the {n} synced {noun}?\n\nOK = delete them\nCancel = keep them as regular memories',
+    purgeConfirm: {
+      one: 'Also delete the {n} synced {noun}?\n\nOK = delete them\nCancel = keep them as regular memories',
+      other: 'Also delete the {n} synced {noun}?\n\nOK = delete them\nCancel = keep them as regular memories',
+    },
     disconnecting: 'Disconnecting…',
     disconnectFailed: 'Disconnect failed',
     nounEvent: { one: 'event', other: 'events' },
@@ -567,9 +569,6 @@ const I18N_IT = {
     zoomIn: 'Aumenta zoom',
     fit: 'Adatta alla vista',
     relayout: 'Ridisponi',
-    clusterOther: 'Altro',
-    clusterUntagged: 'Senza tag',
-    clusterAutoPatterns: 'Pattern automatici',
   },
   menu: {
     title: 'Il tuo cervello',
@@ -582,6 +581,9 @@ const I18N_IT = {
     restore: 'Ripristina da backup',
     integrations: 'Integrazioni',
     appearance: 'Aspetto',
+    language: 'Lingua',
+    localeEn: 'Inglese',
+    localeIt: 'Italiano',
     themeLight: 'Chiaro',
     themeDark: 'Scuro',
     themeAuto: 'Auto',
@@ -684,22 +686,24 @@ const I18N_IT = {
     notionPlaceholder: 'Secret integrazione (ntn_…)',
     urlPlaceholder: 'https://…',
     notionHint:
-      'Crea una <strong>connection</strong> interna (non un personal access token) su notion.so/my-integrations, condividi le pagine da sincronizzare con quella connection, poi incolla qui il secret.',
+      'Crea una <strong>connection</strong> interna (non un personal access token) su <a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener">app.notion.com/developers/connections</a>, condividi le pagine da sincronizzare con quella connection, poi incolla qui il secret.',
     needEmailPw: 'Inserisci email e password app.',
     needSecret: 'Incolla prima il secret.',
     couldNotConnectShort: 'Connessione non riuscita',
     syncNow: 'Sincronizza ora',
     syncing: 'Sincronizzazione…',
     syncingProgress: 'Sincronizzazione… {n} {noun} finora',
-    synced: '{n} sincronizzati',
+    synced: { one: '{n} sincronizzato', other: '{n} sincronizzati' },
     syncFailed: 'Sincronizzazione non riuscita',
     lastSyncFailed: 'Ultima sync non riuscita: {error}',
-    countSynced: '{n} {noun} sincronizzati',
+    countSynced: { one: '{n} {noun} sincronizzato', other: '{n} {noun} sincronizzati' },
     lastSync: 'Ultima sync: {when}',
     never: 'mai',
     disconnectConfirm: 'Disconnettere {name}? Smetterà di sincronizzare.',
-    purgeConfirm:
-      'Eliminare anche i {n} {noun} sincronizzati?\n\nOK = eliminali\nAnnulla = tienili come ricordi normali',
+    purgeConfirm: {
+      one: 'Eliminare anche il {n} {noun} sincronizzato?\n\nOK = eliminali\nAnnulla = tienili come ricordi normali',
+      other: 'Eliminare anche i {n} {noun} sincronizzati?\n\nOK = eliminali\nAnnulla = tienili come ricordi normali',
+    },
     disconnecting: 'Disconnessione…',
     disconnectFailed: 'Disconnessione non riuscita',
     nounEvent: { one: 'evento', other: 'eventi' },
@@ -859,6 +863,23 @@ function initI18n(forceLocale) {
     document.documentElement.lang = currentLocale
   }
   return currentLocale
+}
+
+function setLocale(loc) {
+  if (loc !== 'en' && loc !== 'it') return
+  try {
+    localStorage.setItem(SB_LOCALE_KEY, loc)
+  } catch (_) {
+    /* ignore */
+  }
+  location.reload()
+}
+
+function applyLocale() {
+  const loc = getLocale()
+  document.querySelectorAll('#locale-toggle [data-locale-val]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.localeVal === loc),
+  )
 }
 
 /**

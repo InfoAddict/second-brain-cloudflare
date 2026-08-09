@@ -335,6 +335,13 @@
         <div class="menu-group">
           <div class="menu-group-label" data-i18n="menu.groupThisApp">This app</div>
           <div class="theme-row">
+            <span class="theme-row-label" data-i18n="menu.language">Language</span>
+            <div class="theme-toggle" id="locale-toggle">
+              <button data-locale-val="en" onclick="setLocale('en')" title="English" data-i18n="menu.localeEn" data-i18n-attr="title"><span data-i18n="menu.localeEn">English</span></button>
+              <button data-locale-val="it" onclick="setLocale('it')" title="Italian" data-i18n="menu.localeIt" data-i18n-attr="title"><span data-i18n="menu.localeIt">Italian</span></button>
+            </div>
+          </div>
+          <div class="theme-row">
             <span class="theme-row-label" data-i18n="menu.appearance">Appearance</span>
             <div class="theme-toggle" id="theme-toggle">
               <button data-theme-val="light" onclick="setTheme('light')" title="Light" data-i18n="menu.themeLight" data-i18n-attr="title"><i class="ti ti-sun"></i></button>

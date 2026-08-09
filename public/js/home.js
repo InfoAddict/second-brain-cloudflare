@@ -17,8 +17,15 @@ let homeMode = null
 let homeModeLocked = false
 
 /** Leading words that make a sentence a question even without a question mark. */
-const ASK_OPENERS =
-  /^(who|what|when|where|why|how|which|whose|did|do|does|is|are|was|were|can|could|should|would|will|have|has|had|am|tell me|show me|find|search|remind me what|list|chi|cosa|quando|dove|perché|perche|come|quale|quali|di chi|hai|ho|è|sono|può|puoi|posso|possono|devo|deve|dovrei|vorrei|dimmi|mostrami|trova|cerca|elenca)\b/i
+const ASK_OPENERS_EN =
+  /^(who|what|when|where|why|how|which|whose|did|do|does|is|are|was|were|can|could|should|would|will|have|has|had|am|tell me|show me|find|search|remind me what|list)\b/i
+/** Italian interrogatives only — statement starters like ho/sono/devo are excluded. */
+const ASK_OPENERS_IT =
+  /^(chi|cosa|quando|dove|perché|perche|come|quale|quali|di chi|può|puoi|posso|possono|dovrei|vorrei|dimmi|mostrami|trova|cerca|elenca)\b/i
+
+function askOpenersForLocale() {
+  return getLocale() === 'it' ? ASK_OPENERS_IT : ASK_OPENERS_EN
+}
 
 /**
  * Read the sentence, not the user's mind.
@@ -32,7 +39,7 @@ function detectHomeMode(text) {
   const s = String(text || '').trim()
   if (!s) return null
   if (s.endsWith('?')) return 'ask'
-  if (ASK_OPENERS.test(s)) return 'ask'
+  if (askOpenersForLocale().test(s)) return 'ask'
   // "remember that…" / "note:" are explicit the other way.
   if (/^(remind me to|ricordami di|remember|note|todo|log|ricorda|nota|promemoria|registra)\b/i.test(s))
     return 'remember'

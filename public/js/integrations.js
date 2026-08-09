@@ -155,7 +155,9 @@ function renderIntegrationCard(info) {
   const last = info.lastSyncedAt
     ? new Date(info.lastSyncedAt).toLocaleString(localeTag())
     : t('integrations.never')
-  const count = t('integrations.countSynced', { n: info.itemCount, noun: integrationNoun(p, info.itemCount) })
+  const count = tPlural('integrations.countSynced', info.itemCount, {
+    noun: integrationNoun(p, info.itemCount),
+  })
   const err = info.lastSyncError
     ? `<div class="integration-error">${escHtml(t('integrations.lastSyncFailed', { error: info.lastSyncError }))}</div>`
     : ''
@@ -234,7 +236,7 @@ async function syncIntegration(provider, btn) {
       if ((data.created ?? 0) + (data.updated ?? 0) + (data.deleted ?? 0) === 0 && remaining > 0) break
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('integrations.synced', { n: processed }))}`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('integrations.synced', processed))}`
     btn.style.color = 'var(--good)'
     setTimeout(loadIntegrations, 900)
     refreshAll()
@@ -252,8 +254,7 @@ async function disconnectIntegration(provider, btn) {
   let purge = false
   if (info.itemCount > 0) {
     purge = confirm(
-      t('integrations.purgeConfirm', {
-        n: info.itemCount,
+      tPlural('integrations.purgeConfirm', info.itemCount, {
         noun: tPlural('integrations.nounMemory', info.itemCount),
       }),
     )

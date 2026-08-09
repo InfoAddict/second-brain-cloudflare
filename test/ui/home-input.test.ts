@@ -82,10 +82,13 @@ describe("what the sentence is asking for", () => {
       "did I ever decide on the floor",
       "show me my tasks",
       "find the pricing note",
-      "cosa ho deciso sul prezzo",
-      "quando ho spedito 2.2.3",
     ]) {
       expect(detectHomeMode(q), q).toBe("ask");
+    }
+    const ctx = load();
+    ctx.initI18n("it");
+    for (const q of ["cosa ho deciso sul prezzo", "quando ho spedito 2.2.3"]) {
+      expect(ctx.detectHomeMode(q), q).toBe("ask");
     }
   });
 
@@ -110,6 +113,19 @@ describe("what the sentence is asking for", () => {
     // No question mark, no interrogative — ambiguous, and an unwanted search
     // costs a moment while an unwanted memory costs a cleanup.
     expect(detectHomeMode("pricing floor six thousand")).toBe("remember");
+  });
+
+  it("does not treat Italian statement starters as questions", () => {
+    const ctx = load();
+    ctx.initI18n("it");
+    for (const m of [
+      "Devo chiamare Marco",
+      "Ho finito il report",
+      "Sono in riunione",
+    ]) {
+      expect(ctx.detectHomeMode(m), m).toBe("remember");
+    }
+    expect(ctx.detectHomeMode("Come stai")).toBe("ask");
   });
 
   it("has no opinion about an empty field", () => {
