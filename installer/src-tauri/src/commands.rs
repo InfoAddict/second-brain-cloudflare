@@ -1064,8 +1064,14 @@ fn show_stale_password(app: &AppHandle) {
 
 /// Puts the main window into Worker-update mode and shows it. Called from the
 /// launch-time prompt and the Connection details button.
+///
+/// `async` so the IPC handler does not run `WebviewWindowBuilder::build` on the
+/// WebView2 UI thread (wry#583).
 #[tauri::command]
-pub fn begin_worker_update(app: AppHandle, session: State<'_, SetupSession>) -> Result<(), String> {
+pub async fn begin_worker_update(
+    app: AppHandle,
+    session: State<'_, SetupSession>,
+) -> Result<(), String> {
     *session.pending_worker_update.lock().unwrap() = true;
     windows::open_setup_window(&app)
         .map_err(|_| user_err(locale_of(&app), Key::ErrorOpenWindowFailed))
@@ -1674,8 +1680,10 @@ async fn password_opens_brain(
 
 /// Puts the main window into change-your-password mode and shows it. Door A,
 /// from the Connection pane — the same shape as `begin_worker_update`.
+///
+/// `async` for the same Windows WebView2 IPC deadlock as `open_dashboard`.
 #[tauri::command]
-pub fn begin_password_change(
+pub async fn begin_password_change(
     app: AppHandle,
     session: State<'_, SetupSession>,
 ) -> Result<(), String> {
@@ -1916,10 +1924,14 @@ async fn rotate_demo_password(
 /// Signs this computer out: forgets the saved address + password and returns
 /// to the setup flow. The Second Brain itself (and every other device) is
 /// untouched. Confirmation happens in the UI before this is invoked.
+///
+/// `async` because `perform_logout` may open the setup window via
+/// `WebviewWindowBuilder::build` when `main` is gone (wry#583).
 #[tauri::command]
-pub fn logout(app: AppHandle, session: State<'_, SetupSession>) {
+pub async fn logout(app: AppHandle, session: State<'_, SetupSession>) -> Result<(), String> {
     session.reset();
     perform_logout(&app);
+    Ok(())
 }
 
 /// Shared by the `logout` command and the app-menu item (which confirms via a
@@ -3511,6 +3523,18 @@ mod tests {
                 "pub async fn open_settings_window(",
                 "windows::open_settings_window",
             ),
+            (
+                "pub async fn begin_worker_update(",
+                "windows::open_setup_window",
+            ),
+            (
+                "pub async fn begin_password_change(",
+                "windows::open_setup_window",
+            ),
+            (
+                "pub async fn logout(",
+                "perform_logout",
+            ),
         ] {
             let body = fn_body(src, signature);
             assert!(
@@ -3524,21 +3548,58 @@ mod tests {
         let code = &src[..src
             .find("\n#[cfg(test)]\nmod tests {")
             .expect("the test module is the boundary of the scannable source")];
+        for sync_name in [
+            "open_dashboard",
+            "open_dashboard_integrations",
+            "open_details_window",
+            "open_settings_window",
+            "begin_worker_update",
+            "begin_password_change",
+            "logout",
+        ] {
+            assert!(
+                !code.contains(&format!("pub fn {sync_name}(")),
+                "{sync_name} must not regain a sync IPC signature (WebView2 deadlock on Windows)"
+            );
+        }
+
+        // Any other sync #[tauri::command] that reaches a window opener is the
+        // same footgun — scan the whole file rather than maintaining a name list.
+        let opener_needles = [
+            "windows::open_setup_window",
+            "windows::open_wrapper_window",
+            "windows::open_wrapper_window_integrations",
+            "windows::open_details_window",
+            "windows::open_settings_window",
+            "crate::windows::open_settings_window",
+            "WebviewWindowBuilder",
+            "open_dashboard_impl",
+            "perform_logout",
+        ];
+        let mut search = code;
+        let mut sync_offenders: Vec<String> = Vec::new();
+        while let Some(attr_at) = search.find("#[tauri::command]") {
+            let after_attr = &search[attr_at + "#[tauri::command]".len()..];
+            let trimmed = after_attr.trim_start();
+            if trimmed.starts_with("pub async fn ") {
+                search = &after_attr[1..];
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+                let name_end = rest.find('(').unwrap_or(0);
+                let name = &rest[..name_end];
+                let body = fn_body(src, &format!("pub fn {name}("));
+                if opener_needles.iter().any(|n| body.contains(n)) {
+                    sync_offenders.push(name.to_string());
+                }
+                search = &after_attr[1..];
+                continue;
+            }
+            search = &after_attr[1..];
+        }
         assert!(
-            !code.contains("pub fn open_dashboard("),
-            "open_dashboard must not regain a sync IPC signature (WebView2 deadlock on Windows)"
-        );
-        assert!(
-            !code.contains("pub fn open_dashboard_integrations("),
-            "open_dashboard_integrations must not regain a sync IPC signature"
-        );
-        assert!(
-            !code.contains("pub fn open_details_window("),
-            "open_details_window must not regain a sync IPC signature"
-        );
-        assert!(
-            !code.contains("pub fn open_settings_window("),
-            "open_settings_window must not regain a sync IPC signature"
+            sync_offenders.is_empty(),
+            "sync #[tauri::command] still reach window openers (WebView2 deadlock): {sync_offenders:?}"
         );
     }
 
