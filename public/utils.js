@@ -413,31 +413,39 @@ const GRAPH_AXIS_TAGS = new Set([
   'codex-response',
 ])
 
-/* Group graph nodes into topic clusters by tag. Mutates each node, setting:
- *   n.cluster - the node's broad category: a tag, or one of the reserved sentinel ids
- *               '__other__' | '__untagged__' | '__autopattern__'
+/* Group graph nodes into topic clusters. Mutates each node, setting:
+ *   n.cluster - the node's category: a tag, or the sentinel id '__loose__'
  *   n.sub     - a sub-topic tag shared with other members of the same category, or null
  *
+ * `edges` is optional — [{ source, target, weight }] — and is used only by the
+ * structural fallback below. Without it, nodes tags cannot place stay loose.
+ *
  * Rules (all thresholds scale with the store, so this works for small and large stores):
- * - Reserved (kind:/status:) and system tags never define clusters; entries tagged
- *   'auto-pattern' get their own bucket instead of polluting Untagged.
+ * - System tags never define a cluster or a sub-topic: see isSystemTag. Entries
+ *   *tagged* auto-pattern or synthesized never arrive here at all — the Worker leaves
+ *   them out of the node set (src/graph/traverse.ts).
  * - A tag must be shared by >= 2 nodes to define a cluster (no lone-tag singletons).
- * - Nodes join the broadest of their tags that still distinguishes them: a near-universal
- *   tag (on >= half the store) does not distinguish anything, so it is skipped in favor of
- *   more focused tags. This keeps one dominant tag from swallowing the whole graph. Only
- *   when every eligible tag is near-universal does the node fall back to the least
- *   universal one.
+ * - Nodes join whichever of their tags is nearest sqrt(N) uses, measured in log space:
+ *   a tag on nearly everything characterises nothing, a tag on one thing groups
+ *   nothing, and the useful one is in between. Topic tags are considered first and
+ *   the axis tags in GRAPH_AXIS_TAGS only if there is no topic tag to be had.
  * - Tiny categories (fewer than ~1% of nodes, floor 3) fold into the node's largest
- *   surviving alternative category, or Other, so the graph does not scatter into dozens
- *   of one- and two-node circles.
+ *   surviving alternative category, so the graph does not scatter into dozens of one-
+ *   and two-node circles.
+ * - Whatever the tags could not place then adopts the cluster its graph neighbours
+ *   weigh most heavily toward, over three batched rounds. What is still unplaced is
+ *   genuinely unconnected, and stays '__loose__'.
  * - Sub-topics: within a category, a non-category tag shared by >= 2 members that lives
- *   mostly inside the category (>= half its global uses) becomes a sub-group. A 'japan'
- *   tag concentrated in a 'travel' category qualifies; a cross-cutting 'urgent' tag
- *   spread across many categories does not. Each member takes the dominant such tag.
- * - Ties break deterministically (higher share, then more specific, then alphabetical).
+ *   mostly inside the category (>= half its global uses) becomes a sub-group. A
+ *   'microblog' tag concentrated in a 'bluesky' category qualifies; a cross-cutting
+ *   'urgent' tag spread across many categories does not. Each member takes the
+ *   dominant such tag. Note this fills in the opposite direction from the outer ring:
+ *   the outer tag is a middling-frequency one and a *broader* tag becomes its
+ *   sub-topic, where a naive reading would expect the narrower tag to nest.
+ * - Ties break deterministically (nearer target, then higher share, then alphabetical).
  */
-function assignGraphClusters(nodes) {
-  const SENTINELS = new Set(['__other__', '__untagged__']);
+function assignGraphClusters(nodes, edges) {
+  const SENTINELS = new Set(['__loose__']);
   const MIN_CLUSTER_SIZE = 2;
   const MIN_SUB = 2;
   const candidateTags = (n) => (n.tags || []).filter((t) => !isSystemTag(t) && !SENTINELS.has(t));
@@ -487,10 +495,10 @@ function assignGraphClusters(nodes) {
       chosen = best;
       break;
     }
-    n.cluster = chosen !== null ? chosen : cands.length ? '__other__' : '__untagged__';
+    n.cluster = chosen !== null ? chosen : '__loose__';
   }
 
-  // Fold tiny categories into a larger alternative, or Other.
+  // Fold tiny categories into a larger alternative, or leave them loose.
   const MIN_OUTER = Math.max(3, Math.round(nodes.length / 100));
   const csz = new Map();
   for (const n of nodes) csz.set(n.cluster, (csz.get(n.cluster) || 0) + 1);
@@ -506,7 +514,59 @@ function assignGraphClusters(nodes) {
         alt = t;
       }
     }
-    n.cluster = alt || '__other__';
+    n.cluster = alt || '__loose__';
+  }
+
+  // Let the graph place what the tags could not.
+  //
+  // Tags do not reach every memory. Measured across brain sizes, roughly a quarter
+  // of nodes share no tag with anything else, and on a young brain — where almost
+  // nothing has been tagged twice yet — it is most of them. Pooling those into a
+  // category called "Other" labels a quarter of the canvas with a word that
+  // describes nothing.
+  //
+  // The edges already know better: a memory linked mostly to cycling memories
+  // belongs among them whatever its own tags say. So an unplaced node adopts the
+  // cluster its neighbours weigh most heavily toward.
+  //
+  // Three rounds, so a chain of unplaced nodes resolves inward from whichever end
+  // is anchored; beyond that the assignments have stopped moving on any real graph.
+  // Each round reads the previous round's clusters and applies its own in a batch
+  // at the end, so no node can see a decision made earlier in the same pass — which
+  // is what keeps the result independent of the order nodes arrive in. Ties break
+  // alphabetically for the same reason.
+  const FALLBACK_ROUNDS = 3;
+  const adjacency = new Map();
+  for (const e of edges || []) {
+    if (!adjacency.has(e.source)) adjacency.set(e.source, []);
+    if (!adjacency.has(e.target)) adjacency.set(e.target, []);
+    adjacency.get(e.source).push([e.target, e.weight || 1]);
+    adjacency.get(e.target).push([e.source, e.weight || 1]);
+  }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (let round = 0; round < FALLBACK_ROUNDS; round++) {
+    const pending = [];
+    for (const n of nodes) {
+      if (n.cluster !== '__loose__') continue;
+      const weightByCluster = new Map();
+      for (const [otherId, w] of adjacency.get(n.id) || []) {
+        const c = nodeById.get(otherId)?.cluster;
+        if (!c || c === '__loose__') continue;
+        weightByCluster.set(c, (weightByCluster.get(c) || 0) + w);
+      }
+      if (!weightByCluster.size) continue;
+      let best = null;
+      let bestW = -Infinity;
+      for (const [c, w] of weightByCluster) {
+        if (w > bestW || (w === bestW && c < best)) {
+          bestW = w;
+          best = c;
+        }
+      }
+      pending.push([n, best]);
+    }
+    if (!pending.length) break;
+    for (const [n, c] of pending) n.cluster = c;
   }
 
   // Sub-topic within each category.

@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 const { assignGraphClusters, packGraphNodes, packGraphCircles } = require("../../public/utils.js");
 
 type N = { id: string; tags: string[]; cluster?: string; sub?: string | null };
+type E = { source: string; target: string; weight?: number };
 
 const node = (id: string, tags: string[]): N => ({ id, tags });
 const byId = (nodes: N[], id: string) => nodes.find((n) => n.id === id)!;
@@ -72,16 +73,16 @@ describe("assignGraphClusters — outer category", () => {
       node("t2", ["travel"]),
     ];
     assignGraphClusters(nodes);
-    expect(byId(nodes, "res").cluster).toBe("__untagged__");
-    expect(byId(nodes, "uni").cluster).toBe("__other__");
+    expect(byId(nodes, "res").cluster).toBe("__loose__");
+    expect(byId(nodes, "uni").cluster).toBe("__loose__");
   });
 
   it("never lets a literal sentinel-named tag define or hijack a cluster", () => {
-    const nodes = [node("x", ["__other__"]), node("y", ["__untagged__"])];
+    const nodes = [node("x", ["__loose__"]), node("y", ["__loose__"])];
     assignGraphClusters(nodes);
-    // sentinel-named tags are filtered out, so these have no candidate tags at all
-    expect(byId(nodes, "x").cluster).toBe("__untagged__");
-    expect(byId(nodes, "y").cluster).toBe("__untagged__");
+    // the sentinel-named tag is filtered out, so these have no candidate tags at all
+    expect(byId(nodes, "x").cluster).toBe("__loose__");
+    expect(byId(nodes, "y").cluster).toBe("__loose__");
   });
 
   it("folds tiny categories into a larger alternative, or Other", () => {
@@ -98,8 +99,8 @@ describe("assignGraphClusters — outer category", () => {
     assignGraphClusters(nodes);
     expect(byId(nodes, "g0").cluster).toBe("alpha");
     expect(byId(nodes, "g1").cluster).toBe("alpha");
-    expect(byId(nodes, "e0").cluster).toBe("__other__");
-    expect(byId(nodes, "e1").cluster).toBe("__other__");
+    expect(byId(nodes, "e0").cluster).toBe("__loose__");
+    expect(byId(nodes, "e1").cluster).toBe("__loose__");
   });
 
   it("is deterministic", () => {
@@ -111,6 +112,78 @@ describe("assignGraphClusters — outer category", () => {
     const one = assignGraphClusters(make());
     const two = assignGraphClusters(make());
     expect(one.map((n: N) => [n.id, n.cluster, n.sub])).toEqual(two.map((n: N) => [n.id, n.cluster, n.sub]));
+  });
+});
+
+describe("assignGraphClusters — structural fallback", () => {
+  // Tags cannot place every memory: on a real brain roughly a quarter share no tag
+  // with anything else, and on a young one almost nothing has been tagged twice.
+  // Rather than pool those into a bucket that describes nothing, the graph places
+  // them — a memory linked mostly to cycling memories belongs with them whatever
+  // its own tags say.
+  it("places an untaggable memory with the neighbours it is linked to", () => {
+    const nodes = [
+      ...Array.from({ length: 4 }, (_, i) => node(`c${i}`, ["cycling"])),
+      ...Array.from({ length: 4 }, (_, i) => node(`b${i}`, ["baking"])),
+      node("orphan", ["one-of-a-kind"]),
+    ];
+    const edges = [
+      { source: "orphan", target: "c0", weight: 0.9 },
+      { source: "orphan", target: "c1", weight: 0.8 },
+      { source: "orphan", target: "b0", weight: 0.2 },
+    ];
+    assignGraphClusters(nodes, edges);
+    expect(byId(nodes, "orphan").cluster).toBe("cycling");
+  });
+
+  it("resolves a chain of untaggable memories inward from its clustered end", () => {
+    const nodes = [
+      ...Array.from({ length: 4 }, (_, i) => node(`c${i}`, ["cycling"])),
+      node("a", ["unique-a"]),
+      node("b", ["unique-b"]),
+    ];
+    const edges = [
+      { source: "a", target: "c0", weight: 0.9 },
+      { source: "b", target: "a", weight: 0.9 },
+    ];
+    assignGraphClusters(nodes, edges);
+    expect(byId(nodes, "a").cluster).toBe("cycling");
+    expect(byId(nodes, "b").cluster).toBe("cycling");
+  });
+
+  it("leaves a memory with no clustered neighbour loose", () => {
+    const nodes = [
+      ...Array.from({ length: 4 }, (_, i) => node(`c${i}`, ["cycling"])),
+      node("alone", ["nothing-shared"]),
+    ];
+    assignGraphClusters(nodes, []);
+    expect(byId(nodes, "alone").cluster).toBe("__loose__");
+  });
+
+  it("does not depend on the order nodes arrive in", () => {
+    const make = () => [
+      ...Array.from({ length: 4 }, (_, i) => node(`c${i}`, ["cycling"])),
+      ...Array.from({ length: 4 }, (_, i) => node(`b${i}`, ["baking"])),
+      node("orphan", ["one-of-a-kind"]),
+    ];
+    // a deliberate tie: whichever side wins must win from both directions
+    const edges = [
+      { source: "orphan", target: "c0", weight: 0.5 },
+      { source: "orphan", target: "b0", weight: 0.5 },
+    ];
+    const forward = assignGraphClusters(make(), edges);
+    const reversed = assignGraphClusters(make().reverse(), edges);
+    expect(byId(forward, "orphan").cluster).toBe(byId(reversed, "orphan").cluster);
+  });
+
+  it("works with no edges supplied at all", () => {
+    const nodes = [
+      ...Array.from({ length: 4 }, (_, i) => node(`c${i}`, ["cycling"])),
+      node("orphan", ["one-of-a-kind"]),
+    ];
+    assignGraphClusters(nodes);
+    expect(byId(nodes, "c0").cluster).toBe("cycling");
+    expect(byId(nodes, "orphan").cluster).toBe("__loose__");
   });
 });
 
