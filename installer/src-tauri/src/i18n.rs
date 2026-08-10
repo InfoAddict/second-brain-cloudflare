@@ -31,6 +31,10 @@ impl Locale {
 
     /// Same heuristic as the webview: `it*` → Italian, otherwise English.
     pub fn from_system() -> Self {
+        #[cfg(target_os = "windows")]
+        if let Some(locale) = windows_ui_language() {
+            return locale;
+        }
         for key in ["LANG", "LC_ALL", "LC_MESSAGES", "LANGUAGE"] {
             if let Ok(lang) = std::env::var(key) {
                 if lang.to_lowercase().starts_with("it") {
@@ -39,6 +43,21 @@ impl Locale {
             }
         }
         Self::En
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_ui_language() -> Option<Locale> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetUserDefaultUILanguage() -> u16;
+    }
+  // Italian primary language id is 0x10 (it-IT 0x0410, it-CH 0x0810).
+    let lang = unsafe { GetUserDefaultUILanguage() };
+    if lang & 0x3FF == 0x10 {
+        Some(Locale::It)
+    } else {
+        None
     }
 }
 
@@ -52,6 +71,10 @@ pub enum Key {
     MenuCheckUpdates,
     MenuLogout,
     SubmenuConnections,
+    MenuFile,
+    MenuEdit,
+    MenuWindow,
+    MenuHelp,
     MenuSettings,
     WindowSettings,
     SettingsButtonLabel,
@@ -59,6 +82,12 @@ pub enum Key {
     ErrorBrainNeedsUpdateForSettings,
     TrayOpen,
     TrayQuit,
+    CreditsCreatedBy,
+    CreditsMaintainersLabel,
+    OAuthSuccessTitle,
+    OAuthSuccessBody,
+    OAuthDeniedTitle,
+    OAuthDeniedBody,
     // Dialogs
     LogoutTitle,
     LogoutMessage,
@@ -145,6 +174,10 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         (Locale::En, Key::MenuCheckUpdates) => "Check for updates…",
         (Locale::En, Key::MenuLogout) => "Log out…",
         (Locale::En, Key::SubmenuConnections) => "Connections",
+        (Locale::En, Key::MenuFile) => "File",
+        (Locale::En, Key::MenuEdit) => "Edit",
+        (Locale::En, Key::MenuWindow) => "Window",
+        (Locale::En, Key::MenuHelp) => "Help",
         (Locale::En, Key::MenuSettings) => "Advanced Settings…",
         (Locale::En, Key::WindowSettings) => "Advanced Settings",
         (Locale::En, Key::SettingsButtonLabel) => "Advanced Settings",
@@ -155,6 +188,14 @@ pub fn t(locale: Locale, key: Key) -> &'static str {
         }
         (Locale::En, Key::TrayOpen) => "Open Second Brain",
         (Locale::En, Key::TrayQuit) => "Quit",
+        (Locale::En, Key::CreditsCreatedBy) => "Created by",
+        (Locale::En, Key::CreditsMaintainersLabel) => "Maintainers:",
+        (Locale::En, Key::OAuthSuccessTitle) => "You&rsquo;re signed in ✓",
+        (Locale::En, Key::OAuthSuccessBody) =>
+            "You can close this tab and return to the Second Brain app.",
+        (Locale::En, Key::OAuthDeniedTitle) => "Sign-in cancelled",
+        (Locale::En, Key::OAuthDeniedBody) =>
+            "You can close this tab. Head back to the Second Brain app to try again.",
         // Dialogs — EN
         (Locale::En, Key::LogoutTitle) => "Log out",
         (Locale::En, Key::LogoutMessage) => {
@@ -317,6 +358,10 @@ would send your new password unprotected."
         (Locale::It, Key::MenuCheckUpdates) => "Controlla aggiornamenti…",
         (Locale::It, Key::MenuLogout) => "Esci…",
         (Locale::It, Key::SubmenuConnections) => "Connessioni",
+        (Locale::It, Key::MenuFile) => "File",
+        (Locale::It, Key::MenuEdit) => "Modifica",
+        (Locale::It, Key::MenuWindow) => "Finestra",
+        (Locale::It, Key::MenuHelp) => "Aiuto",
         (Locale::It, Key::MenuSettings) => "Impostazioni avanzate…",
         (Locale::It, Key::WindowSettings) => "Impostazioni avanzate",
         (Locale::It, Key::SettingsButtonLabel) => "Impostazioni avanzate",
@@ -327,6 +372,14 @@ would send your new password unprotected."
         }
         (Locale::It, Key::TrayOpen) => "Apri Second Brain",
         (Locale::It, Key::TrayQuit) => "Esci",
+        (Locale::It, Key::CreditsCreatedBy) => "Creato da",
+        (Locale::It, Key::CreditsMaintainersLabel) => "Manutentori:",
+        (Locale::It, Key::OAuthSuccessTitle) => "Accesso effettuato ✓",
+        (Locale::It, Key::OAuthSuccessBody) =>
+            "Puoi chiudere questa scheda e tornare all’app Second Brain.",
+        (Locale::It, Key::OAuthDeniedTitle) => "Accesso annullato",
+        (Locale::It, Key::OAuthDeniedBody) =>
+            "Puoi chiudere questa scheda. Torna all’app Second Brain per riprovare.",
         // Dialogs — IT
         (Locale::It, Key::LogoutTitle) => "Esci",
         (Locale::It, Key::LogoutMessage) => {
@@ -553,6 +606,10 @@ mod tests {
             MenuCheckUpdates,
             MenuLogout,
             SubmenuConnections,
+            MenuFile,
+            MenuEdit,
+            MenuWindow,
+            MenuHelp,
             MenuSettings,
             WindowSettings,
             SettingsButtonLabel,
@@ -560,6 +617,12 @@ mod tests {
             ErrorBrainNeedsUpdateForSettings,
             TrayOpen,
             TrayQuit,
+            CreditsCreatedBy,
+            CreditsMaintainersLabel,
+            OAuthSuccessTitle,
+            OAuthSuccessBody,
+            OAuthDeniedTitle,
+            OAuthDeniedBody,
             LogoutTitle,
             LogoutMessage,
             LogoutConfirm,

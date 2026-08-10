@@ -36,6 +36,14 @@ function integrationNoun(provider, n) {
   return tPlural(integrationNounKey(provider), n)
 }
 
+function integrationConnectI18n(provider, field, apiFallback, fallbackKey) {
+  const key = `integrations.connect.${provider}.${field}`
+  const translated = t(key)
+  if (translated !== key) return translated
+  if (apiFallback) return apiFallback
+  return fallbackKey ? t(fallbackKey) : ''
+}
+
 async function loadIntegrations() {
   const el = document.getElementById('integrations-list')
   try {
@@ -128,17 +136,31 @@ function renderIntegrationCard(info) {
   const p = info.provider
   const icon = INTEGRATION_ICONS[p] || 'ti-plug'
   if (!info.connected) {
-    const hint = p === 'notion' ? t('integrations.notionHint') : (info.connectHint || '')
-    const label = escHtml(info.connectLabel || t('integrations.pasteSecret'))
+    const hint =
+      p === 'notion'
+        ? t('integrations.notionHint')
+        : integrationConnectI18n(p, 'hint', info.connectHint, '')
+    const label = escHtml(
+      integrationConnectI18n(p, 'label', info.connectLabel, 'integrations.pasteSecret'),
+    )
     const isEmail = p.startsWith('email')
     let inputs
     if (isEmail) {
       // Email needs two fields; connectIntegration packs them into the token.
       inputs =
         `<input type="email" id="email-${p}" placeholder="${escAttr(t('integrations.emailPlaceholder'))}" aria-label="${escAttr(t('integrations.emailAria'))}" autocomplete="off" />` +
-        `<input type="password" id="tok-${p}" placeholder="${escHtml(info.connectPlaceholder || t('integrations.appPassword'))}" aria-label="${escAttr(t('integrations.appPasswordAria'))}" autocomplete="off" />`
+        `<input type="password" id="tok-${p}" placeholder="${escHtml(
+          integrationConnectI18n(p, 'placeholder', info.connectPlaceholder, 'integrations.appPassword'),
+        )}" aria-label="${escAttr(t('integrations.appPasswordAria'))}" autocomplete="off" />`
     } else {
-      const placeholder = escHtml(info.connectPlaceholder || (p === 'notion' ? t('integrations.notionPlaceholder') : t('integrations.urlPlaceholder')))
+      const placeholder = escHtml(
+        integrationConnectI18n(
+          p,
+          'placeholder',
+          info.connectPlaceholder,
+          p === 'notion' ? 'integrations.notionPlaceholder' : 'integrations.urlPlaceholder',
+        ),
+      )
       inputs = `<input type="password" id="tok-${p}" placeholder="${placeholder}" aria-label="${label}" autocomplete="off" />`
     }
     return `

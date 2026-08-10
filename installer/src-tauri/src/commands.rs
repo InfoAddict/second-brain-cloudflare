@@ -186,8 +186,9 @@ pub async fn connect_cloudflare(
         return Ok(accounts);
     }
 
+    let locale = locale_of(&app);
     let opener_app = app.clone();
-    let tokens = oauth::run_login_flow(move |url| {
+    let tokens = oauth::run_login_flow(locale, move |url| {
         let _ = opener_app.opener().open_url(url, None::<&str>);
     })
     .await
@@ -893,7 +894,7 @@ pub fn set_locale(locale: String, app: AppHandle) -> Result<(), String> {
         state.set(locale);
     }
     if let Some(menus) = app.try_state::<AppMenus>() {
-        menus.apply_locale(locale);
+        menus.apply_locale(&app, locale);
         menus.rebuild_tray_menu(&app).map_err(|e| e.to_string())?;
     }
     // Push the new language into an already-open dashboard window. Without this,
