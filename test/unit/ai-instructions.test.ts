@@ -17,6 +17,7 @@ function availabilitySection(text: string) {
 describe("AI instruction files (#223 lazy MCP contract)", () => {
   const claude = readInstructions("CLAUDE_INSTRUCTIONS.md");
   const codex = readInstructions("CODEX_INSTRUCTIONS.md");
+  const chatgpt = readInstructions("CHATGPT_INSTRUCTIONS.md");
 
   for (const [label, text] of [
     ["CLAUDE", claude],
@@ -57,5 +58,16 @@ describe("AI instruction files (#223 lazy MCP contract)", () => {
       expect(claude).toMatch(rule);
       expect(codex).toMatch(rule);
     }
+  });
+
+  it("keeps volatility guidance in every agent template", () => {
+    expect(claude).toMatch(/Volatility.*remember.*append.*update/is);
+    expect(codex).toMatch(/Volatility.*remember.*append.*update/is);
+    expect(chatgpt).toMatch(/Volatility.*remember\/append\/update/is);
+  });
+
+  it("uses the ChatGPT-specific response tag", () => {
+    expect(chatgpt).toContain("chatgpt-response");
+    expect(chatgpt).not.toContain("claude-response");
   });
 });
