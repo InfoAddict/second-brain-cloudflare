@@ -73,18 +73,7 @@ jobs:
             exit 1
           fi
 
-          jq \
-            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
-            --arg database_id "$D1_DATABASE_ID" \
-            --arg oauth_kv_id "$OAUTH_KV_NAMESPACE_ID" \
-            '.account_id = $account_id
-              | .d1_databases |= map(
-                  if .binding == "DB" then .database_id = $database_id else . end
-                )
-              | .kv_namespaces |= map(
-                  if .binding == "OAUTH_KV" then .id = $oauth_kv_id else . end
-                )' \
-            wrangler.jsonc > wrangler.deploy.json
+          node scripts/write-deploy-config.mjs wrangler.jsonc wrangler.deploy.json
 
       - name: Deploy
         env:
