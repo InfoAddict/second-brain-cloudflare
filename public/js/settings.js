@@ -64,9 +64,9 @@ function digestCandidateRow(c) {
       <div class="digest-candidate-row" id="digest-row-${escAttr(c.tag)}">
         <div class="digest-candidate-label">
           <span>${escHtml(c.tag)}</span>
-          <span class="digest-candidate-count">${c.count} entries</span>
+          <span class="digest-candidate-count">${escHtml(tPlural('upkeep.digestEntries', c.count))}</span>
         </div>
-        <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">Digest →</button>
+        <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">${escHtml(t('upkeep.digestAction'))}</button>
       </div>`
 }
 
@@ -83,13 +83,13 @@ function renderDigestSection(candidates) {
   const shown = candidates.slice(0, DIGEST_VISIBLE)
   const rest = candidates.slice(DIGEST_VISIBLE)
   el.innerHTML = `
-    <div class="digest-section-label">Ready to compress</div>
-    <p class="digest-note">Originals are never deleted — digest adds a summary and ranks originals lower in recall so they don't crowd results.</p>
+    <div class="digest-section-label">${escHtml(t('upkeep.digestLabel'))}</div>
+    <p class="digest-note">${escHtml(t('upkeep.digestNote'))}</p>
     ${shown.map(digestCandidateRow).join('')}
     ${
       rest.length
         ? `<div id="digest-rest" hidden>${rest.map(digestCandidateRow).join('')}</div>
-           <button class="digest-more" id="digest-more" onclick="showAllDigestCandidates()">${rest.length} more &rsaquo;</button>`
+           <button class="digest-more" id="digest-more" onclick="showAllDigestCandidates()">${escHtml(t('upkeep.digestMore', { n: rest.length }))}</button>`
         : ''
     }
   `
@@ -105,7 +105,7 @@ function showAllDigestCandidates() {
 async function runDigest(tag, btn) {
   btn.disabled = true
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.working'))}`
   const row = document.getElementById('digest-row-' + tag)
   try {
     const res = await fetch(`${WORKER_URL}/digest?tag=${encodeURIComponent(tag)}`, {
@@ -114,28 +114,28 @@ async function runDigest(tag, btn) {
     const data = await res.json()
     if (data.synthesis) {
       btn.classList.remove('digest-btn--loading')
-      btn.innerHTML = '<i class="ti ti-check"></i> Done'
+      btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.done'))}`
       btn.style.color = 'var(--good)'
       setTimeout(() => {
-        row.innerHTML = `<div class="digest-result"><strong>${escHtml(tag)}</strong> — ${escHtml(data.synthesis)}<div class="digest-result-meta"><i class="ti ti-lock"></i> ${data.source_count} original memories preserved &amp; still searchable</div></div>`
+        row.innerHTML = `<div class="digest-result"><strong>${escHtml(tag)}</strong> — ${escHtml(data.synthesis)}<div class="digest-result-meta"><i class="ti ti-lock"></i> ${escHtml(tPlural('upkeep.digestPreserved', data.source_count))}</div></div>`
       }, 700)
     } else {
       btn.classList.remove('digest-btn--loading')
-      btn.innerHTML = '<i class="ti ti-alert-triangle"></i> ' + escHtml(data.error ?? 'Could not create digest')
+      btn.innerHTML = '<i class="ti ti-alert-triangle"></i> ' + escHtml(data.error ?? t('upkeep.digestFailed'))
       btn.style.color = 'var(--danger)'
       setTimeout(() => {
         btn.disabled = false
-        btn.innerHTML = 'Digest →'
+        btn.innerHTML = escHtml(t('upkeep.digestAction'))
         btn.style.color = ''
       }, 3000)
     }
   } catch {
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
+    btn.innerHTML = `<i class="ti ti-wifi-off"></i> ${escHtml(t('upkeep.requestFailed'))}`
     btn.style.color = 'var(--danger)'
     setTimeout(() => {
       btn.disabled = false
-      btn.innerHTML = 'Digest →'
+      btn.innerHTML = escHtml(t('upkeep.digestAction'))
       btn.style.color = ''
     }, 3000)
   }
@@ -149,16 +149,16 @@ function renderVectorizeSection(count) {
   }
   el.style.display = ''
   el.innerHTML = `
-    <div class="digest-section-label">Not indexed</div>
-    <p class="digest-note">${count} ${count === 1 ? 'memory' : 'memories'} failed to embed and won't appear in recall.</p>
-    <button class="digest-btn" id="vectorize-btn" onclick="runVectorize(this)">Vectorize now →</button>
+    <div class="digest-section-label">${escHtml(t('upkeep.vectorizeLabel'))}</div>
+    <p class="digest-note">${escHtml(tPlural('upkeep.vectorizeNote', count))}</p>
+    <button class="digest-btn" id="vectorize-btn" onclick="runVectorize(this)">${escHtml(t('upkeep.vectorizeAction'))}</button>
   `
 }
 
 async function runVectorize(btn) {
   btn.disabled = true
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.working'))}`
   try {
     let remaining = 1
     let totalProcessed = 0
@@ -167,24 +167,24 @@ async function runVectorize(btn) {
         method: 'POST',
         headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
       })
-      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
       const data = await res.json()
       remaining = data.remaining ?? 0
       totalProcessed += data.processed ?? 0
       if ((data.processed ?? 0) === 0 && remaining > 0) break
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} re-indexed`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.vectorizeDone', { n: totalProcessed }))}`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
     refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
+    btn.innerHTML = `<i class="ti ti-wifi-off"></i> ${escHtml(t('upkeep.requestFailed'))}`
     btn.style.color = 'var(--danger)'
     setTimeout(() => {
       btn.disabled = false
-      btn.innerHTML = 'Vectorize now →'
+      btn.innerHTML = escHtml(t('upkeep.vectorizeAction'))
       btn.style.color = ''
     }, 3000)
   }
@@ -195,16 +195,16 @@ function renderClassifySection(count) {
   if (!count) { el.style.display = 'none'; return }
   el.style.display = ''
   el.innerHTML = `
-    <div class="digest-section-label">Not classified</div>
-    <p class="digest-note">${count} ${count === 1 ? 'memory has' : 'memories have'} no kind or status tag yet (captured before classification existed).</p>
-    <button class="digest-btn" id="classify-btn" onclick="runClassify(this)">Classify now →</button>
+    <div class="digest-section-label">${escHtml(t('upkeep.classifyLabel'))}</div>
+    <p class="digest-note">${escHtml(tPlural('upkeep.classifyNote', count))}</p>
+    <button class="digest-btn" id="classify-btn" onclick="runClassify(this)">${escHtml(t('upkeep.classifyAction'))}</button>
   `
 }
 
 async function runClassify(btn) {
   btn.disabled = true
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.working'))}`
   try {
     let remaining = 1
     let prevRemaining = Infinity
@@ -214,7 +214,7 @@ async function runClassify(btn) {
         method: 'POST',
         headers: { Authorization: `Bearer ${AUTH_TOKEN}` }
       })
-      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
       const data = await res.json()
       remaining = data.remaining ?? 0
       totalProcessed += data.processed ?? 0
@@ -222,17 +222,17 @@ async function runClassify(btn) {
       prevRemaining = remaining
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} classified`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.classifyDone', { n: totalProcessed }))}`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
     refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
+    btn.innerHTML = `<i class="ti ti-wifi-off"></i> ${escHtml(t('upkeep.requestFailed'))}`
     btn.style.color = 'var(--danger)'
     setTimeout(() => {
       btn.disabled = false
-      btn.innerHTML = 'Classify now →'
+      btn.innerHTML = escHtml(t('upkeep.classifyAction'))
       btn.style.color = ''
     }, 3000)
   }
@@ -285,7 +285,7 @@ async function runImportLoop(payload, post, onProgress) {
     if (onProgress) onProgress({ done: Math.min(offset + edgeOffset, totalEntries + totalEdges), total: totalEntries + totalEdges, totals })
 
     if ((data.remaining_entries || 0) === 0 && (data.remaining_edges || 0) === 0) return totals
-    if (stalled) throw new Error('Server did not advance the import cursor — is the Worker up to date?')
+    if (stalled) throw new Error(t('upkeep.importStalled'))
   }
 }
 
@@ -302,9 +302,9 @@ function renderRestoreProgress(label, done, total) {
   const el = restoreSection()
   el.style.display = ''
   el.innerHTML = `
-    <div class="digest-section-label">Restore</div>
+    <div class="digest-section-label">${escHtml(t('upkeep.restoreLabel'))}</div>
     <p class="digest-note">${label}</p>
-    <button class="digest-btn digest-btn--loading" disabled><i class="ti ti-loader-2"></i> ${done.toLocaleString()} of ${total.toLocaleString()}</button>
+    <button class="digest-btn digest-btn--loading" disabled><i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.restoreOf', { done: done.toLocaleString(localeTag()), total: total.toLocaleString(localeTag()) }))}</button>
   `
 }
 
@@ -312,29 +312,29 @@ function renderRestoreFailure(message) {
   const el = restoreSection()
   el.style.display = ''
   el.innerHTML = `
-    <div class="digest-section-label">Restore</div>
-    <p class="digest-note">${message} Your backup file is untouched, and it's safe to try again — anything already restored will be skipped, not duplicated.</p>
-    <button class="digest-btn" onclick="restoreFromBackup()">Try again →</button>
+    <div class="digest-section-label">${escHtml(t('upkeep.restoreLabel'))}</div>
+    <p class="digest-note">${message} ${escHtml(t('upkeep.restoreFailureTail'))}</p>
+    <button class="digest-btn" onclick="restoreFromBackup()">${escHtml(t('upkeep.restoreTryAgain'))}</button>
   `
 }
 
 function renderRestoreDone(totals) {
   const el = restoreSection()
-  const parts = [`${totals.imported.toLocaleString()} restored`]
-  if (totals.edges_imported) parts.push(`${totals.edges_imported.toLocaleString()} connections`)
-  if (totals.skipped) parts.push(`${totals.skipped.toLocaleString()} already present`)
+  const parts = [t('upkeep.restoreSummaryRestored', { n: totals.imported.toLocaleString(localeTag()) })]
+  if (totals.edges_imported) parts.push(t('upkeep.restoreSummaryConnections', { n: totals.edges_imported.toLocaleString(localeTag()) }))
+  if (totals.skipped) parts.push(t('upkeep.restoreSummaryPresent', { n: totals.skipped.toLocaleString(localeTag()) }))
   const failures = totals.failed + totals.edges_failed
   const failNote = failures
-    ? ` ${failures.toLocaleString()} ${failures === 1 ? 'item' : 'items'} couldn't be restored — usually rows edited by hand; the rest are unaffected.`
+    ? ` ${t('upkeep.restoreFailNote', { n: failures.toLocaleString(localeTag()) })}`
     : ''
   const needsIndexing = totals.imported > 0
   el.style.display = ''
   el.innerHTML = `
-    <div class="digest-section-label">Restore</div>
-    <p class="digest-note"><i class="ti ti-check"></i> ${parts.join(' · ')}.${failNote}${
-      needsIndexing ? ' Restored memories can\'t be searched until they\'re indexed.' : ''
+    <div class="digest-section-label">${escHtml(t('upkeep.restoreLabel'))}</div>
+    <p class="digest-note"><i class="ti ti-check"></i> ${escHtml(parts.join(' · '))}.${escHtml(failNote)}${
+      needsIndexing ? ` ${escHtml(t('upkeep.restoreNeedsIndex'))}` : ''
     }</p>
-    ${needsIndexing ? '<button class="digest-btn" onclick="indexRestored(this)">Make searchable →</button>' : ''}
+    ${needsIndexing ? `<button class="digest-btn" onclick="indexRestored(this)">${escHtml(t('upkeep.restoreMakeSearchable'))}</button>` : ''}
   `
 }
 
@@ -344,7 +344,7 @@ function renderRestoreDone(totals) {
 async function indexRestored(btn) {
   btn.disabled = true
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Indexing…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.restoreIndexing'))}`
   try {
     let remaining = 1
     let totalProcessed = 0
@@ -353,20 +353,22 @@ async function indexRestored(btn) {
         method: 'POST',
         headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
       })
-      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
       const data = await res.json()
       remaining = data.remaining ?? 0
       totalProcessed += data.processed ?? 0
-      btn.innerHTML = `<i class="ti ti-loader-2"></i> Indexing… ${totalProcessed.toLocaleString()} done${remaining ? `, ${remaining.toLocaleString()} to go` : ''}`
+      btn.innerHTML = remaining
+        ? `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.restoreIndexingProgress', { done: totalProcessed.toLocaleString(localeTag()), remaining: remaining.toLocaleString(localeTag()) }))}`
+        : `<i class="ti ti-loader-2"></i> ${escHtml(t('upkeep.restoreIndexingDoneOnly', { done: totalProcessed.toLocaleString(localeTag()) }))}`
       if ((data.processed ?? 0) === 0 && remaining > 0) break
     }
     btn.classList.remove('digest-btn--loading')
     if (remaining > 0) {
       // Workers AI quota ran dry mid-backfill — the daily reset finishes the job.
       btn.disabled = false
-      btn.innerHTML = `${remaining.toLocaleString()} left — daily AI limit reached, try tomorrow`
+      btn.innerHTML = escHtml(t('upkeep.restoreQuotaLeft', { n: remaining.toLocaleString(localeTag()) }))
     } else {
-      btn.innerHTML = '<i class="ti ti-check"></i> All restored memories are searchable'
+      btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(t('upkeep.restoreAllSearchable'))}`
       btn.style.color = 'var(--good)'
     }
     await loadMenuStats()
@@ -374,7 +376,7 @@ async function indexRestored(btn) {
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.disabled = false
-    btn.innerHTML = '<i class="ti ti-wifi-off"></i> Failed — tap to retry'
+    btn.innerHTML = `<i class="ti ti-wifi-off"></i> ${escHtml(t('upkeep.restoreIndexFailed'))}`
     btn.style.color = 'var(--danger)'
     btn.onclick = () => indexRestored(btn)
   }
@@ -399,16 +401,16 @@ async function restoreFromBackup() {
   try {
     payload = JSON.parse(await file.text())
   } catch {
-    renderRestoreFailure(`<strong>${file.name}</strong> isn't valid JSON.`)
+    renderRestoreFailure(t('upkeep.restoreInvalidJson', { filename: `<strong>${escHtml(file.name)}</strong>` }))
     return
   }
   if (!payload || !Array.isArray(payload.entries)) {
-    renderRestoreFailure(`<strong>${file.name}</strong> doesn't look like a Second Brain backup — it has no entries list. Use a file created by "Back up as JSON".`)
+    renderRestoreFailure(t('upkeep.restoreNotBackup', { filename: `<strong>${escHtml(file.name)}</strong>` }))
     return
   }
 
   const total = payload.entries.length + (payload.edges || []).length
-  renderRestoreProgress(`Restoring from <strong>${file.name}</strong>…`, 0, total)
+  renderRestoreProgress(t('upkeep.restoreProgress', { filename: `<strong>${escHtml(file.name)}</strong>` }), 0, total)
   try {
     const totals = await runImportLoop(
       payload,
@@ -418,16 +420,16 @@ async function restoreFromBackup() {
           headers: { Authorization: `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         })
-        if (!res.ok) throw new Error(`Server error: ${res.status}`)
+        if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
         return res.json()
       },
-      ({ done }) => renderRestoreProgress(`Restoring from <strong>${file.name}</strong>…`, done, total),
+      ({ done }) => renderRestoreProgress(t('upkeep.restoreProgress', { filename: `<strong>${escHtml(file.name)}</strong>` }), done, total),
     )
     renderRestoreDone(totals)
     await loadMenuStats()
     refreshAll()
   } catch (e) {
-    renderRestoreFailure('The restore stopped partway.')
+    renderRestoreFailure(t('upkeep.restoreStopped'))
   }
 }
 
@@ -437,7 +439,7 @@ async function exportMemories(format) {
     // /export returns everything — entries AND edges — in one shot; /list caps
     // at 100 rows, which used to silently truncate bigger brains
     const res = await fetch(`${WORKER_URL}/export`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
-    if (!res.ok) throw new Error(`Server error: ${res.status}`)
+    if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
     const data = await res.json()
     const entries = data.entries || []
     const edges = data.edges || []
@@ -450,14 +452,14 @@ async function exportMemories(format) {
       filename = `second-brain-export-${ts}.json`
       mime = 'application/json'
     } else {
-      const lines = [`# Second Brain Export`, `Exported: ${ts}`, '']
+      const lines = [t('menu.exportMdTitle'), t('menu.exportMdExported', { date: ts }), '']
       entries.forEach((e, i) => {
         const tags = e.tags || []
-        const date = new Date(e.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-        lines.push(`## Memory ${i + 1}`)
-        lines.push(`**Date:** ${date}`)
-        if (tags.length) lines.push(`**Tags:** ${tags.join(', ')}`)
-        if (e.source) lines.push(`**Source:** ${e.source}`)
+        const date = formatDateUI(e.created_at, { year: 'numeric', month: 'short', day: 'numeric' })
+        lines.push(t('menu.exportMdMemory', { n: i + 1 }))
+        lines.push(t('menu.exportMdDate', { date }))
+        if (tags.length) lines.push(t('menu.exportMdTags', { tags: tags.join(', ') }))
+        if (e.source) lines.push(t('menu.exportMdSource', { source: e.source }))
         lines.push('')
         lines.push(e.content)
         lines.push('')
@@ -466,7 +468,7 @@ async function exportMemories(format) {
       })
       if (edges.length) {
         const labelById = new Map(entries.map((e) => [e.id, (e.content || '').slice(0, 60)]))
-        lines.push(`## Relationships`)
+        lines.push(t('menu.exportMdRelationships'))
         lines.push('')
         edges.forEach((e) => {
           const src = labelById.get(e.source_id) || e.source_id
@@ -488,6 +490,6 @@ async function exportMemories(format) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    alert('Export failed: ' + e.message)
+    alert(t('menu.exportFailed', { message: e.message }))
   }
 }

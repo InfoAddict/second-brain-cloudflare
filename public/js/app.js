@@ -1,5 +1,8 @@
 function init() {
+  initI18n()
+  applyI18nDom()
   applyTheme()
+  applyLocale()
   // Before anything renders, so the Memories screen is already showing the
   // projection this user last chose rather than snapping to it after paint.
   initMemoryView()

@@ -24,29 +24,29 @@ function captureReceipt(result, typedTags) {
   // pulled out of the content itself — not just the ones typed here.
   const filed = humanTags(result.tags && result.tags.length ? result.tags : typedTags || [])
 
-  let headline = 'stored to brain'
+  let headline = t('home.receiptStored')
   const notes = []
   if (result.action === 'merged') {
-    headline = 'merged into an existing memory'
-    notes.push('You had written about this before, so the two are now one memory.')
+    headline = t('home.receiptMerged')
+    notes.push(t('home.receiptMergedNote'))
   } else if (result.action === 'replaced') {
-    headline = 'replaced an outdated memory'
-    notes.push('The older version is gone; this one supersedes it.')
+    headline = t('home.receiptReplaced')
+    notes.push(t('home.receiptReplacedNote'))
   } else if (result.resolved_conflict) {
-    headline = 'stored, and something older now disagrees'
-    notes.push('Your brain noticed this conflicts with an earlier memory and kept the newer one.')
+    headline = t('home.receiptConflict')
+    notes.push(t('home.receiptConflictNote'))
   } else if (result.kept_canonical) {
-    headline = 'stored as a draft'
-    notes.push('This conflicts with a memory you have confirmed, so it is kept unconfirmed rather than overriding it.')
+    headline = t('home.receiptDraft')
+    notes.push(t('home.receiptDraftNote'))
   } else if (result.warning === 'similar') {
-    headline = 'stored, close to something you already had'
-    notes.push('Flagged as a possible duplicate so you can compare them later.')
+    headline = t('home.receiptSimilar')
+    notes.push(t('home.receiptSimilarNote'))
   }
 
   el.innerHTML =
     `<div class="receipt-headline"><span class="receipt-dot"></span>${escHtml(headline)}</div>` +
     (filed.length
-      ? `<div class="receipt-filed">filed under ${filed.map((t) => `<span class="confirm-tag">${escHtml(t)}</span>`).join('')}</div>`
+      ? `<div class="receipt-filed">${escHtml(t('home.receiptFiledUnder'))} ${filed.map((tag) => `<span class="confirm-tag">${escHtml(tag)}</span>`).join('')}</div>`
       : '') +
     notes.map((n) => `<div class="receipt-note">${escHtml(n)}</div>`).join('')
   return el

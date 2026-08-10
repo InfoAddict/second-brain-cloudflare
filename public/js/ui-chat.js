@@ -18,7 +18,7 @@ function renderAnswerMarkdown(src) {
       // in the numbered list the model was given, which is the second source
       // card. Rendered as a chip that reveals and highlights that card, so a
       // claim can be checked against the memory it came from in one tap.
-      .replace(/\[(\d{1,2})\]/g, '<button class="cite" data-cite="$1" title="Show source $1">$1</button>')
+      .replace(/\[(\d{1,2})\]/g, (_, n) => `<button class="cite" data-cite="${n}" title="${escAttr(t('recall.citeTitle', { n }))}">${n}</button>`)
 
   // Some models stream lists inline ("... tools: * a * b * c") with no newlines.
   // Re-break a run of " * " markers onto their own lines so they parse as a list.
@@ -38,25 +38,25 @@ function renderAnswerMarkdown(src) {
   }
 
   lines.forEach((line) => {
-    const t = line.trim()
-    if (!t) {
+    const trimmed = line.trim()
+    if (!trimmed) {
       closeList()
       return
     }
 
     let m
-    if ((m = t.match(/^(#{1,4})\s+(.*)$/))) {
+    if ((m = trimmed.match(/^(#{1,4})\s+(.*)$/))) {
       closeList()
       const lvl = Math.min(m[1].length + 2, 4) // h3/h4
       html += `<h${lvl}>${inline(m[2])}</h${lvl}>`
-    } else if ((m = t.match(/^[*\-+•]\s+(.*)$/))) {
+    } else if ((m = trimmed.match(/^[*\-+•]\s+(.*)$/))) {
       if (listType !== 'ul') {
         closeList()
         html += '<ul>'
         listType = 'ul'
       }
       html += `<li>${inline(m[1])}</li>`
-    } else if ((m = t.match(/^\d+[.)]\s+(.*)$/))) {
+    } else if ((m = trimmed.match(/^\d+[.)]\s+(.*)$/))) {
       if (listType !== 'ol') {
         closeList()
         html += '<ol>'
@@ -65,7 +65,7 @@ function renderAnswerMarkdown(src) {
       html += `<li>${inline(m[1])}</li>`
     } else {
       closeList()
-      html += `<p>${inline(t)}</p>`
+      html += `<p>${inline(trimmed)}</p>`
     }
   })
   closeList()
@@ -74,7 +74,7 @@ function renderAnswerMarkdown(src) {
 function appendUserBubble(container, text) {
   const q = document.createElement('div')
   q.className = 'ex-q'
-  q.innerHTML = '<span class="q-label">You asked</span><span class="q-dash">\u2014</span><span class="q-text"></span>'
+  q.innerHTML = `<span class="q-label">${escHtml(t('recall.youAsked'))}</span><span class="q-dash">\u2014</span><span class="q-text"></span>`
   q.querySelector('.q-text').textContent = text
   container.appendChild(q)
 }

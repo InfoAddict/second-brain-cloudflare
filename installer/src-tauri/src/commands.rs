@@ -911,6 +911,12 @@ pub fn set_locale(locale: String, app: AppHandle) -> Result<(), String> {
         menus.apply_locale(locale);
         menus.rebuild_tray_menu(&app).map_err(|e| e.to_string())?;
     }
+    // Push the new language into an already-open dashboard window. Without this,
+    // changing Language in Settings left the brain webview on the old locale
+    // until the window was destroyed and recreated.
+    if let Ok((worker_url, _)) = dashboard_credentials(&app.state::<SetupSession>(), locale) {
+        windows::sync_brain_locale(&app, &worker_url, locale, true);
+    }
     Ok(())
 }
 

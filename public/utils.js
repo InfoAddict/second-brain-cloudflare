@@ -60,7 +60,7 @@ function stripToPlainText(s) {
  */
 function titleLine(content, max = 90) {
   const plain = stripToPlainText(content)
-  if (!plain) return 'Untitled memory'
+  if (!plain) return t('memories.untitled')
   const sentence = plain.match(/^.{10,}?[.!?](\s|$)/)
   const line = (sentence ? sentence[0] : plain).trim()
   return line.length > max ? line.slice(0, max - 1).trimEnd() + '…' : line
@@ -113,23 +113,23 @@ function previewAfterTitle(content, title) {
   return plain
 }
 
-/** "2h ago" — absolute dates stay available on hover via title attributes. */
+/** Relative time for UI rows — absolute dates stay on hover via title attributes. */
 function relativeTime(ts) {
   const then = Number(ts)
   if (!Number.isFinite(then) || then <= 0) return ''
   const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
-  if (secs < 60) return 'just now'
+  if (secs < 60) return t('common.justNow')
   const mins = Math.round(secs / 60)
-  if (mins < 60) return `${mins}m ago`
+  if (mins < 60) return t('common.minutesAgo', { n: formatNumberUI(mins) })
   const hours = Math.round(mins / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return t('common.hoursAgo', { n: formatNumberUI(hours) })
   const days = Math.round(hours / 24)
-  if (days < 7) return `${days}d ago`
+  if (days < 7) return t('common.daysAgo', { n: formatNumberUI(days) })
   const weeks = Math.round(days / 7)
-  if (weeks < 5) return `${weeks}w ago`
+  if (weeks < 5) return t('common.weeksAgo', { n: formatNumberUI(weeks) })
   const months = Math.round(days / 30)
-  if (months < 12) return `${months}mo ago`
-  return `${Math.round(days / 365)}y ago`
+  if (months < 12) return t('common.monthsAgo', { n: formatNumberUI(months) })
+  return t('common.yearsAgo', { n: formatNumberUI(Math.round(days / 365)) })
 }
 
 /**
@@ -144,6 +144,20 @@ function relativeTime(ts) {
  * Ordered most specific first — "claude-code" is a terminal, not a chat, and
  * "email-gmail" is Google before it is mail.
  */
+const SOURCE_BADGE_I18N = {
+  'claude code': 'common.sourceClaudeCode',
+  cli: 'common.sourceCli',
+  email: 'common.sourceEmail',
+  chat: 'common.sourceChat',
+  browser: 'common.sourceBrowser',
+  dashboard: 'common.sourceDashboard',
+  phone: 'common.sourcePhone',
+  voice: 'common.sourceVoice',
+  import: 'common.sourceImport',
+  system: 'common.sourceSystem',
+  manual: 'common.sourceManual',
+}
+
 const SOURCE_BADGES = [
   // Terminals and code tools. `cli` is the Second Brain CLI; an earlier version
   // of this table matched it to GitHub, which was simply wrong.
@@ -172,11 +186,16 @@ const SOURCE_BADGES = [
   [/^user$|manual|^api$/, 'ti-writing', 'manual'],
 ]
 
+function sourceBadgeLabel(label) {
+  const key = SOURCE_BADGE_I18N[label]
+  return key ? t(key) : label
+}
+
 function sourceBadge(source) {
   const raw = String(source ?? '').trim().toLowerCase()
-  if (!raw) return { icon: 'ti-writing', label: 'manual' }
+  if (!raw) return { icon: 'ti-writing', label: t('common.sourceManual') }
   for (const [pattern, icon, label] of SOURCE_BADGES) {
-    if (pattern.test(raw)) return { icon, label }
+    if (pattern.test(raw)) return { icon, label: sourceBadgeLabel(label) }
   }
   // Some rows carry a whole sentence as their source ("ChatGPT conversation on
   // AI-native SDLC"). Show something rather than nothing, but never let it set
@@ -273,9 +292,9 @@ function vectorizeHealthBanner(health) {
   if (!health || !health.vectorize || health.vectorize.ok) return null;
   const name = health.vectorize.indexName || 'second-brain-vectors';
   return {
-    title: 'Semantic search is disabled. The Vectorize index "' + name + '" was not found.',
+    title: t('upkeep.vectorizeBannerTitle', { name }),
     command: 'npx wrangler vectorize create ' + name + ' --dimensions=384 --metric=cosine',
-    gui: 'Or grant the Workers Builds API token the account-level Vectorize Edit permission in the Cloudflare dashboard (My Profile, API Tokens), then redeploy so the build creates the index automatically.'
+    gui: t('upkeep.vectorizeBannerGui'),
   };
 }
 
@@ -284,8 +303,8 @@ function vectorizeHealthBanner(health) {
 function vectorizeBannerHtml(banner) {
   return (
     '<strong>' + escHtml(banner.title) + '</strong> ' +
-    '<details style="margin-top:6px"><summary style="cursor:pointer">How to fix</summary>' +
-    '<p style="margin:6px 0 2px">Run this once in your terminal:</p>' +
+    '<details style="margin-top:6px"><summary style="cursor:pointer">' + escHtml(t('upkeep.vectorizeBannerHowToFix')) + '</summary>' +
+    '<p style="margin:6px 0 2px">' + escHtml(t('upkeep.vectorizeBannerRunOnce')) + '</p>' +
     '<pre style="white-space:pre-wrap;background:rgba(0,0,0,0.25);padding:8px;border-radius:6px;margin:0">' + escHtml(banner.command) + '</pre>' +
     '<p style="margin:6px 0 0">' + escHtml(banner.gui) + '</p></details>'
   );

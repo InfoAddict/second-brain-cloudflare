@@ -34,7 +34,7 @@ async function loadGraph() {
     canvas.style.display = 'block'
     initGraphSim(canvas, data.nodes, data.edges)
   } catch (e) {
-    emptyEl.textContent = 'Could not load the graph.'
+    emptyEl.textContent = t('graph.loadFailed')
     emptyEl.style.display = 'block'
   }
 }
@@ -69,10 +69,6 @@ function initGraphSim(canvas, nodes, edges) {
 
   // Order clusters (largest first, sentinels last), assign palette colors + dense index.
   const CLUSTER_PALETTE = ['#fd540a', '#4a7c8c', '#7a9a5b', '#a9739e', '#c99a3f', '#5b8a8f', '#8c6f5b', '#6a7bb0', '#b0685f', '#5f8c6a', '#9a7bb0', '#7d8c4f']
-  // Memories the tags and the edges both failed to place. They are not a category —
-  // "Other" and "Untagged" were rings and legend rows describing nothing, and on a
-  // young brain they were most of the canvas. Muted, unringed, unlabelled: a brain
-  // with little structure should look like one.
   const LOOSE_CLUSTER = '__loose__'
   const LOOSE_COLOR = '#b8b3a8'
   const clusterHue = (s) => {
