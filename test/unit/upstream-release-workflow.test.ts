@@ -49,4 +49,9 @@ describe("upstream release workflow safety", () => {
     expect(updateWorkflow).toContain('Upstream-Deployment: reusable');
     expect(deployWorkflow).toContain("!contains(github.event.head_commit.message, 'Upstream-Deployment: reusable')");
   });
+
+  it("parses the shared JSONC config before injecting deployment IDs", () => {
+    expect(deployWorkflow).toContain("node scripts/write-deploy-config.mjs wrangler.jsonc wrangler.deploy.json");
+    expect(deployWorkflow).not.toContain("wrangler.jsonc > wrangler.deploy.json");
+  });
 });
