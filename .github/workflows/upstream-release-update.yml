@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: upstream-release-update
@@ -28,10 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      update_applied: ${{ steps.update.outputs.needed }}
+      update_applied: ${{ steps.publish.outputs.applied }}
+      update_blocked: ${{ steps.merge.outputs.blocked }}
       release_tag: ${{ steps.release.outputs.tag_name }}
       release_name: ${{ steps.release.outputs.release_name }}
       release_url: ${{ steps.release.outputs.release_url }}
+      conflict_files: ${{ steps.merge.outputs.conflict_files }}
+      conflict_pr_url: ${{ steps.merge.outputs.pr_url }}
+      conflict_pr_created: ${{ steps.merge.outputs.pr_created }}
     env:
       UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'rahilp/second-brain-cloudflare' }}
     steps:
@@ -103,51 +108,133 @@ jobs:
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create update branch
+      - name: Create or stage update branch
+        id: merge
         if: steps.update.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ steps.release.outputs.branch_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          RELEASE_URL: ${{ steps.release.outputs.release_url }}
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           base_sha="$(git rev-parse HEAD)"
-          git checkout -B "${{ steps.release.outputs.branch_name }}"
-          git merge --no-edit "${{ steps.release.outputs.tag_name }}"
+          git checkout -B "$BRANCH_NAME"
 
-          # Deployment and update automation belong to this fork. Keeping the
-          # local versions also prevents GitHub's workflow-file push restriction
-          # from blocking otherwise valid upstream app updates.
-          git restore --source="$base_sha" --staged --worktree -- .github/workflows
-          if ! git diff --cached --quiet; then
-            git commit --amend --no-edit
+          if git merge --no-edit --no-ff "$RELEASE_TAG"; then
+            # Workflow files belong to this fork. Keeping the local directory
+            # also avoids GitHub's workflow-file push restriction.
+            git restore --source="$base_sha" --staged --worktree -- .github/workflows
+            if ! git diff --cached --quiet; then
+              git commit --amend --no-edit
+            fi
+            git commit --amend --no-edit --trailer "Upstream-Deployment: reusable"
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          mapfile -t conflict_files < <(git diff --name-only --diff-filter=U)
+          if [[ "${#conflict_files[@]}" -eq 0 ]]; then
+            echo "::error::The upstream merge failed without reporting conflicted files."
+            exit 1
+          fi
+
+          {
+            echo "blocked=true"
+            echo "conflict_files<<EOF"
+            printf '%s\n' "${conflict_files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # Keep the fork side only on this draft branch. Nothing from a
+          # conflicted branch is tested, merged to main, or deployed.
+          git checkout --ours -- "${conflict_files[@]}"
+          git add -- "${conflict_files[@]}"
+          git restore --source="$base_sha" --staged --worktree -- .github/workflows
+          git commit -m "chore: stage upstream release $RELEASE_TAG for conflict resolution"
+
+          git fetch origin "+refs/heads/$BRANCH_NAME:refs/remotes/origin/$BRANCH_NAME" || true
+          git push --force-with-lease origin "HEAD:$BRANCH_NAME"
+
+          pr_url="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$BRANCH_NAME" \
+            --base main \
+            --state open \
+            --json url \
+            --jq '.[0].url // empty')"
+          if [[ -z "$pr_url" ]]; then
+            conflict_list="$(printf -- '- %s\n' "${conflict_files[@]}")"
+            printf -v pr_body \
+              'An upstream release was detected but could not be merged safely.\n\nRelease: %s\n\nConflicted files:\n%s\nThe branch keeps the fork version of each conflicted file for safety. Resolve those files, run the full checks, and only then merge. Nothing from this branch has been deployed.' \
+              "$RELEASE_URL" \
+              "$conflict_list"
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$BRANCH_NAME" \
+              --draft \
+              --title "Resolve upstream $RELEASE_TAG merge conflicts" \
+              --body "$pr_body")"
+            echo "pr_created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr_created=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Upstream release $RELEASE_TAG needs conflict resolution"
+            echo
+            echo "Draft PR: $pr_url"
+            echo
+            echo "Conflicted files:"
+            printf -- "- %s\n" "${conflict_files[@]}"
+            echo
+            echo "Main and the live Worker were not changed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Setup Node
-        if: steps.update.outputs.needed == 'true'
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
 
       - name: Install dependencies
-        if: steps.update.outputs.needed == 'true'
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
         run: npm ci --legacy-peer-deps
 
       - name: Typecheck
-        if: steps.update.outputs.needed == 'true'
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
         run: npm run typecheck
 
       - name: Test
-        if: steps.update.outputs.needed == 'true'
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
         run: npm run test
 
+      - name: Predeploy guard
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
+        run: npm run predeploy
+
+      - name: Worker build check
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
+        run: npx wrangler deploy --dry-run
+
       - name: Publish tested release
-        if: steps.update.outputs.needed == 'true'
+        id: publish
+        if: steps.update.outputs.needed == 'true' && steps.merge.outputs.blocked != 'true'
+        env:
+          BRANCH_NAME: ${{ steps.release.outputs.branch_name }}
         run: |
           set -euo pipefail
 
-          git push --force-with-lease origin "HEAD:${{ steps.release.outputs.branch_name }}"
+          git fetch origin "+refs/heads/$BRANCH_NAME:refs/remotes/origin/$BRANCH_NAME" || true
+          git push --force-with-lease origin "HEAD:$BRANCH_NAME"
           git push origin "HEAD:main"
+          echo "applied=true" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Applied upstream release ${{ steps.release.outputs.tag_name }}"
@@ -173,26 +260,39 @@ jobs:
       always() &&
       (
         (
-          needs.update-from-upstream-release.outputs.update_applied == 'true' &&
-          needs.deploy-upstream-release.result == 'success'
+          needs.update-from-upstream-release.outputs.update_blocked == 'true' &&
+          needs.update-from-upstream-release.outputs.conflict_pr_created == 'true'
+        ) ||
+        needs.update-from-upstream-release.outputs.update_applied == 'true' ||
+        (
+          needs.update-from-upstream-release.result == 'failure' &&
+          needs.update-from-upstream-release.outputs.release_tag != ''
         ) ||
         (
           github.event_name == 'workflow_dispatch' &&
           inputs.test_notification == true &&
-          needs.update-from-upstream-release.outputs.update_applied != 'true'
+          needs.update-from-upstream-release.outputs.update_applied != 'true' &&
+          needs.update-from-upstream-release.outputs.update_blocked != 'true'
         )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Email applied release
+      - name: Email release result
         env:
           SECOND_BRAIN_URL: ${{ secrets.SECOND_BRAIN_URL }}
           RELEASE_NOTIFY_TOKEN: ${{ secrets.RELEASE_NOTIFY_TOKEN }}
           RELEASE_TAG: ${{ needs.update-from-upstream-release.outputs.release_tag }}
           RELEASE_NAME: ${{ needs.update-from-upstream-release.outputs.release_name }}
           RELEASE_URL: ${{ needs.update-from-upstream-release.outputs.release_url }}
-          IS_TEST: ${{ needs.update-from-upstream-release.outputs.update_applied != 'true' }}
+          UPDATE_RESULT: ${{ needs.update-from-upstream-release.result }}
+          UPDATE_APPLIED: ${{ needs.update-from-upstream-release.outputs.update_applied }}
+          UPDATE_BLOCKED: ${{ needs.update-from-upstream-release.outputs.update_blocked }}
+          DEPLOY_RESULT: ${{ needs.deploy-upstream-release.result }}
+          CONFLICT_FILES: ${{ needs.update-from-upstream-release.outputs.conflict_files }}
+          CONFLICT_PR_URL: ${{ needs.update-from-upstream-release.outputs.conflict_pr_url }}
+          IS_TEST_REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.test_notification == true }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -207,20 +307,42 @@ jobs:
             exit 1
           fi
 
+          notification_status="failed"
+          details="Update job: $UPDATE_RESULT; deployment job: $DEPLOY_RESULT."
+          action_url="$RUN_URL"
+          if [[ "$UPDATE_BLOCKED" == "true" ]]; then
+            notification_status="blocked"
+            details="$(printf 'Merge conflicts:\n%s' "$CONFLICT_FILES")"
+            action_url="${CONFLICT_PR_URL:-$RUN_URL}"
+          elif [[ "$UPDATE_RESULT" == "failure" || ( "$UPDATE_APPLIED" == "true" && "$DEPLOY_RESULT" != "success" ) ]]; then
+            notification_status="failed"
+          elif [[ "$UPDATE_APPLIED" == "true" && "$DEPLOY_RESULT" == "success" ]]; then
+            notification_status="applied"
+            details=""
+          elif [[ "$IS_TEST_REQUEST" == "true" ]]; then
+            notification_status="test"
+            details=""
+          fi
+
           payload="$(jq -n \
             --arg release_tag "$RELEASE_TAG" \
             --arg release_name "$RELEASE_NAME" \
             --arg release_url "$RELEASE_URL" \
-            --argjson test "$IS_TEST" \
+            --arg status "$notification_status" \
+            --arg details "$details" \
+            --arg action_url "$action_url" \
             '{
               releaseTag: $release_tag,
               releaseName: $release_name,
               releaseUrl: $release_url,
-              test: $test
+              status: $status,
+              details: $details,
+              actionUrl: $action_url,
+              test: ($status == "test")
             }')"
 
           response_file="$(mktemp)"
-          status="$(curl --silent --show-error \
+          http_status="$(curl --silent --show-error \
             --output "$response_file" \
             --write-out '%{http_code}' \
             --request POST \
@@ -229,19 +351,20 @@ jobs:
             --data "$payload" \
             "${SECOND_BRAIN_URL%/}/internal/release-notification")"
 
-          if [[ "$status" -lt 200 || "$status" -ge 300 ]] || ! jq -e '.ok == true' "$response_file" >/dev/null; then
-            echo "::error::Release notification failed with HTTP ${status}"
+          if [[ "$http_status" -lt 200 || "$http_status" -ge 300 ]] || ! jq -e '.ok == true' "$response_file" >/dev/null; then
+            echo "::error::Release notification failed with HTTP ${http_status}"
             cat "$response_file"
             exit 1
           fi
 
           message_id="$(jq -r '.messageId // "unknown"' "$response_file")"
           {
-            if [[ "$IS_TEST" == "true" ]]; then
-              echo "### Release notification test delivered"
-            else
-              echo "### Emailed applied release ${RELEASE_TAG}"
-            fi
+            case "$notification_status" in
+              applied) echo "### Emailed applied release ${RELEASE_TAG}" ;;
+              blocked) echo "### Emailed blocked release ${RELEASE_TAG}" ;;
+              failed) echo "### Emailed failed release ${RELEASE_TAG}" ;;
+              test) echo "### Release notification test delivered" ;;
+            esac
             echo
             echo "Recipient: dan@infoaddict.net"
             echo
@@ -249,3 +372,20 @@ jobs:
             echo
             echo "Cloudflare message ID: ${message_id}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  mark-upstream-release-blocked:
+    needs:
+      - update-from-upstream-release
+      - notify-upstream-release
+    if: >-
+      always() &&
+      needs.update-from-upstream-release.outputs.update_blocked == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark conflicted release as requiring attention
+        env:
+          RELEASE_TAG: ${{ needs.update-from-upstream-release.outputs.release_tag }}
+          PR_URL: ${{ needs.update-from-upstream-release.outputs.conflict_pr_url }}
+        run: |
+          echo "::error::Upstream release $RELEASE_TAG requires conflict resolution: $PR_URL"
+          exit 1

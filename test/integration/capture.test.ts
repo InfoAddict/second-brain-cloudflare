@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 function makeCtx() {
@@ -98,22 +98,24 @@ describe("POST /capture", () => {
     expect(tags).toContain("fitness");
   });
 
-  it("stores domain tags as values without creating invalid Vectorize metadata keys", async () => {
+  it("stores domain and stream tags with safe per-tag Vectorize metadata keys", async () => {
     const vectorize = makeVectorizeMock();
     env = makeTestEnv(db, { VECTORIZE: vectorize });
     const { ctx, drain } = makeCtx();
 
     const res = await worker.fetch(req("POST", "/capture", {
-      body: { content: "Reference note", tags: ["richardhames.com", "kind:semantic"] }
+      body: { content: "Reference note", tags: ["richardhames.com", "upgrade-the-system", "kind:semantic"] }
     }), env, ctx);
     await drain();
 
     expect(res.status).toBe(200);
-    const insertMock = vectorize.insert as ReturnType<typeof vi.fn>;
-    const vectors = insertMock.mock.calls[0][0] as any[];
-    expect(vectors[0].metadata.tags).toEqual(["richardhames.com", "kind:semantic"]);
+    const upsertMock = vectorize.upsert as ReturnType<typeof vi.fn>;
+    const vectors = upsertMock.mock.calls[0][0] as any[];
+    expect(vectors[0].metadata.tags).toEqual(["richardhames.com", "upgrade-the-system", "kind:semantic"]);
     expect(Object.keys(vectors[0].metadata).some(key => key.includes("."))).toBe(false);
-    expect(Object.keys(vectors[0].metadata).some(key => key.startsWith("tag_"))).toBe(false);
+    expect(vectors[0].metadata["tag_richardhames_com"]).toBe(true);
+    expect(vectors[0].metadata["tag_upgrade-the-system"]).toBe(true);
+    expect(vectors[0].metadata["tag_kind:semantic"]).toBe(true);
   });
 
   it("behaves identically when no hashtags are present (regression)", async () => {
@@ -124,6 +126,36 @@ describe("POST /capture", () => {
     expect(db.entries[0].content).toBe("plain note");
     const tags = JSON.parse(db.entries[0].tags);
     expect(tags).toEqual(["work"]);
+  });
+
+  it("embeds an entry whose tag contains '.' or '\"' — metadata keys are sanitized (regression #210)", async () => {
+    // Cloudflare Vectorize rejects metadata property names containing '.' or '"'.
+    // Model that: the write throws if any tag_ key is left unsanitized, which is
+    // how a tag like "v3.9 notes" silently prevented the entry from embedding.
+    const upsertMock = vi.fn(async (vectors: any[]): Promise<any> => {
+      for (const v of vectors)
+        for (const key of Object.keys(v.metadata ?? {}))
+          if (/[."]/.test(key)) throw new Error(`invalid Vectorize metadata key: ${key}`);
+      return { mutationId: "m" };
+    });
+    const { ctx, drain } = makeCtx();
+    env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ upsert: upsertMock }) });
+
+    const res = await worker.fetch(
+      req("POST", "/capture", { body: { content: "Django compat notes", tags: ['v3.9 notes', 'a"b'] } }),
+      env, ctx
+    );
+    await drain();
+
+    expect(res.status).toBe(200);
+    // The write succeeded rather than being swallowed: a vector was upserted...
+    expect(upsertMock).toHaveBeenCalledOnce();
+    const vector = upsertMock.mock.calls[0][0][0];
+    // ...with every metadata key free of '.' and '"'...
+    expect(Object.keys(vector.metadata).some(k => /[."]/.test(k))).toBe(false);
+    expect(vector.metadata["tag_v3_9 notes"]).toBe(true);
+    // ...while the canonical tags array keeps the originals verbatim.
+    expect(vector.metadata.tags).toEqual(['v3.9 notes', 'a"b']);
   });
 
   it("falls back to original content when input is only hashtags", async () => {

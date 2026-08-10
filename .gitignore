@@ -3,8 +3,15 @@ assets/*.gif
 node_modules/
 coverage/
 .wrangler/
+.wrangler-dry-run/
 docs/
+!docs/dashboard-architecture.md
 .claude/
+.cursor/
 .dev.vars
 .env
 worker-configuration.d.ts
+# Per-environment wrangler overrides. wrangler.jsonc is the shared, ID-free
+# config users deploy from; these carry real account resource IDs and stay local.
+wrangler.*.jsonc
+deploy-personal.sh

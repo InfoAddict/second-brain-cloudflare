@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 
 const { parseRecallResult, escHtml, escAttr, toDateStr, entryIdFromSearch, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
-const dashboardHtml = readFileSync("public/index.html", "utf8");
+const dashboardApp = readFileSync("public/js/app.js", "utf8");
+const dashboardAuth = readFileSync("public/js/auth.js", "utf8");
 
 // Minimal fake document so the banner DOM glue can be tested in the node
 // environment without jsdom. appendChild registers the element by id so a later
@@ -40,9 +41,9 @@ describe("entryIdFromSearch", () => {
   });
 
   it("is wired into the authenticated dashboard entry flow", () => {
-    expect(dashboardHtml).toContain("requestedEntryId = entryIdFromSearch(window.location.search)");
-    expect(dashboardHtml).toContain("void openRequestedEntry()");
-    expect(dashboardHtml).toContain("/entry?id=${encodeURIComponent(entryId)}");
+    expect(dashboardApp).toContain("requestedEntryId = entryIdFromSearch(window.location.search)");
+    expect(dashboardAuth).toContain("void openRequestedEntry()");
+    expect(dashboardAuth).toContain("/entry?id=${encodeURIComponent(entryId)}");
   });
 });
 

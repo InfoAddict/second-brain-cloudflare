@@ -1,0 +1,218 @@
+# Builds, signs, and releases the desktop app for macOS and Windows.
+# Completely independent of the Worker CI (ci.yml) — neither triggers the other.
+#
+# Triggers:
+#   * push a tag like `installer-v0.1.0` → build both platforms, verify
+#     signatures, publish a GitHub Release (draft until BOTH platforms succeed)
+#   * workflow_dispatch → build-only run; artifacts attach to the workflow
+#
+# Signing is optional: with no secrets configured the build still succeeds and
+# produces UNSIGNED artifacts (clearly labeled in the job output). See
+# installer/README.md for the full certificate runbook.
+name: Installer Release
+
+on:
+  push:
+    tags:
+      - "installer-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: installer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: installer/src-tauri -> target
+
+      # Root deps are needed because the Worker bundle (esbuild) resolves the
+      # Worker's own dependencies from the repository root.
+      - name: Install Worker dependencies
+        run: npm ci --legacy-peer-deps
+        working-directory: .
+
+      - name: Install installer dependencies
+        run: npm ci
+
+      - name: Run Rust tests
+        run: npm run bundle-worker && cargo test --manifest-path src-tauri/Cargo.toml
+
+      # ── macOS signing + notarization (skipped cleanly when secrets absent) ──
+      - name: Enable macOS signing
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+            echo "Signing enabled: exporting Apple signing environment."
+            {
+              echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
+              echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+              echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+              echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+              echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+              echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+            } >> "$GITHUB_ENV"
+            echo "MAC_SIGNED=1" >> "$GITHUB_ENV"
+          else
+            echo "::notice::APPLE_CERTIFICATE not configured — producing an UNSIGNED macOS build (testing only)."
+          fi
+
+      # ── Windows signing (skipped cleanly when secrets absent) ──────────────
+      # OV certificate as a .pfx file. For EV certificates on a token/HSM, see
+      # installer/README.md — that route needs a cloud-signing signCommand
+      # instead of this step.
+      - name: Enable Windows signing
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if ("${{ secrets.WINDOWS_CERTIFICATE }}" -ne "") {
+            Write-Host "Signing enabled: importing certificate."
+            $bytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_CERTIFICATE }}")
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $bytes)
+            $pwd = ConvertTo-SecureString -String "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -Force -AsPlainText
+            $cert = Import-PfxCertificate -FilePath "$env:RUNNER_TEMP\cert.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+            $config = @{ bundle = @{ windows = @{
+              certificateThumbprint = $cert.Thumbprint
+              digestAlgorithm = "sha256"
+              timestampUrl = "http://timestamp.digicert.com"
+            } } } | ConvertTo-Json -Depth 5
+            Set-Content -Path "src-tauri/tauri.windows.conf.json" -Value $config
+            Add-Content -Path $env:GITHUB_ENV -Value "WIN_SIGNED=1"
+          } else {
+            Write-Host "::notice::WINDOWS_CERTIFICATE not configured - producing an UNSIGNED Windows build (testing only)."
+          }
+
+      # ── Updater artifacts (skipped cleanly when the signing key is absent) ──
+      # When TAURI_SIGNING_PRIVATE_KEY is set, enable createUpdaterArtifacts so
+      # the build emits the signed update package + latest.json (uploaded to the
+      # release by tauri-action). Guards against shipping the placeholder pubkey.
+      - name: Enable updater artifacts
+        shell: bash
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$UPDATER_KEY" ]; then
+            if grep -q "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJFNjgxMENBRTVCRENEOTQK" src-tauri/tauri.conf.json; then
+              echo "::error::The updater pubkey in tauri.conf.json is still the development placeholder. Generate your own key and replace plugins.updater.pubkey before shipping updates (see installer/README.md)."
+              exit 1
+            fi
+            node -e "const f='src-tauri/tauri.conf.json';const fs=require('fs');const c=JSON.parse(fs.readFileSync(f));c.bundle.createUpdaterArtifacts=true;fs.writeFileSync(f,JSON.stringify(c,null,2))"
+            echo "UPDATER_ENABLED=1" >> "$GITHUB_ENV"
+            echo "Updater artifacts enabled."
+          else
+            echo "::notice::TAURI_SIGNING_PRIVATE_KEY not set — building without in-app updates."
+          fi
+
+      - name: Build (and release on tag)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: installer
+          args: ${{ matrix.args }}
+          # Release inputs only apply on tag pushes; on workflow_dispatch the
+          # action just builds and uploads workflow artifacts below.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/installer-v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/installer-v') && 'Second Brain Desktop __VERSION__' || '' }}
+          # Only used on tag builds (a release is created only when tagName is set).
+          # Names the two real downloads and explains the auto-update plumbing.
+          releaseBody: |
+            **Download for your computer:**
+
+            - **Mac** — the `.dmg` (works on Apple Silicon and Intel)
+            - **Windows** — the `.exe`
+
+            The other files (`latest.json`, `.app.tar.gz`, and the `.sig` files) are how the app updates itself — you can ignore them.
+          releaseDraft: true
+          # Windows updates use the NSIS .exe (we no longer build the .msi).
+          updaterJsonPreferNsis: true
+          uploadWorkflowArtifacts: ${{ !startsWith(github.ref, 'refs/tags/installer-v') }}
+
+      # tauri-action notarizes and staples the .app but not the .dmg that wraps
+      # it — a signed-but-un-notarized DMG still trips Gatekeeper on download.
+      # Notarize + staple the DMG itself so the downloaded file is clean too.
+      - name: Notarize macOS DMG
+        if: matrix.platform == 'macos-latest' && env.MAC_SIGNED == '1'
+        shell: bash
+        run: |
+          DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          echo "Notarizing $DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+
+      # ── Post-build signature verification (signed builds fail CI if bad) ───
+      - name: Verify macOS signature
+        if: matrix.platform == 'macos-latest' && env.MAC_SIGNED == '1'
+        shell: bash
+        run: |
+          APP=$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -name "*.app" | head -1)
+          DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          echo "Verifying $APP and $DMG"
+          # App: valid Developer ID signature + notarized & stapled
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          xcrun stapler validate "$APP"
+          spctl -a -t exec -vv "$APP"
+          # DMG: notarized & stapled (the artifact users actually download)
+          xcrun stapler validate "$DMG"
+          spctl -a -t open --context context:primary-signature -v "$DMG"
+
+      - name: Verify Windows signature
+        if: matrix.platform == 'windows-latest' && env.WIN_SIGNED == '1'
+        shell: pwsh
+        run: |
+          # signtool lives in the Windows SDK on hosted runners.
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\**\x64\signtool.exe" -Recurse | Select-Object -Last 1
+          $artifacts = @(Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction SilentlyContinue) +
+                       @(Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue)
+          if ($artifacts.Count -eq 0) { throw "no Windows installers found to verify" }
+          foreach ($a in $artifacts) {
+            Write-Host "Verifying $($a.FullName)"
+            & $signtool.FullName verify /pa /v $a.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($a.Name)" }
+          }
+
+  # The release stays a draft until BOTH platforms built and verified, so a
+  # published release never contains just one OS.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/installer-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

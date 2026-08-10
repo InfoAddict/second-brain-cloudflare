@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
@@ -158,11 +158,11 @@ describe("POST /append", () => {
     expect(deleteByIdsMock).toHaveBeenCalledWith(["entry-1", "entry-1-update-111"]);
   });
 
-  it("oversized append: new vectors inserted before old ones are deleted (safe ordering)", async () => {
+  it("oversized append: new vectors written before old ones are deleted (safe ordering)", async () => {
     const callOrder: string[] = [];
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
-        insert: vi.fn().mockImplementation(async () => { callOrder.push("insert"); return { mutationId: "m" }; }),
+        upsert: vi.fn().mockImplementation(async () => { callOrder.push("upsert"); return { mutationId: "m" }; }),
         deleteByIds: vi.fn().mockImplementation(async () => { callOrder.push("delete"); return { mutationId: "m" }; }),
       }),
     });
@@ -181,13 +181,18 @@ describe("POST /append", () => {
       ctx
     );
 
-    expect(callOrder.indexOf("insert")).toBeLessThan(callOrder.indexOf("delete"));
+    expect(callOrder.indexOf("upsert")).toBeLessThan(callOrder.indexOf("delete"));
   });
 
-  it("oversized append: Vectorize re-embed failure is non-fatal — D1 still updated", async () => {
+  it("oversized append: re-embed failure fails loud, D1 unchanged, old vectors kept (regression #212)", async () => {
+    // The oversized-append re-embed must run before D1 is mutated. On failure the
+    // handler returns an error and leaves content + vectors intact — never commits
+    // the new content and then deletes every vector.
+    const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
-        insert: vi.fn().mockRejectedValue(new Error("Vectorize down")),
+        upsert: vi.fn().mockRejectedValue(new Error("Vectorize down")),
+        deleteByIds: deleteByIdsMock,
       }),
     });
     db.entries.push({
@@ -205,11 +210,11 @@ describe("POST /append", () => {
       ctx
     );
 
-    expect(res.status).toBe(200);
-    const data = await res.json() as any;
-    expect(data.ok).toBe(true);
-    // D1 content still updated even if Vectorize failed
-    expect(db.entries[0].content).toContain("More info");
+    expect(res.status).toBe(500);
+    // D1 content unchanged — the append did not commit.
+    expect(db.entries[0].content).toBe(LONG_CONTENT);
+    // Old vectors never deleted.
+    expect(deleteByIdsMock).not.toHaveBeenCalled();
   });
 
   it("oversized append: old vector deletion failure is non-fatal", async () => {
@@ -238,7 +243,7 @@ describe("POST /append", () => {
     expect(data.ok).toBe(true);
   });
 
-  it("keeps tags as metadata values without generating unsafe per-tag keys", async () => {
+  it("keeps canonical tags while sanitizing per-tag metadata keys", async () => {
     db.entries.push({
       id: "tagged-entry",
       content: "Original",
@@ -257,7 +262,9 @@ describe("POST /append", () => {
     const insertMock = env.VECTORIZE.insert as ReturnType<typeof import("vitest").vi.fn>;
     const vectors = insertMock.mock.calls[0][0] as any[];
     expect(vectors[0].metadata.tags).toEqual(["work", "richardhames.com"]);
-    expect(Object.keys(vectors[0].metadata).some(key => key.startsWith("tag_"))).toBe(false);
+    expect(vectors[0].metadata.tag_work).toBe(true);
+    expect(vectors[0].metadata.tag_richardhames_com).toBe(true);
+    expect(Object.keys(vectors[0].metadata).some(key => /[."]/.test(key))).toBe(false);
   });
 
   it("returns 500 when appendToEntry throws due to Vectorize failure (short path)", async () => {

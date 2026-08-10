@@ -66,7 +66,7 @@ describe("Release notification", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, messageId: "message-123", test: false });
+    expect(await response.json()).toEqual({ ok: true, messageId: "message-123", test: false, status: "applied" });
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       from: "releases@updates.infoaddict.net",
       to: "dan@infoaddict.net",
@@ -90,6 +90,45 @@ describe("Release notification", () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       subject: "Second Brain release email test",
     }));
+  });
+
+  it("emails a draft PR when an upstream merge is blocked", async () => {
+    const actionUrl = "https://github.com/InfoAddict/second-brain-cloudflare/pull/12";
+    const response = await worker.fetch(
+      req("POST", "/internal/release-notification", {
+        body: {
+          ...release,
+          status: "blocked",
+          details: "Merge conflicts:\npublic/index.html\nsrc/index.ts",
+          actionUrl,
+        },
+        token: "release-test-token",
+      }),
+      env,
+      ctx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, messageId: "message-123", test: false, status: "blocked" });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      subject: "Second Brain update needs attention: v2.1.0",
+      text: expect.stringContaining(actionUrl),
+      html: expect.stringContaining("public/index.html"),
+    }));
+  });
+
+  it("rejects non-GitHub action links", async () => {
+    const response = await worker.fetch(
+      req("POST", "/internal/release-notification", {
+        body: { ...release, status: "blocked", actionUrl: "https://example.com/pull/12" },
+        token: "release-test-token",
+      }),
+      env,
+      ctx,
+    );
+
+    expect(response.status).toBe(400);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("returns an error when Cloudflare cannot send", async () => {

@@ -22,6 +22,12 @@ concurrency:
 
 jobs:
   deploy:
+    # A clean upstream update calls this workflow directly. Its main-branch
+    # push carries this trailer so the push event does not deploy the same
+    # Worker a second time.
+    if: >-
+      github.event_name != 'push' ||
+      !contains(github.event.head_commit.message, 'Upstream-Deployment: reusable')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -44,6 +50,9 @@ jobs:
 
       - name: Test
         run: npm run test
+
+      - name: Predeploy guard
+        run: npm run predeploy
 
       - name: Write deploy Wrangler config
         env:

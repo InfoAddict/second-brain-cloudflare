@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
@@ -98,7 +98,7 @@ describe("POST /vectorize-pending", () => {
     let callCount = 0;
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
-        insert: vi.fn().mockImplementation(() => {
+        upsert: vi.fn().mockImplementation(() => {
           callCount++;
           if (callCount === 1) throw new Error("Vectorize error");
           return Promise.resolve({ mutationId: "m" });
