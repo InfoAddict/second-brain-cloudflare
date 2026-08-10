@@ -1,17 +1,14 @@
-      #screen-graph {
-        padding: 0;
-      }
-      #screen-graph.active {
+      /* The graph is a view of the Memories screen now rather than a screen of
+         its own, so it fills whatever space the list would have taken. */
+      .mem-graph {
+        flex: 1 1 auto;
         display: flex;
         flex-direction: column;
+        min-height: 0;
+        position: relative;
       }
-      .graph-toolbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 16px;
-        border-bottom: 1px solid var(--border-input);
+      .mem-graph[hidden] {
+        display: none;
       }
       .graph-hint {
         font-size: 12px;
@@ -35,9 +32,19 @@
         border-radius: 50%;
         display: inline-block;
       }
+      /* Floating over the canvas: the toolbar row above is already carrying the
+         legend and the list/graph toggle, which on a phone is a full row. */
       .graph-controls {
         display: flex;
         gap: 4px;
+        position: absolute;
+        right: 12px;
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        z-index: 2;
+      }
+      .graph-controls .graph-btn {
+        background: var(--bg-card);
+        box-shadow: var(--shadow-card);
       }
       .graph-btn {
         background: none;

@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
-import { appendToEntry, deleteStaleVectors, storeEntry } from "../capture/store";
+import { appendToEntry, updateEntryContent } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { createEdge, deleteEdge, edgeLabel } from "../graph/edges";
 import { EDGE_TYPES } from "../graph/types";
@@ -12,9 +12,29 @@ import { getConnections } from "../graph/traverse";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
+import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { recallEntries } from "../recall/search";
 import { renderRecallText } from "../recall/render";
 import { RECALL_OUTPUT_BUDGET, SNIPPET_MAX_CHARS, snippetOf, truncationNote } from "../recall/snippet";
+
+// Asking the calling model for this is the whole point: it has already read the content
+// in order to decide to store it, so the judgment is free, and it is a far better
+// classifier than the regex fallback in staleness/heuristic.ts, which abstains on most
+// real content. Sent once per session as part of the tool schema rather than repeated in
+// recall output, and worded to make abstaining the safe move — a wrong verdict is worse
+// than none, because `state` and `volatile` earn a "verify before asserting" qualifier
+// on every future recall.
+const VOLATILITY_DESCRIPTION =
+  "How likely is this to stop being true? "
+  + "durable = never changes (a birthday, where someone grew up, something that already happened). "
+  + "state = true for now but can move (an employer, a city, a current plan or priority). "
+  + "volatile = true only briefly (a meeting, a deadline, this week's focus). "
+  + "Omit it when you are unsure — no verdict is better than a wrong one.";
+
+const volatilityParam = z
+  .enum([...VOLATILITY_VALUES] as [string, ...string[]])
+  .optional()
+  .describe(VOLATILITY_DESCRIPTION);
 
 export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
   const server = new McpServer({ name: "second-brain", version: "1.0.0" });
@@ -28,10 +48,21 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         content: z.string().describe("The idea, task, or note to store"),
         tags: z.array(z.string()).optional().describe("Optional tags for filtering"),
         source: z.string().optional().describe("Origin: phone, browser, voice, claude"),
+        volatility: volatilityParam,
       },
     },
-    async ({ content, tags, source }) => {
-      const result = await captureEntry(content, tags ?? [], source ?? "claude", env, ctx);
+    async ({ content, tags, source, volatility }) => {
+      // Folded into the tag list rather than threaded through captureEntry: tags are
+      // already the carrier for every other reserved namespace (kind:, status:).
+      // withVolatility clears the namespace case-insensitively before appending, so a
+      // caller passing its own "volatility:"-prefixed tag alongside a conflicting enum
+      // value cannot leave two verdicts on one entry. That filter has to stay
+      // case-insensitive: captureEntry lowercases tags *after* this runs, so a
+      // case-sensitive one let "Volatility:durable" through to become a second verdict,
+      // and the injected one won.
+      const baseTags = tags ?? [];
+      const withVerdict = volatility ? withVolatility(baseTags, volatility as Volatility) : baseTags;
+      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx);
       if (result.status === "blocked") {
         return { content: [{ type: "text", text: `Duplicate detected (${(result.score * 100).toFixed(0)}% match) — not stored. Existing entry ID: ${result.matchId}` }] };
       }
@@ -62,9 +93,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       inputSchema: {
         id: z.string().describe("Entry ID to append to — from recall or list_recent"),
         addition: z.string().describe("The new information to add to the existing entry"),
+        volatility: volatilityParam,
       },
     },
-    async ({ id, addition }) => {
+    async ({ id, addition, volatility }) => {
       const row = await env.DB.prepare(
         `SELECT id, content, tags, source FROM entries WHERE id = ?`
       ).bind(id).first() as Record<string, any> | null;
@@ -90,8 +122,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         return { content: [{ type: "text", text: mirrorEditError(source) }] };
       }
 
+      let indexed: boolean;
       try {
-        await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env));
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined);
       } catch (e) {
         console.error("Append failed:", e);
         return {
@@ -102,7 +135,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       return {
         content: [{
           type: "text",
-          text: `Appended to entry ${id}. The original content is preserved and your update has been added with today's date.`,
+          text: `Appended to entry ${id}. The original content is preserved and your update has been added with today's date.`
+            + (indexed ? "" : ` Note: it was not indexed for semantic search because the Vectorize index is missing, so it is findable by keyword only. Fix: ${VECTORIZE_FIX_HINT}.`),
         }],
       };
     }
@@ -116,17 +150,18 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       inputSchema: {
         id: z.string().describe("Entry ID to update — from recall or list_recent"),
         content: z.string().describe("The new content to replace the existing entry with"),
+        volatility: volatilityParam,
       },
     },
-    async ({ id, content }) => {
+    async ({ id, content, volatility }) => {
       const newContent = content.trim();
       if (!newContent) {
         return { content: [{ type: "text", text: "Content cannot be empty." }] };
       }
 
-      // Read current row upfront — need tags, source, AND old vector_ids before any mutation
+      // Refuse before anything is written — same guard, same read, as POST /update.
       const row = await env.DB.prepare(
-        `SELECT tags, source, vector_ids FROM entries WHERE id = ?`
+        `SELECT source FROM entries WHERE id = ?`
       ).bind(id).first() as Record<string, any> | null;
 
       if (!row) {
@@ -137,32 +172,32 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
-      const tags: string[] = JSON.parse(row.tags ?? "[]").filter((t: string) => t !== "rolled-up");
-      const source = row.source as string;
-      const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
+      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined);
 
-      // Step 1: Update D1 content and tags (strip rolled-up so updated entry ranks normally)
-      await env.DB.prepare(`UPDATE entries SET content = ?, tags = ? WHERE id = ?`)
-        .bind(newContent, JSON.stringify(tags), id).run();
-
-      // Step 2: Re-embed new content → inserts new vectors + updates vector_ids in D1
-      let newVectorIds: string[] = [];
-      try {
-        newVectorIds = await storeEntry(env, id, newContent, tags, source, Date.now(), await resolveConfig(env));
-      } catch (e) {
-        console.error("Vectorize re-embed failed (non-fatal):", e);
+      // Only reachable if the entry was deleted between the guard read and the write.
+      if (result.status === "not_found") {
+        return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
-      const newVectorCount = newVectorIds.length;
 
-      // Step 3: Delete only stale vectors — ids reused by the re-embed must survive
-      try {
-        await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-      } catch (e) {
-        console.error("Old vector cleanup failed (non-fatal):", e);
+      // Fails closed (#212): nothing was written, so the reply must not claim otherwise.
+      // This tool used to report success here while leaving the index pointing at the old
+      // text, and no repair path could see it — /vectorize-pending and /stats both look for
+      // an empty vector_ids, which a mis-indexed entry does not have (#289).
+      if (result.status === "reembed_failed") {
+        return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged — please try again.` }] };
+      }
+
+      if (!result.vectorIds) {
+        return {
+          content: [{
+            type: "text",
+            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
+          }],
+        };
       }
 
       return {
-        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${newVectorCount} vector(s).` }],
+        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).` }],
       };
     }
   );
@@ -201,7 +236,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
     },
     async ({ query, topK, tag, after, before, kind, hops }) => {
       const cfg = await resolveConfig(env);
-      const { matches, insight, semanticUnavailable, queryTokens } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false }, env, ctx, cfg);
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false }, env, ctx, cfg);
 
       const notice = semanticUnavailable
         ? `Note: semantic search is unavailable because the Vectorize index is missing, so these are keyword matches only. Fix: ${VECTORIZE_FIX_HINT}.\n\n`
@@ -211,7 +246,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
         return { content: [{ type: "text", text: notice + "Nothing found matching that query." }] };
       }
 
-      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg }) }] };
+      return { content: [{ type: "text", text: notice + renderRecallText(matches, insight, { queryTokens, config: cfg, compoundStale }) }] };
     }
   );
 
@@ -244,7 +279,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       const rows = results as Record<string, any>[];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const date = new Date(row.created_at as number).toLocaleDateString();
+        const date = new Date(row.created_at as number).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
         const tags: string[] = JSON.parse(row.tags ?? "[]");
         const tagStr = tags.length ? ` · ${tags.join(", ")}` : "";
         const s = snippetOf(row.content as string, (await resolveConfig(env)).SNIPPET_MAX_CHARS);
@@ -284,7 +319,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       }
       const tags: string[] = JSON.parse(row.tags ?? "[]");
       const tagStr = tags.length ? ` · ${tags.join(", ")}` : "";
-      const date = new Date(row.created_at as number).toLocaleDateString();
+      const date = new Date(row.created_at as number).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
       return {
         content: [{ type: "text", text: `[${date} · ${row.source}${tagStr}]\nID: ${row.id}\n${row.content}` }],
       };
@@ -363,7 +398,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext): McpServer {
       const text = connections
         .map(c => {
           const who = c.provenance === "explicit" ? "you linked" : c.provenance === "system" ? "system-linked" : "auto-linked";
-          const when = c.linkedAt ? ` · ${new Date(c.linkedAt).toLocaleDateString()}` : "";
+          const when = c.linkedAt ? ` · ${new Date(c.linkedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}` : "";
           return `- (${c.label} · ${who}${when}) ${c.id}: ${c.content.slice(0, 120)}`;
         })
         .join("\n");

@@ -14,11 +14,16 @@ function renderAnswerMarkdown(src) {
       .replace(/__([^_]+)__/g, '<strong>$1</strong>')
       .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
       .replace(/`([^`]+)`/g, '<code>$1</code>')
+      // Citations the answer prompt asks for: [2] refers to the second memory
+      // in the numbered list the model was given, which is the second source
+      // card. Rendered as a chip that reveals and highlights that card, so a
+      // claim can be checked against the memory it came from in one tap.
+      .replace(/\[(\d{1,2})\]/g, '<button class="cite" data-cite="$1" title="Show source $1">$1</button>')
 
   // Some models stream lists inline ("... tools: * a * b * c") with no newlines.
   // Re-break a run of " * " markers onto their own lines so they parse as a list.
   let text = String(src || '').replace(/\r/g, '')
-  if (!/\n\s*[*-]\s/.test(text) && (text.match(/\s\*\s/g) || []).length >= 2) {
+  if (!/\n\s*[*\-+]\s/.test(text) && (text.match(/\s\*\s/g) || []).length >= 2) {
     text = text.replace(/\s\*\s+/g, '\n* ')
   }
 
@@ -44,7 +49,7 @@ function renderAnswerMarkdown(src) {
       closeList()
       const lvl = Math.min(m[1].length + 2, 4) // h3/h4
       html += `<h${lvl}>${inline(m[2])}</h${lvl}>`
-    } else if ((m = t.match(/^[*\-•]\s+(.*)$/))) {
+    } else if ((m = t.match(/^[*\-+•]\s+(.*)$/))) {
       if (listType !== 'ul') {
         closeList()
         html += '<ul>'
@@ -84,13 +89,21 @@ function autoResize(el) {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 80) + 'px'
 }
-function clearRemember() {
-  const msgs = document.getElementById('remember-messages')
-  msgs.innerHTML = `<div class="recall-hero" id="remember-intro"><div class="eyebrow">Remember</div><div class="hero-line">What's worth keeping? Write it down &mdash; add <span class="hashtag">#tags</span> anywhere and I'll file it.</div></div>`
-  document.getElementById('remember-clear-btn').style.display = 'none'
-}
+/**
+ * The parts of the recall column that are not the conversation, and so must
+ * survive clearing it.
+ *
+ * Wiping innerHTML was safe when this container held nothing but bubbles. Home
+ * and the brief moved in with them, and the wipe took both — permanently, in a
+ * desktop window that has no reload to recover with.
+ */
+const RECALL_FURNITURE = new Set(['home', 'brief', 'recall-welcome'])
+
 function clearRecall() {
   const msgs = document.getElementById('recall-messages')
-  msgs.innerHTML = `<div class="recall-hero" id="recall-welcome"><div class="eyebrow">Recall</div><div class="hero-line">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div></div>`
+  for (const el of [...msgs.children]) {
+    if (!RECALL_FURNITURE.has(el.id)) el.remove()
+  }
   document.getElementById('recall-clear-btn').style.display = 'none'
+  if (typeof returnHome === 'function') returnHome()
 }

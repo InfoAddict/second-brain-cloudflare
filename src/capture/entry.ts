@@ -7,6 +7,10 @@ import { scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
 import { deleteStaleVectors, reembedOrThrow, storeEntry } from "./store";
+import { tagsAfterWrite } from "../memory/stale";
+import { getVolatility, withVolatility } from "../memory/volatility";
+import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { rememberTags } from "../tags/vocabulary";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -16,7 +20,11 @@ export function buildEntryFilterQuery(params: {
 }): { sql: string; bindings: (string | number)[] } {
   const conds: string[] = [];
   const bindings: (string | number)[] = [];
-  if (params.tag) { conds.push(`tags LIKE ?`); bindings.push(`%"${params.tag}"%`); }
+  // Escaped for the same reason as the recall path: `_` and `%` in a tag are LIKE
+  // wildcards, so `#q3_planning` would also list `q3-planning` entries and `?tag=%` would
+  // list everything. A read, so over-broad rather than destructive — but a filter that
+  // silently stops filtering is worse than one that returns nothing.
+  if (params.tag) { conds.push(`tags LIKE ? ${TAG_LIKE_ESCAPE}`); bindings.push(tagLikePattern(params.tag)); }
   if (params.after !== undefined) { conds.push(`created_at >= ?`); bindings.push(params.after); }
   if (params.before !== undefined) { conds.push(`created_at <= ?`); bindings.push(params.before); }
 
@@ -30,7 +38,7 @@ export function buildEntryFilterQuery(params: {
 
 export type CaptureResult =
   | { status: "blocked"; matchId: string; score: number }
-  | { status: "stored"; id: string }
+  | { status: "stored"; id: string; tags: string[] }
   | { status: "flagged"; id: string; matchId: string; score: number }
   | { status: "contradiction"; id: string; resolvedConflict: string; reason?: string }
   | { status: "contradiction_protected"; id: string; canonicalId: string; reason?: string }
@@ -86,7 +94,19 @@ export async function captureEntry(
       }
 
       if (newVectorIds) {
-        await env.DB.prepare(`UPDATE entries SET content = ? WHERE id = ?`).bind(newContent, targetId).run();
+        // The rest of the incoming tag list is deliberately discarded on a merge, which
+        // predates this and is left alone — but the volatility verdict cannot be, because
+        // it is the one value the tool schema tells the caller wins permanently. Dropping
+        // it here reported "merged" on a write that silently threw the judgment away, and
+        // the merge bumps updated_at, so the nightly pass would not revisit the entry for
+        // 90 days to re-derive anything. The caller judged the content being merged in, so
+        // its verdict describes the combined body more recently than the target's does.
+        const incomingVerdict = getVolatility(t);
+        const stripped = tagsAfterWrite(existingTags);
+        const refreshedTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+        const now = Date.now();
+        await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+          .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
         try {
           await deleteStaleVectors(env, oldVectorIds, newVectorIds);
         } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
@@ -106,13 +126,20 @@ export async function captureEntry(
   const finalTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
 
   await env.DB.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, vector_ids) VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(id, c, JSON.stringify(finalTags), source, now, "[]").run();
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, c, JSON.stringify(finalTags), source, now, now, "[]").run();
 
   ctx.waitUntil(
     storeEntry(env, id, c, finalTags, source, now, cfg)
       .catch(e => console.error("Vectorize insert failed (non-fatal):", e))
   );
+
+  // Capture is where a tag string nobody wrote into the source first exists, so it is
+  // one of the two places the cached vocabulary has to learn one (#288). Deferred, so
+  // the capture does not wait on KV — which means the tag is admitted once this
+  // settles rather than by the time the response lands, and a `GET /tags` fired
+  // straight off the back of the save can miss it by one refresh.
+  ctx.waitUntil(rememberTags(env, finalTags));
 
   scheduleClassifyAndTag(id, c, env, ctx, cfg);
 
@@ -162,5 +189,9 @@ export async function captureEntry(
     return { status: "flagged", id, matchId: dup.matchId, score: dup.score };
   }
 
-  return { status: "stored", id };
+  // finalTags is what actually landed on the row — hashtags pulled out of the
+  // content, plus anything the caller passed. The dashboard shows it back as a
+  // capture receipt, so a person can see what the brain did with what they
+  // wrote rather than trusting it silently.
+  return { status: "stored", id, tags: finalTags };
 }

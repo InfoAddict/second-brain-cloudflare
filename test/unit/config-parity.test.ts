@@ -42,6 +42,8 @@ describe("DEFAULTS parity with shipped constants", () => {
     ["COMPRESSION_IMPORTANCE_THRESHOLD", DEFAULTS.COMPRESSION_IMPORTANCE_THRESHOLD, COMPRESSION_IMPORTANCE_THRESHOLD],
     ["COMPRESSION_MIN_RECALL", DEFAULTS.COMPRESSION_MIN_RECALL, COMPRESSION_MIN_RECALL],
     ["COMPRESSION_MIN_AGE_MS", DEFAULTS.COMPRESSION_MIN_AGE_MS, COMPRESSION_MIN_AGE_MS],
+    ["KEYWORD_CANDIDATE_LIMIT", DEFAULTS.KEYWORD_CANDIDATE_LIMIT, constants.KEYWORD_CANDIDATE_LIMIT],
+    ["SUBSTRING_MATCH_WEIGHT", DEFAULTS.SUBSTRING_MATCH_WEIGHT, constants.SUBSTRING_MATCH_WEIGHT],
     ["TAG_BOOST_STEP", DEFAULTS.TAG_BOOST_STEP, constants.TAG_BOOST_STEP],
     ["TAG_BOOST_MAX", DEFAULTS.TAG_BOOST_MAX, constants.TAG_BOOST_MAX],
     ["CONTRADICTION_IMPORTANCE_STEP", DEFAULTS.CONTRADICTION_IMPORTANCE_STEP, constants.CONTRADICTION_IMPORTANCE_STEP],
@@ -91,8 +93,9 @@ describe("config rule coverage", () => {
 
   it("platform limits are absent from the config surface", () => {
     // Exposing these guarantees breakage rather than risking it: Vectorize
-    // rejects >20 ids per call, D1 caps bound params at 100.
-    for (const forbidden of ["VECTORIZE_GET_BY_IDS_BATCH", "D1_MAX_BOUND_PARAMS", "EDGE_QUERY_BATCH"]) {
+    // rejects >20 ids per call, D1 caps bound params at 100 and refuses an
+    // expression tree deeper than 100 (#276).
+    for (const forbidden of ["VECTORIZE_GET_BY_IDS_BATCH", "D1_MAX_BOUND_PARAMS", "EDGE_QUERY_BATCH", "KEYWORD_MAX_TOKENS"]) {
       expect(DEFAULTS).not.toHaveProperty(forbidden);
     }
   });
