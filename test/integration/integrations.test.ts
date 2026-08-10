@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeTestEnv, makeTestDb, makeMemoryKV } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
@@ -85,9 +85,14 @@ describe("integrations routes", () => {
       const res = await worker.fetch(req("GET", "/integrations"), env, ctx);
       expect(res.status).toBe(200);
       const data = await res.json() as any;
-      expect(data.integrations).toEqual([
+      expect(data.integrations).toContainEqual(
         expect.objectContaining({ provider: "notion", connected: false, itemCount: 0 }),
-      ]);
+      );
+      // The registry also carries the calendar providers (email lands later);
+      // assert presence without pinning the exact set.
+      expect(data.integrations.map((i: any) => i.provider)).toEqual(
+        expect.arrayContaining(["notion", "calendar-google", "calendar-outlook", "calendar-icloud"]),
+      );
     });
   });
 

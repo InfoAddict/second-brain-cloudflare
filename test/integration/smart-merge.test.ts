@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import worker from "../../src/index";
 import { makeTestDb, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
-import type { Env } from "../../src/index";
+import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
@@ -122,7 +122,7 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
         query: vi.fn().mockResolvedValue({
           matches: [{ id: "existing-id", score: 0.88, metadata: { parentId: "existing-id" } }],
         }),
-        insert: insertMock,
+        upsert: insertMock,
         deleteByIds: deleteByIdsMock,
       }),
       AI: makeMergeAI('{"action":"replace","target_id":"existing-id"}'),
@@ -146,14 +146,14 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
         query: vi.fn().mockResolvedValue({
           matches: [{ id: "existing-id", score: 0.88, metadata: { parentId: "existing-id" } }],
         }),
-        insert: vi.fn().mockImplementation(async () => { callOrder.push("insert"); return { mutationId: "m" }; }),
+        upsert: vi.fn().mockImplementation(async () => { callOrder.push("upsert"); return { mutationId: "m" }; }),
         deleteByIds: vi.fn().mockImplementation(async () => { callOrder.push("delete"); return { mutationId: "m" }; }),
       }),
       AI: makeMergeAI('{"action":"replace","target_id":"existing-id"}'),
     });
 
     await worker.fetch(req("POST", "/capture", { body: { content: "Cursor IDE" } }), env, ctx);
-    expect(callOrder.indexOf("insert")).toBeLessThan(callOrder.indexOf("delete"));
+    expect(callOrder.indexOf("upsert")).toBeLessThan(callOrder.indexOf("delete"));
   });
 
   // ── Merge ───────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
         query: vi.fn().mockResolvedValue({
           matches: [{ id: "existing-id", score: 0.88, metadata: { parentId: "existing-id" } }],
         }),
-        insert: insertMock,
+        upsert: insertMock,
       }),
       AI: makeMergeAI('{"action":"merge","target_id":"existing-id","merged_content":"THE MERGED RESULT"}'),
     });
@@ -291,14 +291,19 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
 
   // ── Non-fatal error handling ──────────────────────────────────────────────────
 
-  it("replace: returns ok:true even when Vectorize re-embed throws", async () => {
-    seedEntry(db);
+  it("replace: re-embed failure degrades to keep_both, target untouched (regression #212)", async () => {
+    // On a failed re-embed the merge target must not be overwritten and then have its
+    // vectors deleted. Instead we keep both: the target is untouched and the new content
+    // is stored as its own (recoverable) entry.
+    const deleteByIdsMock = vi.fn().mockResolvedValue({ mutationId: "m" });
+    seedEntry(db); // target "existing-id", content "I use VSCode"
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
         query: vi.fn().mockResolvedValue({
           matches: [{ id: "existing-id", score: 0.88, metadata: { parentId: "existing-id" } }],
         }),
-        insert: vi.fn().mockRejectedValue(new Error("Vectorize down")),
+        upsert: vi.fn().mockRejectedValue(new Error("Vectorize down")),
+        deleteByIds: deleteByIdsMock,
       }),
       AI: makeMergeAI('{"action":"replace","target_id":"existing-id"}'),
     });
@@ -309,10 +314,12 @@ describe("POST /capture — smart merge (flagged band 0.85–0.95)", () => {
     );
 
     expect(res.status).toBe(200);
-    const data = await res.json() as any;
-    expect(data.ok).toBe(true);
-    // D1 content still updated even if Vectorize failed
-    expect(db.entries[0].content).toBe("I switched to Cursor");
+    // Target is untouched — its content did not change.
+    expect(db.entries.find(e => e.id === "existing-id")?.content).toBe("I use VSCode");
+    // The new content was stored as its own entry (keep_both).
+    expect(db.entries.some(e => e.content === "I switched to Cursor")).toBe(true);
+    // The target's vectors were never deleted.
+    expect(deleteByIdsMock).not.toHaveBeenCalled();
   });
 
   it("merge: returns ok:true even when deleteByIds throws", async () => {
