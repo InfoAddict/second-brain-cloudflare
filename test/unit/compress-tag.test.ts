@@ -269,4 +269,124 @@ describe("compressTag()", () => {
     expect(result.synthesizedId).toBeNull();
     expect(env.AI.run).not.toHaveBeenCalled();
   });
+
+  // The candidate query excludes these, so reaching here means something else called
+  // compressTag directly. It matters more than it looks: without the guard a digest gets
+  // built for "everything the staleness pass touched", and markSourcesRolledUp then rolls
+  // up every one of those sources — taking them out of the running for the real topics
+  // they were also tagged with.
+  it("refuses to compress a volatility:* namespaced tag", async () => {
+    seedEntries(db, "volatility:state", 15, { recall_count: 0 });
+    const { ctx } = makeCtx();
+    const result = await compressTag("volatility:state", env, ctx);
+    expect(result.synthesizedId).toBeNull();
+    expect(env.AI.run).not.toHaveBeenCalled();
+    for (const e of db.entries) expect(JSON.parse(e.tags)).not.toContain("rolled-up");
+  });
+
+  it("refuses to compress the stale:as-of tag", async () => {
+    seedEntries(db, "stale:as-of", 15, { recall_count: 0 });
+    const { ctx } = makeCtx();
+    const result = await compressTag("stale:as-of", env, ctx);
+    expect(result.synthesizedId).toBeNull();
+    expect(env.AI.run).not.toHaveBeenCalled();
+    for (const e of db.entries) expect(JSON.parse(e.tags)).not.toContain("rolled-up");
+  });
+
+  // Mixed case is the dangerous form, not a curiosity. The source selector below this guard
+  // is `tags LIKE '%"<tag>"%'`, and LIKE ignores ASCII case — so `Kind:Semantic` reaching
+  // compressTag does not roll up the entries tagged `Kind:Semantic`, it rolls up every
+  // entry tagged `kind:semantic`. The guard has to reject it before that query runs.
+  it.each(["Kind:Semantic", "Status:Active", "Volatility:State", "Stale:As-Of", "STALE:AS-OF"])(
+    "refuses to compress %s regardless of case",
+    async (tag) => {
+      seedEntries(db, tag.toLowerCase(), 15, { recall_count: 0 });
+      const { ctx } = makeCtx();
+      const result = await compressTag(tag, env, ctx);
+      expect(result.synthesizedId).toBeNull();
+      expect(result.entriesUsed).toBe(0);
+      expect(env.AI.run).not.toHaveBeenCalled();
+      for (const e of db.entries) expect(JSON.parse(e.tags)).not.toContain("rolled-up");
+    },
+  );
+
+  // ── Marking sources rolled-up (#278) ─────────────────────────────────────────
+  //
+  // All four nightly jobs share one scheduled() invocation and therefore one
+  // subrequest budget, and marking sources one statement at a time was ~88% of the
+  // whole cron's D1 cost. These pin the batching, and the per-row fallback that
+  // keeps a single bad row from rolling back a whole tag's worth of marks.
+
+  /** Counts subrequests the way D1 bills them: a batch is one, whatever it carries. */
+  function countingDb(db: D1Mock, failBatch = false, failRowIds: string[] = []) {
+    const calls = { batches: 0, batchedStatements: 0, individualRuns: 0 };
+    const wrap = (stmt: any, boundId?: string): any => ({
+      bind: (...args: any[]) => wrap(stmt.bind(...args), args[args.length - 1]),
+      run: async () => {
+        calls.individualRuns++;
+        if (boundId && failRowIds.includes(boundId)) throw new Error(`row ${boundId} rejected`);
+        return stmt.run();
+      },
+      first: () => stmt.first(),
+      all: () => stmt.all(),
+      __inner: stmt,
+    });
+    const DB = {
+      prepare: (sql: string) => wrap(db.prepare(sql)),
+      exec: (sql: string) => db.exec(sql),
+      batch: (stmts: any[]) => {
+        calls.batches++;
+        calls.batchedStatements += stmts.length;
+        if (failBatch) throw new Error("batch rejected");
+        return db.batch(stmts.map(s => s.__inner ?? s));
+      },
+    } as unknown as D1Database;
+    return { DB, calls };
+  }
+
+  const rolledUp = (db: D1Mock) =>
+    db.entries.filter(e => JSON.parse(e.tags ?? "[]").includes("rolled-up")).map(e => e.id).sort();
+
+  it("marks every source in a single batch rather than one statement per row", async () => {
+    seedEntries(db, "work", 15, { recall_count: 0 });
+    const { DB, calls } = countingDb(db);
+    const { ctx, drain } = makeCtx();
+
+    const result = await compressTag("work", makeTestEnv(db, { AI: makeDigestAI(), DB }), ctx);
+    await drain();
+
+    expect(result.synthesizedId).not.toBeNull();
+    expect(calls.batches).toBe(1);
+    expect(calls.batchedStatements).toBe(15);
+    expect(rolledUp(db)).toHaveLength(15);
+  });
+
+  it("falls back to per-row writes when the batch is rejected", async () => {
+    // batch() is atomic, so without this fallback one bad row would un-mark every
+    // source for the tag — and an unmarked source is compressed again later,
+    // turning one duplicate digest into a whole tag's worth.
+    seedEntries(db, "work", 15, { recall_count: 0 });
+    const { DB, calls } = countingDb(db, true);
+    const { ctx, drain } = makeCtx();
+
+    const result = await compressTag("work", makeTestEnv(db, { AI: makeDigestAI(), DB }), ctx);
+    await drain();
+
+    expect(result.synthesizedId).not.toBeNull();
+    expect(calls.batches).toBe(1);
+    expect(rolledUp(db)).toHaveLength(15);
+  });
+
+  it("keeps marking the rest when one row fails during the fallback", async () => {
+    seedEntries(db, "work", 15, { recall_count: 0 });
+    const { DB } = countingDb(db, true, ["entry-7"]);
+    const { ctx, drain } = makeCtx();
+
+    await compressTag("work", makeTestEnv(db, { AI: makeDigestAI(), DB }), ctx);
+    await drain();
+
+    const marked = rolledUp(db);
+    expect(marked).toHaveLength(14);
+    expect(marked).not.toContain("entry-7");
+  });
 });

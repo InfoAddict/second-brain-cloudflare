@@ -31,7 +31,7 @@ jobs:
     outputs:
       update_applied: ${{ steps.publish.outputs.applied }}
       update_blocked: ${{ steps.merge.outputs.blocked }}
-      release_tag: ${{ steps.release.outputs.tag_name }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
       release_name: ${{ steps.release.outputs.release_name }}
       release_url: ${{ steps.release.outputs.release_url }}
       conflict_files: ${{ steps.merge.outputs.conflict_files }}
@@ -46,8 +46,8 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Find latest upstream app release
-        id: release
+      - name: Find latest upstream Worker-bearing release
+        id: source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -60,50 +60,102 @@ jobs:
             exit 0
           fi
 
-          # The repository also publishes installer-v* desktop releases. Follow
-          # only stable app versions such as v2.0.0, v1.6, or 1.5.1.
+          # Worker releases may be published directly (v2.3.1) or bundled into
+          # a stable desktop release (installer-v1.3.1). Follow whichever
+          # Worker-bearing release was published most recently.
           release_json="$(jq -c '
             map(select(
               (.draft | not) and
               (.prerelease | not) and
-              (.tag_name | test("^v?[0-9]+(\\.[0-9]+){1,2}$"))
-            )) | first // empty
+              (
+                (.tag_name | test("^installer-v[0-9]+(\\.[0-9]+){2}$")) or
+                (.tag_name | test("^v?[0-9]+(\\.[0-9]+){1,2}$"))
+              )
+            )) | sort_by(.published_at // .created_at) | reverse | first // empty
           ' <<< "$releases_json")"
           if [[ -z "$release_json" ]]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No stable upstream app release found for ${UPSTREAM_REPO}; nothing to update."
+            echo "No stable upstream Worker-bearing release found for ${UPSTREAM_REPO}; nothing to update."
             exit 0
           fi
 
-          tag_name="$(jq -r '.tag_name' <<< "$release_json")"
-          release_name="$(jq -r '.name // .tag_name' <<< "$release_json")"
+          source_tag="$(jq -r '.tag_name' <<< "$release_json")"
+          source_release_name="$(jq -r '.name // .tag_name' <<< "$release_json")"
           release_url="$(jq -r '.html_url' <<< "$release_json")"
-          branch_name="upstream-release/${tag_name//[^A-Za-z0-9._-]/-}"
 
           {
             echo "found=true"
-            echo "tag_name=$tag_name"
-            echo "release_name=$release_name"
+            echo "source_tag=$source_tag"
+            echo "source_release_name=$source_release_name"
             echo "release_url=$release_url"
-            echo "branch_name=$branch_name"
           } >> "$GITHUB_OUTPUT"
 
       - name: Fetch upstream tag
-        if: steps.release.outputs.found == 'true'
+        if: steps.source.outputs.found == 'true'
         run: |
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch upstream "refs/tags/${{ steps.release.outputs.tag_name }}:refs/tags/${{ steps.release.outputs.tag_name }}"
+          git fetch upstream "refs/tags/${{ steps.source.outputs.source_tag }}:refs/tags/${{ steps.source.outputs.source_tag }}"
 
-      - name: Check whether update is needed
-        if: steps.release.outputs.found == 'true'
-        id: update
+      - name: Inspect bundled Worker release
+        id: release
+        if: steps.source.outputs.found == 'true'
+        env:
+          SOURCE_TAG: ${{ steps.source.outputs.source_tag }}
+          SOURCE_RELEASE_NAME: ${{ steps.source.outputs.source_release_name }}
+          RELEASE_URL: ${{ steps.source.outputs.release_url }}
         run: |
           set -euo pipefail
 
-          if git merge-base --is-ancestor "${{ steps.release.outputs.tag_name }}" HEAD; then
+          worker_version="$(git show "${SOURCE_TAG}:src/env.ts" \
+            | sed -n 's/.*SB_VERSION[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+            | head -n 1)"
+          if [[ ! "$worker_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not read a semantic SB_VERSION from ${SOURCE_TAG}:src/env.ts"
+            exit 1
+          fi
+
+          release_tag="v${worker_version}"
+          if [[ "$SOURCE_TAG" =~ ^installer-v(.+)$ ]]; then
+            release_name="Second Brain Worker ${release_tag} (bundled with Desktop ${BASH_REMATCH[1]})"
+          else
+            release_name="${SOURCE_RELEASE_NAME}"
+          fi
+          branch_name="upstream-worker/${release_tag//[^A-Za-z0-9._-]/-}"
+
+          {
+            echo "source_tag=$SOURCE_TAG"
+            echo "release_tag=$release_tag"
+            echo "release_name=$release_name"
+            echo "release_url=$RELEASE_URL"
+            echo "worker_version=$worker_version"
+            echo "branch_name=$branch_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check whether update is needed
+        if: steps.source.outputs.found == 'true'
+        id: update
+        env:
+          SOURCE_TAG: ${{ steps.release.outputs.source_tag }}
+          UPSTREAM_WORKER_VERSION: ${{ steps.release.outputs.worker_version }}
+        run: |
+          set -euo pipefail
+
+          current_version="$(sed -n 's/.*SB_VERSION[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' src/env.ts | head -n 1)"
+          if [[ ! "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not read the current semantic SB_VERSION from src/env.ts"
+            exit 1
+          fi
+
+          if git merge-base --is-ancestor "$SOURCE_TAG" HEAD; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "Current branch already contains ${{ steps.release.outputs.tag_name }}."
+            echo "Current branch already contains $SOURCE_TAG (Worker v${UPSTREAM_WORKER_VERSION})."
+          elif [[ "$current_version" == "$UPSTREAM_WORKER_VERSION" ]]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Current branch already reports Worker v${current_version}."
+          elif [[ "$(printf '%s\n%s\n' "$current_version" "$UPSTREAM_WORKER_VERSION" | sort -V | tail -n 1)" == "$current_version" ]]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Current Worker v${current_version} is newer than upstream v${UPSTREAM_WORKER_VERSION}; refusing to downgrade."
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
@@ -114,7 +166,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH_NAME: ${{ steps.release.outputs.branch_name }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          SOURCE_TAG: ${{ steps.release.outputs.source_tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
           RELEASE_URL: ${{ steps.release.outputs.release_url }}
         run: |
           set -euo pipefail
@@ -124,7 +177,7 @@ jobs:
           base_sha="$(git rev-parse HEAD)"
           git checkout -B "$BRANCH_NAME"
 
-          if git merge --no-edit --no-ff "$RELEASE_TAG"; then
+          if git merge --no-edit --no-ff "$SOURCE_TAG"; then
             # Workflow files belong to this fork. Keeping the local directory
             # also avoids GitHub's workflow-file push restriction.
             git restore --source="$base_sha" --staged --worktree -- .github/workflows
@@ -169,8 +222,9 @@ jobs:
           if [[ -z "$pr_url" ]]; then
             conflict_list="$(printf -- '- %s\n' "${conflict_files[@]}")"
             printf -v pr_body \
-              'An upstream release was detected but could not be merged safely.\n\nRelease: %s\n\nConflicted files:\n%s\nThe branch keeps the fork version of each conflicted file for safety. Resolve those files, run the full checks, and only then merge. Nothing from this branch has been deployed.' \
+              'An upstream Worker release was detected but could not be merged safely.\n\nWorker release: %s\nSource tag: %s\n\nConflicted files:\n%s\nThe branch keeps the fork version of each conflicted file for safety. Resolve those files, run the full checks, and only then merge. Nothing from this branch has been deployed.' \
               "$RELEASE_URL" \
+              "$SOURCE_TAG" \
               "$conflict_list"
             pr_url="$(gh pr create \
               --repo "$GITHUB_REPOSITORY" \
@@ -237,9 +291,11 @@ jobs:
           echo "applied=true" >> "$GITHUB_OUTPUT"
 
           {
-            echo "### Applied upstream release ${{ steps.release.outputs.tag_name }}"
+            echo "### Applied upstream Worker release ${{ steps.release.outputs.release_tag }}"
             echo
             echo "Source: ${{ steps.release.outputs.release_url }}"
+            echo
+            echo "Source tag: ${{ steps.release.outputs.source_tag }}"
             echo
             echo "Typecheck and tests passed before the release was pushed to main."
           } >> "$GITHUB_STEP_SUMMARY"

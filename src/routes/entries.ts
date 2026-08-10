@@ -1,14 +1,17 @@
 import type { Env } from "../env";
+import { importExportPayload, parseImportBody, parseImportLimit, parseImportOffset } from "../entries/import";
+import { initializeDatabase } from "../db/init";
 import { json, requireAuth } from "../lib/http";
 import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
+import { getTagVocabulary } from "../tags/vocabulary";
 
 export async function handleEntriesRoutes(
   request: Request,
   url: URL,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response | null> {
   // GET /count
   if (url.pathname === "/count" && request.method === "GET") {
@@ -18,14 +21,15 @@ export async function handleEntriesRoutes(
     return json({ count: (row?.count as number) ?? 0 });
   }
 
-  // GET /tags
+  // GET /tags — the dashboard's filter dropdown, refetched on every page load.
+  // Reads the same cache recall does (#288): the scan behind it costs 180,000 rows
+  // on a 20,000-entry brain, and nothing here is worth that per navigation. Unlike
+  // recall this route has no useful degraded answer, so a cold cache is scanned
+  // inline rather than answered empty — see getTagVocabulary.
   if (url.pathname === "/tags" && request.method === "GET") {
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
-    const { results } = await env.DB.prepare(
-      `SELECT DISTINCT value FROM entries, json_each(entries.tags) ORDER BY value`
-    ).all();
-    return json((results as any[]).map(r => r.value as string));
+    return json(await getTagVocabulary(env, ctx));
   }
 
   // GET /export — complete backup: every entry plus the edges table. Single
@@ -37,7 +41,7 @@ export async function handleEntriesRoutes(
     if (authErr) return authErr;
 
     const { results: entryRows } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries ORDER BY created_at DESC`
+      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries ORDER BY created_at DESC`
     ).all() as { results: Record<string, any>[] };
     const { results: edgeRows } = await env.DB.prepare(
       `SELECT source_id, target_id, type, weight, provenance, created_at FROM edges`
@@ -45,12 +49,24 @@ export async function handleEntriesRoutes(
 
     // vector_ids are deliberately excluded — they're deployment-specific and an
     // import tool re-embeds anyway. Tags are parsed so the file holds real arrays.
+    //
+    // updated_at is carried because it is load-bearing on the way back in, not for
+    // display: recall reads it as the entry's age (src/recall/search.ts) and the
+    // staleness pass selects on it (src/staleness/pass.ts). Without it a restore
+    // silently rewrites every entry's last-touched time to its creation time, so
+    // anything edited long after it was written comes back looking untouched —
+    // ranked staler than it is, and eligible for a staleness verdict sooner.
+    // Coalesced in SQL because rows written before that column existed hold NULL, and
+    // the export should carry a number the importer can use directly. Aliased to
+    // `last_updated` rather than `updated_at` so the projection is not itself a bare
+    // read of the column — see test/unit/updated-at-coalesced.test.ts.
     const entries = entryRows.map(r => ({
       id: r.id,
       content: r.content,
       tags: JSON.parse(r.tags ?? "[]"),
       source: r.source,
       created_at: r.created_at,
+      updated_at: r.last_updated ?? r.created_at,
       recall_count: r.recall_count ?? 0,
       importance_score: r.importance_score ?? 0,
       contradiction_wins: r.contradiction_wins ?? 0,
@@ -65,6 +81,39 @@ export async function handleEntriesRoutes(
       created_at: r.created_at,
     }));
     return json({ ok: true, exported_at: Date.now(), version: 2, entries, edges });
+  }
+
+  // POST /import — round-trip counterpart to GET /export (issue #217). Inserts by
+  // export id (skip if exists), preserves created_at/updated_at/tags/source, defers
+  // embedding via vector_ids=[] so POST /vectorize-pending can backfill without
+  // burning the Workers AI quota in one request. Does NOT go through /capture.
+  //
+  // Paged positionally: one call examines entries[offset .. offset+limit), then —
+  // once entries are exhausted — edges[edge_offset .. edge_offset+limit). Clients
+  // resend the same file with the next_offset/next_edge_offset from the previous
+  // response until both remaining counts are 0. See importExportPayload for why
+  // this is what keeps a large restore inside the D1 free-plan query budget.
+  if (url.pathname === "/import" && request.method === "POST") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    // Awaited, not left to ensureDbReady's waitUntil: an import is often a freshly
+    // deployed brain's first request, which is exactly when the schema ALTERs have
+    // not run yet and every insert would fail on a missing column. Latched after
+    // the first call, so this costs nothing in the steady state.
+    await initializeDatabase(env);
+
+    let body: unknown;
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+
+    const parsed = parseImportBody(body);
+    if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
+
+    const limit = parseImportLimit(url.searchParams.get("limit"));
+    const offset = parseImportOffset(url.searchParams.get("offset"));
+    const edgeOffset = parseImportOffset(url.searchParams.get("edge_offset"));
+    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset });
+    return json(summary);
   }
 
   // POST /forget — delete-by-id, mirrors the MCP `forget` tool
@@ -96,10 +145,19 @@ export async function handleEntriesRoutes(
     const id = url.searchParams.get("id")?.trim();
     if (!id) return json({ ok: false, error: "id is required" }, 400);
 
+    // Everything the brain knows about one memory, in the one row read it was
+    // already doing. The dashboard's detail view shows what the pipeline
+    // decided — importance, how often this was recalled, whether it has ever
+    // lost a contradiction — and none of it was reachable before v2.3.
     const row = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE id = ?`
+      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated,
+              importance_score, recall_count, contradiction_wins, contradiction_losses, vector_ids
+       FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
     if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+
+    let vectorIds: unknown[] = [];
+    try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
     return json({
       ok: true,
@@ -109,6 +167,14 @@ export async function handleEntriesRoutes(
         tags: JSON.parse(row.tags ?? "[]"),
         source: row.source,
         created_at: row.created_at,
+        updated_at: row.last_updated ?? row.created_at,
+        importance_score: row.importance_score ?? 0,
+        recall_count: row.recall_count ?? 0,
+        contradiction_wins: row.contradiction_wins ?? 0,
+        contradiction_losses: row.contradiction_losses ?? 0,
+        // Whether recall can see it at all — the dashboard already surfaces
+        // "not indexed" in lists, and the detail view should agree.
+        indexed: Array.isArray(vectorIds) && vectorIds.length > 0,
       },
     });
   }

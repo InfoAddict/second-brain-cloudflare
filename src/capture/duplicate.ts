@@ -49,7 +49,17 @@ export async function checkDuplicateAndContradiction(
 }> {
   const sample = getDuplicateCheckSample(content);
   const values = await embed(sample, env, config);
-  const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
+
+  // Duplicate detection, contradiction detection and neighbour edges are all
+  // advisory — a capture without them is still correct, just less enriched. This
+  // runs before the D1 insert, so throwing here rejected the write entirely (#270)
+  // on deployments the read path already serves keyword-only (recall/search.ts).
+  let matches: VectorizeMatch[] = [];
+  try {
+    ({ matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" }));
+  } catch (e) {
+    console.error("Vectorize query failed (capturing without duplicate/contradiction checks):", e);
+  }
 
   const neighborScores = new Map<string, number>();
   for (const m of matches) {

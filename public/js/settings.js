@@ -20,97 +20,54 @@ function backToMenu() {
   openMenu()
 }
 
+// The count, the week, the most-used tags and the sources all live on home now
+// (GET /brief), so this no longer renders any of them — showing the same numbers
+// in two places just meant they could disagree, which is exactly what happened
+// after a delete. What is left is the chore queue.
 async function loadMenuStats() {
   try {
     const res = await fetch(`${WORKER_URL}/stats`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     const data = await res.json()
-    document.getElementById('stats-count').textContent = (data.count ?? 0).toLocaleString()
-    document.getElementById('stats-importance').textContent = data.avg_importance != null ? data.avg_importance.toFixed(1) + ' / 5' : '—'
-    const tagsEl = document.getElementById('stats-tags')
-    tagsEl.innerHTML = data.top_tags?.length
-      ? data.top_tags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
-      : '<span style="font-size:13px;color:var(--text-tertiary)">No tags yet</span>'
     vectorizeGraceMs = data.vectorize_grace_ms ?? vectorizeGraceMs
     renderDigestSection(data.digest_candidates ?? [])
     renderVectorizeSection(data.unvectorized ?? 0)
     renderClassifySection(data.unclassified ?? 0)
-    loadPatterns()
-  } catch {}
-}
-
-// ── Patterns panel: system proposes, human ratifies ───────────────────────
-// Auto-derived patterns are excluded from recall until confirmed; confirming
-// strips the auto-pattern tag (which is the exclusion), dismissing deprecates.
-async function loadPatterns() {
-  const el = document.getElementById('patterns-section')
-  try {
-    const res = await fetch(`${WORKER_URL}/list?n=20&tag=auto-pattern`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
-    const rows = await res.json()
-    const patterns = (Array.isArray(rows) ? rows : []).filter((e) => {
-      let tags = []
-      try {
-        tags = JSON.parse(e.tags || '[]')
-      } catch {}
-      return !tags.includes('status:deprecated') // dismissed patterns linger in /list
-    })
-    if (!patterns.length) {
-      el.style.display = 'none'
-      el.innerHTML = ''
-      return
-    }
-    el.style.display = ''
-    el.innerHTML = `
-      <div class="digest-section-label">Patterns noticed</div>
-      <p class="digest-note">Your brain spotted these across multiple memories. Confirm to make one a trusted, recallable fact; dismiss to discard it.</p>
-      ${patterns
-        .map(
-          (p) => `
-        <div class="digest-result" id="pattern-row-${escAttr(p.id)}">
-          ${escHtml(p.content)}
-          <div style="display: flex; gap: 8px; margin-top: 10px">
-            <button class="digest-btn" onclick="resolvePattern('${escAttr(p.id)}', 'confirm', this)">Confirm</button>
-            <button class="digest-btn danger" onclick="resolvePattern('${escAttr(p.id)}', 'dismiss', this)">Dismiss</button>
-          </div>
-        </div>`,
-        )
-        .join('')}
-    `
-  } catch {}
-}
-
-async function resolvePattern(id, action, btn) {
-  const row = document.getElementById('pattern-row-' + id)
-  row.querySelectorAll('button').forEach((b) => (b.disabled = true))
-  btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Working…'
-  try {
-    const res = await fetch(`${WORKER_URL}/patterns/resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ id, action }),
-    })
-    const data = await res.json()
-    if (!data.ok) throw new Error(data.error || 'failed')
-    if (action === 'dismiss') {
-      row.classList.add('explode-out')
-      setTimeout(() => {
-        row.innerHTML = `<div class="digest-result-meta">Dismissed</div>`
-        row.classList.remove('explode-out')
-        row.style.opacity = '1'
-      }, 400)
-    } else {
-      row.style.transition = 'opacity 0.4s'
-      row.style.opacity = '0'
-      setTimeout(() => {
-        row.innerHTML = `<div class="digest-result-meta"><i class="ti ti-check"></i> Saved as a trusted memory</div>`
-        row.style.opacity = '1'
-      }, 400)
-    }
+    await loadPatternCount()
   } catch {
-    btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Failed'
-    setTimeout(() => loadPatterns(), 2000)
+  } finally {
+    syncUpkeepGroup()
   }
+}
+
+/** The five chore panels, in the order they appear under "Upkeep". */
+const UPKEEP_SECTIONS = ['patterns-section', 'digest-section', 'vectorize-section', 'classify-section', 'restore-section']
+
+/**
+ * A heading over nothing reads as a broken screen, and a brain with no chores
+ * pending is the normal case — so the whole group goes when every panel inside
+ * it has hidden itself.
+ */
+function syncUpkeepGroup() {
+  const group = document.getElementById('upkeep-group')
+  if (!group) return
+  group.hidden = !UPKEEP_SECTIONS.some((id) => {
+    const el = document.getElementById(id)
+    return el && el.style.display !== 'none'
+  })
+}
+
+/** How many compression candidates to show before the list becomes a chore wall. */
+const DIGEST_VISIBLE = 4
+
+function digestCandidateRow(c) {
+  return `
+      <div class="digest-candidate-row" id="digest-row-${escAttr(c.tag)}">
+        <div class="digest-candidate-label">
+          <span>${escHtml(c.tag)}</span>
+          <span class="digest-candidate-count">${c.count} entries</span>
+        </div>
+        <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">Digest →</button>
+      </div>`
 }
 
 function renderDigestSection(candidates) {
@@ -120,23 +77,29 @@ function renderDigestSection(candidates) {
     return
   }
   el.style.display = ''
+  // Candidates arrive largest-first, and the tail is always the least worth
+  // doing. Nine identical rows read as a backlog someone is failing to keep up
+  // with; four read as a suggestion, with the rest one tap away.
+  const shown = candidates.slice(0, DIGEST_VISIBLE)
+  const rest = candidates.slice(DIGEST_VISIBLE)
   el.innerHTML = `
     <div class="digest-section-label">Ready to compress</div>
     <p class="digest-note">Originals are never deleted — digest adds a summary and ranks originals lower in recall so they don't crowd results.</p>
-    ${candidates
-      .map(
-        (c) => `
-      <div class="digest-candidate-row" id="digest-row-${escAttr(c.tag)}">
-        <div class="digest-candidate-label">
-          <span>${escHtml(c.tag)}</span>
-          <span class="digest-candidate-count">${c.count} entries</span>
-        </div>
-        <button class="digest-btn" onclick="runDigest('${escAttr(c.tag)}', this)">Digest →</button>
-      </div>
-    `,
-      )
-      .join('')}
+    ${shown.map(digestCandidateRow).join('')}
+    ${
+      rest.length
+        ? `<div id="digest-rest" hidden>${rest.map(digestCandidateRow).join('')}</div>
+           <button class="digest-more" id="digest-more" onclick="showAllDigestCandidates()">${rest.length} more &rsaquo;</button>`
+        : ''
+    }
   `
+}
+
+function showAllDigestCandidates() {
+  const rest = document.getElementById('digest-rest')
+  const btn = document.getElementById('digest-more')
+  if (rest) rest.hidden = false
+  if (btn) btn.remove()
 }
 
 async function runDigest(tag, btn) {
@@ -214,7 +177,7 @@ async function runVectorize(btn) {
     btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} re-indexed`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
-    loadRecent()
+    refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
@@ -262,7 +225,7 @@ async function runClassify(btn) {
     btn.innerHTML = `<i class="ti ti-check"></i> Done — ${totalProcessed} classified`
     btn.style.color = 'var(--good)'
     await loadMenuStats()
-    loadRecent()
+    refreshAll()
   } catch {
     btn.classList.remove('digest-btn--loading')
     btn.innerHTML = '<i class="ti ti-wifi-off"></i> Request failed'
@@ -272,6 +235,199 @@ async function runClassify(btn) {
       btn.innerHTML = 'Classify now →'
       btn.style.color = ''
     }, 3000)
+  }
+}
+
+// ---- Restore from backup -------------------------------------------------
+//
+// The counterpart to "Back up as JSON", and a two-stage flow by design. Stage
+// one walks POST /import's cursor — one call per page, because a whole restore
+// in one request would blow the D1 free plan's per-invocation query budget, and
+// a 5,000-entry file is ~125 sequential calls nobody should run by hand. Stage
+// two matters just as much: imported entries carry no embeddings, so recall
+// cannot see them until they are indexed. A restore that ends before search
+// works would look complete and be broken — so the flow carries the user
+// straight into "Make searchable", which spends Workers AI quota only when
+// they choose to.
+
+/**
+ * Walk the /import cursor until entries and edges are both exhausted.
+ *
+ * Split from the DOM so the paging protocol is testable: `post` is
+ * `(query) => Promise<summary>`, `onProgress` gets running totals per page.
+ * Re-running after a failure is safe — the server skips existing ids — which
+ * is why this throws on error and lets the caller offer a retry.
+ */
+async function runImportLoop(payload, post, onProgress) {
+  const totals = { imported: 0, skipped: 0, failed: 0, edges_imported: 0, edges_skipped: 0, edges_failed: 0 }
+  let offset = 0
+  let edgeOffset = 0
+  const totalEntries = (payload.entries || []).length
+  const totalEdges = (payload.edges || []).length
+
+  for (;;) {
+    const data = await post(`offset=${offset}&edge_offset=${edgeOffset}`)
+    totals.imported += data.imported || 0
+    totals.skipped += data.skipped || 0
+    totals.failed += data.failed || 0
+    totals.edges_imported += data.edges_imported || 0
+    totals.edges_skipped += data.edges_skipped || 0
+    totals.edges_failed += data.edges_failed || 0
+
+    // Apply the fallback BEFORE the stall check: a pre-cursor Worker echoes no
+    // next_offset at all, and comparing against undefined would wave it through
+    // into an infinite loop — the exact case the check exists for.
+    const nextOffset = data.next_offset ?? offset
+    const nextEdgeOffset = data.next_edge_offset ?? edgeOffset
+    const stalled = nextOffset === offset && nextEdgeOffset === edgeOffset
+    offset = nextOffset
+    edgeOffset = nextEdgeOffset
+    if (onProgress) onProgress({ done: Math.min(offset + edgeOffset, totalEntries + totalEdges), total: totalEntries + totalEdges, totals })
+
+    if ((data.remaining_entries || 0) === 0 && (data.remaining_edges || 0) === 0) return totals
+    if (stalled) throw new Error('Server did not advance the import cursor — is the Worker up to date?')
+  }
+}
+
+// Revealing the panel has to reveal the group above it, or a restore in progress
+// renders under a heading that is still hidden.
+function restoreSection() {
+  const el = document.getElementById('restore-section')
+  el.style.display = ''
+  syncUpkeepGroup()
+  return el
+}
+
+function renderRestoreProgress(label, done, total) {
+  const el = restoreSection()
+  el.style.display = ''
+  el.innerHTML = `
+    <div class="digest-section-label">Restore</div>
+    <p class="digest-note">${label}</p>
+    <button class="digest-btn digest-btn--loading" disabled><i class="ti ti-loader-2"></i> ${done.toLocaleString()} of ${total.toLocaleString()}</button>
+  `
+}
+
+function renderRestoreFailure(message) {
+  const el = restoreSection()
+  el.style.display = ''
+  el.innerHTML = `
+    <div class="digest-section-label">Restore</div>
+    <p class="digest-note">${message} Your backup file is untouched, and it's safe to try again — anything already restored will be skipped, not duplicated.</p>
+    <button class="digest-btn" onclick="restoreFromBackup()">Try again →</button>
+  `
+}
+
+function renderRestoreDone(totals) {
+  const el = restoreSection()
+  const parts = [`${totals.imported.toLocaleString()} restored`]
+  if (totals.edges_imported) parts.push(`${totals.edges_imported.toLocaleString()} connections`)
+  if (totals.skipped) parts.push(`${totals.skipped.toLocaleString()} already present`)
+  const failures = totals.failed + totals.edges_failed
+  const failNote = failures
+    ? ` ${failures.toLocaleString()} ${failures === 1 ? 'item' : 'items'} couldn't be restored — usually rows edited by hand; the rest are unaffected.`
+    : ''
+  const needsIndexing = totals.imported > 0
+  el.style.display = ''
+  el.innerHTML = `
+    <div class="digest-section-label">Restore</div>
+    <p class="digest-note"><i class="ti ti-check"></i> ${parts.join(' · ')}.${failNote}${
+      needsIndexing ? ' Restored memories can\'t be searched until they\'re indexed.' : ''
+    }</p>
+    ${needsIndexing ? '<button class="digest-btn" onclick="indexRestored(this)">Make searchable →</button>' : ''}
+  `
+}
+
+/** Stage two: the same /vectorize-pending loop the "Not indexed" section runs,
+ * kept inside the restore flow so finishing doesn't require finding another
+ * button elsewhere in the menu. */
+async function indexRestored(btn) {
+  btn.disabled = true
+  btn.classList.add('digest-btn--loading')
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Indexing…'
+  try {
+    let remaining = 1
+    let totalProcessed = 0
+    while (remaining > 0) {
+      const res = await fetch(`${WORKER_URL}/vectorize-pending`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+      })
+      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      const data = await res.json()
+      remaining = data.remaining ?? 0
+      totalProcessed += data.processed ?? 0
+      btn.innerHTML = `<i class="ti ti-loader-2"></i> Indexing… ${totalProcessed.toLocaleString()} done${remaining ? `, ${remaining.toLocaleString()} to go` : ''}`
+      if ((data.processed ?? 0) === 0 && remaining > 0) break
+    }
+    btn.classList.remove('digest-btn--loading')
+    if (remaining > 0) {
+      // Workers AI quota ran dry mid-backfill — the daily reset finishes the job.
+      btn.disabled = false
+      btn.innerHTML = `${remaining.toLocaleString()} left — daily AI limit reached, try tomorrow`
+    } else {
+      btn.innerHTML = '<i class="ti ti-check"></i> All restored memories are searchable'
+      btn.style.color = 'var(--good)'
+    }
+    await loadMenuStats()
+    refreshAll()
+  } catch {
+    btn.classList.remove('digest-btn--loading')
+    btn.disabled = false
+    btn.innerHTML = '<i class="ti ti-wifi-off"></i> Failed — tap to retry'
+    btn.style.color = 'var(--danger)'
+    btn.onclick = () => indexRestored(btn)
+  }
+}
+
+function pickBackupFile() {
+  return new Promise((resolveFile) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,application/json'
+    // A cancelled picker fires no event; the unresolved promise is harmless.
+    input.onchange = () => resolveFile(input.files && input.files[0] ? input.files[0] : null)
+    input.click()
+  })
+}
+
+async function restoreFromBackup() {
+  const file = await pickBackupFile()
+  if (!file) return
+
+  let payload
+  try {
+    payload = JSON.parse(await file.text())
+  } catch {
+    renderRestoreFailure(`<strong>${file.name}</strong> isn't valid JSON.`)
+    return
+  }
+  if (!payload || !Array.isArray(payload.entries)) {
+    renderRestoreFailure(`<strong>${file.name}</strong> doesn't look like a Second Brain backup — it has no entries list. Use a file created by "Back up as JSON".`)
+    return
+  }
+
+  const total = payload.entries.length + (payload.edges || []).length
+  renderRestoreProgress(`Restoring from <strong>${file.name}</strong>…`, 0, total)
+  try {
+    const totals = await runImportLoop(
+      payload,
+      async (query) => {
+        const res = await fetch(`${WORKER_URL}/import?${query}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) throw new Error(`Server error: ${res.status}`)
+        return res.json()
+      },
+      ({ done }) => renderRestoreProgress(`Restoring from <strong>${file.name}</strong>…`, done, total),
+    )
+    renderRestoreDone(totals)
+    await loadMenuStats()
+    refreshAll()
+  } catch (e) {
+    renderRestoreFailure('The restore stopped partway.')
   }
 }
 

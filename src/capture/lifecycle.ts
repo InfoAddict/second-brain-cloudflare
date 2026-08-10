@@ -33,6 +33,23 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
   return { status: "deleted", vectorCount: vectorIds.length };
 }
 
+/**
+ * SQL for "this entry is still supposed to be in the index".
+ *
+ * `deprecateEntry` empties `vector_ids` and deletes the vectors on purpose, so
+ * an empty `vector_ids` means one of two opposite things: an entry that failed
+ * to embed and should be retried, or one that was deliberately taken out of the
+ * index and must not be. Reading it as only the first is how dismissing a
+ * pattern raised the "not searchable" count and then re-embedded the very thing
+ * the user had just dismissed when they pressed "Vectorize now".
+ *
+ * This lives beside the function that creates the state, so anything counting
+ * or repairing unindexed entries can recognise it. (`vector_ids` is named bare
+ * here on purpose — test/unit/updated-at-coalesced.test.ts reads every
+ * backtick-delimited span in src/ as SQL, comments included.)
+ */
+export const INDEXABLE_SQL = `tags NOT LIKE '%"status:deprecated"%'`;
+
 export async function deprecateEntry(id: string, env: Env): Promise<boolean> {
   const row = await env.DB.prepare(
     `SELECT tags, vector_ids FROM entries WHERE id = ?`

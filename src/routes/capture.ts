@@ -1,10 +1,25 @@
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
+import { VECTORIZE_FIX_HINT } from "../constants";
 import { json, requireAuth } from "../lib/http";
 import { captureEntry } from "../capture/entry";
-import { appendToEntry, deleteStaleVectors, reembedOrThrow } from "../capture/store";
+import { appendToEntry, updateEntryContent } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
-import { extractHashtags } from "../text/hashtags";
+import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
+
+/**
+ * Zod guards the MCP tools; these routes have no schema layer, so an unrecognised value
+ * has to be rejected here rather than dropped. Silently ignoring it would hand a caller
+ * that sent "Volatile" or "temporary" a 200 and no verdict, with nothing to tell them
+ * the field did not take.
+ */
+function readVolatility(raw: unknown): { value?: Volatility; error?: string } {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "string" || !(VOLATILITY_VALUES as readonly string[]).includes(raw)) {
+    return { error: `volatility must be one of: ${VOLATILITY_VALUES.join(", ")}` };
+  }
+  return { value: raw as Volatility };
+}
 
 export async function handleCaptureRoutes(
   request: Request,
@@ -17,11 +32,18 @@ export async function handleCaptureRoutes(
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
 
-    let body: { content?: string; tags?: string[]; source?: string };
+    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
 
-    const result = await captureEntry(body.content, body.tags ?? [], body.source ?? "api", env, ctx);
+    const captureVol = readVolatility(body.volatility);
+    if (captureVol.error) return json({ ok: false, error: captureVol.error }, 400);
+
+    const captureTags = captureVol.value
+      ? withVolatility(body.tags ?? [], captureVol.value)
+      : body.tags ?? [];
+
+    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx);
 
     if (result.status === "blocked") {
       return json({
@@ -54,7 +76,9 @@ export async function handleCaptureRoutes(
         message: "Stored but similar entry exists — tagged as duplicate-candidate",
       });
     }
-    return json({ ok: true, id: result.id });
+    // Additive: older clients ignore the extra field, and the dashboard uses it
+    // to show what was filed under what.
+    return json({ ok: true, id: result.id, tags: result.tags ?? [] });
   }
 
   // POST /append
@@ -62,10 +86,13 @@ export async function handleCaptureRoutes(
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
 
-    let body: { id?: string; addition?: string };
+    let body: { id?: string; addition?: string; volatility?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.addition?.trim()) return json({ ok: false, error: "addition is required" }, 400);
+
+    const appendVol = readVolatility(body.volatility);
+    if (appendVol.error) return json({ ok: false, error: appendVol.error }, 400);
 
     const id = body.id.trim();
     const addition = body.addition.trim();
@@ -86,8 +113,9 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: mirrorEditError(source) }, 409);
     }
 
+    let indexed: boolean;
     try {
-      await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env));
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value);
     } catch (e) {
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
@@ -95,7 +123,10 @@ export async function handleCaptureRoutes(
     return json({
       ok: true,
       id,
-      message: "Update appended successfully with timestamp",
+      semantic_unavailable: !indexed,
+      message: indexed
+        ? "Update appended successfully with timestamp"
+        : `Update appended, but not indexed for semantic search (Vectorize unavailable) — it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
     });
   }
 
@@ -104,16 +135,33 @@ export async function handleCaptureRoutes(
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
 
-    let body: { id?: string; content?: string };
+    let body: { id?: string; content?: string; volatility?: unknown; tags?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
 
+    const updateVol = readVolatility(body.volatility);
+    if (updateVol.error) return json({ ok: false, error: updateVol.error }, 400);
+
+    // Absent means "leave the tags alone" — every client but the editor omits the
+    // key, and reading a missing key as an empty list would have them all wiping
+    // tags on save. An explicit [] does mean the user removed the last one.
+    let replaceTags: string[] | undefined;
+    if (body.tags !== undefined) {
+      if (!Array.isArray(body.tags) || body.tags.some(t => typeof t !== "string")) {
+        return json({ ok: false, error: "tags must be an array of strings" }, 400);
+      }
+      replaceTags = body.tags as string[];
+    }
+
     const id = body.id.trim();
     const newContent = body.content.trim();
 
+    // Refuse before anything is written. Only `source` is needed: updateEntryContent reads
+    // the rest for itself, and keeping the mirror guard out here is what stops
+    // capture/store.ts having to depend on the integrations registry (see #289).
     const row = await env.DB.prepare(
-      `SELECT tags, source, vector_ids FROM entries WHERE id = ?`
+      `SELECT source FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
 
     if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
@@ -122,35 +170,28 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: mirrorEditError(row.source as string) }, 409);
     }
 
-    const tags: string[] = JSON.parse(row.tags ?? "[]");
-    const { cleanContent, hashtags: newHashtags } = extractHashtags(newContent);
-    const mergedTags = [...new Set([...tags, ...newHashtags])];
-    const source = row.source as string;
-    const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
-    const finalContent = cleanContent || newContent;
+    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags);
 
-    // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors
-    // untouched and surface an error, instead of committing new content and then
-    // deleting every vector — which would leave the entry silently unsearchable.
-    let newVectorIds: string[];
-    try {
-      newVectorIds = await reembedOrThrow(env, id, finalContent, mergedTags, source, await resolveConfig(env));
-    } catch (e) {
-      console.error("Re-embed failed — entry left unchanged:", e);
+    // Only reachable if the entry was deleted between the guard read and the write.
+    if (result.status === "not_found") {
+      return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    }
+
+    if (result.status === "reembed_failed") {
       return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
     }
 
-    // Embed succeeded → safe to commit the new content and retire stale vectors.
-    await env.DB.prepare(`UPDATE entries SET content = ?, tags = ? WHERE id = ?`)
-      .bind(finalContent, JSON.stringify(mergedTags), id).run();
-
-    try {
-      await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-    } catch (e) {
-      console.error("Old vector cleanup failed (non-fatal):", e);
+    if (!result.vectorIds) {
+      return json({
+        ok: true,
+        id,
+        vectors: 0,
+        semantic_unavailable: true,
+        message: `Updated, but not re-indexed for semantic search (Vectorize unavailable) — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
+      });
     }
 
-    return json({ ok: true, id, vectors: newVectorIds.length });
+    return json({ ok: true, id, vectors: result.vectorIds.length });
   }
 
   return null;

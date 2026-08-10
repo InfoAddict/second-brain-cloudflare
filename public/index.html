@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Second Brain" />
@@ -55,13 +55,17 @@
             <div class="sb-brand-status" id="sb-status">always remembers</div>
           </div>
         </div>
+        <!-- Two destinations, not four. Recall and Remember were verbs and the
+             home input does both; Recent and Graph were two projections of one
+             corpus, so they are one place with a view toggle. -->
         <nav class="sb-nav">
-          <button class="sb-tab active" id="sb-tab-recall" onclick="switchTab('recall')"><i class="ti ti-search"></i><span>Recall</span></button>
-          <button class="sb-tab" id="sb-tab-recent" onclick="switchTab('recent')"><i class="ti ti-clock"></i><span>Recent</span></button>
-          <button class="sb-tab" id="sb-tab-remember" onclick="switchTab('remember')"><i class="ti ti-plus"></i><span>Remember</span></button>
-          <button class="sb-tab" id="sb-tab-graph" onclick="switchTab('graph')"><i class="ti ti-affiliate"></i><span>Graph</span></button>
+          <button class="sb-tab active" id="sb-tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span>Home</span></button>
+          <button class="sb-tab" id="sb-tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span>Memories</span></button>
         </nav>
         <div class="sb-footer">
+          <!-- In the desktop app there is no address bar and no reload, so this
+               is the only way to get fresh data without quitting. -->
+          <button class="sb-footer-btn refresh-now" onclick="refreshAll()" title="Refresh"><i class="ti ti-refresh"></i><span>Refresh</span></button>
           <button class="sb-footer-btn" onclick="openMenu()"><i class="ti ti-settings"></i><span>Settings</span></button>
         </div>
       </div>
@@ -75,16 +79,51 @@
             <div class="topbar-name">Second Brain</div>
             <div class="topbar-status" id="topbar-status">always remembers</div>
           </div>
+          <button class="topbar-menu refresh-now" onclick="refreshAll()" aria-label="Refresh"><i class="ti ti-refresh"></i></button>
           <button class="topbar-menu" onclick="openMenu()"><i class="ti ti-dots"></i></button>
         </div>
 
         <div id="screens">
-          <div class="screen active" id="screen-recall">
+          <div class="screen active" id="screen-home">
             <div id="recall-messages">
-              <div class="recall-hero" id="recall-welcome">
+              <!-- The home composition: greeting + one input, centred as a unit.
+                   Hidden the moment a conversation starts. -->
+              <div class="home" id="home">
+                <div class="home-greet">
+                  <span class="home-mark"><i class="ti ti-sparkles"></i></span>
+                  <span id="home-greeting">Hello</span>
+                </div>
+                <div class="home-sub" id="home-sub"></div>
+                <div class="home-input">
+                  <textarea
+                    class="home-field"
+                    id="home-field"
+                    placeholder="Ask, or tell me something to remember"
+                    rows="1"
+                    onkeydown="handleHomeKey(event)"
+                    oninput="onHomeInput(this)"
+                  ></textarea>
+                  <div class="home-row">
+                    <button class="home-mode" id="home-mode" onclick="toggleHomeMode()" title="Switch between asking and remembering">
+                      <span class="home-mode-dot"></span><span id="home-mode-label">will search</span>
+                    </button>
+                    <button class="send-btn" onclick="submitHome()"><i class="ti ti-arrow-up"></i></button>
+                  </div>
+                </div>
+                <!-- The one thing worth keeping from the deleted Remember tab:
+                     it was the only place hashtags were ever taught. -->
+                <div class="home-hint">Add <span class="hashtag">#tags</span> anywhere to file it</div>
+                <div class="home-topics" id="home-topics"></div>
+                <div class="home-more" id="home-more"></div>
+              </div>
+              <div class="brief" id="brief" style="display: none"></div>
+              <div class="recall-hero" id="recall-welcome" style="display: none">
                 <div class="eyebrow">Recall</div>
                 <div class="hero-line">Ask me anything you've stored away &mdash; I'll find it and answer in your own words.</div>
               </div>
+              <!-- Answers append after this point. Home, the brief and the hero
+                   above are siblings of the conversation, not part of it — see
+                   clearRecall(), which used to wipe the lot. -->
             </div>
             <div class="filter-bar" style="padding-bottom: 0">
               <div class="filter-inner">
@@ -105,8 +144,10 @@
             </div>
             <div class="input-bar">
               <div class="input-inner">
-                <button id="recall-clear-btn" class="refresh-btn" onclick="clearRecall()" style="display: none" title="Clear Chat">
-                  <i class="ti ti-trash"></i>
+                <!-- The way out of a conversation. Without it the only route
+                     back to home was pressing the tab you were already on. -->
+                <button id="recall-clear-btn" class="refresh-btn" onclick="clearRecall()" style="display: none" title="Back to home">
+                  <i class="ti ti-home"></i>
                 </button>
                 <textarea
                   class="input-field"
@@ -121,12 +162,14 @@
             </div>
           </div>
 
-          <div class="screen" id="screen-recent">
-            <div id="recent-list">
-              <div class="empty-state"><i class="ti ti-clock"></i><span>Loading memories...</span></div>
-            </div>
-            <div class="filter-bar">
-              <div class="filter-inner">
+          <!-- One corpus, two projections. Recent and Graph were separate tabs,
+               which asked the user to pick a place when they were really picking
+               a way of looking: by time, or by structure. Filters sit above the
+               thing they filter now, rather than in a footer you had to travel
+               back down to. -->
+          <div class="screen" id="screen-memories">
+            <div class="mem-bar">
+              <div class="filter-inner mem-filters" id="mem-filters">
                 <i class="ti ti-tag" style="color: var(--text-tertiary); font-size: 13px; flex-shrink: 0"></i>
                 <select class="filter-field" id="tag-filter-recent" onchange="onTagChange(this.value)">
                   <option value="">All tags</option>
@@ -138,61 +181,45 @@
                   <option value="30">Last 30 days</option>
                   <option value="month">This month</option>
                 </select>
-                <button class="refresh-btn" id="refresh-btn" onclick="loadRecent()"><i class="ti ti-refresh"></i></button>
               </div>
-            </div>
-          </div>
-
-          <div class="screen" id="screen-remember">
-            <div id="remember-messages">
-              <div class="recall-hero" id="remember-intro">
-                <div class="eyebrow">Remember</div>
-                <div class="hero-line">What's worth keeping? Write it down &mdash; add <span class="hashtag">#tags</span> anywhere and I'll file it.</div>
-              </div>
-            </div>
-            <div class="input-bar">
-              <div class="input-hint">Tip: add <span class="hint-tags">#tags</span> anywhere in your message</div>
-              <div class="input-inner">
-                <button id="remember-clear-btn" class="refresh-btn" onclick="clearRemember()" style="display: none" title="Clear Chat">
-                  <i class="ti ti-trash"></i>
+              <!-- This used to read "Knowledge / Events / Unsorted", which stopped
+                   being true when the canvas moved to per-cluster colours from a
+                   palette (graph-canvas.js). The canvas draws its own legend with
+                   the real colours and counts, so this says what the picture is
+                   instead of mislabelling it. -->
+              <div class="mem-caption" id="mem-legend" hidden>Grouped by tag &middot; tap a memory to open it</div>
+              <div class="view-toggle" role="tablist" aria-label="How to view your memories">
+                <button class="view-toggle-btn active" id="mem-view-list" role="tab" aria-selected="true" onclick="setMemoryView('list')" title="By time">
+                  <i class="ti ti-list"></i><span>List</span>
                 </button>
-                <textarea
-                  class="input-field"
-                  id="remember-input"
-                  placeholder="Tell your brain something..."
-                  rows="1"
-                  onkeydown="handleRememberKey(event)"
-                  oninput="autoResize(this)"
-                ></textarea>
-                <button class="send-btn" onclick="sendRemember()"><i class="ti ti-arrow-up"></i></button>
+                <button class="view-toggle-btn" id="mem-view-graph" role="tab" aria-selected="false" onclick="setMemoryView('graph')" title="By connection">
+                  <i class="ti ti-affiliate"></i><span>Graph</span>
+                </button>
               </div>
             </div>
-          </div>
 
-          <div class="screen" id="screen-graph">
-            <div class="graph-toolbar">
-              <div class="graph-legend">
-                <span><i class="gl-dot" style="background: #fd540a"></i>Knowledge</span>
-                <span><i class="gl-dot" style="background: #4a7c8c"></i>Events</span>
-                <span><i class="gl-dot" style="background: #9a958a"></i>Unsorted</span>
-              </div>
+            <div id="recent-list">
+              <div class="empty-state"><i class="ti ti-clock"></i><span>Loading memories...</span></div>
+            </div>
+
+            <div class="mem-graph" id="mem-graph" hidden>
+              <canvas id="graph-canvas"></canvas>
+              <div class="graph-empty" id="graph-empty" style="display: none">No connections yet — link memories, or let them auto-connect as you add more.</div>
+              <!-- Floating over the canvas rather than in the bar: the bar is
+                   already carrying the legend and the view toggle on a phone. -->
               <div class="graph-controls">
                 <button class="graph-btn" onclick="graphZoom(0.8)" title="Zoom out"><i class="ti ti-minus"></i></button>
                 <button class="graph-btn" onclick="graphZoom(1.25)" title="Zoom in"><i class="ti ti-plus"></i></button>
                 <button class="graph-btn" onclick="graphFit()" title="Fit to view"><i class="ti ti-maximize"></i></button>
-                <button class="graph-btn" onclick="loadGraph()" title="Refresh"><i class="ti ti-refresh"></i></button>
+                <button class="graph-btn" onclick="loadGraph()" title="Re-lay out"><i class="ti ti-refresh"></i></button>
               </div>
             </div>
-            <canvas id="graph-canvas"></canvas>
-            <div class="graph-empty" id="graph-empty" style="display: none">No connections yet — link memories, or let them auto-connect as you add more.</div>
           </div>
         </div>
 
         <div id="navbar">
-          <button class="nav-tab active" id="tab-recall" onclick="switchTab('recall')"><i class="ti ti-search"></i><span>Recall</span></button>
-          <button class="nav-tab" id="tab-recent" onclick="switchTab('recent')"><i class="ti ti-clock"></i><span>Recent</span></button>
-          <button class="nav-tab" id="tab-remember" onclick="switchTab('remember')"><i class="ti ti-plus"></i><span>Remember</span></button>
-          <button class="nav-tab" id="tab-graph" onclick="switchTab('graph')"><i class="ti ti-affiliate"></i><span>Graph</span></button>
+          <button class="nav-tab active" id="tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span>Home</span></button>
+          <button class="nav-tab" id="tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span>Memories</span></button>
         </div>
       </div>
     </div>
@@ -224,12 +251,15 @@
 
     <div id="edit-sheet">
       <div class="edit-inner">
-        <h3>Edit memory</h3>
-        <div class="edit-existing-tags" id="edit-existing-tags"></div>
-        <div class="append-input-wrap">
-          <textarea id="edit-textarea" placeholder="Edit your memory..." rows="5"></textarea>
+        <div class="edit-header">
+          <h3>Edit memory</h3>
+          <div class="edit-sub" id="edit-sub"></div>
         </div>
-        <div class="edit-hint">Use <span style="font-style: italic">#hashtags</span> to add new tags</div>
+        <div class="append-input-wrap edit-input-wrap">
+          <textarea id="edit-textarea" placeholder="Edit your memory..."></textarea>
+        </div>
+        <div class="edit-existing-tags" id="edit-existing-tags"></div>
+        <div class="edit-hint">Tap a tag to remove it. Use <span style="font-style: italic">#hashtags</span> in the text to add one.</div>
         <div class="append-actions">
           <button class="btn-append-cancel" onclick="closeEdit()">Cancel</button>
           <button class="btn-append-save" id="edit-save-btn" onclick="saveEdit()">Save</button>
@@ -244,9 +274,18 @@
           <h3>Memory</h3>
           <button class="btn-close-icon" onclick="closeView()"><i class="ti ti-x"></i></button>
         </div>
-        <div class="view-content" id="view-content-text"></div>
-        <div class="view-tags" id="view-tags-container"></div>
-        <div class="view-related" id="view-related" style="display: none"></div>
+        <!-- One scroll region between a fixed header and fixed actions. These
+             were five siblings of the actions, each with its own min- or
+             max-height, and their sum could exceed the sheet's own max-height —
+             at which point the actions overflowed the padding box and sat flush
+             against the bottom edge of the card. -->
+        <div class="view-scroll">
+          <div class="view-meta" id="view-meta"></div>
+          <div class="view-content" id="view-content-text"></div>
+          <div class="view-tags" id="view-tags-container"></div>
+          <div class="view-brain" id="view-brain" style="display: none"></div>
+          <div class="view-related" id="view-related" style="display: none"></div>
+        </div>
         <div class="view-actions">
           <button class="btn-view-append" id="view-btn-append"><i class="ti ti-writing"></i> Append</button>
           <button class="btn-view-edit" id="view-btn-edit"><i class="ti ti-pencil"></i> Edit</button>
@@ -256,50 +295,56 @@
     </div>
 
     <div id="menu-sheet">
+      <!-- Not settings, despite the icon: the Tauri "Advanced Settings" window
+           is the only writer of the Worker's config (installer/src/settings.ts),
+           and the one real setting down here is the theme. What this sheet
+           actually holds is housekeeping — chores, data and identity — so it is
+           grouped by that, the way the Tauri window groups by what a control
+           affects. The stats panel moved out: home already carries the count,
+           the week, the sources and the tags.
+
+           Deliberately NOT copying Tauri's staged Save/Cancel model. Every
+           control here is an immediate verb — Digest, Restore, Export — and a
+           "Save" that fired nine irreversible actions at once would be a trap. -->
       <div class="menu-inner">
-        <h3>Second Brain</h3>
-        <div class="stats-panel" id="stats-panel">
-          <div class="stats-kpi-row">
-            <div class="stats-kpi-card">
-              <div class="stats-kpi-value" id="stats-count">—</div>
-              <div class="stats-kpi-label">Memories</div>
-            </div>
-            <div class="stats-kpi-card">
-              <div class="stats-kpi-value" id="stats-importance">—</div>
-              <div class="stats-kpi-label">Avg Importance</div>
-            </div>
-          </div>
-          <div class="stats-top-tags">
-            <div class="stats-top-tags-label">Most used tags</div>
-            <div class="stats-tags" id="stats-tags"></div>
-          </div>
+        <h3>Your brain</h3>
+
+        <!-- Chores. Each section hides itself when there is nothing to do, so
+             on a healthy brain this whole group disappears. -->
+        <div class="menu-group" id="upkeep-group" hidden>
+          <div class="menu-group-label">Upkeep</div>
+          <div class="digest-section" id="patterns-section" style="display: none"></div>
+          <div class="digest-section" id="digest-section" style="display: none"></div>
+          <div class="digest-section" id="vectorize-section" style="display: none"></div>
+          <div class="digest-section" id="classify-section" style="display: none"></div>
+          <div class="digest-section" id="restore-section" style="display: none"></div>
         </div>
-        <div class="digest-section" id="patterns-section" style="display: none"></div>
-        <div class="digest-section" id="digest-section" style="display: none"></div>
-        <div class="digest-section" id="vectorize-section" style="display: none"></div>
-        <div class="digest-section" id="classify-section" style="display: none"></div>
-        <div class="theme-row">
-          <span class="theme-row-label">Appearance</span>
-          <div class="theme-toggle" id="theme-toggle">
-            <button data-theme-val="light" onclick="setTheme('light')" title="Light"><i class="ti ti-sun"></i></button>
-            <button data-theme-val="dark" onclick="setTheme('dark')" title="Dark"><i class="ti ti-moon"></i></button>
-            <button data-theme-val="auto" onclick="setTheme('auto')" title="Match system">Auto</button>
-          </div>
+
+        <div class="menu-group">
+          <div class="menu-group-label">Data</div>
+          <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> Back up as JSON</button>
+          <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> Export as Markdown</button>
+          <button class="menu-item" id="restore-btn" onclick="restoreFromBackup()"><i class="ti ti-upload"></i> Restore from backup</button>
         </div>
-        <button
-          class="menu-item"
-          onclick="
-            closeMenu()
-            switchTab('recent')
-          "
-        >
-          <i class="ti ti-clock"></i> View all memories
-        </button>
-        <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> Integrations</button>
-        <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> Export as JSON</button>
-        <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> Export as Markdown</button>
-        <div class="about-credits" id="about-credits" aria-label="About Second Brain"></div>
-        <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> Disconnect</button>
+
+        <div class="menu-group">
+          <div class="menu-group-label">Connections</div>
+          <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> Integrations</button>
+        </div>
+
+        <div class="menu-group">
+          <div class="menu-group-label">This app</div>
+          <div class="theme-row">
+            <span class="theme-row-label">Appearance</span>
+            <div class="theme-toggle" id="theme-toggle">
+              <button data-theme-val="light" onclick="setTheme('light')" title="Light"><i class="ti ti-sun"></i></button>
+              <button data-theme-val="dark" onclick="setTheme('dark')" title="Dark"><i class="ti ti-moon"></i></button>
+              <button data-theme-val="auto" onclick="setTheme('auto')" title="Match system">Auto</button>
+            </div>
+          </div>
+          <div class="about-credits" id="about-credits" aria-label="About Second Brain"></div>
+          <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> Disconnect</button>
+        </div>
       </div>
     </div>
 
@@ -317,6 +362,36 @@
       </div>
     </div>
 
+    <!-- The whole pattern queue. Two cards on the home brief is a daily nudge;
+         a brain that has been running for months has a backlog, and ruling on it
+         two at a time is the reason this exists. -->
+    <div id="patterns-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <button class="btn-close-icon" onclick="backToMenuFromPatterns()" title="Back to settings"><i class="ti ti-arrow-left"></i></button>
+            <h3 style="margin-bottom: 0">Patterns noticed</h3>
+          </div>
+          <button class="btn-close-icon" onclick="closePatternsSheet()"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note" id="patterns-intro">
+          Your brain spotted these across several memories. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.
+        </p>
+        <div class="patterns-bulkbar" id="patterns-bulkbar" hidden>
+          <label class="patterns-selectall">
+            <input type="checkbox" id="patterns-select-all" onchange="togglePatternSelectAll(this.checked)" />
+            <span id="patterns-selected-label">Select all</span>
+          </label>
+          <div class="patterns-bulk-actions">
+            <button class="digest-btn" id="patterns-confirm-btn" onclick="resolveSelectedPatterns('confirm', this)" disabled>Confirm</button>
+            <button class="digest-btn danger" id="patterns-dismiss-btn" onclick="resolveSelectedPatterns('dismiss', this)" disabled>Dismiss</button>
+          </div>
+        </div>
+        <div id="patterns-list"><p class="digest-note">Loading&hellip;</p></div>
+        <button class="digest-more" id="patterns-more" hidden onclick="loadMorePatterns(this)"></button>
+      </div>
+    </div>
+
     <script src="utils.js"></script>
     <script src="credits.js"></script>
     <script src="js/state.js"></script>
@@ -328,9 +403,13 @@
     <script src="js/remember.js"></script>
     <script src="js/memory-crud.js"></script>
     <script src="js/settings.js"></script>
+    <script src="js/patterns.js"></script>
     <script src="js/integrations.js"></script>
     <script src="js/graph-canvas.js"></script>
+    <script src="js/brief.js"></script>
+    <script src="js/home.js"></script>
     <script src="js/nav.js"></script>
+    <script src="js/refresh.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/download-app.js"></script>
     <script src="js/app.js"></script>

@@ -65,14 +65,16 @@ function initGraphSim(canvas, nodes, edges) {
   // tested) tags each node with n.cluster (its broad category) and n.sub (a shared
   // sub-topic within that category, or null). The clusters drive the static packed
   // layout, the outline rings, the cluster labels, and the legend below.
-  assignGraphClusters(nodes)
+  assignGraphClusters(nodes, edges)
 
   // Order clusters (largest first, sentinels last), assign palette colors + dense index.
   const CLUSTER_PALETTE = ['#fd540a', '#4a7c8c', '#7a9a5b', '#a9739e', '#c99a3f', '#5b8a8f', '#8c6f5b', '#6a7bb0', '#b0685f', '#5f8c6a', '#9a7bb0', '#7d8c4f']
-  const SENTINEL_COLOR = { __other__: '#9a958a', __untagged__: '#b8b3a8', __autopattern__: '#9aa7ad' }
-  const SENTINEL_CLUSTER = new Set(['__other__', '__untagged__', '__autopattern__'])
-  const clusterLabelOf = (id) =>
-    id === '__other__' ? 'Other' : id === '__untagged__' ? 'Untagged' : id === '__autopattern__' ? 'Auto-patterns' : id
+  // Memories the tags and the edges both failed to place. They are not a category —
+  // "Other" and "Untagged" were rings and legend rows describing nothing, and on a
+  // young brain they were most of the canvas. Muted, unringed, unlabelled: a brain
+  // with little structure should look like one.
+  const LOOSE_CLUSTER = '__loose__'
+  const LOOSE_COLOR = '#b8b3a8'
   const clusterHue = (s) => {
     let h = 0
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
@@ -84,16 +86,16 @@ function initGraphSim(canvas, nodes, edges) {
     const sz = new Map()
     for (const n of nodes) sz.set(n.cluster, (sz.get(n.cluster) || 0) + 1)
     const ordered = [...sz.keys()].sort((a, b) => {
-      const sa = SENTINEL_CLUSTER.has(a),
-        sb = SENTINEL_CLUSTER.has(b)
-      if (sa !== sb) return sa ? 1 : -1
+      const la = a === LOOSE_CLUSTER,
+        lb = b === LOOSE_CLUSTER
+      if (la !== lb) return la ? 1 : -1
       return sz.get(b) - sz.get(a) || (a < b ? -1 : 1)
     })
     let pi = 0
     ordered.forEach((id) => {
-      const color = SENTINEL_CLUSTER.has(id) ? SENTINEL_COLOR[id] : pi < CLUSTER_PALETTE.length ? CLUSTER_PALETTE[pi++] : clusterHue(id)
+      const color = id === LOOSE_CLUSTER ? LOOSE_COLOR : pi < CLUSTER_PALETTE.length ? CLUSTER_PALETTE[pi++] : clusterHue(id)
       clusterColor.set(id, color)
-      clusterLegend.push({ label: clusterLabelOf(id), color, count: sz.get(id) })
+      if (id !== LOOSE_CLUSTER) clusterLegend.push({ label: id, color, count: sz.get(id) })
     })
   }
   for (const n of nodes) n.clusterColor = clusterColor.get(n.cluster)
@@ -152,7 +154,7 @@ function initGraphSim(canvas, nodes, edges) {
         n.olx = c.x
         n.oly = c.y
       })
-      outerObjs.push({ id, color, label: clusterLabelOf(id), subs, loose, R: packed.R + 9 })
+      outerObjs.push({ id, color, label: id, subs, loose, R: packed.R + 9 })
     }
     // pack the category discs on the canvas (largest first)
     const outerPacked = packGraphCircles(
@@ -165,7 +167,9 @@ function initGraphSim(canvas, nodes, edges) {
     })
     // resolve absolute node positions and build the draw lists
     for (const o of outerObjs) {
-      clusterList.push({ color: o.color, label: o.label, cx: o.cx, cy: o.cy, R: o.R })
+      // The loose group is packed like any other so its nodes get positions, but it
+      // gets no ring and no label — it is not a category.
+      if (o.id !== LOOSE_CLUSTER) clusterList.push({ color: o.color, label: o.label, cx: o.cx, cy: o.cy, R: o.R })
       for (const s of o.subs) {
         const scx = o.cx + s.cx
         const scy = o.cy + s.cy
@@ -452,15 +456,37 @@ function initGraphSim(canvas, nodes, edges) {
       }
     }
     // Cluster labels: a bold, cluster-colored pill above each cluster's top edge.
-    if (cam.scale >= 0.4) {
+    //
+    // Drawn in world space but with every pixel dimension divided by cam.scale, the
+    // same trick the ring strokes above use — so the pill is a constant size on
+    // screen however far out the view is zoomed.
+    //
+    // It used to be a flat 13px, which meant the label shrank with the graph and
+    // stopped being readable, so it was gated at cam.scale >= 0.4. That gate was
+    // set when the clustering produced eight or so large categories. It now
+    // produces two dozen smaller ones, so fit-to-view settles below 0.4 even on a
+    // wide desktop canvas and every label silently vanished — which is what made
+    // the legend the only key, and the legend is what will not fit on a phone.
+    // Screen-constant text removes the reason for the gate; what is left of it is a
+    // floor for genuinely huge graphs, where the pills would collide into mush.
+    if (cam.scale >= 0.12) {
+      const k = 1 / cam.scale
       for (const c of clusterList) {
         const cx = c.cx
-        const cy = c.cy - c.R - 16
-        ctx.font = '700 13px "Geist", system-ui, sans-serif'
+        const cy = c.cy - c.R - 16 * k
+        ctx.font = `700 ${13 * k}px "Geist", system-ui, sans-serif`
         const tw = ctx.measureText(c.label).width
-        const padX = 7
-        const h = 20
-        const rr = 6
+        const padX = 7 * k
+        const h = 20 * k
+        const rr = 6 * k
+        // A cluster has to be wide enough to own its name: the pill may overhang its
+        // ring by half again, no more. Both sides are world units here, but the pill
+        // is screen-constant so its world width grows as the view zooms out, while
+        // the ring's does not — which is what makes this a zoom test rather than a
+        // fixed one. Zoomed out on a phone the mid-sized labels are wider than the
+        // clusters themselves and pile up on their neighbours; they drop out, and
+        // come back as you zoom in. On a desktop canvas almost all of them clear it.
+        if (tw + padX * 2 > c.R * 2 * 1.6) continue
         const x = cx - tw / 2 - padX
         const w = tw + padX * 2
         const topY = cy - h / 2
@@ -519,12 +545,26 @@ function initGraphSim(canvas, nodes, edges) {
     // fixed while the graph pans/zooms. Ivory pill + dark text reads on both themes.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     if (clusterLegend.length) {
-      const rows = clusterLegend.slice(0, 10)
+      // The legend is an overlay sitting on top of the graph, so its size is a claim
+      // on the canvas, not on the window. Bounding it by available height alone was
+      // wrong: a phone is tall, so all two dozen rows fitted and buried most of the
+      // graph behind them.
+      //
+      // A third of the height at most, and fewer rows again on a narrow canvas —
+      // the pill is a fixed ~180px wide, which is half a phone screen whatever its
+      // height. The clusters each carry their own label on the canvas now, so a
+      // short legend costs a summary rather than the key itself.
+      const rowH = 17
+      const maxRows = Math.max(3, Math.min(W < 520 ? 6 : 12, Math.floor(H / 3 / rowH)))
+      const hidden = clusterLegend.length - maxRows
+      const rows =
+        hidden > 0
+          ? [...clusterLegend.slice(0, maxRows - 1), { label: `+${hidden + 1} more`, color: LOOSE_COLOR, count: '' }]
+          : clusterLegend
       ctx.font = '600 11px "Geist", system-ui, sans-serif'
       let maxW = 0
       for (const r of rows) maxW = Math.max(maxW, ctx.measureText(r.label).width + ctx.measureText(String(r.count)).width)
       const padX = 8
-      const rowH = 17
       const sw = 10
       const gap = 24
       const boxW = padX * 2 + sw + 6 + maxW + gap

@@ -17,9 +17,13 @@ const DASHBOARD_SCRIPTS = [
   "public/js/remember.js",
   "public/js/memory-crud.js",
   "public/js/settings.js",
+  "public/js/patterns.js",
   "public/js/integrations.js",
   "public/js/graph-canvas.js",
+  "public/js/brief.js",
+  "public/js/home.js",
   "public/js/nav.js",
+  "public/js/refresh.js",
   "public/js/auth.js",
   "public/js/download-app.js",
   "public/js/app.js",
@@ -74,6 +78,11 @@ function makeFakeDocument() {
     querySelectorAll: () => [],
     getElementById: (_id?: string) => el(),
     createElement: () => el(),
+    // Document-level listeners are real: v2.3 registers outside-click and
+    // Escape handlers to dismiss row overflow menus at load time, and a
+    // document without these throws before any handler is defined.
+    addEventListener() {},
+    removeEventListener() {},
     body: { style: {}, appendChild() {} },
   };
 }

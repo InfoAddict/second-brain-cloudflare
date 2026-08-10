@@ -5,6 +5,19 @@ const updateWorkflow = readFileSync(".github/workflows/upstream-release-update.y
 const deployWorkflow = readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
 
 describe("upstream release workflow safety", () => {
+  it("tracks installer releases by their bundled Worker version", () => {
+    expect(updateWorkflow).toContain("^installer-v[0-9]+");
+    expect(updateWorkflow).toContain('git show "${SOURCE_TAG}:src/env.ts"');
+    expect(updateWorkflow).toContain("SB_VERSION");
+    expect(updateWorkflow).toContain('release_tag="v${worker_version}"');
+    expect(updateWorkflow).toContain("Current branch already reports Worker v${current_version}.");
+  });
+
+  it("refuses to deploy an older upstream Worker", () => {
+    expect(updateWorkflow).toContain("sort -V");
+    expect(updateWorkflow).toContain("refusing to downgrade");
+  });
+
   it("only reports an update as applied after the tested branch reaches main", () => {
     expect(updateWorkflow).toContain("update_applied: ${{ steps.publish.outputs.applied }}");
     expect(updateWorkflow).toContain('echo "applied=true" >> "$GITHUB_OUTPUT"');

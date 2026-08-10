@@ -63,4 +63,12 @@ describe("extractHashtags", () => {
     expect(cleanContent).toBe("note today");
     expect(hashtags).toEqual(["upgrade-the-system"]);
   });
+
+  it("keeps numeric references while extracting hyphenated tags", () => {
+    const { cleanContent, hashtags } = extractHashtags(
+      "Synced #298 into #second-brain and #2026-roadmap",
+    );
+    expect(cleanContent).toBe("Synced #298 into and");
+    expect(hashtags).toEqual(["second-brain", "2026-roadmap"]);
+  });
 });

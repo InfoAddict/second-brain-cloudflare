@@ -22,6 +22,21 @@ export interface VectorizeHealth {
   error?: string;
 }
 
+/**
+ * True when Vectorize itself is unreachable — binding absent, index not created,
+ * or the deploying token lacks Vectorize permission. This is a supported
+ * keyword-only deployment, so write paths degrade rather than fail.
+ *
+ * Deliberately distinct from "this one embed failed" (#212): a transient
+ * failure must still fail loudly so the caller retries, or we would commit new
+ * content against stale vectors and report success. Only called on an error
+ * path, so the extra describe() costs nothing in the healthy case.
+ */
+export async function isVectorizeUnavailable(env: Env): Promise<boolean> {
+  if (!env.VECTORIZE) return true;
+  return !(await checkVectorizeHealth(env)).ok;
+}
+
 export async function checkVectorizeHealth(env: Env): Promise<VectorizeHealth> {
   try {
     const info = (await env.VECTORIZE.describe()) as any;
