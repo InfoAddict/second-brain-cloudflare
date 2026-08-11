@@ -296,7 +296,8 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
     try {
       const { results: superseded } = await env.DB.prepare(
         `SELECT e.source_id, e.target_id,
-                a.created_at AS a_created, b.created_at AS b_created
+                a.created_at AS a_created, a.content AS a_content, a.tags AS a_tags, a.source AS a_source,
+                b.created_at AS b_created, b.content AS b_content, b.tags AS b_tags, b.source AS b_source
          FROM edges e
          JOIN entries a ON a.id = e.source_id
          JOIN entries b ON b.id = e.target_id
@@ -305,12 +306,27 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
          ORDER BY e.created_at DESC
          LIMIT 10`,
       ).bind(MIN_GAP_MS).all() as {
-        results: { source_id: string; target_id: string; a_created: number; b_created: number }[];
+        results: {
+          source_id: string; target_id: string;
+          a_created: number; a_content: string; a_tags: string; a_source: string;
+          b_created: number; b_content: string; b_tags: string; b_source: string;
+        }[];
       };
 
-      if (superseded.length) {
+      // The gap floor alone is not eligibility. A system-provenance supersedes
+      // edge always deprecates its target (src/capture/entry.ts), so without
+      // this filter essentially every supersedes candidate pairs a live entry
+      // with a deprecated one — the same isInsightEligible check the vector
+      // path already runs on both sides after hydrating from D1, applied here
+      // to the rows this query already hydrated.
+      const eligible = superseded.filter(row =>
+        isInsightEligible({ content: row.a_content, tags: parseTags(row.a_tags), source: row.a_source })
+        && isInsightEligible({ content: row.b_content, tags: parseTags(row.b_tags), source: row.b_source }),
+      );
+
+      if (eligible.length) {
         const now = Date.now();
-        await env.DB.batch(superseded.map(row => {
+        await env.DB.batch(eligible.map(row => {
           const [a, b] = normalisePair(row.source_id, row.target_id);
           const gap = Math.abs(row.a_created - row.b_created);
           return env.DB.prepare(

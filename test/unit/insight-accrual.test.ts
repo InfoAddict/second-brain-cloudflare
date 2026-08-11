@@ -320,4 +320,50 @@ describe("runInsightAccrual()", () => {
 
     expect(await candidateCount(sqlite)).toBe(0);
   });
+
+  it("does not seed a supersedes candidate whose deprecated side fails eligibility", async () => {
+    // A system-provenance supersedes edge always calls deprecateEntry() on its
+    // target (src/capture/entry.ts), so without this filter essentially every
+    // supersedes candidate pairs a live entry with a deprecated one whose
+    // vectors have already been deleted. This is the design spec's own
+    // documented false positive (docs/superpowers/specs/2026-08-10-insight-
+    // pass-design.md), reproduced directly: the gap floor alone says yes, and
+    // only isInsightEligible on the deprecated side says no.
+    sqlite.seed({
+      id: "old-decision", createdAt: NOW - 120 * DAY, tags: ["pricing", "status:deprecated"],
+      content: "Decision: price the first tier flat at nine dollars a month for predictability, always.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+       VALUES ('edge-3', 'seed-1', 'old-decision', 'supersedes', 1.0, 'system', '{}', ?, ?)`,
+    ).bind(NOW, NOW).run();
+
+    await runInsightAccrual(makeEnv(sqlite, []), ctx);
+
+    expect(await candidateCount(sqlite)).toBe(0);
+  });
+
+  it("does not seed a supersedes candidate when the newer side is machine-authored", async () => {
+    // The eligibility filter runs on BOTH sides, not just the deprecated one —
+    // a supersedes edge's source can just as easily fail on its own tags,
+    // source, or content floor, and the vector path already checks both sides
+    // after hydrating from D1. This pins that the supersedes path now does
+    // the same, rather than only handling the deprecated-target case.
+    sqlite.seed({
+      id: "sup-a", createdAt: NOW - 120 * DAY, tags: ["synthesized", "work"], source: "system",
+      content: "[Synthesized from 12 entries] A long enough synthesized summary of a recurring theme in this brain overall.",
+    });
+    sqlite.seed({
+      id: "sup-b", createdAt: NOW, tags: ["pricing"],
+      content: "Decision: a perfectly ordinary, eligible entry that clears the content floor on its own merits, easily.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+       VALUES ('edge-4', 'sup-a', 'sup-b', 'supersedes', 1.0, 'system', '{}', ?, ?)`,
+    ).bind(NOW, NOW).run();
+
+    await runInsightAccrual(makeEnv(sqlite, []), ctx);
+
+    expect(await candidateCount(sqlite)).toBe(0);
+  });
 });
