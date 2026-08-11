@@ -52,6 +52,15 @@ interface FixtureEntry {
 // clustered tightly around 0 (concentration of measure), so distinct
 // clusters separate reliably without hand-tuning, and a member's
 // similarity to its own cluster is controlled directly by `pull`.
+//
+// A second, narrower version of the same mistake showed up within the
+// pricing cluster itself, after this fix: at the cluster default (0.92
+// pull), plant-contradiction-old and plant-contradiction-new measured
+// 0.9920 — so close that no third vector could be built similar to one and
+// dissimilar to the other, which is exactly what decoy-recent needs (see
+// its comment below). `PRICING_PULL` loosens that one cluster to ~0.87
+// pairwise, leaving room underneath for the decoy without touching anything
+// else. See task-9-report.md's second entry for the measured before/after.
 
 /** FNV-1a, only so each label gets its own deterministic PRNG stream. */
 function hashLabel(label: string): number {
@@ -89,19 +98,41 @@ const unit = (label: string): number[] => {
  * A member of a topic cluster: `pull` of the cluster's shared direction plus
  * `1 - pull` of the member's own independent noise, renormalised. Two
  * members of the same cluster at the default pull are close (~0.99) without
- * being identical; `decoy-recent` uses a lower pull so it sits under
- * MIN_SIMILARITY (0.80) against every other pricing-cluster member — the
- * point of that decoy is that only the gap floor excludes it, not a
- * similarity floor doing the same job twice.
+ * being identical.
  */
 const clusterMember = (cluster: number[], label: string, pull = 0.92): number[] => {
   const noise = unit(label);
   return normalize(cluster.map((c, i) => c * pull + noise[i] * (1 - pull)));
 };
 
+/**
+ * A near-duplicate of an already-built vector: `weight` of that vector plus
+ * `1 - weight` of the label's own independent noise. Used for `decoy-recent`
+ * below, which needs to be similarity-eligible against ONE specific entry
+ * and not another — `clusterMember` can't express that, because every
+ * member it builds is equally related to every other member of the same
+ * cluster (they all share only the cluster direction, nothing pairwise).
+ */
+const similarTo = (vector: number[], label: string, weight: number): number[] => {
+  const noise = unit(label);
+  return normalize(vector.map((v, i) => v * weight + noise[i] * (1 - weight)));
+};
+
 const CLUSTER_PRICING = unit("cluster:pricing");
 const CLUSTER_CONNECTION = unit("cluster:connection");
 const CLUSTER_STATE = unit("cluster:state");
+
+/**
+ * How similar the core pricing-cluster entries (the two contradiction
+ * entries, plus decoy-machine and decoy-mirror) are to one another —
+ * measured ~0.87 pairwise, comfortably above MIN_SIMILARITY (0.80) with
+ * headroom both above and below. Deliberately looser than the cluster
+ * default (0.92 pull, ~0.99 pairwise): decoy-recent (below) needs to land
+ * above the floor against ONE core member and below it against another, and
+ * there is no room to do that when the two core members are themselves
+ * cosine-indistinguishable — see task-9-report.md's second entry.
+ */
+const PRICING_PULL = 0.73;
 
 // Every field has a default so a fixture entry states only what it is testing.
 // The default content must clear MIN_INSIGHT_CONTENT_CHARS (80) from
@@ -117,19 +148,24 @@ const entry = (over: Partial<FixtureEntry> & { id: string }): FixtureEntry => ({
   ...over,
 });
 
+// Built once, by name, so decoy-recent (below) can be defined as a
+// near-duplicate of this specific vector rather than of the pricing cluster
+// in general.
+const PLANT_CONTRADICTION_NEW_VECTOR = clusterMember(CLUSTER_PRICING, "plant-contradiction-new", PRICING_PULL);
+
 export const PLANTED: FixtureEntry[] = [
   // contradiction — reversed decision, four months apart
   entry({
     id: "plant-contradiction-old",
     content: "Decision: price the first tier flat at $9 a month, because predictable billing is what small teams asked for.",
     createdAt: FIXTURE_NOW - 120 * DAY, tags: ["pricing"], importance: 4,
-    vector: clusterMember(CLUSTER_PRICING, "plant-contradiction-old"),
+    vector: clusterMember(CLUSTER_PRICING, "plant-contradiction-old", PRICING_PULL),
   }),
   entry({
     id: "plant-contradiction-new",
     content: "Decision: move the first tier to usage-based billing. Flat pricing was leaving money on the table for heavy accounts.",
     createdAt: FIXTURE_NOW, tags: ["pricing"], importance: 4,
-    vector: clusterMember(CLUSTER_PRICING, "plant-contradiction-new"),
+    vector: PLANT_CONTRADICTION_NEW_VECTOR,
   }),
   // connection — two topics never tagged together
   entry({
@@ -168,7 +204,7 @@ export const DECOYS: FixtureEntry[] = [
     // Deliberately still similarity-eligible (same pricing cluster) — the
     // point of this decoy is that the tag filter excludes it, not that it
     // was too dissimilar to reach the candidate stage in the first place.
-    vector: clusterMember(CLUSTER_PRICING, "decoy-machine"),
+    vector: clusterMember(CLUSTER_PRICING, "decoy-machine", PRICING_PULL),
   }),
   // integration-mirrored record
   entry({
@@ -176,18 +212,24 @@ export const DECOYS: FixtureEntry[] = [
     content: "PR merged: chore(deps): bump the npm_and_yarn group across 2 directories with 3 updates.",
     createdAt: FIXTURE_NOW - 70 * DAY, tags: ["repo"], source: "git-hook",
     // Same reasoning as decoy-machine: similarity-eligible, excluded by source.
-    vector: clusterMember(CLUSTER_PRICING, "decoy-mirror"),
+    vector: clusterMember(CLUSTER_PRICING, "decoy-mirror", PRICING_PULL),
   }),
   // near-duplicate written days apart, not months
   entry({
     id: "decoy-recent",
     content: "Decision: price the first tier flat at $9 a month for predictable billing on small teams.",
     createdAt: FIXTURE_NOW - 2 * DAY, tags: ["pricing"],
-    // Lower pull: measured cosine ~0.69 against both plant-contradiction
-    // entries, comfortably under MIN_SIMILARITY, so it is excluded from
-    // pairing with the old entry by similarity and from the new entry by
-    // the gap floor (2 days) — never by both at once, and never by neither.
-    vector: clusterMember(CLUSTER_PRICING, "decoy-recent", 0.5),
+    // Built as a near-duplicate of plant-contradiction-new specifically
+    // (weight 0.63), not of the pricing cluster in general — that is what
+    // makes it similarity-eligible against ONE entry and not the other, the
+    // asymmetry this decoy needs and clusterMember cannot express. Measured:
+    // cosine 0.8552 against plant-contradiction-new (above MIN_SIMILARITY —
+    // only the 2-day gap excludes that pairing) and 0.7473 against
+    // plant-contradiction-old (below MIN_SIMILARITY — that pairing is
+    // excluded by similarity; its 118-day gap alone would have cleared the
+    // floor). Both exclusions fire, each for its own reason, never for the
+    // other's. See task-9-report.md for the full pairwise matrix.
+    vector: similarTo(PLANT_CONTRADICTION_NEW_VECTOR, "decoy-recent", 0.63),
   }),
 ];
 
