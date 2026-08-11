@@ -26,7 +26,6 @@ export const CLASSIFY_MAX_TOKENS = 80;
 export const CONTRADICTION_MAX_TOKENS = 80;
 export const SMART_MERGE_MAX_TOKENS = 250;
 export const INSIGHT_MAX_TOKENS = 300;
-export const PATTERN_MAX_TOKENS = 100;
 export const DIGEST_MAX_TOKENS = 400;
 
 export const VECTORIZE_FIX_HINT =
