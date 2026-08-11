@@ -34,9 +34,9 @@ const tagMatchesLike = (tags: string[], tag: string) =>
 
 /** What src/db/init.ts's probe sees on a migrated brain — see the handler in all(). */
 const SCHEMA_PROBE_RESULTS = [
-  ...["entries", "edges"].map(name => ({ kind: "table", name })),
+  ...["entries", "edges", "insight_candidates"].map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_edges_source", "idx_edges_target",
-    "idx_edges_weight"].map(name => ({ kind: "index", name })),
+    "idx_edges_weight", "idx_insight_candidates_queue"].map(name => ({ kind: "index", name })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
     "staleness_checked_at"].map(name => ({ kind: "column", name })),

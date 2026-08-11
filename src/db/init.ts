@@ -80,6 +80,20 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // stating the direction keeps the index and its one caller obviously paired. Bonus: the
   // nightly prune's `weight < ?` becomes a range search, 200,000 rows read down to 60,000.
   idx_edges_weight: `CREATE INDEX IF NOT EXISTS idx_edges_weight ON edges(weight DESC)`,
+  // Candidate pairs for the weekly insight pass (see docs/superpowers/specs/
+  // 2026-08-10-insight-pass-design.md). Additive, like `edges` — old code
+  // ignores it and rollback is a no-op.
+  //
+  // UNIQUE(a_id, b_id) with ids normalised so a_id < b_id at the call site is
+  // what makes a pair enter once rather than twice in opposite orders. Together
+  // with the `rejected` status it is also the dedupe: a candidate the model has
+  // already declined is never re-proposed, and never paid for twice.
+  insight_candidates: `CREATE TABLE IF NOT EXISTS insight_candidates (id TEXT PRIMARY KEY, a_id TEXT NOT NULL, b_id TEXT NOT NULL, similarity REAL NOT NULL, gap_ms INTEGER NOT NULL, score REAL NOT NULL, signal TEXT NOT NULL DEFAULT 'vector', status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, UNIQUE(a_id, b_id))`,
+  // The weekly read is `WHERE status='pending' ORDER BY score DESC LIMIT n`.
+  // Without an ordered path to score SQLite builds a temp b-tree over the whole
+  // table before applying the LIMIT, the same shape idx_edges_weight exists to
+  // avoid on the graph read path.
+  idx_insight_candidates_queue: `CREATE INDEX IF NOT EXISTS idx_insight_candidates_queue ON insight_candidates(status, score DESC)`,
 };
 
 /**
