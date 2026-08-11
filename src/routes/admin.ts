@@ -12,6 +12,7 @@ import { getStatus, withStatus } from "../memory/status";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { reasonOverPair } from "../insight/reason";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -354,6 +355,54 @@ export async function handleAdminRoutes(
     ).first() as Record<string, any> | null;
 
     return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+  }
+
+  // GET /insights/dry-run — what the weekly pass would say, without saying it.
+  //
+  // Ships ahead of the weekly writer being enabled. The design was validated
+  // against a brain that is not representative, so the first question is
+  // whether the shortlist is any good on real data — and this answers it for
+  // the price of a few model calls and no writes at all. A declined candidate
+  // is reported with null shape/text rather than dropped, so a reader can see
+  // a high-scoring pair was considered and rejected, not just what survived.
+  if (url.pathname === "/insights/dry-run" && request.method === "GET") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    const limit = intParam(url, "limit", { fallback: 10, min: 1, max: 25 });
+    if (limit instanceof Response) return limit;
+
+    const { results } = await env.DB.prepare(
+      `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content
+       FROM insight_candidates c
+       JOIN entries a ON a.id = c.a_id
+       JOIN entries b ON b.id = c.b_id
+       WHERE c.status = 'pending'
+       ORDER BY c.score DESC
+       LIMIT ?`,
+    ).bind(limit).all() as { results: Record<string, any>[] };
+
+    const candidates = [];
+    for (const row of results) {
+      // cfg carries the user's LLM_MODEL choice, same as the real weekly pass
+      // (src/insight/weekly.ts) — without it this would preview reasoning from
+      // the shipped default model rather than the one that will actually run.
+      const insight = await reasonOverPair(
+        { content: row.a_content as string },
+        { content: row.b_content as string },
+        env,
+        cfg,
+      );
+      candidates.push({
+        a_id: row.a_id as string,
+        b_id: row.b_id as string,
+        score: row.score as number,
+        shape: insight?.shape ?? null,
+        text: insight?.text ?? null,
+      });
+    }
+
+    return json({ ok: true, candidates });
   }
 
   return null;
