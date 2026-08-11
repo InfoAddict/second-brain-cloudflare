@@ -29,8 +29,16 @@ describe("parseInsightResponse()", () => {
     expect(parseInsightResponse(`{"insight": false}`)).toBeNull();
   });
 
+  it("returns null on a refusal even when shape and text would otherwise pass", () => {
+    expect(parseInsightResponse(`{"insight": false, "shape": "connection", "text": "This text is long enough to clear the forty character floor easily."}`)).toBeNull();
+  });
+
   it("returns null on unparseable output", () => {
     expect(parseInsightResponse("I could not find anything.")).toBeNull();
+  });
+
+  it("returns null when a brace-delimited substring is not valid JSON", () => {
+    expect(parseInsightResponse("Here is my answer: {not json at all}")).toBeNull();
   });
 
   it("returns null on an invalid shape", () => {
@@ -55,6 +63,13 @@ describe("sharesVocabulary()", () => {
       "You often talk about this and that.",
       "Kubernetes autoscaling thresholds were raised for the ingest workers.",
     )).toBe(false);
+  });
+
+  it("is true when the source has no distinctive vocabulary to match against", () => {
+    expect(sharesVocabulary(
+      "Kubernetes autoscaling thresholds were raised for the ingest workers.",
+      "You often talk about this and that with them.",
+    )).toBe(true);
   });
 });
 

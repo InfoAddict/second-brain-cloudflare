@@ -16,7 +16,7 @@
  */
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
-import { INSIGHT_PASS_MAX_TOKENS, LLM_MODEL } from "../constants";
+import { INSIGHT_PASS_MAX_TOKENS } from "../constants";
 import { readStreamText } from "../lib/ai";
 
 export type InsightShape = "contradiction" | "throughline" | "connection";
