@@ -9,10 +9,20 @@
  * contradict or extend something from March.
  *
  * Nothing here re-embeds. Vectors were written at capture time; this reads them.
+ *
+ * Neighbour dates, tags, content and importance come from D1, not Vectorize
+ * metadata. Metadata is stamped when the vector is *written*, not when the
+ * entry was created — an append re-embeds with `Date.now()` (see
+ * src/capture/store.ts) — so an old memory that was touched recently would
+ * report a false-recent date under metadata and fail the gap floor, silently
+ * dropping exactly the long-lived entries most likely to have drifted.
+ * `entries.created_at` is never rewritten after capture, so it is the only
+ * value trusted for the gap, the eligibility check, and the importance term
+ * `scoreCandidate` uses.
  */
 import type { Env } from "../env";
 import { initializeDatabase } from "../db/init";
-import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import { VECTORIZE_GET_BY_IDS_BATCH, D1_MAX_BOUND_PARAMS } from "../constants";
 import { isInsightEligible } from "./eligibility";
 import { MIN_GAP_MS, MIN_SIMILARITY, normalisePair, scoreCandidate, type ScorableEntry } from "./score";
 
@@ -21,8 +31,12 @@ export const ACCRUAL_CURSOR_KEY = "insight:accrual-cursor";
 
 /**
  * Seeds per run. Each costs one Vectorize query, and the budget is 50
- * subrequests for the whole invocation: one KV read, one D1 select, two
- * getByIds batches, 25 queries, one batched insert, one KV write is ~31.
+ * subrequests for the whole invocation. Measured at a full 25-seed batch
+ * (steady-state, already-migrated schema): 1 schema probe + 1 seed select +
+ * 2 getByIds batches + 25 queries + 1 D1 hydration lookup + 1 batched insert
+ * + 1 supersedes select + 1 supersedes batched insert + 1 KV read + 1 KV
+ * write is ~34-37 depending on how many distinct neighbours need hydrating
+ * (chunked at D1_MAX_BOUND_PARAMS). See task-6-report.md for the measurement.
  */
 export const ACCRUAL_SEED_LIMIT = 25;
 
@@ -39,39 +53,108 @@ interface SeedRow {
   vector_ids: string;
 }
 
+/** A neighbour, hydrated live from D1 rather than trusted from vector metadata. */
+interface NeighbourRow {
+  id: string;
+  content: string;
+  tags: string;
+  source: string;
+  created_at: number;
+  importance_score: number | null;
+}
+
+/** The examined-so-far position. A keyset, not an offset — see `seedSql`. */
+interface AccrualCursor {
+  createdAt: number;
+  id: string;
+}
+
 const parseTags = (raw: string): string[] => {
   try { return JSON.parse(raw ?? "[]"); } catch { return []; }
 };
+
+/**
+ * A cursor written by an older shape, or hand-edited, or simply absent: all
+ * treated as "start from the top" rather than trusting a position that cannot
+ * be read. Restarting costs one more pass over already-seen rows; trusting a
+ * bad cursor could skip entries silently, which is worse. Mirrors
+ * `readMigration`'s tolerance in src/migration/embedding.ts.
+ */
+function parseCursor(raw: string | null): AccrualCursor | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.createdAt === "number" && typeof parsed?.id === "string") {
+      return { createdAt: parsed.createdAt, id: parsed.id };
+    }
+  } catch {
+    // fall through to null
+  }
+  return null;
+}
+
+async function writeCursor(env: Env, row: { created_at: number; id: string }): Promise<void> {
+  try {
+    const cursor: AccrualCursor = { createdAt: row.created_at, id: row.id };
+    await env.OAUTH_KV.put(ACCRUAL_CURSOR_KEY, JSON.stringify(cursor));
+  } catch (e) {
+    console.error("Insight accrual cursor write failed (non-fatal):", e);
+  }
+}
+
+/**
+ * Rows after the cursor, oldest first.
+ *
+ * Keyed on `(created_at, id)` rather than `created_at` alone: several entries
+ * can share a millisecond timestamp — bulk imports and rapid captures produce
+ * this routinely — and a single-column cursor that lands inside such a tie
+ * group drops the rest of it permanently, since none of the remaining rows'
+ * timestamps are ever greater than the cursor's. Matches
+ * `src/migration/embedding.ts`'s `pageSql`, including the tie-break column.
+ */
+function seedSql(hasCursor: boolean): string {
+  const where = hasCursor ? `WHERE created_at > ? OR (created_at = ? AND id > ?)` : "";
+  return `SELECT id, content, tags, source, created_at, importance_score, vector_ids
+            FROM entries
+            ${where}
+           ORDER BY created_at ASC, id ASC
+           LIMIT ${ACCRUAL_SEED_LIMIT}`;
+}
 
 export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promise<void> {
   try {
     await initializeDatabase(env);
 
-    let cursor = 0;
+    let cursor: AccrualCursor | null = null;
     try {
-      const raw = await env.OAUTH_KV.get(ACCRUAL_CURSOR_KEY);
-      cursor = raw ? parseInt(raw, 10) || 0 : 0;
+      cursor = parseCursor(await env.OAUTH_KV.get(ACCRUAL_CURSOR_KEY));
     } catch (e) {
       console.error("Insight accrual cursor read failed; starting from the top (non-fatal):", e);
     }
 
-    // Entries written since the last run, oldest first so the cursor advances
-    // monotonically. When there are none the same query walks forward from the
-    // cursor anyway, which is the backfill: on a quiet night it picks up
-    // historical entries instead of doing nothing.
-    const { results } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at, importance_score, vector_ids
-       FROM entries
-       WHERE created_at > ?
-       ORDER BY created_at ASC
-       LIMIT ${ACCRUAL_SEED_LIMIT}`,
-    ).bind(cursor).all() as { results: SeedRow[] };
+    // When there is no cursor yet, the same query walks forward from the
+    // start, which is the backfill: on a quiet night it picks up historical
+    // entries instead of doing nothing.
+    const { results } = (
+      cursor
+        ? await env.DB.prepare(seedSql(true)).bind(cursor.createdAt, cursor.createdAt, cursor.id).all()
+        : await env.DB.prepare(seedSql(false)).all()
+    ) as { results: SeedRow[] };
 
     const seeds = results.filter(r =>
       isInsightEligible({ content: r.content, tags: parseTags(r.tags), source: r.source })
       && parseTags(r.vector_ids).length > 0
     );
-    if (!seeds.length) return;
+
+    if (!seeds.length) {
+      // Every row in the window was examined and correctly rejected — none of
+      // them qualified as a seed (too short, machine-tagged, no vector yet).
+      // Unlike the vectorById case below, these rows WERE looked at, so
+      // holding the cursor buys nothing: it would just re-read the same
+      // rejected window every night, wedging accrual permanently.
+      if (results.length) await writeCursor(env, results[results.length - 1]);
+      return;
+    }
 
     const vectorById = new Map<string, number[]>();
     const headIdOf = new Map<string, string>();
@@ -95,9 +178,15 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
     // is precisely what the cursor exists to prevent. Leave it and retry.
     if (!vectorById.size) return;
 
-    const rows: {
-      id: string; a: string; b: string; similarity: number; gap: number; score: number;
-    }[] = [];
+    // Candidate neighbours, gathered across every seed before any of them is
+    // trusted. Only two things are decided from the Vectorize match itself:
+    // the parent id (identity, not subject to the metadata-staleness problem)
+    // and the similarity score (Vectorize's own cosine distance, not derived
+    // from anything written at a different time). Everything else about the
+    // neighbour — is it the seed's own chunk aside, that's covered by parentId
+    // — is decided after hydrating the real row from D1 below.
+    const pending: { seed: SeedRow; parentId: string; similarity: number }[] = [];
+    const neighbourIds = new Set<string>();
 
     for (const seed of seeds) {
       const head = headIdOf.get(seed.id);
@@ -109,42 +198,83 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
         returnMetadata: "all",
       });
 
+      for (const match of matches) {
+        const meta = (match.metadata ?? {}) as Record<string, any>;
+        const parentId = (meta.parentId ?? match.id) as string;
+        // Another chunk of the same entry is not a second memory. Decided
+        // before paying for a D1 lookup that would only ever rehydrate the
+        // seed's own row anyway (same id, same created_at — a self-match's
+        // gap is always zero once hydrated, so this also just avoids the cost
+        // of finding that out the slow way).
+        if (parentId === seed.id) continue;
+        if (match.score < MIN_SIMILARITY) continue;
+
+        pending.push({ seed, parentId, similarity: match.score });
+        neighbourIds.add(parentId);
+      }
+    }
+
+    // One hydration lookup (chunked at D1_MAX_BOUND_PARAMS — 25 seeds x topK 10
+    // can exceed 100 distinct ids, D1's bound-parameter ceiling) instead of one
+    // per candidate. A neighbour missing here — deleted, or a race with a
+    // delete — has nothing authoritative to check it against, so it is
+    // skipped rather than falling back to the metadata this step exists to
+    // not trust.
+    const neighbourById = new Map<string, NeighbourRow>();
+    const neighbourIdList = [...neighbourIds];
+    for (let i = 0; i < neighbourIdList.length; i += D1_MAX_BOUND_PARAMS) {
+      const batch = neighbourIdList.slice(i, i + D1_MAX_BOUND_PARAMS);
+      const placeholders = batch.map(() => "?").join(", ");
+      const { results: hydrated } = await env.DB.prepare(
+        `SELECT id, content, tags, source, created_at, importance_score
+           FROM entries
+          WHERE id IN (${placeholders})`,
+      ).bind(...batch).all() as { results: NeighbourRow[] };
+      for (const row of hydrated) neighbourById.set(row.id, row);
+    }
+
+    const rows: {
+      id: string; a: string; b: string; similarity: number; gap: number; score: number;
+    }[] = [];
+
+    for (const { seed, parentId, similarity } of pending) {
+      const neighbour = neighbourById.get(parentId);
+      if (!neighbour) continue;
+
+      const gap = Math.abs(seed.created_at - neighbour.created_at);
+      if (gap < MIN_GAP_MS) continue;
+
+      const neighbourTags = parseTags(neighbour.tags);
+      const eligible = isInsightEligible({
+        content: neighbour.content,
+        tags: neighbourTags,
+        source: neighbour.source,
+      });
+      if (!eligible) continue;
+
       const seedScorable: ScorableEntry = {
         id: seed.id,
         tags: parseTags(seed.tags),
         importance: seed.importance_score ?? 0,
         createdAt: seed.created_at,
       };
-
-      for (const match of matches) {
-        const meta = (match.metadata ?? {}) as Record<string, any>;
-        const parentId = (meta.parentId ?? match.id) as string;
-        // Another chunk of the same entry is not a second memory.
-        if (parentId === seed.id) continue;
-        if (match.score < MIN_SIMILARITY) continue;
-
-        const createdAt = Number(meta.created_at ?? 0);
-        const gap = Math.abs(seed.created_at - createdAt);
-        if (gap < MIN_GAP_MS) continue;
-
-        const tags: string[] = Array.isArray(meta.tags) ? meta.tags : [];
-        const eligible = isInsightEligible({
-          content: String(meta.content ?? ""),
-          tags,
-          source: String(meta.source ?? ""),
-        });
-        if (!eligible) continue;
-
-        const other: ScorableEntry = { id: parentId, tags, importance: 0, createdAt };
-        const [a, b] = normalisePair(seed.id, parentId);
-        rows.push({
-          id: crypto.randomUUID(),
-          a, b,
-          similarity: match.score,
-          gap,
-          score: scoreCandidate(seedScorable, other, match.score),
-        });
-      }
+      // The neighbour's real importance, not zero: `scoreCandidate`'s boost
+      // uses max(a.importance, b.importance), so a high-importance neighbour
+      // that never boosts anything would defeat the whole point of that term.
+      const other: ScorableEntry = {
+        id: neighbour.id,
+        tags: neighbourTags,
+        importance: neighbour.importance_score ?? 0,
+        createdAt: neighbour.created_at,
+      };
+      const [a, b] = normalisePair(seed.id, neighbour.id);
+      rows.push({
+        id: crypto.randomUUID(),
+        a, b,
+        similarity,
+        gap,
+        score: scoreCandidate(seedScorable, other, similarity),
+      });
     }
 
     if (rows.length) {
@@ -198,11 +328,7 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
     // Advanced only after the work landed. A failure above leaves the cursor
     // where it was, so tomorrow re-examines this slice rather than skipping it —
     // and the UNIQUE constraint makes the repeat a no-op.
-    try {
-      await env.OAUTH_KV.put(ACCRUAL_CURSOR_KEY, String(seeds[seeds.length - 1].created_at));
-    } catch (e) {
-      console.error("Insight accrual cursor write failed (non-fatal):", e);
-    }
+    await writeCursor(env, seeds[seeds.length - 1]);
   } catch (e) {
     console.error("Insight accrual failed (non-fatal):", e);
   }
