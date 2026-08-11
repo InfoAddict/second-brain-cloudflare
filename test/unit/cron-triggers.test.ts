@@ -65,4 +65,23 @@ describe("cron triggers", () => {
     const minutes = configuredCrons().map(c => c.trim().split(/\s+/)[0]);
     expect(new Set(minutes).size).toBe(minutes.length);
   });
+
+  // wrangler.jsonc and schedule.ts agreeing with each other proves nothing
+  // about whether Cloudflare's trigger API will accept the string: two files
+  // can agree on a value it rejects. Confirmed empirically against the live
+  // API — `wrangler triggers deploy` with "15 2 * * 0" failed registration
+  // with `code 10100: invalid cron string: 15 2 * * 0`; Cloudflare does not
+  // accept numeric 0 for Sunday in the day-of-week field, only "SUN". Worker
+  // code deploys succeed regardless, so a bad cron string only surfaces if
+  // someone reads the deploy output closely — this test exists so a future
+  // schedule with the same mistake (e.g. "* * * * 0") fails the suite instead.
+  it("gives every configured schedule a Cloudflare-acceptable shape", () => {
+    for (const cron of configuredCrons()) {
+      const fields = cron.trim().split(/\s+/);
+      expect(fields, `"${cron}" must have exactly 5 whitespace-separated fields`).toHaveLength(5);
+      const [, , , , dayOfWeek] = fields;
+      expect(dayOfWeek, `"${cron}" uses numeric 0 for Sunday, which Cloudflare rejects (code 10100) — use "SUN" instead`)
+        .not.toBe("0");
+    }
+  });
 });

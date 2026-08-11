@@ -15,5 +15,14 @@
 /** Nightly. Offset from maintenance at :00 so the two never share a minute. */
 export const INSIGHT_ACCRUAL_CRON = "45 1 * * *";
 
-/** Sundays, after the night's accrual has landed. */
-export const INSIGHT_WEEKLY_CRON = "15 2 * * 0";
+/**
+ * Sundays, after the night's accrual has landed.
+ *
+ * Day-of-week is spelled "SUN", not "0": Cloudflare's trigger API rejects the
+ * numeric form. `wrangler triggers deploy` with "15 2 * * 0" fails registration
+ * with `code 10100: invalid cron string: 15 2 * * 0`, confirmed empirically
+ * against the live API — Worker code deploys still succeed, so this fails
+ * silently unless the deploy output is read closely. Do not "tidy" this back
+ * to 0.
+ */
+export const INSIGHT_WEEKLY_CRON = "15 2 * * SUN";
