@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { INTEGRATION_SYNC_CRON } from "../../src/integrations/mirror";
+import { INSIGHT_ACCRUAL_CRON, INSIGHT_WEEKLY_CRON } from "../../src/insight/schedule";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -52,5 +53,16 @@ describe("cron triggers", () => {
       expect(minuteOf(cron), `${cron} shares a minute with ${INTEGRATION_SYNC_CRON}`)
         .not.toBe(integrationMinute);
     }
+  });
+
+  it("configures both insight schedules the worker routes on", () => {
+    const crons = configuredCrons();
+    expect(crons).toContain(INSIGHT_ACCRUAL_CRON);
+    expect(crons).toContain(INSIGHT_WEEKLY_CRON);
+  });
+
+  it("gives every configured schedule a distinct minute", () => {
+    const minutes = configuredCrons().map(c => c.trim().split(/\s+/)[0]);
+    expect(new Set(minutes).size).toBe(minutes.length);
   });
 });

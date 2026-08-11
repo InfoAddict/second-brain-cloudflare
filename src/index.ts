@@ -9,6 +9,9 @@ import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integrations/mirror";
 import { runStalenessPass } from "./staleness/pass";
+import { runInsightAccrual } from "./insight/candidates";
+import { runWeeklyInsights } from "./insight/weekly";
+import { INSIGHT_ACCRUAL_CRON, INSIGHT_WEEKLY_CRON } from "./insight/schedule";
 import { apiHandler } from "./mcp/handler";
 import { augmentOAuthRegistrationRequest } from "./oauth/register";
 import { defaultHandler } from "./routes";
@@ -55,6 +58,19 @@ export default {
     // buying it.
     if (event.cron === INTEGRATION_SYNC_CRON) {
       job("integration sync", runScheduledIntegrationSync(env));
+      return;
+    }
+
+    // Both insight schedules get their own invocation, and therefore their own
+    // D1 and CPU budget. They must be routed explicitly: the fallthrough below
+    // is maintenance, so without these each new trigger would run compression,
+    // the graph pass and staleness a second and third time every day.
+    if (event.cron === INSIGHT_ACCRUAL_CRON) {
+      job("insight accrual", runInsightAccrual(env, ctx));
+      return;
+    }
+    if (event.cron === INSIGHT_WEEKLY_CRON) {
+      job("weekly insights", runWeeklyInsights(env, ctx));
       return;
     }
 

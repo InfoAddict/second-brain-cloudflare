@@ -51,7 +51,14 @@
 			// runScheduledIntegrationSync) — a nightly rotation would leave a user
 			// with several connections waiting days between syncs. Offset to :30 so
 			// it never fires in the same minute as the nightly job.
-			"30 * * * *"
+			"30 * * * *",
+			// Insight candidate accrual. Its own schedule because it is its own
+			// budget: maintenance already spends ~30 of an invocation's 50 D1
+			// subrequests and this needs ~31. INSIGHT_ACCRUAL_CRON in
+			// src/insight/schedule.ts must match exactly.
+			"45 1 * * *",
+			// Weekly insight reasoning. INSIGHT_WEEKLY_CRON must match exactly.
+			"15 2 * * 0"
 		]
 	}
 }
