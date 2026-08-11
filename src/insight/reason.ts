@@ -26,6 +26,30 @@ export interface ReasonedInsight {
   text: string;
 }
 
+/**
+ * What came of reasoning over one pair. Three outcomes, not two, and they must
+ * stay distinguishable all the way to the caller:
+ *
+ *   - "insight"  — a real insight, ready to write.
+ *   - "declined" — the model gave an answer and it was not an insight: an
+ *     explicit `{"insight": false}`, malformed output, an invalid shape, text
+ *     too short, or a failure of the vocabulary floor. Re-asking the same
+ *     model the same question about the same pair is not expected to change
+ *     the answer, so this is a settled no.
+ *   - "failed"   — the call itself never produced an answer to judge (network
+ *     error, timeout, non-2xx). Nothing was decided, so the pair must stay
+ *     eligible to be asked again.
+ *
+ * Collapsing "declined" and "failed" into one null was the bug this type
+ * exists to prevent: a transient model outage would have looked exactly like
+ * a considered refusal, and every candidate caught in it would have been
+ * marked rejected forever. See src/insight/weekly.ts.
+ */
+export type ReasonOutcome =
+  | { outcome: "insight"; shape: InsightShape; text: string }
+  | { outcome: "declined" }
+  | { outcome: "failed" };
+
 const SHAPES: ReadonlySet<string> = new Set(["contradiction", "throughline", "connection"]);
 
 /** Below this the model has not said anything a person could act on. */
@@ -90,7 +114,7 @@ export async function reasonOverPair(
   b: { content: string },
   env: Env,
   config: Readonly<Config> = DEFAULTS,
-): Promise<ReasonedInsight | null> {
+): Promise<ReasonOutcome> {
   const first = a.content.slice(0, ENTRY_EXCERPT_CHARS);
   const second = b.content.slice(0, ENTRY_EXCERPT_CHARS);
 
@@ -123,17 +147,20 @@ Respond with JSON only. No text outside the JSON object.
     });
     raw = await readStreamText(stream as ReadableStream);
   } catch (e) {
+    // The call never produced an answer to judge — nothing was decided, so the
+    // pair must stay eligible to be asked again rather than being marked as a
+    // considered refusal.
     console.error("Insight reasoning call failed (non-fatal):", e);
-    return null;
+    return { outcome: "failed" };
   }
 
   const parsed = parseInsightResponse(raw);
-  if (!parsed) return null;
+  if (!parsed) return { outcome: "declined" };
 
   // The mechanical floor. A real insight names something from each side; a
   // centroid names only what they share.
-  if (!sharesVocabulary(parsed.text, first)) return null;
-  if (!sharesVocabulary(parsed.text, second)) return null;
+  if (!sharesVocabulary(parsed.text, first)) return { outcome: "declined" };
+  if (!sharesVocabulary(parsed.text, second)) return { outcome: "declined" };
 
-  return parsed;
+  return { outcome: "insight", shape: parsed.shape, text: parsed.text };
 }

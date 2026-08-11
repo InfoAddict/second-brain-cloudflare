@@ -379,6 +379,8 @@ export async function handleAdminRoutes(
        JOIN entries a ON a.id = c.a_id
        JOIN entries b ON b.id = c.b_id
        WHERE c.status = 'pending'
+         AND a.tags NOT LIKE '%"status:deprecated"%'
+         AND b.tags NOT LIKE '%"status:deprecated"%'
        ORDER BY c.score DESC
        LIMIT ?`,
     ).bind(limit).all() as { results: Record<string, any>[] };
@@ -387,30 +389,40 @@ export async function handleAdminRoutes(
     // Reasons over every row the query returned, deliberately past the three
     // production would ever write (src/insight/weekly.ts's own
     // MAX_INSIGHTS_PER_RUN cap) — seeing candidates four and beyond is how the
-    // ranking itself gets judged. `would_write` is what keeps that honest: it
-    // marks only the first three ACCEPTED candidates in score order, because
-    // that's what the real pass's `written` counter tracks — a decline costs a
-    // model call but never consumes a cap slot, so it must not shift who
-    // counts as the fourth accepted candidate.
+    // ranking itself gets judged. `would_write` marks the first three ACCEPTED
+    // candidates in score order (an "insight" outcome, capped at
+    // MAX_INSIGHTS_PER_RUN) — which is close to but not exactly what
+    // production's `written` counter tracks: that increments only when
+    // captureEntry returns `status: "stored"`, so an accepted insight that
+    // turns out to duplicate an earlier entry consumes no slot there but is
+    // still counted here. A dry run cannot resolve that without calling
+    // captureEntry, which would make it a write rather than a preview — this
+    // is the one place that gap between preview and production is recorded.
     let written = 0;
     for (const row of results) {
       // cfg carries the user's LLM_MODEL choice, same as the real weekly pass
       // (src/insight/weekly.ts) — without it this would preview reasoning from
       // the shipped default model rather than the one that will actually run.
-      const insight = await reasonOverPair(
+      const result = await reasonOverPair(
         { content: row.a_content as string },
         { content: row.b_content as string },
         env,
         cfg,
       );
-      const would_write = insight !== null && written < MAX_INSIGHTS_PER_RUN;
-      if (insight) written++;
+      const would_write = result.outcome === "insight" && written < MAX_INSIGHTS_PER_RUN;
+      if (result.outcome === "insight") written++;
       candidates.push({
         a_id: row.a_id as string,
         b_id: row.b_id as string,
         score: row.score as number,
-        shape: insight?.shape ?? null,
-        text: insight?.text ?? null,
+        // "declined" and "failed" are both reported, distinctly, rather than
+        // collapsed to null: a human reading the shortlist can tell "the model
+        // looked and said no" apart from "the call itself never answered",
+        // which matters for judging whether the ranking or the model call is
+        // the thing worth investigating.
+        outcome: result.outcome,
+        shape: result.outcome === "insight" ? result.shape : null,
+        text: result.outcome === "insight" ? result.text : null,
         would_write,
       });
     }

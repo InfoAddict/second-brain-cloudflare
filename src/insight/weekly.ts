@@ -37,12 +37,22 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     // One statement rather than a select-then-hydrate: the join is what keeps
     // this inside the subrequest budget, and a candidate whose entries have
     // since been forgotten drops out of the result rather than needing a guard.
+    //
+    // The deprecation check is the same reasoning applied to a candidate whose
+    // entries still exist but should no longer be reasoned over: accrual is
+    // nightly and this is weekly, so up to seven days can pass between a pair
+    // being accrued and being read here, and a `supersedes` edge deprecates its
+    // target the moment it is created (src/capture/entry.ts). Filtering both
+    // sides here catches that drift regardless of which signal accrued the
+    // candidate or how eligibility was — or was not — checked at accrual time.
     const { results } = await env.DB.prepare(
       `SELECT c.id, c.a_id, c.b_id, a.content AS a_content, b.content AS b_content
        FROM insight_candidates c
        JOIN entries a ON a.id = c.a_id
        JOIN entries b ON b.id = c.b_id
        WHERE c.status = 'pending'
+         AND a.tags NOT LIKE '%"status:deprecated"%'
+         AND b.tags NOT LIKE '%"status:deprecated"%'
        ORDER BY c.score DESC
        LIMIT ?`,
     ).bind(WEEKLY_CANDIDATE_LIMIT).all() as { results: CandidateRow[] };
@@ -54,31 +64,35 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     for (const candidate of results) {
       if (written >= MAX_INSIGHTS_PER_RUN) break;
 
-      const insight = await reasonOverPair(
+      const result = await reasonOverPair(
         { content: candidate.a_content },
         { content: candidate.b_content },
         env,
         cfg,
       );
 
-      // A refusal is settled; a thrown call is not. reasonOverPair returns null
-      // for both, so the distinction is drawn here by leaving anything that did
-      // not produce an insight in `pending` only when the call itself failed.
-      // In practice both land in `rejected`: re-asking a model that declined
-      // costs tokens for an answer already given, and a transient failure is
-      // recovered by the next accrual finding the pair again.
-      if (!insight) {
+      // A refusal is settled; a thrown call is not. reasonOverPair now says
+      // which one happened instead of returning null for both. A "declined"
+      // candidate is marked `rejected` below — re-asking a model that has
+      // already answered costs tokens for a response already given. A "failed"
+      // candidate is left untouched in `pending`: nothing was decided, and
+      // re-accrual cannot resurrect a `rejected` row (`ON CONFLICT DO NOTHING`
+      // leaves its status alone), so the only way a transient failure gets a
+      // second chance is by never having been marked settled in the first
+      // place.
+      if (result.outcome === "failed") continue;
+      if (result.outcome === "declined") {
         rejected.push(candidate.id);
         continue;
       }
 
-      const content = `${insight.text}\n\n[Insight: ${insight.shape} — drawn from 2 memories]`;
-      const result = await captureEntry(content, ["auto-insight"], "system", env, ctx, cfg);
+      const content = `${result.text}\n\n[Insight: ${result.shape} — drawn from 2 memories]`;
+      const captured = await captureEntry(content, ["auto-insight"], "system", env, ctx, cfg);
 
       // A non-stored result means the insight duplicated an earlier one. Mark it
       // used anyway, or the pass re-proposes and re-pays for this pair forever.
       used.push(candidate.id);
-      if (result.status === "stored") written++;
+      if (captured.status === "stored") written++;
     }
 
     const statements = [

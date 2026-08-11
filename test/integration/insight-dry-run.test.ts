@@ -151,10 +151,44 @@ describe("GET /insights/dry-run", () => {
 
     const body = await (await call(env, "/insights/dry-run"))!.json() as any;
 
+    expect(body.candidates[0].outcome).toBe("declined");
     expect(body.candidates[0].shape).toBeNull();
     expect(body.candidates[0].text).toBeNull();
     // A decline can never count toward the write cap.
     expect(body.candidates[0].would_write).toBe(false);
+  });
+
+  it("reports a failed model call distinctly from a declined one", async () => {
+    // Both used to collapse to the same null; a human reading the shortlist
+    // could not tell "the model looked and said no" apart from "the call
+    // itself never answered." They must stay distinguishable here even though
+    // neither ever writes anything.
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any,
+      AI: { run: vi.fn().mockRejectedValue(new Error("AI down")) } as unknown as Ai,
+      OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+    });
+
+    const body = await (await call(env, "/insights/dry-run"))!.json() as any;
+
+    expect(body.candidates[0].outcome).toBe("failed");
+    expect(body.candidates[0].shape).toBeNull();
+    expect(body.candidates[0].text).toBeNull();
+    expect(body.candidates[0].would_write).toBe(false);
+  });
+
+  it("excludes a candidate whose entry was deprecated after it was accrued", async () => {
+    await sqlite.db.prepare(
+      `UPDATE entries SET tags = '["pricing","status:deprecated"]' WHERE id = 'b-1'`,
+    ).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD),
+      OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+    });
+
+    const body = await (await call(env, "/insights/dry-run"))!.json() as any;
+
+    expect(body.candidates).toEqual([]);
   });
 
   it("reasons with the configured LLM_MODEL, not the shipped default", async () => {

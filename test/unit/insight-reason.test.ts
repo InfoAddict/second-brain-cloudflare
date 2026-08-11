@@ -82,20 +82,35 @@ describe("reasonOverPair()", () => {
       AI: makeAI(`{"insight": true, "shape": "contradiction", "text": "You chose flat pricing for the first tier, then switched to usage-based pricing."}`),
     });
     const out = await reasonOverPair(a, b, env);
-    expect(out?.shape).toBe("contradiction");
+    expect(out).toEqual({
+      outcome: "insight",
+      shape: "contradiction",
+      text: "You chose flat pricing for the first tier, then switched to usage-based pricing.",
+    });
   });
 
-  it("rejects a generic statement that echoes neither entry specifically", async () => {
+  it("declines a generic statement that echoes neither entry specifically", async () => {
     const env = makeTestEnv(makeTestDb(), {
       AI: makeAI(`{"insight": true, "shape": "throughline", "text": "You often talk about building a second brain and thinking about things."}`),
     });
-    expect(await reasonOverPair(a, b, env)).toBeNull();
+    expect(await reasonOverPair(a, b, env)).toEqual({ outcome: "declined" });
   });
 
-  it("returns null rather than throwing when the model call fails", async () => {
+  it("declines an explicit refusal", async () => {
+    const env = makeTestEnv(makeTestDb(), {
+      AI: makeAI(`{"insight": false}`),
+    });
+    expect(await reasonOverPair(a, b, env)).toEqual({ outcome: "declined" });
+  });
+
+  it("reports failed, not declined, when the model call itself throws", async () => {
+    // The distinction is load-bearing: src/insight/weekly.ts marks a "declined"
+    // candidate rejected permanently and leaves a "failed" one pending to
+    // retry. Collapsing this into one outcome (as a bare null once did) made a
+    // transient model outage indistinguishable from a considered refusal.
     const env = makeTestEnv(makeTestDb(), {
       AI: { run: vi.fn().mockRejectedValue(new Error("AI down")) } as unknown as Ai,
     });
-    await expect(reasonOverPair(a, b, env)).resolves.toBeNull();
+    await expect(reasonOverPair(a, b, env)).resolves.toEqual({ outcome: "failed" });
   });
 });
