@@ -366,4 +366,60 @@ describe("runInsightAccrual()", () => {
 
     expect(await candidateCount(sqlite)).toBe(0);
   });
+
+  it("does not let a flood of dead system supersedes edges starve out a live explicit one", async () => {
+    // The filter for a deprecated target used to run only in JS, after
+    // `ORDER BY e.created_at DESC LIMIT 10` had already picked the ten rows
+    // it would ever see. A system-provenance supersedes edge always
+    // deprecates its target the instant it is created (src/capture/entry.ts
+    // calls deprecateEntry(conflictId) immediately before createEdge(...,
+    // "supersedes", { provenance: "system" })), so every one of those rows
+    // was always going to fail isInsightEligible. System edges outnumber
+    // explicit ones roughly 3:1 in a real brain and are usually the newest,
+    // so more than ten of them — all newer than the one explicit edge below
+    // — fill the window with rows that can never qualify, and the explicit
+    // pair is never examined. There is no cursor on this query, so that is
+    // not unlucky timing: it starves the same way on every later run too.
+    const explicitContent =
+      "Decision: keep the explicit supersedes edge readable and long enough to clear the content floor, in full.";
+    sqlite.seed({ id: "explicit-a", createdAt: NOW - 120 * DAY, tags: ["pricing"], content: explicitContent });
+    sqlite.seed({ id: "explicit-b", createdAt: NOW - 200 * DAY, tags: ["pricing"], content: explicitContent });
+    sqlite.db.prepare(
+      `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+       VALUES ('edge-explicit', 'explicit-a', 'explicit-b', 'supersedes', 1.0, 'explicit', '{}', ?, ?)`,
+    ).bind(NOW, NOW).run();
+
+    // One shared live source, 12 distinct deprecated targets, 12 system
+    // edges — more than the LIMIT 10 the query applies. All 12 edges are
+    // newer than the explicit edge above, so an unfiltered top-10-by-recency
+    // window is filled entirely by these before the explicit edge is ever
+    // reached. (The source is shared, not distinct per edge, purely to keep
+    // this test's row count under ACCRUAL_SEED_LIMIT — ACCRUAL_SEED_LIMIT
+    // governs a separate, unrelated selection over `entries` earlier in the
+    // same run, and this test does not want to also be exercising that.)
+    sqlite.seed({
+      id: "sys-src", createdAt: NOW - 60 * DAY, tags: ["pricing"],
+      content: "A perfectly ordinary system-edge source entry, long enough to clear the content floor easily.",
+    });
+    for (let i = 0; i < 12; i++) {
+      const tgt = `sys-tgt-${i}`;
+      sqlite.seed({
+        id: tgt, createdAt: NOW - 150 * DAY, tags: ["pricing", "status:deprecated"],
+        content: `A perfectly ordinary system-edge target entry, number ${i}, long enough to clear the content floor easily.`,
+      });
+      sqlite.db.prepare(
+        `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+         VALUES (?, 'sys-src', ?, 'supersedes', 1.0, 'system', '{}', ?, ?)`,
+      ).bind(`edge-sys-${i}`, tgt, NOW + i * 1000, NOW + i * 1000).run();
+    }
+
+    await runInsightAccrual(makeEnv(sqlite, []), ctx);
+
+    expect(await candidateCount(sqlite)).toBe(1);
+    const row = await sqlite.db.prepare(
+      `SELECT a_id, b_id, signal FROM insight_candidates`,
+    ).first() as { a_id: string; b_id: string; signal: string };
+    expect(row.signal).toBe("supersedes");
+    expect([row.a_id, row.b_id].sort()).toEqual(["explicit-a", "explicit-b"]);
+  });
 });

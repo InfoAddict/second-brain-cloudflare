@@ -303,6 +303,8 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
          JOIN entries b ON b.id = e.target_id
          WHERE e.type = 'supersedes'
            AND ABS(a.created_at - b.created_at) >= ?
+           AND a.tags NOT LIKE '%"status:deprecated"%'
+           AND b.tags NOT LIKE '%"status:deprecated"%'
          ORDER BY e.created_at DESC
          LIMIT 10`,
       ).bind(MIN_GAP_MS).all() as {
@@ -313,12 +315,31 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
         }[];
       };
 
-      // The gap floor alone is not eligibility. A system-provenance supersedes
-      // edge always deprecates its target (src/capture/entry.ts), so without
-      // this filter essentially every supersedes candidate pairs a live entry
-      // with a deprecated one — the same isInsightEligible check the vector
-      // path already runs on both sides after hydrating from D1, applied here
-      // to the rows this query already hydrated.
+      // The deprecation half of eligibility is filtered here, in SQL, rather
+      // than left to the JS pass below — because LIMIT 10 runs before that
+      // pass ever sees a row. A system-provenance supersedes edge always
+      // deprecates its target the instant it is created (src/capture/entry.ts
+      // calls deprecateEntry(conflictId) immediately before createEdge(...,
+      // "supersedes", { provenance: "system" })), and system edges outnumber
+      // explicit ones roughly 3:1 and are usually the newest. Unfiltered, an
+      // `ORDER BY e.created_at DESC LIMIT 10` window fills entirely with rows
+      // that isInsightEligible was always going to reject, and the rare
+      // user-authored supersedes edge between two still-live entries gets
+      // crowded out before it is ever examined. This query has no cursor, so
+      // that crowding-out is permanent — the same dead rows win the window
+      // again on every later run, not just this one.
+      //
+      // This does NOT resurrect system-provenance candidates: the deprecated
+      // side's vectors are already deleted and that signal is genuinely
+      // unusable, so those rows are excluded exactly as before. All this
+      // buys is that they no longer consume every slot in the window, so a
+      // pair that could actually qualify has a chance to be one of the ten
+      // rows examined.
+      //
+      // isInsightEligible still has to run below: it also checks machine
+      // tags, integration sources and the content floor, none of which this
+      // predicate touches. SQL narrows the window to rows that CAN pass;
+      // JS remains the authority on whether they DO.
       const eligible = superseded.filter(row =>
         isInsightEligible({ content: row.a_content, tags: parseTags(row.a_tags), source: row.a_source })
         && isInsightEligible({ content: row.b_content, tags: parseTags(row.b_tags), source: row.b_source }),
