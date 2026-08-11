@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { json, requireAuth } from "../lib/http";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
-import { PENDING_PATTERN_SQL } from "../memory/patterns";
+import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 
 /**
  * GET /brief — what the brain did while you were away.
@@ -42,6 +42,7 @@ const RESURFACE_MIN_IMPORTANCE = 3;
 const RESURFACE_FILTER = `created_at < ? AND importance_score >= ?
          AND tags NOT LIKE '%"status:deprecated"%'
          AND tags NOT LIKE '%"auto-pattern"%'
+         AND tags NOT LIKE '%"insight"%'
          AND tags NOT LIKE '%"synthesized"%'`;
 
 export async function handleBriefRoutes(
@@ -66,12 +67,12 @@ export async function handleBriefRoutes(
        WHERE created_at >= ? GROUP BY source ORDER BY n DESC`,
     ).bind(since).all(),
 
-    // Patterns the nightly pass proposed and nobody has ruled on. These are
+    // Insights the weekly pass proposed and nobody has ruled on. These are
     // excluded from recall until confirmed, so leaving them unseen in a menu
     // is the same as throwing them away.
     env.DB.prepare(
       `SELECT id, content FROM entries
-       WHERE ${PENDING_PATTERN_SQL}
+       WHERE ${PENDING_INSIGHT_SQL}
        ORDER BY created_at DESC LIMIT 3`,
     ).all(),
 
@@ -118,7 +119,7 @@ export async function handleBriefRoutes(
        WHERE entries.created_at >= ?
          AND value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
          AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
-         AND value NOT IN ('auto-pattern', 'synthesized', 'rolled-up', 'duplicate-candidate')
+         AND value NOT IN ('auto-pattern', 'insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
          AND value NOT GLOB '[0-9]*'
        GROUP BY value ORDER BY n DESC LIMIT 6`,
     ).bind(now - TOPIC_WINDOW_MS).all(),

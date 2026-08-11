@@ -42,7 +42,7 @@ const RESERVED_TAG_PREFIXES = [STATUS_PREFIX, KIND_PREFIX, VOLATILITY_PREFIX];
 const RESERVED_TAGS = [STALE_AS_OF];
 
 /** Bookkeeping tags that mark an entry's role in compression rather than its subject. */
-const NON_TOPIC_TAGS = ["synthesized", "auto-pattern", "duplicate-candidate", "contradiction-resolved", "rolled-up"];
+const NON_TOPIC_TAGS = ["synthesized", "auto-pattern", "insight", "duplicate-candidate", "contradiction-resolved", "rolled-up"];
 
 export function isReservedTag(tag: string): boolean {
   const t = tag.toLowerCase();

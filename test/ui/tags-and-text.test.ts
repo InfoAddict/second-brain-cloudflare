@@ -39,7 +39,7 @@ describe("isSystemTag / humanTags", () => {
   });
 
   it("hides pipeline markers", () => {
-    for (const t of ["auto-pattern", "synthesized", "rolled-up", "duplicate-candidate"]) {
+    for (const t of ["auto-pattern", "insight", "synthesized", "rolled-up", "duplicate-candidate"]) {
       expect(isSystemTag(t), t).toBe(true);
     }
   });

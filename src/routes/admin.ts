@@ -7,7 +7,7 @@ import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
 import { storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
-import { PENDING_PATTERN_SQL } from "../memory/patterns";
+import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { getStatus, withStatus } from "../memory/status";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
@@ -51,7 +51,7 @@ export async function handleAdminRoutes(
         `SELECT value, COUNT(*) as n FROM entries, json_each(entries.tags)
          WHERE value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
            AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
-           AND value NOT IN ('auto-pattern', 'synthesized', 'rolled-up', 'duplicate-candidate')
+           AND value NOT IN ('auto-pattern', 'insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
            AND value NOT GLOB '[0-9]*'
          GROUP BY value ORDER BY n DESC LIMIT 5`,
       ).all(),
@@ -62,6 +62,7 @@ export async function handleAdminRoutes(
           AND entries.tags NOT LIKE '%"rolled-up"%'
           AND entries.tags NOT LIKE '%"synthesized"%'
           AND entries.tags NOT LIKE '%"auto-pattern"%'
+          AND entries.tags NOT LIKE '%"insight"%'
           AND ${compressionEligibilitySql("entries.", cfg)}
         GROUP BY value
         HAVING count > 10
@@ -119,13 +120,13 @@ export async function handleAdminRoutes(
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, created_at FROM entries
-         WHERE ${PENDING_PATTERN_SQL}
+         WHERE ${PENDING_INSIGHT_SQL}
          ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       ).bind(limit, offset).all(),
       // The total drives "N waiting" and the pager. It is a second query rather
       // than a window function so the shape survives D1's SQLite build.
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${PENDING_PATTERN_SQL}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${PENDING_INSIGHT_SQL}`,
       ).first() as Promise<Record<string, any> | null>,
     ]);
 
@@ -194,8 +195,8 @@ export async function handleAdminRoutes(
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
       if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
-      if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-pattern")) {
-        return json({ ok: false, error: "Entry is not an auto-derived pattern" }, 400);
+      if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("insight")) {
+        return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
     }
 
@@ -208,14 +209,14 @@ export async function handleAdminRoutes(
       // Anything that is not an unresolved pattern is skipped rather than
       // rejected: a bulk request built from a list the user was looking at can
       // legitimately race a nightly pass or a second tab.
-      if (!tags.includes("auto-pattern") || getStatus(tags) === "deprecated") continue;
+      if (!tags.includes("insight") || getStatus(tags) === "deprecated") continue;
 
       if (action === "confirm") {
-        // Losing the auto-pattern tag is what exits the recall exclusion — it is
+        // Losing the insight tag is what exits the recall exclusion — it is
         // enforced at D1 hydration, not vector metadata, so this tag update alone
         // makes the entry recallable. No re-embed: content is unchanged and vectors
-        // already exist (the stale auto-pattern flag in vector metadata is harmless).
-        const promoted = withStatus(withKind(tags.filter(t => t !== "auto-pattern"), "semantic"), "canonical");
+        // already exist (the stale insight flag in vector metadata is harmless).
+        const promoted = withStatus(withKind(tags.filter(t => t !== "insight"), "semantic"), "canonical");
         statements.push(
           env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id),
         );

@@ -37,6 +37,7 @@ async function candidateTags(seed: (s: SqliteD1) => void): Promise<string[]> {
       AND entries.tags NOT LIKE '%"rolled-up"%'
       AND entries.tags NOT LIKE '%"synthesized"%'
       AND entries.tags NOT LIKE '%"auto-pattern"%'
+      AND entries.tags NOT LIKE '%"insight"%'
       AND ${compressionEligibilitySql("entries.")}
     GROUP BY value
     HAVING count > 10

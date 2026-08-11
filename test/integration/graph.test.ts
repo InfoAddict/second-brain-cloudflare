@@ -47,19 +47,21 @@ describe("GET /graph", () => {
   });
 
   it("leaves machine-authored entries out of the graph", async () => {
-    // auto-pattern and synthesized entries are written by the pattern-mining and
-    // compression passes — the brain's notes about itself. Recall already excludes
-    // auto-patterns and the dashboard reviews them in their own queue.
+    // auto-pattern, insight and synthesized entries are written by the pattern-mining
+    // (now insight) and compression passes — the brain's notes about itself. Recall
+    // already excludes them and the dashboard reviews them in their own queue.
     seedEntry(db, "e1", "A memory", ["cycling"]);
     seedEntry(db, "e2", "A mined pattern", ["auto-pattern"]);
     seedEntry(db, "e3", "A nightly digest", ["synthesized"]);
     // rolled-up marks the person's own memory as folded into a digest; it stays.
     seedEntry(db, "e4", "A folded memory", ["cycling", "rolled-up"]);
-    // all four are edged, so exclusion has to come from the tag rather than from
+    seedEntry(db, "e5", "A proposed insight", ["insight"]);
+    // all five are edged, so exclusion has to come from the tag rather than from
     // having nothing to attach to
     pushEdge(db, "e1", "e2");
     pushEdge(db, "e2", "e3");
     pushEdge(db, "e1", "e4");
+    pushEdge(db, "e1", "e5");
 
     const res = await worker.fetch(req("GET", "/graph"), env, ctx);
     const data = await res.json() as any;

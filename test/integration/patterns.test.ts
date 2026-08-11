@@ -1,8 +1,8 @@
 /**
- * The pattern review queue: listing it, and ruling on it.
+ * The insight review queue: listing it, and ruling on it.
  *
  * Run against real SQLite rather than the SQL-matching mock. The queue is
- * defined by a WHERE clause — an auto-pattern that is not deprecated — and a
+ * defined by a WHERE clause — an insight that is not deprecated — and a
  * mock that recognises queries by substring cannot tell a correct predicate
  * from a broken one. That is exactly how the dashboard's own pattern panel came
  * to render empty on any brain with more than a page of dismissals.
@@ -48,7 +48,7 @@ const envOf = (s: SqliteD1, overrides: Record<string, unknown> = {}): Env =>
   makeTestEnv(dbOf(s) as any, overrides as any);
 
 function seedPattern(s: SqliteD1, id: string, content: string, extraTags: string[] = []) {
-  s.seed({ id, content, createdAt: 1000, tags: ["auto-pattern", ...extraTags], source: "system", vectorIds: [id] });
+  s.seed({ id, content, createdAt: 1000, tags: ["insight", ...extraTags], source: "system", vectorIds: [id] });
 }
 
 const rowOf = (s: SqliteD1, id: string) => s.rows().find(r => r.id === id) as Record<string, any>;
@@ -78,7 +78,7 @@ describe("GET /patterns", () => {
     // through a backlog gives no sense of how much is left.
     sq = await migrated();
     for (let i = 0; i < 30; i++) {
-      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["auto-pattern"], source: "system" });
+      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["insight"], source: "system" });
     }
 
     const data = await (await worker.fetch(req("GET", "/patterns?limit=10"), envOf(sq), ctx)).json() as any;
@@ -89,7 +89,7 @@ describe("GET /patterns", () => {
   it("pages without repeating or skipping", async () => {
     sq = await migrated();
     for (let i = 0; i < 25; i++) {
-      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["auto-pattern"], source: "system" });
+      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["insight"], source: "system" });
     }
 
     const first = await (await worker.fetch(req("GET", "/patterns?limit=10&offset=0"), envOf(sq), ctx)).json() as any;
@@ -127,13 +127,13 @@ describe("POST /patterns/resolve — one at a time", () => {
     expect(res.status).toBe(404);
   });
 
-  it("400s for an entry that is not an auto-derived pattern", async () => {
+  it("400s for an entry that is not a derived insight", async () => {
     sq = await migrated();
     sq.seed({ id: "normal", content: "Just a memory", createdAt: 1000, tags: ["work"] });
 
     const res = await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "normal", action: "confirm" } }), envOf(sq), ctx);
     expect(res.status).toBe(400);
-    expect((await res.json() as any).error).toContain("not an auto-derived pattern");
+    expect((await res.json() as any).error).toContain("not a derived insight");
   });
 
   it("400s for an invalid action", async () => {
@@ -143,7 +143,7 @@ describe("POST /patterns/resolve — one at a time", () => {
     expect(res.status).toBe(400);
   });
 
-  it("confirm strips auto-pattern, adds kind:semantic + status:canonical, and the entry becomes recallable", async () => {
+  it("confirm strips insight, adds kind:semantic + status:canonical, and the entry becomes recallable", async () => {
     sq = await migrated();
     seedPattern(sq, "p1", "You tend to write tests before shipping");
     const env = envOf(sq, {
@@ -163,7 +163,7 @@ describe("POST /patterns/resolve — one at a time", () => {
     expect(await res.json()).toMatchObject({ ok: true, id: "p1", action: "confirm" });
 
     const tags = tagsOf(sq, "p1");
-    expect(tags).not.toContain("auto-pattern");
+    expect(tags).not.toContain("insight");
     expect(tags).toContain("kind:semantic");
     expect(tags).toContain("status:canonical");
 
@@ -225,7 +225,7 @@ describe("POST /patterns/resolve — in bulk", () => {
 
     expect(data.resolved).toBe(5);
     for (const id of ids) {
-      expect(tagsOf(sq, id)).not.toContain("auto-pattern");
+      expect(tagsOf(sq, id)).not.toContain("insight");
       expect(tagsOf(sq, id)).toContain("status:canonical");
       // Confirming must not touch the vectors — the entry is becoming
       // recallable, so it needs the ones it has.
