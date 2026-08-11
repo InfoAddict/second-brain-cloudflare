@@ -14,4 +14,4 @@
 // which is why they live here together.
 
 /** Proposed by the weekly insight pass, and not yet ruled on. */
-export const PENDING_INSIGHT_SQL = `tags LIKE '%"insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+export const PENDING_INSIGHT_SQL = `tags LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;

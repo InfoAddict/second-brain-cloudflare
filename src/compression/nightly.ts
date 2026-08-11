@@ -70,7 +70,7 @@ export async function runNightlyCompression(env: Env, ctx: ExecutionContext): Pr
       AND entries.tags NOT LIKE '%"rolled-up"%'
       AND entries.tags NOT LIKE '%"synthesized"%'
       AND entries.tags NOT LIKE '%"auto-pattern"%'
-      AND entries.tags NOT LIKE '%"insight"%'
+      AND entries.tags NOT LIKE '%"auto-insight"%'
       AND ${compressionEligibilitySql("entries.", cfg)}
     GROUP BY value
     HAVING count > 10

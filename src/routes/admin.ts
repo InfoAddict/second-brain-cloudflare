@@ -51,7 +51,7 @@ export async function handleAdminRoutes(
         `SELECT value, COUNT(*) as n FROM entries, json_each(entries.tags)
          WHERE value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
            AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
-           AND value NOT IN ('auto-pattern', 'insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
+           AND value NOT IN ('auto-pattern', 'auto-insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
            AND value NOT GLOB '[0-9]*'
          GROUP BY value ORDER BY n DESC LIMIT 5`,
       ).all(),
@@ -62,7 +62,7 @@ export async function handleAdminRoutes(
           AND entries.tags NOT LIKE '%"rolled-up"%'
           AND entries.tags NOT LIKE '%"synthesized"%'
           AND entries.tags NOT LIKE '%"auto-pattern"%'
-          AND entries.tags NOT LIKE '%"insight"%'
+          AND entries.tags NOT LIKE '%"auto-insight"%'
           AND ${compressionEligibilitySql("entries.", cfg)}
         GROUP BY value
         HAVING count > 10
@@ -102,12 +102,12 @@ export async function handleAdminRoutes(
 
   // GET /patterns — the whole review queue, paged.
   //
-  // The dashboard used to build this list from `/list?n=20&tag=auto-pattern` and
-  // drop the deprecated rows in the browser, which cannot work on a brain that
-  // has been running a while: dismissed patterns keep their auto-pattern tag
-  // forever, so once there are more than a page of them the filter throws away
-  // every row and the panel renders empty while real patterns wait behind them.
-  // Filtering belongs in the query.
+  // The dashboard used to build this list from `/list?n=20&tag=auto-pattern`
+  // (the old producer) and drop the deprecated rows in the browser, which
+  // cannot work on a brain that has been running a while: dismissed insight
+  // proposals keep their tag forever, so once there are more than a page of
+  // them the filter throws away every row and the panel renders empty while
+  // real proposals wait behind them. Filtering belongs in the query.
   if (url.pathname === "/patterns" && request.method === "GET") {
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
@@ -143,10 +143,10 @@ export async function handleAdminRoutes(
     });
   }
 
-  // POST /patterns/resolve — confirm or dismiss auto-derived patterns.
-  // Dashboard-only, no MCP twin: pattern review is a human curation act, not an
-  // agent capability. Confirm promotes a pattern into a real recallable memory;
-  // dismiss deprecates it (audit row kept, vectors removed).
+  // POST /patterns/resolve — confirm or dismiss a proposed insight.
+  // Dashboard-only, no MCP twin: insight review is a human curation act, not
+  // an agent capability. Confirm promotes an insight into a real recallable
+  // memory; dismiss deprecates it (audit row kept, vectors removed).
   //
   // Takes `id` for one or `ids` for many. Ruling on a backlog one at a time is
   // the actual complaint this answers, and doing it as N single requests would
@@ -195,7 +195,7 @@ export async function handleAdminRoutes(
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
       if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
-      if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("insight")) {
+      if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
         return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
     }
@@ -209,14 +209,14 @@ export async function handleAdminRoutes(
       // Anything that is not an unresolved pattern is skipped rather than
       // rejected: a bulk request built from a list the user was looking at can
       // legitimately race a nightly pass or a second tab.
-      if (!tags.includes("insight") || getStatus(tags) === "deprecated") continue;
+      if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
 
       if (action === "confirm") {
-        // Losing the insight tag is what exits the recall exclusion — it is
+        // Losing the auto-insight tag is what exits the recall exclusion — it is
         // enforced at D1 hydration, not vector metadata, so this tag update alone
         // makes the entry recallable. No re-embed: content is unchanged and vectors
-        // already exist (the stale insight flag in vector metadata is harmless).
-        const promoted = withStatus(withKind(tags.filter(t => t !== "insight"), "semantic"), "canonical");
+        // already exist (the stale auto-insight flag in vector metadata is harmless).
+        const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
         statements.push(
           env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id),
         );

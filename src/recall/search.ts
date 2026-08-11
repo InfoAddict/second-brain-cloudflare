@@ -255,7 +255,7 @@ export async function recallEntries(
   // second batch ever runs: d1Rows is then batch order, not one result set's
   // order — worth knowing if a future consumer relies on that ordering.
   const allParentIds = [...seedParentIds, ...expandedScored.map(e => e.parentId)];
-  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
   const filterBindings: number[] = [];
   if (kind && (KIND_VALUES as readonly string[]).includes(kind)) {
     d1Filters += ` AND tags LIKE '%"kind:${kind}"%'`;

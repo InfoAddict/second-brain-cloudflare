@@ -99,8 +99,8 @@ describe("GET /brief", () => {
   it("surfaces patterns awaiting a decision, and skips dismissed ones", async () => {
     sq = await migrated();
     const now = Date.now();
-    sq.seed({ id: "p1", content: "You keep deferring the pricing decision", createdAt: now - HOUR, tags: ["insight"] });
-    sq.seed({ id: "p2", content: "Dismissed already", createdAt: now - HOUR, tags: ["insight", "status:deprecated"] });
+    sq.seed({ id: "p1", content: "You keep deferring the pricing decision", createdAt: now - HOUR, tags: ["auto-insight"] });
+    sq.seed({ id: "p2", content: "Dismissed already", createdAt: now - HOUR, tags: ["auto-insight", "status:deprecated"] });
 
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
     expect(data.patterns.map((p: any) => p.id)).toEqual(["p1"]);

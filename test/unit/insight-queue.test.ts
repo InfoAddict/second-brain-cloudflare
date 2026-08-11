@@ -3,8 +3,8 @@ import { PENDING_INSIGHT_SQL } from "../../src/memory/patterns";
 import { isTopicTag } from "../../src/compression/eligibility";
 
 describe("insight review queue", () => {
-  it("selects insight entries that have not been ruled on", () => {
-    expect(PENDING_INSIGHT_SQL).toContain(`'%"insight"%'`);
+  it("selects auto-insight entries that have not been ruled on", () => {
+    expect(PENDING_INSIGHT_SQL).toContain(`'%"auto-insight"%'`);
     expect(PENDING_INSIGHT_SQL).toContain(`NOT LIKE '%"status:deprecated"%'`);
   });
 
@@ -12,8 +12,8 @@ describe("insight review queue", () => {
     expect(PENDING_INSIGHT_SQL).not.toContain("?");
   });
 
-  it("treats insight as a bookkeeping tag, never a compression topic", () => {
-    expect(isTopicTag("insight")).toBe(false);
-    expect(isTopicTag("Insight")).toBe(false);
+  it("treats auto-insight as a bookkeeping tag, never a compression topic", () => {
+    expect(isTopicTag("auto-insight")).toBe(false);
+    expect(isTopicTag("Auto-Insight")).toBe(false);
   });
 });

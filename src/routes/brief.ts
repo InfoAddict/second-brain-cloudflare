@@ -42,7 +42,7 @@ const RESURFACE_MIN_IMPORTANCE = 3;
 const RESURFACE_FILTER = `created_at < ? AND importance_score >= ?
          AND tags NOT LIKE '%"status:deprecated"%'
          AND tags NOT LIKE '%"auto-pattern"%'
-         AND tags NOT LIKE '%"insight"%'
+         AND tags NOT LIKE '%"auto-insight"%'
          AND tags NOT LIKE '%"synthesized"%'`;
 
 export async function handleBriefRoutes(
@@ -119,7 +119,7 @@ export async function handleBriefRoutes(
        WHERE entries.created_at >= ?
          AND value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
          AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
-         AND value NOT IN ('auto-pattern', 'insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
+         AND value NOT IN ('auto-pattern', 'auto-insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
          AND value NOT GLOB '[0-9]*'
        GROUP BY value ORDER BY n DESC LIMIT 6`,
     ).bind(now - TOPIC_WINDOW_MS).all(),

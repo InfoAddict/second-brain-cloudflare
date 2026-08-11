@@ -53,7 +53,7 @@ export const GRAPH_VIEW_MAX_NODES = 1500;
  * person's own memory, and it stays in the graph whatever the pipeline has since
  * concluded about it.
  */
-const MACHINE_AUTHORED_TAGS = new Set(["auto-pattern", "insight", "synthesized"]);
+const MACHINE_AUTHORED_TAGS = new Set(["auto-pattern", "auto-insight", "synthesized"]);
 export const GRAPH_HOP_DECAY = 0.6;
 const EDGE_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 

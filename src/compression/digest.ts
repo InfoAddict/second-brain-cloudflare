@@ -111,7 +111,7 @@ export async function compressTag(
     WHERE tags LIKE ? ${TAG_LIKE_ESCAPE}
       AND tags NOT LIKE '%"synthesized"%'
       AND tags NOT LIKE '%"auto-pattern"%'
-      AND tags NOT LIKE '%"insight"%'
+      AND tags NOT LIKE '%"auto-insight"%'
       AND tags NOT LIKE '%"rolled-up"%'
       AND ${compressionEligibilitySql("", cfg)}
     ORDER BY created_at DESC

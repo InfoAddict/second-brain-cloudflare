@@ -466,7 +466,7 @@ export class D1Mock {
               const tags: string[] = JSON.parse(e.tags ?? "[]");
               if (tags.includes("status:deprecated")) return false;
               if (tags.includes("auto-pattern")) return false;
-              if (tags.includes("insight")) return false;
+              if (tags.includes("auto-insight")) return false;
               if (tags.includes("synthesized")) return false;
               if (tags.includes("rolled-up")) return false;
               const touched = e.updated_at ?? e.created_at;
@@ -488,7 +488,7 @@ export class D1Mock {
             const tags: string[] = JSON.parse(e.tags ?? "[]");
             if (!ids.includes(e.id)) return false;
             if (tags.includes("auto-pattern")) return false;
-            if (tags.includes("insight")) return false;
+            if (tags.includes("auto-insight")) return false;
             if (s.includes('"status:deprecated"') && tags.includes("status:deprecated")) return false;
             if (kindMatch && !tags.includes(kindMatch[1])) return false;
             return true;
@@ -512,7 +512,7 @@ export class D1Mock {
           return { results };
         }
         if (s.includes("FROM entries WHERE id IN") && s.includes("tags NOT LIKE")) {
-          // recallEntries D1 hydration — filter by IDs, exclude auto-pattern/insight entries, apply after/before
+          // recallEntries D1 hydration — filter by IDs, exclude auto-pattern/auto-insight entries, apply after/before
           const inMatch = s.match(/WHERE id IN \(([^)]*)\)/);
           const idCount = inMatch ? inMatch[1].split(",").length : 0;
           const ids = args.slice(0, idCount);
@@ -523,7 +523,7 @@ export class D1Mock {
             const tags: string[] = JSON.parse(e.tags ?? "[]");
             if (!ids.includes(e.id)) return false;
             if (tags.includes("auto-pattern")) return false;
-            if (tags.includes("insight")) return false;
+            if (tags.includes("auto-insight")) return false;
             if (s.includes('"status:deprecated"') && tags.includes("status:deprecated")) return false;
             if (kindMatch && !tags.includes(kindMatch[1])) return false;
             return true;
@@ -549,7 +549,7 @@ export class D1Mock {
             .filter((e: any) => {
               const tags: string[] = JSON.parse(e.tags ?? "[]");
               if (!tagMatchesLike(tags, tag)) return false;
-              if (tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("insight") || tags.includes("rolled-up")) return false;
+              if (tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("auto-insight") || tags.includes("rolled-up")) return false;
               if (!(e.importance_score == null || e.importance_score < COMPRESSION_IMPORTANCE_THRESHOLD)) return false;
               const rc = e.recall_count; // NULL/undefined → recall clause is falsy → protected (matches SQL)
               if (!(rc === 0 || (rc < COMPRESSION_MIN_RECALL && e.created_at < cutoff))) return false;
@@ -574,7 +574,7 @@ export class D1Mock {
           const counts = new Map<string, number>();
           for (const e of db.entries as any[]) {
             const tags: string[] = JSON.parse(e.tags ?? "[]");
-            if (tags.includes("rolled-up") || tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("insight")) continue;
+            if (tags.includes("rolled-up") || tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("auto-insight")) continue;
             if (!(e.importance_score == null || e.importance_score < COMPRESSION_IMPORTANCE_THRESHOLD)) continue;
             const rc = e.recall_count; // NULL/undefined → recall clause is falsy → protected (matches SQL)
             if (!(rc === 0 || (rc < COMPRESSION_MIN_RECALL && e.created_at < cutoff))) continue;

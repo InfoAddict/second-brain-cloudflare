@@ -55,7 +55,7 @@ describe("GET /graph", () => {
     seedEntry(db, "e3", "A nightly digest", ["synthesized"]);
     // rolled-up marks the person's own memory as folded into a digest; it stays.
     seedEntry(db, "e4", "A folded memory", ["cycling", "rolled-up"]);
-    seedEntry(db, "e5", "A proposed insight", ["insight"]);
+    seedEntry(db, "e5", "A proposed insight", ["auto-insight"]);
     // all five are edged, so exclusion has to come from the tag rather than from
     // having nothing to attach to
     pushEdge(db, "e1", "e2");

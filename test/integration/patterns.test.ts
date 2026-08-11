@@ -48,7 +48,7 @@ const envOf = (s: SqliteD1, overrides: Record<string, unknown> = {}): Env =>
   makeTestEnv(dbOf(s) as any, overrides as any);
 
 function seedPattern(s: SqliteD1, id: string, content: string, extraTags: string[] = []) {
-  s.seed({ id, content, createdAt: 1000, tags: ["insight", ...extraTags], source: "system", vectorIds: [id] });
+  s.seed({ id, content, createdAt: 1000, tags: ["auto-insight", ...extraTags], source: "system", vectorIds: [id] });
 }
 
 const rowOf = (s: SqliteD1, id: string) => s.rows().find(r => r.id === id) as Record<string, any>;
@@ -78,7 +78,7 @@ describe("GET /patterns", () => {
     // through a backlog gives no sense of how much is left.
     sq = await migrated();
     for (let i = 0; i < 30; i++) {
-      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["insight"], source: "system" });
+      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["auto-insight"], source: "system" });
     }
 
     const data = await (await worker.fetch(req("GET", "/patterns?limit=10"), envOf(sq), ctx)).json() as any;
@@ -89,7 +89,7 @@ describe("GET /patterns", () => {
   it("pages without repeating or skipping", async () => {
     sq = await migrated();
     for (let i = 0; i < 25; i++) {
-      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["insight"], source: "system" });
+      sq.seed({ id: `p${i}`, content: `Pattern ${i}`, createdAt: 1000 + i, tags: ["auto-insight"], source: "system" });
     }
 
     const first = await (await worker.fetch(req("GET", "/patterns?limit=10&offset=0"), envOf(sq), ctx)).json() as any;
@@ -143,7 +143,7 @@ describe("POST /patterns/resolve — one at a time", () => {
     expect(res.status).toBe(400);
   });
 
-  it("confirm strips insight, adds kind:semantic + status:canonical, and the entry becomes recallable", async () => {
+  it("confirm strips auto-insight, adds kind:semantic + status:canonical, and the entry becomes recallable", async () => {
     sq = await migrated();
     seedPattern(sq, "p1", "You tend to write tests before shipping");
     const env = envOf(sq, {
@@ -163,7 +163,7 @@ describe("POST /patterns/resolve — one at a time", () => {
     expect(await res.json()).toMatchObject({ ok: true, id: "p1", action: "confirm" });
 
     const tags = tagsOf(sq, "p1");
-    expect(tags).not.toContain("insight");
+    expect(tags).not.toContain("auto-insight");
     expect(tags).toContain("kind:semantic");
     expect(tags).toContain("status:canonical");
 
@@ -225,7 +225,7 @@ describe("POST /patterns/resolve — in bulk", () => {
 
     expect(data.resolved).toBe(5);
     for (const id of ids) {
-      expect(tagsOf(sq, id)).not.toContain("insight");
+      expect(tagsOf(sq, id)).not.toContain("auto-insight");
       expect(tagsOf(sq, id)).toContain("status:canonical");
       // Confirming must not touch the vectors — the entry is becoming
       // recallable, so it needs the ones it has.
