@@ -22,6 +22,8 @@ import { D1Mock } from "../helpers/d1-mock";
 import type { Env } from "../../src/env";
 import { INTEGRATION_SYNC_CRON } from "../../src/integrations/mirror";
 import { INTEGRATION_PROVIDERS } from "../../src/integrations";
+import { INSIGHT_ACCRUAL_CRON, INSIGHT_WEEKLY_CRON } from "../../src/insight/schedule";
+import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
 
 const FREE_PLAN_SUBREQUESTS = 50;
 const MAINTENANCE_CRON = "0 1 * * *";
@@ -400,6 +402,58 @@ describe("nightly cron D1 subrequest cost", () => {
 
       const tags: string[] = JSON.parse(db.entries.find(e => e.id === "job")!.tags);
       expect(tags).toContain("stale:as-of");
+    });
+
+    // The insight passes get the same treatment as the mirror sync above: each
+    // is its own budget (#290's argument extended to insight accrual/#296's
+    // reasoning pass), so scheduled() has to name them explicitly. A handler
+    // that let either fall through would run the maintenance suite a second
+    // (or third) time on top of whatever the insight job itself did — the
+    // exact multiplier the split exists to avoid, now happening daily and
+    // weekly instead of hourly.
+
+    it("does not run the maintenance jobs on the insight accrual schedule", async () => {
+      const db = makeTestDb();
+      const old = Date.now() - STALENESS_AGE_MS - 86400000;
+      db.entries.push({
+        id: "job", content: "Bob works at Example Inc", tags: "[]",
+        source: "api", created_at: old, updated_at: old, vector_ids: "[]",
+      });
+      const kv = makeMemoryKV();
+      const kvGet = vi.spyOn(kv, "get");
+      const { env } = countingEnv(db, { OAUTH_KV: kv });
+
+      await runCron(env, INSIGHT_ACCRUAL_CRON);
+
+      // The staleness pass is the cheapest maintenance job to detect: on the
+      // maintenance schedule this same entry comes back tagged.
+      const tags: string[] = JSON.parse(db.entries.find(e => e.id === "job")!.tags);
+      expect(tags).not.toContain("stale:as-of");
+      // And accrual's own job did run: it is the very first thing
+      // runInsightAccrual does, so this is what tells "routed nowhere" (the
+      // bug this test exists to catch) apart from "routed correctly to a job
+      // that found nothing to accrue."
+      expect(kvGet).toHaveBeenCalledWith(ACCRUAL_CURSOR_KEY);
+    });
+
+    it("does not run the maintenance jobs on the insight weekly schedule", async () => {
+      const db = makeTestDb();
+      const old = Date.now() - STALENESS_AGE_MS - 86400000;
+      db.entries.push({
+        id: "job", content: "Bob works at Example Inc", tags: "[]",
+        source: "api", created_at: old, updated_at: old, vector_ids: "[]",
+      });
+      const { env, prepared } = countingEnv(db);
+
+      await runCron(env, INSIGHT_WEEKLY_CRON);
+
+      const tags: string[] = JSON.parse(db.entries.find(e => e.id === "job")!.tags);
+      expect(tags).not.toContain("stale:as-of");
+      // And the weekly pass's own job did run: its candidate-queue read is
+      // the first D1 statement it issues, so its presence is what tells
+      // "routed nowhere" apart from "routed correctly to a job with nothing
+      // pending."
+      expect(prepared.some(s => s.includes("FROM insight_candidates"))).toBe(true);
     });
   });
 });
