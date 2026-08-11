@@ -461,6 +461,17 @@ export class D1Mock {
           const cutoff = Number(args[0]);
           const limitMatch = s.match(/LIMIT (\d+)/);
           const limit = limitMatch ? parseInt(limitMatch[1], 10) : 25;
+          // This handler, and the other `tags.includes("auto-pattern"/"auto-insight")`
+          // checks below (the recall hydration branches and the digest-candidate
+          // branch), enforce the exclusion UNCONDITIONALLY — in JS, on every row,
+          // regardless of what the matched SQL string actually says. Unlike
+          // `tagMatchesLike` above, which at least reads the bind parameter, these
+          // never look at whether the real query has a `tags NOT LIKE
+          // '%"auto-pattern"%'`-shaped clause at all. A production query that lost
+          // that clause entirely would still be filtered here and the test would
+          // stay green. Anything whose subject IS one of those exclusion clauses —
+          // asserting it exists, asserting its exact shape — is untestable against
+          // this mock and belongs in a `sqlite-d1`-backed test instead.
           const results = [...db.entries]
             .filter((e: any) => {
               const tags: string[] = JSON.parse(e.tags ?? "[]");
@@ -484,6 +495,8 @@ export class D1Mock {
           const rest = args.slice(idCount);
           let argIdx = 0;
           const kindMatch = s.match(/tags LIKE '%"(kind:(?:episodic|semantic))"%'/);
+          // Unconditional exclusion, not derived from `s` — see the note above the
+          // first such check in this file.
           let rows = db.entries.filter((e: any) => {
             const tags: string[] = JSON.parse(e.tags ?? "[]");
             if (!ids.includes(e.id)) return false;
@@ -519,6 +532,8 @@ export class D1Mock {
           const rest = args.slice(idCount);
           let argIdx = 0;
           const kindMatch = s.match(/tags LIKE '%"(kind:(?:episodic|semantic))"%'/);
+          // Unconditional exclusion, not derived from `s` — see the note above the
+          // first such check in this file.
           let rows = db.entries.filter((e: any) => {
             const tags: string[] = JSON.parse(e.tags ?? "[]");
             if (!ids.includes(e.id)) return false;
@@ -545,6 +560,9 @@ export class D1Mock {
           const tagPattern = args[0] as string;
           const tag = tagFromLikePattern(tagPattern);
           const cutoff = Number(args[1]);
+          // The synthesized/auto-pattern/auto-insight/rolled-up exclusion below is
+          // unconditional, not derived from `s` — see the note above the first such
+          // check in this file.
           const results = [...db.entries]
             .filter((e: any) => {
               const tags: string[] = JSON.parse(e.tags ?? "[]");
@@ -572,6 +590,8 @@ export class D1Mock {
           // entries that pass the compression eligibility predicate. Cutoff is args[0].
           const cutoff = Number(args[0]);
           const counts = new Map<string, number>();
+          // Unconditional exclusion, not derived from `s` — see the note above the
+          // first such check in this file.
           for (const e of db.entries as any[]) {
             const tags: string[] = JSON.parse(e.tags ?? "[]");
             if (tags.includes("rolled-up") || tags.includes("synthesized") || tags.includes("auto-pattern") || tags.includes("auto-insight")) continue;

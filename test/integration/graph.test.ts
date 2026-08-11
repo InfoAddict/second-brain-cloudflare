@@ -47,7 +47,7 @@ describe("GET /graph", () => {
   });
 
   it("leaves machine-authored entries out of the graph", async () => {
-    // auto-pattern, insight and synthesized entries are written by the pattern-mining
+    // auto-pattern, auto-insight and synthesized entries are written by the pattern-mining
     // (now insight) and compression passes — the brain's notes about itself. Recall
     // already excludes them and the dashboard reviews them in their own queue.
     seedEntry(db, "e1", "A memory", ["cycling"]);

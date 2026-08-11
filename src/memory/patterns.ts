@@ -3,8 +3,8 @@
 // The weekly insight pass proposes observations it drew from two memories, and
 // they are excluded from recall until a human confirms them. Dismissing one
 // deprecates it rather than deleting it — the audit row stays, tags and all —
-// so an entry carries `insight` forever whether or not it was ever ruled on.
-// The tag alone is a history, not a queue.
+// so an entry carries `auto-insight` forever whether or not it was ever ruled
+// on. The tag alone is a history, not a queue.
 //
 // Reading it as a queue is what broke the dashboard's panel under the previous
 // producer: it asked for the newest twenty rows and dropped the deprecated ones

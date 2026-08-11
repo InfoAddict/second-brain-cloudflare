@@ -5,7 +5,8 @@
  * budgets, the same argument wrangler.jsonc already makes for the integration
  * sync (#290): a Worker invocation gets 50 D1 subrequests and 10 ms of CPU on
  * the free plan, maintenance already spends about 30 of them, and accrual needs
- * about 31 on its own.
+ * about 34 on its own (see src/insight/candidates.ts's ACCRUAL_SEED_LIMIT
+ * comment for the measurement).
  *
  * These strings must match wrangler.jsonc exactly. test/unit/cron-triggers.test.ts
  * fails if they drift.

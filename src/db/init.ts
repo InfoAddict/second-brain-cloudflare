@@ -125,19 +125,23 @@ const ENTRIES_COLUMNS: Record<string, string> = {
  * PRAGMA table_info (SQLite rewrites neither list lazily — an ALTER shows up immediately).
  * `kind` is what stops a name that appears on both sides from being read as the wrong one.
  *
- * This exists because the thirteen statements it replaces cost thirteen subrequests to
+ * This exists because the fifteen statements it replaces cost fifteen subrequests to
  * discover that a migrated brain — which is every brain after its first request — needs
  * nothing done (#282). Free-plan invocations get 50 subrequests, ensureDbReady spends
  * them inside the request that triggered it, and GET /graph was already close enough to
  * the ceiling that a cold isolate pushed it over: 59 against a limit of 50, now 47.
  *
- * Cost is one subrequest and one row read per catalogue entry: rows_read = 23 on a fully
- * migrated brain (our seven objects, plus D1's own bookkeeping table and SQLite's implicit
- * autoindexes, plus twelve columns) and — the part worth checking rather than assuming —
- * flat in the number of entries, because neither side of the UNION touches table data.
- * Both figures measured on real D1 (workerd via Miniflare), not on the mock. It grows by
- * one row per object added to SCHEMA_OBJECTS, which is the cheap direction: adding a
- * statement above now costs one row here rather than one subrequest on every cold start.
+ * Cost is one subrequest and one row read per catalogue entry, flat in the number of
+ * entries because neither side of the UNION touches table data — measured on real D1
+ * (workerd via Miniflare), not the mock, which is not something that can be re-verified
+ * from a laptop. rows_read = 23 was that measurement, but it predates insight_candidates
+ * and its index: it was taken when SCHEMA_OBJECTS held seven objects, not the nine it
+ * holds now (plus D1's own bookkeeping table, SQLite's implicit autoindexes, and twelve
+ * columns), so 23 is stale by two rows and should be re-measured against a live database
+ * rather than trusted as today's figure. What the measurement did establish, and what
+ * still holds regardless of the exact count: it grows by one row per object added to
+ * SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now costs one
+ * row here rather than one subrequest on every cold start.
  */
 const PROBE_SQL =
   `SELECT type AS kind, name FROM sqlite_master WHERE type IN ('table','index') ` +
