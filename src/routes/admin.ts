@@ -13,6 +13,7 @@ import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { reasonOverPair } from "../insight/reason";
+import { MAX_INSIGHTS_PER_RUN } from "../insight/weekly";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -383,6 +384,15 @@ export async function handleAdminRoutes(
     ).bind(limit).all() as { results: Record<string, any>[] };
 
     const candidates = [];
+    // Reasons over every row the query returned, deliberately past the three
+    // production would ever write (src/insight/weekly.ts's own
+    // MAX_INSIGHTS_PER_RUN cap) — seeing candidates four and beyond is how the
+    // ranking itself gets judged. `would_write` is what keeps that honest: it
+    // marks only the first three ACCEPTED candidates in score order, because
+    // that's what the real pass's `written` counter tracks — a decline costs a
+    // model call but never consumes a cap slot, so it must not shift who
+    // counts as the fourth accepted candidate.
+    let written = 0;
     for (const row of results) {
       // cfg carries the user's LLM_MODEL choice, same as the real weekly pass
       // (src/insight/weekly.ts) — without it this would preview reasoning from
@@ -393,12 +403,15 @@ export async function handleAdminRoutes(
         env,
         cfg,
       );
+      const would_write = insight !== null && written < MAX_INSIGHTS_PER_RUN;
+      if (insight) written++;
       candidates.push({
         a_id: row.a_id as string,
         b_id: row.b_id as string,
         score: row.score as number,
         shape: insight?.shape ?? null,
         text: insight?.text ?? null,
+        would_write,
       });
     }
 
