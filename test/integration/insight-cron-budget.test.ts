@@ -8,8 +8,9 @@ import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-en
 
 /**
  * A Worker invocation gets 50 D1 subrequests on the free plan, and every
- * binding call counts against it — D1, Vectorize and Workers AI alike.
- * `sqlite.issued` records one entry per D1 call, including one per batch.
+ * binding call counts against it — D1, Vectorize, Workers AI and KV alike.
+ * `sqlite.issued` records one entry per D1 call, including one per batch;
+ * the other three are counted directly off each mock's own call log below.
  */
 const SUBREQUEST_BUDGET = 50;
 
@@ -87,12 +88,20 @@ describe("insight crons stay inside one invocation's budget", () => {
         vectorIds: [`vec-${fx.all[i % fx.all.length].id}`],
       });
     }
+    // The fixture's KV (test/helpers/make-env.ts's makeMemoryKV) is a plain
+    // object, not a vi.fn(), so its calls have to be spied on explicitly —
+    // runInsightAccrual reads and writes the accrual cursor through it, and
+    // that read/write is as real a subrequest as a D1 or Vectorize call.
+    const kvGet = vi.spyOn(fx.env.OAUTH_KV, "get");
+    const kvPut = vi.spyOn(fx.env.OAUTH_KV, "put");
 
     await runInsightAccrual(fx.env, ctx);
 
     const bindingCalls =
       (fx.env.VECTORIZE.query as any).mock.calls.length +
-      (fx.env.VECTORIZE.getByIds as any).mock.calls.length;
+      (fx.env.VECTORIZE.getByIds as any).mock.calls.length +
+      kvGet.mock.calls.length +
+      kvPut.mock.calls.length;
     expect(fx.sqlite.issued.length + bindingCalls).toBeLessThan(SUBREQUEST_BUDGET);
     fx.sqlite.close();
   });
@@ -120,10 +129,21 @@ describe("insight crons stay inside one invocation's budget", () => {
     }
     const before = sqlite.issued.length;   // seeding is not the pass
 
+    const kv = makeMemoryKV();
     const env = makeTestEnv(undefined, {
-      DB: sqlite.db as any, OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+      DB: sqlite.db as any, OAUTH_KV: kv, VECTORIZE: makeVectorizeMock(),
       AI: makeReasoningAI(),
     });
+    // Same reasoning as the accrual test: KV is a plain object, not a vi.fn(),
+    // so it needs an explicit spy. runWeeklyInsights itself reads it once
+    // (config, via resolveConfig) — but each successful captureEntry call
+    // fires its own KV read too, for the tag-vocabulary cache (rememberTags,
+    // src/tags/vocabulary.ts), via a fire-and-forget ctx.waitUntil() call
+    // whose body still runs (and still spends the read) synchronously up to
+    // its first await regardless of whether anything ever awaits the result.
+    // Measured: 1 config read + 3 vocabulary reads (one per capture) = 4.
+    const kvGet = vi.spyOn(kv, "get");
+    const kvPut = vi.spyOn(kv, "put");
 
     await runWeeklyInsights(env, ctx);
 
@@ -139,7 +159,14 @@ describe("insight crons stay inside one invocation's budget", () => {
     const bindingCalls =
       (env.AI.run as any).mock.calls.length +
       (env.VECTORIZE.query as any).mock.calls.length +
-      (env.VECTORIZE.insert as any).mock.calls.length;
+      // captureEntry's storage path calls VECTORIZE.upsert, not .insert
+      // (src/capture/store.ts) — counting only .insert left the actual
+      // vector write completely untracked. Both are counted, rather than
+      // one replacing the other, so this stays correct if that ever changes.
+      (env.VECTORIZE.insert as any).mock.calls.length +
+      (env.VECTORIZE.upsert as any).mock.calls.length +
+      kvGet.mock.calls.length +
+      kvPut.mock.calls.length;
     expect((sqlite.issued.length - before) + bindingCalls).toBeLessThan(SUBREQUEST_BUDGET);
     sqlite.close();
   });
