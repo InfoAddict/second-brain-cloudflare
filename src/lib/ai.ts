@@ -6,11 +6,29 @@ export function graceMs(env: Env): number {
   return parseInt(env.VECTORIZE_GRACE_MS ?? "300000", 10) || 300000;
 }
 
+/**
+ * Workers AI streams two different answer shapes depending on model lineage.
+ * Llama-family models (the shipped default) put the text directly on
+ * `response`. OpenAI-lineage models (`@cf/openai/gpt-oss-*`) stream an
+ * OpenAI-style chat-completion delta instead, under `choices[0].delta.content`
+ * — and the reasoning ones in that family emit chain-of-thought first, as
+ * `delta.reasoning` / `delta.reasoning_content`, before any `delta.content`.
+ * That chain-of-thought is deliberately never returned here: every caller of
+ * `readStreamText` treats the result as the answer — JSON.parse'ing it or
+ * feeding it straight into a digest — not as reasoning prose.
+ */
+function extractChunkText(d: any): string {
+  if (d?.response) return d.response;
+  const content = d?.choices?.[0]?.delta?.content;
+  return typeof content === "string" ? content : "";
+}
+
 function consumeSseLine(line: string, onText: (chunk: string) => void): void {
   if (!line.startsWith("data: ") || line.includes("[DONE]")) return;
   try {
     const d = JSON.parse(line.slice(6));
-    if (d.response) onText(d.response);
+    const text = extractChunkText(d);
+    if (text) onText(text);
   } catch (e) {
     // A parse failure here is on a COMPLETE line (buffering already held back
     // any partial one), so it's a genuine anomaly rather than a chunk-boundary

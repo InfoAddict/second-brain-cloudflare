@@ -61,7 +61,16 @@ export const CLASSIFY_MAX_TOKENS = 80;
 export const CONTRADICTION_MAX_TOKENS = 80;
 export const SMART_MERGE_MAX_TOKENS = 250;
 export const INSIGHT_MAX_TOKENS = 300;
-export const INSIGHT_PASS_MAX_TOKENS = 200;
+// max_tokens is a CEILING, not a target. A non-reasoning model stops at its
+// own natural answer length well under this cap, so raising it costs that
+// model nothing extra. But INSIGHT_LLM_MODEL's default, @cf/openai/gpt-oss-120b,
+// is a reasoning model: it spends tokens on chain-of-thought (streamed as
+// `delta.reasoning` / `delta.reasoning_content`, see readStreamText in
+// src/lib/ai.ts) before it ever emits an answer. At 200 it could burn the
+// entire budget thinking and reach the cap without emitting an answer at
+// all — the pass would then silently return nothing. 1200 gives it enough
+// headroom to finish reasoning and still answer.
+export const INSIGHT_PASS_MAX_TOKENS = 1200;
 export const DIGEST_MAX_TOKENS = 400;
 
 export const VECTORIZE_FIX_HINT =

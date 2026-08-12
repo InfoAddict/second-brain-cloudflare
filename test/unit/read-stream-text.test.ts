@@ -98,6 +98,59 @@ describe("readStreamText()", () => {
     }
   });
 
+  it("assembles text from an OpenAI-shape stream (choices[0].delta.content) across several chunks", async () => {
+    const stream = streamFromStrings([
+      'data: {"choices":[{"delta":{"content":"Hello","role":"assistant"},"finish_reason":null,"index":0,"logprobs":null}],"object":"chat.completion.chunk"}\n',
+      'data: {"choices":[{"delta":{"content":" from"},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"content":" gpt-oss"},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[],"created":1,"object":"chat.completion.chunk","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n',
+      'data: {"response":"","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n',
+      "data: [DONE]\n",
+    ]);
+    expect(await readStreamText(stream)).toBe("Hello from gpt-oss");
+  });
+
+  it("excludes delta.reasoning and delta.reasoning_content entirely from the returned text", async () => {
+    const stream = streamFromStrings([
+      'data: {"choices":[{"delta":{"reasoning":"We","reasoning_content":"We"},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"reasoning":" need","reasoning_content":" need"},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"reasoning":" to think about this.","reasoning_content":" to think about this."},"finish_reason":null,"index":0}]}\n',
+      "data: [DONE]\n",
+    ]);
+    expect(await readStreamText(stream)).toBe("");
+  });
+
+  it("returns only the content, in order, when reasoning chunks arrive before content chunks", async () => {
+    const stream = streamFromStrings([
+      'data: {"choices":[{"delta":{"reasoning":"Thinking it through first.","reasoning_content":"Thinking it through first."},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"reasoning":" Still thinking.","reasoning_content":" Still thinking."},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"content":"The","role":"assistant"},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"content":" answer"},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"content":" is 42."},"finish_reason":"stop","index":0}]}\n',
+      "data: [DONE]\n",
+    ]);
+    expect(await readStreamText(stream)).toBe("The answer is 42.");
+  });
+
+  it("tolerates choices: [] and a missing delta without throwing", async () => {
+    const stream = streamFromStrings([
+      'data: {"choices":[],"created":1,"object":"chat.completion.chunk"}\n',
+      'data: {"choices":[{"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{},"finish_reason":null,"index":0}]}\n',
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n',
+      "data: [DONE]\n",
+    ]);
+    await expect(readStreamText(stream)).resolves.toBe("ok");
+  });
+
+  it("reassembles an OpenAI-shape SSE line (choices[0].delta.content) split across a chunk boundary", async () => {
+    const line = 'data: {"choices":[{"delta":{"content":"streamed across a byte boundary"},"finish_reason":null,"index":0}]}\n';
+    const bytes = new TextEncoder().encode(line);
+    const splitAt = 40; // lands inside the JSON string value
+    const stream = streamFromChunks([bytes.slice(0, splitAt), bytes.slice(splitAt)]);
+    expect(await readStreamText(stream)).toBe("streamed across a byte boundary");
+  });
+
   it("end-to-end: synthesizeInsight assembles the full text from a chunk-split stream", async () => {
     // Split a real caller's SSE line across a chunk boundary the way a live
     // network stream would, and confirm the caller sees the complete text
