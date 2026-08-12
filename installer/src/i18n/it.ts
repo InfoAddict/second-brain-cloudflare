@@ -144,9 +144,15 @@ export const it: Messages = {
     },
     model: {
       label: "Quale modello AI usare",
-      desc: "Usato per ordinare, riassumere e individuare contraddizioni nei tuoi ricordi — non per la ricerca in sé. Ogni modello elencato qui gira sul tuo account Cloudflare.",
+      desc: "Usato per ordinare, riassumere e individuare contraddizioni nei tuoi ricordi — non per la ricerca in sé, e non per gli insight che Second Brain trae dal confronto tra i ricordi, che hanno un modello proprio qui sotto. Ogni modello elencato qui gira sul tuo account Cloudflare.",
       sizeNote: "I modelli più grandi scrivono riassunti migliori e costano più Neurons. Quelli più piccoli sono più rapidi ed economici.",
       neuronsNote: "I Neurons sono l'unità di consumo AI di Cloudflare. Il tuo piano include un'assegnazione giornaliera.",
+    },
+    insightModel: {
+      label: "Quale modello AI usare per gli insight",
+      desc: "Usato solo quando Second Brain confronta due ricordi e scrive un insight su come si collegano. Tutto il resto — ordinare, riassumere, individuare contraddizioni — usa il modello qui sopra.",
+      sizeNote: "I modelli più grandi trovano insight più acuti e costano più Neurons. Quelli più piccoli sono più rapidi ed economici.",
+      defaultNote: "Confrontare due ricordi è un giudizio più difficile che riassumerne uno solo, perciò qui il valore predefinito è un modello più grande di quello sopra — e poiché il confronto in sé è breve, costa comunque quasi lo stesso.",
     },
     migration: {
       lede: "Come il tuo Second Brain legge i tuoi ricordi e li abbina a ciò che chiedi.",

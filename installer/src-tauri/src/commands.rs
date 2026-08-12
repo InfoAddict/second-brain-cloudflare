@@ -2304,9 +2304,10 @@ pub async fn save_brain_settings(
     levels: Vec<(String, String)>,
     resets: Vec<String>,
     model: Option<String>,
+    insight_model: Option<String>,
 ) -> Result<crate::settings::SettingsView, String> {
     let (url, token, locale) = settings_target(&app)?;
-    crate::settings::apply_settings(&url, &token, &levels, &resets, model, locale).await?;
+    crate::settings::apply_settings(&url, &token, &levels, &resets, model, insight_model, locale).await?;
     crate::settings::fetch_settings(&url, &token, locale).await
 }
 
