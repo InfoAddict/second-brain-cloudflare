@@ -283,9 +283,12 @@ describe("runInsightAccrual()", () => {
 
   it("does not throw when the whole pass fails", async () => {
     const broken = { prepare: () => { throw new Error("D1 down"); } } as any;
+    // Nothing was ever read, so the summary reports zero examined rather than
+    // throwing or resolving to nothing — the caller (POST /insights/accrue)
+    // always gets a shape it can report, even on a broken run.
     await expect(
       runInsightAccrual(makeTestEnv(undefined, { DB: broken, OAUTH_KV: makeMemoryKV() }), ctx),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ seedsExamined: 0 });
   });
 
   it("seeds a candidate from a supersedes edge", async () => {
@@ -421,5 +424,45 @@ describe("runInsightAccrual()", () => {
     ).first() as { a_id: string; b_id: string; signal: string };
     expect(row.signal).toBe("supersedes");
     expect([row.a_id, row.b_id].sort()).toEqual(["explicit-a", "explicit-b"]);
+  });
+
+  describe("seedsExamined", () => {
+    // POST /insights/accrue (src/routes/admin.ts) reports this back so a
+    // self-hoster priming a large brain can see the pass making progress.
+    it("counts the whole window pulled this pass, not just the eligible subset", async () => {
+      seedNeighbour(sqlite);
+      // "too-short" fails the content floor and is never a seed, but it was
+      // still in the window this pass examined.
+      sqlite.seed({
+        id: "too-short", content: "short.", createdAt: NOW + DAY,
+        tags: ["pricing"], source: "claude-desktop", vectorIds: ["vec-too-short"], importanceScore: 0,
+      });
+      const summary = await runInsightAccrual(makeEnv(sqlite, [match()]), ctx);
+      // beforeEach seeds "seed-1"; seedNeighbour() adds "old-1"; this test
+      // adds "too-short" — three rows in the window total.
+      expect(summary).toEqual({ seedsExamined: 3 });
+    });
+
+    it("is nonzero even when the whole window is rejected (results.length, not seeds.length)", async () => {
+      // Fresh database, deliberately without beforeEach's eligible "seed-1" —
+      // this exercises the `!seeds.length` early return with results.length
+      // > 0, to confirm seedsExamined counts the window, not the eligible
+      // subset, on that path too.
+      sqlite.close();
+      sqlite = makeSqliteD1();
+      sqlite.seed({
+        id: "too-short", content: "short.", createdAt: NOW,
+        tags: ["pricing"], source: "claude-desktop", vectorIds: ["vec-too-short"], importanceScore: 0,
+      });
+      const summary = await runInsightAccrual(makeEnv(sqlite, []), ctx);
+      expect(summary).toEqual({ seedsExamined: 1 });
+    });
+
+    it("is zero when the window itself is empty", async () => {
+      sqlite.close();
+      sqlite = makeSqliteD1();
+      const summary = await runInsightAccrual(makeEnv(sqlite, []), ctx);
+      expect(summary).toEqual({ seedsExamined: 0 });
+    });
   });
 });

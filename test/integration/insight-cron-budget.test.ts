@@ -5,6 +5,8 @@ import { resetDatabaseInit } from "../../src/db/init";
 import { makeInsightFixture, FIXTURE_NOW } from "../helpers/insight-fixture";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
+import { handleAdminRoutes } from "../../src/routes/admin";
+import { req } from "../helpers/make-request";
 
 /**
  * A Worker invocation gets 50 D1 subrequests on the free plan, and every
@@ -169,5 +171,53 @@ describe("insight crons stay inside one invocation's budget", () => {
       kvPut.mock.calls.length;
     expect((sqlite.issued.length - before) + bindingCalls).toBeLessThan(SUBREQUEST_BUDGET);
     sqlite.close();
+  });
+});
+
+describe("POST /insights/accrue stays inside one invocation's budget", () => {
+  // The on-demand endpoint (src/routes/admin.ts) runs the exact same
+  // runInsightAccrual pass the nightly cron does, plus two cheap COUNT(*)
+  // queries against insight_candidates (before/after) to report what
+  // changed. It has to fit the same 50-subrequest ceiling — the platform
+  // does not grant fetch handlers a bigger budget than scheduled ones — so
+  // this measures the endpoint's total cost, not just the accrual pass
+  // underneath it.
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXTURE_NOW);
+    resetDatabaseInit();
+  });
+
+  it("stays under budget at a full seed batch", async () => {
+    // Same worst-case padding as "accrual stays under budget at a full seed
+    // batch" above — see that test's comment for why each pad seed points at
+    // a real, registered fixture vector rather than an unresolvable one.
+    const fx = makeInsightFixture();
+    for (let i = 0; i < ACCRUAL_SEED_LIMIT; i++) {
+      fx.sqlite.seed({
+        id: `pad-${i}`, createdAt: FIXTURE_NOW - i * DAY, tags: ["pricing"],
+        content: `A padding decision about the pricing model number ${i}, long enough to be eligible.`,
+        vectorIds: [`vec-${fx.all[i % fx.all.length].id}`],
+      });
+    }
+    const kvGet = vi.spyOn(fx.env.OAUTH_KV, "get");
+    const kvPut = vi.spyOn(fx.env.OAUTH_KV, "put");
+
+    const res = await handleAdminRoutes(
+      req("POST", "/insights/accrue"),
+      new URL("http://localhost/insights/accrue"),
+      fx.env,
+      ctx,
+    );
+    expect(res?.status).toBe(200);
+
+    const bindingCalls =
+      (fx.env.VECTORIZE.query as any).mock.calls.length +
+      (fx.env.VECTORIZE.getByIds as any).mock.calls.length +
+      kvGet.mock.calls.length +
+      kvPut.mock.calls.length;
+    // Measured: 37 (runInsightAccrual's own ~34-37 plus the endpoint's two
+    // COUNT(*) queries) — comfortably inside the 50-subrequest ceiling.
+    expect(fx.sqlite.issued.length + bindingCalls).toBeLessThan(SUBREQUEST_BUDGET);
+    fx.sqlite.close();
   });
 });
