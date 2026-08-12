@@ -47,7 +47,7 @@ function makeReasoningAI() {
       // text — and therefore captureEntry's stored content — is distinct per
       // candidate, not a repeat of the same string three times over.
       const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
-      const insight = `{"insight": true, "shape": "contradiction", "text": "You set tier ${tier} pricing flat for a while and later moved tier ${tier} to usage-based billing instead."}`;
+      const insight = `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`;
       return sse(prompt.includes("Memory A:") ? insight : "3");
     }),
   } as unknown as Ai;

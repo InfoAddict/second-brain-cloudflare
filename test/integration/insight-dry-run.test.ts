@@ -20,7 +20,7 @@ const DAY = 86400000;
 const NOW = 400 * DAY;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
-const GOOD = `{"insight": true, "shape": "contradiction", "text": "You set the pricing model flat and later moved it to usage-based billing."}`;
+const GOOD = `{"insight": true, "shape": "contradiction", "text": "You priced the first tier at nine dollars flat, then moved it to usage-based pricing instead."}`;
 
 function makeAI(payload: string) {
   return {
@@ -57,7 +57,7 @@ function makeTieredAI(declineTier: number) {
       const tier = Number(prompt.match(/tier (\d+)/)?.[1] ?? -1);
       if (tier === declineTier) return sse(`{"insight": false}`);
       return sse(
-        `{"insight": true, "shape": "contradiction", "text": "You set tier ${tier} pricing flat for a while and later moved tier ${tier} to usage-based billing instead."}`,
+        `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`,
       );
     }),
   } as unknown as Ai;
