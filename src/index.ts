@@ -47,7 +47,10 @@ export default {
     // The jobs are independent, and each begins by awaiting the shared schema init. One
     // of them failing — including on that init — must not take the others down or surface
     // as an unhandled rejection inside waitUntil.
-    const job = (name: string, run: Promise<void>) =>
+    // `Promise<unknown>` rather than `Promise<void>`: runInsightAccrual returns
+    // a summary (seeds examined) for POST /insights/accrue to report, and this
+    // scheduled path fires the same promise but never reads that value.
+    const job = (name: string, run: Promise<unknown>) =>
       ctx.waitUntil(run.catch((e) => console.error(`${name} failed (non-fatal):`, e)));
 
     // Two schedules, two budgets (#290). A Worker invocation gets 50 D1 queries and 10 ms

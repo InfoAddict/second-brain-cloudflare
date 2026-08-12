@@ -72,20 +72,109 @@ const distinctiveTokens = (text: string): Set<string> =>
   );
 
 /**
- * Does the insight name something specific from this source?
+ * Does the insight text draw on vocabulary particular to EACH side, not just
+ * vocabulary the two entries already share?
  *
- * The failure this exists to catch is the centroid statement — text that echoes
- * only the topic two entries have in common and nothing particular to either.
- * Requiring overlap with each side independently is what separates "you often
- * talk about building a second brain" from an observation about two memories.
+ * The rule this replaced required a distinctive token from A, checked
+ * independently of a distinctive token from B — "shares a distinctive token
+ * with each entry". A noun both entries happen to contain (the shared topic
+ * that made them a candidate pair in the first place) satisfies that against
+ * both sides at once, trivially, every time. That is precisely the centroid
+ * failure: "you often talk about your second brain project" echoes only what
+ * the two entries have in common and names nothing particular to either.
+ *
+ * The asymmetric version requires a token that is distinctive to A AND ABSENT
+ * from B, and — separately — a token distinctive to B AND absent from A. A
+ * real insight says something particular to each side; a centroid can only
+ * ever draw on their intersection.
+ *
+ * Degenerate case: the old rule's "source has no distinctive vocabulary of
+ * its own" (an entry that is all stopwords) returned true, because there was
+ * nothing to require. The asymmetric analogue is an entry whose entire
+ * distinctive vocabulary is already contained in the other's — near-duplicate
+ * entries, or one side's topic wholly subsumed by the other's. When a side
+ * has no vocabulary that is ITS ALONE (onlyA / onlyB empty), that side has
+ * nothing distinctive to ask for and cannot veto — handled explicitly below,
+ * not as an accident of the boolean logic. If both sides are empty this way,
+ * the two entries are too similar for the vocabulary floor to do any work at
+ * all, and the prompt-level judgment (plus the restatement blocklist below)
+ * is what is left to catch it.
  */
-export function sharesVocabulary(text: string, source: string): boolean {
-  const wanted = distinctiveTokens(source);
-  if (!wanted.size) return true; // nothing distinctive to match against
-  for (const token of distinctiveTokens(text)) {
-    if (wanted.has(token)) return true;
-  }
-  return false;
+export function sharesVocabulary(text: string, a: string, b: string): boolean {
+  const insightTokens = distinctiveTokens(text);
+  const tokensA = distinctiveTokens(a);
+  const tokensB = distinctiveTokens(b);
+
+  const onlyA = [...tokensA].filter(t => !tokensB.has(t));
+  const onlyB = [...tokensB].filter(t => !tokensA.has(t));
+
+  const namesA = onlyA.length === 0 || onlyA.some(t => insightTokens.has(t));
+  const namesB = onlyB.length === 0 || onlyB.some(t => insightTokens.has(t));
+
+  return namesA && namesB;
+}
+
+/**
+ * A small, narrow backstop for the restatement framings the prompt above now
+ * explicitly asks the model not to produce — not a style filter, and not a
+ * substitute for that prompt instruction. A model that ignores the prompt
+ * should still be caught mechanically, but the prompt change is what is
+ * meant to keep the phrasing from happening in the first place.
+ *
+ * This code ships in a public template that other people self-host against
+ * their own brains, so the list below is deliberately narrow: every phrase
+ * here asserts bare co-occurrence and cannot appear in a well-formed
+ * insight ("X is mentioned in both" says nothing about what changed, no
+ * matter whose brain it is), or leaks the prompt's own scaffolding labels
+ * ("Memory A" / "Memory B") into user-facing text.
+ *
+ * These eight real proposals, captured off the live endpoint against one
+ * brain, are the evidence the list below is observed rather than guessed —
+ * but they are evidence of how the model writes when it has nothing to say,
+ * not evidence about that brain's subject matter, and the list must not be
+ * fitted to them:
+ *
+ *   1. "...in Memory A, and in Memory B, you noted that there were replies
+ *       posted, upvotes clicked..."
+ *   2. "...first planning a promotional strategy in Memory A and then
+ *       executing it in Memory B..."
+ *   3. "...is mentioned in both memories, with Memory A discussing it...
+ *       and Memory B describing..."
+ *   4. "...is a recurring concern, as seen in Memory A's discussion of..."
+ *   5. "...in both posts, showing a consistent concern over time."
+ *   6. "...indicating a ongoing concern with the consistency and
+ *       development of this technology stack."
+ *   7. "...is a recurring concern that evolved in your thinking from
+ *       identifying the problem... to developing a solution..."
+ *   8. "...in Memory A, and later drafted YouTube comments... suggesting a
+ *       continued exploration of AI memory and cost optimization."
+ *
+ * Deliberately NOT included, even though they appear above: "recurring
+ * theme", "recurring concern", "consistent concern", "ongoing concern",
+ * "continued exploration". Each is ordinary English that a genuine insight
+ * can legitimately contain — "your recurring concern about onboarding
+ * friction resolved when you shipped the installer" is a real observation,
+ * not a restatement — so blocking the phrase would reject good output for
+ * anyone whose brain actually has that shape, on the strength of one model
+ * overusing it against one dataset. Sample 7 above (the one candidate of
+ * the eight judged a real insight) contains "recurring concern" verbatim,
+ * which is exactly this risk realized: a broader list would have rejected
+ * the one good sample for the same surface reason it rejects sample 4's bad
+ * one. Do not add these back without re-litigating this trade-off — the
+ * asymmetric vocabulary check above and the prompt instruction are what are
+ * meant to carry that weight instead.
+ */
+const RESTATEMENT_PHRASES = [
+  "mentioned in both",
+  "in both memories",
+  "appears in both",
+  "memory a",
+  "memory b",
+];
+
+export function isRestatementFraming(text: string): boolean {
+  const lower = text.toLowerCase();
+  return RESTATEMENT_PHRASES.some(phrase => lower.includes(phrase));
 }
 
 export function parseInsightResponse(raw: string): ReasonedInsight | null {
@@ -126,7 +215,14 @@ ${first}
 Memory B:
 ${second}
 
-Is there a real, specific insight in the relationship between these two? Only answer yes if you can name something concrete from BOTH memories. Restating what they have in common is not an insight.
+Is there a real, specific insight in the relationship between these two? Only answer yes if you can name something concrete from BOTH memories.
+
+Restating what they have in common is not an insight. Specifically, do not:
+- say something "is mentioned in both" memories, or call it a "recurring theme" or "recurring concern"
+- just narrate that the person did one thing in the first memory and then did another in the second
+- refer to the inputs as "Memory A" or "Memory B" in your answer — write to the person directly, not about the documents
+
+Instead, name what changed between the two, what they conflict on, or what genuinely connects them that the person would not already have noticed just from having written both.
 
 The shape is one of:
 - "contradiction" — B reverses, revises or conflicts with A
@@ -140,7 +236,13 @@ Respond with JSON only. No text outside the JSON object.
 
   let raw = "";
   try {
-    const stream = await (env.AI as any).run(config.LLM_MODEL as any, {
+    // config.INSIGHT_LLM_MODEL, deliberately not config.LLM_MODEL — this is
+    // the one call in the codebase reasoning over two whole memories at once
+    // rather than classifying, extracting or summarizing one, and it is worth
+    // a stronger model. See the cost comment on constants.INSIGHT_LLM_MODEL
+    // for why that does not also change classification, contradiction
+    // detection, smart merge, digests or recall synthesis.
+    const stream = await (env.AI as any).run(config.INSIGHT_LLM_MODEL as any, {
       messages: [{ role: "user", content: prompt }],
       max_tokens: INSIGHT_PASS_MAX_TOKENS,
       stream: true,
@@ -157,10 +259,11 @@ Respond with JSON only. No text outside the JSON object.
   const parsed = parseInsightResponse(raw);
   if (!parsed) return { outcome: "declined" };
 
-  // The mechanical floor. A real insight names something from each side; a
-  // centroid names only what they share.
-  if (!sharesVocabulary(parsed.text, first)) return { outcome: "declined" };
-  if (!sharesVocabulary(parsed.text, second)) return { outcome: "declined" };
+  // The mechanical floor. A real insight draws on vocabulary particular to
+  // each side, not just what they share, and doesn't reach for the stock
+  // phrases that mean the model gave up and restated the pair instead.
+  if (isRestatementFraming(parsed.text)) return { outcome: "declined" };
+  if (!sharesVocabulary(parsed.text, first, second)) return { outcome: "declined" };
 
   return { outcome: "insight", shape: parsed.shape, text: parsed.text };
 }

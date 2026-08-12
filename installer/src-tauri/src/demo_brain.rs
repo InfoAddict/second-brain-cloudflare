@@ -72,10 +72,12 @@ const STALL_ENV: &str = "SECOND_BRAIN_DEMO_STALL_AFTER";
 /// variable made first-time demo setup die with "Something went wrong".
 const ROTATE_ENV: &str = "SECOND_BRAIN_DEMO_ROTATE_AFTER";
 
-/// Shipped in `src/config.ts` DEFAULTS. Both must be values the pickers offer,
-/// or the settings window shows a model that is not in its own dropdown and the
-/// migration pane cannot read the current dimensions — asserted in tests.
+/// Shipped in `src/config.ts` DEFAULTS. All three must be values the pickers
+/// offer, or the settings window shows a model that is not in its own dropdown
+/// and the migration pane cannot read the current dimensions — asserted in
+/// tests.
 const DEMO_LLM_MODEL: &str = "@cf/meta/llama-4-scout-17b-16e-instruct";
+const DEMO_INSIGHT_LLM_MODEL: &str = "@cf/openai/gpt-oss-120b";
 const DEMO_EMBEDDING_MODEL: &str = "@cf/baai/bge-small-en-v1.5";
 
 /// Returned when loopback cannot be bound at all. Port 1 refuses instantly, so
@@ -172,6 +174,7 @@ pub fn shipped_config() -> Map<String, Value> {
         out.extend(patch);
     }
     out.insert("LLM_MODEL".into(), json!(DEMO_LLM_MODEL));
+    out.insert("INSIGHT_LLM_MODEL".into(), json!(DEMO_INSIGHT_LLM_MODEL));
     out.insert("EMBEDDING_MODEL".into(), json!(DEMO_EMBEDDING_MODEL));
     out
 }
@@ -1031,17 +1034,22 @@ mod tests {
             );
         }
         assert_eq!(view.llm_model, DEMO_LLM_MODEL);
+        assert_eq!(view.insight_llm_model, DEMO_INSIGHT_LLM_MODEL);
     }
 
-    /// The two models must be ones the pickers offer. An LLM_MODEL outside
-    /// `LLM_MODELS` renders an empty dropdown selection; an EMBEDDING_MODEL
-    /// outside `EMBEDDING_MODELS` leaves `oldDimensions` null, which makes the
-    /// last migration step unreachable.
+    /// The three models must be ones the pickers offer. An LLM_MODEL or
+    /// INSIGHT_LLM_MODEL outside `LLM_MODELS` renders an empty dropdown
+    /// selection; an EMBEDDING_MODEL outside `EMBEDDING_MODELS` leaves
+    /// `oldDimensions` null, which makes the last migration step unreachable.
     #[test]
-    fn both_demo_models_are_offered_by_the_pickers() {
+    fn all_demo_models_are_offered_by_the_pickers() {
         assert!(
             settings::LLM_MODELS.contains(&DEMO_LLM_MODEL),
             "{DEMO_LLM_MODEL} is not in the dropdown"
+        );
+        assert!(
+            settings::LLM_MODELS.contains(&DEMO_INSIGHT_LLM_MODEL),
+            "{DEMO_INSIGHT_LLM_MODEL} is not in the dropdown"
         );
         assert!(
             crate::migration::dimensions_for(DEMO_EMBEDDING_MODEL).is_some(),
@@ -1065,10 +1073,14 @@ mod tests {
                 "{key} is not a Worker default — the demo reports a setting that does not exist"
             );
         }
-        // And the two model strings must be the shipped ones, not a guess.
+        // And the three model strings must be the shipped ones, not a guess.
         assert!(
             defaults.contains(&format!("LLM_MODEL: \"{DEMO_LLM_MODEL}\"")),
             "LLM_MODEL drifted from src/config.ts"
+        );
+        assert!(
+            defaults.contains(&format!("INSIGHT_LLM_MODEL: \"{DEMO_INSIGHT_LLM_MODEL}\"")),
+            "INSIGHT_LLM_MODEL drifted from src/config.ts"
         );
         assert!(
             defaults.contains(&format!("EMBEDDING_MODEL: \"{DEMO_EMBEDDING_MODEL}\"")),
@@ -1103,6 +1115,7 @@ mod tests {
             &[("variety".into(), "varied".into())],
             &[],
             None,
+            None,
             Locale::En,
         )
         .await
@@ -1115,6 +1128,32 @@ mod tests {
         // ...and only that control moved.
         let detail = view.controls.iter().find(|c| c.id == "detail").expect("detail");
         assert_eq!(detail.level.as_deref(), Some("standard"));
+    }
+
+    /// The insight model has its own save path, separate from `LLM_MODEL` — this
+    /// proves a save actually reaches the Worker and comes back on the next read,
+    /// the same round trip `a_saved_level_is_what_the_next_read_reports` proves
+    /// for a level.
+    #[tokio::test]
+    async fn a_saved_insight_model_is_what_the_next_read_reports() {
+        let url = brain();
+        settings::apply_settings(
+            &url,
+            "demo",
+            &[],
+            &[],
+            None,
+            Some("@cf/qwen/qwen2.5-coder-32b-instruct".into()),
+            Locale::En,
+        )
+        .await
+        .expect("save");
+
+        let view = settings::fetch_settings(&url, "demo", Locale::En).await.expect("view");
+        assert_eq!(view.insight_llm_model, "@cf/qwen/qwen2.5-coder-32b-instruct");
+
+        // ...and the general-purpose model must be untouched by an insight-only save.
+        assert_eq!(view.llm_model, DEMO_LLM_MODEL);
     }
 
     #[tokio::test]
@@ -1139,6 +1178,7 @@ mod tests {
             "demo",
             &[("recency".into(), "recent_first".into())],
             &[],
+            None,
             None,
             Locale::En,
         )

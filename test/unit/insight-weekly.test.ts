@@ -8,7 +8,7 @@ const DAY = 86400000;
 const NOW = 400 * DAY;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
-const GOOD = `{"insight": true, "shape": "contradiction", "text": "You set the pricing model flat for that tier and later reversed it to usage-based billing."}`;
+const GOOD = `{"insight": true, "shape": "contradiction", "text": "You priced that tier at nine dollars flat, then reversed course to usage-based pricing instead."}`;
 
 /** The AI mock must serve three callers: embeddings, the classifier inside
  *  captureEntry (streaming SSE), and the reasoning call (also streaming). */
@@ -241,7 +241,7 @@ describe("runWeeklyInsights()", () => {
         if (!prompt.includes("Memory A:")) return sse("3");
         const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
         return sse(
-          `{"insight": true, "shape": "contradiction", "text": "You set tier ${tier} pricing flat for a while and later moved tier ${tier} to usage-based billing instead."}`,
+          `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`,
         );
       }),
     } as unknown as Ai;

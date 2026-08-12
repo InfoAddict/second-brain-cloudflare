@@ -14,6 +14,7 @@ import { checkVectorizeHealth } from "../vectorize/health";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { reasonOverPair } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN } from "../insight/weekly";
+import { runInsightAccrual } from "../insight/candidates";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -26,7 +27,7 @@ export async function handleAdminRoutes(
   request: Request,
   url: URL,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response | null> {
   const cfg = await resolveConfig(env);
   // GET /stats
@@ -356,6 +357,52 @@ export async function handleAdminRoutes(
     ).first() as Record<string, any> | null;
 
     return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+  }
+
+  // POST /insights/accrue — run one accrual pass on demand, right now.
+  //
+  // The nightly cron (runInsightAccrual, src/insight/candidates.ts) examines
+  // only ACCRUAL_SEED_LIMIT (25) entries per run, topped up from a backfill
+  // cursor on quiet nights. That is fine for a brain that grows a little
+  // every day, but a self-hoster installing this against an EXISTING brain
+  // of a few thousand entries would otherwise wait months for the backfill
+  // cursor to cross it once — the weekly pass would have almost nothing to
+  // reason over, and the feature would look broken with no way to prime it.
+  //
+  // This calls the exact same function the cron does, once, synchronously,
+  // and reports what it found — no separate accrual logic lives here. The
+  // cursor it walks is the SAME cursor the nightly cron uses (KV key
+  // ACCRUAL_CURSOR_KEY), so calling this repeatedly walks it forward exactly
+  // like repeated nights would: that is the intended way to prime a large
+  // brain, not a one-shot backfill. Call it until `seeds_examined` comes back
+  // small — that means the cursor has caught up to the present.
+  if (url.pathname === "/insights/accrue" && request.method === "POST") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    const pendingCount = () =>
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM insight_candidates WHERE status = 'pending'`)
+        .first() as Promise<Record<string, any> | null>;
+
+    // Before/after rather than threading a write-count out of
+    // runInsightAccrual itself: every row it inserts starts 'pending' and
+    // nothing else in this request can change that count concurrently, so
+    // the delta is exactly how many candidates this pass newly recorded —
+    // including the ON CONFLICT(a_id, b_id) DO NOTHING case, where an
+    // attempted insert did not actually add a row.
+    const before = await pendingCount();
+    const { seedsExamined } = await runInsightAccrual(env, ctx);
+    const after = await pendingCount();
+
+    const pendingTotal = (after?.n as number) ?? 0;
+    const pendingBefore = (before?.n as number) ?? 0;
+
+    return json({
+      ok: true,
+      seeds_examined: seedsExamined,
+      candidates_recorded: pendingTotal - pendingBefore,
+      pending_total: pendingTotal,
+    });
   }
 
   // GET /insights/dry-run — what the weekly pass would say, without saying it.

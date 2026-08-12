@@ -121,7 +121,21 @@ function seedSql(hasCursor: boolean): string {
            LIMIT ${ACCRUAL_SEED_LIMIT}`;
 }
 
-export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promise<void> {
+/**
+ * What one accrual pass did. `seedsExamined` is the size of the window
+ * pulled this pass (bounded by ACCRUAL_SEED_LIMIT) — every row looked at,
+ * whether or not it turned out eligible — which is what `POST
+ * /insights/accrue` (src/routes/admin.ts) reports back so a self-hoster
+ * priming a large brain can tell the pass is making progress and knows when
+ * to stop calling it (seedsExamined drops once the cursor reaches the end of
+ * the table).
+ */
+export interface AccrualSummary {
+  seedsExamined: number;
+}
+
+export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promise<AccrualSummary> {
+  let seedsExamined = 0;
   try {
     await initializeDatabase(env);
 
@@ -140,6 +154,7 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
         ? await env.DB.prepare(seedSql(true)).bind(cursor.createdAt, cursor.createdAt, cursor.id).all()
         : await env.DB.prepare(seedSql(false)).all()
     ) as { results: SeedRow[] };
+    seedsExamined = results.length;
 
     const seeds = results.filter(r =>
       isInsightEligible({ content: r.content, tags: parseTags(r.tags), source: r.source })
@@ -153,7 +168,7 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
       // holding the cursor buys nothing: it would just re-read the same
       // rejected window every night, wedging accrual permanently.
       if (results.length) await writeCursor(env, results[results.length - 1]);
-      return;
+      return { seedsExamined };
     }
 
     const vectorById = new Map<string, number[]>();
@@ -176,7 +191,7 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
     // returns an empty array rather than throwing — but advancing the cursor
     // past seeds that were never examined would skip them permanently, which
     // is precisely what the cursor exists to prevent. Leave it and retry.
-    if (!vectorById.size) return;
+    if (!vectorById.size) return { seedsExamined };
 
     // Candidate neighbours, gathered across every seed before any of them is
     // trusted. Only two things are decided from the Vectorize match itself:
@@ -366,7 +381,9 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
     // where it was, so tomorrow re-examines this slice rather than skipping it —
     // and the UNIQUE constraint makes the repeat a no-op.
     await writeCursor(env, seeds[seeds.length - 1]);
+    return { seedsExamined };
   } catch (e) {
     console.error("Insight accrual failed (non-fatal):", e);
+    return { seedsExamined };
   }
 }
