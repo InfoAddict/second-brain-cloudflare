@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseInsightResponse, sharesVocabulary, isRestatementFraming, reasonOverPair } from "../../src/insight/reason";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
+import { DEFAULTS } from "../../src/config";
 
 function makeAI(payload: string) {
   return {
@@ -326,5 +327,24 @@ describe("reasonOverPair()", () => {
       AI: { run: vi.fn().mockRejectedValue(new Error("AI down")) } as unknown as Ai,
     });
     await expect(reasonOverPair(a, b, env)).resolves.toEqual({ outcome: "failed" });
+  });
+
+  it("calls the model with config.INSIGHT_LLM_MODEL, never config.LLM_MODEL", async () => {
+    // LLM_MODEL is shared with classification, contradiction detection, smart
+    // merge, digests and recall synthesis; INSIGHT_LLM_MODEL is this call's
+    // own setting (see src/constants.ts). Set the two to different,
+    // recognisable strings so a regression that reads the wrong one is
+    // visible here rather than passing by coincidence.
+    const ai = makeAI(`{"insight": false}`);
+    const env = makeTestEnv(makeTestDb(), { AI: ai });
+    const config = {
+      ...DEFAULTS,
+      LLM_MODEL: "should-not-be-used-by-insight-reasoning",
+      INSIGHT_LLM_MODEL: "insight-only-model-for-test",
+    };
+
+    await reasonOverPair(a, b, env, config);
+
+    expect((ai.run as any).mock.calls[0][0]).toBe("insight-only-model-for-test");
   });
 });

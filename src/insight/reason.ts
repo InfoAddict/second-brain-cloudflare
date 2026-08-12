@@ -236,7 +236,13 @@ Respond with JSON only. No text outside the JSON object.
 
   let raw = "";
   try {
-    const stream = await (env.AI as any).run(config.LLM_MODEL as any, {
+    // config.INSIGHT_LLM_MODEL, deliberately not config.LLM_MODEL — this is
+    // the one call in the codebase reasoning over two whole memories at once
+    // rather than classifying, extracting or summarizing one, and it is worth
+    // a stronger model. See the cost comment on constants.INSIGHT_LLM_MODEL
+    // for why that does not also change classification, contradiction
+    // detection, smart merge, digests or recall synthesis.
+    const stream = await (env.AI as any).run(config.INSIGHT_LLM_MODEL as any, {
       messages: [{ role: "user", content: prompt }],
       max_tokens: INSIGHT_PASS_MAX_TOKENS,
       stream: true,

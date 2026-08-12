@@ -191,13 +191,15 @@ describe("GET /insights/dry-run", () => {
     expect(body.candidates).toEqual([]);
   });
 
-  it("reasons with the configured LLM_MODEL, not the shipped default", async () => {
+  it("reasons with the configured INSIGHT_LLM_MODEL, not the shipped default", async () => {
     // makeAI's mock answers the same way whatever model string it's called
     // with, so this has to inspect the call itself — a regression that drops
-    // `cfg` and silently falls back to DEFAULTS.LLM_MODEL would otherwise
-    // pass every other test in this file unnoticed.
+    // `cfg` and silently falls back to DEFAULTS.INSIGHT_LLM_MODEL would
+    // otherwise pass every other test in this file unnoticed. reasonOverPair
+    // (src/insight/reason.ts) reads INSIGHT_LLM_MODEL, not the shared
+    // LLM_MODEL every other feature uses — see src/constants.ts.
     const kv = makeMemoryKV();
-    await kv.put(CONFIG_KEY, JSON.stringify({ LLM_MODEL: "custom-model-for-test" }));
+    await kv.put(CONFIG_KEY, JSON.stringify({ INSIGHT_LLM_MODEL: "custom-model-for-test" }));
     const ai = makeAI(GOOD);
     const env = makeTestEnv(undefined, {
       DB: sqlite.db as any, AI: ai, OAUTH_KV: kv, VECTORIZE: makeVectorizeMock(),
