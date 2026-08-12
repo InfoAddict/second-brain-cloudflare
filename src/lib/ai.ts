@@ -16,6 +16,12 @@ export function graceMs(env: Env): number {
  * That chain-of-thought is deliberately never returned here: every caller of
  * `readStreamText` treats the result as the answer — JSON.parse'ing it or
  * feeding it straight into a digest — not as reasoning prose.
+ *
+ * POST /chat (src/routes/recall.ts) is the one caller that does NOT go
+ * through `readStreamText` — it streams the raw Workers AI response
+ * straight to the browser, so public/js/recall.js hand-mirrors this exact
+ * function (extractChatChunkText) and the buffering below it. Keep the two
+ * in sync: a change here is a prompt to check there, and vice versa.
  */
 function extractChunkText(d: any): string {
   if (d?.response) return d.response;
