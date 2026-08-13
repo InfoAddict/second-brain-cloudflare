@@ -343,7 +343,7 @@ const I18N_EN = {
   patterns: {
     title: 'Insights noticed',
     intro:
-      'Your brain drew these by connecting two memories written weeks apart. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.',
+      'Your brain drew these by connecting two memories written months apart. Confirm one to make it a trusted, recallable fact; dismiss to discard it. Nothing here is searchable until you confirm it.',
     selectAll: 'Select all',
     nSelected: '{n} selected',
     confirmN: 'Confirm {n}',
@@ -733,7 +733,7 @@ const I18N_IT = {
   patterns: {
     title: 'Insight notati',
     intro:
-      'Il cervello li ha ricavati collegando due ricordi scritti a distanza di settimane. Confermane uno per renderlo un fatto affidabile e richiamabile; ignoralo per scartarlo. Nulla qui è ricercabile finché non confermi.',
+      'Il cervello li ha ricavati collegando due ricordi scritti a distanza di mesi. Confermane uno per renderlo un fatto affidabile e richiamabile; ignoralo per scartarlo. Nulla qui è ricercabile finché non confermi.',
     selectAll: 'Seleziona tutti',
     nSelected: '{n} selezionati',
     confirmN: 'Conferma {n}',
