@@ -227,7 +227,7 @@ describe("the settings entry point", () => {
     const ctx = load();
     ctx.renderPatternsSection(214);
     const html = ctx.__els.get("patterns-section").innerHTML;
-    expect(html).toContain("214 patterns are waiting");
+    expect(html).toContain("214 insights are waiting");
     expect(html).toContain("Review all");
     expect(html).not.toContain("pattern-row");
   });
@@ -236,7 +236,7 @@ describe("the settings entry point", () => {
     const ctx = load();
     ctx.renderPatternsSection(1);
     const html = ctx.__els.get("patterns-section").innerHTML;
-    expect(html).toContain("1 pattern is waiting");
+    expect(html).toContain("1 insight is waiting");
     expect(html).toContain("Review it");
   });
 
@@ -253,6 +253,6 @@ describe("the settings entry point", () => {
     ctx.fetch = (url: string, init: any) => { urls.push(url); return inner(url, init); };
     await ctx.loadPatternCount();
     expect(urls[0]).toContain("limit=1");
-    expect(ctx.__els.get("patterns-section").innerHTML).toContain("214 patterns");
+    expect(ctx.__els.get("patterns-section").innerHTML).toContain("214 insights");
   });
 });
