@@ -5,7 +5,11 @@
 // jobs had spent the night compressing, linking and judging. None of that work
 // was visible anywhere until you went looking for it in a settings menu.
 //
-// Everything here is read back, never computed: one GET /brief, no AI calls.
+// Everything here is read back, never computed: one GET /brief, no AI calls —
+// with one deliberate exception. /brief hands back a third pending insight
+// beyond the two the card shows, purely as a sign a backlog exists; getting
+// its exact size costs a second request, made only once that sign has fired
+// (see loadMoreInsightsTotal below).
 // The brief is deliberately small and quiet — if nothing happened it says
 // almost nothing rather than inventing activity, because a home screen that
 // manufactures news to justify itself is worse than an empty one.
@@ -21,10 +25,30 @@ async function loadBrief() {
     if (!res.ok) return // an older Worker has no /brief; the hero stays
     briefData = await res.json()
     if (!briefData.ok) return
+    if ((briefData.patterns || []).length > 2) {
+      briefData.patternsTotal = await loadMoreInsightsTotal()
+    }
     if (typeof renderHome === 'function') renderHome(briefData)
     renderBrief(briefData)
   } catch {
     // Offline or a stale deploy — the welcome hero is a fine fallback.
+  }
+}
+
+/**
+ * How many insights are actually waiting, asked for only when the brief
+ * already knows there are more than it can show (a third row came back from
+ * /brief's LIMIT 3). Same endpoint the Upkeep panel counts against
+ * (loadPatternCount, patterns.js) — `limit=1` costs the same regardless of
+ * how large the real queue is.
+ */
+async function loadMoreInsightsTotal() {
+  try {
+    const res = await fetch(`${WORKER_URL}/patterns?limit=1`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    const data = await res.json()
+    return data.ok ? data.total : null
+  } catch {
+    return null // the card still reads fine without a number
   }
 }
 
@@ -102,16 +126,39 @@ function renderBrief(data) {
   const cards = []
   // Patterns are excluded from recall until ruled on, so one sitting unseen in
   // a settings menu is the same as one thrown away.
-  for (const p of (data.patterns || []).slice(0, 2)) {
+  const pending = data.patterns || []
+  for (const p of pending.slice(0, 2)) {
+    // An insight IS the content, not a headline for it — clipping it to a
+    // title-length snippet asked for a Confirm/Dismiss decision on a sentence
+    // the card cut off. The pass writes one or two sentences and rejects
+    // anything under 40 characters, so the full text is always this short.
+    const { text, shape } = splitInsightShape(p.content)
+    const label = shape
+      ? `${t('brief.patternNoticed')}${t('brief.shapeSuffix', { shape: t(`patterns.shapes.${shape}`) })}`
+      : t('brief.patternNoticed')
     cards.push(`
       <div class="brief-card" data-pattern="${escAttr(p.id)}">
-        <div class="brief-label">${escHtml(t('brief.patternNoticed'))}</div>
-        <div class="brief-body">${escHtml(titleLine(p.content, 140))}</div>
+        <div class="brief-label">${escHtml(label)}</div>
+        <div class="brief-body">${escHtml(text)}</div>
         <div class="brief-actions">
           <button class="digest-btn" onclick="briefResolvePattern('${escAttr(p.id)}', 'confirm', this)">${escHtml(t('brief.confirm'))}</button>
           <button class="digest-btn danger" onclick="briefResolvePattern('${escAttr(p.id)}', 'dismiss', this)">${escHtml(t('brief.dismiss'))}</button>
         </div>
       </div>`)
+  }
+  // The brief only ever shows two; a brain that has been running a while has
+  // more behind them, and the only route there used to be the "⋯" menu's
+  // Upkeep group, which stays hidden unless a chore happens to be pending.
+  // The /brief query itself fetches one row past what the card shows
+  // (LIMIT 3, see src/routes/admin.ts) purely as this signal — asking for the
+  // real total would be a seventh D1 query on every app open, so that only
+  // happens once the signal has actually fired (loadBrief, below).
+  if (pending.length > 2) {
+    const moreLabel =
+      typeof data.patternsTotal === 'number' && data.patternsTotal > 2
+        ? tPlural('brief.moreInsights', data.patternsTotal - 2)
+        : t('brief.moreInsightsGeneric')
+    cards.push(`<button class="digest-more brief-more" onclick="openPatternsSheet()">${escHtml(moreLabel)}</button>`)
   }
   if (data.resurface) {
     const when = data.resurface.created_at

@@ -3067,6 +3067,13 @@
         margin-top: 10px;
       }
 
+      /* Sits in the same list as the cards above it, so it takes the same
+         block rhythm rather than the inline width a bare <button> defaults to. */
+      .brief-more {
+        display: block;
+        margin: 0 0 10px;
+      }
+
       .brief-suggestions {
         display: flex;
         flex-wrap: wrap;
