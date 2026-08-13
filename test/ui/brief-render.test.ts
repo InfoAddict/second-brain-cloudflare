@@ -102,6 +102,102 @@ describe("the daily brief", () => {
     expect(html).toContain("Dismiss");
     // Two is a brief; three is a queue.
     expect(html.match(/Insight noticed/g)).toHaveLength(2);
+    // A third one is pending behind the two shown, so there has to be a way to
+    // it — the "⋯" menu's Upkeep group is invisible unless a chore happens to
+    // be waiting, which is not a door most people find.
+    expect(html).toContain("openPatternsSheet()");
+  });
+
+  it("renders the whole insight, not a title-length clip of it", () => {
+    const ctx = load();
+    // One sentence, deliberately past the old 140-char title budget — this is
+    // an ordinary length for what the weekly pass writes, not an edge case.
+    const sentence =
+      "That same workflow now automatically captures the release PR you merge, which is exactly the kind of duplication you spent March complaining about and then quietly automated away in April.";
+    expect(sentence.length).toBeGreaterThan(140);
+    ctx.renderBrief({
+      ...empty,
+      patterns: [{ id: "p1", content: `${sentence}\n\n[Insight: throughline — drawn from 2 memories]` }],
+    });
+    const html = ctx.__els.get("brief").innerHTML;
+    // The whole sentence, verbatim. Confirm/Dismiss ask for a decision on
+    // text a person can actually finish reading.
+    expect(html).toContain(sentence);
+    expect(html).not.toContain("…");
+    // The provenance line is bookkeeping for the pass, not something to read
+    // back to the person who has to rule on this.
+    expect(html).not.toContain("[Insight:");
+    expect(html).not.toContain("drawn from 2 memories");
+    // ...but the shape of the observation is genuinely informative, so it is
+    // surfaced deliberately rather than thrown away with the rest of the line.
+    expect(html).toContain("Throughline");
+  });
+
+  it("offers a way to the rest of the queue only when there is a rest", () => {
+    const ctx = load();
+    ctx.renderBrief({
+      ...empty,
+      patterns: [
+        { id: "p1", content: "You keep deferring the pricing decision." },
+        { id: "p2", content: "You review PRs in the evening." },
+      ],
+    });
+    // Exactly two pending, exactly two shown — nothing waits behind them.
+    expect(ctx.__els.get("brief").innerHTML).not.toContain("openPatternsSheet()");
+  });
+
+  it("reads generically until the real count is known, then says exactly how many", () => {
+    const ctx = load();
+    const threePending = {
+      ...empty,
+      patterns: [
+        { id: "p1", content: "You keep deferring the pricing decision." },
+        { id: "p2", content: "You review PRs in the evening." },
+        { id: "p3", content: "A third that should not crowd the screen." },
+      ],
+    };
+    ctx.renderBrief(threePending);
+    expect(ctx.__els.get("brief").innerHTML).toContain("More insights are waiting");
+
+    ctx.renderBrief({ ...threePending, patternsTotal: 214 });
+    // 214 total, 2 already on screen as cards — 212 are genuinely elsewhere.
+    expect(ctx.__els.get("brief").innerHTML).toContain("212 more insights waiting");
+  });
+
+  it("asks for the real total only once the brief already knows there is more", async () => {
+    const ctx = load();
+    const calls: string[] = [];
+    ctx.fetch = async (url: string) => {
+      calls.push(url);
+      if (url.includes("/patterns")) return { ok: true, json: async () => ({ ok: true, total: 214 }) };
+      return {
+        ok: true,
+        json: async () => ({
+          ...empty,
+          patterns: [
+            { id: "p1", content: "You keep deferring the pricing decision." },
+            { id: "p2", content: "You review PRs in the evening." },
+            { id: "p3", content: "A third that should not crowd the screen." },
+          ],
+        }),
+      };
+    };
+    await ctx.loadBrief();
+    expect(calls.some((u) => u.includes("/patterns?limit=1"))).toBe(true);
+    expect(ctx.__els.get("brief").innerHTML).toContain("212 more insights waiting");
+  });
+
+  it("does not pay for a count nobody needs when nothing is waiting behind the brief", async () => {
+    const ctx = load();
+    const calls: string[] = [];
+    ctx.fetch = async (url: string) => {
+      calls.push(url);
+      return { ok: true, json: async () => ({ ...empty, patterns: [{ id: "p1", content: "The only one pending." }] }) };
+    };
+    await ctx.loadBrief();
+    // Just the one /brief call — no seventh query for a number the resting
+    // state of the app does not need.
+    expect(calls).toHaveLength(1);
   });
 
   it("dates the resurfaced memory by name, not 8/2/2026", () => {

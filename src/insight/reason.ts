@@ -33,9 +33,9 @@ export interface ReasonedInsight {
  *   - "insight"  — a real insight, ready to write.
  *   - "declined" — the model gave an answer and it was not an insight: an
  *     explicit `{"insight": false}`, malformed output, an invalid shape, text
- *     too short, or a failure of the vocabulary floor. Re-asking the same
- *     model the same question about the same pair is not expected to change
- *     the answer, so this is a settled no.
+ *     too short or too long, or a failure of the vocabulary floor. Re-asking
+ *     the same model the same question about the same pair is not expected
+ *     to change the answer, so this is a settled no.
  *   - "failed"   — the call itself never produced an answer to judge (network
  *     error, timeout, non-2xx). Nothing was decided, so the pair must stay
  *     eligible to be asked again.
@@ -54,6 +54,28 @@ const SHAPES: ReadonlySet<string> = new Set(["contradiction", "throughline", "co
 
 /** Below this the model has not said anything a person could act on. */
 const MIN_INSIGHT_TEXT_CHARS = 40;
+
+/**
+ * Above this the model has stopped writing "one or two sentences" and
+ * started writing paragraphs — a ceiling now needed because it used to come
+ * for free. Before INSIGHT_PASS_MAX_TOKENS went from 200 to 1200 (see the
+ * comment on that constant in src/constants.ts), the token budget itself
+ * kept `text` short; raising it to give the reasoning model room to think
+ * also removed the only thing bounding the length of its answer.
+ *
+ * Measured on a live brain, well-formed insights ran 259-316 characters
+ * against this same "one or two sentences" prompt. 600 is roughly double
+ * that observed ceiling: comfortable headroom for a longer-but-still-
+ * disciplined two-sentence insight (long names, an em-dash aside, a
+ * qualifying clause), while still refusing anything that has plainly
+ * stopped being one or two sentences.
+ *
+ * The home dashboard now renders `text` in full in a review card (see
+ * commit "Show full insight text on the brief card..."), with no clipping —
+ * that's precisely why this ceiling exists: an unbounded `text` is not just
+ * a quality problem, it's a wall of text on someone's home screen.
+ */
+const MAX_INSIGHT_TEXT_CHARS = 600;
 
 /** How much of each entry the prompt carries. */
 const ENTRY_EXCERPT_CHARS = 800;
@@ -194,6 +216,7 @@ export function parseInsightResponse(raw: string): ReasonedInsight | null {
 
   const text = String(parsed.text ?? "").trim();
   if (text.length < MIN_INSIGHT_TEXT_CHARS) return null;
+  if (text.length > MAX_INSIGHT_TEXT_CHARS) return null;
 
   return { shape: shape as InsightShape, text };
 }

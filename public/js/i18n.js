@@ -339,6 +339,12 @@ const I18N_EN = {
     failedRetry: 'Failed — retry',
     worthRereading: 'Worth re-reading',
     fromDate: '· from {date}',
+    shapeSuffix: ' · {shape}',
+    moreInsights: {
+      one: '{n} more insight waiting →',
+      other: '{n} more insights waiting →',
+    },
+    moreInsightsGeneric: 'More insights are waiting →',
   },
   patterns: {
     title: 'Insights noticed',
@@ -360,6 +366,11 @@ const I18N_EN = {
     },
     reviewOne: 'Review it →',
     reviewAll: 'Review all →',
+    shapes: {
+      contradiction: 'Contradiction',
+      throughline: 'Throughline',
+      connection: 'Connection',
+    },
   },
   download: {
     mac: 'Download for Mac',
@@ -729,6 +740,12 @@ const I18N_IT = {
     failedRetry: 'Non riuscito — riprova',
     worthRereading: 'Da rileggere',
     fromDate: '· dal {date}',
+    shapeSuffix: ' · {shape}',
+    moreInsights: {
+      one: '{n} altro insight in attesa →',
+      other: '{n} altri insight in attesa →',
+    },
+    moreInsightsGeneric: 'Altri insight in attesa →',
   },
   patterns: {
     title: 'Insight notati',
@@ -751,6 +768,11 @@ const I18N_IT = {
     },
     reviewOne: 'Esaminarlo →',
     reviewAll: 'Esaminarli tutti →',
+    shapes: {
+      contradiction: 'Contraddizione',
+      throughline: 'Filo conduttore',
+      connection: 'Connessione',
+    },
   },
   download: {
     mac: 'Scarica per Mac',

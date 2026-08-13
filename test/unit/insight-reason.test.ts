@@ -49,6 +49,17 @@ describe("parseInsightResponse()", () => {
   it("returns null when the text is too short to say anything", () => {
     expect(parseInsightResponse(`{"insight": true, "shape": "connection", "text": "Related."}`)).toBeNull();
   });
+
+  it("accepts text exactly at the 600 character upper bound", () => {
+    const text = "A".repeat(600);
+    const out = parseInsightResponse(`{"insight": true, "shape": "connection", "text": "${text}"}`);
+    expect(out?.text.length).toBe(600);
+  });
+
+  it("returns null when text is one character past the 600 character upper bound", () => {
+    const text = "A".repeat(601);
+    expect(parseInsightResponse(`{"insight": true, "shape": "connection", "text": "${text}"}`)).toBeNull();
+  });
 });
 
 describe("sharesVocabulary()", () => {
@@ -307,6 +318,20 @@ describe("reasonOverPair()", () => {
   it("declines a generic statement that echoes neither entry specifically", async () => {
     const env = makeTestEnv(makeTestDb(), {
       AI: makeAI(`{"insight": true, "shape": "throughline", "text": "You often talk about building a second brain and thinking about things."}`),
+    });
+    expect(await reasonOverPair(a, b, env)).toEqual({ outcome: "declined" });
+  });
+
+  it("declines text that blows past the 600 character ceiling, with the same outcome as any other quality-floor failure", async () => {
+    // A model that ignored "one or two sentences" and wrote paragraphs
+    // instead. The dashboard renders `text` in full with no clipping (see
+    // the comment on MAX_INSIGHT_TEXT_CHARS in src/insight/reason.ts), so
+    // this has to be a settled "declined" — same as the other floor
+    // failures — not a "failed" left pending for retry.
+    const longText = "You chose flat pricing for the first tier, then switched to usage-based pricing. ".repeat(10);
+    expect(longText.length).toBeGreaterThan(600);
+    const env = makeTestEnv(makeTestDb(), {
+      AI: makeAI(`{"insight": true, "shape": "contradiction", "text": ${JSON.stringify(longText)}}`),
     });
     expect(await reasonOverPair(a, b, env)).toEqual({ outcome: "declined" });
   });

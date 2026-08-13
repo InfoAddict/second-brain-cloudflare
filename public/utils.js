@@ -67,6 +67,25 @@ function titleLine(content, max = 90) {
 }
 
 /**
+ * The weekly insight pass appends its own provenance to what it writes —
+ * `\n\n[Insight: <shape> — drawn from N memories]` — so the one stored string
+ * can answer both "what should a person read" and "what shape of observation
+ * is this" (src/insight/weekly.ts). Every surface that displays a pending
+ * insight's content reads it back through here, so the sentence a person
+ * judges and the bookkeeping that produced it never appear as one blob of
+ * text.
+ *
+ * An insight with no such suffix (or content that is not a pending insight at
+ * all) just gets trimmed and returned with shape: null — this is safe to call
+ * on any entry's content, not only auto-insight rows.
+ */
+function splitInsightShape(content) {
+  const s = String(content ?? '')
+  const m = s.match(/\n\n\[Insight:\s*(contradiction|throughline|connection)\s*—[^\]]*\]\s*$/)
+  return m ? { text: s.slice(0, m.index).trim(), shape: m[1] } : { text: s.trim(), shape: null }
+}
+
+/**
  * Source text laid out for reading, without changing what is stored.
  *
  * Emails arrive wrapped and indented by whatever client sent them, and

@@ -104,6 +104,33 @@ describe("loading the queue", () => {
     expect(ctx.__els.get("patterns-more").hidden).toBe(true);
   });
 
+  it("strips the pass's own provenance line and shows the shape instead", async () => {
+    const ctx = load([
+      {
+        ok: true,
+        total: 1,
+        patterns: [
+          {
+            id: "p1",
+            content:
+              "You keep circling back to the same onboarding complaint.\n\n[Insight: throughline — drawn from 2 memories]",
+            created_at: Date.UTC(2026, 1, 8, 12),
+          },
+        ],
+      },
+    ]);
+    await ctx.loadPatternQueue();
+    const html = ctx.__els.get("patterns-list").innerHTML;
+    // The sentence a person should read, verbatim...
+    expect(html).toContain("You keep circling back to the same onboarding complaint.");
+    // ...not the bookkeeping the pass appended to it.
+    expect(html).not.toContain("[Insight:");
+    expect(html).not.toContain("drawn from 2 memories");
+    // The shape is worth keeping, alongside the date it was noticed.
+    expect(html).toContain("Throughline");
+    expect(html).toContain("Feb 8, 2026");
+  });
+
   it("appends the next page rather than replacing the current one", async () => {
     const ctx = load([page(50, 60), page(10, 60, 50)]);
     await ctx.loadPatternQueue();
