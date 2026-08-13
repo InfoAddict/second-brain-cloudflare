@@ -183,9 +183,10 @@ fn localize_os_menu_titles_from_app(app: &AppHandle, locale: Locale) -> tauri::R
 }
 
 fn localize_os_menu_titles(menu: &Menu<tauri::Wry>, locale: Locale) -> tauri::Result<()> {
-    let pairs: [(Key, &[&str]); 4] = [
+    let pairs: [(Key, &[&str]); 5] = [
         (Key::MenuFile, &["File"]),
         (Key::MenuEdit, &["Edit", "Modifica"]),
+        (Key::MenuView, &["View", "Visualizza"]),
         (Key::MenuWindow, &["Window", "Finestra"]),
         (Key::MenuHelp, &["Help", "Aiuto"]),
     ];

@@ -321,31 +321,31 @@ const I18N_EN = {
     nounItem: { one: 'item', other: 'items' },
     nounMemory: { one: 'memory', other: 'memories' },
     connect: {
-      calendarGoogle: {
+      'calendar-google': {
         label: 'Paste your Google Calendar secret iCal URL',
         placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
         hint:
           'In Google Calendar (web): Settings → your calendar → <b>Integrate calendar</b> → copy the <b>"Secret address in iCal format"</b>. Keep it private — anyone with it can read the calendar.',
       },
-      calendarOutlook: {
+      'calendar-outlook': {
         label: 'Paste your Outlook published ICS URL',
         placeholder: 'https://outlook.live.com/owa/calendar/…/calendar.ics',
         hint:
           'In Outlook.com: Settings → Calendar → <b>Shared calendars</b> → Publish a calendar → publish, then copy the <b>ICS</b> link. (Work/school accounts may have publishing disabled.)',
       },
-      calendarIcloud: {
+      'calendar-icloud': {
         label: 'Paste your iCloud shared calendar URL',
         placeholder: 'webcal://p…-caldav.icloud.com/published/…',
         hint:
           'In Calendar (Mac or iCloud.com): right-click the calendar → <b>Share Calendar</b> → enable <b>Public Calendar</b> → copy the webcal link.',
       },
-      emailGmail: {
+      'email-gmail': {
         label: 'Connect your Gmail inbox',
         placeholder: '16-character app password',
         hint:
           'In your Google Account → Security → 2-Step Verification → <b>App passwords</b>, create one for Mail, then enter your Gmail address and that password. (Requires 2-Step Verification; IMAP must be enabled in Gmail settings.)',
       },
-      emailIcloud: {
+      'email-icloud': {
         label: 'Connect your iCloud inbox',
         placeholder: 'app-specific password',
         hint:
@@ -745,31 +745,31 @@ const I18N_IT = {
     nounItem: { one: 'elemento', other: 'elementi' },
     nounMemory: { one: 'ricordo', other: 'ricordi' },
     connect: {
-      calendarGoogle: {
+      'calendar-google': {
         label: 'Incolla l’URL iCal segreto di Google Calendar',
         placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
         hint:
           'In Google Calendar (web): Impostazioni → il tuo calendario → <b>Integra calendario</b> → copia l’<b>«Indirizzo segreto in formato iCal»</b>. Tienilo privato — chiunque lo abbia può leggere il calendario.',
       },
-      calendarOutlook: {
+      'calendar-outlook': {
         label: 'Incolla l’URL ICS pubblicato di Outlook',
         placeholder: 'https://outlook.live.com/owa/calendar/…/calendar.ics',
         hint:
           'In Outlook.com: Impostazioni → Calendario → <b>Calendari condivisi</b> → Pubblica un calendario → pubblica, poi copia il link <b>ICS</b>. (Account aziendali/scolastici potrebbero disabilitare la pubblicazione.)',
       },
-      calendarIcloud: {
+      'calendar-icloud': {
         label: 'Incolla l’URL del calendario iCloud condiviso',
         placeholder: 'webcal://p…-caldav.icloud.com/published/…',
         hint:
           'In Calendario (Mac o iCloud.com): clic con il tasto destro sul calendario → <b>Condividi calendario</b> → attiva <b>Calendario pubblico</b> → copia il link webcal.',
       },
-      emailGmail: {
+      'email-gmail': {
         label: 'Collega la posta Gmail',
         placeholder: 'password per app di 16 caratteri',
         hint:
           'Nel tuo Account Google → Sicurezza → Verifica in due passaggi → <b>Password per le app</b>, crea una per Mail, poi inserisci l’indirizzo Gmail e quella password. (Richiede la verifica in due passaggi; IMAP deve essere attivo in Gmail.)',
       },
-      emailIcloud: {
+      'email-icloud': {
         label: 'Collega la posta iCloud',
         placeholder: 'password specifica per l’app',
         hint:

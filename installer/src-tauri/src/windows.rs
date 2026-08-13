@@ -220,9 +220,6 @@ fn open_wrapper_window_impl(
         .unwrap_or(Locale::En);
     if let Some(w) = app.get_webview_window("brain") {
         pin_dark_theme(&w);
-        // Align dashboard locale with the app without reloading when it already
-        // matches — reopening the brain otherwise would flash a full reload.
-        sync_brain_locale(app, worker_url, locale, false);
         if open_integrations {
             let _ = w.eval("try { openIntegrations() } catch (_) {}");
         }
@@ -576,6 +573,30 @@ mod tests {
             .find("\n        })\n")
             .expect("the navigation closure closes at eight spaces, before .build()");
         &rest[..end]
+    }
+
+    /// The early-return branch when the `brain` window already exists.
+    fn existing_brain_reopen_branch() -> &'static str {
+        let code = code();
+        let start = code
+            .find("if let Some(w) = app.get_webview_window(\"brain\") {")
+            .expect("existing brain window branch");
+        let rest = &code[start..];
+        let end = rest
+            .find("return Ok(());")
+            .expect("existing brain branch returns");
+        &rest[..end]
+    }
+
+    /// Reopening from tray/menu must not push the native locale into the
+    /// dashboard — the user may have chosen a different language in the webview.
+    #[test]
+    fn reopening_an_existing_brain_window_does_not_sync_locale() {
+        let body = existing_brain_reopen_branch();
+        assert!(
+            !body.contains("sync_brain_locale"),
+            "reopening the brain must not overwrite dashboard locale chosen by the user"
+        );
     }
 
     /// Windows 11 report: the Connections button in the injected sidebar hung the
