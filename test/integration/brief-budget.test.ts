@@ -120,13 +120,16 @@ describe("GET /brief", () => {
   it("returns a complete activity strip, including the days nothing happened", async () => {
     sq = await migrated();
     const now = Date.now();
-    sq.seed({ id: "today", content: "Today", createdAt: now - HOUR });
-    sq.seed({ id: "older", content: "Four days ago", createdAt: now - 4 * DAY });
+    const todayBucket = Math.floor(now / 86400000);
+    const todayStart = todayBucket * 86400000;
+    sq.seed({ id: "today", content: "Today", createdAt: todayStart + HOUR });
+    sq.seed({ id: "older", content: "Four days ago", createdAt: todayStart - 4 * DAY + HOUR });
 
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
     // Absent days would compress a quiet fortnight into a busy-looking one.
     expect(data.activity).toHaveLength(14);
-    expect(data.activity.at(-1).count).toBe(1);
+    const todayEntry = data.activity.find((d: any) => d.day === todayBucket);
+    expect(todayEntry?.count).toBe(1);
     expect(data.activity.filter((d: any) => d.count === 0).length).toBe(12);
   });
 
