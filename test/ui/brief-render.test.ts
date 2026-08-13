@@ -97,11 +97,11 @@ describe("the daily brief", () => {
       ],
     });
     const html = ctx.__els.get("brief").innerHTML;
-    expect(html).toContain("Pattern noticed");
+    expect(html).toContain("Insight noticed");
     expect(html).toContain("Confirm");
     expect(html).toContain("Dismiss");
     // Two is a brief; three is a queue.
-    expect(html.match(/Pattern noticed/g)).toHaveLength(2);
+    expect(html.match(/Insight noticed/g)).toHaveLength(2);
   });
 
   it("dates the resurfaced memory by name, not 8/2/2026", () => {
