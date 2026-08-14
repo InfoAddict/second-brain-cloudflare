@@ -3,10 +3,11 @@
  *
  * Read-only. Connects each provider's SECRET iCal subscription URL (Gmail's
  * "Secret address in iCal format", Outlook's published ICS link, iCloud's
- * shared webcal URL) — not CalDAV, not OAuth. One HTTPS GET per sync; ical.js
- * expands recurrences; qualifying occurrences mirror into memory. Upcoming
- * events are live-mirrored (cancellations delete); past events freeze into a
- * bounded historical log.
+ * shared webcal URL) — not CalDAV, not OAuth. One HTTPS GET per sync (two for
+ * iCloud published feeds when the `caldav` host misses and the `calendars`
+ * fallback is used); ical.js expands recurrences; qualifying occurrences
+ * mirror into memory. Upcoming events are live-mirrored (cancellations
+ * delete); past events freeze into a bounded historical log.
  */
 
 import ICAL from "ical.js";

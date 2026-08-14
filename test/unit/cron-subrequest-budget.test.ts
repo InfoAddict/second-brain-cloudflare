@@ -240,6 +240,47 @@ describe("nightly cron D1 subrequest cost", () => {
       expect(saved.lastSyncedAt).not.toBeNull();
     });
 
+    // An iCloud published URL that misses on caldav retries once on calendars
+    // (#310). That is two outbound fetches in the same invocation; the happy
+    // path above still asserts one, so this is the case that notices the extra.
+    it("pays two feed fetches when an iCloud caldav host misses and calendars succeeds", async () => {
+      const db = makeTestDb();
+      const kv = makeMemoryKV();
+      await kv.put("integrations:calendar-icloud", JSON.stringify({
+        provider: "calendar-icloud",
+        authKind: "token",
+        credentials: { token: "https://p12-caldav.icloud.com/published/2/token" },
+        config: {},
+        status: "connected",
+        workspaceName: "Family",
+        lastSyncedAt: null,
+        lastSyncError: null,
+        itemMap: {},
+        createdAt: 0,
+        updatedAt: 0,
+      }));
+      const ics = icsWithUpcomingEvents(120);
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).includes("-caldav.")) {
+          return { ok: false, status: 400, text: async () => "" } as any;
+        }
+        return { ok: true, status: 200, text: async () => ics } as any;
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { env } = countingEnv(db, { OAUTH_KV: kv });
+
+      await runCron(env, INTEGRATION_SYNC_CRON);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+        "https://p12-caldav.icloud.com/published/2/token",
+        "https://p12-calendars.icloud.com/published/2/token",
+      ]);
+      expect(db.entries.filter(e => e.source === "calendar-icloud")).toHaveLength(SYNC_EVENT_BATCH);
+      const saved = JSON.parse((await kv.get("integrations:calendar-icloud")) as string);
+      expect(saved.lastSyncedAt).not.toBeNull();
+    });
+
     it("keeps its own invocation inside the D1 budget", async () => {
       const db = makeTestDb();
       seedCompressibleTags(db, 7); // a big brain must not make the sync cost more

@@ -697,6 +697,33 @@ describe("parseAndExpand Apple ICS quirks", () => {
       summary: "Office Dinner",
     });
   });
+
+  it("still emits the event when a bare orphan line is not attached to X-APPLE-STRUCTURED-LOCATION", () => {
+    // ical.js throws "invalid line (no token ; or :)" on a content line with
+    // neither delimiter. stripAppleStructuredLocation does not touch this
+    // feed, so only dropOrphanIcsLines can recover it.
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//caldav.icloud.com//CALDAVJ//EN",
+      "BEGIN:VEVENT",
+      "UID:orphan-bare@test",
+      "DTSTAMP:20260101T000000Z",
+      "DTSTART:20260710T140000Z",
+      "DTEND:20260710T150000Z",
+      "SUMMARY:Team Sync",
+      "Seattle WA 98101",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const occs = parseAndExpand(ics, ms("2026-07-01T00:00:00Z"), ms("2026-07-31T00:00:00Z"));
+    expect(occs).toHaveLength(1);
+    expect(occs[0]).toMatchObject({
+      uid: "orphan-bare@test",
+      summary: "Team Sync",
+    });
+  });
 });
 
 describe("makeCalendarProvider sync (happy path)", () => {
