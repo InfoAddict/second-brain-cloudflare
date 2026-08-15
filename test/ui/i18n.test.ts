@@ -92,13 +92,9 @@ describe("dashboard i18n", () => {
   it("resolves integration connect copy by provider id (kebab-case)", () => {
     const { ctx: en } = loadI18n("en");
     const { ctx: it } = loadI18n("it");
-    const providers = [
-      "calendar-google",
-      "calendar-outlook",
-      "calendar-icloud",
-      "email-gmail",
-      "email-icloud",
-    ] as const;
+    const registry = readFileSync(resolve(ROOT, "src/integrations/index.ts"), "utf8");
+    const providers = [...registry.matchAll(/\bid:\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(providers.length).toBeGreaterThan(0);
     const fields = ["label", "placeholder", "hint"] as const;
     for (const id of providers) {
       for (const field of fields) {

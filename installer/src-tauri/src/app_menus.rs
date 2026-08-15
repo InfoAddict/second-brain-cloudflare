@@ -398,6 +398,28 @@ mod tests {
         );
     }
 
+    /// Tauri's default macOS menu adds a View submenu that File/Edit/Window/Help
+    /// renaming used to miss. Deleting the `MenuView` row from `pairs` used to
+    /// leave every Rust test green. Asserted on the source because the submenu
+    /// only exists in a real macOS build.
+    #[test]
+    fn os_menu_rename_table_covers_every_menu_key() {
+        let src = include_str!("app_menus.rs");
+        let start = src
+            .find("fn localize_os_menu_titles(")
+            .expect("localize_os_menu_titles");
+        let end = src[start..].find("\n}\n").expect("end of fn") + start;
+        let body = &src[start..end];
+
+        for key in ["MenuFile", "MenuEdit", "MenuView", "MenuWindow", "MenuHelp"] {
+            assert!(
+                body.contains(&format!("Key::{key}")),
+                "localize_os_menu_titles pairs table no longer covers Key::{key} — \
+                 deleting that row used to leave the macOS menubar half-English"
+            );
+        }
+    }
+
     /// The metadata is worthless if the roster is empty.
     #[test]
     fn about_metadata_carries_the_full_roster() {

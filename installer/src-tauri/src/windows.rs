@@ -246,9 +246,11 @@ fn open_wrapper_window_impl(
   try {{ window.SB_DESKTOP = true; }} catch (_) {{}}
   try {{
     if (location.origin === {origin_js}) {{
-      if (!sessionStorage.getItem('sb-native-locale-stamped')) {{
-        localStorage.setItem('sb-locale', {locale_js});
-        sessionStorage.setItem('sb-native-locale-stamped', '1');
+      var last = localStorage.getItem('sb-native-locale-last');
+      var next = {locale_js};
+      if (last !== next) {{
+        localStorage.setItem('sb-locale', next);
+        localStorage.setItem('sb-native-locale-last', next);
       }}
     }}
   }} catch (_) {{}}
@@ -349,6 +351,7 @@ pub fn sync_brain_locale(
     var prev = localStorage.getItem('sb-locale');
     if (prev === next && !{force}) return;
     localStorage.setItem('sb-locale', next);
+    localStorage.setItem('sb-native-locale-last', next);
     location.reload();
   }} catch (_) {{}}
 }})();"#
@@ -596,6 +599,79 @@ mod tests {
         assert!(
             !body.contains("sync_brain_locale"),
             "reopening the brain must not overwrite dashboard locale chosen by the user"
+        );
+    }
+
+    /// The creation-time init script, and only that.
+    fn wrapper_init_script() -> &'static str {
+        let code = code();
+        let start = code
+            .find("fn open_wrapper_window_impl(")
+            .expect("open_wrapper_window_impl");
+        let scope = &code[start..];
+        let scope = &scope[..scope
+            .find("\n}\n")
+            .expect("open_wrapper_window_impl ends at a closing brace in column zero")];
+        let lit = scope
+            .find("try {{ window.SB_DESKTOP = true; }}")
+            .expect("the brain window still injects an init script");
+        let rest = &scope[lit..];
+        let end = rest
+            .find("}})();\"#")
+            .expect("the init script literal closes before connections/settings injection");
+        &rest[..end]
+    }
+
+    fn sync_brain_locale_body() -> &'static str {
+        let code = code();
+        let start = code
+            .find("pub fn sync_brain_locale(")
+            .expect("sync_brain_locale");
+        let rest = &code[start..];
+        &rest[..rest
+            .find("\n}\n")
+            .expect("sync_brain_locale ends at a closing brace in column zero")]
+    }
+
+    /// Closing the dashboard destroys the webview session. A sessionStorage
+    /// stamp dies with it, so the next open used to rewrite sb-locale back to
+    /// the app language. Seed-if-absent would fix that but break changing the
+    /// language in Settings while the dashboard is closed. Record the last app
+    /// locale the shell stamped, and only overwrite when it differs.
+    #[test]
+    fn closing_the_brain_window_does_not_reset_dashboard_locale() {
+        let init = wrapper_init_script();
+        assert!(
+            !init.contains("sessionStorage"),
+            "sessionStorage dies with the webview — using it as the locale stamp \
+             resets the dashboard language every time the window is closed"
+        );
+        assert!(
+            init.contains("sb-native-locale-last"),
+            "the init script must remember the last app locale it stamped so a \
+             close/reopen can leave a user-chosen dashboard language alone"
+        );
+        assert!(
+            init.contains("last !== next"),
+            "the init script must overwrite sb-locale only when the app locale \
+             has changed since the last stamp — seed-if-absent breaks Settings \
+             changes made while the dashboard is closed"
+        );
+
+        let sync = sync_brain_locale_body();
+        let locale_write = sync
+            .find("localStorage.setItem('sb-locale'")
+            .expect("sync_brain_locale still writes sb-locale");
+        let last_write = sync
+            .find("localStorage.setItem('sb-native-locale-last'")
+            .expect(
+                "sync_brain_locale must also stamp sb-native-locale-last, otherwise \
+                 a Settings change while the dashboard is open is forgotten on close",
+            );
+        assert!(
+            last_write > locale_write,
+            "sb-native-locale-last has to be written on the same path that writes \
+             sb-locale, not on an early return that skipped the change"
         );
     }
 
