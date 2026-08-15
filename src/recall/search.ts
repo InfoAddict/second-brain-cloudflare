@@ -10,7 +10,6 @@ import { embed } from "../lib/ai";
 import { expandGraph } from "../graph/traverse";
 import type { EdgeProvenance, EdgeType } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
-import { derivePattern } from "../compression/pattern";
 import { parseTimePhrase } from "../text/temporal";
 import { tokenizeQuery } from "../text/tokenize";
 import { distillToRareTerms, inferQueryTags, type DistilledQuery } from "./distill";
@@ -254,9 +253,9 @@ export async function recallEntries(
   // which fits one statement; the loop is what makes raising either of them a
   // tuning change here rather than a query D1 rejects. One consequence if a
   // second batch ever runs: d1Rows is then batch order, not one result set's
-  // order, which derivePattern's rows.slice(0, 20) below samples from.
+  // order — worth knowing if a future consumer relies on that ordering.
   const allParentIds = [...seedParentIds, ...expandedScored.map(e => e.parentId)];
-  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
   const filterBindings: number[] = [];
   if (kind && (KIND_VALUES as readonly string[]).includes(kind)) {
     d1Filters += ` AND tags LIKE '%"kind:${kind}"%'`;
@@ -337,13 +336,6 @@ export async function recallEntries(
   const insight = synthesize && matches.length > 1
     ? await synthesizeInsight(embedQuery, matches.map(m => ({ id: m.id, content: m.content })), env, cfg)
     : "";
-
-  if (d1Rows.length >= 5) {
-    ctx.waitUntil(
-      derivePattern(d1Rows as { id: string; content: string }[], env, ctx, cfg)
-        .catch(e => console.error("derivePattern failed (non-fatal):", e))
-    );
-  }
 
   return { matches, insight, semanticUnavailable, queryUsed: embedQuery, queryTokens: tokens, compoundStale };
 }

@@ -3,10 +3,11 @@
  *
  * Read-only. Connects each provider's SECRET iCal subscription URL (Gmail's
  * "Secret address in iCal format", Outlook's published ICS link, iCloud's
- * shared webcal URL) — not CalDAV, not OAuth. One HTTPS GET per sync; ical.js
- * expands recurrences; qualifying occurrences mirror into memory. Upcoming
- * events are live-mirrored (cancellations delete); past events freeze into a
- * bounded historical log.
+ * shared webcal URL) — not CalDAV, not OAuth. One HTTPS GET per sync (two for
+ * iCloud published feeds when the `caldav` host misses and the `calendars`
+ * fallback is used); ical.js expands recurrences; qualifying occurrences
+ * mirror into memory. Upcoming events are live-mirrored (cancellations
+ * delete); past events freeze into a bounded historical log.
  */
 
 import ICAL from "ical.js";
@@ -188,11 +189,125 @@ function expandRecurring(ev: any, startMs: number, endMs: number, out: Occurrenc
   }
 }
 
+/** Strip UTF-8 BOM and leading whitespace so BEGIN:VCALENDAR is findable. */
+function stripBom(text: string): string {
+  return text.replace(/^\uFEFF/, "").replace(/^\s+/, "");
+}
+
+function looksLikeIcs(text: string): boolean {
+  return /BEGIN:VCALENDAR/i.test(text);
+}
+
+/**
+ * Remove X-APPLE-STRUCTURED-LOCATION properties. Apple feeds often break RFC
+ * 5545 folding here (continuation lines without a leading space/tab), so we
+ * skip until the next real property / BEGIN / END line — not only space-folded
+ * continuations.
+ */
+function stripAppleStructuredLocation(ics: string): string {
+  const lines = ics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const out: string[] = [];
+  let skipping = false;
+  const isNewContentLine = (line: string) =>
+    /^(BEGIN|END|[A-Za-z0-9-]+)[;:]/i.test(line);
+
+  for (const line of lines) {
+    if (skipping) {
+      if (line.startsWith(" ") || line.startsWith("\t")) continue;
+      if (!isNewContentLine(line)) continue; // orphan / broken fold
+      skipping = false;
+    }
+    if (/^X-APPLE-STRUCTURED-LOCATION/i.test(line)) {
+      skipping = true;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\r\n");
+}
+
+/**
+ * Drop orphan content lines that have neither ':' nor ';' — typically Apple's
+ * non-indented continuations of X-APPLE-STRUCTURED-LOCATION after that property
+ * was already stripped, or leftover fragments that still break ical.js.
+ */
+function dropOrphanIcsLines(ics: string): string {
+  const lines = ics.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line === "") {
+      out.push(line);
+      continue;
+    }
+    // Folded continuations (space/tab) are valid; keep them for other properties.
+    if (line.startsWith(" ") || line.startsWith("\t")) {
+      out.push(line);
+      continue;
+    }
+    if (line.includes(":") || line.includes(";")) {
+      out.push(line);
+      continue;
+    }
+    // Orphan bare text — drop.
+  }
+  return out.join("\r\n");
+}
+
+/**
+ * Pick a VCALENDAR jCal root. ICAL.parse may return a single component or an
+ * array of roots when the input is odd; we always want the first vcalendar.
+ */
+function asVCalendarComponent(parsed: unknown): any {
+  if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === "string") {
+    // Single jCal component: ["vcalendar", [...], [...]]
+    return new ICAL.Component(parsed as any);
+  }
+  if (Array.isArray(parsed)) {
+    for (const item of parsed as any[]) {
+      if (Array.isArray(item) && item[0] === "vcalendar") {
+        return new ICAL.Component(item);
+      }
+    }
+    if (parsed.length > 0) return new ICAL.Component(parsed[0] as any);
+  }
+  return new ICAL.Component(parsed as any);
+}
+
+/**
+ * Sanitize Apple/iCloud ICS quirks then parse. Shared by connect validation and
+ * sync expansion so both paths see the same document.
+ */
+function parseIcsDocument(icsText: string): any {
+  let text = stripBom(icsText);
+  if (!looksLikeIcs(text)) {
+    throw new Error("NO_VCALENDAR");
+  }
+
+  const attempts = [
+    text,
+    stripAppleStructuredLocation(text),
+    dropOrphanIcsLines(stripAppleStructuredLocation(text)),
+  ];
+  // Deduplicate identical attempts.
+  const seen = new Set<string>();
+  let lastErr: unknown;
+  for (const attempt of attempts) {
+    if (seen.has(attempt)) continue;
+    seen.add(attempt);
+    try {
+      return asVCalendarComponent(ICAL.parse(attempt));
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 // Parse an .ics document and expand it into concrete occurrences within
 // [windowStartMs, windowEndMs]. Registers embedded VTIMEZONEs so TZID-based
 // times resolve to the right absolute instants.
 export function parseAndExpand(icsText: string, windowStartMs: number, windowEndMs: number): Occurrence[] {
-  const root = new ICAL.Component(ICAL.parse(icsText));
+  const root = parseIcsDocument(icsText);
 
   for (const vtz of root.getAllSubcomponents("vtimezone")) {
     try {
@@ -325,6 +440,11 @@ export interface CalendarService {
   connectHint: string;
 }
 
+const ICS_FETCH_HEADERS = {
+  Accept: "text/calendar, text/plain, */*",
+  "User-Agent": "CalendarAgent/1.0 SecondBrain/2",
+};
+
 function normalizeUrl(raw: string): string {
   const swapped = raw.trim().replace(/^webcal:\/\//i, "https://");
   const u = new URL(swapped); // throws on garbage
@@ -332,10 +452,51 @@ function normalizeUrl(raw: string): string {
   return u.toString();
 }
 
+/** One-shot rewrite: pNN-caldav.icloud.com → pNN-calendars.icloud.com. */
+function icloudCalendarsFallbackUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const m = u.hostname.match(/^p(\d+)-caldav\.icloud\.com$/i);
+    if (!m) return null;
+    u.hostname = `p${m[1]}-calendars.icloud.com`;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function getIcsOnce(url: string): Promise<{ ok: boolean; status: number; body: string }> {
+  const res = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: ICS_FETCH_HEADERS,
+  });
+  const body = stripBom(await res.text());
+  return { ok: res.ok, status: res.status, body };
+}
+
+/**
+ * Fetch a secret/public iCal URL. GET-only (Apple's published-calendar endpoint
+ * returns 400 to HEAD). Strips BOM before ICS detection. For iCloud caldav
+ * hosts, retries once on the calendars hostname if the first response is not a
+ * VCALENDAR. Returns the last 2xx body even when it is not ICS so callers can
+ * distinguish HTML from transport failure; throws only when no 2xx is obtained.
+ */
 async function fetchIcs(url: string): Promise<string> {
-  const res = await fetch(url, { headers: { Accept: "text/calendar" } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+  const first = await getIcsOnce(url);
+  if (first.ok && looksLikeIcs(first.body)) return first.body;
+
+  const fallback = icloudCalendarsFallbackUrl(url);
+  if (fallback) {
+    const second = await getIcsOnce(fallback);
+    if (second.ok && looksLikeIcs(second.body)) return second.body;
+    if (second.ok) return second.body;
+    if (first.ok) return first.body;
+    throw new Error(`HTTP ${second.status}`);
+  }
+
+  if (first.ok) return first.body;
+  throw new Error(`HTTP ${first.status}`);
 }
 
 // Validate a pasted secret iCal URL and return a display label for the UI.
@@ -350,8 +511,14 @@ export async function validateCalendarUrl(rawUrl: string): Promise<string> {
   }
   let root: any;
   try {
-    root = new ICAL.Component(ICAL.parse(body));
-  } catch {
+    root = parseIcsDocument(body);
+  } catch (e) {
+    if (e instanceof Error && e.message === "NO_VCALENDAR") {
+      throw new Error("That link didn't return a calendar. Make sure it's the secret iCal (.ics) address, not the calendar's web page.");
+    }
+    if (looksLikeIcs(stripBom(body))) {
+      throw new Error("That link returned a calendar that couldn't be parsed. Try regenerating the public calendar link in iCloud.");
+    }
     throw new Error("That link didn't return a calendar. Make sure it's the secret iCal (.ics) address, not the calendar's web page.");
   }
   if (root.name !== "vcalendar") {

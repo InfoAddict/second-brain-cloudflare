@@ -620,10 +620,11 @@ mod tests {
             "compatibilityDate": "2026-06-17",
             "compatibilityFlags": ["nodejs_compat"],
             "vars": { "VECTORIZE_GRACE_MS": "300000" },
-            // Both schedules: nightly maintenance and the hourly integration sync,
-            // which runs on its own budget (#290). The app has to register every
-            // entry, not just the first.
-            "cron": ["0 1 * * *", "30 * * * *"],
+            // All four schedules: nightly maintenance, the hourly integration sync
+            // (its own budget, #290), nightly insight candidate accrual (its own
+            // D1 subrequest budget), and weekly insight reasoning. The app has to
+            // register every entry, not just the first.
+            "cron": ["0 1 * * *", "30 * * * *", "45 1 * * *", "15 2 * * SUN"],
             "d1Binding": "DB",
             "d1Name": "second-brain-db",
             "vectorizeBinding": "VECTORIZE",
@@ -820,7 +821,9 @@ mod tests {
         assert!(log.contains(&"create_vectorize:second-brain-vectors:384:cosine".to_string()));
         // 5 fixed bindings + 1 var
         assert!(log.contains(&"deploy:second-brain:6".to_string()));
-        assert!(log.contains(&"set_cron:0 1 * * *,30 * * * *".to_string()));
+        assert!(log.contains(
+            &"set_cron:0 1 * * *,30 * * * *,45 1 * * *,15 2 * * SUN".to_string()
+        ));
         assert!(log.contains(&"health_ok".to_string()));
         assert!(log.contains(&"capture_ok".to_string()));
     }
@@ -1058,7 +1061,9 @@ mod tests {
         // A user who installed before the integration sync got its own trigger
         // only picks it up here, and only if every entry is sent.
         assert!(
-            log.contains(&"set_cron:0 1 * * *,30 * * * *".to_string()),
+            log.contains(
+                &"set_cron:0 1 * * *,30 * * * *,45 1 * * *,15 2 * * SUN".to_string()
+            ),
             "update must set every schedule the manifest carries: {log:?}"
         );
     }

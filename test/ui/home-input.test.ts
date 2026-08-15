@@ -45,8 +45,21 @@ function load() {
       querySelectorAll: () => [],
     },
   };
+  ctx.localStorage = {
+    _m: new Map<string, string>(),
+    getItem(k: string) {
+      return this._m.get(k) ?? null;
+    },
+    setItem(k: string, v: string) {
+      this._m.set(k, v);
+    },
+  };
+  ctx.navigator = { language: "en-US" };
+  ctx.document.documentElement = { lang: "en" };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  vm.runInContext(readFileSync(resolve(ROOT, "public/js/i18n.js"), "utf8"), ctx);
+  ctx.initI18n("en");
   vm.runInContext(readFileSync(resolve(ROOT, "public/js/home.js"), "utf8"), ctx);
   ctx.__els = els;
   return ctx;
@@ -72,6 +85,11 @@ describe("what the sentence is asking for", () => {
     ]) {
       expect(detectHomeMode(q), q).toBe("ask");
     }
+    const ctx = load();
+    ctx.initI18n("it");
+    for (const q of ["cosa ho deciso sul prezzo", "quando ho spedito 2.2.3"]) {
+      expect(ctx.detectHomeMode(q), q).toBe("ask");
+    }
   });
 
   it("reads a statement as something to remember", () => {
@@ -95,6 +113,19 @@ describe("what the sentence is asking for", () => {
     // No question mark, no interrogative — ambiguous, and an unwanted search
     // costs a moment while an unwanted memory costs a cleanup.
     expect(detectHomeMode("pricing floor six thousand")).toBe("remember");
+  });
+
+  it("does not treat Italian statement starters as questions", () => {
+    const ctx = load();
+    ctx.initI18n("it");
+    for (const m of [
+      "Devo chiamare Marco",
+      "Ho finito il report",
+      "Sono in riunione",
+    ]) {
+      expect(ctx.detectHomeMode(m), m).toBe("remember");
+    }
+    expect(ctx.detectHomeMode("Come stai")).toBe("ask");
   });
 
   it("has no opinion about an empty field", () => {

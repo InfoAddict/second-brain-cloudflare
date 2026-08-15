@@ -1,13 +1,13 @@
 //! Named levels for the settings window (#246).
 //!
-//! Six of the seven controls are multi-value: one user-facing level moves two
+//! Six of the eight controls are multi-value: one user-facing level moves two
 //! or three config keys together. They are levels rather than sliders because
 //! the underlying values must stay coherent — two pairs carry invariants the
 //! Worker enforces at resolve time, and a user must not be able to cross them
 //! from the UI at all.
 //!
-//! The seventh control (which AI model) is a plain dropdown over LLM_MODEL and
-//! is not modelled here.
+//! The other two (which AI model, and which AI model for insights) are plain
+//! dropdowns over LLM_MODEL and INSIGHT_LLM_MODEL, and are not modelled here.
 
 use crate::i18n::{self, Key, Locale};
 use serde::Serialize;
@@ -153,16 +153,20 @@ fn values_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Models offered in the dropdown. A curated list rather than a live catalogue
-/// fetch: the panel must render offline, and an unrecognised model string still
-/// resolves fine on the Worker (LLM_MODEL is validated only as a non-empty
-/// string), so a stale entry degrades to "works" rather than "breaks".
+/// Models offered in both model dropdowns (LLM_MODEL and INSIGHT_LLM_MODEL). A
+/// curated list rather than a live catalogue fetch: the panel must render
+/// offline, and an unrecognised model string still resolves fine on the Worker
+/// (both settings are validated only as a non-empty string), so a stale entry
+/// degrades to "works" rather than "breaks".
 pub const LLM_MODELS: &[&str] = &[
     "@cf/meta/llama-4-scout-17b-16e-instruct",
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/meta/llama-3.1-8b-instruct-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen2.5-coder-32b-instruct",
+    // The largest model on offer, and the shipped INSIGHT_LLM_MODEL default —
+    // last because every entry above it is smaller.
+    "@cf/openai/gpt-oss-120b",
 ];
 
 // ── Worker API ──────────────────────────────────────────────────────────────
@@ -193,7 +197,15 @@ pub struct ControlView {
 pub struct SettingsView {
     pub controls: Vec<ControlView>,
     pub llm_model: String,
-    /// Sent to the UI so the dropdown never hardcodes model ids.
+    /// The model used only when reasoning over a pair of memories to draw an
+    /// insight — everything else in `controls` and `llm_model` is unaffected
+    /// by this value. See the cost comment on `constants.INSIGHT_LLM_MODEL` in
+    /// the Worker for why it is its own setting rather than folded into
+    /// `llm_model`.
+    pub insight_llm_model: String,
+    /// Sent to the UI so neither dropdown ever hardcodes model ids. Shared by
+    /// both: insight reasoning draws from the same curated catalogue as the
+    /// general-purpose model.
     pub llm_models: Vec<&'static str>,
 }
 
@@ -220,6 +232,11 @@ fn view_from_config(config: &Map<String, Value>) -> SettingsView {
             .collect(),
         llm_model: config
             .get("LLM_MODEL")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        insight_llm_model: config
+            .get("INSIGHT_LLM_MODEL")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
@@ -344,7 +361,7 @@ pub async fn reset_control(
 }
 
 /// Commits a batch of staged changes: one merged PATCH for every changed level
-/// plus the model, then a DELETE per key of each control being reset.
+/// plus either model, then a DELETE per key of each control being reset.
 ///
 /// Merged rather than one request per control on purpose. The Worker validates
 /// invariants against the whole resulting config, so splitting a batch could
@@ -358,6 +375,7 @@ pub async fn apply_settings(
     levels: &[(String, String)],
     resets: &[String],
     model: Option<String>,
+    insight_model: Option<String>,
     locale: Locale,
 ) -> Result<(), String> {
     let mut patch = Map::new();
@@ -372,6 +390,9 @@ pub async fn apply_settings(
     }
     if let Some(m) = model {
         patch.insert("LLM_MODEL".into(), json!(m));
+    }
+    if let Some(m) = insight_model {
+        patch.insert("INSIGHT_LLM_MODEL".into(), json!(m));
     }
 
     if !patch.is_empty() {
@@ -564,7 +585,7 @@ mod tests {
                 let (status, payload) = match (method.as_str(), url.as_str()) {
                     ("GET", "/config") => (
                         200,
-                        r#"{"ok":true,"config":{"MMR_LAMBDA":0.7,"RECENCY_FLOOR":0.6,"RECENCY_FLOOR_DURABLE":0.9,"RECENCY_FLOOR_VOLATILE":0.15,"DEFAULT_HOPS":0,"GRAPH_HOP_DECAY":0.6,"RECALL_OUTPUT_BUDGET":12000,"SNIPPET_MAX_CHARS":400,"RECALL_FULL_MATCHES":2,"DUPLICATE_BLOCK_THRESHOLD":0.95,"DUPLICATE_FLAG_THRESHOLD":0.85,"COMPRESSION_IMPORTANCE_THRESHOLD":4,"COMPRESSION_MIN_RECALL":2,"COMPRESSION_MIN_AGE_MS":5184000000,"LLM_MODEL":"@cf/meta/llama-4-scout-17b-16e-instruct"},"overrides":{},"defaults":{}}"#.to_string(),
+                        r#"{"ok":true,"config":{"MMR_LAMBDA":0.7,"RECENCY_FLOOR":0.6,"RECENCY_FLOOR_DURABLE":0.9,"RECENCY_FLOOR_VOLATILE":0.15,"DEFAULT_HOPS":0,"GRAPH_HOP_DECAY":0.6,"RECALL_OUTPUT_BUDGET":12000,"SNIPPET_MAX_CHARS":400,"RECALL_FULL_MATCHES":2,"DUPLICATE_BLOCK_THRESHOLD":0.95,"DUPLICATE_FLAG_THRESHOLD":0.85,"COMPRESSION_IMPORTANCE_THRESHOLD":4,"COMPRESSION_MIN_RECALL":2,"COMPRESSION_MIN_AGE_MS":5184000000,"LLM_MODEL":"@cf/meta/llama-4-scout-17b-16e-instruct","INSIGHT_LLM_MODEL":"@cf/openai/gpt-oss-120b"},"overrides":{},"defaults":{}}"#.to_string(),
                     ),
                     ("PATCH", "/config") if body.contains("\"BAD\"") => (
                         400,
@@ -595,6 +616,7 @@ mod tests {
             assert_eq!(c.level.as_deref(), Some(*level_id), "{control_id} read as the wrong level");
         }
         assert_eq!(view.llm_model, "@cf/meta/llama-4-scout-17b-16e-instruct");
+        assert_eq!(view.insight_llm_model, "@cf/openai/gpt-oss-120b");
     }
 
     #[tokio::test]
@@ -616,7 +638,7 @@ mod tests {
     #[tokio::test]
     async fn apply_level_patches_only_that_controls_keys() {
         let (url, seen) = spawn_worker();
-        apply_settings(&url, "tok", &[("variety".into(), "varied".into())], &[], None, Locale::En)
+        apply_settings(&url, "tok", &[("variety".into(), "varied".into())], &[], None, None, Locale::En)
             .await
             .unwrap();
         let log = seen.lock().unwrap();
@@ -629,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn apply_level_rejects_an_unknown_level_without_calling_the_worker() {
         let (url, seen) = spawn_worker();
-        let err = apply_settings(&url, "tok", &[("variety".into(), "nonsense".into())], &[], None, Locale::En).await;
+        let err = apply_settings(&url, "tok", &[("variety".into(), "nonsense".into())], &[], None, None, Locale::En).await;
         assert!(err.is_err());
         assert!(seen.lock().unwrap().is_empty(), "must not hit the Worker for an invalid level");
     }
@@ -843,6 +865,7 @@ mod tests {
             &[("variety".into(), "varied".into()), ("detail".into(), "compact".into())],
             &[],
             None,
+            None,
             Locale::En,
         ).await.unwrap();
 
@@ -859,17 +882,48 @@ mod tests {
     #[tokio::test]
     async fn saving_includes_the_model_when_it_changed() {
         let (url, seen) = spawn_worker();
-        apply_settings(&url, "tok", &[], &[], Some("@cf/some/model".into()), Locale::En)
+        apply_settings(&url, "tok", &[], &[], Some("@cf/some/model".into()), None, Locale::En)
             .await
             .unwrap();
         let log = seen.lock().unwrap();
-        assert!(log[0].contains("LLM_MODEL"), "got: {}", log[0]);
+        assert!(log[0].contains("\"LLM_MODEL\""), "got: {}", log[0]);
+        assert!(!log[0].contains("INSIGHT_LLM_MODEL"), "leaked the insight model key: {}", log[0]);
+    }
+
+    #[tokio::test]
+    async fn saving_includes_the_insight_model_when_it_changed() {
+        let (url, seen) = spawn_worker();
+        apply_settings(&url, "tok", &[], &[], None, Some("@cf/some/insight-model".into()), Locale::En)
+            .await
+            .unwrap();
+        let log = seen.lock().unwrap();
+        assert!(log[0].contains("\"INSIGHT_LLM_MODEL\""), "got: {}", log[0]);
+        // Saving the insight model alone must not touch the general-purpose one.
+        assert!(!log[0].contains("\"LLM_MODEL\""), "leaked the general model key: {}", log[0]);
+    }
+
+    #[tokio::test]
+    async fn saving_both_models_at_once_sends_them_in_one_merged_patch() {
+        let (url, seen) = spawn_worker();
+        apply_settings(
+            &url, "tok", &[], &[],
+            Some("@cf/some/model".into()),
+            Some("@cf/some/insight-model".into()),
+            Locale::En,
+        )
+        .await
+        .unwrap();
+        let log = seen.lock().unwrap();
+        let patches: Vec<&String> = log.iter().filter(|l| l.starts_with("PATCH")).collect();
+        assert_eq!(patches.len(), 1, "expected a single merged PATCH, got {patches:?}");
+        assert!(patches[0].contains("\"LLM_MODEL\""));
+        assert!(patches[0].contains("\"INSIGHT_LLM_MODEL\""));
     }
 
     #[tokio::test]
     async fn saving_a_reset_deletes_that_controls_keys() {
         let (url, seen) = spawn_worker();
-        apply_settings(&url, "tok", &[], &["recency".into()], None, Locale::En)
+        apply_settings(&url, "tok", &[], &["recency".into()], None, None, Locale::En)
             .await
             .unwrap();
         let log = seen.lock().unwrap();
@@ -880,22 +934,23 @@ mod tests {
     #[tokio::test]
     async fn saving_nothing_makes_no_requests() {
         let (url, seen) = spawn_worker();
-        apply_settings(&url, "tok", &[], &[], None, Locale::En).await.unwrap();
+        apply_settings(&url, "tok", &[], &[], None, None, Locale::En).await.unwrap();
         assert!(seen.lock().unwrap().is_empty(), "an empty save must not call the Worker");
     }
 
     #[tokio::test]
     async fn saving_an_unknown_level_fails_before_any_request() {
         let (url, seen) = spawn_worker();
-        let r = apply_settings(&url, "tok", &[("variety".into(), "nope".into())], &[], None, Locale::En).await;
+        let r = apply_settings(&url, "tok", &[("variety".into(), "nope".into())], &[], None, None, Locale::En).await;
         assert!(r.is_err());
         assert!(seen.lock().unwrap().is_empty(), "must validate before writing anything");
     }
 
     #[test]
-    fn ships_seven_controls_counting_the_model_dropdown() {
-        // Six level controls here; the seventh (LLM_MODEL) is a dropdown and is
-        // deliberately not modelled as levels.
+    fn ships_eight_controls_counting_both_model_dropdowns() {
+        // Six level controls here; the other two (LLM_MODEL and
+        // INSIGHT_LLM_MODEL) are dropdowns and are deliberately not modelled as
+        // levels.
         assert_eq!(CONTROLS.len(), 6);
     }
 }

@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
+import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -16,6 +17,7 @@ function load(): any {
   const ctx: any = { console };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  installI18n(ctx, "en");
   vm.runInContext(readFileSync(resolve(ROOT, "public/utils.js"), "utf8"), ctx);
   return ctx;
 }
@@ -37,7 +39,7 @@ describe("isSystemTag / humanTags", () => {
   });
 
   it("hides pipeline markers", () => {
-    for (const t of ["auto-pattern", "synthesized", "rolled-up", "duplicate-candidate"]) {
+    for (const t of ["auto-pattern", "auto-insight", "synthesized", "rolled-up", "duplicate-candidate"]) {
       expect(isSystemTag(t), t).toBe(true);
     }
   });

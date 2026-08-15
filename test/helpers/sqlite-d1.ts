@@ -58,7 +58,11 @@ class SqliteStatement {
 
 export interface SqliteD1 {
   /** Shaped like `env.DB`. */
-  db: { prepare(sql: string): SqliteStatement; exec(sql: string): Promise<void> };
+  db: {
+    prepare(sql: string): SqliteStatement;
+    exec(sql: string): Promise<void>;
+    batch(statements: SqliteStatement[]): Promise<{ success: true }[]>;
+  };
   /**
    * One entry per D1 call made through `db` — which is one entry per subrequest,
    * since `prepare()` here is only ever followed by a single execution.
@@ -131,6 +135,20 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
       exec: async (sql: string) => {
         issued.push(sql);
         raw.exec(sql);
+      },
+      // A batch is ONE subrequest whatever it carries, which is the whole reason
+      // production uses it — so it must count as one entry in `issued`, or the
+      // budget tests measure something the platform does not charge for.
+      //
+      // Callers build the statements with env.DB.prepare(), and `prepare` above
+      // has already pushed one entry per statement by the time this runs. The
+      // last `statements.length` entries are therefore exactly this batch's, so
+      // they are replaced by the single entry the platform actually charges for.
+      batch: async (statements: SqliteStatement[]) => {
+        issued.splice(Math.max(0, issued.length - statements.length), statements.length, "BATCH");
+        const out: { success: true }[] = [];
+        for (const statement of statements) out.push(await statement.run());
+        return out;
       },
     },
     columns() {
