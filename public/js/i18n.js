@@ -320,6 +320,38 @@ const I18N_EN = {
     nounEmail: { one: 'email', other: 'emails' },
     nounItem: { one: 'item', other: 'items' },
     nounMemory: { one: 'memory', other: 'memories' },
+    connect: {
+      'calendar-google': {
+        label: 'Paste your Google Calendar secret iCal URL',
+        placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
+        hint:
+          'In Google Calendar (web): Settings → your calendar → <b>Integrate calendar</b> → copy the <b>"Secret address in iCal format"</b>. Keep it private — anyone with it can read the calendar.',
+      },
+      'calendar-outlook': {
+        label: 'Paste your Outlook published ICS URL',
+        placeholder: 'https://outlook.live.com/owa/calendar/…/calendar.ics',
+        hint:
+          'In Outlook.com: Settings → Calendar → <b>Shared calendars</b> → Publish a calendar → publish, then copy the <b>ICS</b> link. (Work/school accounts may have publishing disabled.)',
+      },
+      'calendar-icloud': {
+        label: 'Paste your iCloud shared calendar URL',
+        placeholder: 'webcal://p…-caldav.icloud.com/published/…',
+        hint:
+          'In Calendar (Mac or iCloud.com): right-click the calendar → <b>Share Calendar</b> → enable <b>Public Calendar</b> → copy the webcal link.',
+      },
+      'email-gmail': {
+        label: 'Connect your Gmail inbox',
+        placeholder: '16-character app password',
+        hint:
+          'In your Google Account → Security → 2-Step Verification → <b>App passwords</b>, create one for Mail, then enter your Gmail address and that password. (Requires 2-Step Verification; IMAP must be enabled in Gmail settings.)',
+      },
+      'email-icloud': {
+        label: 'Connect your iCloud inbox',
+        placeholder: 'app-specific password',
+        hint:
+          'At appleid.apple.com → Sign-In and Security → <b>App-Specific Passwords</b>, generate one, then enter your iCloud email and that password.',
+      },
+    },
   },
   brief: {
     eyebrow: 'Your brain, lately',
@@ -398,6 +430,8 @@ const I18N_EN = {
     sourceImport: 'import',
     sourceSystem: 'system',
     sourceClaudeCode: 'claude code',
+    invalidResponse: 'Invalid response',
+    mcpError: 'MCP error',
   },
 }
 
@@ -405,8 +439,8 @@ const I18N_IT = {
   auth: {
     brand: 'Second Brain',
     subtitle:
-      'Inserisci il Bearer token per collegarti al tuo layer di memoria personale. È la password scelta durante la configurazione di Second Brain.',
-    tokenPlaceholder: 'Bearer token (la password di setup)',
+      'Inserisci il token di accesso per collegarti al tuo livello di memoria personale. È la password scelta durante la configurazione di Second Brain.',
+    tokenPlaceholder: 'Token di accesso (la password di setup)',
     connect: 'Connetti',
     connecting: 'Connessione...',
     connectingEllipsis: 'Connessione…',
@@ -416,7 +450,7 @@ const I18N_IT = {
     serverError: 'Errore del server: {status}',
   },
   nav: {
-    home: 'Home',
+    home: 'Inizio',
     memories: 'Ricordi',
     refresh: 'Aggiorna',
     settings: 'Impostazioni',
@@ -476,7 +510,7 @@ const I18N_IT = {
     allTags: 'Tutti i tag',
     sugWorkingOn: 'A cosa sto lavorando?',
     sugDecidedRecently: 'Cosa ho deciso di recente?',
-    sugTasks: 'Mostra i miei task',
+    sugTasks: 'Mostra le mie attività',
     sugGoals: 'Quali sono i miei obiettivi?',
     sugIdeas: 'Che idee ho?',
     sugLastWeek: 'La settimana scorsa',
@@ -490,7 +524,7 @@ const I18N_IT = {
     sourcesFound: { one: 'trovato · {n} fonte', other: 'trovato · {n} fonti' },
     citeTitle: 'Mostra fonte {n}',
     citedAs: 'Citato come [{n}] nella risposta',
-    relatedHop: { one: 'correlato · {n} hop', other: 'correlato · {n} hop' },
+    relatedHop: { one: 'correlato · {n} salto', other: 'correlato · {n} salti' },
   },
   memories: {
     allTime: 'Tutto il tempo',
@@ -597,12 +631,12 @@ const I18N_IT = {
     localeIt: 'Italiano',
     themeLight: 'Chiaro',
     themeDark: 'Scuro',
-    themeAuto: 'Auto',
+    themeAuto: 'Automatico',
     themeMatchSystem: 'Come il sistema',
     aboutAria: 'Informazioni su Second Brain',
     about: 'Informazioni',
     createdBy: 'Creato da',
-    maintainers: 'Maintainer',
+    maintainers: 'Manutentori',
     disconnect: 'Disconnetti',
     exportFailed: 'Esportazione non riuscita: {message}',
     exportMdTitle: '# Esportazione Second Brain',
@@ -619,11 +653,11 @@ const I18N_IT = {
     requestFailed: 'Richiesta non riuscita',
     digestLabel: 'Pronto da comprimere',
     digestNote:
-      'Gli originali non vengono mai cancellati — il digest aggiunge un riepilogo e abbassa gli originali nel richiamo così non affollano i risultati.',
+      'Gli originali non vengono mai cancellati — il riepilogo aggiunge una sintesi e abbassa gli originali nel richiamo così non affollano i risultati.',
     digestEntries: { one: '{n} voce', other: '{n} voci' },
-    digestAction: 'Digest →',
+    digestAction: 'Riepilogo →',
     digestMore: 'altre {n} ›',
-    digestFailed: 'Impossibile creare il digest',
+    digestFailed: 'Impossibile creare il riepilogo',
     digestPreserved: {
       one: '{n} ricordo originale conservato e ancora ricercabile',
       other: '{n} ricordi originali conservati e ancora ricercabili',
@@ -665,7 +699,7 @@ const I18N_IT = {
     restoreQuotaLeft: '{n} rimasti — limite AI giornaliero raggiunto, riprova domani',
     restoreAllSearchable: 'Tutti i ricordi ripristinati sono ricercabili',
     restoreIndexFailed: 'Non riuscito — tocca per riprovare',
-    importStalled: 'Il server non ha avanzato il cursore di import — il Worker è aggiornato?',
+    importStalled: 'Il server non ha avanzato il cursore di importazione — il Worker è aggiornato?',
     vectorizeBannerTitle:
       'La ricerca semantica è disattivata. L’indice Vectorize «{name}» non è stato trovato.',
     vectorizeBannerHowToFix: 'Come risolvere',
@@ -689,26 +723,26 @@ const I18N_IT = {
     summaryConnected: { one: '{n} collegata', other: '{n} collegate' },
     notConnected: 'Non collegata',
     connected: 'Collegata',
-    pasteSecret: 'Incolla il secret',
+    pasteSecret: 'Incolla il segreto',
     emailPlaceholder: 'tu@esempio.com',
     emailAria: 'Indirizzo email',
     appPassword: 'password app',
     appPasswordAria: 'Password app',
-    notionPlaceholder: 'Secret integrazione (ntn_…)',
+    notionPlaceholder: 'Segreto integrazione (ntn_…)',
     urlPlaceholder: 'https://…',
     notionHint:
-      'Crea una <strong>connection</strong> interna (non un personal access token) su <a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener">app.notion.com/developers/connections</a>, condividi le pagine da sincronizzare con quella connection, poi incolla qui il secret.',
+      'Crea una <strong>connessione</strong> interna (non un token di accesso personale) su <a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener">app.notion.com/developers/connections</a>, condividi le pagine da sincronizzare con quella connessione, poi incolla qui il segreto.',
     needEmailPw: 'Inserisci email e password app.',
-    needSecret: 'Incolla prima il secret.',
+    needSecret: 'Incolla prima il segreto.',
     couldNotConnectShort: 'Connessione non riuscita',
     syncNow: 'Sincronizza ora',
     syncing: 'Sincronizzazione…',
     syncingProgress: 'Sincronizzazione… {n} {noun} finora',
     synced: { one: '{n} sincronizzato', other: '{n} sincronizzati' },
     syncFailed: 'Sincronizzazione non riuscita',
-    lastSyncFailed: 'Ultima sync non riuscita: {error}',
+    lastSyncFailed: 'Ultima sincronizzazione non riuscita: {error}',
     countSynced: { one: '{n} {noun} sincronizzato', other: '{n} {noun} sincronizzati' },
-    lastSync: 'Ultima sync: {when}',
+    lastSync: 'Ultima sincronizzazione: {when}',
     never: 'mai',
     disconnectConfirm: 'Disconnettere {name}? Smetterà di sincronizzare.',
     purgeConfirm: {
@@ -721,6 +755,38 @@ const I18N_IT = {
     nounEmail: { one: 'email', other: 'email' },
     nounItem: { one: 'elemento', other: 'elementi' },
     nounMemory: { one: 'ricordo', other: 'ricordi' },
+    connect: {
+      'calendar-google': {
+        label: 'Incolla l’URL iCal segreto di Google Calendar',
+        placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
+        hint:
+          'In Google Calendar (web): Impostazioni → il tuo calendario → <b>Integra calendario</b> → copia l’<b>«Indirizzo segreto in formato iCal»</b>. Tienilo privato — chiunque lo abbia può leggere il calendario.',
+      },
+      'calendar-outlook': {
+        label: 'Incolla l’URL ICS pubblicato di Outlook',
+        placeholder: 'https://outlook.live.com/owa/calendar/…/calendar.ics',
+        hint:
+          'In Outlook.com: Impostazioni → Calendario → <b>Calendari condivisi</b> → Pubblica un calendario → pubblica, poi copia il link <b>ICS</b>. (Account aziendali/scolastici potrebbero disabilitare la pubblicazione.)',
+      },
+      'calendar-icloud': {
+        label: 'Incolla l’URL del calendario iCloud condiviso',
+        placeholder: 'webcal://p…-caldav.icloud.com/published/…',
+        hint:
+          'In Calendario (Mac o iCloud.com): clic con il tasto destro sul calendario → <b>Condividi calendario</b> → attiva <b>Calendario pubblico</b> → copia il link webcal.',
+      },
+      'email-gmail': {
+        label: 'Collega la posta Gmail',
+        placeholder: 'password per app di 16 caratteri',
+        hint:
+          'Nel tuo Account Google → Sicurezza → Verifica in due passaggi → <b>Password per le app</b>, crea una per Mail, poi inserisci l’indirizzo Gmail e quella password. (Richiede la verifica in due passaggi; IMAP deve essere attivo in Gmail.)',
+      },
+      'email-icloud': {
+        label: 'Collega la posta iCloud',
+        placeholder: 'password specifica per l’app',
+        hint:
+          'Su appleid.apple.com → Accesso e sicurezza → <b>Password specifiche per le app</b>, genera una, poi inserisci l’email iCloud e quella password.',
+      },
+    },
   },
   brief: {
     eyebrow: 'Il tuo cervello, di recente',
@@ -800,6 +866,8 @@ const I18N_IT = {
     sourceImport: 'import',
     sourceSystem: 'sistema',
     sourceClaudeCode: 'claude code',
+    invalidResponse: 'Risposta non valida',
+    mcpError: 'Errore MCP',
   },
 }
 

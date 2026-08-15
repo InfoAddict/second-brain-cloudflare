@@ -251,7 +251,7 @@ pub fn run() {
                 menu_logout,
                 connections,
             ) = build_menu_items(&handle, locale)?;
-            install_app_menu(&handle, &connections)?;
+            install_app_menu(&handle, &connections, locale)?;
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "menu-open" => open_dashboard_from_menu(app),
                 "menu-hub" => windows::open_details_window(app),

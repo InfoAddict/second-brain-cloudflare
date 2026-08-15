@@ -88,4 +88,28 @@ describe("dashboard i18n", () => {
     expect(ctx.getLocale()).toBe("it");
     expect(ctx.localeTag()).toBe("it-IT");
   });
+
+  it("resolves integration connect copy by provider id (kebab-case)", () => {
+    const { ctx: en } = loadI18n("en");
+    const { ctx: it } = loadI18n("it");
+    const registry = readFileSync(resolve(ROOT, "src/integrations/index.ts"), "utf8");
+    const providers = [...registry.matchAll(/\bid:\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(providers.length).toBeGreaterThan(0);
+    const fields = ["label", "placeholder", "hint"] as const;
+    for (const id of providers) {
+      for (const field of fields) {
+        const key = `integrations.connect.${id}.${field}`;
+        const enVal = en.t(key);
+        const itVal = it.t(key);
+        expect(enVal).not.toBe(key);
+        expect(itVal).not.toBe(key);
+      }
+      expect(it.t(`integrations.connect.${id}.label`)).not.toBe(
+        en.t(`integrations.connect.${id}.label`),
+      );
+      expect(it.t(`integrations.connect.${id}.hint`)).not.toBe(
+        en.t(`integrations.connect.${id}.hint`),
+      );
+    }
+  });
 });

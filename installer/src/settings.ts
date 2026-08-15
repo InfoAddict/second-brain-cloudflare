@@ -12,6 +12,7 @@
 // behaves, so a mis-click must not silently retune the user's brain — nothing
 // reaches the Worker until Save, and Cancel discards the batch.
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { h } from "./shared";
 import { LOCALE_CHANGE_EVENT, getLocale, initI18n, t } from "./i18n";
 import "./style.css";
@@ -1208,6 +1209,8 @@ function countEdits(id: SectionId): number {
 
 async function boot(): Promise<void> {
   initI18n();
+  document.title = t("settingsPanel.title");
+  void getCurrentWindow().setTitle(t("settingsPanel.title"));
   app.replaceChildren(h("p", { class: "settings-lede" }, [t("settingsPanel.saving")]));
   try {
     saved = await invoke<SettingsView>("get_brain_settings");
@@ -1229,5 +1232,9 @@ window.addEventListener("beforeunload", event => {
   if (isDirty() || migrationBusy()) event.preventDefault();
 });
 
-window.addEventListener(LOCALE_CHANGE_EVENT, () => render());
+window.addEventListener(LOCALE_CHANGE_EVENT, () => {
+  document.title = t("settingsPanel.title");
+  void getCurrentWindow().setTitle(t("settingsPanel.title"));
+  render();
+});
 void boot();

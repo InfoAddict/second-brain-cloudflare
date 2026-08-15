@@ -1,6 +1,8 @@
 //! Project credits for the native About dialog and in-app About section.
 //! Human contributors from git history; bots and automated agents are excluded.
 
+use crate::i18n::{self, Key, Locale};
+
 pub struct Person {
     pub name: &'static str,
     pub github: Option<&'static str>,
@@ -48,8 +50,13 @@ fn line(person: &Person) -> String {
 }
 
 /// macOS About panel — multiline credits field.
-pub fn credits_text() -> String {
-    let mut out = format!("Created by {}\n\nMaintainers:\n", line(&CREATOR));
+pub fn credits_text(locale: Locale) -> String {
+    let mut out = format!(
+        "{} {}\n\n{}\n",
+        i18n::t(locale, Key::CreditsCreatedBy),
+        line(&CREATOR),
+        i18n::t(locale, Key::CreditsMaintainersLabel),
+    );
     for person in MAINTAINERS {
         out.push_str(&format!("• {}\n", line(person)));
     }
@@ -69,11 +76,19 @@ mod tests {
 
     #[test]
     fn credits_include_creator_and_maintainers() {
-        let text = credits_text();
+        let text = credits_text(Locale::En);
         assert!(text.contains("Rahil Pirani"));
         assert!(text.contains("Vincenzo Fabiano"));
+        assert!(text.contains("Created by"));
         assert!(!text.contains("dependabot"));
         assert!(!text.contains("bot]"));
+    }
+
+    #[test]
+    fn credits_localized_in_italian() {
+        let text = credits_text(Locale::It);
+        assert!(text.contains("Creato da"));
+        assert!(text.contains("Manutentori:"));
     }
 
     #[test]

@@ -6,9 +6,9 @@ async function apiMcp(toolName, args) {
   })
   const text = await res.text()
   const match = text.match(/data: ({.+})/s)
-  if (!match) throw new Error('Invalid response')
+  if (!match) throw new Error(t('common.invalidResponse'))
   const json = JSON.parse(match[1])
-  if (json.error) throw new Error(json.error.message || 'MCP error')
+  if (json.error) throw new Error(json.error.message || t('common.mcpError'))
   return json.result?.content?.[0]?.text ?? ''
 }
 

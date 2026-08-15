@@ -9,7 +9,7 @@
 //! Worker origin, and the Connections sidebar button below.
 
 use crate::i18n::{self, Key, Locale};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 
 /// Clicking the injected Connections button navigates here. The navigation is
 /// cancelled in `on_navigation` and turned into a native window instead, so the
@@ -22,6 +22,14 @@ const CONNECTIONS_PATH: &str = "/__sb-connections";
 /// so this button is injected here rather than shipped in the dashboard.
 const SETTINGS_PATH: &str = "/__sb-settings";
 
+fn dark_window_chrome(builder: WebviewWindowBuilder<'_, tauri::Wry, AppHandle>) -> WebviewWindowBuilder<'_, tauri::Wry, AppHandle> {
+    builder.theme(Some(Theme::Dark))
+}
+
+fn pin_dark_theme(window: &tauri::WebviewWindow) {
+    let _ = window.set_theme(Some(Theme::Dark));
+}
+
 /// Adds a "Connections" entry to the dashboard's own sidebar footer, next to
 /// Settings, reusing the dashboard's `sb-footer-btn` class so it inherits the
 /// real styling rather than floating over the page. Injected rather than shipped
@@ -30,18 +38,32 @@ const SETTINGS_PATH: &str = "/__sb-settings";
 /// idempotent so a re-render cannot produce two buttons.
 const CONNECTIONS_BUTTON_JS: &str = r#"(function () {
   var ID = 'sb-desktop-connections';
-  var LABEL = __LABEL__;
-  var TITLE = __TITLE__;
+  var LABELS = { en: __LABEL_EN__, it: __LABEL_IT__ };
+  var TITLES = { en: __TITLE_EN__, it: __TITLE_IT__ };
+  function pick(map) {
+    try {
+      var loc = localStorage.getItem('sb-locale');
+      if (loc === 'it' || loc === 'en') return map[loc] || map.en;
+    } catch (_) {}
+    return map.en;
+  }
   var tries = 0;
   var iv = setInterval(function () {
-    if (document.getElementById(ID)) { clearInterval(iv); return; }
+    var existing = document.getElementById(ID);
+    if (existing) {
+      existing.title = pick(TITLES);
+      var span = existing.querySelector('span');
+      if (span) span.textContent = pick(LABELS);
+      clearInterval(iv);
+      return;
+    }
     var footer = document.querySelector('.sb-footer');
     if (footer) {
       var b = document.createElement('button');
       b.id = ID;
       b.className = 'sb-footer-btn';
-      b.title = TITLE;
-      b.innerHTML = '<i class="ti ti-plug"></i><span>' + LABEL + '</span>';
+      b.title = pick(TITLES);
+      b.innerHTML = '<i class="ti ti-plug"></i><span>' + pick(LABELS) + '</span>';
       b.addEventListener('click', function () { location.assign('__CONNECTIONS_PATH__'); });
       footer.appendChild(b);
       clearInterval(iv);
@@ -61,18 +83,32 @@ const CONNECTIONS_BUTTON_JS: &str = r#"(function () {
 /// twice anyway.
 const SETTINGS_BUTTON_JS: &str = r#"(function () {
   var ID = 'sb-desktop-settings';
-  var LABEL = __LABEL__;
-  var TITLE = __TITLE__;
+  var LABELS = { en: __LABEL_EN__, it: __LABEL_IT__ };
+  var TITLES = { en: __TITLE_EN__, it: __TITLE_IT__ };
+  function pick(map) {
+    try {
+      var loc = localStorage.getItem('sb-locale');
+      if (loc === 'it' || loc === 'en') return map[loc] || map.en;
+    } catch (_) {}
+    return map.en;
+  }
   var tries = 0;
   var iv = setInterval(function () {
-    if (document.getElementById(ID)) { clearInterval(iv); return; }
+    var existing = document.getElementById(ID);
+    if (existing) {
+      existing.title = pick(TITLES);
+      var span = existing.querySelector('span');
+      if (span) span.textContent = pick(LABELS);
+      clearInterval(iv);
+      return;
+    }
     var footer = document.querySelector('.sb-footer');
     if (footer) {
       var b = document.createElement('button');
       b.id = ID;
       b.className = 'sb-footer-btn';
-      b.title = TITLE;
-      b.innerHTML = '<i class="ti ti-adjustments"></i><span>' + LABEL + '</span>';
+      b.title = pick(TITLES);
+      b.innerHTML = '<i class="ti ti-adjustments"></i><span>' + pick(LABELS) + '</span>';
       b.addEventListener('click', function () { location.assign('__SETTINGS_PATH__'); });
       footer.appendChild(b);
       clearInterval(iv);
@@ -82,21 +118,37 @@ const SETTINGS_BUTTON_JS: &str = r#"(function () {
   }, 100);
 })();"#;
 
-fn settings_button_js(locale: Locale) -> String {
-    let label = serde_json::to_string(i18n::t(locale, Key::SettingsButtonLabel)).expect("string");
-    let title = serde_json::to_string(i18n::t(locale, Key::SettingsButtonTooltip)).expect("string");
+fn settings_button_js() -> String {
+    let label_en =
+        serde_json::to_string(i18n::t(Locale::En, Key::SettingsButtonLabel)).expect("string");
+    let label_it =
+        serde_json::to_string(i18n::t(Locale::It, Key::SettingsButtonLabel)).expect("string");
+    let title_en =
+        serde_json::to_string(i18n::t(Locale::En, Key::SettingsButtonTooltip)).expect("string");
+    let title_it =
+        serde_json::to_string(i18n::t(Locale::It, Key::SettingsButtonTooltip)).expect("string");
     SETTINGS_BUTTON_JS
-        .replace("__LABEL__", &label)
-        .replace("__TITLE__", &title)
+        .replace("__LABEL_EN__", &label_en)
+        .replace("__LABEL_IT__", &label_it)
+        .replace("__TITLE_EN__", &title_en)
+        .replace("__TITLE_IT__", &title_it)
         .replace("__SETTINGS_PATH__", SETTINGS_PATH)
 }
 
-fn connections_button_js(locale: Locale) -> String {
-    let label = serde_json::to_string(i18n::t(locale, Key::ConnectionsButtonLabel)).expect("string");
-    let title = serde_json::to_string(i18n::t(locale, Key::ConnectionsButtonTooltip)).expect("string");
+fn connections_button_js() -> String {
+    let label_en =
+        serde_json::to_string(i18n::t(Locale::En, Key::ConnectionsButtonLabel)).expect("string");
+    let label_it =
+        serde_json::to_string(i18n::t(Locale::It, Key::ConnectionsButtonLabel)).expect("string");
+    let title_en =
+        serde_json::to_string(i18n::t(Locale::En, Key::ConnectionsButtonTooltip)).expect("string");
+    let title_it =
+        serde_json::to_string(i18n::t(Locale::It, Key::ConnectionsButtonTooltip)).expect("string");
     CONNECTIONS_BUTTON_JS
-        .replace("__LABEL__", &label)
-        .replace("__TITLE__", &title)
+        .replace("__LABEL_EN__", &label_en)
+        .replace("__LABEL_IT__", &label_it)
+        .replace("__TITLE_EN__", &title_en)
+        .replace("__TITLE_IT__", &title_it)
         .replace("__CONNECTIONS_PATH__", CONNECTIONS_PATH)
 }
 
@@ -106,16 +158,20 @@ pub fn open_setup_window(app: &AppHandle) -> tauri::Result<()> {
         .map(|l| l.get())
         .unwrap_or(Locale::En);
     if let Some(w) = app.get_webview_window("main") {
+        pin_dark_theme(&w);
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    let window = dark_window_chrome(
+        WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into())),
+    )
         .title(i18n::t(locale, Key::WindowSecondBrain))
         .inner_size(940.0, 700.0)
         .min_inner_size(760.0, 560.0)
         .build()?;
+    pin_dark_theme(&window);
     Ok(())
 }
 
@@ -163,9 +219,7 @@ fn open_wrapper_window_impl(
         .map(|l| l.get())
         .unwrap_or(Locale::En);
     if let Some(w) = app.get_webview_window("brain") {
-        // Align dashboard locale with the app without reloading when it already
-        // matches — reopening the brain otherwise would flash a full reload.
-        sync_brain_locale(app, worker_url, locale, false);
+        pin_dark_theme(&w);
         if open_integrations {
             let _ = w.eval("try { openIntegrations() } catch (_) {}");
         }
@@ -192,9 +246,18 @@ fn open_wrapper_window_impl(
   try {{ window.SB_DESKTOP = true; }} catch (_) {{}}
   try {{
     if (location.origin === {origin_js}) {{
+      var last = localStorage.getItem('sb-native-locale-last');
+      var next = {locale_js};
+      if (last !== next) {{
+        localStorage.setItem('sb-locale', next);
+        localStorage.setItem('sb-native-locale-last', next);
+      }}
+    }}
+  }} catch (_) {{}}
+  try {{
+    if (location.origin === {origin_js}) {{
       localStorage.setItem('sb_url', {origin_js});
       localStorage.setItem('sb_token', {token_js});
-      localStorage.setItem('sb-locale', {locale_js});
     }}
   }} catch (_) {{}}
 }})();"#
@@ -204,15 +267,17 @@ fn open_wrapper_window_impl(
         init.push_str(OPEN_INTEGRATIONS_JS);
     }
     init.push('\n');
-    init.push_str(&connections_button_js(locale));
+    init.push_str(&connections_button_js());
     init.push('\n');
-    init.push_str(&settings_button_js(locale));
+    init.push_str(&settings_button_js());
 
     let url: tauri::Url = format!("{origin}/")
         .parse()
         .map_err(|_| tauri::Error::WindowNotFound)?;
     let nav_handle = app.clone();
-    WebviewWindowBuilder::new(app, "brain", WebviewUrl::External(url))
+    let window = dark_window_chrome(
+        WebviewWindowBuilder::new(app, "brain", WebviewUrl::External(url)),
+    )
         .title(i18n::t(locale, Key::WindowSecondBrain))
         .inner_size(1180.0, 820.0)
         .min_inner_size(720.0, 480.0)
@@ -248,6 +313,7 @@ fn open_wrapper_window_impl(
             false
         })
         .build()?;
+    pin_dark_theme(&window);
     Ok(())
 }
 
@@ -285,6 +351,7 @@ pub fn sync_brain_locale(
     var prev = localStorage.getItem('sb-locale');
     if (prev === next && !{force}) return;
     localStorage.setItem('sb-locale', next);
+    localStorage.setItem('sb-native-locale-last', next);
     location.reload();
   }} catch (_) {{}}
 }})();"#
@@ -415,18 +482,24 @@ pub fn open_details_window(app: &AppHandle) {
         .map(|l| l.get())
         .unwrap_or(Locale::En);
     if let Some(w) = app.get_webview_window("details") {
+        pin_dark_theme(&w);
         let _ = w.center();
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "details", WebviewUrl::App("details.html".into()))
+    if let Ok(w) = dark_window_chrome(
+        WebviewWindowBuilder::new(app, "details", WebviewUrl::App("details.html".into())),
+    )
         .title(i18n::t(locale, Key::WindowConnections))
         .inner_size(960.0, 680.0)
         .min_inner_size(820.0, 560.0)
         .center()
-        .build();
+        .build()
+    {
+        pin_dark_theme(&w);
+    }
 }
 
 /// Sized to its content: seven controls with three radio levels each is taller
@@ -437,18 +510,24 @@ pub fn open_settings_window(app: &AppHandle) {
         .map(|l| l.get())
         .unwrap_or(Locale::En);
     if let Some(w) = app.get_webview_window("settings") {
+        pin_dark_theme(&w);
         let _ = w.center();
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    if let Ok(w) = dark_window_chrome(
+        WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into())),
+    )
         .title(i18n::t(locale, Key::WindowSettings))
         .inner_size(760.0, 820.0)
         .min_inner_size(640.0, 560.0)
         .center()
-        .build();
+        .build()
+    {
+        pin_dark_theme(&w);
+    }
 }
 
 #[cfg(test)]
@@ -497,6 +576,103 @@ mod tests {
             .find("\n        })\n")
             .expect("the navigation closure closes at eight spaces, before .build()");
         &rest[..end]
+    }
+
+    /// The early-return branch when the `brain` window already exists.
+    fn existing_brain_reopen_branch() -> &'static str {
+        let code = code();
+        let start = code
+            .find("if let Some(w) = app.get_webview_window(\"brain\") {")
+            .expect("existing brain window branch");
+        let rest = &code[start..];
+        let end = rest
+            .find("return Ok(());")
+            .expect("existing brain branch returns");
+        &rest[..end]
+    }
+
+    /// Reopening from tray/menu must not push the native locale into the
+    /// dashboard — the user may have chosen a different language in the webview.
+    #[test]
+    fn reopening_an_existing_brain_window_does_not_sync_locale() {
+        let body = existing_brain_reopen_branch();
+        assert!(
+            !body.contains("sync_brain_locale"),
+            "reopening the brain must not overwrite dashboard locale chosen by the user"
+        );
+    }
+
+    /// The creation-time init script, and only that.
+    fn wrapper_init_script() -> &'static str {
+        let code = code();
+        let start = code
+            .find("fn open_wrapper_window_impl(")
+            .expect("open_wrapper_window_impl");
+        let scope = &code[start..];
+        let scope = &scope[..scope
+            .find("\n}\n")
+            .expect("open_wrapper_window_impl ends at a closing brace in column zero")];
+        let lit = scope
+            .find("try {{ window.SB_DESKTOP = true; }}")
+            .expect("the brain window still injects an init script");
+        let rest = &scope[lit..];
+        let end = rest
+            .find("}})();\"#")
+            .expect("the init script literal closes before connections/settings injection");
+        &rest[..end]
+    }
+
+    fn sync_brain_locale_body() -> &'static str {
+        let code = code();
+        let start = code
+            .find("pub fn sync_brain_locale(")
+            .expect("sync_brain_locale");
+        let rest = &code[start..];
+        &rest[..rest
+            .find("\n}\n")
+            .expect("sync_brain_locale ends at a closing brace in column zero")]
+    }
+
+    /// Closing the dashboard destroys the webview session. A sessionStorage
+    /// stamp dies with it, so the next open used to rewrite sb-locale back to
+    /// the app language. Seed-if-absent would fix that but break changing the
+    /// language in Settings while the dashboard is closed. Record the last app
+    /// locale the shell stamped, and only overwrite when it differs.
+    #[test]
+    fn closing_the_brain_window_does_not_reset_dashboard_locale() {
+        let init = wrapper_init_script();
+        assert!(
+            !init.contains("sessionStorage"),
+            "sessionStorage dies with the webview — using it as the locale stamp \
+             resets the dashboard language every time the window is closed"
+        );
+        assert!(
+            init.contains("sb-native-locale-last"),
+            "the init script must remember the last app locale it stamped so a \
+             close/reopen can leave a user-chosen dashboard language alone"
+        );
+        assert!(
+            init.contains("last !== next"),
+            "the init script must overwrite sb-locale only when the app locale \
+             has changed since the last stamp — seed-if-absent breaks Settings \
+             changes made while the dashboard is closed"
+        );
+
+        let sync = sync_brain_locale_body();
+        let locale_write = sync
+            .find("localStorage.setItem('sb-locale'")
+            .expect("sync_brain_locale still writes sb-locale");
+        let last_write = sync
+            .find("localStorage.setItem('sb-native-locale-last'")
+            .expect(
+                "sync_brain_locale must also stamp sb-native-locale-last, otherwise \
+                 a Settings change while the dashboard is open is forgotten on close",
+            );
+        assert!(
+            last_write > locale_write,
+            "sb-native-locale-last has to be written on the same path that writes \
+             sb-locale, not on an early return that skipped the change"
+        );
     }
 
     /// Windows 11 report: the Connections button in the injected sidebar hung the
