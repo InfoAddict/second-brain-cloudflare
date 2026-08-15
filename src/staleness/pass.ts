@@ -25,6 +25,7 @@ const STALENESS_CAS_ATTEMPTS = 3;
 const SYSTEM_TAG_EXCLUSIONS = [
   `tags NOT LIKE '%"status:deprecated"%'`,
   `tags NOT LIKE '%"auto-pattern"%'`,
+  `tags NOT LIKE '%"auto-insight"%'`,
   `tags NOT LIKE '%"synthesized"%'`,
   `tags NOT LIKE '%"rolled-up"%'`,
 ].join(" AND ");

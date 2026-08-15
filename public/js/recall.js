@@ -9,6 +9,63 @@ function handleRecallKey(e) {
   }
 }
 
+/**
+ * Workers AI streams two different answer shapes depending on model
+ * lineage: Llama-family models put the text directly on `response`;
+ * OpenAI-lineage models (`@cf/openai/gpt-oss-*`) stream an OpenAI-style
+ * chat-completion delta under `choices[0].delta.content` instead, and the
+ * reasoning ones in that family emit chain-of-thought first as
+ * `delta.reasoning` / `delta.reasoning_content` — deliberately never
+ * returned here, since callers render this as the answer, not as reasoning
+ * prose.
+ *
+ * This mirrors extractChunkText/consumeSseLine in src/lib/ai.ts, which has
+ * the fuller explanation. The client can't reuse that helper directly:
+ * POST /chat (src/routes/recall.ts) streams the raw Workers AI response
+ * straight to the browser rather than through readStreamText, so this is a
+ * second, hand-kept-in-sync implementation. A change to one should be a
+ * prompt to check the other.
+ */
+function extractChatChunkText(d) {
+  if (d && d.response) return d.response
+  const content = d && d.choices && d.choices[0] && d.choices[0].delta && d.choices[0].delta.content
+  return typeof content === 'string' ? content : ''
+}
+
+function consumeChatSseLine(line, onText) {
+  if (!line.startsWith('data: ') || line.includes('[DONE]')) return
+  try {
+    const d = JSON.parse(line.slice(6))
+    const text = extractChatChunkText(d)
+    if (text) onText(text)
+  } catch (e) {
+    // A parse failure here is on a COMPLETE line (buffering already held
+    // back any partial one), so it's a genuine anomaly rather than a
+    // chunk-boundary artifact — worth logging, but it must not interrupt
+    // the stream: dropping one malformed SSE line beats losing everything
+    // read so far.
+    console.error('sendRecall: malformed SSE line (non-fatal):', e)
+  }
+}
+
+/**
+ * Feeds one decoded chunk of the /chat stream through line buffering, so an
+ * SSE line split across a network chunk boundary isn't silently dropped.
+ * `buffer` carries any trailing partial line across calls — pass the
+ * returned value back in on the next call, and flush whatever is left with
+ * consumeChatSseLine once the stream ends. Mirrors the buffering loop in
+ * src/lib/ai.ts's readStreamText.
+ */
+function feedChatStream(buffer, decodedChunk, onText) {
+  buffer += decodedChunk
+  const lines = buffer.split('\n')
+  // The last element is either "" (buffer ended on a newline) or an
+  // incomplete line — either way it stays buffered for the next call.
+  buffer = lines.pop() ?? ''
+  for (const line of lines) consumeChatSseLine(line, onText)
+  return buffer
+}
+
 async function sendRecall() {
   const input = document.getElementById('recall-input')
   const query = input.value.trim()
@@ -84,26 +141,24 @@ async function sendRecall() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let fullText = ''
+      let buffer = ''
+      const onText = (chunk) => {
+        fullText += chunk
+        answerEl.textContent = fullText
+      }
       try {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          const chunk = decoder.decode(value)
-          chunk.split('\n').forEach((line) => {
-            if (line.startsWith('data: ')) {
-              const raw = line.slice(6).trim()
-              if (raw === '[DONE]') return
-              try {
-                const d = JSON.parse(raw)
-                if (d.response) {
-                  fullText += d.response
-                  answerEl.textContent = fullText
-                }
-              } catch {}
-            }
-          })
+          // { stream: true } holds back a trailing partial multi-byte
+          // sequence until the bytes that complete it arrive next read.
+          buffer = feedChatStream(buffer, decoder.decode(value, { stream: true }), onText)
           msgs.scrollTop = msgs.scrollHeight
         }
+        // Flush any bytes the decoder was holding back, then process a
+        // final line that may have arrived with no trailing newline.
+        buffer += decoder.decode()
+        if (buffer) consumeChatSseLine(buffer, onText)
       } finally {
         reader.releaseLock()
       }

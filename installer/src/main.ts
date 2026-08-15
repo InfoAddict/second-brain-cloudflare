@@ -133,11 +133,9 @@ function searchingScreen() {
     brand(),
     h("h1", {}, [t("connectExisting.searchingTitle")]),
     h("p", { class: "lede" }, [t("connectExisting.searchingLede")]),
-    h("div", { class: "checklist" }, [
-      h("li", { class: "running" }, [
-        h("span", { class: "check-icon" }, [h("span", { class: "spinner" })]),
-        t("connectExisting.searchingStep"),
-      ]),
+    h("div", { class: "searching-status" }, [
+      h("span", { class: "check-icon" }, [h("span", { class: "spinner" })]),
+      t("connectExisting.searchingStep"),
     ]),
   );
 }

@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import worker from "../../src/index"; import { captureEntry } from "../../src/capture/entry";
 import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { setDbReady } from "../../src/runtime/state";
 
 // Returns an AI mock that always resolves a contradiction verdict (for captureEntry).
 function makeContradictionAI(response: string): Ai {
@@ -665,5 +668,63 @@ describe("GET /recall — missing Vectorize index", () => {
     const data = await res.json() as any;
     expect(data.semantic_unavailable).toBe(false);
     expect(query).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("GET /recall — auto-pattern exclusion, against real SQLite", () => {
+  // "excludes status:deprecated entries from recall results" above runs against
+  // test/helpers/d1-mock.ts, which is the wrong tool for pinning this: its
+  // hydration branch drops `auto-pattern`/`auto-insight` tagged rows
+  // unconditionally, not by evaluating src/recall/search.ts's `d1Filters`
+  // string — so it would keep passing even if that clause were deleted from
+  // the real query. Same reasoning as test/integration/deprecated-stays-unindexed.test.ts:
+  // driven against real SQLite so the WHERE clause itself is what is under test.
+  let sq: SqliteD1 | null = null;
+  afterEach(() => { sq?.close(); sq = null; setDbReady(false); });
+
+  function dbOf(s: SqliteD1) {
+    return {
+      prepare: (sql: string) => s.db.prepare(sql),
+      exec: (sql: string) => s.db.exec(sql),
+    };
+  }
+
+  async function migrated(): Promise<SqliteD1> {
+    const s = makeSqliteD1();
+    resetDatabaseInit();
+    await initializeDatabase({ DB: dbOf(s) } as unknown as Env);
+    setDbReady(true);
+    return s;
+  }
+
+  const envOf = (s: SqliteD1, overrides: Record<string, unknown> = {}): Env =>
+    makeTestEnv(dbOf(s) as any, overrides as any);
+
+  it("drops an auto-pattern entry from recall even when it has not been dismissed", async () => {
+    sq = await migrated();
+    // The undismissed one is what actually pins the clause: a deprecated
+    // auto-pattern entry would also be caught by the separate
+    // status:deprecated filter even if the auto-pattern clause were deleted.
+    sq.seed({ id: "undismissed", content: "You keep deferring the pricing decision", createdAt: 1000, tags: ["auto-pattern"], vectorIds: ["undismissed"] });
+    sq.seed({ id: "dismissed", content: "Not a real pattern, and dismissed", createdAt: 1000, tags: ["auto-pattern", "status:deprecated"], vectorIds: ["dismissed"] });
+    sq.seed({ id: "normal", content: "An ordinary memory about pricing", createdAt: 1000, tags: ["work"], vectorIds: ["normal"] });
+
+    const env = envOf(sq, {
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({
+          matches: [
+            { id: "undismissed", score: 0.9, metadata: { parentId: "undismissed", isUpdate: false } },
+            { id: "dismissed", score: 0.85, metadata: { parentId: "dismissed", isUpdate: false } },
+            { id: "normal", score: 0.8, metadata: { parentId: "normal", isUpdate: false } },
+          ],
+        }),
+      }),
+    });
+    const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
+
+    const res = await worker.fetch(req("GET", "/recall?query=pricing"), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.results.map((r: any) => r.id)).toEqual(["normal"]);
   });
 });

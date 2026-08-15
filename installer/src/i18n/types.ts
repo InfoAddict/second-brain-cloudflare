@@ -62,6 +62,11 @@ export type Messages = {
     compression: { label: string; desc: string; note: string; levels: { conservative: LevelCopy; standard: LevelCopy; aggressive: LevelCopy } };
     model: { label: string; desc: string; sizeNote: string; neuronsNote: string };
     /**
+     * The model used only when Second Brain reasons over a pair of memories to
+     * draw an insight — everything `model` above covers is unaffected by this.
+     */
+    insightModel: { label: string; desc: string; sizeNote: string; defaultNote: string };
+    /**
      * Rebuilding how memories are read (#248). The only destructive, multi-step
      * flow in this window, so it carries a screen's worth of copy per step
      * rather than one notice per level.

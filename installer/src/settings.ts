@@ -29,6 +29,9 @@ type ControlView = {
 type SettingsView = {
   controls: ControlView[];
   llmModel: string;
+  /** Used only when reasoning over a pair of memories to draw an insight. */
+  insightLlmModel: string;
+  /** Shared by both model dropdowns. */
   llmModels: string[];
 };
 
@@ -40,7 +43,7 @@ type Staged = { kind: "level"; id: string } | { kind: "reset" };
  * renders — seven controls stacked in one column was a long scroll, and the
  * grouping is what tells a user whether a setting affects recall or capture.
  *
- * "ai" holds the model dropdown rather than level controls, so it has no
+ * "ai" holds the two model dropdowns rather than level controls, so it has no
  * entry in `controls`; "matching" holds the rebuild flow (#248) the same way.
  * "matching" is last because it is the only pane that can start something
  * destructive.
@@ -68,6 +71,7 @@ let saved: SettingsView | null = null;
 /** Staged edits, keyed by control id. Empty means nothing to save. */
 let staged = new Map<string, Staged>();
 let stagedModel: string | null = null;
+let stagedInsightModel: string | null = null;
 let busy = false;
 let message: { text: string; kind: "ok" | "error" } | null = null;
 
@@ -98,7 +102,7 @@ function effectiveLevel(c: ControlView): string | null {
 }
 
 function isDirty(): boolean {
-  return staged.size > 0 || stagedModel !== null;
+  return staged.size > 0 || stagedModel !== null || stagedInsightModel !== null;
 }
 
 function stage(controlId: string, next: Staged, c: ControlView): void {
@@ -116,6 +120,7 @@ function stage(controlId: string, next: Staged, c: ControlView): void {
 function discard(): void {
   staged = new Map();
   stagedModel = null;
+  stagedInsightModel = null;
   message = null;
   render();
 }
@@ -139,9 +144,11 @@ async function save(): Promise<void> {
       levels,
       resets,
       model: stagedModel,
+      insightModel: stagedInsightModel,
     });
     staged = new Map();
     stagedModel = null;
+    stagedInsightModel = null;
     message = { text: t("settingsPanel.saved"), kind: "ok" };
   } catch (e) {
     // The Worker's message names the offending key or the invariant it
@@ -1028,6 +1035,28 @@ function controlCard(c: ControlView): HTMLElement {
   return card;
 }
 
+/**
+ * Both model dropdowns (LLM_MODEL and INSIGHT_LLM_MODEL) draw from the same
+ * curated catalogue and show the id itself — there is no friendly-name layer
+ * for these the way the migration picker has for embedding models, so the
+ * option text is the id.
+ */
+function modelSelect(models: string[], current: string, onChange: (value: string) => void): HTMLSelectElement {
+  const select = h("select", { class: "locale-select" }) as HTMLSelectElement;
+  for (const model of models) {
+    select.append(h("option", { value: model }, [model]));
+  }
+  // A model set outside the app (or dropped from the curated list) must still
+  // show as selected rather than silently reading as the first entry.
+  if (current && !models.includes(current)) {
+    select.append(h("option", { value: current }, [current]));
+  }
+  select.value = current;
+  select.disabled = locked();
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
 function modelCard(v: SettingsView): HTMLElement {
   const card = h("div", { class: `card settings-control${stagedModel ? " settings-edited" : ""}` });
   card.append(
@@ -1036,19 +1065,8 @@ function modelCard(v: SettingsView): HTMLElement {
   );
 
   const current = stagedModel ?? v.llmModel;
-  const select = h("select", { class: "locale-select" }) as HTMLSelectElement;
-  for (const model of v.llmModels) {
-    select.append(h("option", { value: model }, [model]));
-  }
-  // A model set outside the app (or dropped from the curated list) must still
-  // show as selected rather than silently reading as the first entry.
-  if (current && !v.llmModels.includes(current)) {
-    select.append(h("option", { value: current }, [current]));
-  }
-  select.value = current;
-  select.disabled = locked();
-  select.addEventListener("change", () => {
-    stagedModel = select.value === v.llmModel ? null : select.value;
+  const select = modelSelect(v.llmModels, current, value => {
+    stagedModel = value === v.llmModel ? null : value;
     message = null;
     render();
   });
@@ -1061,9 +1079,37 @@ function modelCard(v: SettingsView): HTMLElement {
   return card;
 }
 
+/**
+ * A second, separate model: the general model above never reasons over a pair
+ * of memories, and this one never does anything else. Kept as its own control
+ * (rather than a level of `modelCard`) so each can be changed, staged and
+ * reset independently.
+ */
+function insightModelCard(v: SettingsView): HTMLElement {
+  const card = h("div", { class: `card settings-control${stagedInsightModel ? " settings-edited" : ""}` });
+  card.append(
+    h("div", { class: "url-label" }, [t("settingsPanel.insightModel.label")]),
+    h("div", { class: "url-desc" }, [t("settingsPanel.insightModel.desc")]),
+  );
+
+  const current = stagedInsightModel ?? v.insightLlmModel;
+  const select = modelSelect(v.llmModels, current, value => {
+    stagedInsightModel = value === v.insightLlmModel ? null : value;
+    message = null;
+    render();
+  });
+
+  card.append(
+    select,
+    h("div", { class: "settings-notice" }, [t("settingsPanel.insightModel.sizeNote")]),
+    h("div", { class: "settings-forward-note" }, [`ⓘ ${t("settingsPanel.insightModel.defaultNote")}`]),
+  );
+  return card;
+}
+
 /** Sticky footer: nothing reaches the Worker except through Save. */
 function actionBar(): HTMLElement {
-  const count = staged.size + (stagedModel ? 1 : 0);
+  const count = staged.size + (stagedModel ? 1 : 0) + (stagedInsightModel ? 1 : 0);
   const bar = h("div", { class: "settings-actions" });
 
   const status = h("div", { class: "settings-actions-status" });
@@ -1142,7 +1188,7 @@ function render(): void {
     // may not expose every control yet.
     if (c) pane.append(controlCard(c));
   }
-  if (active === "ai") pane.append(modelCard(saved));
+  if (active === "ai") pane.append(modelCard(saved), insightModelCard(saved));
   if (active === "matching") pane.append(migrationCard());
 
   app.append(h("div", { class: "panel" }, [rail, pane]), actionBar());
@@ -1157,6 +1203,7 @@ function countEdits(id: SectionId): number {
   if (!section) return 0;
   let n = section.controls.filter(c => staged.has(c)).length;
   if (id === "ai" && stagedModel) n += 1;
+  if (id === "ai" && stagedInsightModel) n += 1;
   return n;
 }
 

@@ -104,6 +104,33 @@ describe("loading the queue", () => {
     expect(ctx.__els.get("patterns-more").hidden).toBe(true);
   });
 
+  it("strips the pass's own provenance line and shows the shape instead", async () => {
+    const ctx = load([
+      {
+        ok: true,
+        total: 1,
+        patterns: [
+          {
+            id: "p1",
+            content:
+              "You keep circling back to the same onboarding complaint.\n\n[Insight: throughline — drawn from 2 memories]",
+            created_at: Date.UTC(2026, 1, 8, 12),
+          },
+        ],
+      },
+    ]);
+    await ctx.loadPatternQueue();
+    const html = ctx.__els.get("patterns-list").innerHTML;
+    // The sentence a person should read, verbatim...
+    expect(html).toContain("You keep circling back to the same onboarding complaint.");
+    // ...not the bookkeeping the pass appended to it.
+    expect(html).not.toContain("[Insight:");
+    expect(html).not.toContain("drawn from 2 memories");
+    // The shape is worth keeping, alongside the date it was noticed.
+    expect(html).toContain("Throughline");
+    expect(html).toContain("Feb 8, 2026");
+  });
+
   it("appends the next page rather than replacing the current one", async () => {
     const ctx = load([page(50, 60), page(10, 60, 50)]);
     await ctx.loadPatternQueue();
@@ -227,7 +254,7 @@ describe("the settings entry point", () => {
     const ctx = load();
     ctx.renderPatternsSection(214);
     const html = ctx.__els.get("patterns-section").innerHTML;
-    expect(html).toContain("214 patterns are waiting");
+    expect(html).toContain("214 insights are waiting");
     expect(html).toContain("Review all");
     expect(html).not.toContain("pattern-row");
   });
@@ -236,7 +263,7 @@ describe("the settings entry point", () => {
     const ctx = load();
     ctx.renderPatternsSection(1);
     const html = ctx.__els.get("patterns-section").innerHTML;
-    expect(html).toContain("1 pattern is waiting");
+    expect(html).toContain("1 insight is waiting");
     expect(html).toContain("Review it");
   });
 
@@ -253,6 +280,6 @@ describe("the settings entry point", () => {
     ctx.fetch = (url: string, init: any) => { urls.push(url); return inner(url, init); };
     await ctx.loadPatternCount();
     expect(urls[0]).toContain("limit=1");
-    expect(ctx.__els.get("patterns-section").innerHTML).toContain("214 patterns");
+    expect(ctx.__els.get("patterns-section").innerHTML).toContain("214 insights");
   });
 });

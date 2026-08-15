@@ -70,14 +70,22 @@ function patternRow(p) {
   const when = p.created_at
     ? formatDateUI(p.created_at, { year: 'numeric', month: 'short', day: 'numeric' })
     : ''
+  // Strip the same provenance suffix the brief card does (splitInsightShape,
+  // utils.js), so the queue reads as the sentence the pass wrote, not the
+  // bookkeeping appended to it. The shape rides along on the same line the
+  // date already occupies rather than earning its own row.
+  const { text, shape } = splitInsightShape(p.content)
+  const meta = [shape ? t(`patterns.shapes.${shape}`) : '', when ? t('patterns.noticedWhen', { date: when }) : '']
+    .filter(Boolean)
+    .join(' · ')
   return `
     <label class="pattern-row" id="pattern-row-${escAttr(p.id)}">
       <input type="checkbox" class="pattern-check" value="${escAttr(p.id)}"
              ${selectedPatterns.has(p.id) ? 'checked' : ''}
              onchange="togglePatternSelection('${escAttr(p.id)}', this.checked)" />
       <span class="pattern-body">
-        <span class="pattern-text">${escHtml(p.content)}</span>
-        ${when ? `<span class="pattern-when">${escHtml(t('patterns.noticedWhen', { date: when }))}</span>` : ''}
+        <span class="pattern-text">${escHtml(text)}</span>
+        ${meta ? `<span class="pattern-when">${escHtml(meta)}</span>` : ''}
       </span>
     </label>`
 }

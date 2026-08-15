@@ -44,3 +44,22 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 -- saving pays for many times over. Must stay in step with src/db/init.ts, which creates
 -- the same index at runtime for brains that were migrated before it existed.
 CREATE INDEX IF NOT EXISTS idx_edges_weight ON edges(weight DESC);
+
+-- Candidate pairs for the weekly insight pass. Must stay in step with
+-- src/db/init.ts, which creates the same objects at runtime for brains that
+-- were migrated before this existed.
+CREATE TABLE IF NOT EXISTS insight_candidates (
+  id          TEXT PRIMARY KEY,
+  a_id        TEXT NOT NULL,
+  b_id        TEXT NOT NULL,                       -- normalised so a_id < b_id
+  similarity  REAL NOT NULL,                       -- cosine at accrual time
+  gap_ms      INTEGER NOT NULL,                    -- |created_at difference|
+  score       REAL NOT NULL,                       -- see src/insight/score.ts
+  signal      TEXT NOT NULL DEFAULT 'vector',      -- vector | supersedes
+  status      TEXT NOT NULL DEFAULT 'pending',     -- pending | used | rejected
+  created_at  INTEGER NOT NULL,
+  UNIQUE(a_id, b_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_insight_candidates_queue
+  ON insight_candidates(status, score DESC);

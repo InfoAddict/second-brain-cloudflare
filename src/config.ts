@@ -65,6 +65,10 @@ export const DEFAULTS = {
   // ── Models (src/lib/ai.ts) ──
   LLM_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
   EMBEDDING_MODEL: "@cf/baai/bge-small-en-v1.5",
+  // Used only by src/insight/reason.ts's pair-reasoning call — everything
+  // else above keeps using LLM_MODEL. See the cost comment on
+  // constants.INSIGHT_LLM_MODEL for why this is a separate setting.
+  INSIGHT_LLM_MODEL: "@cf/openai/gpt-oss-120b",
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -124,6 +128,7 @@ export const RULES: Record<ConfigKey, Rule> = {
 
   LLM_MODEL: { kind: "string" },
   EMBEDDING_MODEL: { kind: "string" },
+  INSIGHT_LLM_MODEL: { kind: "string" },
 };
 
 /**
