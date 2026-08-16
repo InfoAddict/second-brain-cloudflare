@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createEdge, inferEdgesOnWrite, isValidEdgeType, isSymmetric } from "../../src/graph/edges";
+import { createEdge, inferEdgesOnWrite, isValidEdgeType, isSymmetric, edgeLabel } from "../../src/graph/edges";
 import { expandGraph } from "../../src/graph/traverse";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import type { Env } from "../../src/env";
@@ -19,6 +19,12 @@ describe("edge-type registry", () => {
   it("treats relates_to as symmetric and supersedes as directed", () => {
     expect(isSymmetric("relates_to")).toBe(true);
     expect(isSymmetric("supersedes")).toBe(false);
+  });
+
+  it("registers drawn_from as a valid, directed type for insight provenance", () => {
+    expect(isValidEdgeType("drawn_from")).toBe(true);
+    expect(isSymmetric("drawn_from" as any)).toBe(false);
+    expect(edgeLabel("drawn_from" as any)).toBe("Drawn from");
   });
 });
 
