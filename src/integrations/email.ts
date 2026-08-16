@@ -65,11 +65,31 @@ export interface EmailHeaderInfo {
   bulk: boolean;
 }
 
-// Automated senders (broadened): the local-part signals a machine, not a person.
+// A machine label, matched against ONE whole dot-separated piece of the domain.
+//
+// Whole-piece rather than substring on purpose: `notifyhealth.example.com` is a
+// company and `alertsystems.example.com` is a company, and matching a substring
+// would drop a person's mail to keep a receipt out. The optional short prefix
+// covers the `e-notify` / `em-alerts` convention large senders use for their
+// outbound subdomain.
+const MACHINE_DOMAIN_LABEL =
+  /^(?:[a-z0-9]{1,3}-)?(no[-_]?reply|do[-_]?not[-_]?reply|donotreply|notifications?|notify|notices?|alerts?|mailer|mailer-daemon|postmaster|bounces?|newsletters?|updates)$/;
+
+// Automated senders (broadened): the local part OR the domain signals a machine,
+// not a person.
+//
+// The local part alone was not enough. A large sender wants its own brand in the
+// local part and puts the machine marker in the domain instead
+// (`brand@notification.example.com`), so transactional mail walked past this
+// check even though it is as automated as anything the header filter catches.
 export function isNoiseSender(from: string): boolean {
   const addr = (/<([^>]+)>/.exec(from)?.[1] ?? from).toLowerCase();
   const local = (addr.split("@")[0] ?? "").trim();
-  return /(^|[._+-])(no-?reply|do-?not-?reply|donotreply|noreply|notification|notifications|notify|alert|alerts|mailer-daemon|mailer|postmaster|bounce|bounces|newsletter|updates)([._+-]|$)/.test(local);
+  if (/(^|[._+-])(no[-_]?reply|do[-_]?not[-_]?reply|donotreply|noreply|notification|notifications|notify|alert|alerts|mailer-daemon|mailer|postmaster|bounce|bounces|newsletter|updates)([._+-]|$)/.test(local)) {
+    return true;
+  }
+  const domain = (addr.split("@")[1] ?? "").trim();
+  return domain.split(".").some(label => MACHINE_DOMAIN_LABEL.test(label));
 }
 
 // Header markers that reliably indicate bulk / automated / list mail. This is

@@ -64,6 +64,46 @@ function cleanText(s: unknown): string {
   return String(s).replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+// Where a conferencing block starts.
+//
+// The calendar twin of the machine trailer in `integrations/email.ts`, and worse
+// in one respect: a recurring meeting carries the same block on every single
+// occurrence, so the identical text is embedded dozens of times over. It is pure
+// navigation — a join URL, a meeting id, a page of dial-in numbers — and says
+// nothing about what the meeting is for, which is the only thing a description
+// is worth remembering for.
+//
+// Anchored to a line start and matched on the organiser-generated wording, so a
+// description that merely says "join the pricing meeting" is left alone.
+const CONFERENCING_MARKERS = [
+  /\n[ \t]*_{10,}[ \t]*\n/,
+  /\n[ \t]*Join Zoom Meeting\b/i,
+  /\n[ \t]*Microsoft Teams meeting\b/i,
+  /\n[ \t]*Join with Google Meet\b/i,
+  /\n[ \t]*Join on your computer\b/i,
+  /\n[ \t]*Click here to join the meeting\b/i,
+  /\n[ \t]*One tap mobile\b/i,
+  /\n[ \t]*Dial by your location\b/i,
+  /\n[ \t]*Meeting ID:[ \t]/i,
+  /\n[ \t]*Find your local number\b/i,
+];
+
+/**
+ * Drop the conferencing block from an event description, keeping the agenda.
+ *
+ * Runs BEFORE the MAX_DESCRIPTION_CHARS cap, not after: a long block would
+ * otherwise spend the whole allowance on dial-in numbers and truncate away the
+ * agenda it was meant to preserve.
+ */
+export function stripConferencingBlock(description: string): string {
+  let t = (description || "").replace(/\r\n/g, "\n");
+  for (const re of CONFERENCING_MARKERS) {
+    const m = re.exec(t);
+    if (m && m.index > 0) t = t.slice(0, m.index);
+  }
+  return t.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function eventVersion(ev: any): string {
   const c = ev.component;
   const lm = c.getFirstPropertyValue("last-modified");
@@ -91,7 +131,7 @@ function pushSingle(ev: any, startMs: number, endMs: number, out: Occurrence[]):
     end: e,
     allDay: ev.startDate.isDate === true,
     location: cleanText(ev.location),
-    description: cleanText(ev.description).slice(0, MAX_DESCRIPTION_CHARS),
+    description: stripConferencingBlock(cleanText(ev.description)).slice(0, MAX_DESCRIPTION_CHARS),
     version: eventVersion(ev),
   });
 }
@@ -182,7 +222,7 @@ function expandRecurring(ev: any, startMs: number, endMs: number, out: Occurrenc
       end: e,
       allDay: details.startDate.isDate === true,
       location: cleanText(details.item.location),
-      description: cleanText(details.item.description).slice(0, MAX_DESCRIPTION_CHARS),
+      description: stripConferencingBlock(cleanText(details.item.description)).slice(0, MAX_DESCRIPTION_CHARS),
       version: `${eventVersion(details.item)}::${startISO}`,
     });
     if (++emitted >= MAX_OCCURRENCES_PER_EVENT) break;

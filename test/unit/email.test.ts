@@ -93,6 +93,39 @@ describe("isNoiseSender", () => {
     expect(isNoiseSender("Mailer Daemon <mailer-daemon@x.com>")).toBe(true);
     expect(isNoiseSender("Jordan Lee <jordan@gmail.com>")).toBe(false);
   });
+
+  // Only the local part was inspected, so a sender that puts the machine marker
+  // in the domain walked straight past — which is most large senders, because a
+  // brand wants its own name in the local part. These are the shapes that were
+  // reaching the brain.
+  it.each([
+    "brand@notification.example.com",
+    "brand@notices.example.com",
+    "brand@e-notify.example",
+    "info@alerts.example.com",
+    "team@mailer.example.com",
+  ])("treats %s as a noise sender on the domain", (from) => {
+    expect(isNoiseSender(from)).toBe(true);
+  });
+
+  // The alternation only spelled `noreply` and `no-reply`; the underscore form
+  // is just as common and was slipping through.
+  it("catches the underscore spelling of no_reply", () => {
+    expect(isNoiseSender("no_reply@example.com")).toBe(true);
+    expect(isNoiseSender("do_not_reply@example.com")).toBe(true);
+  });
+
+  // Over-reach guard. A domain that merely contains one of these as a substring
+  // of a longer word is a real company, not a machine: cutting these would drop
+  // correspondence from a person.
+  it.each([
+    "jordan@notifyhealth.example.com",
+    "sam@alertsystems.example.com",
+    "wendy.lambert@example.com",
+    "chris@mailerson.example.com",
+  ])("leaves %s alone", (from) => {
+    expect(isNoiseSender(from)).toBe(false);
+  });
 });
 
 // ─── computeEmailPlan ───────────────────────────────────────────────────────
