@@ -129,8 +129,11 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
   describe("recall", () => {
     it("tells the client to judge returned content rather than trust rank", async () => {
       const recall = (await descriptions()).recall;
-      expect(recall).toMatch(/first result is often not the right one/i);
+      expect(recall).toMatch(/rank 1 is a candidate, not a guarantee/i);
       expect(recall).toMatch(/read the returned content/i);
+      // Rank 1 being unreliable must not read as rank 1 being usually wrong —
+      // that would buy recovery calls the result set does not need.
+      expect(recall).not.toMatch(/often not the right one/i);
     });
 
     it("says the match percentage is a retrieval signal, not answer confidence", async () => {
@@ -179,6 +182,15 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       expect(recall).toMatch(/episodic memories are better for/i);
     });
 
+    it("treats lifecycle status as a dimension separate from kind", async () => {
+      const recall = (await descriptions()).recall;
+      expect(recall).toMatch(/kind and lifecycle status are separate dimensions/i);
+      expect(recall).toMatch(/canonical one outranks a draft/i);
+      // Canonical wins for settled information, not unconditionally: a question
+      // about what is still tentative wants the draft.
+      expect(recall).toMatch(/but not when the question is precisely about what is tentative/i);
+    });
+
     it("scopes graph expansion to history-shaped questions only", async () => {
       const recall = (await descriptions()).recall;
       expect(recall).toMatch(/hops to 1-2/i);
@@ -218,8 +230,13 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
   describe("remember", () => {
     it("still asks for automatic capture without permission", async () => {
       const remember = (await descriptions()).remember;
-      expect(remember).toMatch(/automatically/i);
-      expect(remember).toMatch(/do not ask permission/i);
+      expect(remember).toMatch(/automatically, without asking permission/i);
+    });
+
+    it("scopes automatic capture to durable, later-retrievable information", async () => {
+      const remember = (await descriptions()).remember;
+      expect(remember).toMatch(/durable enough to be worth retrieving in a later conversation/i);
+      expect(remember).toMatch(/passing conversational detail that will not matter later/i);
     });
 
     it("points a continuing thread at append instead of a near-duplicate", async () => {
