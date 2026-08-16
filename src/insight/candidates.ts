@@ -375,9 +375,17 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
       // tags, integration sources and the content floor, none of which this
       // predicate touches. SQL narrows the window to rows that CAN pass;
       // JS remains the authority on whether they DO.
+      // An explicit supersedes link (src/mcp/server.ts, src/routes/graph.ts)
+      // never runs deprecateEntry the way a system-detected contradiction
+      // does (src/capture/entry.ts), so both sides can independently clear
+      // isInsightEligible above while still both being assistant-authored.
+      // The pair-level rule applies here exactly as it does to the
+      // vector-neighbour path above — authorship is a property of the pair,
+      // not of which accrual path found it.
       const eligible = superseded.filter(row =>
         isInsightEligible({ content: row.a_content, tags: parseTags(row.a_tags), source: row.a_source })
-        && isInsightEligible({ content: row.b_content, tags: parseTags(row.b_tags), source: row.b_source }),
+        && isInsightEligible({ content: row.b_content, tags: parseTags(row.b_tags), source: row.b_source })
+        && isEligiblePair({ tags: parseTags(row.a_tags) }, { tags: parseTags(row.b_tags) }),
       );
 
       if (eligible.length) {

@@ -188,3 +188,98 @@ describe("runInsightAccrual() pair authorship rule", () => {
     expect(rows.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * The same authorship rule against the OTHER accrual path: an explicit
+ * `supersedes` edge (src/mcp/server.ts's `link` tool, POST /graph) rather
+ * than a Vectorize neighbour match. An explicit link never calls
+ * deprecateEntry the way a system-detected contradiction does
+ * (src/capture/entry.ts), so neither side gets tagged status:deprecated and
+ * both can independently clear isInsightEligible — nothing upstream of
+ * candidates.ts's supersedes block stops two assistant-authored entries
+ * from reaching it.
+ *
+ * `filler` exists only so `seeds.length` is non-zero: runInsightAccrual
+ * returns before the supersedes block ever runs if no entry in the window
+ * has a vector (src/insight/candidates.ts, the `!seeds.length` and
+ * `!vectorById.size` early returns). It shares no cluster, tag or edge with
+ * "a"/"b" and the Vectorize mock's `query` is left at its default (no
+ * matches), so it cannot itself produce a candidate — only the supersedes
+ * edge between "a" and "b" can.
+ */
+function supersedesEnvOf(s: SqliteD1): Env {
+  return makeTestEnv(s.db as any, {
+    OAUTH_KV: makeMemoryKV(),
+    VECTORIZE: makeVectorizeMock({
+      getByIds: vi.fn().mockImplementation(async (ids: string[]) =>
+        ids.map(id => ({ id, values: new Array(384).fill(0.1) }))),
+    }),
+  });
+}
+
+function seedFiller(s: SqliteD1) {
+  s.seed({
+    id: "filler",
+    content: "An ordinary entry present only so the accrual window has a vector to examine, well past the content floor.",
+    createdAt: 1000, tags: ["work", "pricing"], vectorIds: ["filler"],
+  });
+}
+
+async function insertSupersedesEdge(s: SqliteD1, sourceId: string, targetId: string) {
+  await s.db.prepare(
+    `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+     VALUES ('edge-explicit', ?, ?, 'supersedes', 1.0, 'explicit', '{}', ?, ?)`,
+  ).bind(sourceId, targetId, 1000, 1000).run();
+}
+
+describe("runInsightAccrual() pair authorship rule — explicit supersedes edges", () => {
+  let sq: SqliteD1 | null = null;
+
+  afterEach(() => { sq?.close(); sq = null; });
+
+  it("does not accrue an explicit supersedes edge between two assistant-written memories", async () => {
+    sq = await migrated();
+    seedFiller(sq);
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 2000, tags: ["work", "claude-response"],
+    });
+    sq.seed({
+      id: "b",
+      content: "Another long enough assistant note about the pricing model, written to clear that same content floor.",
+      createdAt: 2000 + 40 * DAY, tags: ["work", "claude-response"],
+    });
+    await insertSupersedesEdge(sq, "a", "b");
+
+    await runInsightAccrual(supersedesEnvOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows).toEqual([]);
+  });
+
+  it("still accrues an explicit supersedes edge between an assistant note and a user memory", async () => {
+    sq = await migrated();
+    seedFiller(sq);
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 2000, tags: ["work", "claude-response"],
+    });
+    sq.seed({
+      id: "b",
+      content: "A long enough memory the user wrote about the pricing model themselves, well past the content floor.",
+      createdAt: 2000 + 40 * DAY, tags: ["work", "pricing"],
+    });
+    await insertSupersedesEdge(sq, "a", "b");
+
+    await runInsightAccrual(supersedesEnvOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows.length).toBeGreaterThan(0);
+  });
+});
