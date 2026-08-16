@@ -14,6 +14,7 @@ import { resolveConfig } from "../config";
 import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
+import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 
 /** Pairs considered per run. Each costs one model call. */
 export const WEEKLY_CANDIDATE_LIMIT = 10;
@@ -21,12 +22,42 @@ export const WEEKLY_CANDIDATE_LIMIT = 10;
 /** Written per run, however many qualify. */
 export const MAX_INSIGHTS_PER_RUN = 3;
 
+/**
+ * How many recently written insights the novelty floor compares a new
+ * candidate against, in addition to whatever this run itself accepts.
+ *
+ * Bounded on purpose — spec D2 explicitly rejects comparing against "the
+ * whole history" — but wide enough to catch what the design's own motivating
+ * case needed: the 2026-08-16 run restated an insight the 2026-08-12 dry run
+ * had produced, four days and one cycle earlier. At MAX_INSIGHTS_PER_RUN (3)
+ * per run, 10 covers a little over three runs' worth of unreviewed backlog —
+ * generous enough for a queue a week or two behind, not the whole history.
+ * Matches WEEKLY_CANDIDATE_LIMIT's existing round number rather than
+ * introducing a second unrelated one.
+ */
+export const RECENT_INSIGHT_WINDOW = 10;
+
 interface CandidateRow {
   id: string;
   a_id: string;
   b_id: string;
   a_content: string;
   b_content: string;
+}
+
+/**
+ * A stored auto-insight's `content` carries the reasoned text plus a fixed
+ * "[Insight: shape — drawn from 2 memories]" footer (built below). Comparing
+ * against the raw stored content would give every insight a few tokens
+ * ("insight", "drawn", "memories", its shape word) that match purely because
+ * they are boilerplate, not because the two insights say anything alike —
+ * inflating restatesRecent's overlap ratio for genuinely distinct insights
+ * that merely share a shape. Stripping the footer keeps the comparison the
+ * same shape as the within-run one, which compares raw `result.text` values.
+ */
+function rawInsightText(content: string): string {
+  const footer = content.indexOf("\n\n[Insight:");
+  return footer === -1 ? content : content.slice(0, footer);
 }
 
 export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promise<void> {
@@ -57,15 +88,29 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
        LIMIT ?`,
     ).bind(WEEKLY_CANDIDATE_LIMIT).all() as { results: CandidateRow[] };
 
+    // Seeds the novelty floor with what a reader would already have seen: the
+    // last RECENT_INSIGHT_WINDOW insights still sitting unreviewed in the
+    // queue (PENDING_INSIGHT_SQL — auto-insight, not yet confirmed or
+    // dismissed), not just what this run itself is about to write. Without
+    // this, restatesRecent could only catch two candidate pairs in the SAME
+    // run reaching the same conclusion — not the case the spec's own evidence
+    // is built on, where the restated insight came from an earlier run.
+    const { results: recentInsightRows } = await env.DB.prepare(
+      `SELECT content FROM entries WHERE ${PENDING_INSIGHT_SQL}
+       ORDER BY created_at DESC LIMIT ?`,
+    ).bind(RECENT_INSIGHT_WINDOW).all() as { results: { content: string }[] };
+
     let written = 0;
     const rejected: string[] = [];
     const used: string[] = [];
-    // Texts of insights already accepted THIS run. Two different candidate
-    // pairs can reason to the same conclusion — a corpus full of near-
-    // duplicate memories makes that common, not rare — and each is a slot
-    // this run gets to spend only three of. Checked independently against
-    // each entry (restatesRecent), not concatenated.
-    const writtenThisRun: string[] = [];
+    // Texts to compare a new proposal against: insights still unreviewed from
+    // earlier runs, plus (appended below) whatever this run itself accepts.
+    // Two different candidate pairs — in this run, or one from weeks back —
+    // can reason to the same conclusion; a corpus full of near-duplicate
+    // memories makes that common, not rare, and each is a slot this run gets
+    // to spend only three of. Checked independently against each entry
+    // (restatesRecent), never concatenated.
+    const writtenThisRun: string[] = recentInsightRows.map(r => rawInsightText(r.content));
 
     for (const candidate of results) {
       if (written >= MAX_INSIGHTS_PER_RUN) break;
@@ -94,9 +139,10 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
 
       // A rejected restatement marks its candidate `used`, not `rejected` —
       // the pair reasoned over successfully, it just landed where the reader
-      // has already been this run. `rejected` is reserved for a pair the
-      // model itself declined; marking a restatement `rejected` would make
-      // the pass re-propose and re-pay for it on a later run.
+      // has already been, whether that's this run or an earlier one still
+      // sitting unreviewed. `rejected` is reserved for a pair the model
+      // itself declined; marking a restatement `rejected` would make the
+      // pass re-propose and re-pay for it on a later run.
       if (restatesRecent(result.text, writtenThisRun)) {
         used.push(candidate.id);
         continue;

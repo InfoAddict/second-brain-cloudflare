@@ -8,7 +8,10 @@ const DAY = 86400000;
 const NOW = 400 * DAY;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
-const GOOD = `{"insight": true, "shape": "contradiction", "text": "You priced that tier at nine dollars flat, then reversed course to usage-based pricing instead."}`;
+// Split out so the cross-run restatement test can seed an already-persisted
+// insight entry with the exact same reasoned text without duplicating it.
+const GOOD_TEXT = "You priced that tier at nine dollars flat, then reversed course to usage-based pricing instead.";
+const GOOD = `{"insight": true, "shape": "contradiction", "text": "${GOOD_TEXT}"}`;
 
 /** The AI mock must serve three callers: embeddings, the classifier inside
  *  captureEntry (streaming SSE), and the reasoning call (also streaming). */
@@ -331,6 +334,30 @@ describe("runWeeklyInsights()", () => {
     // reader has already been. Rejected would re-pay for it on a later run.
     expect(await statusOf(sqlite, "cand-0")).toBe("used");
     expect(await statusOf(sqlite, "cand-1")).toBe("used");
+  });
+
+  it("does not write an insight that restates one from an earlier run still in the queue", async () => {
+    // The spec's own motivating case: the 2026-08-16 run restated an insight
+    // the 2026-08-12 dry run had already produced — a DIFFERENT run, still
+    // sitting unreviewed. Within-run tracking alone cannot catch this; the
+    // seed list has to include what a reader would already have seen in the
+    // queue, not just what this run is about to add to it.
+    seedCandidates(sqlite, 1);
+    sqlite.seed({
+      id: "prior-insight", createdAt: NOW - 4 * DAY, tags: ["auto-insight"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // Only the pre-existing insight is present — the pass wrote nothing new.
+    expect(await insightCount(sqlite)).toBe(1);
+    // Used, not rejected, for the same reason as the within-run case: the
+    // pair reasoned fine, it just landed where the reader has already been.
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
   });
 
   it("does not throw when the pass fails", async () => {
