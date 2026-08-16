@@ -365,6 +365,83 @@ describe("runWeeklyInsights()", () => {
     expect(await statusOf(sqlite, "cand-0")).toBe("used");
   });
 
+  // Measured on the real brain the day D2 shipped: the dry run reported ZERO
+  // restatements suppressed, and the queue held ZERO unreviewed insights. The
+  // guard had nothing to compare against, because a reviewer who acts on the
+  // queue empties the very window the guard reads. A diligent reviewer was
+  // switching D2 off.
+  //
+  // Both exits have to stay in the window, and they leave by different doors:
+  // dismiss keeps `auto-insight` and adds `status:deprecated`; confirm STRIPS
+  // `auto-insight` outright (admin.ts, so the entry becomes recallable), which
+  // leaves no tag saying it was ever an insight. What survives confirmation is
+  // the `drawn_from` edges the insight is the source of.
+  it("still compares against an insight the reviewer has dismissed", async () => {
+    seedCandidates(sqlite, 1);
+    sqlite.seed({
+      id: "dismissed-insight", createdAt: NOW - 4 * DAY,
+      tags: ["auto-insight", "status:deprecated"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // Nothing new written: re-proposing something the reviewer already threw
+    // away is the same waste as restating something still in the queue.
+    // Counted as "only the seed survives" rather than insightCount() === 0 —
+    // the dismissed seed keeps its `auto-insight` tag, so it is itself counted.
+    const rows = (await sqlite.db.prepare(
+      `SELECT id FROM entries WHERE tags LIKE '%"auto-insight"%'`,
+    ).all()).results as { id: string }[];
+    expect(rows.map(r => r.id)).toEqual(["dismissed-insight"]);
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("still compares against an insight the reviewer has confirmed", async () => {
+    seedCandidates(sqlite, 1);
+    // Exactly what confirm leaves behind: no `auto-insight` tag at all, plus
+    // the promotion tags. Only its drawn_from edges identify it as an insight.
+    sqlite.seed({
+      id: "confirmed-insight", createdAt: NOW - 4 * DAY,
+      tags: ["kind:semantic", "status:canonical"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    await sqlite.db.prepare(
+      `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind("e1", "confirmed-insight", "some-source", "drawn_from", 1, "system", "{}", NOW - 4 * DAY, NOW - 4 * DAY).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // A confirmed insight is a real recallable memory now. Writing it again is
+    // pure duplication — the worst of the three cases, not the most forgivable.
+    expect(await insightCount(sqlite)).toBe(0);
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("does not treat an ordinary memory as a recent insight", async () => {
+    // The window must widen to reach confirmed insights without swallowing the
+    // whole corpus — every memory would otherwise become a restatement target.
+    seedCandidates(sqlite, 1);
+    sqlite.seed({
+      id: "ordinary", createdAt: NOW - 4 * DAY, tags: ["work", "pricing"],
+      content: GOOD_TEXT,
+    });
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(1);
+  });
+
   it("records the two memories an insight was drawn from", async () => {
     seedCandidates(sqlite, 1); // seeds candidate cand-0 over entries a-0 and b-0
     const env = makeTestEnv(undefined, {

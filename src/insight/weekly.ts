@@ -14,7 +14,7 @@ import { resolveConfig } from "../config";
 import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
-import { PENDING_INSIGHT_SQL } from "../memory/patterns";
+import { PENDING_INSIGHT_SQL, WRITTEN_INSIGHT_SQL } from "../memory/patterns";
 import { edgeInsertStatement } from "../graph/edges";
 import { isEligiblePair, parseTags } from "./candidates";
 
@@ -103,14 +103,18 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     ).bind(WEEKLY_CANDIDATE_LIMIT).all() as { results: CandidateRow[] };
 
     // Seeds the novelty floor with what a reader would already have seen: the
-    // last RECENT_INSIGHT_WINDOW insights still sitting unreviewed in the
-    // queue (PENDING_INSIGHT_SQL — auto-insight, not yet confirmed or
-    // dismissed), not just what this run itself is about to write. Without
-    // this, restatesRecent could only catch two candidate pairs in the SAME
-    // run reaching the same conclusion — not the case the spec's own evidence
-    // is built on, where the restated insight came from an earlier run.
+    // last RECENT_INSIGHT_WINDOW insights the pass has WRITTEN, not just what
+    // this run itself is about to write. Without a cross-run seed, restatesRecent
+    // could only catch two candidate pairs in the SAME run reaching the same
+    // conclusion — not the case the spec's evidence is built on, where the
+    // restated insight came from an earlier run.
+    //
+    // WRITTEN_INSIGHT_SQL, not PENDING_INSIGHT_SQL. The pending window empties
+    // as fast as the queue is reviewed: measured on a real brain the day this
+    // shipped, zero unreviewed insights meant zero comparisons and a guard that
+    // could not fire at all. Reviewing promptly was switching it off.
     const { results: recentInsightRows } = await env.DB.prepare(
-      `SELECT content FROM entries WHERE ${PENDING_INSIGHT_SQL}
+      `SELECT content FROM entries WHERE ${WRITTEN_INSIGHT_SQL}
        ORDER BY created_at DESC LIMIT ?`,
     ).bind(RECENT_INSIGHT_WINDOW).all() as { results: { content: string }[] };
 
