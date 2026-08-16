@@ -13,9 +13,9 @@ import { getStatus, withStatus } from "../memory/status";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
-import { reasonOverPair } from "../insight/reason";
-import { MAX_INSIGHTS_PER_RUN } from "../insight/weekly";
-import { runInsightAccrual } from "../insight/candidates";
+import { reasonOverPair, restatesRecent } from "../insight/reason";
+import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
+import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -499,8 +499,13 @@ export async function handleAdminRoutes(
     const limit = intParam(url, "limit", { fallback: 10, min: 1, max: 25 });
     if (limit instanceof Response) return limit;
 
+    // a.tags/b.tags added so this can apply the same D1 pair rule the weekly
+    // pass applies (src/insight/weekly.ts) — without them, this endpoint
+    // could not tell an assistant-authored pair from any other and would
+    // report exactly what production refuses as if it would be written.
     const { results } = await env.DB.prepare(
-      `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content
+      `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content,
+              a.tags AS a_tags, b.tags AS b_tags
        FROM insight_candidates c
        JOIN entries a ON a.id = c.a_id
        JOIN entries b ON b.id = c.b_id
@@ -511,21 +516,58 @@ export async function handleAdminRoutes(
        LIMIT ?`,
     ).bind(limit).all() as { results: Record<string, any>[] };
 
+    // D2's comparison list, built exactly as src/insight/weekly.ts builds it:
+    // insights still unreviewed from earlier runs, seeded before the loop and
+    // grown as this preview accepts candidates. Without this, the dry run
+    // could not reproduce the spec's own motivating case — a candidate
+    // restating an insight a PRIOR run already wrote is invisible to a
+    // same-run-only check.
+    const { results: recentInsightRows } = await env.DB.prepare(
+      `SELECT content FROM entries WHERE ${PENDING_INSIGHT_SQL}
+       ORDER BY created_at DESC LIMIT ?`,
+    ).bind(RECENT_INSIGHT_WINDOW).all() as { results: { content: string }[] };
+    const writtenThisRun: string[] = recentInsightRows.map(r => rawInsightText(r.content));
+
     const candidates = [];
     // Reasons over every row the query returned, deliberately past the three
     // production would ever write (src/insight/weekly.ts's own
     // MAX_INSIGHTS_PER_RUN cap) — seeing candidates four and beyond is how the
-    // ranking itself gets judged. `would_write` marks the first three ACCEPTED
-    // candidates in score order (an "insight" outcome, capped at
-    // MAX_INSIGHTS_PER_RUN) — which is close to but not exactly what
+    // ranking itself gets judged. `would_write` marks the first three
+    // candidates, in score order, that clear D1 (pair-eligible), the model
+    // (an "insight" outcome), AND D2 (not restatesRecent against
+    // writtenThisRun) — the same three gates runWeeklyInsights applies before
+    // it ever calls captureEntry. This is close to but not exactly what
     // production's `written` counter tracks: that increments only when
-    // captureEntry returns `status: "stored"`, so an accepted insight that
-    // turns out to duplicate an earlier entry consumes no slot there but is
-    // still counted here. A dry run cannot resolve that without calling
-    // captureEntry, which would make it a write rather than a preview — this
-    // is the one place that gap between preview and production is recorded.
+    // captureEntry returns `status: "stored"`, so an accepted, non-restating
+    // insight that turns out to duplicate an earlier ENTRY (not a recent
+    // insight — captureEntry's own separate duplicate check) consumes no slot
+    // there but is still counted here. A dry run cannot resolve that without
+    // calling captureEntry, which would make it a write rather than a preview
+    // — this is the one place that gap between preview and production is
+    // recorded.
     let written = 0;
     for (const row of results) {
+      // D1 at the draw (src/insight/weekly.ts): a pair this disqualified is
+      // never sent to the model in production, so the preview must not spend
+      // a model call on it either — otherwise the dry run reports as
+      // writable exactly what production refuses, which is the bug the
+      // Rollout section's comparison exists to catch.
+      const aTags = parseTags(row.a_tags as string);
+      const bTags = parseTags(row.b_tags as string);
+      if (!isEligiblePair({ tags: aTags }, { tags: bTags })) {
+        candidates.push({
+          a_id: row.a_id as string,
+          b_id: row.b_id as string,
+          score: row.score as number,
+          outcome: "pair_rejected",
+          shape: null,
+          text: null,
+          would_write: false,
+          reason: "both memories are assistant-authored (D1)",
+        });
+        continue;
+      }
+
       // cfg carries the user's LLM_MODEL choice, same as the real weekly pass
       // (src/insight/weekly.ts) — without it this would preview reasoning from
       // the shipped default model rather than the one that will actually run.
@@ -535,8 +577,30 @@ export async function handleAdminRoutes(
         env,
         cfg,
       );
-      const would_write = result.outcome === "insight" && written < MAX_INSIGHTS_PER_RUN;
-      if (result.outcome === "insight") written++;
+
+      // would_write and `reason` are worked out in the same order
+      // runWeeklyInsights actually applies its checks: the cap (a candidate
+      // reached only after production's loop would already have broken),
+      // then D2's novelty floor, then acceptance. A decline or a failed call
+      // is definitive regardless of where it falls in that order.
+      let would_write = false;
+      let reason: string | null = null;
+      if (result.outcome === "declined") {
+        reason = "the model declined this pair";
+      } else if (result.outcome === "failed") {
+        reason = "the model call itself failed";
+      } else if (written >= MAX_INSIGHTS_PER_RUN) {
+        reason = `the weekly cap of ${MAX_INSIGHTS_PER_RUN} insights would already be reached`;
+      } else if (restatesRecent(result.text, writtenThisRun)) {
+        // Same rule src/insight/weekly.ts applies (D2): reasoned to a real
+        // insight, but the text lands where a reader has already been.
+        reason = "restates a recently written insight";
+      } else {
+        would_write = true;
+        written++;
+        writtenThisRun.push(result.text);
+      }
+
       candidates.push({
         a_id: row.a_id as string,
         b_id: row.b_id as string,
@@ -550,6 +614,7 @@ export async function handleAdminRoutes(
         shape: result.outcome === "insight" ? result.shape : null,
         text: result.outcome === "insight" ? result.text : null,
         would_write,
+        reason,
       });
     }
 

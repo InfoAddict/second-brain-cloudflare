@@ -82,7 +82,13 @@ interface AccrualCursor {
   id: string;
 }
 
-const parseTags = (raw: string): string[] => {
+/**
+ * Exported for src/insight/weekly.ts and src/routes/admin.ts's dry-run
+ * endpoint, which both need to read `a.tags`/`b.tags` off a raw D1 row the
+ * same way this module already does — one parser rather than a second
+ * hand-written copy.
+ */
+export const parseTags = (raw: string): string[] => {
   try { return JSON.parse(raw ?? "[]"); } catch { return []; }
 };
 

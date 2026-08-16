@@ -16,6 +16,7 @@ import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { edgeInsertStatement } from "../graph/edges";
+import { isEligiblePair, parseTags } from "./candidates";
 
 /** Pairs considered per run. Each costs one model call. */
 export const WEEKLY_CANDIDATE_LIMIT = 10;
@@ -44,6 +45,8 @@ interface CandidateRow {
   b_id: string;
   a_content: string;
   b_content: string;
+  a_tags: string;
+  b_tags: string;
 }
 
 /**
@@ -55,8 +58,12 @@ interface CandidateRow {
  * inflating restatesRecent's overlap ratio for genuinely distinct insights
  * that merely share a shape. Stripping the footer keeps the comparison the
  * same shape as the within-run one, which compares raw `result.text` values.
+ *
+ * Exported so src/routes/admin.ts's dry-run endpoint can build the identical
+ * comparison list this pass does — one definition of "what a reader has
+ * already seen," not a second copy that could drift from this one.
  */
-function rawInsightText(content: string): string {
+export function rawInsightText(content: string): string {
   const footer = content.indexOf("\n\n[Insight:");
   return footer === -1 ? content : content.slice(0, footer);
 }
@@ -77,8 +84,14 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     // target the moment it is created (src/capture/entry.ts). Filtering both
     // sides here catches that drift regardless of which signal accrued the
     // candidate or how eligibility was — or was not — checked at accrual time.
+    // a.tags/b.tags ride along on the same join this query already makes —
+    // D1 (isEligiblePair, ./candidates.ts) has to be applied here too, not
+    // only at accrual, or every candidate accrued before D1 existed keeps
+    // being drawn under the old rule until the pool empties. Free: the JOIN
+    // was already selecting these rows, this only widens the column list.
     const { results } = await env.DB.prepare(
-      `SELECT c.id, c.a_id, c.b_id, a.content AS a_content, b.content AS b_content
+      `SELECT c.id, c.a_id, c.b_id, a.content AS a_content, b.content AS b_content,
+              a.tags AS a_tags, b.tags AS b_tags
        FROM insight_candidates c
        JOIN entries a ON a.id = c.a_id
        JOIN entries b ON b.id = c.b_id
@@ -102,6 +115,13 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     ).bind(RECENT_INSIGHT_WINDOW).all() as { results: { content: string }[] };
 
     let written = 0;
+    // D2 instrumentation (spec: "if it starts rejecting often, the corpus is
+    // telling us D3 is due"). candidatesReasoned counts only pairs that
+    // actually reached the model — a D1 pair-rule rejection below never
+    // calls reasonOverPair, so it must not inflate this count the way it
+    // would if measured off `results.length`.
+    let candidatesReasoned = 0;
+    let restatementsSuppressed = 0;
     const rejected: string[] = [];
     const used: string[] = [];
     // Two per stored insight: which memories it was drawn from. Collected as
@@ -125,6 +145,20 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     for (const candidate of results) {
       if (written >= MAX_INSIGHTS_PER_RUN) break;
 
+      // D1 at the draw, not only at accrual: a candidate accrued before the
+      // guard existed is still sitting in the pool under the old rule, and
+      // this join already has both sides' tags on hand at zero extra cost.
+      // Marked `used`, the same as a restatement — the pair is disqualified
+      // outright, and re-accrual would just re-insert the identical row
+      // (ON CONFLICT(a_id, b_id) DO NOTHING), so a `pending` or `rejected`
+      // status here would only have the pass re-discover and re-skip it
+      // every week rather than settling it once.
+      if (!isEligiblePair({ tags: parseTags(candidate.a_tags) }, { tags: parseTags(candidate.b_tags) })) {
+        used.push(candidate.id);
+        continue;
+      }
+
+      candidatesReasoned++;
       const result = await reasonOverPair(
         { content: candidate.a_content },
         { content: candidate.b_content },
@@ -154,6 +188,7 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
       // itself declined; marking a restatement `rejected` would make the
       // pass re-propose and re-pay for it on a later run.
       if (restatesRecent(result.text, writtenThisRun)) {
+        restatementsSuppressed++;
         used.push(candidate.id);
         continue;
       }
@@ -174,6 +209,20 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
         }
       }
     }
+
+    // One structured line, before the batch: candidatesReasoned vs. results.length
+    // shows how much of the slice D1 removed before a model call was ever
+    // made; declinedByModel vs. restatementsSuppressed vs. written separates
+    // three failure modes that all otherwise collapse into "output was low"
+    // — a corpus running dry, D2 over-firing, and the model itself saying no
+    // look identical from the outside without this line.
+    console.log("[insight] weekly pass:", {
+      candidatesDrawn: results.length,
+      candidatesReasoned,
+      declinedByModel: rejected.length,
+      restatementsSuppressed,
+      written,
+    });
 
     const statements = [
       ...rejected.map(id => env.DB.prepare(
