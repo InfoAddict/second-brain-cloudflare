@@ -23,8 +23,21 @@
 import type { Env } from "../env";
 import { initializeDatabase } from "../db/init";
 import { VECTORIZE_GET_BY_IDS_BATCH, D1_MAX_BOUND_PARAMS } from "../constants";
-import { isInsightEligible } from "./eligibility";
+import { isInsightEligible, isAssistantAuthored } from "./eligibility";
 import { MIN_GAP_MS, MIN_SIMILARITY, normalisePair, scoreCandidate, type ScorableEntry } from "./score";
+
+/**
+ * Authorship is a property of the PAIR, not the entry.
+ *
+ * An assistant's note connected to something the user wrote is a legitimate
+ * insight and often the useful kind. Two assistant notes connected to each other
+ * have no original in them: the result is a summary of summaries presented as an
+ * observation about the user's thinking, which is how the Aug 16 run produced a
+ * confidently-worded wrong detail.
+ */
+export function isEligiblePair(a: { tags: string[] }, b: { tags: string[] }): boolean {
+  return !(isAssistantAuthored(a.tags) && isAssistantAuthored(b.tags));
+}
 
 /** Where accrual resumes from. Operational state, so KV rather than a column. */
 export const ACCRUAL_CURSOR_KEY = "insight:accrual-cursor";
