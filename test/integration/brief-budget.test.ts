@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import worker from "../../src/index";
+import { withStaleAsOf } from "../../src/memory/stale";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
@@ -148,7 +149,12 @@ describe("GET /brief", () => {
     sq = await migrated();
     const now = Date.now();
     sq.seed({ id: "u", content: "Never embedded", createdAt: now - HOUR, vectorIds: [] });
-    sq.seed({ id: "s", content: "Possibly out of date", createdAt: now - HOUR, vectorIds: ["v"], tags: ["stale:as-of:2026-01-01"] });
+    // Tagged through the production writer, not a literal. This fixture used to
+    // say "stale:as-of:2026-01-01" — a dated form nothing has ever written — and
+    // passed only because the count matched a bare substring. The predicate is
+    // exact now, so a fixture that invents a tag shape fails instead of quietly
+    // agreeing with itself.
+    sq.seed({ id: "s", content: "Possibly out of date", createdAt: now - HOUR, vectorIds: ["v"], tags: withStaleAsOf([]) });
     sq.seed({ id: "ok", content: "Fine", createdAt: now - HOUR, vectorIds: ["v"] });
 
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;

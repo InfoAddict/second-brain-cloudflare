@@ -136,6 +136,31 @@ export function sharesVocabulary(text: string, a: string, b: string): boolean {
   return namesA && namesB;
 }
 
+/** A proposal restates an earlier one when most of its distinctive words are already there. */
+const RESTATEMENT_OVERLAP = 0.6;
+
+/**
+ * Whether this proposal says what a recently written insight already said.
+ *
+ * The inverse of the D8 quality floor: that asks whether a proposal shares
+ * distinctive vocabulary with each of its SOURCES, this asks whether it shares
+ * too much with an insight already written. Reuses the same tokeniser rather
+ * than an embedding call — no new model call, no new index.
+ *
+ * Each recent insight is compared independently. Concatenating them would pool
+ * the vocabulary of unrelated insights into a match neither would have made.
+ */
+export function restatesRecent(text: string, recent: string[]): boolean {
+  const tokens = distinctiveTokens(text);
+  if (tokens.size === 0) return false;
+  return recent.some(prior => {
+    const priorTokens = distinctiveTokens(prior);
+    if (priorTokens.size === 0) return false;
+    const shared = [...tokens].filter(t => priorTokens.has(t)).length;
+    return shared / tokens.size >= RESTATEMENT_OVERLAP;
+  });
+}
+
 /**
  * A small, narrow backstop for the restatement framings the prompt above now
  * explicitly asks the model not to produce — not a style filter, and not a

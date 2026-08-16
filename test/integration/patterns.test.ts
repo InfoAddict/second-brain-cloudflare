@@ -51,6 +51,13 @@ function seedPattern(s: SqliteD1, id: string, content: string, extraTags: string
   s.seed({ id, content, createdAt: 1000, tags: ["auto-insight", ...extraTags], source: "system", vectorIds: [id] });
 }
 
+function seedEdge(s: SqliteD1, sourceId: string, targetId: string, type: string) {
+  s.db.prepare(
+    `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(crypto.randomUUID(), sourceId, targetId, type, 1, "system", "{}", 1000, 1000).run();
+}
+
 const rowOf = (s: SqliteD1, id: string) => s.rows().find(r => r.id === id) as Record<string, any>;
 const tagsOf = (s: SqliteD1, id: string) => JSON.parse(rowOf(s, id).tags ?? "[]") as string[];
 const vectorsOf = (s: SqliteD1, id: string) => JSON.parse(rowOf(s, id).vector_ids ?? "[]") as string[];
@@ -111,6 +118,44 @@ describe("GET /patterns", () => {
     sq = await migrated();
     const data = await (await worker.fetch(req("GET", "/patterns"), envOf(sq), ctx)).json() as any;
     expect(data).toMatchObject({ ok: true, patterns: [], total: 0 });
+  });
+
+  it("carries the memories each insight was drawn from", async () => {
+    sq = await migrated();
+    sq.seed({ id: "m1", content: "The first source memory", createdAt: 1000, tags: ["work"] });
+    sq.seed({ id: "m2", content: "The second source memory", createdAt: 2000, tags: ["work"] });
+    seedPattern(sq, "i1", "An insight about both");
+    seedEdge(sq, "i1", "m1", "drawn_from");
+    seedEdge(sq, "i1", "m2", "drawn_from");
+
+    const data = await (await worker.fetch(req("GET", "/patterns"), envOf(sq), ctx)).json() as any;
+
+    expect(data.patterns[0].sources.map((s: any) => s.content).sort())
+      .toEqual(["The first source memory", "The second source memory"]);
+  });
+
+  it("reports a forgotten source instead of dropping it", async () => {
+    sq = await migrated();
+    sq.seed({ id: "m1", content: "The surviving source", createdAt: 1000, tags: ["work"] });
+    seedPattern(sq, "i1", "An insight about both");
+    seedEdge(sq, "i1", "m1", "drawn_from");
+    seedEdge(sq, "i1", "gone", "drawn_from");
+
+    const data = await (await worker.fetch(req("GET", "/patterns"), envOf(sq), ctx)).json() as any;
+
+    expect(data.patterns[0].sources).toHaveLength(2);
+    expect(data.patterns[0].sources.filter((s: any) => s.missing)).toHaveLength(1);
+  });
+
+  it("gives an insight with no recorded sources an empty list, not undefined", async () => {
+    // Every insight written before this shipped. The client must not have to
+    // distinguish "none" from "not loaded".
+    sq = await migrated();
+    seedPattern(sq, "old", "An insight from before provenance existed");
+
+    const data = await (await worker.fetch(req("GET", "/patterns"), envOf(sq), ctx)).json() as any;
+
+    expect(data.patterns[0].sources).toEqual([]);
   });
 });
 

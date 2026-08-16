@@ -145,6 +145,41 @@ describe("loading the queue", () => {
     expect(ctx.__els.get("patterns-bulkbar").hidden).toBe(true);
     expect(ctx.__els.get("patterns-list").innerHTML).toContain("been ruled on");
   });
+
+  it("shows the memories an insight was drawn from", async () => {
+    const ctx = load([{
+      ok: true, total: 1,
+      patterns: [{
+        id: "p0", content: "An insight", created_at: Date.UTC(2026, 1, 8),
+        sources: [{ id: "m1", content: "The first source" }, { id: "m2", content: "The second source" }],
+      }],
+    }]);
+
+    await ctx.loadPatternQueue();
+
+    const html = ctx.__els.get("patterns-list").innerHTML;
+    expect(html).toContain("The first source");
+    expect(html).toContain("The second source");
+  });
+
+  it("says a source is gone rather than showing a blank", async () => {
+    const ctx = load([{
+      ok: true, total: 1,
+      patterns: [{ id: "p0", content: "An insight", created_at: Date.UTC(2026, 1, 8), sources: [{ id: "m1", missing: true }] }],
+    }]);
+
+    await ctx.loadPatternQueue();
+
+    expect(ctx.__els.get("patterns-list").innerHTML).toContain("no longer in your brain");
+  });
+
+  it("renders an insight with no sources unchanged", async () => {
+    const ctx = load([{ ok: true, total: 1, patterns: [{ id: "p0", content: "An insight", created_at: Date.UTC(2026, 1, 8), sources: [] }] }]);
+
+    await ctx.loadPatternQueue();
+
+    expect(ctx.__els.get("patterns-list").innerHTML).toContain("An insight");
+  });
 });
 
 describe("selecting", () => {

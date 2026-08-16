@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   parseAndExpand,
   buildEventContent,
+  stripConferencingBlock,
   computeCalendarPlan,
   computeRetentionPrune,
   validateCalendarUrl,
@@ -194,6 +195,28 @@ describe("parseAndExpand", () => {
       isRecurring: false,
       summary: "Orphan Instance",
     });
+  });
+
+  // Proves the stripper is wired into the parse path, not merely exported and
+  // unit-tested. Without this a neutered call site keeps every unit test green.
+  it("strips the conferencing block from a parsed event description", () => {
+    const ics = calendar(
+      vevent([
+        "UID:conf-1@test",
+        "DTSTAMP:20260101T000000Z",
+        "DTSTART:20260710T140000Z",
+        "DTEND:20260710T150000Z",
+        "SUMMARY:Roadmap Review",
+        "DESCRIPTION:Agenda: pricing then Q3.\\n\\nJoin Zoom Meeting\\nhttps://example.zoom.us/j/1\\nMeeting ID: 123 456 7890\\nPasscode: 999999",
+      ]),
+    );
+
+    const occs = parseAndExpand(ics, ms("2026-07-01T00:00:00Z"), ms("2026-07-31T00:00:00Z"));
+
+    expect(occs).toHaveLength(1);
+    expect(occs[0].description).toBe("Agenda: pricing then Q3.");
+    expect(occs[0].description).not.toContain("Zoom");
+    expect(occs[0].description).not.toContain("Passcode");
   });
 
   it("does not return an event entirely outside the window", () => {
@@ -463,6 +486,72 @@ describe("computeRetentionPrune", () => {
     };
     const pruned = computeRetentionPrune(meta, now, { retentionMs: RETENTION, recurringRetentionMs: null });
     expect(pruned).toEqual([]); // only 1 hour old, well within the 180-day retentionMs horizon
+  });
+});
+
+// The calendar twin of the email trailer problem. A conferencing block is
+// templated, so it repeats on every event from every organiser, and a recurring
+// meeting repeats it on every occurrence — the same text embedded dozens of
+// times. It is also pure navigation: dial-in numbers and a join URL say nothing
+// about what the meeting is for.
+describe("stripConferencingBlock", () => {
+  it("drops a Zoom join block and keeps the agenda", () => {
+    const description = [
+      "Agenda: pricing review, then Q3 planning.",
+      "",
+      "Join Zoom Meeting",
+      "https://example.zoom.us/j/1234567890?pwd=abc",
+      "",
+      "Meeting ID: 123 456 7890",
+      "Passcode: 123456",
+      "",
+      "One tap mobile",
+      "+13120000000,,1234567890# US (Chicago)",
+      "",
+      "Dial by your location",
+      "+1 312 000 0000 US (Chicago)",
+      "Find your local number: https://example.zoom.us/u/abc",
+    ].join("\n");
+
+    expect(stripConferencingBlock(description)).toBe("Agenda: pricing review, then Q3 planning.");
+  });
+
+  it("drops a Teams join block", () => {
+    const description = [
+      "Weekly sync. Bring the migration numbers.",
+      "________________________________________________________________________________",
+      "Microsoft Teams meeting",
+      "Join on your computer, mobile app or room device",
+      "Click here to join the meeting",
+      "Meeting ID: 123 456 789 012",
+      "Passcode: abc123",
+      "Learn more | Meeting options",
+      "________________________________________________________________________________",
+    ].join("\n");
+
+    expect(stripConferencingBlock(description)).toBe("Weekly sync. Bring the migration numbers.");
+  });
+
+  it("drops a Google Meet join block", () => {
+    const description = [
+      "Design review for the new onboarding flow.",
+      "",
+      "Join with Google Meet: https://meet.example.com/abc-defg-hij",
+      "Or dial: (US) +1 234 000 0000 PIN: 123456789#",
+      "More phone numbers: https://tel.example.com/abc-defg-hij",
+    ].join("\n");
+
+    expect(stripConferencingBlock(description)).toBe("Design review for the new onboarding flow.");
+  });
+
+  it("keeps a description with no conferencing block", () => {
+    const description = "Bring the Q3 numbers and last month's churn breakdown.";
+    expect(stripConferencingBlock(description)).toBe(description);
+  });
+
+  it("keeps a description that merely mentions a meeting", () => {
+    const description = "We should join the pricing meeting before deciding.";
+    expect(stripConferencingBlock(description)).toBe(description);
   });
 });
 

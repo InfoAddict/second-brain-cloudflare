@@ -78,6 +78,14 @@ function patternRow(p) {
   const meta = [shape ? t(`patterns.shapes.${shape}`) : '', when ? t('patterns.noticedWhen', { date: when }) : '']
     .filter(Boolean)
     .join(' · ')
+  // A source can be gone by the time the queue is read: the edge outlives the
+  // memory it points at, since forgetting one leaves no foreign key behind to
+  // stop it. Say so rather than rendering a blank line or dropping the card.
+  const sources = (p.sources || []).map((s) =>
+    s.missing
+      ? `<li class="pattern-source pattern-source--gone">${escHtml(t('patterns.sourceGone'))}</li>`
+      : `<li class="pattern-source">${escHtml(s.content.slice(0, 160))}</li>`,
+  ).join('')
   return `
     <label class="pattern-row" id="pattern-row-${escAttr(p.id)}">
       <input type="checkbox" class="pattern-check" value="${escAttr(p.id)}"
@@ -86,6 +94,7 @@ function patternRow(p) {
       <span class="pattern-body">
         <span class="pattern-text">${escHtml(text)}</span>
         ${meta ? `<span class="pattern-when">${escHtml(meta)}</span>` : ''}
+        ${sources ? `<ul class="pattern-sources">${sources}</ul>` : ''}
       </span>
     </label>`
 }

@@ -1576,6 +1576,7 @@
       #menu-sheet,
       #integrations-sheet,
       #patterns-sheet,
+      #stale-sheet,
       #view-sheet {
         display: none;
         position: fixed;
@@ -1590,12 +1591,29 @@
         backdrop-filter: blur(2px);
       }
 
+      /* Action modals paint above the surface that launched them.
+         Everything above shares one z-index, so which overlay wins was decided
+         by document order — fine while no sheet could open another. The
+         out-of-date queue is the first that can: Edit, Append and Forget all
+         launch from inside it and all three are declared earlier in index.html,
+         so they opened BEHIND it. On a phone that is indistinguishable from the
+         tap doing nothing — the sheet does not move, no dialog appears, and the
+         confirm is found waiting underneath only after closing the queue.
+         Reordering the markup would fix this instance and break on the next
+         sheet added below them; the layer is what is actually meant. */
+      #confirm-dialog,
+      #append-sheet,
+      #edit-sheet {
+        z-index: 60;
+      }
+
       #confirm-dialog.open,
       #append-sheet.open,
       #edit-sheet.open,
       #menu-sheet.open,
       #integrations-sheet.open,
       #patterns-sheet.open,
+      #stale-sheet.open,
       #view-sheet.open {
         display: flex;
         opacity: 1;
@@ -2249,6 +2267,39 @@
 
       /* The whole row is the label, so tapping anywhere on a pattern ticks it —
          a checkbox-sized target is the wrong size for a phone. */
+
+      /* One flagged memory, with the three ways out of the flag. Mirrors
+         .pattern-row's rhythm; no checkbox, because ruling on staleness is a
+         per-memory judgement rather than a bulk one. */
+      .stale-row {
+        padding: 12px 2px;
+        border-bottom: 0.5px solid var(--border);
+      }
+
+      .stale-row:last-child {
+        border-bottom: none;
+      }
+
+      .stale-text {
+        margin: 0 0 6px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--text-primary);
+      }
+
+      .stale-when {
+        display: block;
+        font-size: 12px;
+        color: var(--text-tertiary);
+        margin-bottom: 8px;
+      }
+
+      .stale-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
       .pattern-row {
         display: flex;
         align-items: flex-start;
@@ -2290,6 +2341,27 @@
       .pattern-when {
         font-size: 11.5px;
         color: var(--text-tertiary);
+      }
+
+      .pattern-sources {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin: 2px 0 0;
+        padding: 0 0 0 14px;
+        list-style: disc;
+      }
+
+      .pattern-source {
+        font-size: 12.5px;
+        line-height: 1.4;
+        color: var(--text-secondary);
+        overflow-wrap: anywhere;
+      }
+
+      .pattern-source--gone {
+        color: var(--text-tertiary);
+        font-style: italic;
       }
 
       #patterns-more {
@@ -3452,6 +3524,7 @@
         #menu-sheet,
         #integrations-sheet,
         #patterns-sheet,
+        #stale-sheet,
         #view-sheet {
           align-items: center;
           justify-content: center;

@@ -19,6 +19,11 @@ const SUBREQUEST_BUDGET = 50;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 const DAY = 86400000;
 
+const drawnFrom = async (sqlite: SqliteD1) =>
+  ((await sqlite.db.prepare(
+    `SELECT source_id, target_id, provenance FROM edges WHERE type = 'drawn_from'`,
+  ).all()).results) as { source_id: string; target_id: string; provenance: string }[];
+
 /**
  * A reasoning call that always accepts. The default AI mock (makeAIMock in
  * test/helpers/make-env.ts) returns the literal text "3" for every non-embedding
@@ -47,9 +52,24 @@ function makeReasoningAI() {
       const prompt = String(opts?.messages?.[0]?.content ?? "");
       // Keyed off the candidate's own tier number so every accepted insight's
       // text — and therefore captureEntry's stored content — is distinct per
-      // candidate, not a repeat of the same string three times over.
+      // candidate, not a repeat of the same string three times over. Distinct
+      // means genuinely different wording, not a shared template with the
+      // tier digit swapped in: distinctiveTokens (reason.ts) drops a bare
+      // digit entirely, and even where it didn't, one differing word among
+      // nine tokens is still ~89% overlap — restatesRecent (wired into
+      // weekly.ts by the same task this fixture had to be corrected for)
+      // would treat that as the same conclusion restated and this run would
+      // stop writing after the first candidate instead of three. Only tiers
+      // 0-2 need to clear both the vocabulary floor (against their own
+      // entries) and mutual novelty (against each other), since only the top
+      // three by score are ever reasoned over.
       const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
-      const insight = `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`;
+      const perTier: Record<string, string> = {
+        "0": "You priced this tier at nine dollars flat, then moved it entirely to usage-based billing.",
+        "1": "This tier's predictable monthly amount got swapped for pricing tied to actual usage instead.",
+        "2": "That flat monthly price got left behind once usage-based charges took over instead.",
+      };
+      const insight = `{"insight": true, "shape": "contradiction", "text": "${perTier[tier] ?? perTier["0"]}"}`;
       return sse(prompt.includes("Memory A:") ? insight : "3");
     }),
   } as unknown as Ai;
@@ -169,7 +189,26 @@ describe("insight crons stay inside one invocation's budget", () => {
       (env.VECTORIZE.upsert as any).mock.calls.length +
       kvGet.mock.calls.length +
       kvPut.mock.calls.length;
-    expect((sqlite.issued.length - before) + bindingCalls).toBeLessThan(SUBREQUEST_BUDGET);
+    const measured = (sqlite.issued.length - before) + bindingCalls;
+    expect(measured).toBeLessThan(SUBREQUEST_BUDGET);
+    // The <SUBREQUEST_BUDGET check above has 12 requests of slack at this
+    // candidate slate (measured 38 of 50) — comfortably wide enough that
+    // spending six more unbatched subrequests here (two drawn_from edges per
+    // insight via createEdge, rather than joining the batch below) would
+    // still read as "under budget" and this test would not catch the
+    // regression edgeInsertStatement exists to prevent. Pinned to the
+    // measured value so that regression fails loudly instead of quietly
+    // eating slack.
+    expect(measured).toBe(38);
+
+    // Verified after the budget assertion, not before: this SELECT is a test
+    // check, not something runWeeklyInsights() itself issues, and including
+    // it above would charge the measurement for a subrequest production
+    // never spends. Two drawn_from edges per stored insight — the whole
+    // reason edgeInsertStatement exists is so these join the batch above
+    // rather than costing MAX_INSIGHTS_PER_RUN * 2 extra subrequests via
+    // createEdge.
+    expect(await drawnFrom(sqlite)).toHaveLength(MAX_INSIGHTS_PER_RUN * 2);
     sqlite.close();
   });
 });

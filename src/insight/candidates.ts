@@ -23,8 +23,21 @@
 import type { Env } from "../env";
 import { initializeDatabase } from "../db/init";
 import { VECTORIZE_GET_BY_IDS_BATCH, D1_MAX_BOUND_PARAMS } from "../constants";
-import { isInsightEligible } from "./eligibility";
+import { isInsightEligible, isAssistantAuthored } from "./eligibility";
 import { MIN_GAP_MS, MIN_SIMILARITY, normalisePair, scoreCandidate, type ScorableEntry } from "./score";
+
+/**
+ * Authorship is a property of the PAIR, not the entry.
+ *
+ * An assistant's note connected to something the user wrote is a legitimate
+ * insight and often the useful kind. Two assistant notes connected to each other
+ * have no original in them: the result is a summary of summaries presented as an
+ * observation about the user's thinking, which is how the Aug 16 run produced a
+ * confidently-worded wrong detail.
+ */
+export function isEligiblePair(a: { tags: string[] }, b: { tags: string[] }): boolean {
+  return !(isAssistantAuthored(a.tags) && isAssistantAuthored(b.tags));
+}
 
 /** Where accrual resumes from. Operational state, so KV rather than a column. */
 export const ACCRUAL_CURSOR_KEY = "insight:accrual-cursor";
@@ -69,7 +82,13 @@ interface AccrualCursor {
   id: string;
 }
 
-const parseTags = (raw: string): string[] => {
+/**
+ * Exported for src/insight/weekly.ts and src/routes/admin.ts's dry-run
+ * endpoint, which both need to read `a.tags`/`b.tags` off a raw D1 row the
+ * same way this module already does — one parser rather than a second
+ * hand-written copy.
+ */
+export const parseTags = (raw: string): string[] => {
   try { return JSON.parse(raw ?? "[]"); } catch { return []; }
 };
 
@@ -267,9 +286,16 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
       });
       if (!eligible) continue;
 
+      const seedTags = parseTags(seed.tags);
+      // Both sides individually clear isInsightEligible above; this is the
+      // pair-level check — two assistant-written notes have no original
+      // between them even when each alone is legitimate seed/neighbour
+      // material. See isEligiblePair's own comment for why.
+      if (!isEligiblePair({ tags: seedTags }, { tags: neighbourTags })) continue;
+
       const seedScorable: ScorableEntry = {
         id: seed.id,
-        tags: parseTags(seed.tags),
+        tags: seedTags,
         importance: seed.importance_score ?? 0,
         createdAt: seed.created_at,
       };
@@ -355,9 +381,17 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
       // tags, integration sources and the content floor, none of which this
       // predicate touches. SQL narrows the window to rows that CAN pass;
       // JS remains the authority on whether they DO.
+      // An explicit supersedes link (src/mcp/server.ts, src/routes/graph.ts)
+      // never runs deprecateEntry the way a system-detected contradiction
+      // does (src/capture/entry.ts), so both sides can independently clear
+      // isInsightEligible above while still both being assistant-authored.
+      // The pair-level rule applies here exactly as it does to the
+      // vector-neighbour path above — authorship is a property of the pair,
+      // not of which accrual path found it.
       const eligible = superseded.filter(row =>
         isInsightEligible({ content: row.a_content, tags: parseTags(row.a_tags), source: row.a_source })
-        && isInsightEligible({ content: row.b_content, tags: parseTags(row.b_tags), source: row.b_source }),
+        && isInsightEligible({ content: row.b_content, tags: parseTags(row.b_tags), source: row.b_source })
+        && isEligiblePair({ tags: parseTags(row.a_tags) }, { tags: parseTags(row.b_tags) }),
       );
 
       if (eligible.length) {
