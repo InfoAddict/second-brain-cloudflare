@@ -1591,6 +1591,22 @@
         backdrop-filter: blur(2px);
       }
 
+      /* Action modals paint above the surface that launched them.
+         Everything above shares one z-index, so which overlay wins was decided
+         by document order — fine while no sheet could open another. The
+         out-of-date queue is the first that can: Edit, Append and Forget all
+         launch from inside it and all three are declared earlier in index.html,
+         so they opened BEHIND it. On a phone that is indistinguishable from the
+         tap doing nothing — the sheet does not move, no dialog appears, and the
+         confirm is found waiting underneath only after closing the queue.
+         Reordering the markup would fix this instance and break on the next
+         sheet added below them; the layer is what is actually meant. */
+      #confirm-dialog,
+      #append-sheet,
+      #edit-sheet {
+        z-index: 60;
+      }
+
       #confirm-dialog.open,
       #append-sheet.open,
       #edit-sheet.open,
