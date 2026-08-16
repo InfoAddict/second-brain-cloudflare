@@ -9,14 +9,20 @@
 // consequence is that a brain full of automated report exhaust still yields some
 // junk candidates until that work lands.
 import { isReservedTag } from "../compression/eligibility";
+import { MIRRORED_SOURCES } from "../constants";
 
 /** Below this an entry cannot carry an idea two memories apart. */
 export const MIN_INSIGHT_CONTENT_CHARS = 80;
 
-/** Sources that mirror an external system rather than record a thought. */
-export const INTEGRATION_SOURCES: ReadonlySet<string> = new Set([
-  "git-hook", "email-icloud", "email-gmail", "notion", "obsidian",
-]);
+/**
+ * Sources that mirror an external system rather than record a thought.
+ *
+ * This was a second hand-written list and it had fallen three providers behind —
+ * every calendar source was missing, so calendar records were reasoned over as
+ * though a person had written them. One list now, in `constants.ts`, guarded by
+ * a registry-coverage test.
+ */
+export const INTEGRATION_SOURCES = MIRRORED_SOURCES;
 
 /** Written by the brain about itself. Reasoning over these compounds drift. */
 const MACHINE_TAGS = new Set(["synthesized", "auto-pattern", "auto-insight"]);

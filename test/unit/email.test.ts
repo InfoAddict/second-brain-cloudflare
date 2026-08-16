@@ -182,6 +182,45 @@ describe("cleanEmailBody", () => {
     const raw = "Just a normal short message with no quoting or signature.";
     expect(cleanEmailBody(raw)).toBe(raw);
   });
+
+  // Transactional mail is deliberately built NOT to look like bulk mail — it
+  // carries no List-Unsubscribe, so `looksBulk` lets it through by design. What
+  // arrives is one line of fact wrapped in several thousand characters of
+  // templated trailer, and because the trailer is templated it repeats across
+  // every sender, which is what makes it dominate retrieval.
+  it("drops a bulk-mail trailer that follows the transactional fact", () => {
+    const raw = [
+      "You sent $40.00 to alex@example.com.",
+      "Payment ID: ABC123",
+      "",
+      "Thanks for choosing Northwind Bank.",
+      "Follow Northwind Bank on Instagram",
+      "Follow Northwind Bank on X",
+      "Download the Northwind Bank Mobile app",
+      "This email was sent by: Northwind Bank, 1 Example Plaza",
+    ].join("\n");
+
+    const result = cleanEmailBody(raw);
+
+    expect(result).toContain("You sent $40.00 to alex@example.com.");
+    expect(result).toContain("Payment ID: ABC123");
+    expect(result).not.toContain("Thanks for choosing");
+    expect(result).not.toContain("Follow Northwind Bank");
+    expect(result).not.toContain("This email was sent by");
+  });
+
+  it("drops an unsubscribe trailer", () => {
+    const raw = "Your statement is ready.\n\nUnsubscribe | Manage preferences\nView in browser";
+
+    const result = cleanEmailBody(raw);
+
+    expect(result).toBe("Your statement is ready.");
+  });
+
+  it("keeps a body that merely mentions choosing something", () => {
+    const raw = "We are choosing between two vendors and I wanted your view.";
+    expect(cleanEmailBody(raw)).toBe(raw);
+  });
 });
 
 // ─── buildEmailContent ──────────────────────────────────────────────────────
