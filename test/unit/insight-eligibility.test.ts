@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { isInsightEligible, topicTagsOf } from "../../src/insight/eligibility";
+import { MIRRORED_SOURCES } from "../../src/constants";
 
 const entry = (over: Partial<{ content: string; tags: string[]; source: string }> = {}) => ({
   content: "A decision about the pricing model, written out at some length so it clears the floor.",
@@ -27,9 +28,14 @@ describe("isInsightEligible()", () => {
     expect(isInsightEligible(entry({ tags: ["kind:episodic", "status:canonical"] }))).toBe(false);
   });
 
-  it("rejects integration-mirrored records", () => {
-    for (const source of ["git-hook", "email-icloud", "email-gmail"]) {
-      expect(isInsightEligible(entry({ source }))).toBe(false);
+  // Derived, not listed. The hand-written version of this test named three
+  // sources and passed for months while every calendar provider was missing from
+  // the predicate — so calendar records were reasoned over as though a person
+  // had written them. A test that repeats the production list cannot catch the
+  // production list being wrong.
+  it("rejects every mirrored source", () => {
+    for (const source of MIRRORED_SOURCES) {
+      expect(isInsightEligible(entry({ source })), `${source} should be ineligible`).toBe(false);
     }
   });
 

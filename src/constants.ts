@@ -47,6 +47,23 @@ export const CONTRADICTION_IMPORTANCE_STEP = 1.0;
 export const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 
 export const CHUNK_MAX_CHARS = 1600;
+
+// Sources that mirror an external system rather than record a thought.
+//
+// Lives here, not in `integrations/`, because `capture/store.ts` reads it and
+// `integrations/mirror.ts` already imports `capture/store.ts` — the dependency
+// must not run both ways. `test/unit/store-mirrored-chunks.test.ts` asserts this
+// covers every id in INTEGRATION_PROVIDERS, which a test may import from both
+// sides freely; that guard exists because the equivalent hand-written list in
+// `insight/eligibility.ts` had silently fallen three providers behind.
+//
+// `git-hook` and `obsidian` are external clients that write memories rather than
+// registered providers, so they are named here and cannot be derived.
+export const MIRRORED_SOURCES: ReadonlySet<string> = new Set([
+  "calendar-google", "calendar-outlook", "calendar-icloud",
+  "email-gmail", "email-icloud",
+  "notion", "git-hook", "obsidian",
+]);
 // ── Embedding migration (#248) ───────────────────────────────────────────────
 // Budgeted in chunks rather than entries because storeEntry fires one model call
 // per chunk, all concurrently: 25 single-chunk entries is already ~75 binding

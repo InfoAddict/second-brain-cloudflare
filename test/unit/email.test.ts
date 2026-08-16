@@ -93,6 +93,39 @@ describe("isNoiseSender", () => {
     expect(isNoiseSender("Mailer Daemon <mailer-daemon@x.com>")).toBe(true);
     expect(isNoiseSender("Jordan Lee <jordan@gmail.com>")).toBe(false);
   });
+
+  // Only the local part was inspected, so a sender that puts the machine marker
+  // in the domain walked straight past — which is most large senders, because a
+  // brand wants its own name in the local part. These are the shapes that were
+  // reaching the brain.
+  it.each([
+    "brand@notification.example.com",
+    "brand@notices.example.com",
+    "brand@e-notify.example",
+    "info@alerts.example.com",
+    "team@mailer.example.com",
+  ])("treats %s as a noise sender on the domain", (from) => {
+    expect(isNoiseSender(from)).toBe(true);
+  });
+
+  // The alternation only spelled `noreply` and `no-reply`; the underscore form
+  // is just as common and was slipping through.
+  it("catches the underscore spelling of no_reply", () => {
+    expect(isNoiseSender("no_reply@example.com")).toBe(true);
+    expect(isNoiseSender("do_not_reply@example.com")).toBe(true);
+  });
+
+  // Over-reach guard. A domain that merely contains one of these as a substring
+  // of a longer word is a real company, not a machine: cutting these would drop
+  // correspondence from a person.
+  it.each([
+    "jordan@notifyhealth.example.com",
+    "sam@alertsystems.example.com",
+    "wendy.lambert@example.com",
+    "chris@mailerson.example.com",
+  ])("leaves %s alone", (from) => {
+    expect(isNoiseSender(from)).toBe(false);
+  });
 });
 
 // ─── computeEmailPlan ───────────────────────────────────────────────────────
@@ -180,6 +213,45 @@ describe("cleanEmailBody", () => {
 
   it("keeps ordinary body text untouched", () => {
     const raw = "Just a normal short message with no quoting or signature.";
+    expect(cleanEmailBody(raw)).toBe(raw);
+  });
+
+  // Transactional mail is deliberately built NOT to look like bulk mail — it
+  // carries no List-Unsubscribe, so `looksBulk` lets it through by design. What
+  // arrives is one line of fact wrapped in several thousand characters of
+  // templated trailer, and because the trailer is templated it repeats across
+  // every sender, which is what makes it dominate retrieval.
+  it("drops a bulk-mail trailer that follows the transactional fact", () => {
+    const raw = [
+      "You sent $40.00 to alex@example.com.",
+      "Payment ID: ABC123",
+      "",
+      "Thanks for choosing Northwind Bank.",
+      "Follow Northwind Bank on Instagram",
+      "Follow Northwind Bank on X",
+      "Download the Northwind Bank Mobile app",
+      "This email was sent by: Northwind Bank, 1 Example Plaza",
+    ].join("\n");
+
+    const result = cleanEmailBody(raw);
+
+    expect(result).toContain("You sent $40.00 to alex@example.com.");
+    expect(result).toContain("Payment ID: ABC123");
+    expect(result).not.toContain("Thanks for choosing");
+    expect(result).not.toContain("Follow Northwind Bank");
+    expect(result).not.toContain("This email was sent by");
+  });
+
+  it("drops an unsubscribe trailer", () => {
+    const raw = "Your statement is ready.\n\nUnsubscribe | Manage preferences\nView in browser";
+
+    const result = cleanEmailBody(raw);
+
+    expect(result).toBe("Your statement is ready.");
+  });
+
+  it("keeps a body that merely mentions choosing something", () => {
+    const raw = "We are choosing between two vendors and I wanted your view.";
     expect(cleanEmailBody(raw)).toBe(raw);
   });
 });
