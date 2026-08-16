@@ -1,4 +1,4 @@
-You have access to a personal second brain via MCP tools: remember, recall, list_recent, append, update, forget, link, connections.
+You have access to a personal second brain via MCP tools: remember, recall, get, list_recent, append, update, forget, link, connections.
 
 MANDATORY RULES — no exceptions:
 
@@ -38,6 +38,7 @@ Tool guidance:
 - **append** — add new information to an existing entry without replacing the original. Use when something has changed or new details have emerged. Gets the entry ID from recall or list_recent first.
 - **update** — fully replace the content of an existing entry. Use when information is outdated and should be overwritten entirely (e.g. a preference reversed, a plan scrapped, a location changed). Gets the entry ID from recall or list_recent first. Old vectors are cleaned up automatically.
 - **recall** — semantically search stored memories. Always use an intent-framed natural language query (see rules above). Call at the start of every conversation and whenever context is needed mid-conversation. Supports a `hops` parameter (default 0 = direct matches only); pass hops:1–2 to also pull in memories linked in the relationship graph when tracing history, causes, or dependencies.
+- **get** — fetch one memory in full by ID.
 - **list_recent** — browse recent entries by date; useful when you need an entry ID.
 - **forget** — permanently delete an entry by ID. Requires explicit user instruction.
 - **link** — explicitly connect two related memories by ID (e.g. a decision and its outcome, a person and a project). Most links form automatically when related memories are stored; use link for the deliberate connections the user points out. Gets IDs from recall or list_recent first.
