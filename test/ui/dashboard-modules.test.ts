@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 const ROOT = resolve(import.meta.dirname, "../..");
 
 const DASHBOARD_SCRIPTS = [
+  "public/js/i18n.js",
   "public/utils.js",
   "public/credits.js",
   "public/js/state.js",
@@ -61,6 +62,7 @@ function makeFakeDocument() {
     onclick: null,
     setAttribute() {},
     getAttribute: () => null,
+    hasAttribute: () => false,
     appendChild() {},
     querySelector: () => el(),
     querySelectorAll: () => [],
@@ -73,7 +75,7 @@ function makeFakeDocument() {
     offsetHeight: 24,
   });
   return {
-    documentElement: { setAttribute() {}, getAttribute: () => null },
+    documentElement: { lang: "en", setAttribute() {}, getAttribute: () => null },
     querySelector: () => el(),
     querySelectorAll: () => [],
     getElementById: (_id?: string) => el(),
@@ -129,13 +131,22 @@ describe("dashboard modules", () => {
     const sandbox: Record<string, unknown> = {
       document: {
         ...makeFakeDocument(),
+        documentElement: { lang: "en" },
         getElementById: (id?: string) => (id === "about-credits" ? creditsRoot : makeFakeDocument().getElementById(id)),
       },
+      localStorage: {
+        getItem: () => null,
+        setItem() {},
+      },
+      navigator: { language: "en-US" },
       module: undefined,
       exports: undefined,
     };
     sandbox.window = sandbox;
+    sandbox.escHtml = (s: string) => String(s);
     vm.createContext(sandbox);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/js/i18n.js"), "utf8"), sandbox);
+    (sandbox as any).initI18n("en");
     vm.runInContext(readFileSync(resolve(ROOT, "public/credits.js"), "utf8"), sandbox);
     expect(typeof sandbox.renderAboutCredits).toBe("function");
     (sandbox.renderAboutCredits as () => void)();

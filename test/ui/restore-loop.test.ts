@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
+import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -20,6 +21,7 @@ function loadRunImportLoop(): (payload: any, post: any, onProgress?: any) => Pro
   const ctx: any = { window: {}, document: {}, fetch: () => {}, console };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  installI18n(ctx, "en");
   vm.runInContext(src, ctx);
   return ctx.runImportLoop;
 }

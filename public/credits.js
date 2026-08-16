@@ -25,9 +25,9 @@ window.renderAboutCredits = function renderAboutCredits() {
   };
 
   root.innerHTML = `
-    <div class="about-credits-label">About</div>
-    <p class="about-credits-line"><span class="about-credits-kicker">Created by</span> ${personLine(creator)}</p>
-    <p class="about-credits-kicker">Maintainers</p>
+    <div class="about-credits-label">${escHtml(t('menu.about'))}</div>
+    <p class="about-credits-line"><span class="about-credits-kicker">${escHtml(t('menu.createdBy'))}</span> ${personLine(creator)}</p>
+    <p class="about-credits-kicker">${escHtml(t('menu.maintainers'))}</p>
     <ul class="about-credits-list">
       ${maintainers.map((p) => `<li>${personLine(p)}</li>`).join("")}
     </ul>

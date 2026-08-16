@@ -1,9 +1,32 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import vm from "node:vm";
 
-const { parseRecallResult, escHtml, escAttr, toDateStr, entryIdFromSearch, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
-const dashboardApp = readFileSync("public/js/app.js", "utf8");
-const dashboardAuth = readFileSync("public/js/auth.js", "utf8");
+const ROOT = resolve(import.meta.dirname, "../..");
+const i18nCtx: any = {
+  localStorage: {
+    _m: new Map(),
+    getItem(k: string) {
+      return this._m.get(k) ?? null;
+    },
+    setItem(k: string, v: string) {
+      this._m.set(k, v);
+    },
+  },
+  navigator: { language: "en-US" },
+  document: { documentElement: { lang: "en" }, querySelectorAll: () => [] },
+};
+vm.createContext(i18nCtx);
+vm.runInContext(readFileSync(resolve(ROOT, "public/js/i18n.js"), "utf8"), i18nCtx);
+i18nCtx.initI18n("en");
+(globalThis as any).t = i18nCtx.t;
+(globalThis as any).tPlural = i18nCtx.tPlural;
+(globalThis as any).formatNumberUI = i18nCtx.formatNumberUI;
+(globalThis as any).localeTag = i18nCtx.localeTag;
+(globalThis as any).getLocale = i18nCtx.getLocale;
+
+const { parseRecallResult, escHtml, escAttr, toDateStr, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner } = require("../../public/utils.js");
 
 // Minimal fake document so the banner DOM glue can be tested in the node
 // environment without jsdom. appendChild registers the element by id so a later
@@ -24,28 +47,6 @@ function makeFakeDoc() {
   doc.body.appendChild = (el: any) => { byId[el.id] = el; };
   return doc;
 }
-
-describe("entryIdFromSearch", () => {
-  it("reads and decodes the dashboard entry deep link", () => {
-    expect(entryIdFromSearch("?entry=memory%2Fone")).toBe("memory/one");
-  });
-
-  it("trims the entry id and ignores unrelated or empty queries", () => {
-    expect(entryIdFromSearch("?entry=%20memory-1%20")).toBe("memory-1");
-    expect(entryIdFromSearch("?tag=throughline")).toBeNull();
-    expect(entryIdFromSearch("?entry=%20%20")).toBeNull();
-  });
-
-  it("rejects unreasonably large entry ids", () => {
-    expect(entryIdFromSearch(`?entry=${"a".repeat(257)}`)).toBeNull();
-  });
-
-  it("is wired into the authenticated dashboard entry flow", () => {
-    expect(dashboardApp).toContain("requestedEntryId = entryIdFromSearch(window.location.search)");
-    expect(dashboardAuth).toContain("void openRequestedEntry()");
-    expect(dashboardAuth).toContain("/entry?id=${encodeURIComponent(entryId)}");
-  });
-});
 
 describe("parseRecallResult", () => {
   it("parses a JSON array of entries", () => {

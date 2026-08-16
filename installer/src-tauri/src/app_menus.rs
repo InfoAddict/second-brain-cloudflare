@@ -6,7 +6,7 @@ use tauri::menu::{
     SubmenuBuilder,
 };
 use tauri::tray::TrayIconBuilder;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /// Handles to menu items so labels can be updated when the locale changes.
 pub struct AppMenus {
@@ -27,7 +27,7 @@ pub struct AppMenus {
 }
 
 impl AppMenus {
-    pub fn apply_locale(&self, locale: Locale) {
+    pub fn apply_locale(&self, app: &AppHandle, locale: Locale) {
         let _ = self.menu_open.set_text(i18n::t(locale, Key::MenuOpenDashboard));
         let _ = self.menu_hub.set_text(i18n::t(locale, Key::MenuConnections));
         let _ = self.menu_settings.set_text(i18n::t(locale, Key::MenuSettings));
@@ -44,6 +44,8 @@ impl AppMenus {
         let _ = self.tray_update.set_text(i18n::t(locale, Key::MenuCheckUpdates));
         let _ = self.tray_logout.set_text(i18n::t(locale, Key::MenuLogout));
         let _ = self.tray_quit.set_text(i18n::t(locale, Key::TrayQuit));
+        let _ = localize_os_menu_titles_from_app(app, locale);
+        let _ = refresh_about_dialog(app, locale);
     }
 
     pub fn rebuild_tray_menu(&self, app: &AppHandle) -> tauri::Result<()> {
@@ -137,28 +139,76 @@ pub fn build_menu_items(
 }
 
 /// Inserts the Connections submenu before Help and wires the native About dialog.
-pub fn install_app_menu(app: &AppHandle, connections: &Submenu<tauri::Wry>) -> tauri::Result<()> {
+pub fn install_app_menu(
+    app: &AppHandle,
+    connections: &Submenu<tauri::Wry>,
+    locale: Locale,
+) -> tauri::Result<()> {
     let menu = Menu::default(app)?;
-    let help_pos = menu.items()?.iter().position(|item| {
-        matches!(item, MenuItemKind::Submenu(s) if s.text().ok().as_deref() == Some("Help"))
-    });
+    let help_pos = find_help_submenu_index(&menu);
     if let Some(pos) = help_pos {
         menu.insert(connections, pos)?;
     } else {
         menu.append(connections)?;
     }
 
-    wire_about_dialog(app, &menu)?;
+    localize_os_menu_titles(&menu, locale)?;
+    wire_about_dialog(app, &menu, locale)?;
     app.set_menu(menu)?;
     Ok(())
 }
 
-fn about_metadata(app: &AppHandle) -> AboutMetadata<'_> {
+fn find_help_submenu_index(menu: &Menu<tauri::Wry>) -> Option<usize> {
+    let items = match menu.items() {
+        Ok(items) => items,
+        Err(_) => return None,
+    };
+    items.iter().position(|item| {
+        matches!(item, MenuItemKind::Submenu(s) if is_help_submenu(s))
+    })
+}
+
+fn is_help_submenu(submenu: &Submenu<tauri::Wry>) -> bool {
+    matches!(
+        submenu.text().ok().as_deref(),
+        Some("Help") | Some("Aiuto")
+    )
+}
+
+fn localize_os_menu_titles_from_app(app: &AppHandle, locale: Locale) -> tauri::Result<()> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    localize_os_menu_titles(&menu, locale)
+}
+
+fn localize_os_menu_titles(menu: &Menu<tauri::Wry>, locale: Locale) -> tauri::Result<()> {
+    let pairs: [(Key, &[&str]); 5] = [
+        (Key::MenuFile, &["File"]),
+        (Key::MenuEdit, &["Edit", "Modifica"]),
+        (Key::MenuView, &["View", "Visualizza"]),
+        (Key::MenuWindow, &["Window", "Finestra"]),
+        (Key::MenuHelp, &["Help", "Aiuto"]),
+    ];
+    for item in menu.items()? {
+        if let MenuItemKind::Submenu(sub) = item {
+            let text = sub.text().ok();
+            for (key, labels) in pairs {
+                if labels.iter().any(|label| text.as_deref() == Some(*label)) {
+                    let _ = sub.set_text(i18n::t(locale, key));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn about_metadata(app: &AppHandle, locale: Locale) -> AboutMetadata<'_> {
     let version = app.package_info().version.to_string();
     AboutMetadata {
         name: Some(app.package_info().name.clone()),
         version: Some(version),
-        credits: Some(crate::credits::credits_text()),
+        credits: Some(crate::credits::credits_text(locale)),
         authors: Some(crate::credits::author_names()),
         copyright: Some(format!("© {}", crate::credits::CREATOR.name)),
         license: Some("MIT".into()),
@@ -179,8 +229,12 @@ fn about_metadata(app: &AppHandle) -> AboutMetadata<'_> {
 /// no Help submenu existed. macOS always has Help, so on macOS the credits were
 /// never reachable: the panel fell back to the name and version macOS derives
 /// from the bundle.
-fn wire_about_dialog(app: &AppHandle, menu: &Menu<tauri::Wry>) -> tauri::Result<()> {
-    let about = PredefinedMenuItem::about(app, None, Some(about_metadata(app)))?;
+fn wire_about_dialog(
+    app: &AppHandle,
+    menu: &Menu<tauri::Wry>,
+    locale: Locale,
+) -> tauri::Result<()> {
+    let about = PredefinedMenuItem::about(app, None, Some(about_metadata(app, locale)))?;
 
     // macOS: the first submenu is the application menu and its first entry is
     // About. Swap that entry for ours rather than rebuilding the whole submenu,
@@ -197,13 +251,20 @@ fn wire_about_dialog(app: &AppHandle, menu: &Menu<tauri::Wry>) -> tauri::Result<
     }
 
     // Windows / Linux: no application menu, so surface it under Help.
-    let has_help = menu.items()?.iter().any(|item| {
-        matches!(item, MenuItemKind::Submenu(s) if s.text().ok().as_deref() == Some("Help"))
-    });
-    if !has_help {
-        let help = SubmenuBuilder::new(app, "Help").item(&about).build()?;
+    if find_help_submenu_index(menu).is_none() {
+        let help = SubmenuBuilder::new(app, i18n::t(locale, Key::MenuHelp))
+            .item(&about)
+            .build()?;
         menu.append(&help)?;
     }
+    Ok(())
+}
+
+fn refresh_about_dialog(app: &AppHandle, locale: Locale) -> tauri::Result<()> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    wire_about_dialog(app, &menu, locale)?;
     Ok(())
 }
 
@@ -337,10 +398,32 @@ mod tests {
         );
     }
 
+    /// Tauri's default macOS menu adds a View submenu that File/Edit/Window/Help
+    /// renaming used to miss. Deleting the `MenuView` row from `pairs` used to
+    /// leave every Rust test green. Asserted on the source because the submenu
+    /// only exists in a real macOS build.
+    #[test]
+    fn os_menu_rename_table_covers_every_menu_key() {
+        let src = include_str!("app_menus.rs");
+        let start = src
+            .find("fn localize_os_menu_titles(")
+            .expect("localize_os_menu_titles");
+        let end = src[start..].find("\n}\n").expect("end of fn") + start;
+        let body = &src[start..end];
+
+        for key in ["MenuFile", "MenuEdit", "MenuView", "MenuWindow", "MenuHelp"] {
+            assert!(
+                body.contains(&format!("Key::{key}")),
+                "localize_os_menu_titles pairs table no longer covers Key::{key} — \
+                 deleting that row used to leave the macOS menubar half-English"
+            );
+        }
+    }
+
     /// The metadata is worthless if the roster is empty.
     #[test]
     fn about_metadata_carries_the_full_roster() {
-        let credits = crate::credits::credits_text();
+        let credits = crate::credits::credits_text(crate::i18n::Locale::En);
         assert!(credits.contains("Created by"), "credits text has no creator line");
         for person in crate::credits::MAINTAINERS {
             assert!(

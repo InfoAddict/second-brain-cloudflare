@@ -29,6 +29,7 @@ const RESERVED_TAG_PREFIXES = ["kind:", "status:", "volatility:", "stale:"];
  */
 const PIPELINE_TAG_NAMES = new Set([
   "auto-pattern",
+  "auto-insight",
   "synthesized",
   "rolled-up",
   "duplicate-candidate",

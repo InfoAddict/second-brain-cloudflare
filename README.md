@@ -25,11 +25,29 @@ Prefer to run it yourself? Use the one-click **[Deploy to Cloudflare](https://de
 >
 > <a href="https://www.producthunt.com/products/second-brain-cloudflare?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-second-brain-for-ai" target="_blank" rel="noopener noreferrer"><img alt="Second Brain for AI: Persistent memory for Claude, ChatGPT, and Cursor" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1151393&theme=light&period=daily&t=1780357463637"></a>
 
+## What's new in v2.3
+
+* **A home screen instead of an empty search box.** Open the dashboard and it shows what your brain has been doing: what arrived in the last 48 hours and where it came from, a two-week activity strip, the topics you have been writing about, and one older memory worth re-reading. On a quiet day it says almost nothing rather than inventing news.
+
+* **Insights.** Once a week your Second Brain reads two of your own memories written at least a month apart and tells you what changed between them, what they conflict on, or what connects them — one or two sentences, at most three a week, and often none at all. Confirm one and it becomes a memory you can search; dismiss it and it is gone. Nothing enters recall until you have ruled on it.
+
+* **A graph you can read.** Memories cluster by what they are actually about, and a memory without tags is placed by the company it keeps rather than dumped in an "Other" ring. The brain's own housekeeping notes are no longer drawn as if they were your memories, and the legend and labels fit a phone screen.
+
+* **Memories explain themselves.** Opening a memory shows what the brain makes of it in plain language — how important it is, how often it has been recalled, whether it is current or has been superseded, and whether search can see it at all. Answers cite their sources, with dates.
+
+* **The dashboard keeps itself current.** Four destinations became two: Home, and Memories with a list/graph toggle that remembers your choice. A refresh control sits in the sidebar, and editing or deleting a memory no longer leaves stale numbers on screen.
+
+* **More AI models to choose from**, including larger reasoning models. Insight writing has its own model setting, separate from everything else, under **Advanced Settings → AI**.
+
+* **The dashboard now speaks Italian**, alongside the native Mac and Windows menus added in v2.2.
+
 ## What's new in v2.2
 
 * **Advanced Settings.** Seven plain-language controls for how your Second Brain remembers and recalls — how much recent memories outrank old ones, how varied results are, how far to follow connections, how much detail comes back, how strictly duplicates are blocked, how aggressively old memories are compressed, and which AI model does the thinking. Open it with ⌘, in the desktop app. Changes apply to your next search, with no redeploy.
 
 * **Change how your memories are read.** Pick a finer reading for more precise matching, and the app rebuilds your search data for you — resumable if your daily AI allowance runs out, and reversible until the final step. Your memories themselves are never touched.
+
+* **Back up and restore.** Save everything as JSON from the dashboard menu, and restore it there too. A restore runs in the open — it shows what has gone back so far, never duplicates anything if you retry the same file, and finishes by making the restored memories searchable again, spending your daily AI allowance only when you say so.
 
 * **Lost your password?** The unlock screen is no longer a dead end. Sign in to Cloudflare and set a new one. You can also change your password deliberately from Connections, and disconnect every AI tool in one step.
 

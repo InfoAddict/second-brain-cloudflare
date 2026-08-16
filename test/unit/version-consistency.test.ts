@@ -1,17 +1,22 @@
 /**
- * The app version lives in four files that must agree, and nothing but habit
+ * The app version lives in five files that must agree, and nothing but habit
  * kept them aligned.
  *
  * They drift in ways that are quiet and expensive. tauri.conf.json is what the
  * built app reports and what the updater compares against; Cargo.toml is what
- * `cargo` stamps into the binary; installer/package.json is what npm sees; and
- * Cargo.lock is regenerated from Cargo.toml, so a bump that forgets `cargo
- * update` leaves the lockfile behind and the next build rewrites it as an
- * unrelated diff.
+ * `cargo` stamps into the binary; installer/package.json is what npm sees;
+ * package-lock.json is what `npm ci` installs from, and npm calls a lockfile
+ * whose version disagrees with package.json out of sync; and Cargo.lock is
+ * regenerated from Cargo.toml, so a bump that forgets `cargo update` leaves the
+ * lockfile behind and the next build rewrites it as an unrelated diff.
  *
- * scripts/release.mjs writes the first three and runs cargo update for the
- * fourth. This test is what makes that the only correct path — a hand-edited
- * bump that misses a file fails CI on the branch rather than at release time.
+ * package-lock.json is here because it was the one this test did not cover.
+ * release.mjs never wrote it, so it sat two releases stale — 1.2.3 while the app
+ * shipped 1.3.1 — and nothing failed, which is exactly how it survived that long.
+ *
+ * scripts/release.mjs writes the first four and runs cargo update for the fifth.
+ * This test is what makes that the only correct path — a hand-edited bump that
+ * misses a file fails CI on the branch rather than at release time.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -28,6 +33,22 @@ function tauriConfVersion(): string {
 
 function installerPkgVersion(): string {
   return JSON.parse(read("installer/package.json")).version;
+}
+
+/**
+ * npm records the version twice. Both are asserted: a lockfile whose root
+ * package entry disagrees with its top-level field is as out-of-sync as one that
+ * disagrees with package.json, and only one of the two is obvious on inspection.
+ */
+function installerLockVersions(): string {
+  const lock = JSON.parse(read("installer/package-lock.json"));
+  const root = lock.packages?.[""]?.version;
+  if (lock.version !== root) {
+    throw new Error(
+      `installer/package-lock.json disagrees with itself: version ${lock.version}, packages[""].version ${root}`,
+    );
+  }
+  return lock.version;
 }
 
 function cargoTomlVersion(): string {
@@ -54,6 +75,7 @@ describe("desktop app version is consistent", () => {
   const sources: [string, () => string][] = [
     ["installer/src-tauri/tauri.conf.json", tauriConfVersion],
     ["installer/package.json", installerPkgVersion],
+    ["installer/package-lock.json", installerLockVersions],
     ["installer/src-tauri/Cargo.toml", cargoTomlVersion],
     ["installer/src-tauri/Cargo.lock", cargoLockVersion],
   ];
@@ -64,7 +86,7 @@ describe("desktop app version is consistent", () => {
     expect(
       distinct.length,
       `app version differs across files:\n${found.map(([n, v]) => `  ${v}  ${n}`).join("\n")}\n` +
-        "Bump with `npm run deploy:app -- <version|patch|minor|major>`, which writes all four.",
+        "Bump with `npm run deploy:app -- <version|patch|minor|major>`, which writes all five.",
     ).toBe(1);
   });
 
@@ -98,7 +120,7 @@ describe("Worker version", () => {
 describe("release tooling stays the single path", () => {
   it("release.mjs still writes every app-version file this test checks", () => {
     const script = read("scripts/release.mjs");
-    for (const f of ["tauri.conf.json", "installer/package.json", "Cargo.toml"]) {
+    for (const f of ["tauri.conf.json", "installer/package.json", "installer/package-lock.json", "Cargo.toml"]) {
       expect(script, `release.mjs no longer writes ${f}`).toContain(f);
     }
     // Cargo.lock is derived, so the script must run cargo rather than edit it.

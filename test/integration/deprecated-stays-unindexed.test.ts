@@ -63,7 +63,7 @@ describe("a dismissed pattern", () => {
       id: "dismissed",
       content: "You keep deferring the pricing decision",
       createdAt: PAST_GRACE,
-      tags: ["auto-pattern", "status:deprecated"],
+      tags: ["auto-insight", "status:deprecated"],
       vectorIds: [],
     });
 
@@ -75,7 +75,7 @@ describe("a dismissed pattern", () => {
   it("is not offered for repair in the settings count", async () => {
     sq = await migrated();
     sq.seed({ id: "genuinely-broken", content: "Failed to embed", createdAt: PAST_GRACE, vectorIds: [] });
-    sq.seed({ id: "dismissed", content: "Not a real pattern", createdAt: PAST_GRACE, tags: ["auto-pattern", "status:deprecated"], vectorIds: [] });
+    sq.seed({ id: "dismissed", content: "Not a real pattern", createdAt: PAST_GRACE, tags: ["auto-insight", "status:deprecated"], vectorIds: [] });
 
     const data = await (await worker.fetch(req("GET", "/stats"), envOf(sq), ctx)).json() as any;
     expect(data.unvectorized).toBe(1);
@@ -84,7 +84,7 @@ describe("a dismissed pattern", () => {
   it("is left alone by Vectorize now", async () => {
     sq = await migrated();
     sq.seed({ id: "genuinely-broken", content: "Failed to embed", createdAt: PAST_GRACE, vectorIds: [] });
-    sq.seed({ id: "dismissed", content: "Not a real pattern", createdAt: PAST_GRACE, tags: ["auto-pattern", "status:deprecated"], vectorIds: [] });
+    sq.seed({ id: "dismissed", content: "Not a real pattern", createdAt: PAST_GRACE, tags: ["auto-insight", "status:deprecated"], vectorIds: [] });
 
     const data = await (await worker.fetch(req("POST", "/vectorize-pending"), envOf(sq), ctx)).json() as any;
     expect(data.processed).toBe(1);
@@ -112,7 +112,7 @@ describe("dismissing a pattern, end to end", () => {
       id: "p1",
       content: "You keep deferring the pricing decision",
       createdAt: PAST_GRACE,
-      tags: ["auto-pattern"],
+      tags: ["auto-insight"],
       vectorIds: ["p1"],
     });
 
@@ -142,11 +142,11 @@ describe("dismissing a pattern, end to end", () => {
     // The mirror case: confirm promotes the pattern into recall, so nothing here
     // may treat it as deprecated.
     sq = await migrated();
-    sq.seed({ id: "p2", content: "You review PRs in the evening", createdAt: PAST_GRACE, tags: ["auto-pattern"], vectorIds: ["p2"] });
+    sq.seed({ id: "p2", content: "You review PRs in the evening", createdAt: PAST_GRACE, tags: ["auto-insight"], vectorIds: ["p2"] });
 
     await worker.fetch(req("POST", "/patterns/resolve", { body: { id: "p2", action: "confirm" } }), envOf(sq), ctx);
     const tags = tagsOf(sq, "p2");
-    expect(tags).not.toContain("auto-pattern");
+    expect(tags).not.toContain("auto-insight");
     expect(tags).not.toContain("status:deprecated");
     expect(vectorsOf(sq, "p2")).toEqual(["p2"]);
   });

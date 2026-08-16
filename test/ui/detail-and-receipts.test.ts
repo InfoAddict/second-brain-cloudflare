@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
+import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -33,6 +34,7 @@ function load(): any {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  installI18n(ctx, "en");
   for (const f of ["public/utils.js", "public/js/memory-crud.js", "public/js/remember.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
@@ -102,9 +104,15 @@ describe("memory detail — what the brain knows", () => {
 
 describe("citation chips", () => {
   function render(text: string) {
-    const ctx: any = { console };
+    const ctx: any = {
+      console,
+      document: { documentElement: { lang: "en" }, querySelectorAll: () => [] },
+      escAttr: (s: string) => String(s).replace(/"/g, "&quot;"),
+      escHtml: (s: string) => String(s),
+    };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
+    installI18n(ctx, "en");
     vm.runInContext(readFileSync(resolve(ROOT, "public/js/ui-chat.js"), "utf8"), ctx);
     return ctx.renderAnswerMarkdown(text) as string;
   }

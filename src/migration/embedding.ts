@@ -58,9 +58,8 @@ export const MIGRATION_KEY = "migration:embedding";
  * Where the rebuild has got to.
  *
  * The cursor is `(created_at, id)` rather than an offset. Capture stays live
- * during a migration — the nightly cron writes, and recall itself writes via
- * `derivePattern` — so an offset would skip or repeat rows as the table grows
- * underneath it. A keyset cursor cannot.
+ * during a migration — the nightly cron writes — so an offset would skip or
+ * repeat rows as the table grows underneath it. A keyset cursor cannot.
  */
 export interface MigrationState {
   /** The model being migrated *to*, recorded so a resumed run can detect that

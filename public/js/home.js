@@ -17,7 +17,15 @@ let homeMode = null
 let homeModeLocked = false
 
 /** Leading words that make a sentence a question even without a question mark. */
-const ASK_OPENERS = /^(who|what|when|where|why|how|which|whose|did|do|does|is|are|was|were|can|could|should|would|will|have|has|had|am|tell me|show me|find|search|remind me what|list)\b/i
+const ASK_OPENERS_EN =
+  /^(who|what|when|where|why|how|which|whose|did|do|does|is|are|was|were|can|could|should|would|will|have|has|had|am|tell me|show me|find|search|remind me what|list)\b/i
+/** Italian interrogatives only — statement starters like ho/sono/devo are excluded. */
+const ASK_OPENERS_IT =
+  /^(chi|cosa|quando|dove|perché|perche|come|quale|quali|di chi|può|puoi|posso|possono|dovrei|vorrei|dimmi|mostrami|trova|cerca|elenca)\b/i
+
+function askOpenersForLocale() {
+  return getLocale() === 'it' ? ASK_OPENERS_IT : ASK_OPENERS_EN
+}
 
 /**
  * Read the sentence, not the user's mind.
@@ -28,12 +36,13 @@ const ASK_OPENERS = /^(who|what|when|where|why|how|which|whose|did|do|does|is|ar
  * search costs a moment, an unwanted memory costs a cleanup.
  */
 function detectHomeMode(text) {
-  const t = String(text || '').trim()
-  if (!t) return null
-  if (t.endsWith('?')) return 'ask'
-  if (ASK_OPENERS.test(t)) return 'ask'
+  const s = String(text || '').trim()
+  if (!s) return null
+  if (s.endsWith('?')) return 'ask'
+  if (askOpenersForLocale().test(s)) return 'ask'
   // "remember that…" / "note:" are explicit the other way.
-  if (/^(remember|note|todo|remind me to|log)\b/i.test(t)) return 'remember'
+  if (/^(remind me to|ricordami di|remember|note|todo|log|ricorda|nota|promemoria|registra)\b/i.test(s))
+    return 'remember'
   return 'remember'
 }
 
@@ -43,7 +52,7 @@ function applyHomeMode(mode) {
   const label = document.getElementById('home-mode-label')
   if (!btn || !label) return
   const asking = mode === 'ask'
-  label.textContent = asking ? 'will search' : 'will remember'
+  label.textContent = asking ? t('home.willSearch') : t('home.willRemember')
   btn.classList.toggle('home-mode--remember', !asking)
   btn.style.visibility = mode ? 'visible' : 'hidden'
 }
@@ -115,14 +124,14 @@ async function submitHome() {
     field.value = ''
     autoResize(field)
     if (result.duplicate) {
-      receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>already kept</div><div class="receipt-note">Something very similar is already in your brain, so this was skipped.</div></div>`
+      receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>${escHtml(t('home.receiptAlreadyKept'))}</div><div class="receipt-note">${escHtml(t('home.receiptAlreadyKeptNote'))}</div></div>`
     } else {
       receipts.innerHTML = ''
       receipts.appendChild(captureReceipt(result, tags))
     }
     refreshAll()
   } catch {
-    receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>could not save</div><div class="receipt-note">Nothing was lost — the text is still in the box. Try again.</div></div>`
+    receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>${escHtml(t('home.receiptCouldNotSave'))}</div><div class="receipt-note">${escHtml(t('home.receiptCouldNotSaveNote'))}</div></div>`
   } finally {
     field.disabled = false
     field.focus()
@@ -174,11 +183,11 @@ function returnHome() {
  */
 function greetingFor(date) {
   const h = date.getHours()
-  if (h < 5) return 'Still up'
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  if (h < 22) return 'Good evening'
-  return 'Late one'
+  if (h < 5) return t('home.greetingStillUp')
+  if (h < 12) return t('home.greetingMorning')
+  if (h < 17) return t('home.greetingAfternoon')
+  if (h < 22) return t('home.greetingEvening')
+  return t('home.greetingLate')
 }
 
 /** Fills the greeting and the one number worth putting above the input. */
@@ -191,11 +200,12 @@ function renderHome(data) {
   const sub = document.getElementById('home-sub')
   if (sub && data) {
     const bits = []
-    if (data.total) bits.push(`${data.total.toLocaleString()} ${data.total === 1 ? 'memory' : 'memories'}`)
+    if (data.total)
+      bits.push(tPlural('home.subMemory', data.total, { n: formatNumberUI(data.total) }))
     // Summed from the activity strip rather than reusing `captured`, which is a
     // 48-hour count and would have been labelled "this week" incorrectly.
     const week = (data.activity || []).slice(-7).reduce((n, d) => n + (d.count || 0), 0)
-    if (week) bits.push(`${week} this week`)
+    if (week) bits.push(t('home.subThisWeek', { n: formatNumberUI(week) }))
     sub.textContent = bits.join(' · ')
   }
 
@@ -216,6 +226,6 @@ function renderHome(data) {
 function askAbout(tag) {
   leaveHome()
   const input = document.getElementById('recall-input')
-  input.value = `What did I decide about ${tag}?`
+  input.value = t('home.askAbout', { tag })
   sendRecall()
 }
