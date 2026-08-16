@@ -28,8 +28,10 @@ async function saveAppend() {
   btn.disabled = true
   btn.textContent = t('memories.saving')
   try {
-    await apiMcp('append', { id: pendingAppendId, addition })
+    const appendedId = pendingAppendId
+    await apiMcp('append', { id: appendedId, addition })
     closeAppend()
+    notifyMemoryResolved(appendedId)
     refreshAll()
   } catch (e) {
     btn.disabled = false
@@ -102,7 +104,9 @@ async function saveEdit() {
       body: JSON.stringify({ id: pendingEditId, content: newContent, tags: pendingEditTags }),
     })
     if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
+    const editedId = pendingEditId
     closeEdit()
+    notifyMemoryResolved(editedId)
     refreshAll()
   } catch (e) {
     btn.disabled = false
@@ -121,6 +125,22 @@ function closeConfirm() {
   pendingForgetId = null
   pendingForgetCard = null
 }
+/**
+ * Tell any open list that this memory has been dealt with.
+ *
+ * The Memories screen is handled inline above — a row animation and a local
+ * filter — but a sheet that holds its own copy of a list has no way to know an
+ * action happened, and its row stays on screen looking like the action failed.
+ * That is what the out-of-date queue did after a successful forget.
+ *
+ * A call rather than a reach: each list decides what an id means to it, and one
+ * it is not showing has to leave it alone. Guarded so a page that never loaded
+ * that module is unaffected.
+ */
+function notifyMemoryResolved(id) {
+  if (typeof dropFromStaleQueue === 'function') dropFromStaleQueue(id)
+}
+
 async function confirmForget() {
   if (!pendingForgetId) return
   const idToForget = pendingForgetId
@@ -140,6 +160,7 @@ async function confirmForget() {
       setTimeout(() => cardElement?.remove(), 400)
     }
     allEntries = allEntries.filter((e) => e.id !== idToForget)
+    notifyMemoryResolved(idToForget)
     // Everything except the list, which the row animation and the local filter
     // above have already handled — reloading it here would swap the element out
     // from under its own exit animation.

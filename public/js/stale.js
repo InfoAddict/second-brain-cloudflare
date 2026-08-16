@@ -89,6 +89,32 @@ function staleRow(e) {
     </div>`
 }
 
+/**
+ * Take a memory out of the queue once it has been acted on.
+ *
+ * All three row actions resolve the row, for two different reasons: forget
+ * removes the memory outright, while edit and append clear the staleness flag on
+ * their own — touching a memory is what confirms it, so the Worker strips the
+ * tag (tagsAfterWrite, tagsAfterAppend). Either way the row is answering a
+ * question that has been answered, and leaving it there reads as the action
+ * having failed.
+ *
+ * Called by memory-crud rather than reached for by it: this module knows what
+ * its own queue holds, and an id it is not showing must leave it untouched, or
+ * forgetting something from the Memories screen would renumber a queue that
+ * never contained it.
+ */
+function dropFromStaleQueue(id) {
+  if (!loadedStale.length) return
+  const remaining = loadedStale.filter((e) => e.id !== id)
+  if (remaining.length === loadedStale.length) return
+  loadedStale = remaining
+  // The total counts the whole queue, not the page, so it moves with the row —
+  // otherwise "3 more" survives resolving all three.
+  staleTotal = Math.max(0, staleTotal - 1)
+  renderStaleQueue()
+}
+
 function renderStaleQueue() {
   const list = document.getElementById('stale-list')
   const more = document.getElementById('stale-more')
