@@ -47,9 +47,24 @@ function makeReasoningAI() {
       const prompt = String(opts?.messages?.[0]?.content ?? "");
       // Keyed off the candidate's own tier number so every accepted insight's
       // text — and therefore captureEntry's stored content — is distinct per
-      // candidate, not a repeat of the same string three times over.
+      // candidate, not a repeat of the same string three times over. Distinct
+      // means genuinely different wording, not a shared template with the
+      // tier digit swapped in: distinctiveTokens (reason.ts) drops a bare
+      // digit entirely, and even where it didn't, one differing word among
+      // nine tokens is still ~89% overlap — restatesRecent (wired into
+      // weekly.ts by the same task this fixture had to be corrected for)
+      // would treat that as the same conclusion restated and this run would
+      // stop writing after the first candidate instead of three. Only tiers
+      // 0-2 need to clear both the vocabulary floor (against their own
+      // entries) and mutual novelty (against each other), since only the top
+      // three by score are ever reasoned over.
       const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
-      const insight = `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`;
+      const perTier: Record<string, string> = {
+        "0": "You priced this tier at nine dollars flat, then moved it entirely to usage-based billing.",
+        "1": "This tier's predictable monthly amount got swapped for pricing tied to actual usage instead.",
+        "2": "That flat monthly price got left behind once usage-based charges took over instead.",
+      };
+      const insight = `{"insight": true, "shape": "contradiction", "text": "${perTier[tier] ?? perTier["0"]}"}`;
       return sse(prompt.includes("Memory A:") ? insight : "3");
     }),
   } as unknown as Ai;

@@ -13,7 +13,7 @@ import type { Env } from "../env";
 import { resolveConfig } from "../config";
 import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
-import { reasonOverPair } from "./reason";
+import { reasonOverPair, restatesRecent } from "./reason";
 
 /** Pairs considered per run. Each costs one model call. */
 export const WEEKLY_CANDIDATE_LIMIT = 10;
@@ -60,6 +60,12 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     let written = 0;
     const rejected: string[] = [];
     const used: string[] = [];
+    // Texts of insights already accepted THIS run. Two different candidate
+    // pairs can reason to the same conclusion — a corpus full of near-
+    // duplicate memories makes that common, not rare — and each is a slot
+    // this run gets to spend only three of. Checked independently against
+    // each entry (restatesRecent), not concatenated.
+    const writtenThisRun: string[] = [];
 
     for (const candidate of results) {
       if (written >= MAX_INSIGHTS_PER_RUN) break;
@@ -85,6 +91,17 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
         rejected.push(candidate.id);
         continue;
       }
+
+      // A rejected restatement marks its candidate `used`, not `rejected` —
+      // the pair reasoned over successfully, it just landed where the reader
+      // has already been this run. `rejected` is reserved for a pair the
+      // model itself declined; marking a restatement `rejected` would make
+      // the pass re-propose and re-pay for it on a later run.
+      if (restatesRecent(result.text, writtenThisRun)) {
+        used.push(candidate.id);
+        continue;
+      }
+      writtenThisRun.push(result.text);
 
       const content = `${result.text}\n\n[Insight: ${result.shape} — drawn from 2 memories]`;
       const captured = await captureEntry(content, ["auto-insight"], "system", env, ctx, cfg);

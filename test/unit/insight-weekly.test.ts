@@ -210,6 +210,17 @@ describe("runWeeklyInsights()", () => {
     // so each accepted insight's text is distinct, or captureEntry would block
     // the second and third as duplicates of the first and the test would not
     // be able to tell "read in the right order" apart from "read at all."
+    // Distinct means genuinely distinct wording below, not a shared template
+    // with the tier digit swapped in: distinctiveTokens (reason.ts) drops a
+    // bare digit entirely (it only matches tokens that START with a letter),
+    // and even where it didn't, a single differing word out of nine tokens is
+    // still ~89% overlap. restatesRecent (wired into weekly.ts by this task)
+    // would treat that as the same conclusion restated, collapsing every
+    // candidate after the first into "used" without a genuine write and
+    // reading past the top three by score to compensate for it — defeating
+    // this test's premise. Only tiers 0-2 need to clear both floors (the
+    // vocabulary floor against their own entries, and mutual novelty against
+    // each other) since 3 and 4 must never be reasoned over at all.
     const tiersInInsertionOrder: [tier: number, score: number][] = [
       [3, 6.6], [0, 9.9], [4, 5.5], [1, 8.8], [2, 7.7],
     ];
@@ -240,8 +251,24 @@ describe("runWeeklyInsights()", () => {
         const prompt = String(opts?.messages?.[0]?.content ?? "");
         if (!prompt.includes("Memory A:")) return sse("3");
         const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
+        // Each entry from seed() reads "price tier N flat at nine dollars a
+        // month for predictable billing" / "move tier N to usage-based
+        // billing; flat pricing left money on the table" — the same for every
+        // tier bar the digit distinctiveTokens drops. sharesVocabulary needs
+        // one word from {price, nine, dollars, month, predictable} and one
+        // from {move, usage-based, pricing, left, money, table} in each text
+        // below; restatesRecent needs the three texts to share under 60% of
+        // their OWN distinctive tokens pairwise, which a shared template
+        // cannot give no matter which single word varies.
+        const perTier: Record<string, string> = {
+          "0": "You priced this tier at nine dollars flat, then moved it entirely to usage-based billing.",
+          "1": "This tier's predictable monthly amount got swapped for money tied to actual usage.",
+          "2": "That flat monthly price got left behind once usage-based charges took over.",
+          "3": "A fixed quarterly fee here was dropped in favor of billing that scales with usage.",
+          "4": "The old flat charge on this plan gave way to invoicing based on money actually spent.",
+        };
         return sse(
-          `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`,
+          `{"insight": true, "shape": "contradiction", "text": "${perTier[tier] ?? perTier["0"]}"}`,
         );
       }),
     } as unknown as Ai;
@@ -282,6 +309,28 @@ describe("runWeeklyInsights()", () => {
 
     expect(await insightCount(sqlite)).toBe(0);
     expect(await statusOf(sqlite, "cand-0")).toBe("pending");
+  });
+
+  it("does not write a second insight that only restates the first", async () => {
+    // Two candidate pairs reasoning to the same text is exactly what a corpus
+    // full of near-duplicates produces: different pairs, one conclusion.
+    // makeAI returns a fixed payload, so both pairs land on identical text —
+    // the strongest form of the case, and the one the Aug 16 run produced in
+    // weaker form. Default VECTORIZE mock returns no matches (make-env.ts), so
+    // captureEntry's own duplicate detection cannot be what blocks the second
+    // write — only restatesRecent can.
+    seedCandidates(sqlite, 2);
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(1);
+    // Used, not rejected: the pair reasoned fine, it just landed where the
+    // reader has already been. Rejected would re-pay for it on a later run.
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+    expect(await statusOf(sqlite, "cand-1")).toBe("used");
   });
 
   it("does not throw when the pass fails", async () => {
