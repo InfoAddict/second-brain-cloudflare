@@ -19,6 +19,11 @@ const SUBREQUEST_BUDGET = 50;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 const DAY = 86400000;
 
+const drawnFrom = async (sqlite: SqliteD1) =>
+  ((await sqlite.db.prepare(
+    `SELECT source_id, target_id, provenance FROM edges WHERE type = 'drawn_from'`,
+  ).all()).results) as { source_id: string; target_id: string; provenance: string }[];
+
 /**
  * A reasoning call that always accepts. The default AI mock (makeAIMock in
  * test/helpers/make-env.ts) returns the literal text "3" for every non-embedding
@@ -184,7 +189,26 @@ describe("insight crons stay inside one invocation's budget", () => {
       (env.VECTORIZE.upsert as any).mock.calls.length +
       kvGet.mock.calls.length +
       kvPut.mock.calls.length;
-    expect((sqlite.issued.length - before) + bindingCalls).toBeLessThan(SUBREQUEST_BUDGET);
+    const measured = (sqlite.issued.length - before) + bindingCalls;
+    expect(measured).toBeLessThan(SUBREQUEST_BUDGET);
+    // The <SUBREQUEST_BUDGET check above has 12 requests of slack at this
+    // candidate slate (measured 38 of 50) — comfortably wide enough that
+    // spending six more unbatched subrequests here (two drawn_from edges per
+    // insight via createEdge, rather than joining the batch below) would
+    // still read as "under budget" and this test would not catch the
+    // regression edgeInsertStatement exists to prevent. Pinned to the
+    // measured value so that regression fails loudly instead of quietly
+    // eating slack.
+    expect(measured).toBe(38);
+
+    // Verified after the budget assertion, not before: this SELECT is a test
+    // check, not something runWeeklyInsights() itself issues, and including
+    // it above would charge the measurement for a subrequest production
+    // never spends. Two drawn_from edges per stored insight — the whole
+    // reason edgeInsertStatement exists is so these join the batch above
+    // rather than costing MAX_INSIGHTS_PER_RUN * 2 extra subrequests via
+    // createEdge.
+    expect(await drawnFrom(sqlite)).toHaveLength(MAX_INSIGHTS_PER_RUN * 2);
     sqlite.close();
   });
 });

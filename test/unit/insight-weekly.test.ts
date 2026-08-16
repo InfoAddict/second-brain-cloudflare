@@ -56,6 +56,11 @@ const statusOf = async (sqlite: SqliteD1, id: string) =>
     `SELECT status FROM insight_candidates WHERE id = ?`,
   ).bind(id).first()) as { status: string }).status;
 
+const drawnFrom = async (sqlite: SqliteD1) =>
+  ((await sqlite.db.prepare(
+    `SELECT source_id, target_id, provenance FROM edges WHERE type = 'drawn_from'`,
+  ).all()).results) as { source_id: string; target_id: string; provenance: string }[];
+
 const insightCount = async (sqlite: SqliteD1) =>
   ((await sqlite.db.prepare(
     `SELECT COUNT(*) AS n FROM entries WHERE tags LIKE '%"auto-insight"%'`,
@@ -358,6 +363,46 @@ describe("runWeeklyInsights()", () => {
     // Used, not rejected, for the same reason as the within-run case: the
     // pair reasoned fine, it just landed where the reader has already been.
     expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("records the two memories an insight was drawn from", async () => {
+    seedCandidates(sqlite, 1); // seeds candidate cand-0 over entries a-0 and b-0
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    const edges = await drawnFrom(sqlite);
+    expect(edges).toHaveLength(2);
+    expect(edges.map(e => e.target_id).sort()).toEqual(["a-0", "b-0"]);
+    expect(new Set(edges.map(e => e.source_id)).size).toBe(1);
+    expect(edges.every(e => e.provenance === "system")).toBe(true);
+  });
+
+  it("records nothing for an insight that was not stored", async () => {
+    // captureEntry declines when duplicate detection blocks the write — the
+    // same technique "marks a duplicate-blocked candidate used, not
+    // rejected, and writes nothing" above uses to force a non-`stored`
+    // result deterministically (a VECTORIZE match scored above the block
+    // threshold), rather than relying on restatesRecent, which never reaches
+    // captureEntry at all and so cannot exercise this branch. An edge from
+    // an entry that was never created would be a dangling row every later
+    // reader has to defend against.
+    seedCandidates(sqlite, 1);
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any,
+      AI: makeAI(GOOD),
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [{ id: "existing", score: 0.99, metadata: {} }] }),
+      }),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(0);
+    expect(await drawnFrom(sqlite)).toHaveLength(0);
   });
 
   it("does not throw when the pass fails", async () => {

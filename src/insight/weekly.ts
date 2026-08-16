@@ -15,6 +15,7 @@ import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
+import { edgeInsertStatement } from "../graph/edges";
 
 /** Pairs considered per run. Each costs one model call. */
 export const WEEKLY_CANDIDATE_LIMIT = 10;
@@ -103,6 +104,15 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
     let written = 0;
     const rejected: string[] = [];
     const used: string[] = [];
+    // Two per stored insight: which memories it was drawn from. Collected as
+    // plain pairs rather than calling edgeInsertStatement here — that call is
+    // just a local statement builder (no D1 round trip), but issuing it
+    // mid-loop would interleave it with the next candidate's own D1 activity.
+    // Building every prepared statement in one synchronous pass right beside
+    // rejected.map/used.map, immediately before env.DB.batch(statements),
+    // keeps the whole batch's statements prepared together — which is what
+    // lets it join the status updates as a single subrequest.
+    const drawnFromPairs: { insightId: string; targetId: string }[] = [];
     // Texts to compare a new proposal against: insights still unreviewed from
     // earlier runs, plus (appended below) whatever this run itself accepts.
     // Two different candidate pairs — in this run, or one from weeks back —
@@ -155,7 +165,14 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
       // A non-stored result means the insight duplicated an earlier one. Mark it
       // used anyway, or the pass re-proposes and re-pays for this pair forever.
       used.push(candidate.id);
-      if (captured.status === "stored") written++;
+      if (captured.status === "stored") {
+        written++;
+        // Only on a real, created entry — an edge sourced from a capture that
+        // declined to store would point at a row that never exists.
+        for (const targetId of [candidate.a_id, candidate.b_id]) {
+          drawnFromPairs.push({ insightId: captured.id, targetId });
+        }
+      }
     }
 
     const statements = [
@@ -163,6 +180,11 @@ export async function runWeeklyInsights(env: Env, ctx: ExecutionContext): Promis
         `UPDATE insight_candidates SET status = 'rejected' WHERE id = ?`).bind(id)),
       ...used.map(id => env.DB.prepare(
         `UPDATE insight_candidates SET status = 'used' WHERE id = ?`).bind(id)),
+      ...drawnFromPairs
+        .map(({ insightId, targetId }) => edgeInsertStatement(
+          insightId, targetId, "drawn_from", { provenance: "system", weight: 1 }, env,
+        ))
+        .filter((stmt): stmt is D1PreparedStatement => stmt !== null),
     ];
     if (statements.length) await env.DB.batch(statements);
   } catch (e) {
