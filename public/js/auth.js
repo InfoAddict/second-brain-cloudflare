@@ -1,3 +1,20 @@
+// Fork-owned deep-link handling stays in this module so upstream dashboard files
+// can continue merging without carrying the feature across shared init code.
+function entryIdFromSearch(search) {
+  try {
+    const value = new URLSearchParams(String(search || '')).get('entry')
+    const entryId = value && value.trim()
+    return entryId && entryId.length <= 256 ? entryId : null
+  } catch (_) {
+    return null
+  }
+}
+
+let requestedEntryId = typeof window === 'undefined'
+  ? null
+  : entryIdFromSearch(window.location.search)
+let requestedEntryOpening = false
+
 async function connect() {
   const url = document.getElementById('auth-url').value.trim().replace(/\/$/, '')
   const tok = document.getElementById('auth-token').value.trim()
@@ -70,4 +87,8 @@ function logout() {
   document.getElementById('auth-url').value = ''
   document.getElementById('auth-token').value = ''
   document.getElementById('auth-error').textContent = ''
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { entryIdFromSearch }
 }

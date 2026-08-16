@@ -15,5 +15,3 @@ let pendingEditId = null
 let integrationsInfo = []
 let currentCategory = null
 let graphState = null
-let requestedEntryId = null
-let requestedEntryOpening = false
