@@ -2,6 +2,19 @@ import { withoutVolatility } from "./volatility";
 
 export const STALE_AS_OF = "stale:as-of";
 
+/**
+ * The out-of-date review queue, as a WHERE clause.
+ *
+ * One definition, used by both the count on home and the queue behind it, so the
+ * chip cannot promise a number the list then fails to produce. Matches the quoted
+ * JSON member rather than a bare substring, the same way PENDING_INSIGHT_SQL does.
+ *
+ * Deprecated entries are excluded: deprecation retires a memory from recall, and
+ * asking someone to re-verify something already out of circulation is make-work.
+ */
+export const STALE_REVIEW_SQL =
+  `tags LIKE '%"${STALE_AS_OF}"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+
 export function hasStaleAsOf(tags: string[]): boolean {
   return tags.includes(STALE_AS_OF);
 }

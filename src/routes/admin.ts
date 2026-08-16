@@ -8,6 +8,7 @@ import { classifyEntry } from "../capture/classify";
 import { storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
+import { STALE_REVIEW_SQL } from "../memory/stale";
 import { getStatus, withStatus } from "../memory/status";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
@@ -139,6 +140,60 @@ export async function handleAdminRoutes(
         id: r.id as string,
         content: r.content as string,
         created_at: r.created_at as number,
+      })),
+      total: (countRow?.n as number) ?? 0,
+      limit,
+      offset,
+    });
+  }
+
+  // GET /stale — the out-of-date review queue.
+  //
+  // Home's chip reads "N may be out of date" off an exact tag predicate, so the
+  // entries behind that number are knowable exactly. It used to be wired to a
+  // free-text recall for the phrase "What might be out of date?" — a vector
+  // search over the whole brain, which returns the flagged entries only by
+  // coincidence, and on a real brain returned two memories that merely contained
+  // the words while the one actually flagged never appeared.
+  //
+  // A client-side filter over /list is not the alternative: the dashboard holds
+  // the 50 most recent entries, and a memory old enough to be flagged stale is
+  // almost never among them. That is the same mistake the insight panel made
+  // before /patterns existed, and it renders an empty list rather than a wrong
+  // one. Filtering belongs in the query.
+  if (url.pathname === "/stale" && request.method === "GET") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    const limit = intParam(url, "limit", { fallback: 50, min: 1, max: 100 });
+    if (limit instanceof Response) return limit;
+    const offset = intParam(url, "offset", { fallback: 0, min: 0 });
+    if (offset instanceof Response) return offset;
+
+    const [rows, countRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated
+         FROM entries
+         WHERE ${STALE_REVIEW_SQL}
+         ORDER BY COALESCE(updated_at, created_at) ASC LIMIT ? OFFSET ?`,
+      ).bind(limit, offset).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE ${STALE_REVIEW_SQL}`,
+      ).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      // Oldest-touched first: the least recently confirmed claim is the one most
+      // worth a human's attention, and it keeps paging stable while entries drop
+      // out of the queue as they are edited.
+      entries: (rows.results as Record<string, any>[]).map(r => ({
+        id: r.id as string,
+        content: r.content as string,
+        tags: JSON.parse((r.tags as string) ?? "[]") as string[],
+        source: r.source as string,
+        created_at: r.created_at as number,
+        last_updated: r.last_updated as number,
       })),
       total: (countRow?.n as number) ?? 0,
       limit,
