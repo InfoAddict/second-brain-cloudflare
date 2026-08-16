@@ -134,12 +134,36 @@ export async function handleAdminRoutes(
       ).first() as Promise<Record<string, any> | null>,
     ]);
 
+    const pageIds = (rows.results as Record<string, any>[]).map(r => r.id as string);
+    // One query for the whole page rather than one per insight. LEFT JOIN so a
+    // source deleted after the edge was written still surfaces as a row — the
+    // edges table has no foreign keys, so an edge can outlive its target, and
+    // the reviewer needs to be told the source is gone rather than shown a gap.
+    const sourcesByInsight = new Map<string, ({ id: string; content: string } | { id: string; missing: true })[]>();
+    if (pageIds.length) {
+      const sourceRows = (await env.DB.prepare(
+        `SELECT e.source_id AS insight_id, e.target_id AS id, m.content AS content
+         FROM edges e LEFT JOIN entries m ON m.id = e.target_id
+         WHERE e.type = 'drawn_from' AND e.source_id IN (${pageIds.map(() => "?").join(",")})`,
+      ).bind(...pageIds).all()).results as Record<string, any>[];
+      for (const r of sourceRows) {
+        const list = sourcesByInsight.get(r.insight_id as string) ?? [];
+        list.push(
+          r.content == null
+            ? { id: r.id as string, missing: true }
+            : { id: r.id as string, content: r.content as string },
+        );
+        sourcesByInsight.set(r.insight_id as string, list);
+      }
+    }
+
     return json({
       ok: true,
       patterns: (rows.results as Record<string, any>[]).map(r => ({
         id: r.id as string,
         content: r.content as string,
         created_at: r.created_at as number,
+        sources: sourcesByInsight.get(r.id as string) ?? [],
       })),
       total: (countRow?.n as number) ?? 0,
       limit,
