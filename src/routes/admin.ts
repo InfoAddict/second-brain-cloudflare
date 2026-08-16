@@ -7,11 +7,14 @@ import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
 import { storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
-import { PENDING_PATTERN_SQL } from "../memory/patterns";
+import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { getStatus, withStatus } from "../memory/status";
 import { withKind } from "../memory/kind";
 import { checkVectorizeHealth } from "../vectorize/health";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { reasonOverPair } from "../insight/reason";
+import { MAX_INSIGHTS_PER_RUN } from "../insight/weekly";
+import { runInsightAccrual } from "../insight/candidates";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -24,7 +27,7 @@ export async function handleAdminRoutes(
   request: Request,
   url: URL,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response | null> {
   const cfg = await resolveConfig(env);
   // GET /stats
@@ -51,7 +54,7 @@ export async function handleAdminRoutes(
         `SELECT value, COUNT(*) as n FROM entries, json_each(entries.tags)
          WHERE value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
            AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
-           AND value NOT IN ('auto-pattern', 'synthesized', 'rolled-up', 'duplicate-candidate')
+           AND value NOT IN ('auto-pattern', 'auto-insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
            AND value NOT GLOB '[0-9]*'
          GROUP BY value ORDER BY n DESC LIMIT 5`,
       ).all(),
@@ -62,6 +65,7 @@ export async function handleAdminRoutes(
           AND entries.tags NOT LIKE '%"rolled-up"%'
           AND entries.tags NOT LIKE '%"synthesized"%'
           AND entries.tags NOT LIKE '%"auto-pattern"%'
+          AND entries.tags NOT LIKE '%"auto-insight"%'
           AND ${compressionEligibilitySql("entries.", cfg)}
         GROUP BY value
         HAVING count > 10
@@ -101,12 +105,12 @@ export async function handleAdminRoutes(
 
   // GET /patterns — the whole review queue, paged.
   //
-  // The dashboard used to build this list from `/list?n=20&tag=auto-pattern` and
-  // drop the deprecated rows in the browser, which cannot work on a brain that
-  // has been running a while: dismissed patterns keep their auto-pattern tag
-  // forever, so once there are more than a page of them the filter throws away
-  // every row and the panel renders empty while real patterns wait behind them.
-  // Filtering belongs in the query.
+  // The dashboard used to build this list from `/list?n=20&tag=auto-pattern`
+  // (the old producer) and drop the deprecated rows in the browser, which
+  // cannot work on a brain that has been running a while: dismissed insight
+  // proposals keep their tag forever, so once there are more than a page of
+  // them the filter throws away every row and the panel renders empty while
+  // real proposals wait behind them. Filtering belongs in the query.
   if (url.pathname === "/patterns" && request.method === "GET") {
     const authErr = requireAuth(request, env);
     if (authErr) return authErr;
@@ -119,13 +123,13 @@ export async function handleAdminRoutes(
     const [rows, countRow] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, created_at FROM entries
-         WHERE ${PENDING_PATTERN_SQL}
+         WHERE ${PENDING_INSIGHT_SQL}
          ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       ).bind(limit, offset).all(),
       // The total drives "N waiting" and the pager. It is a second query rather
       // than a window function so the shape survives D1's SQLite build.
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE ${PENDING_PATTERN_SQL}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${PENDING_INSIGHT_SQL}`,
       ).first() as Promise<Record<string, any> | null>,
     ]);
 
@@ -142,10 +146,10 @@ export async function handleAdminRoutes(
     });
   }
 
-  // POST /patterns/resolve — confirm or dismiss auto-derived patterns.
-  // Dashboard-only, no MCP twin: pattern review is a human curation act, not an
-  // agent capability. Confirm promotes a pattern into a real recallable memory;
-  // dismiss deprecates it (audit row kept, vectors removed).
+  // POST /patterns/resolve — confirm or dismiss a proposed insight.
+  // Dashboard-only, no MCP twin: insight review is a human curation act, not
+  // an agent capability. Confirm promotes an insight into a real recallable
+  // memory; dismiss deprecates it (audit row kept, vectors removed).
   //
   // Takes `id` for one or `ids` for many. Ruling on a backlog one at a time is
   // the actual complaint this answers, and doing it as N single requests would
@@ -194,8 +198,8 @@ export async function handleAdminRoutes(
     // one pattern can act on "not found" and the bulk form cannot.
     if (body.ids === undefined) {
       if (!found.length) return json({ ok: false, error: `No entry found with ID: ${ids[0]}` }, 404);
-      if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-pattern")) {
-        return json({ ok: false, error: "Entry is not an auto-derived pattern" }, 400);
+      if (!(JSON.parse(found[0].tags ?? "[]") as string[]).includes("auto-insight")) {
+        return json({ ok: false, error: "Entry is not a derived insight" }, 400);
       }
     }
 
@@ -208,14 +212,14 @@ export async function handleAdminRoutes(
       // Anything that is not an unresolved pattern is skipped rather than
       // rejected: a bulk request built from a list the user was looking at can
       // legitimately race a nightly pass or a second tab.
-      if (!tags.includes("auto-pattern") || getStatus(tags) === "deprecated") continue;
+      if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
 
       if (action === "confirm") {
-        // Losing the auto-pattern tag is what exits the recall exclusion — it is
+        // Losing the auto-insight tag is what exits the recall exclusion — it is
         // enforced at D1 hydration, not vector metadata, so this tag update alone
         // makes the entry recallable. No re-embed: content is unchanged and vectors
-        // already exist (the stale auto-pattern flag in vector metadata is harmless).
-        const promoted = withStatus(withKind(tags.filter(t => t !== "auto-pattern"), "semantic"), "canonical");
+        // already exist (the stale auto-insight flag in vector metadata is harmless).
+        const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
         statements.push(
           env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id),
         );
@@ -353,6 +357,124 @@ export async function handleAdminRoutes(
     ).first() as Record<string, any> | null;
 
     return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+  }
+
+  // POST /insights/accrue — run one accrual pass on demand, right now.
+  //
+  // The nightly cron (runInsightAccrual, src/insight/candidates.ts) examines
+  // only ACCRUAL_SEED_LIMIT (25) entries per run, topped up from a backfill
+  // cursor on quiet nights. That is fine for a brain that grows a little
+  // every day, but a self-hoster installing this against an EXISTING brain
+  // of a few thousand entries would otherwise wait months for the backfill
+  // cursor to cross it once — the weekly pass would have almost nothing to
+  // reason over, and the feature would look broken with no way to prime it.
+  //
+  // This calls the exact same function the cron does, once, synchronously,
+  // and reports what it found — no separate accrual logic lives here. The
+  // cursor it walks is the SAME cursor the nightly cron uses (KV key
+  // ACCRUAL_CURSOR_KEY), so calling this repeatedly walks it forward exactly
+  // like repeated nights would: that is the intended way to prime a large
+  // brain, not a one-shot backfill. Call it until `seeds_examined` comes back
+  // small — that means the cursor has caught up to the present.
+  if (url.pathname === "/insights/accrue" && request.method === "POST") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    const pendingCount = () =>
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM insight_candidates WHERE status = 'pending'`)
+        .first() as Promise<Record<string, any> | null>;
+
+    // Before/after rather than threading a write-count out of
+    // runInsightAccrual itself: every row it inserts starts 'pending' and
+    // nothing else in this request can change that count concurrently, so
+    // the delta is exactly how many candidates this pass newly recorded —
+    // including the ON CONFLICT(a_id, b_id) DO NOTHING case, where an
+    // attempted insert did not actually add a row.
+    const before = await pendingCount();
+    const { seedsExamined } = await runInsightAccrual(env, ctx);
+    const after = await pendingCount();
+
+    const pendingTotal = (after?.n as number) ?? 0;
+    const pendingBefore = (before?.n as number) ?? 0;
+
+    return json({
+      ok: true,
+      seeds_examined: seedsExamined,
+      candidates_recorded: pendingTotal - pendingBefore,
+      pending_total: pendingTotal,
+    });
+  }
+
+  // GET /insights/dry-run — what the weekly pass would say, without saying it.
+  //
+  // Ships ahead of the weekly writer being enabled. The design was validated
+  // against a brain that is not representative, so the first question is
+  // whether the shortlist is any good on real data — and this answers it for
+  // the price of a few model calls and no writes at all. A declined candidate
+  // is reported with null shape/text rather than dropped, so a reader can see
+  // a high-scoring pair was considered and rejected, not just what survived.
+  if (url.pathname === "/insights/dry-run" && request.method === "GET") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    const limit = intParam(url, "limit", { fallback: 10, min: 1, max: 25 });
+    if (limit instanceof Response) return limit;
+
+    const { results } = await env.DB.prepare(
+      `SELECT c.id, c.a_id, c.b_id, c.score, a.content AS a_content, b.content AS b_content
+       FROM insight_candidates c
+       JOIN entries a ON a.id = c.a_id
+       JOIN entries b ON b.id = c.b_id
+       WHERE c.status = 'pending'
+         AND a.tags NOT LIKE '%"status:deprecated"%'
+         AND b.tags NOT LIKE '%"status:deprecated"%'
+       ORDER BY c.score DESC
+       LIMIT ?`,
+    ).bind(limit).all() as { results: Record<string, any>[] };
+
+    const candidates = [];
+    // Reasons over every row the query returned, deliberately past the three
+    // production would ever write (src/insight/weekly.ts's own
+    // MAX_INSIGHTS_PER_RUN cap) — seeing candidates four and beyond is how the
+    // ranking itself gets judged. `would_write` marks the first three ACCEPTED
+    // candidates in score order (an "insight" outcome, capped at
+    // MAX_INSIGHTS_PER_RUN) — which is close to but not exactly what
+    // production's `written` counter tracks: that increments only when
+    // captureEntry returns `status: "stored"`, so an accepted insight that
+    // turns out to duplicate an earlier entry consumes no slot there but is
+    // still counted here. A dry run cannot resolve that without calling
+    // captureEntry, which would make it a write rather than a preview — this
+    // is the one place that gap between preview and production is recorded.
+    let written = 0;
+    for (const row of results) {
+      // cfg carries the user's LLM_MODEL choice, same as the real weekly pass
+      // (src/insight/weekly.ts) — without it this would preview reasoning from
+      // the shipped default model rather than the one that will actually run.
+      const result = await reasonOverPair(
+        { content: row.a_content as string },
+        { content: row.b_content as string },
+        env,
+        cfg,
+      );
+      const would_write = result.outcome === "insight" && written < MAX_INSIGHTS_PER_RUN;
+      if (result.outcome === "insight") written++;
+      candidates.push({
+        a_id: row.a_id as string,
+        b_id: row.b_id as string,
+        score: row.score as number,
+        // "declined" and "failed" are both reported, distinctly, rather than
+        // collapsed to null: a human reading the shortlist can tell "the model
+        // looked and said no" apart from "the call itself never answered",
+        // which matters for judging whether the ranking or the model call is
+        // the thing worth investigating.
+        outcome: result.outcome,
+        shape: result.outcome === "insight" ? result.shape : null,
+        text: result.outcome === "insight" ? result.text : null,
+        would_write,
+      });
+    }
+
+    return json({ ok: true, candidates });
   }
 
   return null;

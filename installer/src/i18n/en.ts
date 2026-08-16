@@ -138,9 +138,15 @@ export const en: Messages = {
     },
     model: {
       label: "Which AI model to use",
-      desc: "Used for sorting, summarizing, and spotting contradictions in your memories — not for the search itself. Every model here runs on your own Cloudflare account.",
+      desc: "Used for sorting, summarizing, and spotting contradictions in your memories — not for the search itself, and not for the insights Second Brain draws between memories, which have their own model below. Every model here runs on your own Cloudflare account.",
       sizeNote: "Larger models write better summaries and cost more neurons. Smaller ones are faster and cheaper.",
       neuronsNote: "Neurons are Cloudflare's usage unit for AI. Your plan includes a daily allowance.",
+    },
+    insightModel: {
+      label: "Which AI model draws insights",
+      desc: "Used only when Second Brain compares two memories and writes an insight about how they connect. Everything else — sorting, summarizing, spotting contradictions — uses the model above instead.",
+      sizeNote: "Larger models draw sharper insights and cost more neurons. Smaller ones are faster and cheaper.",
+      defaultNote: "Comparing two memories is a harder judgment than summarizing one, so this defaults to a larger model than the one above — and since the comparison itself is short, it costs about the same.",
     },
     migration: {
       lede: "How your Second Brain reads your memories and matches them to what you ask for.",

@@ -34,7 +34,7 @@ async function loadGraph() {
     canvas.style.display = 'block'
     initGraphSim(canvas, data.nodes, data.edges)
   } catch (e) {
-    emptyEl.textContent = 'Could not load the graph.'
+    emptyEl.textContent = t('graph.loadFailed')
     emptyEl.style.display = 'block'
   }
 }

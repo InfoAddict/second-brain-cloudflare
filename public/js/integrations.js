@@ -4,9 +4,9 @@
 // that have at least one registered provider are shown, so Email appears
 // automatically once email providers are registered.
 const CATEGORY_META = [
-  { id: 'knowledge', name: 'Knowledge', icon: 'ti-notebook' },
-  { id: 'calendar', name: 'Calendars', icon: 'ti-calendar' },
-  { id: 'email', name: 'Email', icon: 'ti-mail' },
+  { id: 'knowledge', icon: 'ti-notebook' },
+  { id: 'calendar', icon: 'ti-calendar' },
+  { id: 'email', icon: 'ti-mail' },
 ]
 
 const INTEGRATION_ICONS = {
@@ -15,11 +15,34 @@ const INTEGRATION_ICONS = {
   'calendar-outlook': 'ti-brand-windows',
   'calendar-icloud': 'ti-brand-apple',
 }
-// Notion keeps its bespoke connect copy; calendar providers ship their own connectHint.
-const NOTION_HINT =
-  'Create an internal <b>connection</b> (not a personal access token) at ' +
-  '<a href="https://app.notion.com/developers/connections" target="_blank" rel="noopener noreferrer">app.notion.com/developers/connections</a>, ' +
-  'share the pages you want remembered with it (page menu &rarr; Connections), then paste its secret here.'
+
+function integrationCategoryName(id) {
+  const keys = {
+    knowledge: 'integrations.categoryKnowledge',
+    calendar: 'integrations.categoryCalendars',
+    email: 'integrations.categoryEmail',
+    other: 'integrations.categoryOther',
+  }
+  return t(keys[id] || 'integrations.categoryOther')
+}
+
+function integrationNounKey(provider) {
+  if (provider.startsWith('calendar')) return 'integrations.nounEvent'
+  if (provider.startsWith('email')) return 'integrations.nounEmail'
+  return 'integrations.nounItem'
+}
+
+function integrationNoun(provider, n) {
+  return tPlural(integrationNounKey(provider), n)
+}
+
+function integrationConnectI18n(provider, field, apiFallback, fallbackKey) {
+  const key = `integrations.connect.${provider}.${field}`
+  const translated = t(key)
+  if (translated !== key) return translated
+  if (apiFallback) return apiFallback
+  return fallbackKey ? t(fallbackKey) : ''
+}
 
 async function loadIntegrations() {
   const el = document.getElementById('integrations-list')
@@ -29,7 +52,7 @@ async function loadIntegrations() {
     integrationsInfo = data.integrations || []
     renderIntegrations()
   } catch {
-    el.innerHTML = '<p class="digest-note">Could not load integrations.</p>'
+    el.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loadFailed'))}</p>`
   }
 }
 
@@ -39,7 +62,7 @@ function integrationCategoryId(info) {
 }
 
 function categoryMeta(id) {
-  return CATEGORY_META.find((c) => c.id === id) || { id, name: 'Other', icon: 'ti-plug' }
+  return CATEGORY_META.find((c) => c.id === id) || { id, icon: 'ti-plug' }
 }
 
 // Categories present in the data, in CATEGORY_META order, with any leftover
@@ -57,13 +80,13 @@ function renderIntegrationsChrome() {
   const title = document.getElementById('integrations-title')
   const intro = document.getElementById('integrations-intro')
   if (currentCategory) {
-    title.textContent = categoryMeta(currentCategory).name
-    back.setAttribute('title', 'Back to integrations')
+    title.textContent = integrationCategoryName(currentCategory)
+    back.setAttribute('title', t('integrations.backList'))
     back.onclick = backToCategoryList
     intro.style.display = 'none'
   } else {
-    title.textContent = 'Integrations'
-    back.setAttribute('title', 'Back to settings')
+    title.textContent = t('menu.integrations')
+    back.setAttribute('title', t('integrations.backSettings'))
     back.onclick = backToMenu
     intro.style.display = ''
   }
@@ -73,7 +96,7 @@ function renderIntegrations() {
   renderIntegrationsChrome()
   const el = document.getElementById('integrations-list')
   if (!integrationsInfo.length) {
-    el.innerHTML = '<p class="digest-note">No integrations available.</p>'
+    el.innerHTML = `<p class="digest-note">${escHtml(t('integrations.none'))}</p>`
     return
   }
   if (currentCategory) {
@@ -81,7 +104,7 @@ function renderIntegrations() {
       .filter((i) => integrationCategoryId(i) === currentCategory)
       .map(renderIntegrationCard)
       .join('')
-    el.innerHTML = cards || '<p class="digest-note">Nothing here yet.</p>'
+    el.innerHTML = cards || `<p class="digest-note">${escHtml(t('integrations.emptyCategory'))}</p>`
     return
   }
   el.innerHTML = presentCategories().map(renderCategoryRow).join('')
@@ -90,12 +113,12 @@ function renderIntegrations() {
 function renderCategoryRow(cat) {
   const items = integrationsInfo.filter((i) => integrationCategoryId(i) === cat.id)
   const connected = items.filter((i) => i.connected).length
-  const summary = connected > 0 ? `${connected} connected` : 'Not connected'
+  const summary = connected > 0 ? tPlural('integrations.summaryConnected', connected) : t('integrations.notConnected')
   return `
     <button class="integration-category-row" onclick="openCategory('${cat.id}')">
       <i class="ti ${cat.icon}"></i>
-      <span class="integration-category-name">${escHtml(cat.name)}</span>
-      <span class="integration-category-summary">${summary}</span>
+      <span class="integration-category-name">${escHtml(integrationCategoryName(cat.id))}</span>
+      <span class="integration-category-summary">${escHtml(summary)}</span>
       <i class="ti ti-chevron-right integration-category-chevron"></i>
     </button>`
 }
@@ -113,42 +136,61 @@ function renderIntegrationCard(info) {
   const p = info.provider
   const icon = INTEGRATION_ICONS[p] || 'ti-plug'
   if (!info.connected) {
-    const hint = p === 'notion' ? NOTION_HINT : (info.connectHint || '')
-    const label = escHtml(info.connectLabel || 'Paste your secret')
+    const hint =
+      p === 'notion'
+        ? t('integrations.notionHint')
+        : integrationConnectI18n(p, 'hint', info.connectHint, '')
+    const label = escHtml(
+      integrationConnectI18n(p, 'label', info.connectLabel, 'integrations.pasteSecret'),
+    )
     const isEmail = p.startsWith('email')
     let inputs
     if (isEmail) {
       // Email needs two fields; connectIntegration packs them into the token.
       inputs =
-        `<input type="email" id="email-${p}" placeholder="you@example.com" aria-label="Email address" autocomplete="off" />` +
-        `<input type="password" id="tok-${p}" placeholder="${escHtml(info.connectPlaceholder || 'app password')}" aria-label="App password" autocomplete="off" />`
+        `<input type="email" id="email-${p}" placeholder="${escAttr(t('integrations.emailPlaceholder'))}" aria-label="${escAttr(t('integrations.emailAria'))}" autocomplete="off" />` +
+        `<input type="password" id="tok-${p}" placeholder="${escHtml(
+          integrationConnectI18n(p, 'placeholder', info.connectPlaceholder, 'integrations.appPassword'),
+        )}" aria-label="${escAttr(t('integrations.appPasswordAria'))}" autocomplete="off" />`
     } else {
-      const placeholder = escHtml(info.connectPlaceholder || (p === 'notion' ? 'Integration secret (ntn_…)' : 'https://…'))
+      const placeholder = escHtml(
+        integrationConnectI18n(
+          p,
+          'placeholder',
+          info.connectPlaceholder,
+          p === 'notion' ? 'integrations.notionPlaceholder' : 'integrations.urlPlaceholder',
+        ),
+      )
       inputs = `<input type="password" id="tok-${p}" placeholder="${placeholder}" aria-label="${label}" autocomplete="off" />`
     }
     return `
       <div class="integration-row">
-        <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state">Not connected</span></div>
+        <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state">${escHtml(t('integrations.notConnected'))}</span></div>
         <p class="digest-note">${hint}</p>
         <div class="integration-connect-row${isEmail ? ' integration-connect-col' : ''}">
           ${inputs}
-          <button class="digest-btn" onclick="connectIntegration('${p}', this)">Connect</button>
+          <button class="digest-btn" onclick="connectIntegration('${p}', this)">${escHtml(t('auth.connect'))}</button>
         </div>
         <div class="integration-error" id="err-${p}"></div>
       </div>`
   }
-  const last = info.lastSyncedAt ? new Date(info.lastSyncedAt).toLocaleString() : 'never'
-  const noun = p.startsWith('calendar') ? 'event' : p.startsWith('email') ? 'email' : 'item'
-  const count = `${info.itemCount} ${noun}${info.itemCount === 1 ? '' : 's'} synced`
-  const err = info.lastSyncError ? `<div class="integration-error">Last sync failed: ${escHtml(info.lastSyncError)}</div>` : ''
+  const last = info.lastSyncedAt
+    ? new Date(info.lastSyncedAt).toLocaleString(localeTag())
+    : t('integrations.never')
+  const count = tPlural('integrations.countSynced', info.itemCount, {
+    noun: integrationNoun(p, info.itemCount),
+  })
+  const err = info.lastSyncError
+    ? `<div class="integration-error">${escHtml(t('integrations.lastSyncFailed', { error: info.lastSyncError }))}</div>`
+    : ''
   return `
     <div class="integration-row">
-      <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state connected">${escHtml(info.workspaceName || 'Connected')}</span></div>
-      <p class="digest-note" id="note-${p}">${count} &middot; Last sync: ${escHtml(last)}</p>
+      <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state connected">${escHtml(info.workspaceName || t('integrations.connected'))}</span></div>
+      <p class="digest-note" id="note-${p}">${escHtml(count)} &middot; ${escHtml(t('integrations.lastSync', { when: last }))}</p>
       ${err}
       <div class="integration-actions">
-        <button class="digest-btn" onclick="syncIntegration('${p}', this)"><i class="ti ti-refresh"></i> Sync now</button>
-        <button class="digest-btn danger" onclick="disconnectIntegration('${p}', this)">Disconnect</button>
+        <button class="digest-btn" onclick="syncIntegration('${p}', this)"><i class="ti ti-refresh"></i> ${escHtml(t('integrations.syncNow'))}</button>
+        <button class="digest-btn danger" onclick="disconnectIntegration('${p}', this)">${escHtml(t('menu.disconnect'))}</button>
       </div>
     </div>`
 }
@@ -159,14 +201,14 @@ async function connectIntegration(provider, btn) {
   if (provider.startsWith('email')) {
     const email = (document.getElementById(`email-${provider}`).value || '').trim()
     const pw = (document.getElementById(`tok-${provider}`).value || '').trim()
-    if (!email || !pw) { errEl.textContent = 'Enter your email and app password.'; return }
+    if (!email || !pw) { errEl.textContent = t('integrations.needEmailPw'); return }
     token = JSON.stringify({ email: email, appPassword: pw })
   } else {
     token = (document.getElementById(`tok-${provider}`).value || '').trim()
-    if (!token) { errEl.textContent = 'Paste your secret first.'; return }
+    if (!token) { errEl.textContent = t('integrations.needSecret'); return }
   }
   btn.disabled = true
-  btn.textContent = 'Connecting…'
+  btn.textContent = t('auth.connectingEllipsis')
   errEl.textContent = ''
   try {
     const res = await fetch(`${WORKER_URL}/integrations/${provider}/connect`, {
@@ -175,24 +217,23 @@ async function connectIntegration(provider, btn) {
       body: JSON.stringify({ token }),
     })
     const data = await res.json()
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Could not connect')
+    if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.couldNotConnectShort'))
     await loadIntegrations()
     // Kick off the first sync automatically.
     const syncBtn = document.querySelector(`[onclick^="syncIntegration('${provider}'"]`)
     if (syncBtn) syncIntegration(provider, syncBtn)
   } catch (e) {
-    errEl.textContent = e.message || 'Could not connect.'
+    errEl.textContent = e.message || t('auth.couldNotConnect')
     btn.disabled = false
-    btn.textContent = 'Connect'
+    btn.textContent = t('auth.connect')
   }
 }
 
 async function syncIntegration(provider, btn) {
   btn.disabled = true
   btn.classList.add('digest-btn--loading')
-  btn.innerHTML = '<i class="ti ti-loader-2"></i> Syncing…'
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('integrations.syncing'))}`
   const note = document.getElementById(`note-${provider}`)
-  const noun = provider.startsWith('calendar') ? 'event' : provider.startsWith('email') ? 'email' : 'item'
   try {
     // Each call processes a bounded batch and reports what's left — loop
     // until the backlog drains (same pattern as runVectorize).
@@ -204,21 +245,26 @@ async function syncIntegration(provider, btn) {
         headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
       })
       const data = await res.json()
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Sync failed')
+      if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.syncFailed'))
       processed += (data.created ?? 0) + (data.updated ?? 0)
       remaining = data.remaining ?? 0
-      if (note) note.textContent = `Syncing… ${processed} ${noun}${processed === 1 ? '' : 's'} so far`
+      if (note) {
+        note.textContent = t('integrations.syncingProgress', {
+          n: processed,
+          noun: integrationNoun(provider, processed),
+        })
+      }
       // A batch with zero progress means everything in it failed — stop.
       if ((data.created ?? 0) + (data.updated ?? 0) + (data.deleted ?? 0) === 0 && remaining > 0) break
     }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${processed} synced`
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('integrations.synced', processed))}`
     btn.style.color = 'var(--good)'
     setTimeout(loadIntegrations, 900)
     refreshAll()
   } catch (e) {
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = '<i class="ti ti-alert-triangle"></i> Sync failed'
+    btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('integrations.syncFailed'))}`
     btn.style.color = 'var(--danger)'
     setTimeout(loadIntegrations, 3000)
   }
@@ -226,15 +272,17 @@ async function syncIntegration(provider, btn) {
 
 async function disconnectIntegration(provider, btn) {
   const info = integrationsInfo.find((i) => i.provider === provider) || {}
-  if (!confirm(`Disconnect ${info.name || provider}? It will stop syncing.`)) return
+  if (!confirm(t('integrations.disconnectConfirm', { name: info.name || provider }))) return
   let purge = false
   if (info.itemCount > 0) {
     purge = confirm(
-      `Also delete the ${info.itemCount} synced memor${info.itemCount === 1 ? 'y' : 'ies'}?\n\nOK = delete them\nCancel = keep them as regular memories`,
+      tPlural('integrations.purgeConfirm', info.itemCount, {
+        noun: tPlural('integrations.nounMemory', info.itemCount),
+      }),
     )
   }
   btn.disabled = true
-  btn.textContent = 'Disconnecting…'
+  btn.textContent = t('integrations.disconnecting')
   try {
     const res = await fetch(`${WORKER_URL}/integrations/${provider}/disconnect`, {
       method: 'POST',
@@ -242,12 +290,12 @@ async function disconnectIntegration(provider, btn) {
       body: JSON.stringify({ purge }),
     })
     const data = await res.json()
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Disconnect failed')
+    if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.disconnectFailed'))
     await loadIntegrations()
     if (purge) refreshAll()
   } catch (e) {
     btn.disabled = false
-    btn.textContent = 'Disconnect'
-    alert(e.message || 'Disconnect failed')
+    btn.textContent = t('menu.disconnect')
+    alert(e.message || t('integrations.disconnectFailed'))
   }
 }

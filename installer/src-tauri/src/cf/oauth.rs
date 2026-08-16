@@ -9,6 +9,7 @@
 //!
 //! Tokens returned here live in memory only, for the duration of setup.
 
+use crate::i18n::{self, Key, Locale};
 use base64::Engine;
 use rand::RngCore;
 use serde::Deserialize;
@@ -108,16 +109,33 @@ pub fn auth_url(pkce: &Pkce, state: &str) -> String {
     url.to_string()
 }
 
-const SUCCESS_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Second Brain</title>
-<style>body{font-family:system-ui,sans-serif;background:#f4f1ea;color:#26241f;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-.card{text-align:center;max-width:360px;padding:40px}h1{font-size:22px;margin:0 0 10px}p{color:#6e6b62;font-size:15px;line-height:1.5}</style></head>
-<body><div class="card"><h1>You&rsquo;re signed in ✓</h1><p>You can close this tab and return to the Second Brain app.</p></div>
-<script>setTimeout(function(){window.close()},1500)</script></body></html>"#;
+fn oauth_page_style() -> &'static str {
+    "body{font-family:system-ui,sans-serif;background:#f4f1ea;color:#26241f;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}\
+.card{text-align:center;max-width:360px;padding:40px}h1{font-size:22px;margin:0 0 10px}p{color:#6e6b62;font-size:15px;line-height:1.5}"
+}
 
-const DENIED_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Second Brain</title>
-<style>body{font-family:system-ui,sans-serif;background:#f4f1ea;color:#26241f;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-.card{text-align:center;max-width:360px;padding:40px}h1{font-size:22px;margin:0 0 10px}p{color:#6e6b62;font-size:15px;line-height:1.5}</style></head>
-<body><div class="card"><h1>Sign-in cancelled</h1><p>You can close this tab. Head back to the Second Brain app to try again.</p></div></body></html>"#;
+fn success_page(locale: Locale) -> String {
+    format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Second Brain</title>
+<style>{style}</style></head>
+<body><div class="card"><h1>{title}</h1><p>{body}</p></div>
+<script>setTimeout(function(){{window.close()}},1500)</script></body></html>"#,
+        style = oauth_page_style(),
+        title = i18n::t(locale, Key::OAuthSuccessTitle),
+        body = i18n::t(locale, Key::OAuthSuccessBody),
+    )
+}
+
+fn denied_page(locale: Locale) -> String {
+    format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Second Brain</title>
+<style>{style}</style></head>
+<body><div class="card"><h1>{title}</h1><p>{body}</p></div></body></html>"#,
+        style = oauth_page_style(),
+        title = i18n::t(locale, Key::OAuthDeniedTitle),
+        body = i18n::t(locale, Key::OAuthDeniedBody),
+    )
+}
 
 struct CallbackResult {
     code: String,
@@ -126,7 +144,7 @@ struct CallbackResult {
 
 /// Blocks (call from `spawn_blocking`) until the browser hits the loopback
 /// callback, then returns the authorization code.
-fn wait_for_callback(server: tiny_http::Server) -> Result<CallbackResult, OauthError> {
+fn wait_for_callback(server: tiny_http::Server, locale: Locale) -> Result<CallbackResult, OauthError> {
     let deadline = Instant::now() + CALLBACK_TIMEOUT;
     loop {
         let remaining = deadline
@@ -159,12 +177,12 @@ fn wait_for_callback(server: tiny_http::Server) -> Result<CallbackResult, OauthE
             }
         }
         if error.is_some() {
-            let _ = req.respond(html_response(DENIED_PAGE));
+            let _ = req.respond(html_response(&denied_page(locale)));
             return Err(OauthError::Denied);
         }
         match (code, state) {
             (Some(code), Some(state)) => {
-                let _ = req.respond(html_response(SUCCESS_PAGE));
+                let _ = req.respond(html_response(&success_page(locale)));
                 return Ok(CallbackResult { code, state });
             }
             _ => {
@@ -193,7 +211,10 @@ fn tokens_from(resp: TokenResponse) -> Tokens {
 /// Full login: bind the loopback listener FIRST, then hand the browser URL to
 /// `open` (Rust-side opener — the URL never passes through the webview), wait
 /// for the redirect, and exchange the code.
-pub async fn run_login_flow(open: impl FnOnce(String)) -> Result<Tokens, OauthError> {
+pub async fn run_login_flow(
+    locale: Locale,
+    open: impl FnOnce(String),
+) -> Result<Tokens, OauthError> {
     let server = tiny_http::Server::http(("127.0.0.1", CALLBACK_PORT))
         .map_err(|_| OauthError::PortBusy)?;
 
@@ -201,7 +222,7 @@ pub async fn run_login_flow(open: impl FnOnce(String)) -> Result<Tokens, OauthEr
     let state = random_state();
     open(auth_url(&pkce, &state));
 
-    let callback = tokio::task::spawn_blocking(move || wait_for_callback(server))
+    let callback = tokio::task::spawn_blocking(move || wait_for_callback(server, locale))
         .await
         .map_err(|_| OauthError::Timeout)??;
 

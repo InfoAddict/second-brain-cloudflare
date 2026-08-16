@@ -329,6 +329,16 @@ select.locale-select:focus {
   color: var(--danger);
 }
 
+.searching-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 13px 6px;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
 .checklist {
   list-style: none;
   display: flex;

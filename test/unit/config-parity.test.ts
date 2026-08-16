@@ -49,6 +49,7 @@ describe("DEFAULTS parity with shipped constants", () => {
     ["CONTRADICTION_IMPORTANCE_STEP", DEFAULTS.CONTRADICTION_IMPORTANCE_STEP, constants.CONTRADICTION_IMPORTANCE_STEP],
     ["LLM_MODEL", DEFAULTS.LLM_MODEL, constants.LLM_MODEL],
     ["EMBEDDING_MODEL", DEFAULTS.EMBEDDING_MODEL, constants.EMBEDDING_MODEL],
+    ["INSIGHT_LLM_MODEL", DEFAULTS.INSIGHT_LLM_MODEL, constants.INSIGHT_LLM_MODEL],
   ];
 
   for (const [name, fromConfig, fromModule] of cases) {

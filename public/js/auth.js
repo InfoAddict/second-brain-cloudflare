@@ -4,24 +4,24 @@ async function connect() {
   const err = document.getElementById('auth-error')
   const btn = document.getElementById('auth-connect')
   if (!url || !tok) {
-    err.textContent = 'Please fill in both fields.'
+    err.textContent = t('auth.fillBoth')
     return
   }
-  btn.textContent = 'Connecting...'
+  btn.textContent = t('auth.connecting')
   btn.disabled = true
   err.textContent = ''
   try {
     const res = await fetch(`${url}/list?n=1`, { headers: { Authorization: `Bearer ${tok}` } })
-    if (res.status === 401) throw new Error('Invalid token')
-    if (!res.ok) throw new Error(`Server error: ${res.status}`)
+    if (res.status === 401) throw new Error(t('auth.invalidToken'))
+    if (!res.ok) throw new Error(t('auth.serverError', { status: res.status }))
     localStorage.setItem('sb_url', url)
     localStorage.setItem('sb_token', tok)
     WORKER_URL = url
     AUTH_TOKEN = tok
     showApp()
   } catch (e) {
-    err.textContent = e.message || 'Could not connect.'
-    btn.textContent = 'Connect'
+    err.textContent = e.message || t('auth.couldNotConnect')
+    btn.textContent = t('auth.connect')
     btn.disabled = false
   }
 }

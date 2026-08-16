@@ -41,18 +41,19 @@ export const GRAPH_VIEW_MAX_NODES = 1500;
 
 /**
  * Entries the pipeline wrote about itself rather than memories a person stored: the
- * pattern miner's finds and the nightly compression's digests.
+ * insight pass's proposals (and the auto-pattern finds it replaced) and the nightly
+ * compression's digests.
  *
- * Recall already excludes auto-patterns (src/recall/search.ts) and the dashboard
- * reviews them in a queue of their own, so the graph was the last surface drawing
- * them as life events. Filtered here rather than in the client so the places they
- * were occupying inside the node budget go to real memories instead.
+ * Recall already excludes both (src/recall/search.ts) and the dashboard reviews
+ * them in a queue of their own, so the graph was the last surface drawing them as
+ * life events. Filtered here rather than in the client so the places they were
+ * occupying inside the node budget go to real memories instead.
  *
  * `rolled-up` and `duplicate-candidate` are deliberately absent: those mark a
  * person's own memory, and it stays in the graph whatever the pipeline has since
  * concluded about it.
  */
-const MACHINE_AUTHORED_TAGS = new Set(["auto-pattern", "synthesized"]);
+const MACHINE_AUTHORED_TAGS = new Set(["auto-pattern", "auto-insight", "synthesized"]);
 export const GRAPH_HOP_DECAY = 0.6;
 const EDGE_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
