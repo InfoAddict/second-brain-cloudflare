@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseInsightResponse, sharesVocabulary, isRestatementFraming, reasonOverPair } from "../../src/insight/reason";
+import { parseInsightResponse, sharesVocabulary, isRestatementFraming, restatesRecent, reasonOverPair } from "../../src/insight/reason";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import { DEFAULTS } from "../../src/config";
 
@@ -296,6 +296,33 @@ describe("the eight captured samples", () => {
         text: SAMPLE_7,
       });
     });
+  });
+});
+
+describe("restatesRecent()", () => {
+  const earlier = "The ledger table you added for the audit feature became the implementation of the reconciliation ledger you only sketched earlier.";
+
+  it("catches a conclusion already written in different words", () => {
+    const restated = "The ledger table added for the audit feature is the concrete implementation of the reconciliation ledger sketched earlier.";
+    expect(restatesRecent(restated, [earlier])).toBe(true);
+  });
+
+  it("allows an insight about a different subject", () => {
+    const fresh = "Your habit of drafting release notes before the code is finished shows up again in the migration rollout.";
+    expect(restatesRecent(fresh, [earlier])).toBe(false);
+  });
+
+  it("allows the first insight on a brain with none written yet", () => {
+    expect(restatesRecent(earlier, [])).toBe(false);
+  });
+
+  it("compares against each recent insight independently, not their concatenation", () => {
+    // Two unrelated insights must not pool their vocabulary into a match that
+    // neither of them would have made alone.
+    const a = "The ledger table you added for the audit feature is load-bearing.";
+    const b = "Your release notes are drafted before the code is finished.";
+    const unrelated = "The ledger release notes finished audit habit table code.";
+    expect(restatesRecent(unrelated, [a, b])).toBe(false);
   });
 });
 
