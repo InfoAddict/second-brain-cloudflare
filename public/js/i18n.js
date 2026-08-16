@@ -378,6 +378,15 @@ const I18N_EN = {
     },
     moreInsightsGeneric: 'More insights are waiting →',
   },
+  stale: {
+    title: 'May be out of date',
+    intro:
+      'These were true when you wrote them and carry a claim that ages. Update one to confirm it, add to it, or forget it. Editing or appending clears the flag, because the memory has just been confirmed by the act of touching it.',
+    empty: 'Nothing looks out of date.',
+    loadFailed: 'Could not load what may be out of date.',
+    lastConfirmed: 'Last confirmed {date}',
+    more: '{n} more',
+  },
   patterns: {
     title: 'Insights noticed',
     intro:
@@ -812,6 +821,15 @@ const I18N_IT = {
       other: '{n} altri insight in attesa →',
     },
     moreInsightsGeneric: 'Altri insight in attesa →',
+  },
+  stale: {
+    title: 'Potrebbe non essere aggiornato',
+    intro:
+      'Erano veri quando li hai scritti e contengono un\'affermazione che invecchia. Aggiornane uno per confermarlo, aggiungi qualcosa o dimenticalo. Modificare o aggiungere azzera il contrassegno, perché toccare la memoria equivale a confermarla.',
+    empty: 'Nulla sembra non aggiornato.',
+    loadFailed: 'Impossibile caricare cosa potrebbe non essere aggiornato.',
+    lastConfirmed: 'Confermato il {date}',
+    more: 'Altri {n}',
   },
   patterns: {
     title: 'Insight notati',

@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { json, requireAuth } from "../lib/http";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
+import { STALE_REVIEW_SQL } from "../memory/stale";
 
 /**
  * GET /brief — what the brain did while you were away.
@@ -128,14 +129,21 @@ export async function handleBriefRoutes(
     // cost one query: memories recall cannot see, and memories the staleness
     // pass has flagged as possibly out of date.
     //
-    // Deprecated entries are excluded from the first count. Their vectors were
-    // deleted on purpose — dismissing a pattern is the common way — so counting
-    // them as "not searchable" reported the user's own decision back to them as
-    // a problem, and grew the number every time they dismissed one.
+    // Deprecated entries are excluded from BOTH counts, for the same reason in
+    // two forms. Their vectors were deleted on purpose — dismissing a pattern is
+    // the common way — so counting them as "not searchable" reported the user's
+    // own decision back to them as a problem, and grew the number every time they
+    // dismissed one. A deprecated memory is likewise retired from recall, so
+    // asking anyone to re-verify it is make-work.
+    //
+    // The stale count shares STALE_REVIEW_SQL with `GET /stale`, the queue this
+    // chip opens. They are two readings of one fact: a chip that promises a
+    // number the queue then fails to produce is the defect this replaced, and
+    // one predicate is what stops it coming back.
     env.DB.prepare(
       `SELECT
          SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
-         SUM(CASE WHEN tags LIKE '%stale:as-of%' THEN 1 ELSE 0 END) AS stale,
+         SUM(CASE WHEN ${STALE_REVIEW_SQL} THEN 1 ELSE 0 END) AS stale,
          COUNT(*) AS total
        FROM entries`,
     ).first() as Promise<Record<string, any> | null>,
