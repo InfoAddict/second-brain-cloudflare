@@ -2343,6 +2343,27 @@
         color: var(--text-tertiary);
       }
 
+      .pattern-sources {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin: 2px 0 0;
+        padding: 0 0 0 14px;
+        list-style: disc;
+      }
+
+      .pattern-source {
+        font-size: 12.5px;
+        line-height: 1.4;
+        color: var(--text-secondary);
+        overflow-wrap: anywhere;
+      }
+
+      .pattern-source--gone {
+        color: var(--text-tertiary);
+        font-style: italic;
+      }
+
       #patterns-more {
         flex-shrink: 0;
         align-self: flex-start;

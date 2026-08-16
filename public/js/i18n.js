@@ -399,6 +399,7 @@ const I18N_EN = {
     emptyIntro: 'Nothing is waiting on you.',
     emptyBody: 'Every insight your brain drew has been ruled on.',
     noticedWhen: 'noticed {date}',
+    sourceGone: 'This memory is no longer in your brain.',
     more: '{n} more ›',
     failed: 'Failed',
     upkeepNote: {
@@ -843,6 +844,7 @@ const I18N_IT = {
     emptyIntro: 'Niente in attesa.',
     emptyBody: 'Ogni insight ricavato dal cervello è stato valutato.',
     noticedWhen: 'notato {date}',
+    sourceGone: 'Questa memoria non è più nel tuo cervello.',
     more: 'altri {n} ›',
     failed: 'Non riuscito',
     upkeepNote: {
