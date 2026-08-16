@@ -39,9 +39,24 @@ const BOOKKEEPING_TAGS = new Set([
  * one of these have not been shown to share a subject, so they cannot be used to
  * decide whether a pair is cross-topic.
  */
-const AXIS_TAGS = new Set([
+export const AXIS_TAGS: ReadonlySet<string> = new Set([
   "personal", "work", "task", "idea", "context", "claude-response", "codex-response",
 ]);
+
+/**
+ * The axis tags that name an assistant as the author rather than a subject.
+ *
+ * A subset of AXIS_TAGS rather than its own list: both come from
+ * AI_Instructions/*.md, and two hand-written copies of one fact is how
+ * INTEGRATION_SOURCES fell three providers behind its registry.
+ */
+export const ASSISTANT_TAGS: ReadonlySet<string> = new Set(
+  [...AXIS_TAGS].filter(t => t.endsWith("-response")),
+);
+
+export function isAssistantAuthored(tags: string[]): boolean {
+  return tags.some(t => ASSISTANT_TAGS.has(t.toLowerCase()));
+}
 
 export function topicTagsOf(tags: string[]): Set<string> {
   return new Set(
