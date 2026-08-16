@@ -280,9 +280,16 @@ export async function runInsightAccrual(env: Env, ctx: ExecutionContext): Promis
       });
       if (!eligible) continue;
 
+      const seedTags = parseTags(seed.tags);
+      // Both sides individually clear isInsightEligible above; this is the
+      // pair-level check — two assistant-written notes have no original
+      // between them even when each alone is legitimate seed/neighbour
+      // material. See isEligiblePair's own comment for why.
+      if (!isEligiblePair({ tags: seedTags }, { tags: neighbourTags })) continue;
+
       const seedScorable: ScorableEntry = {
         id: seed.id,
-        tags: parseTags(seed.tags),
+        tags: seedTags,
         importance: seed.importance_score ?? 0,
         createdAt: seed.created_at,
       };

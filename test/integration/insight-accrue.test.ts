@@ -13,12 +13,15 @@
  * a bare `ok: true`, and is gated behind the same auth every other admin
  * route uses.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { handleAdminRoutes } from "../../src/routes/admin";
 import { req } from "../helpers/make-request";
 import { makeInsightFixture, FIXTURE_NOW } from "../helpers/insight-fixture";
-import { resetDatabaseInit } from "../../src/db/init";
-import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
+import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { ACCRUAL_CURSOR_KEY, runInsightAccrual } from "../../src/insight/candidates";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { makeTestEnv, makeVectorizeMock, makeMemoryKV } from "../helpers/make-env";
+import type { Env } from "../../src/env";
 
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
@@ -95,5 +98,93 @@ describe("POST /insights/accrue", () => {
     expect(cursor).not.toBeNull();
 
     fx.sqlite.close();
+  });
+});
+
+/**
+ * runInsightAccrual() itself, against real SQLite rather than the
+ * SQL-matching mock: the question is whether the two-sided authorship rule
+ * (isEligiblePair, src/insight/candidates.ts) actually keeps a pair of
+ * assistant-written memories out of insight_candidates, not just whether it
+ * exists as an exported, unit-tested predicate nothing calls — a mock that
+ * recognises the insert by substring would pass whether or not the guard
+ * runs.
+ */
+async function migrated(): Promise<SqliteD1> {
+  const s = makeSqliteD1();
+  resetDatabaseInit();
+  await initializeDatabase(makeTestEnv(s.db as any));
+  return s;
+}
+
+/**
+ * "a" and "b" as each other's only Vectorize neighbour, at a fixed high
+ * score — similarity and the gap floor are not what these tests are about,
+ * so both are made trivially satisfied and only the pair's authorship
+ * changes between tests.
+ */
+function envOf(s: SqliteD1): Env {
+  return makeTestEnv(s.db as any, {
+    OAUTH_KV: makeMemoryKV(),
+    VECTORIZE: makeVectorizeMock({
+      getByIds: vi.fn().mockImplementation(async (ids: string[]) =>
+        ids.map(id => ({ id, values: new Array(384).fill(0.1) }))),
+      query: vi.fn().mockResolvedValue({
+        matches: [
+          { id: "a", score: 0.99, metadata: { parentId: "a" } },
+          { id: "b", score: 0.99, metadata: { parentId: "b" } },
+        ],
+      }),
+    }),
+  });
+}
+
+const DAY = 86400000;
+
+describe("runInsightAccrual() pair authorship rule", () => {
+  let sq: SqliteD1 | null = null;
+
+  afterEach(() => { sq?.close(); sq = null; });
+
+  it("does not accrue a pair of two assistant-written memories", async () => {
+    sq = await migrated();
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 1000, tags: ["work", "claude-response"], vectorIds: ["a"],
+    });
+    sq.seed({
+      id: "b",
+      content: "Another long enough assistant note about the pricing model, written to clear that same content floor.",
+      createdAt: 1000 + 40 * DAY, tags: ["work", "claude-response"], vectorIds: ["b"],
+    });
+
+    await runInsightAccrual(envOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows).toEqual([]);
+  });
+
+  it("still accrues an assistant note paired with a user memory", async () => {
+    sq = await migrated();
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 1000, tags: ["work", "claude-response"], vectorIds: ["a"],
+    });
+    sq.seed({
+      id: "b",
+      content: "A long enough memory the user wrote about the pricing model themselves, well past the content floor.",
+      createdAt: 1000 + 40 * DAY, tags: ["work", "pricing"], vectorIds: ["b"],
+    });
+
+    await runInsightAccrual(envOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows.length).toBeGreaterThan(0);
   });
 });
