@@ -20,13 +20,21 @@ export function allowedKindsFor(type: EdgeType): readonly MemoryKind[] | null {
   return EDGE_TYPES[type].allowedKinds;
 }
 
-export async function createEdge(
+/**
+ * The INSERT createEdge issues, prepared and bound but not run — so a caller
+ * with several edges to write can hand them all to env.DB.batch(...) as one
+ * subrequest instead of paying one subrequest per createEdge call.
+ *
+ * Symmetric-type reordering and the weight clamp live here, not in createEdge,
+ * so a batched caller gets them too rather than just the direct one.
+ */
+export function edgeInsertStatement(
   sourceId: string,
   targetId: string,
   type: string,
   opts: { weight?: number; provenance?: EdgeProvenance; metadata?: Record<string, unknown>; created_at?: number },
   env: Env,
-): Promise<{ source_id: string; target_id: string; type: EdgeType } | null> {
+): D1PreparedStatement | null {
   if (!isValidEdgeType(type)) return null;
   if (sourceId === targetId) return null;
 
@@ -40,13 +48,29 @@ export async function createEdge(
   const now = Date.now();
   const createdAt = opts.created_at ?? now;
 
-  await env.DB.prepare(
+  return env.DB.prepare(
     `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`
-  ).bind(crypto.randomUUID(), source, target, type, weight, provenance, metadata, createdAt, now).run();
+  ).bind(crypto.randomUUID(), source, target, type, weight, provenance, metadata, createdAt, now);
+}
 
-  return { source_id: source, target_id: target, type };
+export async function createEdge(
+  sourceId: string,
+  targetId: string,
+  type: string,
+  opts: { weight?: number; provenance?: EdgeProvenance; metadata?: Record<string, unknown>; created_at?: number },
+  env: Env,
+): Promise<{ source_id: string; target_id: string; type: EdgeType } | null> {
+  const stmt = edgeInsertStatement(sourceId, targetId, type, opts, env);
+  if (!stmt) return null;
+  await stmt.run();
+
+  let source = sourceId;
+  let target = targetId;
+  if (isValidEdgeType(type) && isSymmetric(type) && source > target) [source, target] = [target, source];
+
+  return { source_id: source, target_id: target, type: type as EdgeType };
 }
 
 export async function deleteEdge(

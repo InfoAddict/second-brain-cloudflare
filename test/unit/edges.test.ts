@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createEdge, inferEdgesOnWrite, isValidEdgeType, isSymmetric, edgeLabel } from "../../src/graph/edges";
+import { createEdge, edgeInsertStatement, inferEdgesOnWrite, isValidEdgeType, isSymmetric, edgeLabel } from "../../src/graph/edges";
 import { expandGraph } from "../../src/graph/traverse";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import type { Env } from "../../src/env";
@@ -88,6 +88,49 @@ describe("createEdge", () => {
   it("preserves a custom created_at on insert", async () => {
     await createEdge("a", "b", "relates_to", { created_at: 42_000 }, env);
     expect(db.edges[0].created_at).toBe(42_000);
+  });
+});
+
+describe("edgeInsertStatement()", () => {
+  let env: Env;
+  let db: D1Mock;
+
+  beforeEach(() => {
+    db = makeTestDb();
+    env = makeTestEnv(db);
+  });
+
+  it("returns a statement instead of running it", () => {
+    const stmt = edgeInsertStatement("a", "b", "drawn_from", { provenance: "system" }, env);
+    expect(stmt).not.toBeNull();
+    // Nothing written until the caller runs or batches it.
+    expect(db.edges).toHaveLength(0);
+  });
+
+  it("refuses an unknown type and a self-edge, exactly as createEdge does", () => {
+    expect(edgeInsertStatement("a", "b", "not_a_type", {}, env)).toBeNull();
+    expect(edgeInsertStatement("a", "a", "drawn_from", {}, env)).toBeNull();
+  });
+
+  it("reorders a symmetric type smaller-id-first, same as createEdge", async () => {
+    const stmt = edgeInsertStatement("zeta", "alpha", "relates_to", {}, env);
+    expect(stmt).not.toBeNull();
+    await stmt!.run();
+    expect(db.edges[0].source_id).toBe("alpha");
+    expect(db.edges[0].target_id).toBe("zeta");
+  });
+
+  it("clamps the weight to [0, 1], same as createEdge", async () => {
+    const stmt = edgeInsertStatement("a", "b", "relates_to", { weight: 5 }, env);
+    await stmt!.run();
+    expect(db.edges[0].weight).toBe(1);
+  });
+
+  it("when run, writes the same row createEdge would", async () => {
+    const stmt = edgeInsertStatement("a", "b", "drawn_from", { provenance: "system", weight: 0.9 }, env);
+    await stmt!.run();
+    expect(db.edges).toHaveLength(1);
+    expect(db.edges[0]).toMatchObject({ source_id: "a", target_id: "b", type: "drawn_from", weight: 0.9, provenance: "system" });
   });
 });
 
