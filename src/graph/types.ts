@@ -9,6 +9,7 @@ export const EDGE_TYPES = {
   about_person:    { directed: true,  label: "About person",    allowedKinds: null },
   part_of_project: { directed: true,  label: "Part of project", allowedKinds: null },
   follows:         { directed: true,  label: "Follows",         allowedKinds: ["episodic"] },
+  drawn_from:      { directed: true,  label: "Drawn from",      allowedKinds: null },
 } as const satisfies Record<string, { directed: boolean; label: string; allowedKinds: readonly MemoryKind[] | null }>;
 
 export type EdgeType = keyof typeof EDGE_TYPES;

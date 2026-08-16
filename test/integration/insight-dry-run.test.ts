@@ -20,7 +20,8 @@ const DAY = 86400000;
 const NOW = 400 * DAY;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
-const GOOD = `{"insight": true, "shape": "contradiction", "text": "You priced the first tier at nine dollars flat, then moved it to usage-based pricing instead."}`;
+const GOOD_TEXT = "You priced the first tier at nine dollars flat, then moved it to usage-based pricing instead.";
+const GOOD = `{"insight": true, "shape": "contradiction", "text": "${GOOD_TEXT}"}`;
 
 function makeAI(payload: string) {
   return {
@@ -42,6 +43,20 @@ function makeAI(payload: string) {
  * `declineTier` is the one candidate that gets refused; everything else is
  * accepted with text that shares vocabulary with its own pair (required by
  * reasonOverPair's sharesVocabulary floor).
+ *
+ * Each accepted tier's text is genuinely distinct wording, not a shared
+ * template with the tier digit swapped in. Before this task, the dry-run
+ * endpoint never called restatesRecent, so a digit-swapped template worked
+ * here by accident. distinctiveTokens (reason.ts) drops a bare digit
+ * entirely — it only matches tokens starting with a letter — so a
+ * template that differs solely by "tier N" is ~100% token-identical across
+ * every tier once tokenised, and now that the dry run applies D2 the same
+ * way the weekly pass does, that template would make every candidate after
+ * the first report as restating the one before it, which is correct
+ * behaviour, not a bug, but would defeat this test's premise of exercising
+ * cap-based ordering rather than restatement suppression. Matches the same
+ * fix test/unit/insight-weekly.test.ts's own "reasons over the
+ * highest-scored candidates first" test needed for the identical reason.
  */
 function makeTieredAI(declineTier: number) {
   const sse = (text: string) => new ReadableStream({
@@ -51,13 +66,21 @@ function makeTieredAI(declineTier: number) {
       c.close();
     },
   });
+  const perTier: Record<number, string> = {
+    0: "The predictable morning subscription rate finally gave way to something that adjusts instead.",
+    1: "Nine separate invoices later, the whole scheme moved toward per-use pricing.",
+    2: "Those dollars used to arrive on a fixed schedule until the team decided to move away from it.",
+    3: "Every month brought the identical bill until usage-based math replaced it entirely.",
+    4: "The price never budged no matter how little you used it, instead of scaling with demand.",
+    5: "A predictable sum landed every cycle before pricing tied to real consumption took its place.",
+  };
   return {
     run: vi.fn().mockImplementation(async (_model: string, opts: any) => {
       const prompt = String(opts?.messages?.[0]?.content ?? "");
       const tier = Number(prompt.match(/tier (\d+)/)?.[1] ?? -1);
       if (tier === declineTier) return sse(`{"insight": false}`);
       return sse(
-        `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`,
+        `{"insight": true, "shape": "contradiction", "text": "${perTier[tier] ?? perTier[0]}"}`,
       );
     }),
   } as unknown as Ai;
@@ -208,6 +231,155 @@ describe("GET /insights/dry-run", () => {
     await call(env, "/insights/dry-run");
 
     expect((ai.run as any).mock.calls[0][0]).toBe("custom-model-for-test");
+  });
+});
+
+describe("GET /insights/dry-run — mirrors what the weekly pass actually enforces", () => {
+  // The Rollout section this endpoint exists for: "Ship behind the existing
+  // admin dry-run endpoint first and compare a run with and without, on the
+  // real brain, before enabling." That comparison is only honest if the
+  // preview suppresses what production suppresses. Before this task, the
+  // dry-run's query selected no tags and never called isEligiblePair or
+  // restatesRecent, so it reported as would-write exactly the candidates
+  // production would refuse.
+  let sqlite: SqliteD1;
+
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    sqlite = makeSqliteD1();
+  });
+
+  afterEach(() => sqlite.close());
+
+  it("never reasons over a pair where both sides are assistant-authored, and reports it as not written", async () => {
+    sqlite.seed({
+      id: "a-1", createdAt: NOW - 120 * DAY, tags: ["work", "claude-response"],
+      content: "Decision: price the first tier flat at nine dollars a month for predictability.",
+    });
+    sqlite.seed({
+      id: "b-1", createdAt: NOW, tags: ["work", "codex-response"],
+      content: "Decision: move the first tier to usage-based billing instead of flat pricing.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('c-1', 'a-1', 'b-1', 0.87, ?, 4.2, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+    const ai = makeAI(GOOD);
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: ai, OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+    });
+
+    const body = await (await call(env, "/insights/dry-run"))!.json() as any;
+
+    expect(body.candidates).toHaveLength(1);
+    expect(body.candidates[0].would_write).toBe(false);
+    expect(body.candidates[0].shape).toBeNull();
+    expect(body.candidates[0].text).toBeNull();
+    // The whole point: no model call spent on a pair D1 refuses outright.
+    const reasoningCalls = (ai.run as any).mock.calls.filter(
+      (c: any) => String(c[1]?.messages?.[0]?.content ?? "").includes("Memory A:"),
+    );
+    expect(reasoningCalls).toHaveLength(0);
+  });
+
+  it("still reports would_write for a pair where only one side is assistant-authored", async () => {
+    // The regression D1's own comment warns against: a blunt exclusion would
+    // destroy this case, which is often the useful kind of insight.
+    sqlite.seed({
+      id: "a-1", createdAt: NOW - 120 * DAY, tags: ["work", "claude-response"],
+      content: "Decision: price the first tier flat at nine dollars a month for predictability.",
+    });
+    sqlite.seed({
+      id: "b-1", createdAt: NOW, tags: ["work"],
+      content: "Decision: move the first tier to usage-based billing instead of flat pricing.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('c-1', 'a-1', 'b-1', 0.87, ?, 4.2, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+    });
+
+    const body = await (await call(env, "/insights/dry-run"))!.json() as any;
+
+    expect(body.candidates[0].would_write).toBe(true);
+  });
+
+  it("reports would_write:false for a candidate that restates an insight already sitting in the queue", async () => {
+    // The spec's own motivating case (weekly.ts's RECENT_INSIGHT_WINDOW
+    // comment): the 2026-08-16 run restated an insight the 2026-08-12 dry run
+    // had already produced, four days earlier — a DIFFERENT run, still
+    // unreviewed. Seeding a pending auto-insight entry with the identical
+    // text and running the dry run against a candidate the model answers the
+    // same way is the direct regression test for that.
+    sqlite.seed({
+      id: "prior-insight", createdAt: NOW - 4 * DAY, tags: ["auto-insight"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    sqlite.seed({
+      id: "a-1", createdAt: NOW - 120 * DAY, tags: ["pricing"],
+      content: "Decision: price the first tier flat at nine dollars a month for predictability.",
+    });
+    sqlite.seed({
+      id: "b-1", createdAt: NOW, tags: ["pricing"],
+      content: "Decision: move the first tier to usage-based billing instead of flat pricing.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('c-1', 'a-1', 'b-1', 0.87, ?, 4.2, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+    });
+
+    const body = await (await call(env, "/insights/dry-run"))!.json() as any;
+
+    // The model DID answer, and the answer is reported (this is the "reasoned
+    // but suppressed" case, distinct from "never reasoned over" above) — but
+    // it must not be marked would_write, because production's restatesRecent
+    // would suppress it exactly the same way.
+    expect(body.candidates).toHaveLength(1);
+    expect(body.candidates[0].outcome).toBe("insight");
+    expect(body.candidates[0].text).toBe(GOOD_TEXT);
+    expect(body.candidates[0].would_write).toBe(false);
+  });
+
+  it("still writes nothing at all when a pair is rejected or a candidate restates a recent insight", async () => {
+    sqlite.seed({
+      id: "prior-insight", createdAt: NOW - 4 * DAY, tags: ["auto-insight"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    sqlite.seed({
+      id: "a-1", createdAt: NOW - 120 * DAY, tags: ["pricing"],
+      content: "Decision: price the first tier flat at nine dollars a month for predictability.",
+    });
+    sqlite.seed({
+      id: "b-1", createdAt: NOW, tags: ["pricing"],
+      content: "Decision: move the first tier to usage-based billing instead of flat pricing.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('c-1', 'a-1', 'b-1', 0.87, ?, 4.2, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(), VECTORIZE: makeVectorizeMock(),
+    });
+
+    await call(env, "/insights/dry-run");
+
+    const insights = await sqlite.db.prepare(
+      `SELECT COUNT(*) AS n FROM entries WHERE tags LIKE '%"auto-insight"%'`,
+    ).first() as { n: number };
+    const status = await sqlite.db.prepare(
+      `SELECT status FROM insight_candidates WHERE id = 'c-1'`,
+    ).first() as { status: string };
+
+    // Only the pre-seeded prior insight, nothing newly written; the dry-run
+    // candidate itself is untouched, still 'pending' — a preview commits no
+    // status change either, unlike the real weekly pass marking it 'used'.
+    expect(insights.n).toBe(1);
+    expect(status.status).toBe("pending");
   });
 });
 

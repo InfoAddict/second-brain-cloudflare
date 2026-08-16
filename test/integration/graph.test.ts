@@ -4,6 +4,7 @@ import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
+import { createEdge } from "../../src/graph/edges";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as any;
 
@@ -103,6 +104,22 @@ describe("GET /graph", () => {
     const data = await res.json() as any;
     expect(data.nodes).toHaveLength(250);
     expect(data.edges).toHaveLength(249);
+  });
+
+  it("returns a drawn_from edge from the graph read", async () => {
+    // Inserted through createEdge — the validated path a writer actually uses —
+    // rather than the raw pushEdge fixture: pushEdge writes straight into
+    // db.edges with no type check, so it would show the edge in the read
+    // whether or not drawn_from is registered and prove nothing about the
+    // registry entry this type depends on.
+    seedEntry(db, "i1", "An insight", ["work"]);
+    seedEntry(db, "m1", "A source memory", ["work"]);
+    const created = await createEdge("i1", "m1", "drawn_from", { provenance: "system" }, env);
+    expect(created).not.toBeNull();
+
+    const res = await worker.fetch(req("GET", "/graph"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.edges.some((e: any) => e.type === "drawn_from")).toBe(true);
   });
 
   it("still honors an explicit ?limit=", async () => {
