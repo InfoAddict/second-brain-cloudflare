@@ -92,6 +92,7 @@ export {
   makeCalendarProvider,
   parseAndExpand,
   buildEventContent,
+  stripConferencingBlock,
   computeCalendarPlan,
   computeRetentionPrune,
   validateCalendarUrl,

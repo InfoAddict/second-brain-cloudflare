@@ -65,11 +65,31 @@ export interface EmailHeaderInfo {
   bulk: boolean;
 }
 
-// Automated senders (broadened): the local-part signals a machine, not a person.
+// A machine label, matched against ONE whole dot-separated piece of the domain.
+//
+// Whole-piece rather than substring on purpose: `notifyhealth.example.com` is a
+// company and `alertsystems.example.com` is a company, and matching a substring
+// would drop a person's mail to keep a receipt out. The optional short prefix
+// covers the `e-notify` / `em-alerts` convention large senders use for their
+// outbound subdomain.
+const MACHINE_DOMAIN_LABEL =
+  /^(?:[a-z0-9]{1,3}-)?(no[-_]?reply|do[-_]?not[-_]?reply|donotreply|notifications?|notify|notices?|alerts?|mailer|mailer-daemon|postmaster|bounces?|newsletters?|updates)$/;
+
+// Automated senders (broadened): the local part OR the domain signals a machine,
+// not a person.
+//
+// The local part alone was not enough. A large sender wants its own brand in the
+// local part and puts the machine marker in the domain instead
+// (`brand@notification.example.com`), so transactional mail walked past this
+// check even though it is as automated as anything the header filter catches.
 export function isNoiseSender(from: string): boolean {
   const addr = (/<([^>]+)>/.exec(from)?.[1] ?? from).toLowerCase();
   const local = (addr.split("@")[0] ?? "").trim();
-  return /(^|[._+-])(no-?reply|do-?not-?reply|donotreply|noreply|notification|notifications|notify|alert|alerts|mailer-daemon|mailer|postmaster|bounce|bounces|newsletter|updates)([._+-]|$)/.test(local);
+  if (/(^|[._+-])(no[-_]?reply|do[-_]?not[-_]?reply|donotreply|noreply|notification|notifications|notify|alert|alerts|mailer-daemon|mailer|postmaster|bounce|bounces|newsletter|updates)([._+-]|$)/.test(local)) {
+    return true;
+  }
+  const domain = (addr.split("@")[1] ?? "").trim();
+  return domain.split(".").some(label => MACHINE_DOMAIN_LABEL.test(label));
 }
 
 // Header markers that reliably indicate bulk / automated / list mail. This is
@@ -115,7 +135,38 @@ function htmlToText(html: string): string {
     .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// Strip quoted reply chains, forwarded headers, and signatures; cap length.
+// Where a machine-generated trailer starts.
+//
+// `looksBulk` filters newsletters and marketing by their headers, but TRANSACTIONAL
+// mail — a payment confirmation, a statement notice — is deliberately built not to
+// look bulk: no List-Unsubscribe (it is not marketing), no Precedence: bulk, and a
+// brand name rather than `noreply` in the local part. So it is ingested by design,
+// and what arrives is one line of fact followed by a few thousand characters of
+// trailer.
+//
+// That trailer is the expensive part, and not because it is long. It is TEMPLATED,
+// so the same sentences repeat across every message from every sender, and once
+// `chunkText` splits a message the trailer gets vectors of its own. A query sharing
+// one ordinary word with it ("choosing") then matches a block of text that carries
+// no information at all. Cutting it costs nothing: everything below these markers
+// is navigation, legal and social boilerplate.
+//
+// Anchored to a line start so prose that merely contains the words survives — an
+// email reading "we are choosing between two vendors" is a fact, not a trailer.
+const TRAILER_MARKERS = [
+  /\n[ \t]*Thank(s|[ \t]+you)[ \t]+for[ \t]+choosing\b/i,
+  /\n[ \t]*Unsubscribe\b/i,
+  /\n[ \t]*Manage[ \t]+(your[ \t]+)?(email[ \t]+)?preferences\b/i,
+  /\n[ \t]*View[ \t]+(this[ \t]+email[ \t]+)?in[ \t]+(your[ \t]+)?browser\b/i,
+  /\n[ \t]*This[ \t]+(email|message)[ \t]+was[ \t]+sent[ \t]+(by|to)\b/i,
+  /\n[ \t]*This[ \t]+is[ \t]+an[ \t]+automated[ \t]+message\b/i,
+  /\n[ \t]*Follow[ \t]+.{0,40}?[ \t]+on[ \t]+(Instagram|X|Twitter|Facebook|LinkedIn|YouTube)\b/i,
+  /\n[ \t]*Download[ \t]+the[ \t]+.{0,40}?[ \t]+app\b/i,
+  /\n[ \t]*(©|\(c\)|Copyright)[ \t]*\d{4}\b/i,
+];
+
+// Strip quoted reply chains, forwarded headers, signatures and machine trailers;
+// cap length.
 export function cleanEmailBody(text: string): string {
   let t = (text || "").replace(/\r\n/g, "\n");
   const cuts = [
@@ -124,6 +175,7 @@ export function cleanEmailBody(text: string): string {
     /\n_{5,}\n/,
     /\nFrom:[ \t].+\n(Sent|Date):[ \t].+/i,
     /\n-{3,}[ \t]*Forwarded message[ \t]*-{3,}/i,
+    ...TRAILER_MARKERS,
   ];
   for (const re of cuts) {
     const m = re.exec(t);

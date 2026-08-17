@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { runInsightAccrual, ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
+import { runInsightAccrual, ACCRUAL_CURSOR_KEY, isEligiblePair } from "../../src/insight/candidates";
 import { scoreCandidate, type ScorableEntry } from "../../src/insight/score";
 import { makeTestEnv, makeVectorizeMock, makeMemoryKV } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -464,5 +464,26 @@ describe("runInsightAccrual()", () => {
       const summary = await runInsightAccrual(makeEnv(sqlite, []), ctx);
       expect(summary).toEqual({ seedsExamined: 0 });
     });
+  });
+});
+
+describe("isEligiblePair()", () => {
+  const assistant = { tags: ["work", "claude-response"] };
+  const user = { tags: ["work", "pricing"] };
+
+  it("rejects two assistant notes, which have no original between them", () => {
+    expect(isEligiblePair(assistant, assistant)).toBe(false);
+  });
+
+  // The case a blunt per-entry exclusion would have destroyed, and the one most
+  // likely to regress: a decision recorded in a session meeting a thought
+  // recorded months earlier is the useful kind of insight.
+  it("allows an assistant note paired with a user memory", () => {
+    expect(isEligiblePair(assistant, user)).toBe(true);
+    expect(isEligiblePair(user, assistant)).toBe(true);
+  });
+
+  it("allows two user memories", () => {
+    expect(isEligiblePair(user, user)).toBe(true);
   });
 });

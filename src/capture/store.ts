@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { CHUNK_MAX_CHARS } from "../constants";
+import { CHUNK_MAX_CHARS, MIRRORED_SOURCES } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
@@ -21,7 +21,20 @@ export async function storeEntry(
   now: number,
   config: Readonly<Config> = DEFAULTS
 ): Promise<string[]> {
-  const chunks = chunkText(content);
+  // A mirrored record is indexed by its first chunk only. `chunkText` splits at
+  // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
+  // an external system produces vectors whose entire content is templated trailer
+  // — navigation, legal and social boilerplate that repeats across every sender.
+  // Those vectors carry no information but still match any query sharing one
+  // ordinary word with them, which is how a payment receipt outranks a memory
+  // about the thing you actually asked. The capture paths already lead with the
+  // parts that identify the record (`buildEmailContent`, `buildEventContent`), so
+  // the first chunk is where the signal is.
+  //
+  // Only the INDEX is truncated. entries.content keeps the whole record, so
+  // nothing is lost to the reader and keyword search still covers all of it.
+  const allChunks = chunkText(content);
+  const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
 
   const vectors = await Promise.all(
     chunks.map(async (chunk, i) => {

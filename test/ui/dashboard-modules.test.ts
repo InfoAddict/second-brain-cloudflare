@@ -5,30 +5,21 @@ import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
+/**
+ * The dashboard's scripts, in the order the page loads them.
+ *
+ * Scraped from index.html rather than listed here. This was a hand-written copy
+ * and it drifted the first time a module was added: the page loaded the new
+ * file, this list did not, and the guard below reported the new file's handlers
+ * as undefined — a failure in the test rather than in the code it guards. The
+ * page is the only thing that decides what a browser actually runs, so it is the
+ * only honest source for this list, and load ORDER matters, which is another
+ * thing a hand-written copy gets to be wrong about silently.
+ */
 const DASHBOARD_SCRIPTS = [
-  "public/js/i18n.js",
-  "public/utils.js",
-  "public/credits.js",
-  "public/js/state.js",
-  "public/js/api.js",
-  "public/js/theme.js",
-  "public/js/ui-chat.js",
-  "public/js/recall.js",
-  "public/js/recent.js",
-  "public/js/remember.js",
-  "public/js/memory-crud.js",
-  "public/js/settings.js",
-  "public/js/patterns.js",
-  "public/js/integrations.js",
-  "public/js/graph-canvas.js",
-  "public/js/brief.js",
-  "public/js/home.js",
-  "public/js/nav.js",
-  "public/js/refresh.js",
-  "public/js/auth.js",
-  "public/js/download-app.js",
-  "public/js/app.js",
-];
+  ...readFileSync(resolve(ROOT, "public/index.html"), "utf8")
+    .matchAll(/<script\s+src="([^"]+)"/g),
+].map(m => `public/${m[1].replace(/^\//, "")}`);
 
 /** Keywords / literals that appear in onclick expressions but are not handlers. */
 const INLINE_CALL_DENYLIST = new Set(["return", "false", "true"]);

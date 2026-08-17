@@ -13,12 +13,15 @@
  * a bare `ok: true`, and is gated behind the same auth every other admin
  * route uses.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { handleAdminRoutes } from "../../src/routes/admin";
 import { req } from "../helpers/make-request";
 import { makeInsightFixture, FIXTURE_NOW } from "../helpers/insight-fixture";
-import { resetDatabaseInit } from "../../src/db/init";
-import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
+import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { ACCRUAL_CURSOR_KEY, runInsightAccrual } from "../../src/insight/candidates";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { makeTestEnv, makeVectorizeMock, makeMemoryKV } from "../helpers/make-env";
+import type { Env } from "../../src/env";
 
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
@@ -95,5 +98,188 @@ describe("POST /insights/accrue", () => {
     expect(cursor).not.toBeNull();
 
     fx.sqlite.close();
+  });
+});
+
+/**
+ * runInsightAccrual() itself, against real SQLite rather than the
+ * SQL-matching mock: the question is whether the two-sided authorship rule
+ * (isEligiblePair, src/insight/candidates.ts) actually keeps a pair of
+ * assistant-written memories out of insight_candidates, not just whether it
+ * exists as an exported, unit-tested predicate nothing calls — a mock that
+ * recognises the insert by substring would pass whether or not the guard
+ * runs.
+ */
+async function migrated(): Promise<SqliteD1> {
+  const s = makeSqliteD1();
+  resetDatabaseInit();
+  await initializeDatabase(makeTestEnv(s.db as any));
+  return s;
+}
+
+/**
+ * "a" and "b" as each other's only Vectorize neighbour, at a fixed high
+ * score — similarity and the gap floor are not what these tests are about,
+ * so both are made trivially satisfied and only the pair's authorship
+ * changes between tests.
+ */
+function envOf(s: SqliteD1): Env {
+  return makeTestEnv(s.db as any, {
+    OAUTH_KV: makeMemoryKV(),
+    VECTORIZE: makeVectorizeMock({
+      getByIds: vi.fn().mockImplementation(async (ids: string[]) =>
+        ids.map(id => ({ id, values: new Array(384).fill(0.1) }))),
+      query: vi.fn().mockResolvedValue({
+        matches: [
+          { id: "a", score: 0.99, metadata: { parentId: "a" } },
+          { id: "b", score: 0.99, metadata: { parentId: "b" } },
+        ],
+      }),
+    }),
+  });
+}
+
+const DAY = 86400000;
+
+describe("runInsightAccrual() pair authorship rule", () => {
+  let sq: SqliteD1 | null = null;
+
+  afterEach(() => { sq?.close(); sq = null; });
+
+  it("does not accrue a pair of two assistant-written memories", async () => {
+    sq = await migrated();
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 1000, tags: ["work", "claude-response"], vectorIds: ["a"],
+    });
+    sq.seed({
+      id: "b",
+      content: "Another long enough assistant note about the pricing model, written to clear that same content floor.",
+      createdAt: 1000 + 40 * DAY, tags: ["work", "claude-response"], vectorIds: ["b"],
+    });
+
+    await runInsightAccrual(envOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows).toEqual([]);
+  });
+
+  it("still accrues an assistant note paired with a user memory", async () => {
+    sq = await migrated();
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 1000, tags: ["work", "claude-response"], vectorIds: ["a"],
+    });
+    sq.seed({
+      id: "b",
+      content: "A long enough memory the user wrote about the pricing model themselves, well past the content floor.",
+      createdAt: 1000 + 40 * DAY, tags: ["work", "pricing"], vectorIds: ["b"],
+    });
+
+    await runInsightAccrual(envOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The same authorship rule against the OTHER accrual path: an explicit
+ * `supersedes` edge (src/mcp/server.ts's `link` tool, POST /graph) rather
+ * than a Vectorize neighbour match. An explicit link never calls
+ * deprecateEntry the way a system-detected contradiction does
+ * (src/capture/entry.ts), so neither side gets tagged status:deprecated and
+ * both can independently clear isInsightEligible — nothing upstream of
+ * candidates.ts's supersedes block stops two assistant-authored entries
+ * from reaching it.
+ *
+ * `filler` exists only so `seeds.length` is non-zero: runInsightAccrual
+ * returns before the supersedes block ever runs if no entry in the window
+ * has a vector (src/insight/candidates.ts, the `!seeds.length` and
+ * `!vectorById.size` early returns). It shares no cluster, tag or edge with
+ * "a"/"b" and the Vectorize mock's `query` is left at its default (no
+ * matches), so it cannot itself produce a candidate — only the supersedes
+ * edge between "a" and "b" can.
+ */
+function supersedesEnvOf(s: SqliteD1): Env {
+  return makeTestEnv(s.db as any, {
+    OAUTH_KV: makeMemoryKV(),
+    VECTORIZE: makeVectorizeMock({
+      getByIds: vi.fn().mockImplementation(async (ids: string[]) =>
+        ids.map(id => ({ id, values: new Array(384).fill(0.1) }))),
+    }),
+  });
+}
+
+function seedFiller(s: SqliteD1) {
+  s.seed({
+    id: "filler",
+    content: "An ordinary entry present only so the accrual window has a vector to examine, well past the content floor.",
+    createdAt: 1000, tags: ["work", "pricing"], vectorIds: ["filler"],
+  });
+}
+
+async function insertSupersedesEdge(s: SqliteD1, sourceId: string, targetId: string) {
+  await s.db.prepare(
+    `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+     VALUES ('edge-explicit', ?, ?, 'supersedes', 1.0, 'explicit', '{}', ?, ?)`,
+  ).bind(sourceId, targetId, 1000, 1000).run();
+}
+
+describe("runInsightAccrual() pair authorship rule — explicit supersedes edges", () => {
+  let sq: SqliteD1 | null = null;
+
+  afterEach(() => { sq?.close(); sq = null; });
+
+  it("does not accrue an explicit supersedes edge between two assistant-written memories", async () => {
+    sq = await migrated();
+    seedFiller(sq);
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 2000, tags: ["work", "claude-response"],
+    });
+    sq.seed({
+      id: "b",
+      content: "Another long enough assistant note about the pricing model, written to clear that same content floor.",
+      createdAt: 2000 + 40 * DAY, tags: ["work", "claude-response"],
+    });
+    await insertSupersedesEdge(sq, "a", "b");
+
+    await runInsightAccrual(supersedesEnvOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows).toEqual([]);
+  });
+
+  it("still accrues an explicit supersedes edge between an assistant note and a user memory", async () => {
+    sq = await migrated();
+    seedFiller(sq);
+    sq.seed({
+      id: "a",
+      content: "A long enough assistant note about the pricing model to clear the content floor for this accrual test case.",
+      createdAt: 2000, tags: ["work", "claude-response"],
+    });
+    sq.seed({
+      id: "b",
+      content: "A long enough memory the user wrote about the pricing model themselves, well past the content floor.",
+      createdAt: 2000 + 40 * DAY, tags: ["work", "pricing"],
+    });
+    await insertSupersedesEdge(sq, "a", "b");
+
+    await runInsightAccrual(supersedesEnvOf(sq), ctx);
+
+    const { results: rows } = await sq.db.prepare(
+      "SELECT a_id, b_id FROM insight_candidates",
+    ).all() as { results: unknown[] };
+    expect(rows.length).toBeGreaterThan(0);
   });
 });

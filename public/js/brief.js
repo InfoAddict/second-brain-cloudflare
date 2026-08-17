@@ -108,7 +108,12 @@ function briefAttention(a) {
     items.push(`<button class="attn" onclick="openMenu()"><i class="ti ti-eye-off"></i>${escHtml(t('brief.attentionUnindexed', { n: a.unindexed }))}</button>`)
   }
   if (a.stale > 0) {
-    items.push(`<button class="attn" onclick="sendSuggestion('${escAttr(t('recall.sugOutOfDate'))}')"><i class="ti ti-clock-exclamation"></i>${escHtml(t('brief.attentionStale', { n: a.stale }))}</button>`)
+    // Opens the queue, not a search. The count is computed from an exact tag
+    // predicate, so the entries behind it are knowable — asking the vector index
+    // for the phrase "what might be out of date" instead returned whichever
+    // memories happened to contain those words, which is never reliably the ones
+    // the number refers to.
+    items.push(`<button class="attn" onclick="openStaleSheet()"><i class="ti ti-clock-exclamation"></i>${escHtml(t('brief.attentionStale', { n: a.stale }))}</button>`)
   }
   if (!items.length) return ''
   return `<div class="brief-attention">${items.join('')}</div>`

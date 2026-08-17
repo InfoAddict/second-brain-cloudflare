@@ -8,7 +8,10 @@ const DAY = 86400000;
 const NOW = 400 * DAY;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
-const GOOD = `{"insight": true, "shape": "contradiction", "text": "You priced that tier at nine dollars flat, then reversed course to usage-based pricing instead."}`;
+// Split out so the cross-run restatement test can seed an already-persisted
+// insight entry with the exact same reasoned text without duplicating it.
+const GOOD_TEXT = "You priced that tier at nine dollars flat, then reversed course to usage-based pricing instead.";
+const GOOD = `{"insight": true, "shape": "contradiction", "text": "${GOOD_TEXT}"}`;
 
 /** The AI mock must serve three callers: embeddings, the classifier inside
  *  captureEntry (streaming SSE), and the reasoning call (also streaming). */
@@ -52,6 +55,11 @@ const statusOf = async (sqlite: SqliteD1, id: string) =>
   ((await sqlite.db.prepare(
     `SELECT status FROM insight_candidates WHERE id = ?`,
   ).bind(id).first()) as { status: string }).status;
+
+const drawnFrom = async (sqlite: SqliteD1) =>
+  ((await sqlite.db.prepare(
+    `SELECT source_id, target_id, provenance FROM edges WHERE type = 'drawn_from'`,
+  ).all()).results) as { source_id: string; target_id: string; provenance: string }[];
 
 const insightCount = async (sqlite: SqliteD1) =>
   ((await sqlite.db.prepare(
@@ -210,6 +218,17 @@ describe("runWeeklyInsights()", () => {
     // so each accepted insight's text is distinct, or captureEntry would block
     // the second and third as duplicates of the first and the test would not
     // be able to tell "read in the right order" apart from "read at all."
+    // Distinct means genuinely distinct wording below, not a shared template
+    // with the tier digit swapped in: distinctiveTokens (reason.ts) drops a
+    // bare digit entirely (it only matches tokens that START with a letter),
+    // and even where it didn't, a single differing word out of nine tokens is
+    // still ~89% overlap. restatesRecent (wired into weekly.ts by this task)
+    // would treat that as the same conclusion restated, collapsing every
+    // candidate after the first into "used" without a genuine write and
+    // reading past the top three by score to compensate for it — defeating
+    // this test's premise. Only tiers 0-2 need to clear both floors (the
+    // vocabulary floor against their own entries, and mutual novelty against
+    // each other) since 3 and 4 must never be reasoned over at all.
     const tiersInInsertionOrder: [tier: number, score: number][] = [
       [3, 6.6], [0, 9.9], [4, 5.5], [1, 8.8], [2, 7.7],
     ];
@@ -240,8 +259,24 @@ describe("runWeeklyInsights()", () => {
         const prompt = String(opts?.messages?.[0]?.content ?? "");
         if (!prompt.includes("Memory A:")) return sse("3");
         const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
+        // Each entry from seed() reads "price tier N flat at nine dollars a
+        // month for predictable billing" / "move tier N to usage-based
+        // billing; flat pricing left money on the table" — the same for every
+        // tier bar the digit distinctiveTokens drops. sharesVocabulary needs
+        // one word from {price, nine, dollars, month, predictable} and one
+        // from {move, usage-based, pricing, left, money, table} in each text
+        // below; restatesRecent needs the three texts to share under 60% of
+        // their OWN distinctive tokens pairwise, which a shared template
+        // cannot give no matter which single word varies.
+        const perTier: Record<string, string> = {
+          "0": "You priced this tier at nine dollars flat, then moved it entirely to usage-based billing.",
+          "1": "This tier's predictable monthly amount got swapped for money tied to actual usage.",
+          "2": "That flat monthly price got left behind once usage-based charges took over.",
+          "3": "A fixed quarterly fee here was dropped in favor of billing that scales with usage.",
+          "4": "The old flat charge on this plan gave way to invoicing based on money actually spent.",
+        };
         return sse(
-          `{"insight": true, "shape": "contradiction", "text": "You priced tier ${tier} at nine dollars flat, then moved tier ${tier} to usage-based pricing instead."}`,
+          `{"insight": true, "shape": "contradiction", "text": "${perTier[tier] ?? perTier["0"]}"}`,
         );
       }),
     } as unknown as Ai;
@@ -282,6 +317,320 @@ describe("runWeeklyInsights()", () => {
 
     expect(await insightCount(sqlite)).toBe(0);
     expect(await statusOf(sqlite, "cand-0")).toBe("pending");
+  });
+
+  it("does not write a second insight that only restates the first", async () => {
+    // Two candidate pairs reasoning to the same text is exactly what a corpus
+    // full of near-duplicates produces: different pairs, one conclusion.
+    // makeAI returns a fixed payload, so both pairs land on identical text —
+    // the strongest form of the case, and the one the Aug 16 run produced in
+    // weaker form. Default VECTORIZE mock returns no matches (make-env.ts), so
+    // captureEntry's own duplicate detection cannot be what blocks the second
+    // write — only restatesRecent can.
+    seedCandidates(sqlite, 2);
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(1);
+    // Used, not rejected: the pair reasoned fine, it just landed where the
+    // reader has already been. Rejected would re-pay for it on a later run.
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+    expect(await statusOf(sqlite, "cand-1")).toBe("used");
+  });
+
+  it("does not write an insight that restates one from an earlier run still in the queue", async () => {
+    // The spec's own motivating case: the 2026-08-16 run restated an insight
+    // the 2026-08-12 dry run had already produced — a DIFFERENT run, still
+    // sitting unreviewed. Within-run tracking alone cannot catch this; the
+    // seed list has to include what a reader would already have seen in the
+    // queue, not just what this run is about to add to it.
+    seedCandidates(sqlite, 1);
+    sqlite.seed({
+      id: "prior-insight", createdAt: NOW - 4 * DAY, tags: ["auto-insight"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // Only the pre-existing insight is present — the pass wrote nothing new.
+    expect(await insightCount(sqlite)).toBe(1);
+    // Used, not rejected, for the same reason as the within-run case: the
+    // pair reasoned fine, it just landed where the reader has already been.
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  // Measured on the real brain the day D2 shipped: the dry run reported ZERO
+  // restatements suppressed, and the queue held ZERO unreviewed insights. The
+  // guard had nothing to compare against, because a reviewer who acts on the
+  // queue empties the very window the guard reads. A diligent reviewer was
+  // switching D2 off.
+  //
+  // Both exits have to stay in the window, and they leave by different doors:
+  // dismiss keeps `auto-insight` and adds `status:deprecated`; confirm STRIPS
+  // `auto-insight` outright (admin.ts, so the entry becomes recallable), which
+  // leaves no tag saying it was ever an insight. What survives confirmation is
+  // the `drawn_from` edges the insight is the source of.
+  it("still compares against an insight the reviewer has dismissed", async () => {
+    seedCandidates(sqlite, 1);
+    sqlite.seed({
+      id: "dismissed-insight", createdAt: NOW - 4 * DAY,
+      tags: ["auto-insight", "status:deprecated"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // Nothing new written: re-proposing something the reviewer already threw
+    // away is the same waste as restating something still in the queue.
+    // Counted as "only the seed survives" rather than insightCount() === 0 —
+    // the dismissed seed keeps its `auto-insight` tag, so it is itself counted.
+    const rows = (await sqlite.db.prepare(
+      `SELECT id FROM entries WHERE tags LIKE '%"auto-insight"%'`,
+    ).all()).results as { id: string }[];
+    expect(rows.map(r => r.id)).toEqual(["dismissed-insight"]);
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("still compares against an insight the reviewer has confirmed", async () => {
+    seedCandidates(sqlite, 1);
+    // Exactly what confirm leaves behind: no `auto-insight` tag at all, plus
+    // the promotion tags. Only its drawn_from edges identify it as an insight.
+    sqlite.seed({
+      id: "confirmed-insight", createdAt: NOW - 4 * DAY,
+      tags: ["kind:semantic", "status:canonical"],
+      content: `${GOOD_TEXT}\n\n[Insight: contradiction — drawn from 2 memories]`,
+    });
+    await sqlite.db.prepare(
+      `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind("e1", "confirmed-insight", "some-source", "drawn_from", 1, "system", "{}", NOW - 4 * DAY, NOW - 4 * DAY).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // A confirmed insight is a real recallable memory now. Writing it again is
+    // pure duplication — the worst of the three cases, not the most forgivable.
+    expect(await insightCount(sqlite)).toBe(0);
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("does not treat an ordinary memory as a recent insight", async () => {
+    // The window must widen to reach confirmed insights without swallowing the
+    // whole corpus — every memory would otherwise become a restatement target.
+    seedCandidates(sqlite, 1);
+    sqlite.seed({
+      id: "ordinary", createdAt: NOW - 4 * DAY, tags: ["work", "pricing"],
+      content: GOOD_TEXT,
+    });
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(1);
+  });
+
+  it("records the two memories an insight was drawn from", async () => {
+    seedCandidates(sqlite, 1); // seeds candidate cand-0 over entries a-0 and b-0
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    const edges = await drawnFrom(sqlite);
+    expect(edges).toHaveLength(2);
+    expect(edges.map(e => e.target_id).sort()).toEqual(["a-0", "b-0"]);
+    expect(new Set(edges.map(e => e.source_id)).size).toBe(1);
+    expect(edges.every(e => e.provenance === "system")).toBe(true);
+  });
+
+  it("records nothing for an insight that was not stored", async () => {
+    // captureEntry declines when duplicate detection blocks the write — the
+    // same technique "marks a duplicate-blocked candidate used, not
+    // rejected, and writes nothing" above uses to force a non-`stored`
+    // result deterministically (a VECTORIZE match scored above the block
+    // threshold), rather than relying on restatesRecent, which never reaches
+    // captureEntry at all and so cannot exercise this branch. An edge from
+    // an entry that was never created would be a dangling row every later
+    // reader has to defend against.
+    seedCandidates(sqlite, 1);
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any,
+      AI: makeAI(GOOD),
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [{ id: "existing", score: 0.99, metadata: {} }] }),
+      }),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(0);
+    expect(await drawnFrom(sqlite)).toHaveLength(0);
+  });
+
+  it("does not reason over a candidate whose pair is both assistant-authored, and marks it used", async () => {
+    // D1 (isEligiblePair, src/insight/candidates.ts) is wired in at accrual —
+    // this pins that the WEEKLY DRAW applies it too, not just accrual. Every
+    // candidate accrued before that guard existed is still sitting in the
+    // pool under the old rule, so without this check the weekly pass would
+    // keep drawing and reasoning over exactly the pairs D1 exists to refuse.
+    // Both sides carry the assistant-authored axis tag, and nothing else in
+    // this candidate's shape (score, gap, content) is what should block it —
+    // only the tag combination.
+    sqlite.seed({
+      id: "a-0", createdAt: NOW - 120 * DAY, tags: ["work", "claude-response"],
+      content: "Decision: price tier 0 flat at nine dollars a month for predictable billing.",
+    });
+    sqlite.seed({
+      id: "b-0", createdAt: NOW, tags: ["work", "codex-response"],
+      content: "Decision: move tier 0 to usage-based billing; flat pricing left money on the table.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('cand-0', 'a-0', 'b-0', 0.87, ?, 9.9, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+    const ai = makeAI(GOOD);
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: ai, OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    // Never reasoned over: the only AI.run calls left are embeddings, none of
+    // which carry the reasoning prompt's distinguishing "Memory A:" string.
+    const reasoningCalls = (ai.run as any).mock.calls.filter(
+      (c: any) => String(c[1]?.messages?.[0]?.content ?? "").includes("Memory A:"),
+    );
+    expect(reasoningCalls).toHaveLength(0);
+    expect(await insightCount(sqlite)).toBe(0);
+    // Used, not pending and not rejected: re-accrual would just re-insert the
+    // exact same pair (ON CONFLICT DO NOTHING is keyed on a_id/b_id), so a
+    // pending or rejected status here would have the pass re-discover and
+    // re-skip this pair forever rather than paying for it once.
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("still reasons over a pair where only one side is assistant-authored", async () => {
+    // The case a blunt per-entry exclusion would have destroyed, and the one
+    // the spec calls out as most likely to regress (D1's own comment,
+    // src/insight/candidates.ts): an assistant's note connected to something
+    // the user wrote is a legitimate insight, so the weekly draw must not
+    // reject this pair the way it rejects two assistant notes.
+    sqlite.seed({
+      id: "a-0", createdAt: NOW - 120 * DAY, tags: ["work", "claude-response"],
+      content: "Decision: price tier 0 flat at nine dollars a month for predictable billing.",
+    });
+    sqlite.seed({
+      id: "b-0", createdAt: NOW, tags: ["work"],
+      content: "Decision: move tier 0 to usage-based billing; flat pricing left money on the table.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('cand-0', 'a-0', 'b-0', 0.87, ?, 9.9, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: makeAI(GOOD), OAUTH_KV: makeMemoryKV(),
+    });
+
+    await runWeeklyInsights(env, ctx);
+
+    expect(await insightCount(sqlite)).toBe(1);
+    expect(await statusOf(sqlite, "cand-0")).toBe("used");
+  });
+
+  it("logs one structured line counting candidates reasoned, declined, restatement-suppressed and written", async () => {
+    // Spec D2: "D2 is instrumented to make that measurable — if it starts
+    // rejecting often, the corpus is telling us D3 is due." Nothing recorded
+    // it before this. Four candidates by score (10, 9, 8, 7), each exercising
+    // a different outcome so the four counters can't be satisfied by
+    // coincidence:
+    //  - cand-0 (tier 0): accepted and written.
+    //  - cand-1 (tier 1): the model declines it.
+    //  - cand-2 (tier 2): accepted by the model, but its text is
+    //    byte-identical to cand-0's, so restatesRecent suppresses it.
+    //  - cand-3: both sides assistant-authored — D1 (this task's FIX 3)
+    //    rejects the pair before reasonOverPair is ever called, so it must
+    //    NOT inflate "candidates reasoned".
+    const TIER0_TEXT = "You priced this tier at nine dollars flat, then moved it entirely to usage-based billing.";
+    const tieredAI = {
+      run: vi.fn().mockImplementation(async (model: string, opts: any) => {
+        const sse = (text: string) => new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(text)}}\n\n`));
+            c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+            c.close();
+          },
+        });
+        if (model === "@cf/baai/bge-small-en-v1.5") return { data: [new Array(384).fill(0.1)] };
+        const prompt = String(opts?.messages?.[0]?.content ?? "");
+        if (!prompt.includes("Memory A:")) return sse("3");
+        const tier = prompt.match(/tier (\d+)/)?.[1] ?? "0";
+        if (tier === "1") return sse(`{"insight": false}`);
+        if (tier === "2") {
+          return sse(`{"insight": true, "shape": "contradiction", "text": ${JSON.stringify(TIER0_TEXT)}}`);
+        }
+        return sse(`{"insight": true, "shape": "contradiction", "text": ${JSON.stringify(TIER0_TEXT)}}`);
+      }),
+    } as unknown as Ai;
+
+    for (const tier of [0, 1, 2]) {
+      sqlite.seed({
+        id: `a-${tier}`, createdAt: NOW - 120 * DAY, tags: ["pricing"],
+        content: `Decision: price tier ${tier} flat at nine dollars a month for predictable billing.`,
+      });
+      sqlite.seed({
+        id: `b-${tier}`, createdAt: NOW, tags: ["pricing"],
+        content: `Decision: move tier ${tier} to usage-based billing; flat pricing left money on the table.`,
+      });
+      sqlite.db.prepare(
+        `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+         VALUES (?, ?, ?, 0.87, ?, ?, 'vector', 'pending', ?)`,
+      ).bind(`cand-${tier}`, `a-${tier}`, `b-${tier}`, 120 * DAY, 10 - tier, NOW).run();
+    }
+    sqlite.seed({
+      id: "a-3", createdAt: NOW - 120 * DAY, tags: ["work", "claude-response"],
+      content: "Decision: price tier 3 flat at nine dollars a month for predictable billing.",
+    });
+    sqlite.seed({
+      id: "b-3", createdAt: NOW, tags: ["work", "codex-response"],
+      content: "Decision: move tier 3 to usage-based billing; flat pricing left money on the table.",
+    });
+    sqlite.db.prepare(
+      `INSERT INTO insight_candidates (id, a_id, b_id, similarity, gap_ms, score, signal, status, created_at)
+       VALUES ('cand-3', 'a-3', 'b-3', 0.87, ?, 7, 'vector', 'pending', ?)`,
+    ).bind(120 * DAY, NOW).run();
+
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as any, AI: tieredAI, OAUTH_KV: makeMemoryKV(),
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await runWeeklyInsights(env, ctx);
+
+    const insightLogs = logSpy.mock.calls.filter(c => String(c[0]).includes("insight"));
+    expect(insightLogs).toHaveLength(1);
+    const [, payload] = insightLogs[0];
+    expect(payload).toMatchObject({
+      candidatesReasoned: 3,
+      declinedByModel: 1,
+      restatementsSuppressed: 1,
+      written: 1,
+    });
+    logSpy.mockRestore();
   });
 
   it("does not throw when the pass fails", async () => {

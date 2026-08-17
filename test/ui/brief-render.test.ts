@@ -263,4 +263,20 @@ describe("the daily brief", () => {
     expect(html).toContain("2 not searchable");
     expect(html).toContain("5 may be out of date");
   });
+
+  // The count comes from an exact tag predicate, so the entries behind it are
+  // knowable exactly. This chip used to fire a free-text recall for the phrase
+  // "What might be out of date?" — a vector search that returns the flagged
+  // entries only by coincidence. On a real brain it answered with two memories
+  // that merely contained the words, and said outright that it could not tell
+  // what was out of date. It opens the queue now.
+  it("opens the review queue from the out-of-date chip rather than searching for the phrase", () => {
+    const ctx = load();
+    ctx.renderBrief({ ...empty, attention: { unindexed: 0, stale: 1, patterns: 0 } });
+
+    const html = ctx.__els.get("brief").innerHTML;
+    expect(html).toContain("1 may be out of date");
+    expect(html).toContain("openStaleSheet()");
+    expect(html).not.toContain("sendSuggestion");
+  });
 });
