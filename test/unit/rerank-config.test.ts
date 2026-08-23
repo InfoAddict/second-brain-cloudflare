@@ -18,6 +18,22 @@ function match(id: string, score: number, tags: string[], createdAt = OLD): Vect
 }
 
 describe("rerankWithTimeDecay() config threading", () => {
+  it("can exclude recall frequency for graph roots without changing the default", () => {
+    const old = Date.now() - 365 * 24 * 60 * 60 * 1000;
+    const matches = [
+      { id: "popular", score: 0.7, metadata: { parentId: "popular", created_at: old, tags: [] } },
+      { id: "specific", score: 0.8, metadata: { parentId: "specific", created_at: old, tags: [] } },
+    ];
+    const counts = new Map([["popular", 100], ["specific", 0]]);
+    const direct = rerankWithTimeDecay(matches, counts, new Map(), [], new Map(), new Map(), new Map(), DEFAULTS);
+    const roots = rerankWithTimeDecay(
+      matches, counts, new Map(), [], new Map(), new Map(), new Map(), DEFAULTS,
+      { useRecallFrequency: false },
+    );
+    expect(direct[0].id).toBe("popular");
+    expect(roots[0].id).toBe("specific");
+  });
+
   it("applies the volatile floor from the passed config to an aged task", async () => {
     const matches = [match("t", 1.0, ["task"])];
 

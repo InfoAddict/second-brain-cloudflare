@@ -77,7 +77,7 @@ function withD1Limits(
 const exprDepth = (sql: string) => sql.split(/\s+OR\s+/i).length + 1;
 
 const keywordStatements = (executed: Executed[]) =>
-  executed.filter(e => e.sql.includes("FROM entries WHERE content LIKE"));
+  executed.filter(e => /FROM entries WHERE \(?content LIKE/.test(e.sql));
 
 const hydrationStatements = (executed: Executed[]) =>
   executed.filter(e => e.sql.includes("created_at, updated_at FROM entries WHERE id IN"));
@@ -104,6 +104,30 @@ describe("recall stays inside D1's statement limits", () => {
     });
 
   describe("the keyword clause, on an empty brain (#276)", () => {
+    it("scopes both existing candidate reads to one explicit date", async () => {
+      const day = new Date(2026, 7, 17).getTime();
+      sqlite.seed({ id: "in-range", content: "quartz ledger record", createdAt: day + 1 });
+      sqlite.seed({ id: "out-of-range", content: "quartz ledger record", createdAt: day + 86400000 + 1 });
+      const env = envWith(undefined, {
+        VECTORIZE: makeVectorizeMock({ query: vi.fn().mockRejectedValue(new Error("index unavailable")) }),
+      });
+
+      const result = await recallEntries({
+        query: "quartz ledger on August 17",
+        topK: 5,
+        hops: 0,
+        synthesize: false,
+      }, env, ctx);
+
+      expect(result.matches.map(match => match.id)).toEqual(["in-range"]);
+      const frequency = executed.find(entry => entry.sql.includes("SUM(CASE WHEN content LIKE"));
+      const keyword = keywordStatements(executed)[0];
+      expect(frequency?.sql).toContain("WHERE created_at >= ? AND created_at < ?");
+      expect(keyword.sql).toContain("AND created_at >= ? AND created_at < ?");
+      expect(frequency?.params.slice(-2)).toEqual([day, day + 86400000]);
+      expect(keyword.params.slice(-3, -1)).toEqual([day, day + 86400000]);
+    });
+
     it("answers a 120-word query with no memories stored", async () => {
       const res = await worker.fetch(
         req("GET", `/recall?query=${encodeURIComponent(LONG_QUERY)}`),
@@ -156,9 +180,10 @@ describe("recall stays inside D1's statement limits", () => {
         ctx,
       );
       expect(long.status).toBe(200);
-      // Distillation can rank terms again, so the keyword arm sees three of them
-      // plus the row limit — the cap is a backstop, not the narrowing.
-      expect(keywordStatements(executed)[0].params.length).toBe(4);
+      // Distillation still puts its three rarest terms first, while bounded
+      // retrieval anchors use the remainder of the existing 16-token budget.
+      // The final parameter remains the row limit.
+      expect(keywordStatements(executed)[0].params.length).toBe(17);
 
       executed.length = 0;
       const short = await worker.fetch(req("GET", "/recall?query=topic0"), env, ctx);
@@ -169,11 +194,9 @@ describe("recall stays inside D1's statement limits", () => {
   });
 
   describe("the hydration id list", () => {
-    // Today this list cannot outgrow one statement: the route and the MCP tool
-    // both clamp topK to 20, and expandGraph stops at GRAPH_MAX_NODES (50), so
-    // the worst case is 70 ids. recallEntries itself does not clamp, so calling
-    // it directly is the honest way to ask what the query does when the list
-    // does outgrow one statement — which is one constant in another file away.
+    // Direct recall can exceed the public topK cap when recallEntries is called
+    // internally, while graph-aware recall can hydrate 50 candidate roots plus
+    // 50 expanded nodes. Both paths must leave room for shared filter bindings.
     const N = 150;
     const ids = Array.from({ length: N }, (_, i) => `e${i}`);
 
@@ -236,6 +259,42 @@ describe("recall stays inside D1's statement limits", () => {
       const hydration = hydrationStatements(executed);
       expect(hydration.map(h => h.params.length)).toEqual([100, 54]);
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
+    });
+
+    it("chunks the maximum graph-root plus expanded-node union with tag and time filters", async () => {
+      const roots = Array.from({ length: 50 }, (_, i) => `root-${i}`);
+      const neighbors = Array.from({ length: 50 }, (_, i) => `neighbor-${i}`);
+      for (const [i, id] of roots.entries()) {
+        sqlite.seed({ id, content: `topic0 decision root ${i}`, createdAt: 1000 + i, tags: ["work"], vectorIds: [`v-${id}`] });
+        sqlite.seed({ id: neighbors[i], content: `linked evidence ${i}`, createdAt: 1000 + i, tags: ["work"] });
+        await sqlite.db.prepare(
+          `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(`edge-${i}`, id, neighbors[i], "decided", 1, "explicit", "{}", 1, 1).run();
+      }
+      const env = envWith(undefined, {
+        VECTORIZE: makeVectorizeMock({
+          getByIds: vi.fn(async (ids: string[]) => ids.map(id => ({
+            id,
+            values: new Array(384).fill(0.1),
+            metadata: { parentId: id.replace(/^v-/, "") },
+          }))),
+        }),
+      });
+
+      const { matches } = await recallEntries(
+        { query: "topic0", topK: 20, tag: "work", hops: 1, after: 900, before: 2000, synthesize: false },
+        env,
+        ctx,
+      );
+
+      expect(matches).toHaveLength(20);
+      expect(new Set(matches.map(m => m.id)).size).toBe(20);
+      const hydration = hydrationStatements(executed);
+      expect(hydration.map(h => h.params.length)).toEqual([100, 6]);
+      expect(hydration.every(h => h.params.includes('%"work"%'))).toBe(true);
+      expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
+      expect(executed.length).toBeLessThanOrEqual(30);
     });
   });
 });

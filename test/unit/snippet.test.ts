@@ -6,6 +6,7 @@ import {
   FULL_MATCH_MAX_CHARS,
   RECALL_FULL_MATCHES,
   SNIPPET_MAX_CHARS,
+  queryRelevantWindow,
 } from "../../src/recall/snippet";
 
 // The cost of the truncation note itself, mirrored from snippet.ts. A memory
@@ -123,6 +124,16 @@ describe("allowanceFor", () => {
   it("withholds the large allowance from a leading match that is much weaker than the top hit", () => {
     // Rank alone is not relevance: a distant second should not eat the budget.
     expect(allowanceFor(1, 0.2)).toBe(SNIPPET_MAX_CHARS);
+  });
+});
+
+describe("queryRelevantWindow", () => {
+  it("drops a partial leading word when a nonzero window starts inside it", () => {
+    const content = `${"x".repeat(100)} alpha beta ${"noise ".repeat(100)}`;
+    const window = queryRelevantWindow(content, ["alpha", "beta"]);
+
+    expect(window).toMatch(/^alpha beta /);
+    expect(window.length).toBeLessThanOrEqual(400);
   });
 });
 

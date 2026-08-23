@@ -4,6 +4,7 @@ node_modules/
 coverage/
 .wrangler/
 .wrangler-dry-run/
+.worktrees/
 docs/
 !docs/dashboard-architecture.md
 .claude/

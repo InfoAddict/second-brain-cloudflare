@@ -10,6 +10,10 @@ export interface VectorizeMatch {
   values?: number[] | Float32Array | Float64Array;
 }
 
+export interface RerankOptions {
+  useRecallFrequency?: boolean;
+}
+
 // Recency-decay floors: the minimum fraction of its semantic relevance a memory
 // keeps regardless of age (applied in rerankWithTimeDecay). Because decay now
 // bottoms out at a floor instead of exp()-ing toward zero, recency becomes a
@@ -63,7 +67,8 @@ export function rerankWithTimeDecay(
   d1Tags: Map<string, string[]> = new Map(),
   // Ranking seam: config in, ordering out. Threaded rather than read from
   // module scope so this stays pure and directly assertable without an env.
-  config: Readonly<Config> = DEFAULTS
+  config: Readonly<Config> = DEFAULTS,
+  options: Readonly<RerankOptions> = {},
 ): VectorizeMatch[] {
   const now = Date.now();
 
@@ -82,7 +87,7 @@ export function rerankWithTimeDecay(
 
       const recencyFloor = getRecencyFloor(tags, imp, config);
       const recencyMultiplier = recencyFloor + (1 - recencyFloor) * Math.exp(-ageMs / halfLifeMs);
-      const frequencyMultiplier = 1 + Math.log1p(rc);
+      const frequencyMultiplier = options.useRecallFrequency === false ? 1 : 1 + Math.log1p(rc);
       const combinedMultiplier = Math.min(1.0, recencyMultiplier * frequencyMultiplier);
       const isShortAppend = match.id.includes("-update-") &&
         typeof meta?.content === "string" && meta.content.length < CHUNK_OVERLAP_CHARS;

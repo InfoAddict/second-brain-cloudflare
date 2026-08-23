@@ -432,11 +432,19 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, recall_count, importance_score") && s.includes("WHERE id IN")) {
+        if (s.includes("recall_count, importance_score") && s.includes("WHERE id IN")) {
+          const includesContent = s.startsWith("SELECT id, content,");
+          const includesHydrationFields = s.startsWith("SELECT id, content, source, created_at, COALESCE(updated_at, created_at) AS last_updated,");
           const results = db.entries
             .filter((e: any) => args.includes(e.id))
             .map((e: any) => ({
               id: e.id,
+              ...(includesContent ? { content: e.content } : {}),
+              ...(includesHydrationFields ? {
+                source: e.source,
+                created_at: e.created_at,
+                last_updated: e.updated_at ?? e.created_at,
+              } : {}),
               recall_count: e.recall_count ?? 0,
               importance_score: e.importance_score ?? 0,
               contradiction_wins: e.contradiction_wins ?? 0,
@@ -495,6 +503,9 @@ export class D1Mock {
           const rest = args.slice(idCount);
           let argIdx = 0;
           const kindMatch = s.match(/tags LIKE '%"(kind:(?:episodic|semantic))"%'/);
+          const explicitTag = s.includes("tags LIKE ?")
+            ? tagFromLikePattern(String(rest[argIdx++]))
+            : null;
           // Unconditional exclusion, not derived from `s` — see the note above the
           // first such check in this file.
           let rows = db.entries.filter((e: any) => {
@@ -503,6 +514,7 @@ export class D1Mock {
             if (tags.includes("auto-pattern")) return false;
             if (tags.includes("auto-insight")) return false;
             if (s.includes('"status:deprecated"') && tags.includes("status:deprecated")) return false;
+            if (explicitTag !== null && !tagMatchesLike(tags, explicitTag)) return false;
             if (kindMatch && !tags.includes(kindMatch[1])) return false;
             return true;
           });

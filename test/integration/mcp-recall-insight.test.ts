@@ -74,6 +74,9 @@ describe("recall insight synthesis: MCP skips it, HTTP keeps it", () => {
     // No server-side insight: the MCP client synthesizes with its own model.
     expect(text).not.toContain("**Insight:**");
     expect(insightCalls(env)).toHaveLength(0);
+    for (const privateField of ["denseIds", "keywordIds", "operations", "eligibleRelatedIds", "finalIds"]) {
+      expect(text).not.toContain(privateField);
+    }
   });
 
   it("recallEntries with synthesize:false returns an empty insight without calling the LLM", async () => {

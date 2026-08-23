@@ -5,6 +5,33 @@ const NOW = new Date("2026-05-20T12:00:00.000Z").getTime();
 const DAY = 86400000;
 
 describe("parseTimePhrase", () => {
+  it("turns one explicit month and day into an exact one-day range", () => {
+    const r = parseTimePhrase("why was the quartz record revised on August 17", NOW);
+    expect(r).toEqual({
+      after: new Date(2026, 7, 17).getTime(),
+      before: new Date(2026, 7, 18).getTime(),
+      cleanQuery: "why was the quartz record revised",
+    });
+  });
+
+  it("honors an explicit year and removes adjacent punctuation", () => {
+    const r = parseTimePhrase("quartz record, August 17, 2024?", NOW);
+    expect(r).toEqual({
+      after: new Date(2024, 7, 17).getTime(),
+      before: new Date(2024, 7, 18).getTime(),
+      cleanQuery: "quartz record?",
+    });
+  });
+
+  it("does not hard-filter comparisons containing multiple explicit dates", () => {
+    const query = "why did the quartz record move from June 3 to May 31";
+    expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+  });
+
+  it("rejects invalid explicit calendar dates", () => {
+    const query = "quartz record on February 31";
+    expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+  });
   it("parses 'last 7 days'", () => {
     const r = parseTimePhrase("notes from last 7 days", NOW);
     expect(r.after).toBeCloseTo(NOW - 7 * DAY, -4);

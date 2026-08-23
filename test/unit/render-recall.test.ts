@@ -75,6 +75,27 @@ describe("renderRecallText", () => {
       expect(out.length).toBeLessThan(20000);
     });
 
+    it("keeps graph-aware recall with provenance inside the configured 12k budget", () => {
+      const matches = [
+        ...Array.from({ length: 4 }, (_, i) => m({ id: `direct-${i}`, content: "direct evidence ".repeat(500) })),
+        m({
+          id: "linked-answer",
+          content: "linked causal evidence ".repeat(500),
+          hop: 1,
+          viaFrom: "candidate-root",
+          viaType: "decided",
+          viaProvenance: "explicit",
+          viaLinkedAt: 1700000000000,
+        }),
+      ];
+
+      const out = renderRecallText(matches, "");
+
+      expect(out.length).toBeLessThanOrEqual(12000);
+      expect(out).toContain("ID: linked-answer");
+      expect(out).toContain("[related · you linked");
+    });
+
     it("always returns at least one match even when that match alone is huge", () => {
       const out = renderRecallText([m({ id: "only", content: "z".repeat(80000) })], "");
       expect(out).toContain("ID: only");

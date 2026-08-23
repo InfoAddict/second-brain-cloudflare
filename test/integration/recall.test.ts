@@ -57,6 +57,24 @@ describe("GET /recall", () => {
     expect(data.error).toBe("query is required");
   });
 
+  it("never exposes internal candidate diagnostics in the HTTP response", async () => {
+    db.entries.push(
+      { id: "entry-1", content: "Atlas ledger decision", tags: "[]", source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 },
+    );
+    env = makeTestEnv(db, {
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [makeMatch("entry-1", .9)] }),
+      }),
+    });
+
+    const res = await worker.fetch(req("GET", "/recall?query=atlas&hops=1"), env, ctx);
+    const body = JSON.stringify(await res.json());
+
+    for (const privateField of ["denseIds", "keywordIds", "operations", "eligibleRelatedIds", "finalIds"]) {
+      expect(body).not.toContain(privateField);
+    }
+  });
+
   it("returns an empty result set with a message when nothing matches", async () => {
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [] }) }),

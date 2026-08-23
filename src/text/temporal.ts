@@ -42,5 +42,34 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
     }
   }
 
+  const monthNumber: Record<string, number> = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  };
+  const explicit = /\b(?:on\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,\s*(\d{4}))?\b/gi;
+  const valid = [...query.matchAll(explicit)].filter(match => {
+    const year = match[3] ? Number(match[3]) : d.getFullYear();
+    const month = monthNumber[match[1].toLowerCase().slice(0, 3)];
+    const day = Number(match[2]);
+    const candidate = new Date(year, month, day);
+    return candidate.getFullYear() === year
+      && candidate.getMonth() === month
+      && candidate.getDate() === day;
+  });
+  if (valid.length === 1) {
+    const match = valid[0];
+    const year = match[3] ? Number(match[3]) : d.getFullYear();
+    const month = monthNumber[match[1].toLowerCase().slice(0, 3)];
+    const day = Number(match[2]);
+    const after = new Date(year, month, day).getTime();
+    const cleanQuery = query
+      .replace(match[0], "")
+      .replace(/,\s*(?=[?!.,;:]|$)/g, "")
+      .replace(/\s+/g, " ")
+      .replace(/\s+([?!.,;:])/g, "$1")
+      .trim() || query;
+    return { after, before: new Date(year, month, day + 1).getTime(), cleanQuery };
+  }
+
   return { cleanQuery: query };
 }

@@ -18,9 +18,9 @@ import { D1Mock } from "../helpers/d1-mock";
 
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
-function seed(db: D1Mock, id: string) {
+function seed(db: D1Mock, id: string, content = id) {
   db.entries.push({
-    id, content: id, tags: "[]", source: "api", created_at: 1000,
+    id, content, tags: "[]", source: "api", created_at: 1000,
     vector_ids: "[]", recall_count: 0, importance_score: 0,
   });
 }
@@ -35,6 +35,14 @@ function env(db: D1Mock, overrides?: Record<string, unknown>) {
   const kv = makeMemoryKV();
   if (overrides) kv.put(CONFIG_KEY, JSON.stringify(overrides));
   return makeTestEnv(db, {
+    DB: {
+      prepare: (sql: string) => {
+        if (sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT")) {
+          return { bind: () => ({ all: async () => ({ results: [] }) }) };
+        }
+        return db.prepare(sql);
+      },
+    } as unknown as D1Database,
     OAUTH_KV: kv,
     VECTORIZE: makeVectorizeMock({
       query: vi.fn().mockResolvedValue({
@@ -48,7 +56,7 @@ describe("DEFAULT_HOPS (#246 connections control)", () => {
   let db: D1Mock;
   beforeEach(() => {
     db = makeTestDb();
-    seed(db, "seed"); seed(db, "neighbor");
+    seed(db, "seed", "topic seed"); seed(db, "neighbor", "topic neighbor");
     edge(db, "seed", "neighbor");
   });
 
@@ -57,24 +65,24 @@ describe("DEFAULT_HOPS (#246 connections control)", () => {
   });
 
   it("follows connections when the user raises the default and the caller says nothing", async () => {
-    const res = await recallEntries({ query: "x", topK: 5 }, env(db, { DEFAULT_HOPS: 1 }), ctx);
+    const res = await recallEntries({ query: "topic neighbor", topK: 5 }, env(db, { DEFAULT_HOPS: 1 }), ctx);
     expect(res.matches.map(m => m.id)).toContain("neighbor");
   });
 
   it("returns direct matches only under the shipped default", async () => {
-    const res = await recallEntries({ query: "x", topK: 5 }, env(db), ctx);
+    const res = await recallEntries({ query: "topic neighbor", topK: 5 }, env(db), ctx);
     expect(res.matches.map(m => m.id)).not.toContain("neighbor");
   });
 
   // The property that protects MCP clients: an explicit request wins over the
   // stored preference, including an explicit 0.
   it("lets an explicit hops:0 from the caller override a raised default", async () => {
-    const res = await recallEntries({ query: "x", topK: 5, hops: 0 }, env(db, { DEFAULT_HOPS: 2 }), ctx);
+    const res = await recallEntries({ query: "topic neighbor", topK: 5, hops: 0 }, env(db, { DEFAULT_HOPS: 2 }), ctx);
     expect(res.matches.map(m => m.id)).not.toContain("neighbor");
   });
 
   it("lets an explicit hops:1 win when the default is 0", async () => {
-    const res = await recallEntries({ query: "x", topK: 5, hops: 1 }, env(db), ctx);
+    const res = await recallEntries({ query: "topic neighbor", topK: 5, hops: 1 }, env(db), ctx);
     expect(res.matches.map(m => m.id)).toContain("neighbor");
   });
 
@@ -89,14 +97,17 @@ describe("DEFAULT_HOPS (#246 connections control)", () => {
     // other two, so this asserts the end-to-end property rather than any one
     // implementation — verified by mutation: it only goes red when all three are
     // removed together, and it does go red then.
-    for (const id of ["h1", "h2", "h3", "h4"]) seed(db, id);
+    seed(db, "h1");
+    seed(db, "h2");
+    seed(db, "h3", "topic neighbor h3");
+    seed(db, "h4", "topic h4");
     edge(db, "seed", "h1");
     edge(db, "h1", "h2");
     edge(db, "h2", "h3");
     edge(db, "h3", "h4");
 
     // topK is generous so the assertion is about traversal depth, not truncation.
-    const res = await recallEntries({ query: "x", topK: 50 }, env(db, { DEFAULT_HOPS: 99 }), ctx);
+    const res = await recallEntries({ query: "topic neighbor", topK: 50 }, env(db, { DEFAULT_HOPS: 99 }), ctx);
     const ids = res.matches.map(m => m.id);
 
     expect(ids).toContain("h3");

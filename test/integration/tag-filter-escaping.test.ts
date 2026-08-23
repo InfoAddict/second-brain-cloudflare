@@ -138,15 +138,21 @@ describe("tag-scoped recall candidate query", () => {
       exec: (sql: string) => db.exec(sql),
       batch: (stmts: any[]) => db.batch(stmts),
     } as unknown as D1Database;
-    const env = makeTestEnv(db, { DB });
+    const env = makeTestEnv(db, {
+      DB,
+      VECTORIZE: makeVectorizeMock({
+        getByIds: async () => [{ id: "v-0", values: new Array(384).fill(0.1), metadata: { parentId: "e-0" } }],
+      }),
+    });
 
     await recallEntries({ query: "planning", topK: 5, tag: "q3_planning" }, env, ctx);
 
-    const tagQuery = prepared.find(s => s.includes("FROM entries WHERE tags LIKE ?"));
-    expect(tagQuery).toBeDefined();
-    expect(tagQuery).toContain("ESCAPE");
-    expect(bound[0]?.[0]).toBe(tagLikePattern("q3_planning"));
-    expect(bound[0]?.[0]).not.toBe(`%"q3_planning"%`); // the unescaped form
+    const tagQueries = prepared.filter(s => s.includes("tags LIKE ?"));
+    expect(tagQueries).toHaveLength(2);
+    expect(tagQueries.every(sql => sql.includes("ESCAPE"))).toBe(true);
+    expect(bound).toHaveLength(2);
+    expect(bound.every(args => args.includes(tagLikePattern("q3_planning")))).toBe(true);
+    expect(bound.every(args => !args.includes(`%"q3_planning"%`))).toBe(true); // the unescaped form
   });
 
   /**
@@ -178,6 +184,44 @@ describe("tag-scoped recall candidate query", () => {
 
   it("still returns the entries carrying an ordinary tag", async () => {
     expect(await recalled("q3-planning")).toEqual(OTHER);
+  });
+
+  it("reapplies tag, kind, and date filters when hydrating graph neighbors", async () => {
+    sqlite = makeSqliteD1();
+    const env = envOver(sqlite);
+    resetDatabaseInit();
+    await initializeDatabase(env);
+
+    sqlite.seed({ id: "work-root", content: "alpha beta root", createdAt: 1000, tags: ["work", "kind:semantic"], vectorIds: ["v-work-root"] });
+    sqlite.seed({ id: "a-personal", content: "alpha beta personal evidence", createdAt: 1000, tags: ["personal", "kind:semantic"] });
+    sqlite.seed({ id: "b-wrong-kind", content: "alpha beta episodic evidence", createdAt: 1000, tags: ["work", "kind:episodic"] });
+    sqlite.seed({ id: "c-too-old", content: "alpha beta old evidence", createdAt: 800, tags: ["work", "kind:semantic"] });
+    sqlite.seed({ id: "d-too-new", content: "alpha beta future evidence", createdAt: 1200, tags: ["work", "kind:semantic"] });
+    sqlite.seed({ id: "z-eligible", content: "alpha beta eligible evidence", createdAt: 1000, tags: ["work", "kind:semantic"] });
+    for (const id of ["a-personal", "b-wrong-kind", "c-too-old", "d-too-new", "z-eligible"]) {
+      await sqlite.db.prepare(
+        `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(`edge-${id}`, "work-root", id, "decided", 1, "explicit", "{}", 1, 1).run();
+    }
+
+    const { matches } = await recallEntries(
+      {
+        query: "alpha beta",
+        topK: 5,
+        tag: "work",
+        kind: "semantic",
+        after: 900,
+        before: 1100,
+        hops: 1,
+        synthesize: false,
+      },
+      env,
+      ctx,
+    );
+
+    expect(matches.map(match => match.id)).toEqual(["work-root", "z-eligible"]);
+    expect(matches.every(match => match.tags.includes("work"))).toBe(true);
   });
 });
 

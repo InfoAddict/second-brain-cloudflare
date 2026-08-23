@@ -1,4 +1,6 @@
 import type { EdgeProvenance, EdgeType } from "../graph/types";
+import type { EmbeddingQueryMode } from "./query-profile";
+import type { RootView } from "./root-selector";
 
 export interface CompoundStaleSignal {
   count: number;
@@ -32,6 +34,42 @@ export interface RecallSearchResult {
   // memory has to be shortened for the response.
   queryTokens?: string[];
   compoundStale?: CompoundStaleSignal;
+}
+
+export interface RecallDiagnostics {
+  embeddingMode?: EmbeddingQueryMode;
+  denseIds?: string[];
+  keywordIds?: string[];
+  candidateIds?: string[];
+  fusedIds?: string[];
+  rootSelections?: { id: string; selectedBy: RootView }[];
+  expandedIds?: string[];
+  eligibleRelatedIds?: string[];
+  selectedRelatedIds?: string[];
+  finalIds?: string[];
+  rejections?: { id: string; reason: string }[];
+  operations?: RecallOperationDiagnostics;
+  stageMs?: Partial<Record<RecallStage, number>>;
+}
+
+export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"
+  | "graphExpansion" | "finalHydration" | "selection" | "synthesis" | "total";
+
+export interface RecallOperationDiagnostics {
+  aiCalls: number;
+  embeddingCalls: number;
+  vectorizeQueries: number;
+  vectorizeGets: number;
+  d1Statements: number;
+  d1RowsRead: number | null;
+  d1RowsWritten: number | null;
+  kvReads: number;
+  kvWrites: number;
+}
+
+export interface RecallInternalOptions {
+  embeddingQueryMode?: EmbeddingQueryMode;
+  diagnostics?: RecallDiagnostics;
 }
 
 export interface KeywordRow {

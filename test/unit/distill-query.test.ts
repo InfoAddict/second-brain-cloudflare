@@ -15,6 +15,28 @@ function envWith(total: number, dfByToken: Record<string, number>, tokenOrder: s
 }
 
 describe("distillToRareTerms", () => {
+  it("pushes supplied time bounds into the existing frequency statement", async () => {
+    let sql = "";
+    let bindings: unknown[] = [];
+    const env = {
+      DB: {
+        prepare: (value: string) => {
+          sql = value;
+          return {
+            bind: (...values: unknown[]) => {
+              bindings = values;
+              return { first: async () => ({ total: 1, d0: 1, d1: 1 }) };
+            },
+          };
+        },
+      },
+    } as any;
+
+    await distillToRareTerms("quartz ledger", env, undefined, { after: 100, before: 200 });
+
+    expect(sql).toContain("WHERE created_at >= ? AND created_at < ?");
+    expect(bindings.slice(-2)).toEqual([100, 200]);
+  });
   it("drops corpus-saturating terms and keeps the rare, discriminative ones", async () => {
     // "second"/"brain" saturate the corpus (>30%); "dictawiz"/"reddit" are rare.
     const order = ["second", "brain", "dictawiz", "reddit"];

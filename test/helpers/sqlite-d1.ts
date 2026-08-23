@@ -40,9 +40,12 @@ class SqliteStatement {
     return new SqliteStatement(this.db, this.sql, args);
   }
 
-  async all(): Promise<{ results: unknown[]; success: true }> {
+  async all(): Promise<{ results: unknown[]; success: true; meta: { rows_written: 0 } }> {
     const rows = this.db.prepare(this.sql).all(...(this.args as never[]));
-    return { results: rows, success: true };
+    // SQLite can prove that this SELECT wrote no rows, but it cannot reproduce
+    // Cloudflare D1's billed rows_read (which includes index/table work rather
+    // than merely returned rows). Leave rows_read absent instead of inventing it.
+    return { results: rows, success: true, meta: { rows_written: 0 } };
   }
 
   async first(): Promise<unknown | null> {
@@ -50,9 +53,9 @@ class SqliteStatement {
     return row ?? null;
   }
 
-  async run(): Promise<{ success: true }> {
-    this.db.prepare(this.sql).run(...(this.args as never[]));
-    return { success: true };
+  async run(): Promise<{ success: true; meta: { rows_written: number } }> {
+    const result = this.db.prepare(this.sql).run(...(this.args as never[]));
+    return { success: true, meta: { rows_written: Number(result.changes) } };
   }
 }
 
@@ -61,7 +64,7 @@ export interface SqliteD1 {
   db: {
     prepare(sql: string): SqliteStatement;
     exec(sql: string): Promise<void>;
-    batch(statements: SqliteStatement[]): Promise<{ success: true }[]>;
+    batch(statements: SqliteStatement[]): Promise<{ success: true; meta: { rows_written: number } }[]>;
   };
   /**
    * One entry per D1 call made through `db` — which is one entry per subrequest,
@@ -146,7 +149,7 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
       // they are replaced by the single entry the platform actually charges for.
       batch: async (statements: SqliteStatement[]) => {
         issued.splice(Math.max(0, issued.length - statements.length), statements.length, "BATCH");
-        const out: { success: true }[] = [];
+        const out: { success: true; meta: { rows_written: number } }[] = [];
         for (const statement of statements) out.push(await statement.run());
         return out;
       },

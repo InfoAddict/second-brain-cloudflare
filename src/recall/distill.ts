@@ -76,7 +76,17 @@ export interface DistilledQuery {
   total: number | null;
 }
 
-export async function distillToRareTerms(query: string, env: Env, config: Readonly<Config> = DEFAULTS): Promise<DistilledQuery> {
+export interface TimeBounds {
+  after?: number;
+  before?: number;
+}
+
+export async function distillToRareTerms(
+  query: string,
+  env: Env,
+  config: Readonly<Config> = DEFAULTS,
+  bounds: Readonly<TimeBounds> = {},
+): Promise<DistilledQuery> {
   const words = query.split(/\s+/).filter(Boolean);
   const norm = (w: string) => w.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "");
   const content = words.filter(w => {
@@ -94,8 +104,18 @@ export async function distillToRareTerms(query: string, env: Env, config: Readon
   const uniq = [...new Set(content.map(norm))].slice(0, KEYWORD_MAX_TOKENS);
   try {
     const sums = uniq.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
-    const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries`)
-      .bind(...uniq.map(t => `%${t}%`)).first() as Record<string, number> | null;
+    let where = "";
+    const timeBindings: number[] = [];
+    if (bounds.after !== undefined) {
+      where += " created_at >= ?";
+      timeBindings.push(bounds.after);
+    }
+    if (bounds.before !== undefined) {
+      where += `${where ? " AND" : ""} created_at < ?`;
+      timeBindings.push(bounds.before);
+    }
+    const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries${where ? ` WHERE${where}` : ""}`)
+      .bind(...uniq.map(t => `%${t}%`), ...timeBindings).first() as Record<string, number> | null;
     if (!row || !row.total) return { query: content.join(" "), df: null, total: null };
     const total = row.total;
     const df = new Map(uniq.map((t, i) => [t, (row[`d${i}`] as number) ?? 0]));
