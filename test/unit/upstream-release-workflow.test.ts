@@ -34,6 +34,20 @@ describe("upstream release workflow safety", () => {
     expect(updateWorkflow).toContain("Main and the live Worker were not changed.");
   });
 
+  it("replays verified fork overlays and only blocks on unknown conflicts", () => {
+    expect(updateWorkflow).toContain("node scripts/apply-fork-release-overlays.mjs");
+    expect(updateWorkflow).toContain("overlay_conflicts");
+    expect(updateWorkflow).toContain("manual_conflicts");
+    expect(updateWorkflow).toContain('git checkout --theirs -- "${overlay_conflicts[@]}"');
+    expect(updateWorkflow).toContain('if [[ "${#manual_conflicts[@]}" -eq 0 ]]');
+  });
+
+  it("preserves only fork-owned workflows while accepting upstream CI changes", () => {
+    expect(updateWorkflow).toContain(".github/workflows/deploy-cloudflare.yml");
+    expect(updateWorkflow).toContain(".github/workflows/upstream-release-update.yml");
+    expect(updateWorkflow).not.toContain("-- .github/workflows\n");
+  });
+
   it("emails a newly blocked release and leaves repeat runs deduplicated", () => {
     expect(updateWorkflow).toContain("conflict_pr_created");
     expect(updateWorkflow).toContain("notification_status=\"blocked\"");

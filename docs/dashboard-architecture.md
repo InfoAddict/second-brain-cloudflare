@@ -12,7 +12,7 @@ The one-shot migration script that performed this split was removed after use; d
 | Infra | `js/i18n.js`, `js/state.js`, `js/api.js` | pure |
 | UI kit | `js/theme.js`, `js/ui-chat.js`, `js/toast.js`, `js/coach.js`, `js/confirm-sheet.js` | pure, state |
 | Feature | `js/recall.js`, `js/recent.js`, `js/remember.js`, `js/memory-crud.js`, `js/settings.js`, `js/patterns.js`, `js/stale.js`, `js/integrations.js`, `js/team.js`, `js/activity.js`, `js/graph-canvas.js`, `js/brief.js`, `js/home.js` | infra, UI kit, pure |
-| Shell | `js/nav.js`, `js/refresh.js`, `js/auth.js`, `js/download-app.js`, `js/app.js` | feature, infra |
+| Shell | `js/nav.js`, `js/refresh.js`, `js/auth.js`, `js/dashboard-entry-deep-link.js`, `js/download-app.js`, `js/app.js` | feature, infra |
 | Entry | `index.html` | link/script tags only |
 
 Every script `index.html` loads appears above, and the chain below is the page's
@@ -31,7 +31,7 @@ i18n.js → utils.js → credits.js → state.js → toast.js → coach.js
 → recall.js → recent.js → remember.js → memory-crud.js
 → settings.js → patterns.js → stale.js → integrations.js → team.js → activity.js
 → graph-canvas.js → brief.js → home.js
-→ nav.js → refresh.js → auth.js → download-app.js → app.js
+→ nav.js → refresh.js → auth.js → dashboard-entry-deep-link.js → download-app.js → app.js
 ```
 
 `home.js` is the file that sets `TEAM_MODE`, and it loads BEFORE `nav.js` — the
@@ -62,6 +62,7 @@ against the page rather than maintained by hand.
 | Graph canvas | `js/graph-canvas.js` |
 | Tab nav, tag/time filters | `js/nav.js` |
 | Auth connect / showApp | `js/auth.js` |
+| Dashboard memory deep links | `js/dashboard-entry-deep-link.js` |
 | Sheet listeners, `init()` | `js/app.js` |
 | Escaping, graph layout, vectorize banner | `utils.js` (existing) |
 | About credits | `credits.js` |
