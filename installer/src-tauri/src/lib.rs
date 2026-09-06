@@ -13,6 +13,7 @@ mod commands;
 mod credits;
 mod demo_brain;
 mod i18n;
+mod logging;
 mod mcp_config;
 mod migration;
 mod password_check;
@@ -150,11 +151,11 @@ fn load_setup_unless_dry_run(
 
 pub fn run() {
     // Errors from provisioning etc. print to stderr (visible under `tauri dev`
-    // or when launched from a terminal). Override with RUST_LOG.
-    let _ = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,second_brain_desktop_lib=debug"),
-    )
-    .try_init();
+    // or when launched from a terminal) *and* append to a bounded, scrubbed
+    // file on disk — the only copy a normal launch ever produces, and the one
+    // thing that turns "it said my sign-in expired" into a debuggable report.
+    // Override the level with RUST_LOG. See `logging`.
+    logging::init();
 
     let dry_run = std::env::var("SECOND_BRAIN_DRY_RUN").is_ok();
 
@@ -206,6 +207,7 @@ pub fn run() {
             commands::outstanding_old_index,
             commands::start_provisioning,
             commands::get_connection_details,
+            commands::set_team_mode,
             commands::detect_tools,
             commands::connect_tool,
             commands::detect_cli,
@@ -235,6 +237,11 @@ pub fn run() {
             commands::recheck_password,
             commands::validate_brain_address,
             commands::disconnect_ai_tools,
+            // Who is holding this machine's token. The Connection details
+            // window has no token of its own — it stays in this process — so
+            // without this it hardcoded "owner" and told every team member they
+            // were the brain's owner-admin.
+            commands::connection_role,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -418,6 +425,12 @@ mod tests {
             "recheck_password",
             "validate_brain_address",
             "disconnect_ai_tools",
+            // Not #235's, but the same failure mode: the Connection details
+            // window cannot ask who is holding the token without it, and an
+            // unregistered command fails at runtime with "command not found"
+            // — which `details.ts` catches and reads as "member", so an owner
+            // would silently lose their password card with nothing red.
+            "connection_role",
         ] {
             assert!(
                 handlers.contains(&format!("commands::{command},")),

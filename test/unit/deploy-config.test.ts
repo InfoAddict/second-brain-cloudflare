@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { parse } from "jsonc-parser";
-import { buildDeployConfig } from "../../scripts/write-deploy-config.mjs";
+import { buildDeployConfig, readDeployConfig } from "../../scripts/write-deploy-config.mjs";
 
 const ids = {
   accountId: "account-id",
@@ -11,9 +9,8 @@ const ids = {
 
 describe("deploy Wrangler config", () => {
   it("parses JSONC and injects resource IDs without dropping custom bindings", () => {
-    const sourceText = readFileSync("wrangler.jsonc", "utf8");
-    const sourceConfig = parse(sourceText);
-    const config = buildDeployConfig(sourceText, ids);
+    const sourceConfig = readDeployConfig("wrangler.jsonc");
+    const config = buildDeployConfig(sourceConfig, ids);
 
     expect(config.account_id).toBe("account-id");
     expect(config.d1_databases).toContainEqual(expect.objectContaining({
@@ -33,6 +30,6 @@ describe("deploy Wrangler config", () => {
   });
 
   it("fails closed when an expected binding is absent", () => {
-    expect(() => buildDeployConfig("{}", ids)).toThrow("d1_databases");
+    expect(() => buildDeployConfig({}, ids)).toThrow("d1_databases");
   });
 });

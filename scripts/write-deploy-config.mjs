@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse, printParseErrorCode } from "jsonc-parser";
+import { experimental_readRawConfig } from "wrangler";
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -25,15 +25,8 @@ function setBindingId(config, section, binding, idKey, value) {
   matches[0][idKey] = value;
 }
 
-export function buildDeployConfig(sourceText, ids, sourceName = "wrangler.jsonc") {
-  const errors = [];
-  const config = parse(sourceText, errors, { allowTrailingComma: true });
-  if (errors.length > 0) {
-    const first = errors[0];
-    throw new Error(
-      `Could not parse ${sourceName}: ${printParseErrorCode(first.error)} at offset ${first.offset}`,
-    );
-  }
+export function buildDeployConfig(sourceConfig, ids, sourceName = "wrangler.jsonc") {
+  const config = structuredClone(sourceConfig);
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     throw new Error(`Expected ${sourceName} to contain a JSON object`);
   }
@@ -48,12 +41,20 @@ export function buildDeployConfig(sourceText, ids, sourceName = "wrangler.jsonc"
   return config;
 }
 
+export function readDeployConfig(inputPath = "wrangler.jsonc") {
+  const absolute = resolve(inputPath);
+  const { rawConfig } = experimental_readRawConfig(
+    { config: absolute },
+    { useRedirectIfAvailable: false },
+  );
+  return rawConfig;
+}
+
 const scriptPath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   const inputPath = resolve(process.argv[2] ?? "wrangler.jsonc");
   const outputPath = resolve(process.argv[3] ?? "wrangler.deploy.json");
-  const sourceText = readFileSync(inputPath, "utf8");
-  const config = buildDeployConfig(sourceText, {
+  const config = buildDeployConfig(readDeployConfig(inputPath), {
     accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
     databaseId: process.env.D1_DATABASE_ID,
     oauthKvNamespaceId: process.env.OAUTH_KV_NAMESPACE_ID,

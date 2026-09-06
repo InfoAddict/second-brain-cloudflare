@@ -178,9 +178,17 @@ jobs:
           git checkout -B "$BRANCH_NAME"
 
           if git merge --no-edit --no-ff "$SOURCE_TAG"; then
-            # Workflow files belong to this fork. Keeping the local directory
-            # also avoids GitHub's workflow-file push restriction.
-            git restore --source="$base_sha" --staged --worktree -- .github/workflows
+            # These two workflows belong to the fork. Upstream CI changes are
+            # still accepted, so release safety improvements are not hidden.
+            git restore --source="$base_sha" --staged --worktree -- \
+              .github/workflows/deploy-cloudflare.yml \
+              .github/workflows/upstream-release-update.yml
+            node scripts/apply-fork-release-overlays.mjs
+            git add -- \
+              AI_Instructions/CHATGPT_INSTRUCTIONS.md \
+              public/index.html \
+              docs/dashboard-architecture.md \
+              src/insight/eligibility.ts
             if ! git diff --cached --quiet; then
               git commit --amend --no-edit
             fi
@@ -195,18 +203,70 @@ jobs:
             exit 1
           fi
 
+          managed_overlay_paths=(
+            AI_Instructions/CHATGPT_INSTRUCTIONS.md
+            public/index.html
+            docs/dashboard-architecture.md
+            src/insight/eligibility.ts
+          )
+          overlay_conflicts=()
+          workflow_conflicts=()
+          manual_conflicts=()
+          for path in "${conflict_files[@]}"; do
+            case "$path" in
+              AI_Instructions/CHATGPT_INSTRUCTIONS.md|public/index.html|docs/dashboard-architecture.md|src/insight/eligibility.ts)
+                overlay_conflicts+=("$path")
+                ;;
+              .github/workflows/deploy-cloudflare.yml|.github/workflows/upstream-release-update.yml)
+                workflow_conflicts+=("$path")
+                ;;
+              *)
+                manual_conflicts+=("$path")
+                ;;
+            esac
+          done
+
+          if [[ "${#workflow_conflicts[@]}" -gt 0 ]]; then
+            git checkout --ours -- "${workflow_conflicts[@]}"
+            git add -- "${workflow_conflicts[@]}"
+          fi
+
+          if [[ "${#overlay_conflicts[@]}" -gt 0 ]]; then
+            git checkout --theirs -- "${overlay_conflicts[@]}"
+          fi
+          if ! node scripts/apply-fork-release-overlays.mjs; then
+            # The overlay no longer understands upstream's shape. Keep the fork
+            # side and require a human review instead of guessing.
+            if [[ "${#overlay_conflicts[@]}" -gt 0 ]]; then
+              git checkout --ours -- "${overlay_conflicts[@]}"
+              manual_conflicts+=("${overlay_conflicts[@]}")
+            fi
+          else
+            git add -- "${managed_overlay_paths[@]}"
+          fi
+
+          git restore --source="$base_sha" --staged --worktree -- \
+            .github/workflows/deploy-cloudflare.yml \
+            .github/workflows/upstream-release-update.yml
+
+          if [[ "${#manual_conflicts[@]}" -eq 0 ]]; then
+            git commit --no-edit
+            git commit --amend --no-edit --trailer "Upstream-Deployment: reusable"
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           {
             echo "blocked=true"
             echo "conflict_files<<EOF"
-            printf '%s\n' "${conflict_files[@]}"
+            printf '%s\n' "${manual_conflicts[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          # Keep the fork side only on this draft branch. Nothing from a
-          # conflicted branch is tested, merged to main, or deployed.
-          git checkout --ours -- "${conflict_files[@]}"
-          git add -- "${conflict_files[@]}"
-          git restore --source="$base_sha" --staged --worktree -- .github/workflows
+          # Keep the fork side only for conflicts that are not covered by a
+          # verified overlay. Nothing from this draft branch is deployed.
+          git checkout --ours -- "${manual_conflicts[@]}"
+          git add -- "${manual_conflicts[@]}"
           git commit -m "chore: stage upstream release $RELEASE_TAG for conflict resolution"
 
           git fetch origin "+refs/heads/$BRANCH_NAME:refs/remotes/origin/$BRANCH_NAME" || true
@@ -220,7 +280,7 @@ jobs:
             --json url \
             --jq '.[0].url // empty')"
           if [[ -z "$pr_url" ]]; then
-            conflict_list="$(printf -- '- %s\n' "${conflict_files[@]}")"
+            conflict_list="$(printf -- '- %s\n' "${manual_conflicts[@]}")"
             printf -v pr_body \
               'An upstream Worker release was detected but could not be merged safely.\n\nWorker release: %s\nSource tag: %s\n\nConflicted files:\n%s\nThe branch keeps the fork version of each conflicted file for safety. Resolve those files, run the full checks, and only then merge. Nothing from this branch has been deployed.' \
               "$RELEASE_URL" \
@@ -245,7 +305,7 @@ jobs:
             echo "Draft PR: $pr_url"
             echo
             echo "Conflicted files:"
-            printf -- "- %s\n" "${conflict_files[@]}"
+            printf -- "- %s\n" "${manual_conflicts[@]}"
             echo
             echo "Main and the live Worker were not changed."
           } >> "$GITHUB_STEP_SUMMARY"
