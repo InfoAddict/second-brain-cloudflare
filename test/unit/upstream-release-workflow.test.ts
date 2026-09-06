@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 const updateWorkflow = readFileSync(".github/workflows/upstream-release-update.yml", "utf8");
 const deployWorkflow = readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
+const releaseState = JSON.parse(readFileSync(".github/upstream-release.json", "utf8"));
 
 describe("upstream release workflow safety", () => {
   it("tracks installer releases by their bundled Worker version", () => {
@@ -52,6 +53,28 @@ describe("upstream release workflow safety", () => {
     expect(updateWorkflow).toContain("conflict_pr_created");
     expect(updateWorkflow).toContain("notification_status=\"blocked\"");
     expect(updateWorkflow).toContain("needs.update-from-upstream-release.outputs.conflict_pr_created == 'true'");
+  });
+
+  it("records release metadata for clean and manually resolved updates", () => {
+    expect(updateWorkflow).toContain("write_release_state()");
+    expect(updateWorkflow.match(/write_release_state/g)).toHaveLength(3);
+    expect(updateWorkflow).toContain(".github/upstream-release.json");
+    expect(releaseState).toEqual({
+      sourceTag: "installer-v3.0.0",
+      workerVersion: "3.0.0",
+      releaseTag: "v3.0.0",
+      releaseName: "Second Brain Worker v3.0.0 (bundled with Desktop 3.0.0)",
+      releaseUrl: "https://github.com/rahilp/second-brain-cloudflare/releases/tag/installer-v3.0.0",
+    });
+  });
+
+  it("emails an applied result after a resolved release PR deploys", () => {
+    expect(deployWorkflow).toContain("Email a manually resolved upstream release");
+    expect(deployWorkflow).toContain("if: github.event_name == 'push'");
+    expect(deployWorkflow).toContain('git show "${GITHUB_SHA}^1:${state_file}"');
+    expect(deployWorkflow).toContain('if [[ "$current_state" == "$previous_state" ]]');
+    expect(deployWorkflow).toContain('status: "applied"');
+    expect(deployWorkflow).toContain("Recipient: dan@infoaddict.net");
   });
 
   it("marks a blocked release run as failed after notification", () => {
