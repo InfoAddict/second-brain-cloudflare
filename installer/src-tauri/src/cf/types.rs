@@ -141,6 +141,17 @@ pub enum CfApiError {
     Network(#[from] reqwest::Error),
     #[error("Cloudflare sign-in expired")]
     Unauthorized,
+    /// A 401 that came from the *deployed brain*, not from Cloudflare. The
+    /// worker probes (`worker_health_ok` and friends) talk to the user's own
+    /// Worker over workers.dev, and its `requireAuth` answers 401 for "that
+    /// password does not open this brain" — which has nothing to do with the
+    /// Cloudflare OAuth session the app holds, and must never be shown as
+    /// "your Cloudflare sign-in expired". Kept apart from [`Self::Unauthorized`]
+    /// so the two cannot drift back together: a setup failure that blames the
+    /// sign-in sends a user re-authorising Cloudflare to fix a password
+    /// problem (discussion #315).
+    #[error("the Second Brain rejected the password the app sent it")]
+    WorkerAuthRejected,
     #[error("Cloudflare error {code}: {message}")]
     Api { code: i64, message: String },
     #[error("Cloudflare returned HTTP {status}: {body}")]

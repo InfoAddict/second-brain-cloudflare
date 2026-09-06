@@ -515,24 +515,49 @@ pub async fn probe_worker(worker_url: &str, auth_token: &str) -> Result<WorkerPr
     Ok(WorkerProbe::NotABrain)
 }
 
-/// GET /health — passes only when the Worker is live AND its vector index is
-/// wired (`ok && vectorize.ok`), per the Worker's own health contract.
-pub async fn worker_health_ok(worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
-    let http = reqwest::Client::new();
-    let resp = http
-        .get(format!("{worker_url}/health"))
-        .bearer_auth(auth_token)
-        .timeout(Duration::from_secs(20))
-        .send()
-        .await?;
-    if resp.status().as_u16() == 401 {
-        return Err(CfApiError::Unauthorized);
-    }
+    /// GET /health — passes only when the Worker is live AND its vector index is
+    /// wired (`ok && vectorize.ok`), per the Worker's own health contract.
+    pub async fn worker_health_ok(worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
+        let http = reqwest::Client::new();
+        let resp = http
+            .get(format!("{worker_url}/health"))
+            .bearer_auth(auth_token)
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await?;
+        if resp.status().as_u16() == 401 {
+            // The brain's own `requireAuth`, not Cloudflare's — see
+            // [`CfApiError::WorkerAuthRejected`] for why the two must not share
+            // an error.
+            return Err(CfApiError::WorkerAuthRejected);
+        }
     if !resp.status().is_success() {
         return Ok(false);
     }
     let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
     Ok(body["ok"] == true && body["vectorize"]["ok"] == true)
+}
+
+/// GET /health with **no credentials** — one question: is whatever is listening
+/// a brain that demands authentication?
+///
+/// This is the control arm the authenticated probes cannot provide for
+/// themselves. A 401 with a bearer token means *something* refused the
+/// password — but not whether that something is the current deployment (a real
+/// password problem) or a stale edge node still serving the previous one,
+/// holding the previous secret (a wait-it-out problem, invisible once setup has
+/// already given up). Asking the same URL unauthenticated separates them: a
+/// 401 there means the live version demands auth, so the refusal was real;
+/// anything else means the answering version would not have refused anyone, so
+/// what the poll talked to was not the deployment just uploaded.
+pub async fn worker_requires_auth(worker_url: &str) -> Result<bool, CfApiError> {
+    let http = reqwest::Client::new();
+    let resp = http
+        .get(format!("{worker_url}/health"))
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await?;
+    Ok(resp.status().as_u16() == 401)
 }
 
 /// GET /health, asking one question only: **does this password open this
@@ -557,10 +582,10 @@ pub async fn worker_health_ok(worker_url: &str, auth_token: &str) -> Result<bool
 /// using it. There a 401 means a secret was dropped and a degraded index means
 /// the deploy is not finished, so both legitimately want the whole contract.
 ///
-/// Never answers `Ok(false)`. A refusal comes back as `Unauthorized` because the
-/// caller has to tell "the edge is still serving the old secret" apart from a
-/// network error, and a bool cannot carry that; the `bool` is here so the
-/// [`super::provision::Backend`] method mirrors `health_ok` and a dry run can
+/// Never answers `Ok(false)`. A refusal comes back as [`CfApiError::WorkerAuthRejected`]
+/// because the caller has to tell "the edge is still serving the old secret"
+/// apart from a network error, and a bool cannot carry that; the `bool` is here
+/// so the [`super::provision::Backend`] method mirrors `health_ok` and a dry run can
 /// wave through an address with no server behind it.
 pub async fn worker_auth_ok(worker_url: &str, auth_token: &str) -> Result<bool, CfApiError> {
     let http = reqwest::Client::new();
@@ -571,7 +596,7 @@ pub async fn worker_auth_ok(worker_url: &str, auth_token: &str) -> Result<bool, 
         .send()
         .await?;
     if resp.status().as_u16() == 401 {
-        return Err(CfApiError::Unauthorized);
+        return Err(CfApiError::WorkerAuthRejected);
     }
     Ok(true)
 }
@@ -590,7 +615,7 @@ pub async fn worker_version(
         .send()
         .await?;
     if resp.status().as_u16() == 401 {
-        return Err(CfApiError::Unauthorized);
+        return Err(CfApiError::WorkerAuthRejected);
     }
     if !resp.status().is_success() {
         return Ok(None);
@@ -617,7 +642,9 @@ pub async fn worker_capture_ok(worker_url: &str, auth_token: &str) -> Result<boo
         .send()
         .await?;
     if resp.status().as_u16() == 401 {
-        return Err(CfApiError::Unauthorized);
+        // The brain's own `requireAuth`, not Cloudflare's — see
+        // [`CfApiError::WorkerAuthRejected`].
+        return Err(CfApiError::WorkerAuthRejected);
     }
     if !resp.status().is_success() {
         return Ok(false);
@@ -1305,13 +1332,47 @@ mod tests {
         assert!(
             matches!(
                 worker_auth_ok(&format!("{base}/refused"), "pw").await,
-                Err(CfApiError::Unauthorized)
+                Err(CfApiError::WorkerAuthRejected)
             ),
-            "only a 401 means the new secret has not landed yet"
+            "only a 401 means the new secret has not landed yet — and the refusal \
+             is the brain's own, never dressed up as a Cloudflare sign-in problem"
         );
         assert!(
             worker_auth_ok("http://127.0.0.1:1/nothing", "pw").await.is_err(),
             "nothing answered, so nothing accepted the password"
+        );
+    }
+
+    /// The control arm: the same `/health` with no credentials, answering one
+    /// question — would this address refuse anyone? This is what separates
+    /// "the live brain rejected its password" from "a stale edge node still
+    /// serving the previous deployment answered the poll".
+    #[tokio::test]
+    async fn the_unauthenticated_control_probe_classifies_the_same_two_ways() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || {
+            loop {
+                let Ok(req) = server.recv() else { return };
+                let status = if req.url().starts_with("/demanding") { 401 } else { 200 };
+                let _ = req.respond(
+                    tiny_http::Response::from_string(r#"{"ok":true}"#).with_status_code(status),
+                );
+            }
+        });
+        let base = format!("http://127.0.0.1:{port}");
+
+        assert!(
+            matches!(worker_requires_auth(&format!("{base}/demanding")).await, Ok(true)),
+            "a 401 with no credentials is a brain demanding auth"
+        );
+        assert!(
+            matches!(worker_requires_auth(&format!("{base}/permissive")).await, Ok(false)),
+            "any other answer means this version would not have refused the poll"
+        );
+        assert!(
+            worker_requires_auth("http://127.0.0.1:1/nothing").await.is_err(),
+            "nothing listening is an error, not an answer"
         );
     }
 }
