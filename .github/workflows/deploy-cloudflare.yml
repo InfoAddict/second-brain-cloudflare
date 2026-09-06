@@ -35,6 +35,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 2
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -111,3 +112,81 @@ jobs:
             | npx wrangler secret put AUTH_TOKEN --config wrangler.deploy.json
           printf '%s' "$RELEASE_NOTIFY_TOKEN" \
             | npx wrangler secret put RELEASE_NOTIFY_TOKEN --config wrangler.deploy.json
+
+      - name: Email a manually resolved upstream release
+        if: github.event_name == 'push'
+        env:
+          SECOND_BRAIN_URL: ${{ secrets.SECOND_BRAIN_URL }}
+          RELEASE_NOTIFY_TOKEN: ${{ secrets.RELEASE_NOTIFY_TOKEN }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          state_file=".github/upstream-release.json"
+          if [[ ! -f "$state_file" ]]; then
+            echo "No upstream release state is recorded; no release email needed."
+            exit 0
+          fi
+
+          current_state="$(jq -cS . "$state_file")"
+          previous_state="$(git show "${GITHUB_SHA}^1:${state_file}" 2>/dev/null | jq -cS . 2>/dev/null || true)"
+          if [[ "$current_state" == "$previous_state" ]]; then
+            echo "Upstream release state is unchanged; no release email needed."
+            exit 0
+          fi
+
+          missing=0
+          for name in SECOND_BRAIN_URL RELEASE_NOTIFY_TOKEN; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required GitHub secret: ${name}"
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          release_tag="$(jq -er '.releaseTag | select(type == "string" and length > 0)' "$state_file")"
+          release_name="$(jq -er '.releaseName | select(type == "string" and length > 0)' "$state_file")"
+          release_url="$(jq -er '.releaseUrl | select(type == "string" and startswith("https://github.com/") and contains("/releases/"))' "$state_file")"
+
+          payload="$(jq -n \
+            --arg release_tag "$release_tag" \
+            --arg release_name "$release_name" \
+            --arg release_url "$release_url" \
+            --arg action_url "$RUN_URL" \
+            '{
+              releaseTag: $release_tag,
+              releaseName: $release_name,
+              releaseUrl: $release_url,
+              status: "applied",
+              details: "",
+              actionUrl: $action_url
+            }')"
+
+          response_file="$(mktemp)"
+          http_status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer ${RELEASE_NOTIFY_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "$payload" \
+            "${SECOND_BRAIN_URL%/}/internal/release-notification")"
+
+          if [[ "$http_status" -lt 200 || "$http_status" -ge 300 ]] || ! jq -e '.ok == true' "$response_file" >/dev/null; then
+            echo "::error::Release notification failed with HTTP ${http_status}"
+            cat "$response_file"
+            exit 1
+          fi
+
+          message_id="$(jq -r '.messageId // "unknown"' "$response_file")"
+          {
+            echo "### Emailed manually resolved release ${release_tag}"
+            echo
+            echo "Recipient: dan@infoaddict.net"
+            echo
+            echo "Release notes: ${release_url}"
+            echo
+            echo "Cloudflare message ID: ${message_id}"
+          } >> "$GITHUB_STEP_SUMMARY"
