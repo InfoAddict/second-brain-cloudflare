@@ -35,7 +35,7 @@ import { PROMPT_CAPSULE_SCHEMA, type PromptCapsuleKind } from "./types";
 // with OAuth state. Cold-fill races and revision changes can add attempts.
 export const PROMPT_CAPSULE_CACHE_TTL_SECONDS = 3_600;
 
-const CACHE_PREFIX = "prompt-capsule:v3:";
+const CACHE_PREFIX = "prompt-capsule:v4:";
 
 export interface CachedPromptCapsule {
   ok: true;

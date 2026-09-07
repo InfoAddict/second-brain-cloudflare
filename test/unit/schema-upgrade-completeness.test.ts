@@ -162,10 +162,18 @@ describe("an existing database gains every column db/schema.sql declares", () =>
       expect(missing, `${table} is missing ${missing.join(", ")} after init — db/schema.sql declares ${
         Object.keys(declared).length} columns but src/db/init.ts has no ALTER TABLE ${table} ADD COLUMN for these, so only fresh brains get them`).toEqual([]);
 
-      // Not backfilled and not rewritten: the legacy row is still exactly what
-      // the earlier release wrote.
       const row = await d1.db.prepare(`SELECT ${legacyColumns.join(", ")} FROM ${table}`).first() as Record<string, unknown>;
-      expect(row).toEqual(Object.fromEntries(legacyColumns.map((c, i) => [c, legacyValues[i]])));
+      const expected = Object.fromEntries(legacyColumns.map((c, i) => [c, legacyValues[i]]));
+      if (table === "prompt_capsule_revisions") {
+        // 欠落したトリガーの復旧時には、古いキャッシュを失効させる。
+        // ワークスペースの行を保持し、リビジョンだけを再生成する。
+        expect(row.revision).toMatch(/^[0-9a-f]{32}$/);
+        expect(row.revision).not.toBe(expected.revision);
+        expect(row).toEqual({ ...expected, revision: row.revision });
+      } else {
+        // その他の既存データは書き換えずに保持する。
+        expect(row).toEqual(expected);
+      }
 
       // Existence of the columns is the mechanism; a write that binds all of
       // them is the behaviour every caller depends on. OR REPLACE only so the

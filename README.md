@@ -168,7 +168,7 @@ rather than on every request.
 An empty project Capsule is returned normally but not stored in KV. Project ids
 are caller-selected, so this prevents arbitrary nonexistent ids from consuming
 one KV write and key each. A partial `(workspace_id, id)` index over capsule-tagged
-rows also bounds these reads to capsule definitions instead of every ordinary
+rows, explicitly selected by the candidate query, also bounds these reads to capsule definitions instead of every ordinary
 memory in the workspace. Its cost grows with capsule-tagged rows, not with the
 ordinary corpus. Empty core Capsules remain cached because core is one fixed
 target per workspace.
@@ -177,8 +177,10 @@ After a D1 Time Travel restore, redeploy the Worker before resuming traffic so
 schema initialization recreates `prompt_capsule_revisions` and the four
 `prompt_capsule_*` triggers if the restore point predates part of this migration.
 Initialization also compares installed trigger bodies, atomically drops and
-recreates changed triggers, and rotates revisions so old cached results cannot
-survive a repaired invalidator.
+recreates changed or missing triggers, and rotates revisions so old cached results cannot
+survive a repaired invalidator. NUL-containing ids, content, or tag documents
+are rejected (personal) or skipped and reported (shared), never published as a
+truncated SQLite string.
 
 **Upgrade warning:** `capsule:*` and `capsule-slot:*` are now reserved. Existing
 canonical rows using those names can become prompt definitions or appear in

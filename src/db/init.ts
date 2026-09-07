@@ -464,7 +464,8 @@ async function applySchema(env: Env): Promise<void> {
     }
   }
   for (const [name, ddl] of Object.entries(POST_COLUMN_OBJECTS)) {
-    if (kindOf(ddl) === "trigger" && (existing === null || existing.objects.get(name) === "trigger")) {
+    if (kindOf(ddl) === "trigger" && (existing === null || existing.objects.get(name) === "trigger"
+      || existing.objects.get("prompt_capsule_revisions") === "table")) {
       // sqlite_master removes IF NOT EXISTS. Compare bodies so a deployed
       // trigger can be repaired on the next cold start, not frozen forever.
       const normalize = (sql: string) => sql

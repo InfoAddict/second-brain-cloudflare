@@ -89,6 +89,7 @@ interface PromptCapsuleCandidateRow {
   content_length: number;
   tags: unknown;
   tags_length: number;
+  has_nul: number;
 }
 
 interface PromptCapsuleD1Snapshot {
@@ -205,8 +206,9 @@ async function buildPromptCapsuleFromD1(
             substr(content, 1, ?) AS content,
             length(content) AS content_length,
             substr(tags, 1, ?) AS tags,
-            length(tags) AS tags_length
-       FROM entries
+            length(tags) AS tags_length,
+            (instr(id, char(0)) > 0 OR instr(content, char(0)) > 0 OR instr(tags, char(0)) > 0) AS has_nul
+       FROM entries INDEXED BY idx_entries_capsule
       WHERE ${scope.clause}
         AND instr(lower(tags), '"capsule:') > 0
         AND instr(lower(tags), ?) > 0
@@ -261,11 +263,14 @@ async function buildPromptCapsuleFromD1(
     });
   }
 
-  const boundedInvalid: Array<{ entryId: string; reason: "content-too-large" | "entry-id-too-large" }> = [];
+  const boundedInvalid: Array<{ entryId: string; reason: "content-too-large" | "entry-id-too-large" | "embedded-nul" }> = [];
   const candidates: PromptCapsuleCandidate[] = [];
   for (const row of results) {
     const id = String(row.id ?? "");
-    if (Number(row.id_length) > PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS) {
+    if (Number(row.has_nul)) {
+      // SQLiteのTEXT length/substrはNULで止まる。切断された本文やIDを採用しない。
+      boundedInvalid.push({ entryId: "[omitted]", reason: "embedded-nul" });
+    } else if (Number(row.id_length) > PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS) {
       boundedInvalid.push({ entryId: "[omitted]", reason: "entry-id-too-large" });
     } else if (Number(row.content_length) > PROMPT_CAPSULE_MAX_CHARS) {
       boundedInvalid.push({ entryId: id, reason: "content-too-large" });

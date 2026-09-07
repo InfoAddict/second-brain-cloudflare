@@ -1290,10 +1290,14 @@ describe("prompt capsule routes", () => {
     for (let i = 0; i < 1000; i++) await seed(`ordinary-${i}`, "Ordinary memory.", ["work"]);
     await seed("project", "State.", ["capsule:project:known", "capsule-slot:current-state", "status:canonical"]);
     await initializeDatabase(env);
-    const query = `SELECT id FROM entries WHERE workspace_id = ? AND instr(lower(tags), '"capsule:') > 0 AND instr(lower(tags), ?) > 0 ORDER BY id LIMIT 201`;
-    const plan = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${query}`).bind(identity.personalWorkspaceId, '"capsule:project:missing"').all();
-    expect(JSON.stringify(plan.results)).toContain("idx_entries_capsule");
     expect(await (await defaultHandler.fetch(req("GET", "/prompt-capsules/projects/missing"), env, ctx)).json()).toMatchObject({ populated: false, complete: false });
+    const query = executedSql().find(sql => sql.includes("SELECT substr(id") && sql.includes("instr(lower(tags)"));
+    if (!query) throw new Error("実際の候補SQLが未記録");
+    const plan = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${query}`).bind(
+      PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS + 1, PROMPT_CAPSULE_MAX_CHARS + 1, PROMPT_CAPSULE_MAX_TAG_CHARS + 1,
+      identity.personalWorkspaceId, '"capsule:project:missing"', '"status:canonical"', PROMPT_CAPSULE_MAX_CANDIDATES + 1,
+    ).all();
+    expect(JSON.stringify(plan.results)).toContain("idx_entries_capsule");
   });
 
   it("旧トリガーを置換してrevisionを無効化し、次の起動ではDDLを繰り返さない", async () => {
@@ -1315,6 +1319,85 @@ describe("prompt capsule routes", () => {
     await initializeDatabase(env);
     expect(sqlite.issued).toHaveLength(1);
     expect(sqlite.batches).toHaveLength(0);
+  });
+
+  it("欠落triggerの再作成でも旧revisionのcacheを失効させる", async () => {
+    await seed("missing-trigger", "Before missing trigger.", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const first = await getCore();
+    expect((await first.json() as PromptCapsulePayload).text).toContain("Before missing trigger.");
+    await sqlite.db.prepare("DROP TRIGGER prompt_capsule_entry_update").run();
+    await sqlite.db.prepare("UPDATE entries SET content = 'After missing trigger.' WHERE id = 'missing-trigger'").run();
+    resetDatabaseInit();
+    const recovered = await getCore();
+    expect((await recovered.json() as PromptCapsulePayload).text).toContain("After missing trigger.");
+  });
+
+  it("NULを含む本文を途中までの正常な定義として公開しない", async () => {
+    await seed("nul-content", "Visible prefix\0Hidden suffix", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const response = await getCore();
+    const text = await response.text();
+    expect(text).not.toContain("Visible prefix");
+    expect(JSON.parse(text)).toMatchObject({ invalid_entries: [{ reason: "embedded-nul" }] });
+  });
+
+  it.each(["id", "tags"] as const)("NUL入り%sも有効な定義へ切り詰めない", async field => {
+    await seed("nul-metadata", "Do not publish.", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const value = field === "id" ? "nul-metadata\0suffix" : '["capsule:core","capsule-slot:identity","status:canonical"]\0suffix';
+    await sqlite.db.prepare(`UPDATE entries SET ${field} = ? WHERE id = 'nul-metadata'`).bind(value).run();
+    const response = await getCore();
+    expect(await response.json()).toMatchObject({ ok: false, invalid_entries: [{ entry_id: "[omitted]", reason: "embedded-nul" }] });
+  });
+
+  it.each(['"'.repeat(6000), "😀".repeat(6500)])("SQL文字数内でもJSONエスケープ・UTF16込みの予算を守る", async content => {
+    await seed("escaped-large", content, ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const response = await getCore();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ invalid_entries: [{ entry_id: "escaped-large", reason: "content-too-large" }] });
+  });
+
+  it("本文が同じでも検証報告が変わればETagを変更する", async () => {
+    await seed("safe", "Safe.", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const first = await getCore();
+    const before = await first.json() as PromptCapsulePayload;
+    await seed("invalid", "Invalid.", ["capsule:core", "capsule-slot:unknown", "status:canonical"]);
+    const response = await defaultHandler.fetch(conditionalRequest("GET", "/prompt-capsules/core", first.headers.get("etag")!), env, ctx);
+    expect(response.status).toBe(200);
+    const after = await response.json() as PromptCapsulePayload;
+    expect(after.prompt_hash).toBe(before.prompt_hash);
+    expect(after.complete).toBe(false);
+    expect(after.invalid_entries).toEqual([{ entry_id: "invalid", reason: "invalid-slot" }]);
+    expect(response.headers.get("etag")).not.toBe(first.headers.get("etag"));
+  });
+
+  it("共有slotのMCP変更はauthor/adminだけに許可し、変更後も共有scopeを維持する", async () => {
+    const member = await createMember(env, { name: "Teammate" });
+    const memberIdentity = await resolveIdentityFromToken(member.token, env);
+    if (!memberIdentity) throw new Error("member missing");
+    const team = identity.companyWorkspaceIds[0];
+    await seed("shared-edit", "Shared preference.", ["capsule:core", "capsule-slot:identity", "status:canonical"], team);
+    const use = async (actor: Identity) => {
+      const server = buildMcpServer(env, ctx, actor);
+      const client = new Client({ name: "shared-recovery", version: "1.0.0" });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      try {
+        await Promise.all([client.connect(ct), server.connect(st)]);
+        return await client.callTool({ name: "update", arguments: {
+          id: "shared-edit", content: "Shared preference.", tags: ["capsule:core", "capsule-slot:preferences"],
+        } });
+      } finally { await client.close(); await server.close(); }
+    };
+    const denied = await use(memberIdentity);
+    expect(JSON.stringify(denied)).toContain("Only the entry's author or an admin");
+    const unchanged = await sqlite.db.prepare("SELECT tags FROM entries WHERE id='shared-edit'").first() as { tags: string };
+    expect(JSON.parse(unchanged.tags)).toContain("capsule-slot:identity");
+    const changed = await use(identity);
+    expect(JSON.stringify(changed)).toContain("Updated entry shared-edit");
+    const row = await sqlite.db.prepare("SELECT tags, workspace_id, actor_id FROM entries WHERE id='shared-edit'").first() as { tags: string; workspace_id: string; actor_id: string };
+    expect(row.workspace_id).toBe(team);
+    expect(row.actor_id).toBe(identity.userId);
+    const shared = await defaultHandler.fetch(req("GET", "/prompt-capsules/core?workspace=company", { token: member.token }), env, ctx);
+    expect(await shared.json()).toMatchObject({ sections: [{ slot: "preferences", source_entry_id: "shared-edit" }] });
+    expect(await (await getCore()).json()).toMatchObject({ sections: [] });
   });
 
 });
