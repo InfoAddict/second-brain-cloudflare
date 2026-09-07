@@ -13,6 +13,7 @@ use crate::i18n::{self, AppLocale, Key, Locale};
 use crate::rotate::{self, RotateOutcome};
 use crate::worker_url::subdomain_of;
 use crate::{cli_config, mcp_config, password_check, secure_store, windows, worker_bundle};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -42,6 +43,11 @@ pub struct SetupSession {
     /// a brain is actually connected. Non-secret, but pointless — and possibly
     /// wrong — to persist for a scan the user abandoned.
     cf_hints: Mutex<Option<(String, String)>>,
+    /// Fixed-name resources created by this process, scoped to their Cloudflare
+    /// account. This is the in-session retry bridge for a provision that failed
+    /// after creating storage but before deploying the Worker; it is never
+    /// persisted and cannot authorize residue from another app session.
+    created_resources: Mutex<HashMap<String, provision::CreatedResources>>,
     /// Demo mode's stand-in for the outstanding-index note. Dry-run must never
     /// reach the keychain — every read there can raise an OS password prompt,
     /// which is #252 all over again — so the demo keeps its note in memory and
@@ -61,6 +67,7 @@ impl SetupSession {
             pending_rotation: Mutex::new(false),
             stale_password: Mutex::new(false),
             cf_hints: Mutex::new(None),
+            created_resources: Mutex::new(HashMap::new()),
             demo_previous_index: Mutex::new(None),
         }
     }
@@ -74,6 +81,7 @@ impl SetupSession {
         *self.pending_rotation.lock().unwrap() = false;
         *self.stale_password.lock().unwrap() = false;
         *self.cf_hints.lock().unwrap() = None;
+        self.created_resources.lock().unwrap().clear();
         *self.demo_previous_index.lock().unwrap() = None;
     }
 }
@@ -88,6 +96,116 @@ fn locale_of(app: &AppHandle) -> Locale {
 
 fn user_err(locale: Locale, key: Key) -> String {
     i18n::t(locale, key).to_string()
+}
+
+/// Errors from `start_provisioning` preserve the command's existing string
+/// shape for precondition/authentication failures while adding machine-readable
+/// objects for outcomes that need a different screen or recovery path.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(untagged)]
+pub enum StartProvisioningError {
+    Message(String),
+    Structured(ProvisioningErrorPayload),
+}
+
+/// Errors from `connect_existing` keep legacy paths as strings while giving
+/// credential failures stable keys for the member-token recovery branch.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(untagged)]
+pub enum ConnectExistingError {
+    Message(String),
+    Credential {
+        #[serde(rename = "errorKey")]
+        error_key: &'static str,
+        message: String,
+    },
+}
+
+impl From<String> for ConnectExistingError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+fn credential_error(locale: Locale, key: Key) -> ConnectExistingError {
+    let error_key = match key {
+        Key::ErrorWrongPassword => "ErrorWrongPassword",
+        Key::ErrorEmptyPassword => "ErrorEmptyPassword",
+        _ => unreachable!("credential_error only accepts credential keys"),
+    };
+    ConnectExistingError::Credential {
+        error_key,
+        message: user_err(locale, key),
+    }
+}
+
+impl From<String> for StartProvisioningError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+/// Tagged provisioning error contract consumed by the webview.
+///
+/// New journal-aware stages can be added as variants without changing existing
+/// fields or collapsing them back into an ambiguous display string.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProvisioningErrorPayload {
+    ExistingBrainFound {
+        #[serde(rename = "errorKey")]
+        error_key: &'static str,
+        message: String,
+        url: String,
+    },
+    ResourceNameConflict {
+        #[serde(rename = "errorKey")]
+        error_key: &'static str,
+        message: String,
+        #[serde(rename = "resourceKind")]
+        resource_kind: provision::ResourceKind,
+    },
+    ProvisioningFailed {
+        #[serde(rename = "errorKey")]
+        error_key: &'static str,
+        message: String,
+    },
+}
+
+fn existing_brain_error(locale: Locale, url: String) -> StartProvisioningError {
+    StartProvisioningError::Structured(ProvisioningErrorPayload::ExistingBrainFound {
+        error_key: "GuardExistingBrain",
+        message: user_err(locale, Key::GuardExistingBrain),
+        url,
+    })
+}
+
+fn resource_conflict_error(
+    locale: Locale,
+    resource_kind: provision::ResourceKind,
+) -> StartProvisioningError {
+    let resource_key = match resource_kind {
+        provision::ResourceKind::MemoryStorage => Key::ResourceKindMemoryStorage,
+        provision::ResourceKind::SmartSearch => Key::ResourceKindSmartSearch,
+        provision::ResourceKind::WebApp => Key::ResourceKindWebApp,
+    };
+    let message = i18n::t_fmt(
+        locale,
+        Key::GuardNameConflict,
+        &[("kind", i18n::t(locale, resource_key))],
+    );
+    StartProvisioningError::Structured(ProvisioningErrorPayload::ResourceNameConflict {
+        error_key: "GuardNameConflict",
+        message,
+        resource_kind,
+    })
+}
+
+fn provisioning_failed_error(locale: Locale) -> StartProvisioningError {
+    StartProvisioningError::Structured(ProvisioningErrorPayload::ProvisioningFailed {
+        error_key: "ErrorProvisioningDetail",
+        message: user_err(locale, Key::ErrorProvisioningDetail),
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -265,10 +383,11 @@ pub async fn discover_brains(
     let client = CfClient::new(tokens.access_token.clone(), account_id.clone());
 
     let manifest = worker_bundle::manifest();
+    let known_brain_indexes = brain_index_names();
     let found = discover::discover_in_account(
         &client,
         &manifest.script_name,
-        &manifest.vectorize_name,
+        &known_brain_indexes,
     )
     .await
     .map_err(|e| match e {
@@ -299,7 +418,7 @@ pub async fn start_provisioning(
     team_mode: Option<bool>,
     app: AppHandle,
     session: State<'_, SetupSession>,
-) -> Result<ProvisionOutcome, String> {
+) -> Result<ProvisionOutcome, StartProvisioningError> {
     let locale = locale_of(&app);
     let password = session
         .password
@@ -319,7 +438,7 @@ pub async fn start_provisioning(
             .await
             .map_err(|e| {
                 log::warn!("dry-run provision failed: {e}");
-                user_err(locale, Key::ErrorFriendlyRetry)
+                provisioning_failed_error(locale)
             })?
     } else {
         let account_name = session
@@ -347,21 +466,79 @@ pub async fn start_provisioning(
             *session.tokens.lock().unwrap() = Some(tokens.clone());
         }
 
-        // One transparent refresh+retry on auth expiry: provisioning is
-        // idempotent, so re-running the pipeline is safe.
+        // One transparent refresh+retry on auth expiry. A successful create is
+        // recorded before the pipeline can fail, so the next preflight may
+        // admit only this session's exact residue; unrecorded same-name objects
+        // remain conflicts.
+        let known_brain_indexes = brain_index_names();
+        let mut created = session
+            .created_resources
+            .lock()
+            .unwrap()
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_default();
         let mut attempt = 0;
         loop {
             attempt += 1;
             let backend = LiveBackend {
                 client: CfClient::new(tokens.access_token.clone(), account_id.clone()),
             };
+
+            // Release-blocking ownership guard. Keep this immediately before
+            // `provision`: every call above is authentication/session setup and
+            // every operation below may mutate the selected account.
+            let preflight = match provision::preflight_account(
+                &backend,
+                manifest,
+                &known_brain_indexes,
+                &created,
+            )
+            .await
+            {
+                Ok(preflight) => preflight,
+                Err(CfApiError::Unauthorized) if attempt == 1 => {
+                    tokens = oauth::refresh(&tokens).await.map_err(|e| {
+                        log::warn!("token refresh failed: {e}");
+                        user_err(locale, Key::ErrorCfSignInExpired)
+                    })?;
+                    *session.tokens.lock().unwrap() = Some(tokens.clone());
+                    continue;
+                }
+                Err(e) => {
+                    log::warn!("provisioning preflight failed: {e}");
+                    return Err(provisioning_failed_error(locale));
+                }
+            };
+            match preflight {
+                provision::ProvisionPreflight::Clear => {}
+                provision::ProvisionPreflight::ExistingBrain { url } => {
+                    return Err(existing_brain_error(locale, url));
+                }
+                provision::ProvisionPreflight::NameConflict { kind } => {
+                    return Err(resource_conflict_error(locale, kind));
+                }
+            }
+
             let progress_app = app.clone();
             let progress = move |event: provision::StepEvent| {
                 let _ = progress_app.emit("setup-progress", &event);
             };
-            match provision::provision(&backend, manifest, &account_name, &password, progress)
-                .await
-            {
+            let result = provision::provision_recording(
+                &backend,
+                manifest,
+                &account_name,
+                &password,
+                &mut created,
+                progress,
+            )
+            .await;
+            session
+                .created_resources
+                .lock()
+                .unwrap()
+                .insert(account_id.clone(), created.clone());
+            match result {
                 Ok(outcome) => break outcome,
                 Err(ProvisionError::Api(CfApiError::Unauthorized)) if attempt == 1 => {
                     tokens = oauth::refresh(&tokens).await.map_err(|e| {
@@ -372,11 +549,7 @@ pub async fn start_provisioning(
                 }
                 Err(e) => {
                     log::warn!("provisioning failed: {e}");
-                    return Err(format!(
-                        "{}\n\n{}",
-                        user_err(locale, Key::ErrorFriendlyRetry),
-                        i18n::t_fmt(locale, Key::ErrorProvisioningDetail, &[("detail", &e.to_string())])
-                    ));
+                    return Err(provisioning_failed_error(locale));
                 }
             }
         }
@@ -420,7 +593,10 @@ fn normalize_worker_url(input: &str, locale: Locale) -> Result<String, String> {
         format!("https://{trimmed}")
     };
     let parsed = url::Url::parse(&with_scheme).map_err(|_| bad())?;
-    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+    if parsed.scheme() == "http" {
+        return Err(user_err(locale, Key::ErrorNeedsHttps));
+    }
+    if parsed.scheme() != "https" {
         return Err(bad());
     }
     // No legitimate Worker address carries credentials — this also catches
@@ -445,12 +621,12 @@ pub async fn connect_existing(
     password: String,
     app: AppHandle,
     session: State<'_, SetupSession>,
-) -> Result<ProvisionOutcome, String> {
+) -> Result<ProvisionOutcome, ConnectExistingError> {
     let locale = locale_of(&app);
     let worker_url = normalize_worker_url(&address, locale)?;
     let password = password.trim().to_string();
     if password.is_empty() {
-        return Err(user_err(locale, Key::ErrorEmptyPassword));
+        return Err(credential_error(locale, Key::ErrorEmptyPassword));
     }
 
     if !session.dry_run {
@@ -458,14 +634,14 @@ pub async fn connect_existing(
         match probe_worker(&worker_url, &password).await {
             Ok(WorkerProbe::Valid) => {}
             Ok(WorkerProbe::WrongPassword) => {
-                return Err(user_err(locale, Key::ErrorWrongPassword));
+                return Err(credential_error(locale, Key::ErrorWrongPassword));
             }
             Ok(WorkerProbe::NotABrain) => {
-                return Err(user_err(locale, Key::ErrorNotABrain));
+                return Err(user_err(locale, Key::ErrorNotABrain).into());
             }
             Err(e) => {
                 log::warn!("existing-brain probe failed: {e}");
-                return Err(user_err(locale, Key::ErrorCantReach));
+                return Err(user_err(locale, Key::ErrorCantReach).into());
             }
         }
         secure_store::save_setup(&worker_url, &password).map_err(|e| {
@@ -966,7 +1142,9 @@ pub async fn open_dashboard(
 
 #[tauri::command]
 pub fn set_locale(locale: String, app: AppHandle) -> Result<(), String> {
-    let locale = Locale::parse(&locale).ok_or_else(|| "Invalid locale".to_string())?;
+    let current_locale = locale_of(&app);
+    let locale =
+        Locale::parse(&locale).ok_or_else(|| user_err(current_locale, Key::ErrorInvalidLocale))?;
     if let Ok(config) = app.path().app_config_dir() {
         let _ = i18n::write_stored_locale(&config, locale);
     }
@@ -1447,14 +1625,11 @@ fn for_log(detail: impl std::fmt::Display) -> String {
 
 /// Normalises an address typed into the rotation flow, and refuses cleartext.
 ///
-/// `normalize_worker_url` keeps a scheme the user typed, and `worker_url::labels`
-/// accepts `http` — both on purpose, for `http://localhost:8787` dev setups, and
-/// both wrong on this path. A rotation is the one operation that sends a password
-/// the user has never used before as a bearer token, and then *stores* the origin
-/// it sent it to: the keychain and the plaintext CLI config both take it, so a
-/// single mistyped `http://` makes every later request from the app and from the
-/// `brain` command cleartext too, indefinitely. `reqwest` does no HSTS, so nothing
-/// downstream will upgrade it.
+/// `normalize_worker_url` now rejects `http` for every user-entered connection.
+/// The second scheme check here deliberately remains as defence in depth for the
+/// password-changing path: if the shared normaliser is ever relaxed for a local
+/// development flow, rotation must continue to reject cleartext with its own
+/// established error key.
 ///
 /// Only the typed address goes through here. A Door A address came out of this
 /// app's own secure storage, where it was written after a successful connection,
@@ -1588,9 +1763,7 @@ async fn confirm_target_is_a_brain(
 /// `AUTH_TOKEN` overwritten while the user is told their brain's password
 /// changed.
 fn bindings_are_a_brains(bindings: &[serde_json::Value], locale: Locale) -> Result<(), String> {
-    brain_index_names()
-        .iter()
-        .any(|name| discover::bindings_look_like_a_brain(bindings, name))
+    discover::bindings_look_like_a_brain(bindings, &brain_index_names())
         .then_some(())
         .ok_or_else(|| user_err(locale, Key::ErrorNotABrain))
 }
@@ -2627,12 +2800,15 @@ mod tests {
     use super::{
         app_mode, bindings_are_a_brains, blocked_by_migration, brain_index_names,
         clear_pending_rotation, cloudflare_client_for_brain, confirm_target_is_a_brain,
-        dashboard_credentials, fetch_connection_role, for_log, normalize_worker_url,
+        credential_error, dashboard_credentials, existing_brain_error, fetch_connection_role,
+        for_log, normalize_worker_url, provisioning_failed_error, resource_conflict_error,
         role_probe_from_body, update_prompt_is_offerable,
         password_opens_brain, ConnectionRoleProbe,
         previous_index_for, previous_index_to_record, rebuild_blocks_rotation, revoke_all_tools, rotate_demo_password,
-        rotation_address, rotation_block, rotation_failure, rotation_target, RotateError,
-        SetupSession, LOG_DETAIL_MAX,
+        rotation_address, rotation_block, rotation_failure, rotation_target,
+        ConnectExistingError, ProvisioningErrorPayload, RotateError, SetupSession,
+        StartProvisioningError,
+        LOG_DETAIL_MAX,
     };
     use crate::cf::oauth::Tokens;
     use crate::cf::provision::{ProvisionError, ProvisionOutcome};
@@ -2735,10 +2911,150 @@ mod tests {
     }
 
     #[test]
-    fn keeps_explicit_http_and_ports_for_dev_setups() {
+    fn rejects_http_with_the_scheme_specific_error() {
+        for input in [
+            "http://second-brain.demo.workers.dev",
+            "HTTP://second-brain.demo.workers.dev/mcp",
+            "http://localhost:8787/mcp",
+        ] {
+            assert_eq!(
+                normalize_worker_url(input, Locale::En).unwrap_err(),
+                i18n::t(Locale::En, Key::ErrorNeedsHttps),
+                "input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provisioning_errors_have_stable_machine_readable_shapes() {
+        let existing = serde_json::to_value(existing_brain_error(
+            Locale::En,
+            "https://second-brain.example.workers.dev".into(),
+        ))
+        .unwrap();
+        assert_eq!(existing["kind"], "existingBrainFound");
+        assert_eq!(existing["errorKey"], "GuardExistingBrain");
         assert_eq!(
-            normalize_worker_url("http://localhost:8787/mcp", Locale::En).unwrap(),
-            "http://localhost:8787"
+            existing["url"],
+            "https://second-brain.example.workers.dev"
+        );
+        assert!(existing["message"].is_string());
+
+        let conflict = serde_json::to_value(resource_conflict_error(
+            Locale::En,
+            crate::cf::provision::ResourceKind::MemoryStorage,
+        ))
+        .unwrap();
+        assert_eq!(conflict["kind"], "resourceNameConflict");
+        assert_eq!(conflict["errorKey"], "GuardNameConflict");
+        assert_eq!(conflict["resourceKind"], "memoryStorage");
+        assert!(conflict["message"].is_string());
+
+        let failed = serde_json::to_value(provisioning_failed_error(Locale::En)).unwrap();
+        assert_eq!(failed["kind"], "provisioningFailed");
+        assert_eq!(failed["errorKey"], "ErrorProvisioningDetail");
+        assert!(failed["message"].is_string());
+        assert!(failed.get("detail").is_none());
+
+        // Precondition/auth failures retain the command's pre-existing string
+        // payload, so introducing the structured variants is not a global break.
+        assert_eq!(
+            serde_json::to_value(StartProvisioningError::Message("plain".into())).unwrap(),
+            "plain"
+        );
+
+        let _shape_is_public: Option<ProvisioningErrorPayload> = None;
+    }
+
+    #[test]
+    fn connect_existing_credential_errors_have_stable_machine_readable_shapes() {
+        for (locale, key, expected_error_key) in [
+            (Locale::En, Key::ErrorEmptyPassword, "ErrorEmptyPassword"),
+            (Locale::En, Key::ErrorWrongPassword, "ErrorWrongPassword"),
+            (Locale::It, Key::ErrorEmptyPassword, "ErrorEmptyPassword"),
+            (Locale::It, Key::ErrorWrongPassword, "ErrorWrongPassword"),
+        ] {
+            let value = serde_json::to_value(credential_error(locale, key)).unwrap();
+            let object = value.as_object().expect("credential error is an object");
+            assert_eq!(object.len(), 2, "the credential wire shape changed: {value}");
+            assert_eq!(value["errorKey"], expected_error_key);
+            assert_eq!(value["message"], i18n::t(locale, key));
+        }
+
+        assert_eq!(
+            serde_json::to_value(ConnectExistingError::Message("plain".into())).unwrap(),
+            "plain",
+            "non-credential connect errors retain their legacy string shape"
+        );
+
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn connect_existing(");
+        for key in ["Key::ErrorEmptyPassword", "Key::ErrorWrongPassword"] {
+            assert!(
+                body.contains(&format!("credential_error(locale, {key})")),
+                "connect_existing no longer returns a structured error for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn credential_copy_is_pinned_in_both_rust_locales() {
+        let catalog = include_str!("i18n.rs");
+        for (key, message) in [
+            (
+                "ErrorEmptyPassword",
+                "Enter the Second Brain password or the team sign-in token from your invitation.",
+            ),
+            (
+                "ErrorWrongPassword",
+                "That password or team sign-in token does not work for this Second Brain. Check the invitation or password and try again.",
+            ),
+            (
+                "ErrorEmptyPassword",
+                "Inserisci la password del Second Brain oppure il token di accesso del team presente nel tuo invito.",
+            ),
+            (
+                "ErrorWrongPassword",
+                "Questa password o questo token di accesso del team non funziona per questo Second Brain. Controlla l'invito o la password e riprova.",
+            ),
+        ] {
+            assert!(
+                catalog.contains(message),
+                "the pinned EN/IT {key} copy changed or disappeared: {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provisioning_preflight_is_after_auth_and_immediately_before_mutation() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub async fn start_provisioning(");
+        let preflight = at(body, "provision::preflight_account");
+        assert!(
+            preflight > at(body, "let account_name = session"),
+            "the account must be authenticated before its resources are inspected"
+        );
+        assert!(
+            preflight > at(body, "if tokens.expires_at"),
+            "an expired token must be refreshed before the ownership preflight"
+        );
+        assert!(
+            preflight < at(body, "provision::provision_recording("),
+            "the ownership preflight must run before the first mutating pipeline"
+        );
+    }
+
+    #[test]
+    fn an_invalid_locale_uses_the_localized_error_key() {
+        let src = include_str!("commands.rs");
+        let body = fn_body(src, "pub fn set_locale(");
+        assert!(
+            body.contains("Key::ErrorInvalidLocale"),
+            "set_locale must localize invalid locale errors"
+        );
+        assert!(
+            !body.contains("\"Invalid locale\""),
+            "set_locale must not expose a raw hardcoded error"
         );
     }
 
@@ -2751,7 +3067,6 @@ mod tests {
             );
         }
     }
-
 
     /// #252 fixed launch raising a Keychain prompt in dry-run. Every command
     /// that resolves a brain must go through dashboard_credentials for the same
@@ -3743,11 +4058,11 @@ mod tests {
             );
         }
 
-        // The general normaliser still keeps http for the dev setups that need it,
-        // so this refusal has to live on the rotation path and cannot be delegated.
+        // The shared normaliser now closes the cleartext hole for every typed
+        // connection, including local-looking addresses.
         assert_eq!(
-            normalize_worker_url("http://localhost:8787/mcp", Locale::En).unwrap(),
-            "http://localhost:8787"
+            normalize_worker_url("http://localhost:8787/mcp", Locale::En).unwrap_err(),
+            i18n::t(Locale::En, Key::ErrorNeedsHttps)
         );
     }
 
@@ -4499,10 +4814,12 @@ mod tests {
         let refused = revoke_all_tools(brain.base_url(), "not-this-brains-password", Locale::En)
             .await
             .expect_err("a brain must not revoke anything for a password it refuses");
-        assert!(
-            refused.contains("401"),
-            "the status the brain gave is what makes this diagnosable: {refused}"
+        assert_eq!(
+            refused,
+            i18n::t(Locale::En, Key::ErrorBrainHttpStatus),
+            "a backend status is logged internally; the UI receives only its stable localized key"
         );
+        assert!(!refused.contains("401"), "leaked a raw status code: {refused}");
 
         // …and a brain that could not be reached at all says something else
         // again, because the two send the user to different places.

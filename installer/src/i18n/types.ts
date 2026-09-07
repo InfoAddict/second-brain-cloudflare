@@ -29,6 +29,10 @@ export type Messages = {
     notFound: string;
     demoMode: string;
     appTitle: string;
+    continueToCloudflare: string;
+    continueToConnectionDetails: string;
+    trySetupAgain: string;
+    skipUpdateForNow: string;
   };
   settings: {
     title: string;
@@ -152,6 +156,51 @@ export type Messages = {
       barWorking: string;
     };
   };
+  /**
+   * The left rail's step labels (`steps.ts`). Plain nouns, short enough to sit
+   * on one line in a 208px rail in either language, and deliberately not
+   * screen titles: several screens share a step, so a label that echoed one of
+   * their headings would be wrong on the others.
+   */
+  steps: {
+    navLabel: string;
+    start: string;
+    protect: string;
+    signIn: string;
+    find: string;
+    connect: string;
+    build: string;
+    tools: string;
+    details: string;
+    /** The accessible name of a completed step that can be returned to. */
+    backTo: string;
+    /** The title on a completed step that is behind the point of no return. */
+    locked: string;
+    /** The narrow-window row, which replaces the list with a position. */
+    compact: string;
+  };
+  /**
+   * The editorial band above the task (`valuePanel.ts`). Furniture only: the
+   * testimonials themselves are other people's published words and stay in
+   * English in both locales, so nothing here is a quote.
+   */
+  value: {
+    /** The kicker line over the pull quote. */
+    editorialHeading: string;
+    /** The accessible name of the quote as a figure. */
+    label: string;
+    /** Where a quote was published. Proper nouns, so both read the same. */
+    sourceProductHunt: string;
+    sourceReddit: string;
+    /**
+     * The three facts in the foot strip, read left to right. Kept as three keys
+     * so the separator between them stays with the CSS rather than with the
+     * translation.
+     */
+    statSetup: string;
+    statCost: string;
+    statData: string;
+  };
   welcome: {
     title: string;
     lede: string;
@@ -200,6 +249,9 @@ export type Messages = {
     unlockLede: string;
     /** Door B into the password change (#235) — a ghost link on both screens. */
     lostPassword: string;
+    memberTokenHelp: string;
+    memberTokenHelpTitle: string;
+    memberTokenHelpLede: string;
   };
   password: {
     title: string;
@@ -361,6 +413,14 @@ export type Messages = {
     pickerTitle: string;
     pickerLede: string;
   };
+  /** The two `start_provisioning` preflight guards (#P0-1) — `commands.rs`'s
+   *  `ExistingBrainFound` / `ResourceNameConflict` payload variants. */
+  guard: {
+    existingBrainTitle: string;
+    existingBrainConnect: string;
+    conflictTitle: string;
+    conflictChooseAnother: string;
+  };
   progress: {
     title: string;
     lede: string;
@@ -368,6 +428,9 @@ export type Messages = {
     stepMemory: string;
     stepRecall: string;
     stepFinish: string;
+    stepInProgress: string;
+    stepDone: string;
+    stepFailed: string;
   };
   tools: {
     title: string;
@@ -502,5 +565,41 @@ export type Messages = {
     subject: string;
     bodyAddress: string;
     bodyMcp: string;
+  };
+  /**
+   * Ridge, the guided-experience mascot (plan.md §4.4). One line per screen
+   * (or contextual trigger), keyed the same way the screen tables are: a
+   * safety-relevant line always outranks a delightful one, and none of these
+   * repeat a fact the app has already proven false.
+   */
+  mascot: {
+    dismiss: string;
+    welcome: { intro: string; guard: string };
+    password: { intro: string; breached: string };
+    cloudflare: { why: string; waiting: string; pickerWhy: string };
+    progress: { intro: string };
+    tools: { intro: string };
+    details: { allSetSolo: string; allSetTeam: string; allSetMember: string };
+    connect: { fork: string };
+    discover: { searching: string };
+    brainPicker: { one: string; many: string };
+    unlock: { hint: string };
+    manualEntry: { combined: string; insecureHttp: string };
+    existingTeam: { repeatQuestion: string };
+    rotation: { intro: string };
+    error: {
+      provisioningHonest: string;
+      wrongCredentialMemberAware: string;
+      cfSignIn: string;
+      discoverFailed: string;
+      rotateNotSent: string;
+      rotateUnsure: string;
+      rotateBlocked: string;
+      rotateLocal: string;
+      staleLocal: string;
+      /** v2: details.ts's Connections window is muted in v1 and never calls this. */
+      disconnectPartial: string;
+      clipboard: string;
+    };
   };
 };
