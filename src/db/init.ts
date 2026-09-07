@@ -329,8 +329,8 @@ async function probeSchema(env: Env): Promise<ExistingSchema | null> {
   let rows: unknown;
   try {
     rows = (await env.DB.prepare(PROBE_SQL).all<{ kind: string; name: string }>())?.results;
-  } catch (e) {
-    console.warn("Schema probe failed; applying the full schema instead:", e);
+  } catch {
+    console.warn("Schema probe failed; applying the full schema instead");
     return null;
   }
   if (!Array.isArray(rows)) return null;
@@ -464,6 +464,20 @@ async function applySchema(env: Env): Promise<void> {
     }
   }
   for (const [name, ddl] of Object.entries(POST_COLUMN_OBJECTS)) {
+    if (name === "idx_entries_capsule" && (existing === null || existing.objects.has(name))) {
+      // 強制利用する専用indexは、同名でも定義が異なれば修復する。
+      const normalize = (sql: string) => sql
+        .replace(/^CREATE INDEX IF NOT EXISTS\s+/i, "CREATE INDEX ")
+        .match(/'(?:''|[^'])*'|"(?:""|[^"])*"|[a-zA-Z_]\w*|\d+|[^\s]/g)?.join(" ") ?? "";
+      if (normalize(existing?.definitions.get(name) ?? "") !== normalize(ddl)) {
+        await env.DB.batch([
+          env.DB.prepare(`DROP INDEX IF EXISTS ${name}`),
+          env.DB.prepare(ddl),
+          env.DB.prepare(`UPDATE prompt_capsule_revisions SET revision = lower(hex(randomblob(16)))`),
+        ]);
+      }
+      continue;
+    }
     if (kindOf(ddl) === "trigger" && (existing === null || existing.objects.get(name) === "trigger"
       || existing.objects.get("prompt_capsule_revisions") === "table")) {
       // sqlite_master removes IF NOT EXISTS. Compare bodies so a deployed

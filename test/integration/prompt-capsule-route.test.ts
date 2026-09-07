@@ -1090,8 +1090,7 @@ describe("prompt capsule routes", () => {
     expect(await second.text()).toBe(firstText);
     expect(capsuleQueries()).toBe(2);
     expect(error).toHaveBeenCalledWith(
-      "Prompt capsule cache write failed (non-fatal):",
-      expect.any(Error),
+      "Prompt capsule cache write failed (non-fatal)",
     );
   });
 
@@ -1438,4 +1437,93 @@ describe("prompt capsule routes", () => {
       expect(JSON.parse((recovered.content as Array<{ text: string }>)[0].text)).toMatchObject({ ok: true });
     } finally { await client.close(); await server.close(); vi.restoreAllMocks(); }
   });
+  it.each([
+    "CREATE INDEX idx_entries_capsule ON entries(created_at)",
+    "CREATE INDEX idx_entries_capsule ON entries(workspace_id,id) WHERE instr(lower(tags), '\"foreign:\"') > 0",
+    "CREATE INDEX idx_entries_capsule ON users(id)",
+  ])("同名の異なるindexを修復し、キャッシュを失効する: %s", async ddl => {
+    await seed("repair-index", "Current definition", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const first = await getCore();
+    expect(first.status).toBe(200);
+    const before = await env.DB.prepare("SELECT revision FROM prompt_capsule_revisions WHERE workspace_id = ?").bind(identity.personalWorkspaceId).first();
+    await env.DB.prepare("DROP INDEX idx_entries_capsule").run();
+    await env.DB.prepare(ddl).run();
+    resetDatabaseInit();
+    const repaired = await getCore();
+    expect(repaired.status).toBe(200);
+    expect(await repaired.text()).toContain("Current definition");
+    const after = await env.DB.prepare("SELECT revision FROM prompt_capsule_revisions WHERE workspace_id = ?").bind(identity.personalWorkspaceId).first();
+    expect(after).not.toEqual(before);
+    const batch = vi.spyOn(env.DB, "batch");
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    expect(batch).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["GET", "HEAD"].flatMap(method => ["prepare", "batch", "migration"].map(stage => ({ method, stage }))))("REST $methodの$stage障害は非露出の500、復旧後は200", async ({ method, stage }) => {
+    const secret = "PRIVATE SQL INPUT";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    if (stage === "migration") {
+      await env.DB.prepare("DROP INDEX idx_entries_capsule").run();
+      resetDatabaseInit();
+      vi.spyOn(env.DB, "exec").mockRejectedValue(new Error(secret));
+    } else if (stage === "prepare") {
+      const original = env.DB.prepare.bind(env.DB);
+      vi.spyOn(env.DB, "prepare").mockImplementation(sql => {
+        if (sql.includes("SELECT substr(id")) throw new Error(secret);
+        return original(sql);
+      });
+    } else vi.spyOn(env.DB, "batch").mockRejectedValue(new Error(secret));
+    const response = await defaultHandler.fetch(req(method, "/prompt-capsules/core"), env, ctx);
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const text = await response.text();
+    expect(text).not.toContain(secret);
+    if (method === "HEAD") expect(text).toBe("");
+    else expect(JSON.parse(text)).toMatchObject({ code: "internal_error", status: 500 });
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    vi.restoreAllMocks();
+    expect((await getCore()).status).toBe(200);
+  });
+
+  it.each(["personal", "company"] as const)("適合・過大・適合の%s定義を仕様どおり扱う", async workspace => {
+    const ws = workspace === "personal" ? identity.personalWorkspaceId : identity.companyWorkspaceIds[0];
+    await seed("first-fit", "First fits", ["capsule:core", "capsule-slot:identity", "status:canonical"], ws);
+    await seed("middle-large", "x".repeat(PROMPT_CAPSULE_MAX_CHARS + 1), ["capsule:core", "capsule-slot:preferences", "status:canonical"], ws);
+    await seed("last-fit", "Last fits", ["capsule:core", "capsule-slot:constraints", "status:canonical"], ws);
+    const response = await defaultHandler.fetch(req("GET", `/prompt-capsules/core?workspace=${workspace}`), env, ctx);
+    const body = await response.json() as any;
+    expect(body.invalid_entries).toContainEqual({ entry_id: "middle-large", reason: "content-too-large" });
+    if (workspace === "personal") { expect(response.status).toBe(409); expect(body.text).toBeUndefined(); }
+    else { expect(response.status).toBe(200); expect(body.sections.map((s: any) => s.slot)).toEqual(["identity", "constraints"]); expect(body.complete).toBe(false); }
+  });
+
+  it("RESTとMCPの書込でNUL本文・タグを拒否し既存記憶を保つ", async () => {
+    await seed("nul-guard", "Original", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const ai = vi.spyOn(env.AI, "run");
+    for (const path of ["/capture", "/update", "/append"]) {
+      const response = await defaultHandler.fetch(req("POST", path, { body: { id: "nul-guard", content: "bad\0text", addition: "bad\0text" } }), env, ctx);
+      expect(response.status).toBe(400);
+    }
+    for (const path of ["/capture", "/update"]) {
+      expect((await defaultHandler.fetch(req("POST", path, { body: { id: "nul-guard", content: "valid", tags: ["capsule:core\0x"] } }), env, ctx)).status).toBe(400);
+    }
+    const server = buildMcpServer(env, ctx, identity);
+    const client = new Client({ name: "nul-guard", version: "1" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([client.connect(ct), server.connect(st)]);
+      for (const name of ["remember", "update", "append"]) {
+        expect((await client.callTool({ name, arguments: { id: "nul-guard", content: "bad\0text", addition: "bad\0text" } })).isError).toBe(true);
+      }
+      for (const name of ["remember", "update"]) {
+        expect((await client.callTool({ name, arguments: { id: "nul-guard", content: "valid", tags: ["capsule:core\0x"] } })).isError).toBe(true);
+      }
+    } finally { await client.close(); await server.close(); }
+    expect(ai).not.toHaveBeenCalled();
+    expect(await env.DB.prepare("SELECT content FROM entries WHERE id = 'nul-guard'").first()).toEqual({ content: "Original" });
+    vi.restoreAllMocks();
+  });
+
 });

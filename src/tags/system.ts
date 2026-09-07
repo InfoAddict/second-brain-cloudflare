@@ -91,5 +91,5 @@ export const MAX_INPUT_TAGS = 64;
 export const MAX_INPUT_TAG_CHARS = 128;
 export function validInputTags(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= MAX_INPUT_TAGS
-    && value.every(tag => typeof tag === "string" && tag.length <= MAX_INPUT_TAG_CHARS);
+    && value.every(tag => typeof tag === "string" && tag.length <= MAX_INPUT_TAG_CHARS && !tag.includes("\0"));
 }

@@ -237,8 +237,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
     {
       description: REMEMBER_DESCRIPTION,
       inputSchema: {
-        content: z.string().describe("The idea, task, or note to store — one distinct item, written so it still makes sense on its own months from now"),
-        tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS)).max(MAX_INPUT_TAGS).optional().describe("Optional tags for filtering and later retrieval"),
+        content: z.string().refine(value => !value.includes("\0"), "NUL is not allowed").describe("The idea, task, or note to store — one distinct item, written so it still makes sense on its own months from now"),
+        tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS).refine(value => !value.includes("\0"), "NUL is not allowed")).max(MAX_INPUT_TAGS).optional().describe("Optional tags for filtering and later retrieval"),
         source: z.string().optional().describe("Origin: phone, browser, voice, claude"),
         volatility: volatilityParam,
         workspace: z.enum(["personal", "company"]).optional().describe("Where to store it: your private workspace (default) or the shared company layer"),
@@ -310,7 +310,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       description: APPEND_DESCRIPTION,
       inputSchema: {
         id: z.string().describe("Entry ID to append to — from recall or list_recent"),
-        addition: z.string().describe("The new information to add to the existing entry — what actually changed, not a restatement of what is already there"),
+        addition: z.string().refine(value => !value.includes("\0"), "NUL is not allowed").describe("The new information to add to the existing entry — what actually changed, not a restatement of what is already there"),
         volatility: volatilityParam,
       },
     },
@@ -374,8 +374,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       description: UPDATE_DESCRIPTION,
       inputSchema: {
         id: z.string().describe("Entry ID to update — from recall or list_recent"),
-        content: z.string().describe("The new content to replace the existing entry with"),
-        tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS)).max(MAX_INPUT_TAGS).optional().describe("Replacement topic tags. Supplying any capsule: or capsule-slot: tag replaces both capsule namespaces; include the complete new definition. Omit to preserve tags. Use set_status to unpublish."),
+        content: z.string().refine(value => !value.includes("\0"), "NUL is not allowed").describe("The new content to replace the existing entry with"),
+        tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS).refine(value => !value.includes("\0"), "NUL is not allowed")).max(MAX_INPUT_TAGS).optional().describe("Replacement topic tags. Supplying any capsule: or capsule-slot: tag replaces both capsule namespaces; include the complete new definition. Omit to preserve tags. Use set_status to unpublish."),
         volatility: volatilityParam,
       },
     },
@@ -493,7 +493,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "get_prompt_capsule",
     {
-      description: "Return one deterministic Prompt Capsule and its strong ETag. This read-only tool is for gateways that construct stable prompt prefixes; use recall for query-specific context. Only entries with canonical status are included: give the entry canonical status in its tags at remember time, or call set_status canonical afterwards.",
+      description: "Return one deterministic Prompt Capsule and its strong ETag. This read-only tool is for gateways that construct stable prompt prefixes; use recall for query-specific context. Only entries with canonical status are included: give the entry canonical status in its tags at remember time, or call set_status canonical afterwards. To re-slot an entry, use update with tags containing the complete capsule: and capsule-slot: definition.",
       inputSchema: {
         kind: z.enum(["core", "project"]).describe("Capsule kind"),
         project_id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/).optional()

@@ -55,7 +55,7 @@ function successHeaders(etag: string, bodyText?: string): Headers {
   return headers;
 }
 
-export async function handlePromptCapsuleRoutes(
+async function handlePromptCapsuleRequest(
   request: Request,
   url: URL,
   env: Env,
@@ -97,4 +97,22 @@ export async function handlePromptCapsuleRoutes(
     status: 200,
     headers: successHeaders(built.etag, built.bodyText),
   });
+}
+
+// RESTにもMCPと同じ非露出の障害境界を置く。認証時のDB障害も含む。
+export async function handlePromptCapsuleRoutes(
+  request: Request, url: URL, env: Env, ctx: ExecutionContext,
+): Promise<Response | null> {
+  if (parseTarget(url.pathname) === null) return null;
+  try {
+    return await handlePromptCapsuleRequest(request, url, env, ctx);
+  } catch {
+    console.error("Prompt Capsule retrieval failed");
+    const response = json({
+      ok: false, schema: "prompt-capsule.v1", code: "internal_error", status: 500,
+      error: "Prompt Capsule retrieval failed. Please try again later.",
+    }, 500);
+    response.headers.set("Cache-Control", "no-store");
+    return withoutHeadBody(request, response);
+  }
 }

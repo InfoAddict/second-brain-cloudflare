@@ -149,7 +149,7 @@ export async function writeCachedPromptCapsule(
       JSON.stringify({ bodyText: built.bodyText, etag: built.etag }),
       { expirationTtl: PROMPT_CAPSULE_CACHE_TTL_SECONDS },
     );
-  } catch (e) {
-    console.error("Prompt capsule cache write failed (non-fatal):", e);
+  } catch {
+    console.error("Prompt capsule cache write failed (non-fatal)");
   }
 }

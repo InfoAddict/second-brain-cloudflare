@@ -120,7 +120,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
                   ? "index"
                   : PROMPT_CAPSULE_TRIGGERS.includes(name) ? "trigger" : "table",
                 name,
-                definition: TRIGGER_DDL.get(name),
+                definition: name === "idx_entries_capsule" ? `CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '"capsule:') > 0` : TRIGGER_DDL.get(name),
               })),
               ...[...columns].map(name => ({ kind: "column", name })),
               ...[...edgeColumns].map(name => ({ kind: "edge_column", name })),
@@ -744,7 +744,7 @@ describe("initializeDatabase against real SQLite", () => {
       }));
 
       await expectFullyMigrated();
-      expect(console.warn).toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith("Schema probe failed; applying the full schema instead");
     });
 
     it("applies the whole schema when the probe returns a shape it cannot read", async () => {

@@ -140,10 +140,14 @@ Authenticated clients can use `GET|HEAD /prompt-capsules/core`,
 `GET|HEAD /prompt-capsules/projects/<opaque-project-id>`, or the
 `get_prompt_capsule` MCP tool. Responses include a strong `ETag`, a SHA-256 of
 the exact prompt-ready `text`, and whole-slot omission metadata for the
-12,000-character budget: once a slot does not fit, it and every later slot are
-omitted, so the emitted text is always a prefix of the slot order. A single
+12,000-character budget. Validation happens before serialization: shared invalid,
+duplicate, or individually oversized definitions are excluded and reported, so
+later healthy slots may still appear. The result is an ordered subset of the
+defined slots, not necessarily their prefix. Among the remaining valid slots,
+once the cumulative budget is exceeded, that slot and every later slot are omitted. A single
 entry longer than the whole serialized budget (including JSON escaping) returns
-`409 content-too-large` in a personal capsule. In a shared capsule it is skipped
+`409 invalid_prompt_capsule` with reason `content-too-large` in a personal
+capsule, even if earlier slots would fit; no partial text is returned. In a shared capsule it is skipped
 and reported, so it cannot hide unrelated slots. Empty responses have
 `populated: false` and `complete: false`. The 200-candidate resource limit still
 returns `409 too_many_candidates`; an author or admin must reduce definitions. Timestamps, entry ids, and ETags are excluded from
@@ -176,11 +180,13 @@ target per workspace.
 After a D1 Time Travel restore, redeploy the Worker before resuming traffic so
 schema initialization recreates `prompt_capsule_revisions` and the four
 `prompt_capsule_*` triggers if the restore point predates part of this migration.
-Initialization also compares installed trigger bodies, atomically drops and
-recreates changed or missing triggers, and rotates revisions so old cached results cannot
-survive a repaired invalidator. NUL-containing ids, content, or tag documents
+Initialization compares the installed capsule index definition and trigger bodies.
+Changed index definitions and changed or missing triggers are repaired atomically
+with a revision rotation, so cached results cannot survive a repaired invalidator. NUL-containing ids, content, or tag documents
 are rejected (personal) or skipped and reported (shared), never published as a
-truncated SQLite string.
+truncated SQLite string. REST capture/update/append and MCP remember/update/append
+reject new NUL-containing content; incoming tags must also be NUL-free. Imported
+or legacy rows still receive the read-time checks described above.
 
 **Upgrade warning:** `capsule:*` and `capsule-slot:*` are now reserved. Existing
 canonical rows using those names can become prompt definitions or appear in
