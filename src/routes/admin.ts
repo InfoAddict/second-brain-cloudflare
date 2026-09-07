@@ -1,3 +1,4 @@
+import { hasCapsuleTag } from "../tags/system";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
@@ -604,9 +605,7 @@ export async function handleAdminRoutes(
       // raised because the filter now discards rows the ORDER BY ranked first.
       env.DB.prepare(
         `SELECT value, COUNT(*) as n FROM entries, json_each(entries.tags)
-         WHERE value NOT LIKE 'kind:%' AND value NOT LIKE 'status:%'
-           AND value NOT LIKE 'volatility:%' AND value NOT LIKE 'stale:%'
-           AND value NOT IN ('auto-pattern', 'auto-insight', 'synthesized', 'rolled-up', 'duplicate-candidate')
+         WHERE ${isTopicTagSql()}
            AND value NOT GLOB '[0-9]*'
            AND ${scope.clause}
          GROUP BY value ORDER BY n DESC LIMIT 5`,
@@ -1272,7 +1271,7 @@ export async function handleAdminRoutes(
         const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
         let tags: string[] = JSON.parse(row.tags as string);
         if (kind) tags = withKind(tags, kind);
-        if (canonical && getStatus(tags) === null) tags = withStatus(tags, "canonical");
+        if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
         await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), row.id).run();
         processed++;
       } catch (e) {
