@@ -37,6 +37,9 @@ export interface PromptCapsulePayload {
   sections: Array<{ slot: string; source_entry_id: string }>;
   omitted_slots: string[];
   complete: boolean;
+  populated: boolean;
+  invalid_entries: Array<{ entry_id: string; reason: string }>;
+  duplicate_slots: Array<{ slot: string; entry_ids: string[] }>;
   char_count: number;
   max_chars: number;
 }
@@ -205,6 +208,7 @@ async function buildPromptCapsuleFromD1(
             length(tags) AS tags_length
        FROM entries
       WHERE ${scope.clause}
+        AND instr(lower(tags), '"capsule:') > 0
         AND instr(lower(tags), ?) > 0
         AND instr(lower(tags), ?) > 0
       ORDER BY id ASC
@@ -257,74 +261,42 @@ async function buildPromptCapsuleFromD1(
     });
   }
 
-  const oversizedEntryIdCount = results.filter(
-    row => Number(row.id_length) > PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS,
-  ).length;
-  if (oversizedEntryIdCount) {
-    return finish({
-      ok: false,
-      status: 409,
-      body: {
-        ok: false,
-        code: "invalid_prompt_capsule",
-        error: `Prompt capsule contains ${oversizedEntryIdCount} entry id(s) longer than ${PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS} characters`,
-        invalid_entries: [{
-          entry_id: "[omitted]",
-          reason: "entry-id-too-large",
-        }],
-      },
-    });
+  const boundedInvalid: Array<{ entryId: string; reason: "content-too-large" | "entry-id-too-large" }> = [];
+  const candidates: PromptCapsuleCandidate[] = [];
+  for (const row of results) {
+    const id = String(row.id ?? "");
+    if (Number(row.id_length) > PROMPT_CAPSULE_MAX_ENTRY_ID_CHARS) {
+      boundedInvalid.push({ entryId: "[omitted]", reason: "entry-id-too-large" });
+    } else if (Number(row.content_length) > PROMPT_CAPSULE_MAX_CHARS) {
+      boundedInvalid.push({ entryId: id, reason: "content-too-large" });
+    } else {
+      candidates.push({
+        id,
+        content: row.content,
+        tags: Number(row.tags_length) > PROMPT_CAPSULE_MAX_TAG_CHARS ? null : parseStoredTags(row.tags),
+      });
+    }
   }
-
-  // A row longer than the whole budget can never be emitted, and its truncated
-  // prefix must never reach normalization (trailing whitespace could collapse it
-  // below the budget and publish a partial entry). Ids are safe to reflect: the
-  // oversized-id check above ran first.
-  const oversizedContent = results.filter(row => Number(row.content_length) > PROMPT_CAPSULE_MAX_CHARS);
-  if (oversizedContent.length) {
-    return finish({
-      ok: false,
-      status: 409,
-      body: {
-        ok: false,
-        code: "invalid_prompt_capsule",
-        error: `Prompt capsule contains ${oversizedContent.length} entry(ies) longer than ${PROMPT_CAPSULE_MAX_CHARS} characters`,
-        invalid_entries: oversizedContent.map(row => ({
-          entry_id: String(row.id ?? ""),
-          reason: "content-too-large",
-        })),
-      },
-    });
-  }
-
-  const candidates: PromptCapsuleCandidate[] = results.map(row => ({
-    id: String(row.id ?? ""),
-    content: row.content,
-    tags: Number(row.tags_length) > PROMPT_CAPSULE_MAX_TAG_CHARS
-      ? null
-      : parseStoredTags(row.tags),
-  }));
   const selected = selectPromptCapsuleEntries(request.kind, candidates, request.projectId);
-  if (selected.invalidEntries.length || selected.duplicateSlots.length) {
+
+  // JSON escaping and section framing count toward the budget too. Never
+  // publish a truncated row, or let one oversized shared row hide other slots.
+  selected.sections = selected.sections.filter(section => {
+    if (serializePromptCapsule(request.kind, [section]).sections.length) return true;
+    boundedInvalid.push({ entryId: section.sourceEntryId, reason: "content-too-large" });
+    return false;
+  });
+  if (workspace === "personal" && boundedInvalid.length) {
     return finish({
-      ok: false,
-      status: 409,
+      ok: false, status: 409,
       body: {
-        ok: false,
-        code: "invalid_prompt_capsule",
-        error: "Prompt capsule definition is ambiguous or malformed",
-        invalid_entries: selected.invalidEntries.map(entry => ({
-          entry_id: entry.entryId,
-          reason: entry.reason,
-        })),
-        duplicate_slots: selected.duplicateSlots.map(slot => ({
-          slot: slot.slot,
-          entry_ids: slot.entryIds,
-        })),
+        ok: false, code: "invalid_prompt_capsule", error: "Prompt capsule entry exceeds its size budget",
+        invalid_entries: boundedInvalid.map(entry => ({ entry_id: entry.entryId, reason: entry.reason })),
       },
     });
   }
-
+  const invalidEntries = [...selected.invalidEntries, ...boundedInvalid]
+    .sort((a, b) => a.entryId < b.entryId ? -1 : a.entryId > b.entryId ? 1 : 0);
   const serialized = serializePromptCapsule(request.kind, selected.sections);
   const promptHash = await sha256Hex(serialized.text);
   const payload: PromptCapsulePayload = {
@@ -341,7 +313,11 @@ async function buildPromptCapsuleFromD1(
       source_entry_id: section.sourceEntryId,
     })),
     omitted_slots: serialized.omittedSlots,
-    complete: serialized.complete,
+    complete: serialized.complete && serialized.sections.length > 0
+      && invalidEntries.length === 0 && selected.duplicateSlots.length === 0,
+    populated: serialized.sections.length > 0,
+    invalid_entries: invalidEntries.map(entry => ({ entry_id: entry.entryId, reason: entry.reason })),
+    duplicate_slots: selected.duplicateSlots.map(slot => ({ slot: slot.slot, entry_ids: slot.entryIds })),
     char_count: serialized.charCount,
     max_chars: serialized.maxChars,
   };

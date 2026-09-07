@@ -1,3 +1,4 @@
+import { MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS } from "../tags/system";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveConfig } from "../config";
 import { z } from "zod";
@@ -237,7 +238,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       description: REMEMBER_DESCRIPTION,
       inputSchema: {
         content: z.string().describe("The idea, task, or note to store — one distinct item, written so it still makes sense on its own months from now"),
-        tags: z.array(z.string()).optional().describe("Optional tags for filtering and later retrieval"),
+        tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS)).max(MAX_INPUT_TAGS).optional().describe("Optional tags for filtering and later retrieval"),
         source: z.string().optional().describe("Origin: phone, browser, voice, claude"),
         volatility: volatilityParam,
         workspace: z.enum(["personal", "company"]).optional().describe("Where to store it: your private workspace (default) or the shared company layer"),
@@ -374,10 +375,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       inputSchema: {
         id: z.string().describe("Entry ID to update — from recall or list_recent"),
         content: z.string().describe("The new content to replace the existing entry with"),
+        tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS)).max(MAX_INPUT_TAGS).optional().describe("Replacement topic tags. Supplying any capsule: or capsule-slot: tag replaces both capsule namespaces; include the complete new definition. Omit to preserve tags. Use set_status to unpublish."),
         volatility: volatilityParam,
       },
     },
-    async ({ id, content, volatility }) => {
+    async ({ id, content, volatility, tags }) => {
       const newContent = content.trim();
       if (!newContent) {
         return { content: [{ type: "text", text: "Content cannot be empty." }] };
@@ -399,7 +401,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, undefined, writeCtx);
+      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {

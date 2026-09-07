@@ -736,7 +736,7 @@ describe("captureEntry()", () => {
     expect(tags).toEqual(expect.arrayContaining(capsuleTags));
   });
 
-  it("a capsule-tagged capture judged a contradiction keeps its status:canonical", async () => {
+  it("a capsule-tagged capture judged a contradiction is demoted to draft", async () => {
     db.entries = [{ ...existingNote("api"), tags: '["status:canonical"]' }];
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
@@ -744,19 +744,26 @@ describe("captureEntry()", () => {
       }),
       AI: makeContradictionAI('{"contradicts": true, "conflicting_id": "existing", "reason": "reversed decision"}'),
     });
+    let insertedTags = "";
+    const originalPush = db.entries.push.bind(db.entries);
+    vi.spyOn(db.entries, "push").mockImplementation((...rows) => {
+      insertedTags = rows[0].tags;
+      return originalPush(...rows);
+    });
     const { ctx } = makeCtx();
     const result = await captureEntry("We use keyword search only.", capsuleTags, "api", env, ctx);
+    expect(JSON.parse(insertedTags)).toContain("status:draft");
     expect(result.status).toBe("contradiction_protected");
     if (result.status !== "contradiction_protected") return;
-    expect(result.entryStatus).toBe("canonical");
+    expect(result.entryStatus).toBe("draft");
     const tags: string[] = JSON.parse(db.entries.find(e => e.id === result.id)!.tags);
-    expect(tags).toContain("status:canonical");
-    expect(tags).not.toContain("status:draft");
+    expect(tags).not.toContain("status:canonical");
+    expect(tags).toContain("status:draft");
     expect(tags).not.toContain("contradiction-resolved");
     expect(JSON.parse(db.entries.find(e => e.id === "existing")!.tags)).toContain("status:canonical");
   });
 
-  it("an exact duplicate is still blocked even when it carries capsule tags", async () => {
+  it("an exact duplicate capsule definition is stored with its own tags", async () => {
     db.entries = [existingNote("api")];
     env = makeTestEnv(db, {
       VECTORIZE: makeVectorizeMock({
@@ -765,7 +772,8 @@ describe("captureEntry()", () => {
     });
     const { ctx } = makeCtx();
     const result = await captureEntry("We decided to use Vectorize for semantic search.", capsuleTags, "api", env, ctx);
-    expect(result.status).toBe("blocked");
-    expect(db.entries).toHaveLength(1);
+    expect(result.status).toBe("stored");
+    expect(db.entries).toHaveLength(2)
+    expect(JSON.parse(db.entries[1].tags)).toEqual(expect.arrayContaining(capsuleTags));
   });
 });

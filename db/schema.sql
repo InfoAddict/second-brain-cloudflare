@@ -217,3 +217,7 @@ CREATE TABLE IF NOT EXISTS maintenance_cursor (
 
 INSERT INTO maintenance_cursor (id, workspace_id, advanced_at) VALUES (1, '', 0)
   ON CONFLICT DO NOTHING;
+
+-- Capsule-only index: missing project ids never scan ordinary memories.
+CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id)
+WHERE instr(lower(tags), '"capsule:') > 0;

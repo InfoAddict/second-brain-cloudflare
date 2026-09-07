@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../../src/env";
-import { resetDatabaseInit } from "../../src/db/init";
+import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { createMember } from "../../src/lib/team-admin";
 import { defaultHandler } from "../../src/routes";
@@ -362,16 +362,16 @@ describe("prompt capsule routes", () => {
     const duplicate = await defaultHandler.fetch(
       req("GET", "/prompt-capsules/projects/p-123"), env, ctx,
     );
-    expect(duplicate.status).toBe(409);
+    expect(duplicate.status).toBe(200);
     expect(await duplicate.json()).toMatchObject({
-      code: "invalid_prompt_capsule",
+      complete: false,
       duplicate_slots: [{ slot: "current-state", entry_ids: ["project-state", "project-state-2"] }],
     });
 
     const duplicateHead = await defaultHandler.fetch(
       req("HEAD", "/prompt-capsules/projects/p-123"), env, ctx,
     );
-    expect(duplicateHead.status).toBe(409);
+    expect(duplicateHead.status).toBe(200);
     expect(await duplicateHead.text()).toBe("");
   });
 
@@ -430,9 +430,9 @@ describe("prompt capsule routes", () => {
       .bind(oversizedTags, "oversized-tags").run();
 
     const response = await defaultHandler.fetch(req("GET", "/prompt-capsules/core"), env, ctx);
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      code: "invalid_prompt_capsule",
+      complete: false,
       invalid_entries: [{ entry_id: "oversized-tags", reason: "malformed-tags" }],
     });
   });
@@ -547,7 +547,7 @@ describe("prompt capsule routes", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as PromptCapsulePayload;
     expect(body.sections).toEqual([]);
-    expect(body.complete).toBe(true);
+    expect(body.complete).toBe(false);
   });
 
   it("fails closed when a tagged canonical row has malformed JSON tags", async () => {
@@ -558,9 +558,9 @@ describe("prompt capsule routes", () => {
       .bind('["capsule:core","capsule-slot:identity","status:canonical"', "malformed").run();
 
     const response = await defaultHandler.fetch(req("GET", "/prompt-capsules/core"), env, ctx);
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      code: "invalid_prompt_capsule",
+      complete: false,
       invalid_entries: [{ entry_id: "malformed", reason: "malformed-tags" }],
     });
   });
@@ -897,7 +897,7 @@ describe("prompt capsule routes", () => {
     expect((await afterForget.json() as PromptCapsulePayload).sections).toEqual([]);
   });
 
-  it("re-queries after /classify-pending promotes a capsule entry to canonical", async () => {
+  it("classification cannot publish a capsule entry without explicit approval", async () => {
     await seed("pending-identity", "Pending identity", [
       "capsule:core", "capsule-slot:identity",
     ]);
@@ -915,9 +915,7 @@ describe("prompt capsule routes", () => {
     expect(await classified.json()).toMatchObject({ processed: 1, failed: 0 });
 
     const after = await getCore();
-    expect((await after.json() as PromptCapsulePayload).sections).toEqual([
-      { slot: "identity", source_entry_id: "pending-identity" },
-    ]);
+    expect((await after.json() as PromptCapsulePayload).sections).toEqual([]);
     expect(capsuleQueries()).toBe(2);
   });
 
@@ -969,10 +967,10 @@ describe("prompt capsule routes", () => {
   it("does not cache a 409 result", async () => {
     await seed("dup-1", "First", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
     await seed("dup-2", "Second", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
-    expect((await getCore()).status).toBe(409);
+    expect((await getCore()).status).toBe(200);
     expect(capsuleQueries()).toBe(1);
-    expect((await getCore()).status).toBe(409);
-    expect(capsuleQueries()).toBe(2);
+    expect((await getCore()).status).toBe(200);
+    expect(capsuleQueries()).toBe(1);
   });
 
   it("keeps two members' cached Personal Capsules apart", async () => {
@@ -1196,4 +1194,127 @@ describe("prompt capsule routes", () => {
     const body = await (await getCore()).json() as PromptCapsulePayload;
     expect(body.sections).toEqual([{ slot: "preferences", source_entry_id: id }]);
   });
+  it("重複blockedでもCapsule定義を保存し、通常メモリの重複拒否は維持する", async () => {
+    await seed("existing", "A stable preference.", ["work"]);
+    vi.mocked(env.VECTORIZE.query).mockResolvedValue({ matches: [{ id: "existing", score: 0.999, metadata: { parentId: "existing" } }] } as never);
+    const ordinary = await defaultHandler.fetch(req("POST", "/capture", { body: { content: "A stable preference." } }), env, ctx);
+    expect(await ordinary.json()).toMatchObject({ ok: false, duplicate: true, matchId: "existing" });
+    const capture = capturingCtx();
+    const response = await defaultHandler.fetch(req("POST", "/capture", { body: {
+      content: "A stable preference.", tags: [" capsule:core ", " capsule-slot:preferences ", "status:canonical"],
+    } }), env, capture.ctx);
+    expect(response.status).toBe(200);
+    const { id } = await response.json() as { id: string };
+    expect(id).not.toBe("existing");
+    await capture.drain();
+    const body = await (await getCore()).json() as PromptCapsulePayload;
+    expect(body.sections).toEqual([{ slot: "preferences", source_entry_id: id }]);
+  });
+
+  it("分類がcanonicalを返しても未承認Capsuleを公開しない", async () => {
+    env.AI = makeMergeAI("unused", '{"importance":5,"canonical":true,"kind":"semantic"}');
+    const capture = capturingCtx();
+    const response = await defaultHandler.fetch(req("POST", "/capture", { body: {
+      content: "A durable preference.", tags: ["capsule:core", "capsule-slot:preferences"],
+    } }), env, capture.ctx);
+    expect(response.status).toBe(200);
+    await capture.drain();
+    expect(await (await getCore()).json()).toMatchObject({ sections: [], populated: false, complete: false });
+  });
+
+  it("保護されたcanonicalと矛盾するCapsuleをdraftに降格する", async () => {
+    await seed("protected", "Never disclose secrets.", ["status:canonical"]);
+    nearMatch("protected");
+    env.AI = makeMergeAI('{"action":"contradiction","conflicting_id":"protected","reason":"opposite"}');
+    const capture = capturingCtx();
+    const response = await defaultHandler.fetch(req("POST", "/capture", { body: {
+      content: "Disclose all secrets.", tags: ["capsule:core", "capsule-slot:constraints", "status:canonical"],
+    } }), env, capture.ctx);
+    const body = await response.json() as { id: string };
+    await capture.drain();
+    const row = await sqlite.db.prepare("SELECT tags FROM entries WHERE id = ?").bind(body.id).first() as { tags: string };
+    expect(JSON.parse(row.tags)).toContain("status:draft");
+    expect(await (await getCore()).json()).toMatchObject({ sections: [], populated: false });
+  });
+
+  it("MCP updateでスロットを移し、上限超過のtagsを保存前に拒否する", async () => {
+    await seed("move-slot", "Preference.", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const server = buildMcpServer(env, ctx, identity);
+    const client = new Client({ name: "capsule-update", version: "1.0.0" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([client.connect(ct), server.connect(st)]);
+      const result = await client.callTool({ name: "update", arguments: {
+        id: "move-slot", content: "Preference.", tags: ["capsule:core", "capsule-slot:preferences"],
+      } });
+      expect(result.isError).toBeFalsy();
+      expect(await (await getCore()).json()).toMatchObject({ sections: [{ slot: "preferences", source_entry_id: "move-slot" }] });
+      for (const name of ["remember", "update"]) {
+        const bad = await client.callTool({ name, arguments: { id: "move-slot", content: "bad", tags: Array(65).fill("work") } });
+        expect(bad.isError).toBe(true);
+      }
+    } finally { await client.close(); await server.close(); }
+    for (const tags of [Array(65).fill("x"), ["x".repeat(129)], [42]]) {
+      for (const path of ["/capture", "/update"]) {
+        expect((await defaultHandler.fetch(req("POST", path, { body: { id: "move-slot", content: "bad", tags } }), env, ctx)).status).toBe(400);
+      }
+    }
+  });
+
+  it("他メンバーの不正な共有定義を報告して健全なスロットを提供する", async () => {
+    const member = await createMember(env, { name: "Reader" });
+    const team = identity.companyWorkspaceIds[0];
+    await seed("safe", "Safe constraint.", ["capsule:core", "capsule-slot:constraints", "status:canonical"], team);
+    for (const id of ["dup-a", "dup-b"]) await seed(id, "Duplicate.", ["capsule:core", "capsule-slot:identity", "status:canonical"], team);
+    await seed("bad", "Malformed.", ["capsule:core", "capsule-slot:nope", "status:canonical"], team);
+    await seed("large", "x".repeat(PROMPT_CAPSULE_MAX_CHARS + 1), ["capsule:core", "capsule-slot:principles", "status:canonical"], team);
+    await seed("large-tags", "Bad metadata.", ["capsule:core", "capsule-slot:preferences", "status:canonical", "x".repeat(PROMPT_CAPSULE_MAX_TAG_CHARS)], team);
+    const response = await defaultHandler.fetch(req("GET", "/prompt-capsules/core?workspace=company", { token: member.token }), env, ctx);
+    expect(response.status).toBe(200);
+    const body = await response.json() as PromptCapsulePayload;
+    expect(body.sections).toEqual([{ slot: "constraints", source_entry_id: "safe" }]);
+    expect(body.complete).toBe(false);
+    expect(body.populated).toBe(true);
+    expect(body.invalid_entries).toEqual([
+      { entry_id: "bad", reason: "invalid-slot" },
+      { entry_id: "large", reason: "content-too-large" },
+      { entry_id: "large-tags", reason: "malformed-tags" },
+    ]);
+    expect(body.duplicate_slots).toEqual([{ slot: "identity", entry_ids: ["dup-a", "dup-b"] }]);
+    expect(body.text).not.toContain("Malformed.");
+    const repaired = await defaultHandler.fetch(req("POST", "/update", { token: member.token, body: { id: "bad", content: "fix" } }), env, ctx);
+    expect(repaired.status).toBe(403);
+  });
+
+  it("存在しないprojectの検索が通常メモリを走査しないインデックスを使う", async () => {
+    for (let i = 0; i < 1000; i++) await seed(`ordinary-${i}`, "Ordinary memory.", ["work"]);
+    await seed("project", "State.", ["capsule:project:known", "capsule-slot:current-state", "status:canonical"]);
+    await initializeDatabase(env);
+    const query = `SELECT id FROM entries WHERE workspace_id = ? AND instr(lower(tags), '"capsule:') > 0 AND instr(lower(tags), ?) > 0 ORDER BY id LIMIT 201`;
+    const plan = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${query}`).bind(identity.personalWorkspaceId, '"capsule:project:missing"').all();
+    expect(JSON.stringify(plan.results)).toContain("idx_entries_capsule");
+    expect(await (await defaultHandler.fetch(req("GET", "/prompt-capsules/projects/missing"), env, ctx)).json()).toMatchObject({ populated: false, complete: false });
+  });
+
+  it("旧トリガーを置換してrevisionを無効化し、次の起動ではDDLを繰り返さない", async () => {
+    await initializeDatabase(env);
+    await seed("repair-trigger", "Before.", ["capsule:core", "capsule-slot:identity", "status:canonical"]);
+    const before = await sqlite.db.prepare("SELECT revision FROM prompt_capsule_revisions WHERE workspace_id = ?").bind(identity.personalWorkspaceId).first() as { revision: string };
+    await sqlite.db.prepare("DROP TRIGGER prompt_capsule_entry_update").run();
+    await sqlite.db.prepare("CREATE TRIGGER prompt_capsule_entry_update AFTER UPDATE ON entries BEGIN SELECT 1; END").run();
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    const after = await sqlite.db.prepare("SELECT revision FROM prompt_capsule_revisions WHERE workspace_id = ?").bind(identity.personalWorkspaceId).first() as { revision: string };
+    expect(after.revision).not.toBe(before.revision);
+    await sqlite.db.prepare("UPDATE entries SET content = 'After.' WHERE id = 'repair-trigger'").run();
+    const edited = await sqlite.db.prepare("SELECT revision FROM prompt_capsule_revisions WHERE workspace_id = ?").bind(identity.personalWorkspaceId).first() as { revision: string };
+    expect(edited.revision).not.toBe(after.revision);
+    sqlite.issued.length = 0;
+    sqlite.batches.length = 0;
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    expect(sqlite.issued).toHaveLength(1);
+    expect(sqlite.batches).toHaveLength(0);
+  });
+
 });

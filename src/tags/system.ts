@@ -85,3 +85,11 @@ export function applyTagReplacement(existing: string[], replacement: string[]): 
   const kept = existing.filter((t) => isWorkerOwnedTag(t) && !(redefinesCapsule && isCapsuleTag(t)));
   return [...kept, ...cleaned];
 }
+
+/** Bound caller-supplied metadata before capture or replacement. */
+export const MAX_INPUT_TAGS = 64;
+export const MAX_INPUT_TAG_CHARS = 128;
+export function validInputTags(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= MAX_INPUT_TAGS
+    && value.every(tag => typeof tag === "string" && tag.length <= MAX_INPUT_TAG_CHARS);
+}

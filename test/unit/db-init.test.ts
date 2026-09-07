@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { makeTestEnv } from "../helpers/make-env";
@@ -30,6 +32,7 @@ const ADMIN_EVENTS_ALTERS: [column: string, alter: string][] = [
   ["workspace_id", `ALTER TABLE admin_events ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`],
 ];
 const ALL_COLUMNS = MIGRATION.map(([column]) => column);
+const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../../db/schema.sql"), "utf8").matchAll(/CREATE TRIGGER IF NOT EXISTS (\w+)[\s\S]*?END;/g)].map(m => [m[1], m[0].slice(0, -1)]));
 const PROMPT_CAPSULE_TRIGGERS = [
   "prompt_capsule_entry_insert",
   "prompt_capsule_entry_update",
@@ -41,7 +44,7 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   // (POST_COLUMN_OBJECTS): it indexes a column that arrives via ALTER.
   "workspaces", "prompt_capsule_revisions", "idx_workspaces_kind", "users", "idx_users_token_hash", "idx_users_email",
   "memberships", "idx_memberships_workspace", "entry_events", "idx_entry_events_entry", "idx_entry_events_created",
-  "admin_events", "idx_admin_events_created", "maintenance_cursor", "idx_entries_workspace_created",
+  "admin_events", "idx_admin_events_created", "maintenance_cursor", "idx_entries_workspace_created", "idx_entries_capsule",
   ...PROMPT_CAPSULE_TRIGGERS];
 // Columns in the base CREATE of entries since v3 — present on every brain init touches.
 const BASE_COLUMNS = ["id", "content", "tags", "source", "created_at", "vector_ids", "workspace_id", "actor_id"];
@@ -55,7 +58,7 @@ const FULLY_MIGRATED = {
 };
 
 /** The catalogue read that opens every init. Spelled out so tests can exclude it by name. */
-const PROBE = /^SELECT type AS kind, name FROM sqlite_master\b/;
+const PROBE = /^SELECT type AS kind, name, sql AS definition FROM sqlite_master\b/;
 
 type Row = { created_at: number; updated_at?: number | null };
 
@@ -117,6 +120,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
                   ? "index"
                   : PROMPT_CAPSULE_TRIGGERS.includes(name) ? "trigger" : "table",
                 name,
+                definition: TRIGGER_DDL.get(name),
               })),
               ...[...columns].map(name => ({ kind: "column", name })),
               ...[...edgeColumns].map(name => ({ kind: "edge_column", name })),
@@ -207,7 +211,7 @@ describe("initializeDatabase updated_at migration", () => {
       // no duplicates, so the repair path behind the email index never runs.
       // MOVED 37 -> 42 by the Prompt Capsule revision table and its four
       // triggers, which make invalidation atomic with entry writes.
-      expect(migrated).toBe(42); // 22 base objects + 14 ALTERs + 5 post-column objects + the email-index CREATE
+      expect(migrated).toBe(43); // 22 base objects + 14 ALTERs + 5 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(7); // three probes plus four prepared trigger DDLs
       expect(touchesEntries(execd)).toEqual([]);
@@ -523,7 +527,7 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 35 -> 36 by idx_entry_events_created; see the sibling pin above.
     // MOVED 36 -> 38 by idx_memberships_workspace and idx_users_email.
     // MOVED 38 -> 43 by the Prompt Capsule revision table and its four triggers.
-    expect(cold).toBe(43); // one probe, then the 42 statements a new brain needs
+    expect(cold).toBe(44); // one probe, then the 42 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -718,6 +722,7 @@ describe("initializeDatabase against real SQLite", () => {
       return {
         prepare: (sql: string) => (PROBE.test(sql) ? { all: async () => probe() } : d1.db.prepare(sql)),
         exec: (sql: string) => d1.db.exec(sql),
+        batch: (statements: Parameters<typeof d1.db.batch>[0]) => d1.db.batch(statements),
       } as unknown as D1Database;
     }
 

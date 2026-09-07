@@ -1,3 +1,4 @@
+import { hasCapsuleTag } from "../tags/system";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
@@ -1270,7 +1271,7 @@ export async function handleAdminRoutes(
         const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
         let tags: string[] = JSON.parse(row.tags as string);
         if (kind) tags = withKind(tags, kind);
-        if (canonical && getStatus(tags) === null) tags = withStatus(tags, "canonical");
+        if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
         await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), row.id).run();
         processed++;
       } catch (e) {

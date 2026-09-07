@@ -80,18 +80,19 @@ export async function captureEntry(
   const raw = rawContent.trim();
   const { cleanContent, hashtags } = extractHashtags(raw);
   const c = cleanContent || raw;
-  const t = [...new Set([...tags.map(tag => tag.toLowerCase()), ...hashtags])];
+  const t = [...new Set([...tags.map(tag => tag.trim().toLowerCase()).filter(Boolean), ...hashtags])];
 
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
 
-  if (dup.status === "blocked") {
+  const definesCapsule = t.some(isCapsuleTag);
+  if (definesCapsule && getStatus(t) === null) t.push("status:draft");
+
+  if (dup.status === "blocked" && !definesCapsule) {
     return { status: "blocked", matchId: dup.matchId, score: dup.score };
   }
 
   // A capsule definition must land as its own row: a merge discards the
   // incoming tags, and the slot tags are the whole point of the write.
-  const definesCapsule = t.some(isCapsuleTag);
-
   if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule) {
     const targetId = mergeAction.target_id;
     const newContent = mergeAction.action === "merge" ? mergeAction.merged_content : c;
@@ -164,10 +165,32 @@ export async function captureEntry(
     }
   }
 
+  // 公開可否をINSERT前に確定し、同時に読むgatewayへ矛盾したprefixを見せない。
+  let protectConflict = false;
+  if (contradiction.detected && contradiction.conflicting_id) {
+    const conflictRow = await env.DB.prepare(
+      // scope-exempt: by-id: the conflict id is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
+      `SELECT tags, source FROM entries WHERE id = ?`
+    ).bind(contradiction.conflicting_id).first() as Record<string, any> | null;
+    const conflictStatus = conflictRow ? getStatus(JSON.parse(conflictRow.tags ?? "[]")) : null;
+    const conflictSource = conflictRow ? String(conflictRow.source ?? "") : "";
+    // Canonical memories were always protected here. A transcript gets the same
+    // treatment against any memory of another source: the newcomer becomes a
+    // draft and nothing is deprecated, because "we decided X… actually Y" in a
+    // session log is not evidence that the memory of X is wrong.
+    protectConflict =
+      conflictStatus === "canonical"
+      || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source);
+
+  }
+
   const id = crypto.randomUUID();
   const now = Date.now();
   const baseTags = contradiction.detected ? [...t, "contradiction-resolved"] : t;
-  const finalTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
+  const duplicateTags = dup.status === "flagged" ? [...baseTags, "duplicate-candidate"] : baseTags;
+  const finalTags = protectConflict
+    ? withStatus(duplicateTags.filter(tag => tag !== "contradiction-resolved"), "draft")
+    : duplicateTags;
 
   await env.DB.prepare(
     `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -192,25 +215,11 @@ export async function captureEntry(
 
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictId = contradiction.conflicting_id;
-    const conflictRow = await env.DB.prepare(
-      // scope-exempt: by-id: the conflict id is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
-      `SELECT tags, source FROM entries WHERE id = ?`
-    ).bind(conflictId).first() as Record<string, any> | null;
-    const conflictStatus = conflictRow ? getStatus(JSON.parse(conflictRow.tags ?? "[]")) : null;
-    const conflictSource = conflictRow ? String(conflictRow.source ?? "") : "";
-    // Canonical memories were always protected here. A transcript gets the same
-    // treatment against any memory of another source: the newcomer becomes a
-    // draft and nothing is deprecated, because "we decided X… actually Y" in a
-    // session log is not evidence that the memory of X is wrong.
-    const protectConflict =
-      conflictStatus === "canonical"
-      || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source);
 
     if (protectConflict) {
       const draftTags = finalTags.filter(t => t !== "contradiction-resolved");
-      // A capsule definition keeps the status its caller chose: demoting it to
-      // draft would silently drop it from the capsule.
-      const protectedTags = definesCapsule ? draftTags : withStatus(draftTags, "draft");
+      // Contradictory definitions must not publish into a prompt prefix.
+      const protectedTags = withStatus(draftTags, "draft");
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
         .bind(JSON.stringify(protectedTags), id).run();
       try {
