@@ -518,31 +518,46 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         };
       }
 
-      const built = await buildPromptCapsule(env, identity, {
-        kind,
-        projectId: project_id,
-        workspace,
-        team,
-      });
-      if (!built.ok) {
+      try {
+        const built = await buildPromptCapsule(env, identity, {
+          kind,
+          projectId: project_id,
+          workspace,
+          team,
+        });
+        if (!built.ok) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: JSON.stringify({
+              schema: PROMPT_CAPSULE_MCP_SCHEMA,
+              status: built.status,
+              ...built.body,
+            }) }],
+          };
+        }
+
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            ok: true,
+            schema: PROMPT_CAPSULE_MCP_SCHEMA,
+            etag: built.etag,
+            capsule: built.payload,
+          }, null, 2) }],
+        };
+      } catch {
+        // 例外本文にはSQLや入力が含まれ得るため、応答とログへ流さない。
+        console.error("Prompt Capsule retrieval failed");
         return {
           isError: true,
           content: [{ type: "text", text: JSON.stringify({
+            ok: false,
             schema: PROMPT_CAPSULE_MCP_SCHEMA,
-            status: built.status,
-            ...built.body,
+            code: "internal_error",
+            status: 500,
+            error: "Prompt Capsule retrieval failed. Please try again later.",
           }) }],
         };
       }
-
-      return {
-        content: [{ type: "text", text: JSON.stringify({
-          ok: true,
-          schema: PROMPT_CAPSULE_MCP_SCHEMA,
-          etag: built.etag,
-          capsule: built.payload,
-        }, null, 2) }],
-      };
     },
   );
 

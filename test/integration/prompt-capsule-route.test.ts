@@ -1400,4 +1400,42 @@ describe("prompt capsule routes", () => {
     expect(await (await getCore()).json()).toMatchObject({ sections: [] });
   });
 
+
+  it.each(["prepare", "batch", "migration"] as const)("MCPの%s障害を安全な構造化500として返し、再試行で復旧する", async stage => {
+    await initializeDatabase(env);
+    const failure = "検証用の内部SQL・入力情報";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    if (stage === "migration") {
+      await env.DB.prepare("DROP INDEX idx_entries_capsule").run();
+      resetDatabaseInit();
+      vi.spyOn(env.DB, "exec").mockRejectedValue(new Error(failure));
+    } else if (stage === "batch") {
+      vi.spyOn(env.DB, "batch").mockRejectedValue(new Error(failure));
+    } else {
+      const original = env.DB.prepare.bind(env.DB);
+      vi.spyOn(env.DB, "prepare").mockImplementation(sql => {
+        if (sql.includes("SELECT substr(id")) throw new Error(failure);
+        return original(sql);
+      });
+    }
+    const server = buildMcpServer(env, ctx, identity);
+    const client = new Client({ name: "server-error-contract", version: "1.0.0" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([client.connect(ct), server.connect(st)]);
+      const response = await client.callTool({ name: "get_prompt_capsule", arguments: { kind: "core" } });
+      expect(response.isError).toBe(true);
+      const content = response.content as Array<{ type: string; text: string }>;
+      expect(JSON.parse(content[0].text)).toEqual({
+        ok: false, schema: "prompt-capsule-mcp.v1", code: "internal_error", status: 500,
+        error: "Prompt Capsule retrieval failed. Please try again later.",
+      });
+      expect(JSON.stringify(response)).not.toContain(failure);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(failure);
+      vi.restoreAllMocks();
+      const recovered = await client.callTool({ name: "get_prompt_capsule", arguments: { kind: "core" } });
+      expect(recovered.isError).not.toBe(true);
+      expect(JSON.parse((recovered.content as Array<{ text: string }>)[0].text)).toMatchObject({ ok: true });
+    } finally { await client.close(); await server.close(); vi.restoreAllMocks(); }
+  });
 });

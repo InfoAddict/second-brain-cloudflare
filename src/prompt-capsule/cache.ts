@@ -1,14 +1,10 @@
 /**
  * Prompt Capsule reads, cached in KV.
  *
- * `buildPromptCapsule` filters on `instr(lower(tags), ?)`, which no index can
- * serve: EXPLAIN shows a seek on workspace_id and then a visit to every row in
- * that workspace, so one read costs N rows on an N-entry workspace, and the
- * ETag cannot short-circuit that because it is derived from the query result.
- * A gateway fetching its prefix per request would spend D1's 5M rows/day free
- * tier on a mid-sized brain. Same move as src/tags/vocabulary.ts (#288): put
- * the steady state on KV, a separate quota that is constant in the size of the
- * brain.
+ * 未キャッシュ時はCapsule専用のpartial indexを明示して候補を読む。
+ * 読み取り量は通常メモリではなく、workspace内のCapsuleタグ行数に依存する。
+ * 通常のcache hitでは、D1のrevisionを1行読んでKVから本文を取得する。
+ * ETagの比較だけでは、候補検索やrevisionの確認を省略できない。
  *
  * Keyed by the resolved workspace id that the scope clause binds, never by the
  * "personal"/"company" labels, so one member's capsule can never be served to
