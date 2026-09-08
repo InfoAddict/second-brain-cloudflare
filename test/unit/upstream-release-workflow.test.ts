@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { SB_VERSION } from "../../src/env";
 
 const updateWorkflow = readFileSync(".github/workflows/upstream-release-update.yml", "utf8");
 const deployWorkflow = readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8");
@@ -59,13 +60,25 @@ describe("upstream release workflow safety", () => {
     expect(updateWorkflow).toContain("write_release_state()");
     expect(updateWorkflow.match(/write_release_state/g)).toHaveLength(3);
     expect(updateWorkflow).toContain(".github/upstream-release.json");
+  });
+
+  it("keeps release metadata consistent with the current Worker without pinning a release", () => {
+    expect(SB_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
     expect(releaseState).toEqual({
-      sourceTag: "installer-v3.0.0",
-      workerVersion: "3.0.0",
-      releaseTag: "v3.0.0",
-      releaseName: "Second Brain Worker v3.0.0 (bundled with Desktop 3.0.0)",
-      releaseUrl: "https://github.com/rahilp/second-brain-cloudflare/releases/tag/installer-v3.0.0",
+      sourceTag: expect.stringMatching(/^(?:installer-v\d+\.\d+\.\d+|v?\d+\.\d+(?:\.\d+)?)$/),
+      workerVersion: SB_VERSION,
+      releaseTag: `v${SB_VERSION}`,
+      releaseName: expect.stringMatching(/\S/),
+      releaseUrl: `https://github.com/rahilp/second-brain-cloudflare/releases/tag/${releaseState.sourceTag}`,
     });
+
+    // Desktop and Worker versions can differ, so derive each from its own source.
+    if (releaseState.sourceTag.startsWith("installer-v")) {
+      const desktopVersion = releaseState.sourceTag.slice("installer-v".length);
+      expect(releaseState.releaseName).toBe(
+        `Second Brain Worker v${SB_VERSION} (bundled with Desktop ${desktopVersion})`,
+      );
+    }
   });
 
   it("emails an applied result after a resolved release PR deploys", () => {
