@@ -158,7 +158,7 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     // The signature statement of initializeDatabase, once for the whole cron.
-    expect(statements.filter(s => s.startsWith("SELECT type AS kind, name FROM sqlite_master"))).toHaveLength(1);
+    expect(statements.filter(s => s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master"))).toHaveLength(1);
     // #282: the schema is already there, and the whole point is that finding that out no
     // longer costs a CREATE and an ALTER per object.
     expect(statements.filter(s => /^(CREATE|ALTER)\b/.test(s))).toEqual([]);
