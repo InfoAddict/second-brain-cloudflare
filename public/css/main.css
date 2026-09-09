@@ -5,6 +5,31 @@
        backward-compatible so inline styles keep resolving.
        ============================================================ */
 
+      @font-face {
+        font-family: 'DM Sans';
+        src: url(../fonts/dm-sans-400.ttf) format('truetype');
+        font-weight: 400;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'DM Sans';
+        src: url(../fonts/dm-sans-500.ttf) format('truetype');
+        font-weight: 500;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'DM Sans';
+        src: url(../fonts/dm-sans-600.ttf) format('truetype');
+        font-weight: 600;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'Sora';
+        src: url(../fonts/sora.ttf) format('truetype');
+        font-weight: 100 800;
+        font-display: swap;
+      }
+
       *,
       *::before,
       *::after {
@@ -87,9 +112,10 @@
         --danger-soft: rgba(180, 35, 24, 0.08);
         --on-accent: #161616;
 
-        /* type */
-        --font-serif: 'Lora', Georgia, serif;
-        --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
+        /* type: name kept for compatibility, Sora is the display face now */
+        --font-serif: 'Sora', 'DM Sans', sans-serif;
+        --font-display: 'Sora', 'DM Sans', sans-serif;
+        --font-sans: 'DM Sans', system-ui, sans-serif;
 
         /* radii */
         --radius-card: 14px;
@@ -180,6 +206,8 @@
         height: 100%;
         background: var(--bg);
         font-family: var(--font-sans);
+        font-size: 15px;
+        line-height: 1.5;
         color: var(--text-primary);
         -webkit-font-smoothing: antialiased;
         text-rendering: optimizeLegibility;
@@ -188,6 +216,18 @@
 
       body {
         transition: background 0.45s var(--ease);
+      }
+
+      h1,
+      h2,
+      h3 {
+        font-family: var(--font-display);
+        font-weight: 500;
+        letter-spacing: -0.03em;
+      }
+
+      .num {
+        font-variant-numeric: tabular-nums;
       }
 
       i.ti {
