@@ -41,34 +41,29 @@
       :root {
         /* surfaces */
         --bg: #ffffff;
-        --bg-card: #fcfbf7;
-        --bg-tag: #ece8dd;
-        --bg-secondary: #fcfbf7;
+        --bg-card: #ffffff;
+        --bg-tag: #f3f4f6;
+        --bg-secondary: #f3f4f6;
         --bg-confirm: rgba(253, 84, 10, 0.1);
         --bg-tag-confirmed: #fd540a;
-        --surface-2: #f2efec;
-        --surface-3: #e8e3df;
+        --surface-2: #f3f4f6;
+        --surface-3: #e2e4e8;
+        --surface-muted: #f3f4f6;
+        --charcoal: #17181b;
 
         /* This surface is deliberately dark in BOTH themes — it is an overlay
            chip (the toast), not a page surface, and its ink is therefore
-           fixed rather than theme-flipping. --text-on-elevated on
-           --surface-elevated measures 14.55:1 here. Do not point
-           .app-toast-msg at --text-primary: that token flips to near-black
-           in light mode, which on this near-black surface is how this
-           shipped unreadable in the first place.
-           --accent-on-elevated exists because --accent itself cannot be
-           reused for the toast action: --accent is tuned per theme against
-           each theme's own page surface (light page / dark page), but
-           --surface-elevated is dark in BOTH themes, so light mode's
-           --accent needs re-checking against a surface it was never tuned
-           for. Here it happens to still measure 5.12:1 and clears AA, so
-           this token is the current --accent value restated rather than a
-           new colour. Do not consolidate the two back together: the day
-           --accent moves for page-surface reasons, this one must not move
-           with it. */
-        --surface-elevated: #1e1e1e;
-        --text-on-elevated: #f2efec;
-        --accent-on-elevated: #fd540a;
+           fixed rather than theme-flipping. Do not point .app-toast-msg at
+           the primary ink token, which flips to near-black in light mode
+           and on this near-black surface is how this shipped unreadable
+           in the first place. The elevated-accent token exists because the
+           page accent cannot be reused for the toast action either: it is
+           tuned per theme against each theme's own page surface, but this
+           overlay is dark in BOTH themes. Contrast is re-verified by
+           toast-contrast.test.ts on every change to these three tokens. */
+        --surface-elevated: #17181b;
+        --text-on-elevated: #ffffff;
+        --accent-on-elevated: #ff9a61;
 
         /* The knob of an on/off switch (.sb-switch). Fixed near-white in BOTH
            themes, like --text-on-elevated and for the same reason: it never
@@ -76,129 +71,152 @@
            off, --accent when on — so a theme-flipping value would go dark on
            dark the moment the switch was turned on. Defined in both blocks
            rather than reached for with a var() fallback: an undefined token
-           must fail loudly, which is how the black-on-black toast shipped. */
+           must fail loudly, which is how the black-on-black toast shipped.
+           Contrast re-verified by switch-contrast.test.ts. */
         --switch-knob: #ffffff;
 
         /* ink */
-        /* Ink ramp, all three steps at WCAG AA (4.5:1) against every surface
-           they are set on — #ffffff through the darkest, --surface-3 #e8e3df.
-           Tertiary was #96908b, which measured 2.48:1 on --surface-3 and 3.15:1
-           on plain white at the 10-12px it is actually used at: timestamps,
-           sources, section labels, card meta. Secondary moved down with it,
-           because three passing inks live in a narrower band than two passing
-           and one failing, and leaving secondary at #68635f would have put it
-           within 1.1:1 of the new tertiary — a ramp with no visible steps.
-           Separation is now 2.27 primary/secondary and 1.39 secondary/tertiary. */
-        --text-primary: #161616;
-        --text-secondary: #54504c;
-        --text-tertiary: #6a6560;
-        --text-tag: #68635f;
-        --text-tag-confirmed: #161616;
+        --text-primary: #202124;
+        --text-secondary: #61646c;
+        /* Lighter than --text-secondary on purpose: DESIGN.md's palette has one
+           "muted" ink, but the ink ramp needs three visible steps (see
+           card-stale-contrast.test.ts). Tuned to the tightest gap that still
+           clears AA (4.5:1) on --bg-card and stays a visible step (>1.3:1)
+           below --text-secondary. */
+        --text-tertiary: #74767d;
+        --text-tag: #61646c;
+        --text-tag-confirmed: #202124;
 
         /* lines */
-        --border: rgba(22, 22, 22, 0.09);
-        --border-card: rgba(22, 22, 22, 0.075);
-        --border-input: rgba(22, 22, 22, 0.11);
-        --line-soft: rgba(22, 22, 22, 0.06);
+        --border: #e2e4e8;
+        --border-card: rgba(32, 33, 36, 0.06);
+        --border-input: #e2e4e8;
+        --line: #e2e4e8;
+        --line-soft: rgba(32, 33, 36, 0.05);
+        --border-soft: #d5d8de;
 
-        /* accent — brand orange */
-        --accent: #fd540a;
-        --accent-press: #a83200;
-        --accent-soft: rgba(253, 84, 10, 0.09);
-        --accent-ink: #c43d00;
-        --good: #18794e;
+        /* orange roles: brand identity, action buttons, focus/link accent */
+        --brand-orange: #fd540a;
+        --accent: #cc4109;
+        --action: #cc4109;
+        --action-hover: #a63508;
+        --accent-press: #a63508;
+        --accent-soft: rgba(253, 84, 10, 0.1);
+        --accent-ink: #bd410e;
+        --good: #008300;
         --warn: #b45309;
         --danger: #b42318;
         --danger-soft: rgba(180, 35, 24, 0.08);
-        --on-accent: #161616;
+        --on-accent: #ffffff;
+
+        /* chart / data series */
+        --data: #8a8f99;
+        --s1: #fd540a;
+        --s2: #2a78d6;
+        --s3: #008300;
+        --s4: #4a3aa7;
+        --s5: #8a8f99;
 
         /* type: name kept for compatibility, Sora is the display face now */
         --font-serif: 'Sora', 'DM Sans', sans-serif;
         --font-display: 'Sora', 'DM Sans', sans-serif;
         --font-sans: 'DM Sans', system-ui, sans-serif;
 
-        /* radii */
+        /* radii: old names kept, new living-thread scale added */
         --radius-card: 14px;
         --radius-pill: 999px;
-        --radius-tag: 999px;
-        --radius-bubble: 18px;
+        --radius-tag: 4px;
+        --radius-bubble: 14px;
+        --r-chip: 4px;
+        --r-chip-outline: 5px;
+        --r-input: 6px;
+        --r-button: 7px;
+        --r-card: 12px;
+        --r-panel: 14px;
 
         /* elevation */
-        --shadow-card: 0 1px 2px rgba(22, 22, 22, 0.05), 0 4px 14px rgba(22, 22, 22, 0.06);
-        --shadow-float: 0 2px 6px rgba(22, 22, 22, 0.07), 0 14px 34px rgba(22, 22, 22, 0.12);
-        --shadow-sheet: 0 -10px 44px rgba(22, 22, 22, 0.16);
+        --shadow-card: 0 12px 32px #2021240b;
+        --shadow-float: 0 24px 50px rgba(0, 0, 0, 0.18);
+        --shadow-sheet: 0 -10px 44px rgba(32, 33, 36, 0.16);
 
         /* brand mark (S-ribbon), used to replace the brain glyph in identity spots */
         --sb-mark: url('data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAtNTMuMzUgMjcwLjI3IDI3MC4yNyI+PGRlZnM+PHN0eWxlPi5jbHMtMXtmaWxsOiNmZDU0MGE7fS5jbHMtMntmaWxsOiNmZDZmMTI7fTwvc3R5bGU+PC9kZWZzPjxnPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTS4wNCwxMDUuODNjLS4wMi40MS0uMDQuODQtLjA0LDEuMjZsLjAyLTEuMjZoLjAyWiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTI2OC43NCwxNjMuNThsLTIxNS44Ny0zLjI0Yy0yOS4xNi0uNDMtNTIuNTYtMjQuMTYtNTIuODctNTMuMjJ2LS4wMmw5NS4wMywxLjQyLDE0Mi45NSw1LjY5YzUuODcsMi43MiwxMS4xMyw2LjUxLDE1LjU4LDExLjE1LDkuNiw5Ljg1LDE1LjQsMjMuMzcsMTUuMTcsMzguMjFaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMjcwLjI2LDU3LjVsLTExOS4yNS0xLjc5LTExNC41MS00LjUxQzE1Ljg1LDQzLjQ1LDEuMjYsMjMuMzksMS42MSwwbDIxNS44MSwzLjI0YzE0Ljg0LjIzLDI4LjE3LDYuNDEsMzcuNzIsMTYuMyw5LjUsOS43OSwxNS4yOSwyMy4yNSwxNS4xMywzNy45NloiLz48cGF0aCBjbGFzcz0iY2xzLTIiIGQ9Ik0yNzAuMjYsNTcuNXYuMjVjLS4yOSwxNC43LTYuNDcsMjcuOTctMTYuMjQsMzcuNDctNS40LDUuMjMtMTEuOTMsOS4zNi0xOS4xMSwxMS45M2gtLjA2bC04Ny44Ljg5aC0uMzFsLTUxLjU5LjQ5aC0uMTJMMCwxMDcuMTF2LS4wMmMwLS40MS4wMi0uODQuMDQtMS4yNi44Ny0yMi40NCwxNS41Mi00MS4zNiwzNS42NC00OC40OGwxMjUuMjEtMS4yNi05Ljg3LS4zOSwxMTkuMjUsMS43OVoiLz48L2c+PC9zdmc+Cg==');
 
         /* motion */
-        --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-        --ease-spring: cubic-bezier(0.34, 1.45, 0.5, 1);
+        --ease: cubic-bezier(0.16, 1, 0.3, 1);
+        --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+        --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+        /* Name kept for compatibility; the living-thread system has no
+           bounce/overshoot curve, so this now matches --ease. */
+        --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+        --dur-feedback: 150ms;
+        --dur-state: 260ms;
+        --dur-layout: 420ms;
+        --dur-focal: 700ms;
       }
 
       html[data-theme='dark'] {
-        --bg: #161616;
-        --bg-card: #221f17;
-        --bg-tag: #2c2820;
-        --bg-secondary: #221f17;
-        --bg-confirm: rgba(253, 111, 18, 0.15);
-        --bg-tag-confirmed: #fd6f12;
-        --surface-2: #2c2820;
-        --surface-3: #38332a;
+        --bg: #17181b;
+        --bg-card: #1e1f23;
+        --bg-tag: #24262b;
+        --bg-secondary: #24262b;
+        --bg-confirm: rgba(255, 154, 97, 0.16);
+        --bg-tag-confirmed: #ff9a61;
+        --surface-2: #24262b;
+        --surface-3: #2f3237;
+        --surface-muted: #24262b;
+        --charcoal: #0f1012;
 
         /* Same deliberately-dark overlay surface as the light theme, reusing
-           --surface-3 so the toast still separates from --bg (#161616) — the
-           flat #1e1e1e used everywhere else in this theme sits only 1.44:1
-           from --bg and reads as barely distinct. --text-on-elevated on
-           --surface-elevated measures 10.94:1. Ink stays fixed here for the
-           same reason as light: do not swap it back to --text-primary.
-           --accent itself (#fd6f12) measures only 4.4529:1 here, just under
-           the 4.5:1 AA floor — dark theme's --accent was tuned against
-           --bg-card and friends, not against this dark-in-both-themes
-           overlay, so it cannot simply be reused. --accent-on-elevated uses
-           --accent-ink instead (#ffab6e, already the theme's answer to
-           "orange that needs to sit on something dark"), which measures
-           6.75:1 here and clears AA with real headroom. Do not consolidate
-           this back into --accent: that token is deliberate, measured work
-           for the page surfaces, and rescuing one control by moving it would
-           ripple through every other accent use in the product. */
-        --surface-elevated: #38332a;
-        --text-on-elevated: #f2efec;
+           --surface-3 so the toast still separates from --bg. Contrast
+           re-verified by toast-contrast.test.ts; see the light-theme comment
+           above for why these three stay fixed rather than theme-flipping. */
+        --surface-elevated: #2f3237;
+        --text-on-elevated: #f3f4f6;
         --accent-on-elevated: #ffab6e;
 
-        /* Not #ffffff: pure white is the one ink this theme never uses, and the
-           knob reads as a hole punched in the page against --bg #161616.
-           #f2efec is the theme's own lightest ink, 12.5:1 on the off track
-           (--surface-3) and 4.9:1 on the on track (--accent). */
-        --switch-knob: #f2efec;
+        /* Not pure white: this theme's lightest ink stays a touch warmer so
+           the knob reads as part of the surface, not a hole punched in it.
+           Contrast re-verified by switch-contrast.test.ts. */
+        --switch-knob: #f3f4f6;
 
-        --text-primary: #f2efec;
-        --text-secondary: #c9c5c1;
-        /* Was #8a857f: 3.43:1 on --surface-3 and 4.01:1 on --surface-2. Lifted
-           to clear AA on all four dark surfaces; secondary stays put, since the
-           two are still 1.61:1 apart. */
-        --text-tertiary: #9f9b96;
-        --text-tag: #c9c5c1;
-        --text-tag-confirmed: #161616;
+        --text-primary: #f3f4f6;
+        --text-secondary: #c3c6cc;
+        /* Same ink-ramp requirement as the light theme's comment above. */
+        --text-tertiary: #929499;
+        --text-tag: #c3c6cc;
+        --text-tag-confirmed: #17181b;
 
-        --border: rgba(255, 255, 255, 0.085);
-        --border-card: rgba(255, 255, 255, 0.075);
-        --border-input: rgba(255, 255, 255, 0.11);
-        --line-soft: rgba(255, 255, 255, 0.055);
+        --border: #2f3237;
+        --border-card: rgba(255, 255, 255, 0.07);
+        --border-input: #3a3d43;
+        --line: #2f3237;
+        --line-soft: rgba(255, 255, 255, 0.05);
+        --border-soft: #454850;
 
-        --accent: #fd6f12;
-        --accent-press: #ff8a3d;
-        --accent-soft: rgba(253, 111, 18, 0.16);
-        --accent-ink: #ffab6e;
-        --good: #7bae8a;
-        --warn: #d9a15c;
-        --danger: #d9806b;
-        --danger-soft: rgba(217, 128, 107, 0.14);
-        --on-accent: #161616;
+        --brand-orange: #fd540a;
+        --accent: #ff9a61;
+        --action: #ff9a61;
+        --action-hover: #ffab6e;
+        --accent-press: #ffab6e;
+        --accent-soft: rgba(255, 154, 97, 0.16);
+        --accent-ink: #ff9a61;
+        --on-accent: #17181b;
+        --good: #7bd389;
+        --warn: #e0b15e;
+        --danger: #ff8a7a;
+        --danger-soft: rgba(255, 138, 122, 0.14);
 
-        --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.32), 0 6px 18px rgba(0, 0, 0, 0.28);
-        --shadow-float: 0 2px 8px rgba(0, 0, 0, 0.4), 0 16px 36px rgba(0, 0, 0, 0.5);
-        --shadow-sheet: 0 -10px 44px rgba(0, 0, 0, 0.55);
+        --data: #9aa0aa;
+        --s1: #ff7a3d;
+        --s2: #5aa0f2;
+        --s3: #3fb554;
+        --s4: #9a8cf0;
+        --s5: #9aa0aa;
+
+        --shadow-card: 0 12px 32px rgba(0, 0, 0, 0.35);
+        --shadow-float: 0 24px 50px rgba(0, 0, 0, 0.55);
+        --shadow-sheet: 0 -10px 44px rgba(0, 0, 0, 0.6);
       }
 
       html,
@@ -1519,8 +1537,8 @@
       }
 
       select.filter-field option {
-        color: #161616;
-        background: #fcfbf7;
+        color: var(--text-primary);
+        background: var(--bg-card);
       }
 
       .refresh-btn {
@@ -3520,7 +3538,9 @@
       .topic-chip span {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 10px;
-        color: var(--text-tertiary);
+        /* --text-tertiary does not clear AA on --bg-tag with the
+           living-thread palette (only on --bg-card); --text-secondary does. */
+        color: var(--text-secondary);
       }
 
       .topic-chip:hover {
@@ -3911,7 +3931,10 @@
       }
 
       .explode-out {
-        animation: explode-out 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards !important;
+        /* Was a hand-picked overshoot curve; --ease-exit is the system's
+           token for exits and collapses (no overshoot in the timing
+           function itself, per DESIGN.md). */
+        animation: explode-out 0.4s var(--ease-exit) forwards !important;
         pointer-events: none;
       }
 
@@ -4001,7 +4024,9 @@
       }
 
       .team-name-icon {
-        color: var(--text-tertiary);
+        /* --text-tertiary does not clear AA on the row's --surface-2
+           background with the living-thread palette; --text-secondary does. */
+        color: var(--text-secondary);
         font-size: 13px;
         flex-shrink: 0;
       }
@@ -4036,7 +4061,9 @@
         font-weight: 500;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: var(--text-tertiary);
+        /* --text-tertiary does not clear AA on --surface-2 with the
+           living-thread palette (only on --bg-card); --text-secondary does. */
+        color: var(--text-secondary);
         background: var(--surface-2);
         border-bottom: 0.5px solid var(--border-input);
       }
