@@ -1112,11 +1112,17 @@ describe("the checker over the real source tree", () => {
   // position, so the checker passes it on its merits: it needs no exception or
   // scope-checked licence. All three licence counts therefore remain fixed.
   //
+  // MOVED queries 100 -> 101 by the dashboard's new GET /stats/activity
+  // (src/routes/admin.ts): one statement, splicing scope.clause directly into
+  // its WHERE, so it passes on its merits. Exempt/scope-checked/outer-join are
+  // all UNCHANGED: no new exception was needed, nothing was assembled in JS,
+  // and no outer join was involved.
+  //
   // As the tool printed it:
-  //   ✔ scope check: 100 queries, 53 documented exceptions, 7 scope-checked
+  //   ✔ scope check: 101 queries, 53 documented exceptions, 7 scope-checked
   //     (clause assembled in JS), 1 scope-outer-join (clause governs a column,
   //     not the row set)
-  it("reports exactly 100 queries, 53 exceptions, 7 scope-checked and 1 outer-join", () => {
+  it("reports exactly 101 queries, 53 exceptions, 7 scope-checked and 1 outer-join", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1131,7 +1137,7 @@ describe("the checker over the real source tree", () => {
       { queries, exempt, checked, outerJoin },
       "check:scope counts moved. If that was deliberate, say so out loud and " +
         "update this expectation in the same commit.",
-    ).toEqual({ queries: 100, exempt: 53, checked: 7, outerJoin: 1 });
+    ).toEqual({ queries: 101, exempt: 53, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

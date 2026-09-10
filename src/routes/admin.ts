@@ -769,6 +769,52 @@ export async function handleAdminRoutes(
     });
   }
 
+  // GET /stats/activity — per-source capture volume over N days, for the
+  // dashboard's growth chart. Per-caller, not admin (see the /patterns
+  // precedent above): same shape as GET /brief's activity strip, widened to
+  // bucket by source as well as by day.
+  if (url.pathname === "/stats/activity" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const days = intParam(url, "days", { fallback: 90, min: 7, max: 365 });
+    if (days instanceof Response) return days;
+
+    const scope = scopeWhere(auth);
+    const now = Date.now();
+    const since = now - days * 86400000;
+    // Uses idx_entries_workspace_created: the workspace predicate seeks, the
+    // created_at cutoff range-scans from there — the same cost class as
+    // GET /brief's activity query. One statement, pivoted into per-source
+    // series below.
+    const { results } = await env.DB.prepare(
+      `SELECT source, CAST(created_at / 86400000 AS INTEGER) AS day, COUNT(*) AS n
+       FROM entries WHERE created_at >= ? AND ${scope.clause}
+       GROUP BY source, day`,
+    ).bind(since, ...scope.bindings).all();
+
+    const today = Math.floor(now / 86400000);
+    const start = today - (days - 1);
+    const bySource = new Map<string, Map<number, number>>();
+    for (const r of results as { source: string | null; day: number; n: number }[]) {
+      const source = r.source ?? "unknown";
+      const byDay = bySource.get(source) ?? new Map<number, number>();
+      byDay.set(r.day, Number(r.n));
+      bySource.set(source, byDay);
+    }
+
+    const series = [...bySource.entries()]
+      .map(([source, byDay]) => {
+        const counts: number[] = [];
+        for (let d = start; d <= today; d++) counts.push(byDay.get(d) ?? 0);
+        return { source, counts, total: counts.reduce((a, b) => a + b, 0) };
+      })
+      .sort((a, b) => b.total - a.total)
+      .map(({ source, counts }) => ({ source, counts }));
+
+    return json({ ok: true, days, start, series });
+  }
+
   // GET /health — index/runtime health, used by the dashboard banner, the
   // README verify step, and external uptime checks. Authenticated like the
   // rest of the API but deliberately NOT admin-gated: it reports index state,

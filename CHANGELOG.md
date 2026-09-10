@@ -2,6 +2,10 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [Unreleased]
+
+- New: `GET /stats/activity?days=N` returns per-source capture counts by day, for the dashboard's activity chart.
+
 ## [3.1.0] — Prompt Capsules
 
 Contributed by @oudouusa.

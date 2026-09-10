@@ -267,6 +267,22 @@ describe("cross-user isolation — read surfaces", () => {
     expect(stats.unclassified).toBe(5);
   });
 
+  it("GET /stats/activity counts only the caller's own captures, per source", async () => {
+    // All fixtures above share source 'test', so each caller's total is just
+    // how many of their own readable rows exist.
+    const bobActivity = await jsonOf(await call("GET", "/stats/activity", bobToken));
+    const bobTotal = bobActivity.series
+      .flatMap((s: any) => s.counts as number[])
+      .reduce((a: number, b: number) => a + b, 0);
+    expect(bobTotal).toBe(4); // his three private rows plus the shared one, never Alice's
+
+    const aliceActivity = await jsonOf(await call("GET", "/stats/activity", ALICE));
+    const aliceTotal = aliceActivity.series
+      .flatMap((s: any) => s.counts as number[])
+      .reduce((a: number, b: number) => a + b, 0);
+    expect(aliceTotal).toBe(2); // her private row plus the shared one, never Bob's
+  });
+
   it("the admin's review queues never print a member's private memory", async () => {
     // The sharpest form of the rule: the SAME admin token gets a 404 from
     // /entry for these rows, and both queues were handing back their full text.
