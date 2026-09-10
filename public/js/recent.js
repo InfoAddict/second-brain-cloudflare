@@ -238,6 +238,7 @@ function confirmBulkLayerMove(target) {
     title: tPlural(`bulk.${sharing ? 'confirmShareTitle' : 'confirmPrivateTitle'}`, ids.length, { n: ids.length }),
     body: t(`bulk.${sharing ? 'confirmShareBody' : 'confirmPrivateBody'}`),
     confirmLabel: t(`bulk.${sharing ? 'shareAction' : 'privateAction'}`),
+    tone: 'primary',
     onConfirm: async (_checked, done, progress) => {
       bulkMoveInFlight = true
       // So the two actions behind the sheet are visibly held down for as long

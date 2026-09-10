@@ -635,6 +635,7 @@ async function rotateTeamToken(id) {
     title: t('team.rotateTitle'),
     body: t('team.rotateConfirm', { name: teamMemberLabel(m) }),
     confirmLabel: t('team.rotateToken'),
+    tone: 'primary',
     // Progress copy is this action's to own — runConfirmAction disables the
     // button for the duration, but has no idea what to say while it waits.
     onConfirm: async (_checked, done) => {
