@@ -16,6 +16,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - New: `GET /stats/recalled?limit=N` returns your most-recalled memories, a running total of recalls, and a running total of contradictions settled in your favor, for the dashboard's "what you keep coming back to" panel.
 - New: `GET /stats/night` reports what last night's maintenance run did (links inferred, digests written, claims flagged as aging), read from a per-workspace summary the nightly cron now writes.
 - `GET /brief`'s resurfaced memory now includes its `source` and `tags`.
+- The OAuth sign-in and sign-in-error pages (`/oauth/authorize`) now use the dashboard's design system: Sora/DM Sans loaded from same-origin `/fonts/`, the brand lockup image in place of the circular brain glyph, and light/dark tokens matched to `prefers-color-scheme`.
 
 ## [3.1.0] — Prompt Capsules
 
