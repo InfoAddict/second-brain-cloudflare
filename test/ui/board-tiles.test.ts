@@ -171,6 +171,41 @@ describe("growth panel", () => {
     await ctx2.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
     expect(ids2.board.children.find((c: any) => c.dataset.panel === "growth")).toBeUndefined();
   });
+
+  it("upgrades to /stats/activity by source, with a live enabled range control", async () => {
+    const { ids, document } = fakeDoc();
+    const days = 90;
+    const start = 19000;
+    const series = [
+      { source: "claude-code", counts: Array.from({ length: days }, () => 3) },
+      { source: "obsidian", counts: Array.from({ length: days }, () => 2) },
+      { source: "chatgpt", counts: Array.from({ length: days }, () => 1) },
+      { source: "email", counts: Array.from({ length: days }, () => 1) },
+      { source: "notion", counts: Array.from({ length: days }, () => 1) },
+    ];
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) =>
+        url.includes("/stats/activity")
+          ? { ok: true, json: async () => ({ ok: true, days, start, series }) }
+          : { ok: false, status: 404, json: async () => ({}) },
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+    const growth = ids.board.children.find((c: any) => c.dataset.panel === "growth");
+    expect(growth, "growth panel should render from /stats/activity").toBeTruthy();
+    const rangeButtons = growth.head.children.find((c: any) => c.className === "seg").children;
+    expect(rangeButtons.every((b: any) => b.disabled === false)).toBe(true);
+    expect(rangeButtons.find((b: any) => b.dataset.range === "90").tabIndex).toBe(0);
+    expect(rangeButtons.find((b: any) => b.dataset.range === "30").tabIndex).toBe(-1);
+  });
 });
 
 describe("graph preview panel", () => {

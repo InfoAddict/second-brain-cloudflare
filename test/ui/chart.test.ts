@@ -27,7 +27,8 @@ describe("chart math", () => {
 
   it("rounds up to a nice axis maximum", () => {
     expect(niceMax(12.6)).toBe(15);
-    expect(niceMax(7)).toBe(10);
+    expect(niceMax(7)).toBe(8);
+    expect(niceMax(6.4 * 1.06)).toBe(8);
   });
 
   it("stacks series into cumulative per-row tops", () => {

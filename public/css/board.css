@@ -191,6 +191,11 @@
   color: var(--text-primary);
 }
 
+.seg button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 @media (max-width: 1240px) {
   .span8 {
     grid-column: span 12;

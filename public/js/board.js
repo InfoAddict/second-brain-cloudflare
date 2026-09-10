@@ -193,47 +193,95 @@ function renderResurfacePanel(board, brief) {
 }
 BOARD_PANELS.push(renderResurfacePanel)
 
-// Task 1.4 had a temporary "Where from" proportion panel here. Task 1.5's
-// growth chart legend is its replacement (per the plan: "the 'Where from'
-// proportion rows move into the chart legend in Task 1.5"), so it is gone —
-// Phase 1's chart has only one aggregate series until /stats/activity
-// (Phase 3) exists, at which point the legend carries a row per source.
+// Task 1.4 had a temporary "Where from" proportion panel here. The growth
+// chart legend below is its replacement (per the plan: "the 'Where from'
+// proportion rows move into the chart legend"), so it is gone.
+
+function capitalizeFirst(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
 
 /**
- * "Memories over time": a stacked area chart. Until /stats/activity exists
- * (Phase 3) this reads the 14-day strip /brief already returns as one
- * "All sources" series, with the range control shown but disabled — the
- * control names a promise the endpoint has not shipped yet, not a lie about
- * what today's data covers.
+ * Groups /stats/activity's per-source series (already sorted largest-first
+ * by the Worker) into at most 5: the four biggest sources plus one "Other"
+ * summing whatever is left, so the chart never grows a sixth color.
  */
-function renderGrowthPanel(board, brief) {
-  const activity = (brief && brief.activity) || []
-  if (!activity.length) return
+function buildActivitySeries(data) {
+  const top = data.series.slice(0, 4)
+  const rest = data.series.slice(4)
+  const defs = top.map((s) => ({ source: s.source, counts: s.counts }))
+  if (rest.length) {
+    const otherCounts = new Array(data.days).fill(0)
+    for (const s of rest) s.counts.forEach((v, i) => { otherCounts[i] += v || 0 })
+    defs.push({ source: null, counts: otherCounts, isOther: true })
+  }
+  return defs
+}
 
-  // The generic default sub ("Saved per day") is what chart.js's own mode
-  // dispatch would say for a single day-mode series; the brief-only fallback
-  // overrides it below with the honest "last 14 days" scope, since the range
-  // control here is disabled and cannot promise more.
+/**
+ * Buckets raw daily rows into the mode the range control asked for: 30 days
+ * shows the raw counts, 90 a centered 7-day average, 365 weekly sums —
+ * mirrors docs/design-mockups/dashboard/template.html's `bucketed()`. The
+ * average's window can only look inside the fetched days (no data exists
+ * before `start`), so it narrows near the two ends of whatever range is on
+ * screen rather than reaching further back.
+ */
+function bucketActivityRows(rawRows, mode) {
+  if (mode === 'day') return rawRows
+  const seriesCount = rawRows.length ? rawRows[0].s.length : 0
+  if (mode === 'avg7') {
+    return rawRows.map((r, i) => {
+      const lo = Math.max(0, i - 3), hi = Math.min(rawRows.length - 1, i + 3)
+      const win = rawRows.slice(lo, hi + 1)
+      const s = []
+      for (let k = 0; k < seriesCount; k++) s.push(win.reduce((acc, w) => acc + w.s[k], 0) / win.length)
+      return { d: r.d, label: r.label, s }
+    })
+  }
+  const out = []
+  for (let i = rawRows.length; i > 0; i -= 7) {
+    const chunk = rawRows.slice(Math.max(0, i - 7), i)
+    const s = []
+    for (let k = 0; k < seriesCount; k++) s.push(chunk.reduce((acc, row) => acc + row.s[k], 0))
+    out.unshift({ d: chunk[0].d, label: t('memories.weekOf', { date: chunk[0].label }), s })
+  }
+  return out
+}
+
+/**
+ * "Memories over time": a stacked area chart from /stats/activity, by
+ * source, with a live 30/90/365 range control. Falls back to the 14-day
+ * single "All sources" strip /brief already returns, with the range control
+ * disabled, when the Worker does not have the rollup endpoint yet.
+ */
+async function renderGrowthPanel(board, brief) {
+  const brief14 = (brief && brief.activity) || []
+  // One fetch decides both whether the panel shows at all and, when it does,
+  // paints the default 90-day range — draw() below reuses this result rather
+  // than fetching /stats/activity a second time for the initial paint.
+  const initial = await boardFetch('/stats/activity?days=90')
+  const live = !!(initial && Array.isArray(initial.series) && initial.series.length)
+  if (!live && !brief14.length) return
+
   const panel = boardPanel('growth', { title: t('board.growthTitle'), sub: t('board.growthSubDay'), span: 8 })
   panel.className += ' growth'
-  if (panel.subEl) panel.subEl.textContent = t('board.growthSubBrief')
 
   const seg = document.createElement('div')
   seg.className = 'seg'
   seg.setAttribute('role', 'radiogroup')
   seg.setAttribute('aria-label', 'Range')
-  ;[['30', t('board.range30')], ['90', t('board.range90')], ['365', t('board.range365')]].forEach(([val, label], i) => {
+  const segButtons = [['30', t('board.range30')], ['90', t('board.range90')], ['365', t('board.range365')]].map(([val, label]) => {
     const b = document.createElement('button')
     b.type = 'button'
     b.setAttribute('role', 'radio')
     b.dataset.range = val
-    b.setAttribute('aria-checked', i === 0 ? 'true' : 'false')
-    // Ranges wire up once /stats/activity (Phase 3) can answer them; brief.activity
-    // is a fixed 14-day window, so the control shows what is coming without
-    // claiming it works yet.
-    b.disabled = true
+    const checked = live ? val === '90' : val === '30'
+    b.setAttribute('aria-checked', String(checked))
+    b.tabIndex = checked ? 0 : -1
+    b.disabled = !live
     b.textContent = label
     seg.appendChild(b)
+    return b
   })
   panel.head.appendChild(seg)
 
@@ -272,21 +320,67 @@ function renderGrowthPanel(board, brief) {
   panel.body.appendChild(legend)
   panel.body.appendChild(tableScroll)
 
-  // The toggle updates itself in place; it never rebuilds the panel.
+  // The toggle updates itself in place and keeps focus; it never rebuilds the panel.
   asTableBtn.onclick = () => {
     table.hidden = !table.hidden
     asTableBtn.textContent = table.hidden ? t('board.chartShowTable') : t('board.chartHideTable')
     asTableBtn.setAttribute('aria-expanded', String(!table.hidden))
+    asTableBtn.focus()
   }
 
-  const rows = activity.map((d) => ({
-    d: String(d.day),
-    label: formatDateUI(d.day * 86400000, { month: 'short', day: 'numeric' }),
-    s: [d.count || 0],
-  }))
-  const series = [{ name: t('board.seriesAll') }]
-  if (typeof renderActivityChart === 'function') renderActivityChart(chartEl, { rows, series, mode: 'day' })
+  let range = 90
+  let cachedInitial = initial
 
+  async function draw() {
+    const data = live ? (range === 90 && cachedInitial ? cachedInitial : await boardFetch(`/stats/activity?days=${range}`)) : null
+    cachedInitial = null
+    if (data && Array.isArray(data.series) && data.series.length) {
+      const mode = range === 30 ? 'day' : range === 365 ? 'week' : 'avg7'
+      const seriesDefs = buildActivitySeries(data)
+      const seriesMeta = seriesDefs.map((sd) => ({
+        name: sd.isOther ? t('board.seriesOther') : capitalizeFirst(sourceBadge(sd.source).label),
+      }))
+      const rawRows = []
+      for (let i = 0; i < data.days; i++) {
+        const dayNum = data.start + i
+        rawRows.push({
+          d: String(dayNum),
+          label: formatDateUI(dayNum * 86400000, { month: 'short', day: 'numeric' }),
+          s: seriesDefs.map((sd) => sd.counts[i] || 0),
+        })
+      }
+      const rows = bucketActivityRows(rawRows, mode)
+      if (typeof renderActivityChart === 'function') renderActivityChart(chartEl, { rows, series: seriesMeta, mode, subEl: panel.subEl })
+    } else {
+      // Older Worker (or a range refetch that failed): the 14-day single
+      // series /brief already returns, honestly scoped as "last 14 days".
+      if (panel.subEl) panel.subEl.textContent = t('board.growthSubBrief')
+      const rows = brief14.map((d) => ({ d: String(d.day), label: formatDateUI(d.day * 86400000, { month: 'short', day: 'numeric' }), s: [d.count || 0] }))
+      const series = [{ name: t('board.seriesAll') }]
+      if (typeof renderActivityChart === 'function') renderActivityChart(chartEl, { rows, series, mode: 'day' })
+    }
+  }
+
+  segButtons.forEach((b) => {
+    b.onclick = () => {
+      if (b.disabled) return
+      range = Number(b.dataset.range)
+      segButtons.forEach((o) => { const on = o === b; o.setAttribute('aria-checked', String(on)); o.tabIndex = on ? 0 : -1 })
+      draw()
+    }
+  })
+  seg.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const enabled = segButtons.filter((b) => !b.disabled)
+    if (!enabled.length) return
+    const i = enabled.indexOf(document.activeElement)
+    const next = enabled[((i === -1 ? 0 : i) + (e.key === 'ArrowRight' ? 1 : enabled.length - 1)) % enabled.length]
+    next.focus()
+    next.onclick()
+  })
+
+  await draw()
   board.appendChild(panel)
 }
 BOARD_PANELS.push(renderGrowthPanel)

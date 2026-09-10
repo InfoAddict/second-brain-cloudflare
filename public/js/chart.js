@@ -29,10 +29,10 @@ function monotonePath(pts) {
   return d
 }
 
-/** Rounds a value up to a friendly axis maximum: 1/1.5/2/2.5/3/5/10 * 10^n. */
+/** Rounds a value up to a friendly axis maximum: 1/1.5/2/2.5/3/4/5/6/8/10 * 10^n. */
 function niceMax(v) {
   const p = Math.pow(10, Math.floor(Math.log10(v || 1))), f = v / p
-  const steps = [1, 1.5, 2, 2.5, 3, 5, 10]
+  const steps = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]
   return (steps.find((s) => f <= s) ?? 10) * p
 }
 
@@ -90,7 +90,7 @@ function renderActivityChart(el, opts) {
   const innerW = W - padL - padR, innerH = H - padT - padB
   const colors = series.map((_, k) => chartColor(k))
 
-  if (!rows.length) { svg.innerHTML = ''; return }
+  if (!rows.length) { svg.innerHTML = ''; el._chart = null; return }
 
   const totals = rows.map((r) => r.s.reduce((a, b) => a + b, 0))
   const yMax = niceMax(Math.max(...totals) * 1.06)
@@ -142,44 +142,64 @@ function renderActivityChart(el, opts) {
   const total = totals.reduce((a, b) => a + b, 0)
   el.setAttribute('aria-label', t('board.chartAriaLabel', { n: rows.length, unit: copy.unit, days: rows.length, total: formatNumberUI(total) }))
 
+  // Live geometry the shared hover/keyboard handlers below read fresh on every
+  // event, rather than closing over this call's rows/x/y: the handlers are
+  // wired once (el._boardChartWired) but renderActivityChart is called again
+  // on every range change, so the geometry they act on must update in place.
+  el._chart = { rows, x, y, padL, innerW, mode, series, colors, svg }
+
   // ── Hover/keyboard tooltip, one shared #board-tip element ────────────────
   const tip = document.getElementById('board-tip')
-  function showAt(i) {
-    i = Math.max(0, Math.min(rows.length - 1, i))
-    const row = rows[i], cx = x(i)
-    const cross = svg.querySelector('#board-cross')
-    if (cross) { cross.setAttribute('x1', cx); cross.setAttribute('x2', cx) }
-    let acc = 0
-    row.s.forEach((v, k) => {
-      acc += v
-      const dot = svg.querySelector(`#board-dot${k}`)
-      if (dot) { dot.setAttribute('cx', cx); dot.setAttribute('cy', y(acc)) }
-    })
-    if (tip) {
-      const total0 = row.s.reduce((a, b) => a + b, 0)
-      tip.innerHTML = `<b>${escHtml(row.label || row.d)}</b> · ${escHtml(chartTipTotal(mode, total0))}` +
-        row.s.map((v, k) => `<div class="row"><span><i style="background:${colors[k]}"></i>${escHtml(series[k].name)}</span><em class="num">${chartCellText(mode, v)}</em></div>`).join('')
-      const r = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0 }
-      tip.style.left = r.left + cx + 'px'
-      tip.style.top = r.top - 8 - (tip.offsetHeight || 0) + 'px'
-      tip.classList.add('on')
-    }
-    el.classList.add('hover')
-    return i
-  }
-  function hide() {
-    el.classList.remove('hover')
-    if (tip) tip.classList.remove('on')
-  }
   if (!el._boardChartWired && el.addEventListener) {
     el._boardChartWired = true
+
+    const showAt = (i) => {
+      const st = el._chart
+      if (!st) return null
+      i = Math.max(0, Math.min(st.rows.length - 1, i))
+      const row = st.rows[i], cx = st.x(i)
+      const cross = st.svg.querySelector('#board-cross')
+      if (cross) { cross.setAttribute('x1', cx); cross.setAttribute('x2', cx) }
+      let acc = 0
+      row.s.forEach((v, k) => {
+        acc += v
+        const dot = st.svg.querySelector(`#board-dot${k}`)
+        if (dot) { dot.setAttribute('cx', cx); dot.setAttribute('cy', st.y(acc)) }
+      })
+      if (tip) {
+        const total0 = row.s.reduce((a, b) => a + b, 0)
+        tip.innerHTML = `<b>${escHtml(row.label || row.d)}</b> · ${escHtml(chartTipTotal(st.mode, total0))}` +
+          row.s.map((v, k) => `<div class="row"><span><i style="background:${st.colors[k]}"></i>${escHtml(st.series[k].name)}</span><em class="num">${chartCellText(st.mode, v)}</em></div>`).join('')
+        const r = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0 }
+        tip.style.left = r.left + cx + 'px'
+        tip.style.top = r.top - 8 - (tip.offsetHeight || 0) + 'px'
+        tip.classList.add('on')
+      }
+      el.classList.add('hover')
+      el._kbIndex = i
+      return i
+    }
+    const hide = () => {
+      el.classList.remove('hover')
+      if (tip) tip.classList.remove('on')
+    }
     el.addEventListener('mousemove', (e) => {
+      const st = el._chart
+      if (!st) return
       const r = el.getBoundingClientRect()
-      showAt(Math.round(((e.clientX - r.left - padL) / innerW) * (rows.length - 1)))
+      showAt(Math.round(((e.clientX - r.left - st.padL) / st.innerW) * (st.rows.length - 1)))
     })
     el.addEventListener('mouseleave', hide)
     el.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') hide()
+      const st = el._chart
+      if (!st) return
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        const base = el._kbIndex == null ? st.rows.length - 1 : el._kbIndex
+        showAt(base + (e.key === 'ArrowRight' ? 1 : -1))
+      } else if (e.key === 'Escape') {
+        hide()
+      }
     })
   }
 }
