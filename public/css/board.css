@@ -443,6 +443,24 @@
   border-top: 1px solid var(--line);
 }
 
+.board .rows .row[role='button'] {
+  cursor: pointer;
+}
+
+.board .rows .row[role='button']:hover,
+.board .rows .row[role='button']:focus-visible {
+  background: var(--bg-soft);
+}
+
+.reread-text[role='button'] {
+  cursor: pointer;
+}
+
+.reread-text[role='button']:hover,
+.reread-text[role='button']:focus-visible {
+  color: var(--brand-orange);
+}
+
 .board .rows .row:first-child {
   border-top: 0;
 }
@@ -621,6 +639,16 @@
   stroke-linecap: round;
 }
 
+.area.is-muted,
+.line.is-muted {
+  opacity: 0.12;
+}
+
+.area,
+.line {
+  transition: opacity var(--dur-feedback) var(--ease-standard);
+}
+
 .cross {
   stroke: var(--text-primary);
   stroke-width: 1;
@@ -723,6 +751,15 @@
   gap: 8px;
   font-size: 13px;
   color: var(--text-primary);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.legend-item.is-muted {
+  opacity: 0.55;
 }
 
 .legend-item i {
@@ -1040,6 +1077,24 @@
   border-top: 1px solid var(--line);
   font-size: 14px;
   color: var(--text-primary);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border-right: 0;
+  border-left: 0;
+  border-bottom: 0;
+  cursor: pointer;
+}
+
+.slot:hover .slot-body,
+.slot:focus-visible .slot-body {
+  color: var(--brand-orange);
+}
+
+.slot-add {
+  grid-column: 2;
+  color: var(--brand-orange);
+  font-size: 12.5px;
 }
 
 .slot:first-child {

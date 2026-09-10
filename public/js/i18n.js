@@ -92,6 +92,10 @@ const I18N_EN = {
     pinnedShared: 'This one goes to the whole team',
   },
   board: {
+    tileOpenMemories: 'Open memories',
+    tileOpenGraph: 'Open the graph',
+    tileGoRecalled: 'Go to most recalled',
+    tileOpenContradictions: 'Open settled contradictions',
     tileMemories: 'memories',
     tileWeek: '{n} saved this week',
     tileConnections: 'connections between memories',
@@ -178,6 +182,9 @@ const I18N_EN = {
     slotPrinciples: 'Principles',
     slotMemories: { one: '{n} memory', other: '{n} memories' },
     slotEmpty: 'Empty',
+    capsuleAdd: 'Add one',
+    capsuleAddHint: 'Save a memory tagged {tag} to fill this slot',
+    topicBrowse: 'Show memories tagged {tag}',
   },
   recall: {
     eyebrow: 'Recall',
@@ -863,6 +870,10 @@ const I18N_IT = {
     pinnedShared: 'Questo va a tutto il team',
   },
   board: {
+    tileOpenMemories: 'Apri i ricordi',
+    tileOpenGraph: 'Apri il grafo',
+    tileGoRecalled: 'Vai ai più richiamati',
+    tileOpenContradictions: 'Apri le contraddizioni risolte',
     tileMemories: 'ricordi',
     tileWeek: '{n} salvati questa settimana',
     tileConnections: 'collegamenti tra ricordi',
@@ -949,6 +960,9 @@ const I18N_IT = {
     slotPrinciples: 'Principi',
     slotMemories: { one: '{n} ricordo', other: '{n} ricordi' },
     slotEmpty: 'Vuoto',
+    capsuleAdd: 'Aggiungine uno',
+    capsuleAddHint: 'Salva un ricordo con tag {tag} per riempire questo spazio',
+    topicBrowse: 'Mostra i ricordi con il tag {tag}',
   },
   recall: {
     eyebrow: 'Richiamo',

@@ -97,6 +97,58 @@ describe("board tiles", () => {
   });
 });
 
+describe("actionable board", () => {
+  it("routes tiles and board rows through their named actions", async () => {
+    const { ids, document } = fakeDoc();
+    const calls: any[] = [];
+    const entry = { id: "recall-1", content: "A recalled memory", source: "cli", recall_count: 2 };
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) => {
+        if (url.includes("/stats/graph")) return { ok: true, json: async () => ({ ok: true, edgeTypes: { relates_to: 2 } }) };
+        if (url.includes("/stats/recalled")) return { ok: true, json: async () => ({ ok: true, total_recalls: 2, total_contradictions: 1, entries: [entry] }) };
+        if (url.includes("/stats/night")) return { ok: true, json: async () => ({ ok: true, ranAt: Date.now(), linksInferred: 1, insightsProposed: 1, digestsWritten: 0, claimsFlagged: 1 }) };
+        return { ok: false, status: 404, json: async () => ({}) };
+      },
+      switchTab: (tab: string) => calls.push(["switchTab", tab]),
+      setMemoryView: (view: string) => calls.push(["setMemoryView", view]),
+      onTagChange: (tag: string) => calls.push(["onTagChange", tag]),
+      openView: (memory: any) => calls.push(["openView", memory]),
+      openPatternsSheet: () => calls.push(["openPatternsSheet"]),
+      openStaleSheet: () => calls.push(["openStaleSheet"]),
+      lockHomeMode: (mode: string) => calls.push(["lockHomeMode", mode]),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({ ok: true, total: 4, activity: [], sources: [], topics: [{ tag: "travel", count: 2 }], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+
+    const tiles = ids["board-tiles"].children;
+    expect(tiles.every((tile: any) => tile.tag === "button")).toBe(true);
+    expect(tiles.find((tile: any) => tile.dataset.tile === "memories").getAttribute("aria-label")).toBe("Open memories");
+    tiles.find((tile: any) => tile.dataset.tile === "connections").onclick();
+    tiles.find((tile: any) => tile.dataset.tile === "contradictions").onclick();
+
+    const recalled = ids.board.children.find((panel: any) => panel.dataset.panel === "recalled");
+    recalled.body.children[0].children[0].onclick();
+    const night = ids.board.children.find((panel: any) => panel.dataset.panel === "night");
+    night.body.children[0].children[1].onclick();
+    const topics = ids.board.children.find((panel: any) => panel.dataset.panel === "topics");
+    topics.body.children[0].children[0].onclick();
+
+    expect(calls).toContainEqual(["setMemoryView", "graph"]);
+    expect(calls).toContainEqual(["onTagChange", "contradiction-resolved"]);
+    expect(calls).toContainEqual(["onTagChange", "travel"]);
+    expect(calls).toContainEqual(["openPatternsSheet"]);
+    expect(calls).toContainEqual(["openView", { id: "recall-1", content: "A recalled memory", tags: [] }]);
+  });
+});
+
 describe("decisions panel", () => {
   it("renders up to two insights as stops on the thread, with a more-button past two", async () => {
     const { ids, document } = fakeDoc();
@@ -400,7 +452,7 @@ describe("recalled panel", () => {
     await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
     const panel = ids.board.children.find((c: any) => c.dataset.panel === "recalled");
     expect(panel, "recalled panel should render").toBeTruthy();
-    expect((panel.body.innerHTML.match(/class="row"/g) || []).length).toBe(2);
+    expect(panel.body.children[0].children).toHaveLength(2);
     const recallsTile = ids["board-tiles"].children.find((t: any) => t.dataset.tile === "recalls");
     expect(recallsTile, "recalls tile should fill from total_recalls").toBeTruthy();
     expect(recallsTile.innerHTML).toMatch(/2,318/);
@@ -475,7 +527,7 @@ describe("night panel", () => {
     await ctx.renderBoard(brief);
     const panel = ids.board.children.find((c: any) => c.dataset.panel === "night");
     expect(panel, "night panel should render").toBeTruthy();
-    expect((panel.body.innerHTML.match(/night-row/g) || []).length).toBe(4);
+    expect(panel.body.children[0].children).toHaveLength(4);
   });
 
   it("hides the insights row at zero and hides the whole panel when ranAt is null", async () => {
@@ -494,7 +546,7 @@ describe("night panel", () => {
     vm.runInContext(src, ctx);
     await ctx.renderBoard(brief);
     const panel = ids.board.children.find((c: any) => c.dataset.panel === "night");
-    expect((panel.body.innerHTML.match(/night-row/g) || []).length).toBe(3);
+    expect(panel.body.children[0].children).toHaveLength(3);
 
     const { ids: ids2, document: document2 } = fakeDoc();
     const ctx2: any = { ...ctx, document: document2, fetch: fetchFor({ ok: true, ranAt: null }) };

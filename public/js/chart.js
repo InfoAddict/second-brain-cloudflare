@@ -117,21 +117,44 @@ function renderActivityChart(el, opts) {
   for (let k = series.length - 1; k >= 0; k--) {
     const top = stacks[k], bottom = k === 0 ? base : stacks[k - 1]
     const area = monotonePath(top) + ' L' + [...bottom].reverse().map((p) => p.join(',')).join(' L') + ' Z'
-    out += `<path class="area" d="${area}" fill="${colors[k]}"/>`
+    out += `<path class="area" data-series="${k}" d="${area}" fill="${colors[k]}"/>`
   }
-  for (let k = 0; k < series.length; k++) out += `<path class="line" d="${monotonePath(stacks[k])}" stroke="${colors[k]}"/>`
+  for (let k = 0; k < series.length; k++) out += `<path class="line" data-series="${k}" d="${monotonePath(stacks[k])}" stroke="${colors[k]}"/>`
   out += `<line class="cross" id="board-cross" x1="0" x2="0" y1="${padT}" y2="${padT + innerH}"/>`
   series.forEach((_, k) => { out += `<circle class="cross-dot" id="board-dot${k}" r="4" fill="${colors[k]}"/>` })
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
   svg.innerHTML = out
 
   const legend = el.parentElement && el.parentElement.querySelector('.legend')
+  let solo = null
+  const applySolo = () => {
+    svg.querySelectorAll('.area, .line').forEach((path) => {
+      const selected = Number(path.dataset.series) === solo
+      path.classList.toggle('is-solo', solo !== null && selected)
+      path.classList.toggle('is-muted', solo !== null && !selected)
+    })
+    if (legend) {
+      legend.querySelectorAll('.legend-item').forEach((item, index) => {
+        const selected = index === solo
+        item.classList.toggle('is-solo', solo !== null && selected)
+        item.classList.toggle('is-muted', solo !== null && !selected)
+        item.setAttribute('aria-pressed', String(selected))
+      })
+    }
+  }
   if (legend) {
     const sums = series.map((_, k) => sumRows.reduce((n, r) => n + (r.s[k] || 0), 0))
     const all = sums.reduce((a, b) => a + b, 0) || 1
-    legend.innerHTML = series
-      .map((s, k) => `<span class="legend-item"><i style="background:${colors[k]}"></i>${escHtml(s.name)} <span class="num">${escHtml(formatNumberUI(sums[k]))} · ${Math.round((sums[k] / all) * 100)}%</span></span>`)
-      .join('')
+    legend.innerHTML = ''
+    series.forEach((s, k) => {
+      const item = document.createElement('button')
+      item.type = 'button'
+      item.className = 'legend-item'
+      item.setAttribute('aria-pressed', 'false')
+      item.innerHTML = `<i style="background:${colors[k]}"></i>${escHtml(s.name)} <span class="num">${escHtml(formatNumberUI(sums[k]))} · ${Math.round((sums[k] / all) * 100)}%</span>`
+      item.onclick = () => { solo = solo === k ? null : k; applySolo() }
+      legend.appendChild(item)
+    })
   }
 
   const table = el.parentElement && el.parentElement.querySelector('.data-table')
@@ -208,6 +231,8 @@ function renderActivityChart(el, opts) {
         const base = el._kbIndex == null ? st.rows.length - 1 : el._kbIndex
         showAt(base + (e.key === 'ArrowRight' ? 1 : -1))
       } else if (e.key === 'Escape') {
+        solo = null
+        applySolo()
         hide()
       }
     })

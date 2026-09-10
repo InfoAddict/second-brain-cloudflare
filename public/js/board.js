@@ -21,12 +21,44 @@ async function boardFetchOnce(key, path) {
   return data
 }
 
-function boardTile(id, { n, label, delta, quiet }) {
-  const el = document.createElement('div')
+function boardTile(id, { n, label, delta, quiet, ariaLabel, onClick }) {
+  const el = document.createElement('button')
+  el.type = 'button'
   el.className = 'tile'; el.dataset.tile = id
+  el.setAttribute('aria-label', ariaLabel)
+  el.onclick = onClick
   el.innerHTML = `<span class="tile-n">${escHtml(formatNumberUI(n))}</span><span class="tile-l">${escHtml(label)}</span>` +
     (delta ? `<span class="tile-d${quiet ? ' quiet' : ''}">${escHtml(delta)}</span>` : '')
   return el
+}
+
+function makeBoardRow(className, onClick) {
+  const el = document.createElement('div')
+  el.className = className
+  if (!onClick) return el
+  el.setAttribute('role', 'button')
+  el.setAttribute('tabindex', '0')
+  el.onclick = onClick
+  el.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onClick()
+  })
+  return el
+}
+
+function openBoardMemory(entry, trigger) {
+  if (typeof openView === 'function') openView({ id: entry.id, content: entry.content, tags: entry.tags || [] }, trigger)
+}
+
+async function openCapsuleMemory(id, trigger) {
+  const data = await boardFetch(`/entry?id=${encodeURIComponent(id)}`)
+  if (data && data.entry) openBoardMemory(data.entry, trigger)
+}
+
+function browseBoardTag(tag) {
+  if (typeof switchTab === 'function') switchTab('memories')
+  if (typeof onTagChange === 'function') onTagChange(tag)
 }
 
 // Built with createElement/appendChild rather than innerHTML+querySelector so
@@ -194,10 +226,19 @@ function renderTopicsPanel(board, brief) {
   const rows = ((brief && brief.topics) || []).filter((t) => !isSystemTag(t.tag)).slice(0, 6)
   if (!rows.length) return
   const panel = boardPanel('topics', { title: t('board.topicsTitle'), sub: t('board.topicsSub'), span: 4 })
-  panel.body.innerHTML = boardBars(
-    rows.map((r) => ({ label: r.tag, count: r.count, tag: r.tag })),
-    (r) => `askAbout('${escAttr(r.tag)}')`,
-  )
+  const bars = document.createElement('div')
+  bars.className = 'bars'
+  const max = Math.max(...rows.map((r) => r.count), 1)
+  rows.forEach((r) => {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'bar'
+    row.setAttribute('aria-label', t('board.topicBrowse', { tag: r.tag }))
+    row.onclick = () => browseBoardTag(r.tag)
+    row.innerHTML = `<span>${escHtml(r.tag)}</span><span class="bar-track" style="--w:${Math.max(Math.round((r.count / max) * 100), 3)}%"></span><span class="bar-n num">${escHtml(formatNumberUI(r.count))}</span>`
+    bars.appendChild(row)
+  })
+  panel.body.appendChild(bars)
   board.appendChild(panel)
 }
 
@@ -222,6 +263,17 @@ function renderResurfacePanel(board, brief) {
       ${tags}
       <button class="digest-btn" type="button" onclick="openAppend('${escAttr(m.id)}', '${escAttr((m.content || '').slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
     </div>`
+  const text = panel.body.querySelector('.reread-text')
+  if (text) {
+    text.setAttribute('role', 'button')
+    text.setAttribute('tabindex', '0')
+    text.onclick = () => openBoardMemory(m, text)
+    text.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      openBoardMemory(m, text)
+    })
+  }
   board.appendChild(panel)
 }
 
@@ -695,17 +747,18 @@ async function renderRecalledPanel(board) {
   if (!entries.length) return
 
   const panel = boardPanel('recalled', { title: t('board.recalledTitle'), sub: t('board.recalledSub'), span: 5 })
-  panel.body.innerHTML = `<div class="rows">${entries
-    .map((m) => {
-      const badge = sourceBadge(m.source)
-      const meta = [sourceDisplayName(m.source), m.created_at ? formatDateUI(m.created_at, { month: 'short', day: 'numeric' }) : null].filter(Boolean).join(' · ')
-      return `<div class="row">
-        <div class="row-t">${escHtml(titleLine(m.content))}</div>
-        <div class="row-n num">${escHtml(tPlural('board.recalls', m.recall_count))}</div>
-        <div class="row-m"><i class="ti ${badge.icon}"></i>${escHtml(meta)}</div>
-      </div>`
-    })
-    .join('')}</div>`
+  const rows = document.createElement('div')
+  rows.className = 'rows'
+  entries.forEach((m) => {
+    const badge = sourceBadge(m.source)
+    const meta = [sourceDisplayName(m.source), m.created_at ? formatDateUI(m.created_at, { month: 'short', day: 'numeric' }) : null].filter(Boolean).join(' · ')
+    const row = makeBoardRow('row', () => openBoardMemory(m, row))
+    row.innerHTML = `<div class="row-t">${escHtml(titleLine(m.content))}</div>
+      <div class="row-n num">${escHtml(tPlural('board.recalls', m.recall_count))}</div>
+      <div class="row-m"><i class="ti ${badge.icon}"></i>${escHtml(meta)}</div>`
+    rows.appendChild(row)
+  })
+  panel.body.appendChild(rows)
   board.appendChild(panel)
 }
 
@@ -720,16 +773,21 @@ async function renderNightPanel(board) {
   const data = await boardFetch('/stats/night')
   if (!data || data.ranAt == null) return
 
-  const rows = [{ n: data.linksInferred, label: t('board.nightLinks') }]
-  if (data.insightsProposed > 0) rows.push({ n: data.insightsProposed, label: t('board.nightInsights') })
+  const rows = [{ n: data.linksInferred, label: t('board.nightLinks'), onClick: () => { switchTab('memories'); setMemoryView('graph') } }]
+  if (data.insightsProposed > 0) rows.push({ n: data.insightsProposed, label: t('board.nightInsights'), onClick: () => openPatternsSheet() })
   rows.push({ n: data.digestsWritten, label: t('board.nightDigests') })
-  rows.push({ n: data.claimsFlagged, label: t('board.nightClaims') })
+  rows.push({ n: data.claimsFlagged, label: t('board.nightClaims'), onClick: () => openStaleSheet() })
 
   const sub = t('board.nightSub', { time: formatDateUI(data.ranAt, { hour: 'numeric', minute: '2-digit' }) })
   const panel = boardPanel('night', { title: t('board.nightTitle'), sub, span: 3 })
-  panel.body.innerHTML = `<div class="night">${rows
-    .map((r) => `<div class="night-row"><span class="night-n num">${escHtml(formatNumberUI(r.n))}</span><span class="night-t">${escHtml(r.label)}</span></div>`)
-    .join('')}</div>`
+  const night = document.createElement('div')
+  night.className = 'night'
+  rows.forEach((r) => {
+    const row = makeBoardRow('night-row', r.onClick)
+    row.innerHTML = `<span class="night-n num">${escHtml(formatNumberUI(r.n))}</span><span class="night-t">${escHtml(r.label)}</span>`
+    night.appendChild(row)
+  })
+  panel.body.appendChild(night)
   board.appendChild(panel)
 }
 
@@ -869,12 +927,25 @@ async function renderCapsulePanel(board) {
     const has = bySlot.has(id) && !omitted.has(id)
     const icon = has ? 'ti-circle-check' : 'ti-circle'
     const detail = has ? tPlural('board.slotMemories', countBySlot.get(id) || 1) : t('board.slotEmpty')
-    return `<div class="slot${has ? '' : ' empty'}"><i class="ti ${icon}"></i><span class="slot-body">${escHtml(slotLabel(id))}<small>${escHtml(detail)}</small></span></div>`
+    const section = bySlot.get(id)
+    const action = has
+      ? `onclick="openCapsuleMemory('${escAttr(section.source_entry_id)}', this)"`
+      : `onclick="openCapsuleComposer('${escAttr(id)}')"`
+    return `<button type="button" class="slot${has ? '' : ' empty'}" ${action}><i class="ti ${icon}"></i><span class="slot-body">${escHtml(slotLabel(id))}<small>${escHtml(detail)}</small></span>${has ? '' : `<span class="slot-add">${escHtml(t('board.capsuleAdd'))}</span>`}</button>`
   })
 
   const panel = boardPanel('capsule', { title: t('board.capsuleTitle'), sub: t('board.capsuleSub'), span: 3 })
   panel.body.innerHTML = `<div class="slots">${rows.join('')}</div>`
   board.appendChild(panel)
+}
+
+function openCapsuleComposer(slot) {
+  const field = document.getElementById('home-field')
+  if (!field) return
+  field.value = ''
+  field.placeholder = t('board.capsuleAddHint', { tag: `capsule:core capsule-slot:${slot}` })
+  if (typeof lockHomeMode === 'function') lockHomeMode('remember')
+  field.focus()
 }
 
 // Registration order is display order. Rows fill 8/4, 7/5, 3/3/3/3, 4/4/4
@@ -933,21 +1004,21 @@ async function renderBoard(brief) {
   _boardFetchCache = new Map()
   tilesEl.innerHTML = ''; board.innerHTML = ''
   const week = ((brief && brief.activity) || []).slice(-7).reduce((n, d) => n + (d.count || 0), 0)
-  if (brief && brief.total) tilesEl.appendChild(boardTile('memories', { n: brief.total, label: t('board.tileMemories'), delta: t('board.tileWeek', { n: formatNumberUI(week) }) }))
+  if (brief && brief.total) tilesEl.appendChild(boardTile('memories', { n: brief.total, label: t('board.tileMemories'), delta: t('board.tileWeek', { n: formatNumberUI(week) }), ariaLabel: t('board.tileOpenMemories'), onClick: () => switchTab('memories') }))
   const graph = await boardFetchOnce('graph', '/stats/graph')
   if (graph && graph.edgeTypes) {
     const total = Object.values(graph.edgeTypes).reduce((a, b) => a + Number(b), 0)
-    tilesEl.appendChild(boardTile('connections', { n: total, label: t('board.tileConnections') }))
+    tilesEl.appendChild(boardTile('connections', { n: total, label: t('board.tileConnections'), ariaLabel: t('board.tileOpenGraph'), onClick: () => { switchTab('memories'); setMemoryView('graph') } }))
   }
   const recalled = await boardFetchOnce('recalled', '/stats/recalled?limit=5')
   if (recalled && typeof recalled.total_recalls === 'number') {
-    tilesEl.appendChild(boardTile('recalls', { n: recalled.total_recalls, label: t('board.tileRecalls'), delta: t('board.tileRecallsDelta'), quiet: true }))
+    tilesEl.appendChild(boardTile('recalls', { n: recalled.total_recalls, label: t('board.tileRecalls'), delta: t('board.tileRecallsDelta'), quiet: true, ariaLabel: t('board.tileGoRecalled'), onClick: () => { const panel = board.querySelector('[data-panel="recalled"]'); if (panel) { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); const heading = panel.querySelector('h2'); if (heading) { heading.tabIndex = -1; heading.focus() } } } }))
   }
   // Same /stats/recalled response the recalls tile above reads (boardFetchOnce
   // shares the one fetch); total_contradictions is absent on an older Worker,
   // in which case the tile stays out rather than showing a false zero.
   if (recalled && typeof recalled.total_contradictions === 'number') {
-    tilesEl.appendChild(boardTile('contradictions', { n: recalled.total_contradictions, label: t('board.tileContradictions'), delta: t('board.tileContradictionsDelta'), quiet: true }))
+    tilesEl.appendChild(boardTile('contradictions', { n: recalled.total_contradictions, label: t('board.tileContradictions'), delta: t('board.tileContradictionsDelta'), quiet: true, ariaLabel: t('board.tileOpenContradictions'), onClick: () => { switchTab('memories'); onTagChange('contradiction-resolved') } }))
   }
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {

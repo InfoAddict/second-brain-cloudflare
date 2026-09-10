@@ -58,7 +58,12 @@ function makeNode(tag = "div") {
     clientWidth: 640,
     clientHeight: 280,
     parentElement: null as any,
-    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    classList: {
+      add(c: string) { if (!this.contains(c)) node.className = `${node.className} ${c}`.trim(); },
+      remove(c: string) { node.className = node.className.split(/\s+/).filter((name: string) => name && name !== c).join(" "); },
+      toggle(c: string, on?: boolean) { (on === undefined ? !this.contains(c) : on) ? this.add(c) : this.remove(c); },
+      contains(c: string) { return node.className.split(/\s+/).includes(c); },
+    },
     setAttribute(k: string, v: string) {
       node.attrs[k] = String(v);
     },
@@ -159,8 +164,8 @@ describe("chart legend and aria-label totals", () => {
     ctx.tableEl = tableEl;
     ctx.legendEl = legendEl;
     ctx.renderActivityChart(chartEl, { rows: rawRows, series, mode: "avg7", totalsRows: rawRows });
-    expect(legendEl.innerHTML).toMatch(/Source A.*20/);
-    expect(legendEl.innerHTML).toMatch(/Source B.*10/);
+    expect(legendEl.children.map((item: any) => item.innerHTML).join("")).toMatch(/Source A.*20/);
+    expect(legendEl.children.map((item: any) => item.innerHTML).join("")).toMatch(/Source B.*10/);
     expect(chartEl.attrs["aria-label"]).toMatch(/30/);
   });
 
@@ -172,8 +177,20 @@ describe("chart legend and aria-label totals", () => {
       { d: "1", label: "Tue", s: [4] },
     ];
     ctx.renderActivityChart(chartEl, { rows, series: [{ name: "All sources" }], mode: "day" });
-    expect(legendEl.innerHTML).toMatch(/All sources.*7/);
+    expect(legendEl.children.map((item: any) => item.innerHTML).join("")).toMatch(/All sources.*7/);
     expect(chartEl.attrs["aria-label"]).toMatch(/7/);
+  });
+
+  it("marks one legend item as solo and the others as muted until toggled off", () => {
+    const ctx = loadWithDom();
+    const { chartEl, legendEl } = buildChartDom();
+    ctx.renderActivityChart(chartEl, { rows: [{ d: "0", label: "Mon", s: [3, 4] }], series: [{ name: "One" }, { name: "Two" }], mode: "day" });
+    legendEl.children[0].onclick();
+    expect(legendEl.children[0].classList.contains("is-solo")).toBe(true);
+    expect(legendEl.children[1].classList.contains("is-muted")).toBe(true);
+    legendEl.children[0].onclick();
+    expect(legendEl.children[0].classList.contains("is-solo")).toBe(false);
+    expect(legendEl.children[1].classList.contains("is-muted")).toBe(false);
   });
 
   it("in week mode, reports the real calendar span, not the bucket count", () => {
