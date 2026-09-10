@@ -1396,8 +1396,8 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        height: 32px;
-        padding: 0 12px;
+        min-height: 32px;
+        padding: 6px 12px;
         border: none;
         background: none;
         border-radius: 5px;
@@ -1434,11 +1434,11 @@
       .filter-inner {
         display: flex;
         align-items: center;
-        height: 36px;
+        min-height: 36px;
         background: var(--bg-card);
         border: 1px solid var(--line);
         border-radius: var(--r-button);
-        padding: 0 10px 0 14px;
+        padding: 8px 10px 8px 14px;
         gap: 8px;
       }
 
@@ -1949,7 +1949,11 @@
       .btn-view-forget {
         background: var(--danger);
         border-color: var(--danger);
-        color: #fff;
+        /* --on-accent, not a hardcoded white: --danger flips light-on-dark
+           in dark theme (a pale coral), so a fixed white label would read at
+           roughly 1.5:1 there. --on-accent flips the same way --danger does
+           and lands on dark ink exactly when the fill goes pale. */
+        color: var(--on-accent);
       }
       .btn-view-forget:hover {
         opacity: 0.92;
@@ -1982,7 +1986,8 @@
         background: var(--surface-muted);
       }
 
-      /* Destructive: --danger fill, white label. */
+      /* Destructive: --danger fill, --on-accent label (see .btn-view-forget:
+         a hardcoded white fails once --danger goes pale in dark theme). */
       .btn-delete {
         flex: 1;
         padding: 14px;
@@ -1992,7 +1997,7 @@
         font-family: var(--font-sans);
         font-size: 14.5px;
         font-weight: 600;
-        color: #fff;
+        color: var(--on-accent);
         cursor: pointer;
         transition: opacity 0.15s;
       }
@@ -2797,6 +2802,14 @@
         height: auto;
       }
 
+      /* The ink lockup's wordmark is unreadable on a dark ground; swap in the
+         reverse (white-text) mark, same asset the site's own header/mobile
+         menu convention uses. */
+      html[data-theme='dark'] .brand img,
+      html[data-theme='dark'] .auth-lockup {
+        content: url(../brand-lockup-reverse.png);
+      }
+
       .rail-status {
         margin: 14px 0 22px 2px;
       }
@@ -3205,7 +3218,9 @@
 
       .cite:hover {
         background: var(--accent);
-        color: #fff;
+        /* --on-accent, not a hardcoded white: --accent turns pale in dark
+           theme, and white-on-pale-orange measures about 2:1. */
+        color: var(--on-accent);
       }
 
       .memory-card--cited {
@@ -3764,7 +3779,9 @@
       }
 
       #screen-home .composer .send-btn i {
-        color: #fff;
+        /* --on-accent, not a hardcoded white: --action goes pale in dark
+           theme, and white-on-pale-orange measures about 2:1. */
+        color: var(--on-accent);
       }
 
       /* The receipt from the last capture, one line under the bar. */
