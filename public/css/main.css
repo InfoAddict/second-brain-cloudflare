@@ -309,6 +309,15 @@
         display: flex;
         flex-direction: column;
         align-items: center;
+        background: var(--bg);
+        border-radius: var(--r-panel);
+      }
+
+      .auth-lockup {
+        display: block;
+        width: 174px;
+        height: auto;
+        margin-bottom: 28px;
       }
 
       .auth-link {
@@ -336,41 +345,20 @@
         margin-bottom: 6px;
       }
 
-      #auth-overlay .brain-logo {
-        width: 70px;
-        height: 70px;
-        border-radius: 50%;
-        background: var(--accent-soft);
-        color: var(--accent);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-bottom: 24px;
-        position: relative;
-      }
-
-      #auth-overlay .brain-logo i {
-        font-size: 33px;
-      }
-
-      #auth-overlay .brain-logo::after {
-        content: '';
-        position: absolute;
-        inset: -7px;
-        border-radius: 50%;
-        border: 1px solid var(--accent-soft);
-      }
-
+      /* The lockup image (.auth-lockup) already carries the wordmark
+         visually; this heading stays for its accessible name rather than
+         showing "Second Brain" twice. */
       #auth-overlay h1 {
-        font-family: var(--font-serif);
-        font-size: 29px;
-        font-weight: 500;
-        color: var(--text-primary);
-        margin-bottom: 9px;
-        letter-spacing: -0.015em;
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
       }
 
       #auth-overlay p {
+        font-family: var(--font-sans);
         font-size: 14px;
         color: var(--text-secondary);
         margin-bottom: 34px;
@@ -387,12 +375,13 @@
         margin-bottom: 14px;
       }
 
+      /* Inputs: 6px radius, --line borders, per the system's input anatomy. */
       #auth-overlay input {
         width: 100%;
         padding: 14px 16px;
         background: var(--bg-card);
-        border: 0.5px solid var(--border-input);
-        border-radius: 13px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-input);
         font-family: var(--font-sans);
         font-size: 15px;
         color: var(--text-primary);
@@ -407,32 +396,27 @@
       }
 
       #auth-overlay input:focus {
-        border-color: var(--accent);
+        border-color: var(--accent-ink);
         box-shadow: 0 0 0 3px var(--accent-soft);
       }
 
+      /* Connect: the system's primary button, --action fill. */
       #auth-connect {
         width: 100%;
         padding: 15px;
-        background: var(--accent);
+        background: var(--action);
         color: var(--on-accent);
         border: none;
-        border-radius: 13px;
+        border-radius: var(--r-button);
         font-family: var(--font-sans);
         font-size: 15px;
         font-weight: 600;
         cursor: pointer;
-        transition:
-          background 0.18s,
-          transform 0.12s var(--ease);
+        transition: background-color var(--dur-feedback) var(--ease-standard);
       }
 
       #auth-connect:hover {
-        background: var(--accent-press);
-      }
-
-      #auth-connect:active {
-        transform: scale(0.985);
+        background: var(--action-hover);
       }
 
       #auth-error {
@@ -465,20 +449,9 @@
         flex-shrink: 0;
       }
 
-      /* The rail and top bar now render the brand-lockup/brand-mark images
-         directly (see index.html); .brain-avatar is retired there. The auth
-         card still uses the icon-font glyph mask below until Task 2.3. */
-      #auth-overlay .brain-logo i.ti-brain {
-        font-size: 0;
-        width: 62%;
-        height: 62%;
-        background-color: var(--accent);
-        mask: var(--sb-mark) center / contain no-repeat;
-        -webkit-mask: var(--sb-mark) center / contain no-repeat;
-      }
-      #auth-overlay .brain-logo i.ti-brain::before {
-        content: none;
-      }
+      /* The rail and top bar render the brand-lockup/brand-mark images
+         directly (see index.html); the auth card now does too (.auth-lockup
+         above), replacing the icon-font glyph mask this used to be. */
 
       .topbar-info {
         flex: 1;
@@ -773,10 +746,10 @@
       }
 
       /* ============================================================
-       JOURNAL EDITORIAL — the conversation reads as prose
+       CONVERSATION — .ex-q a user bubble, .ex-a an answer on paper
        ============================================================ */
       #recall-messages {
-        gap: 0;
+        gap: 14px;
         padding: 20px 20px 10px;
       }
 
@@ -795,53 +768,65 @@
       }
 
       .recall-hero .hero-line {
-        font-family: var(--font-serif);
-        font-size: 23px;
-        line-height: 1.42;
-        letter-spacing: -0.012em;
+        font-family: var(--font-sans);
+        font-size: 19px;
+        line-height: 1.5;
         color: var(--text-primary);
-        max-width: 22em;
+        max-width: 26em;
       }
 
       .recall-hero .hero-line .hashtag {
         color: var(--accent-ink);
       }
 
-      /* a recall exchange: uppercase question label + large serif answer */
+      /* The user's own message: a bubble with one square lower corner (the
+         system's device for "this is the speaker"), right-aligned like
+         .bubble.user elsewhere in the app. The "You asked" label still
+         exists for assistive tech; the bubble shape carries it visually. */
       .ex-q {
         display: flex;
-        gap: 8px;
         align-items: baseline;
-        flex-wrap: wrap;
-        font-size: 11px;
-        letter-spacing: 0.13em;
-        text-transform: uppercase;
-        color: var(--accent-ink);
-        padding: 24px 0 13px;
-        border-top: 0.5px solid var(--line-soft);
+        gap: 6px;
+        align-self: flex-end;
+        max-width: 84%;
+        padding: 11px 15px;
+        border-radius: var(--radius-bubble);
+        border-bottom-right-radius: 6px;
+        background: var(--text-primary);
+        color: var(--bg);
+        font-family: var(--font-sans);
+        font-size: 14px;
+        line-height: 1.5;
         animation: bubble-in 0.36s var(--ease) both;
       }
 
-      #recall-messages > .ex-q:first-child {
-        border-top: none;
-        padding-top: 6px;
-      }
-
+      .ex-q .q-label,
       .ex-q .q-dash {
-        opacity: 0.5;
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
       }
 
       .ex-q .q-text {
-        color: var(--text-secondary);
-        letter-spacing: 0.03em;
-        font-weight: 500;
+        overflow-wrap: anywhere;
       }
 
+      /* The assistant's answer: paper, a hairline border and the system's
+         answer-card shadow, DM Sans rather than the earlier literary serif
+         voice reserved for headings and numerals now. */
       .ex-a {
-        font-family: var(--font-serif);
-        font-size: 19px;
-        line-height: 1.58;
-        letter-spacing: -0.004em;
+        max-width: 92%;
+        padding: 14px 17px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-card);
+        box-shadow: var(--shadow-card);
+        font-family: var(--font-sans);
+        font-size: 15.5px;
+        line-height: 1.6;
         color: var(--text-primary);
         animation: bubble-in 0.36s var(--ease) both;
       }
@@ -924,8 +909,7 @@
         position: absolute;
         left: 0;
         top: 0.04em;
-        font-family: var(--font-serif);
-        font-style: italic;
+        font-family: var(--font-display);
         font-size: 0.82em;
         color: var(--accent-ink);
         font-variant-numeric: tabular-nums;
@@ -940,13 +924,11 @@
 
       /* system note (no result / error) */
       .recall-sys {
-        font-family: var(--font-serif);
-        font-style: italic;
-        font-size: 18px;
+        font-family: var(--font-sans);
+        font-size: 15px;
         line-height: 1.55;
         color: var(--text-secondary);
-        padding: 24px 0 0;
-        border-top: 0.5px solid var(--line-soft);
+        padding: 8px 0 0;
         animation: bubble-in 0.36s var(--ease) both;
       }
 
@@ -994,55 +976,11 @@
         animation: bubble-in 0.36s var(--ease) both;
       }
 
-      /* ---- underline "writing" input ---- */
-      #screen-home .input-inner {
-        background: transparent;
-        border: none;
-        border-bottom: 1.5px solid var(--accent);
-        border-radius: 0;
-        padding: 4px 2px 9px;
-        margin: 0 4px;
-        box-shadow: none;
-        align-items: flex-end;
-        gap: 10px;
-      }
-
-      #screen-home .input-inner:focus-within {
-        box-shadow: none;
-        border-bottom-color: var(--accent-press);
-      }
-
-      #screen-home .input-field {
-        font-family: var(--font-serif);
-        font-size: 16.5px;
-        padding: 6px 0;
-      }
-
-      #screen-home .input-field::placeholder {
-        font-style: italic;
-        color: var(--text-secondary);
-      }
-
-      #screen-home .send-btn {
-        background: transparent;
-        width: auto;
-        height: auto;
-        padding: 4px;
-      }
-
-      #screen-home .send-btn:hover {
-        background: transparent;
-        transform: translateY(-1px);
-      }
-
-      #screen-home .send-btn i {
-        font-size: 23px;
-        color: var(--accent);
-      }
-
-      #screen-home .send-btn:disabled {
-        opacity: 0.4;
-      }
+      /* The conversation's own input bar (bottom, #recall-input) now uses the
+         same rounded, paper input-bar anatomy as the rest of the system
+         instead of a bespoke underline field; see .input-inner/.input-field/
+         .send-btn below. #screen-home .composer .send-btn (further down)
+         still carries the composer's own 42px square button. */
 
       /* sources toggle */
       .sources-toggle {
@@ -1052,28 +990,33 @@
         animation: bubble-in 0.36s var(--ease) both;
       }
 
+      /* Secondary button: transparent, hairline border, same anatomy as
+         .btn-cancel and the view sheet's Append/Edit. */
       .sources-toggle > button {
         display: inline-flex;
         align-items: center;
         gap: 7px;
         align-self: flex-start;
+        height: 32px;
         background: none;
-        border: none;
+        border: 1px solid var(--line);
+        border-radius: var(--r-button);
         cursor: pointer;
-        color: var(--text-secondary);
+        color: var(--text-primary);
         font-family: var(--font-sans);
-        font-size: 12px;
-        padding: 3px 2px;
-        transition: color 0.15s;
+        font-size: 12.5px;
+        font-weight: 500;
+        padding: 0 12px;
+        transition: background-color var(--dur-feedback) var(--ease-standard);
       }
 
       .sources-toggle > button i {
         font-size: 15px;
-        color: var(--accent);
+        color: var(--text-secondary);
       }
 
       .sources-toggle > button:hover {
-        color: var(--text-primary);
+        background: var(--surface-muted);
       }
 
       /* ============ MEMORY CARD ============
@@ -3395,6 +3338,69 @@
         flex-shrink: 0;
       }
 
+      /* Related memories: open rows on a hairline, not boxes — this list was
+         previously unstyled entirely (browser defaults). */
+      .view-related-label {
+        font-size: 11px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 500;
+        margin-bottom: 6px;
+      }
+
+      .related-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .related-item:first-of-type {
+        border-top: none;
+      }
+
+      .related-open {
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-family: var(--font-sans);
+        font-size: 13.5px;
+        color: var(--text-primary);
+        line-height: 1.4;
+      }
+
+      .related-type {
+        display: block;
+        font-size: 11.5px;
+        color: var(--text-secondary);
+        margin-bottom: 2px;
+      }
+
+      .related-unlink {
+        flex-shrink: 0;
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        border-radius: var(--r-button);
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: background-color var(--dur-feedback) var(--ease-standard), color var(--dur-feedback) var(--ease-standard);
+      }
+
+      .related-unlink:hover {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
       /* ── v2.3 daily brief ─────────────────────────────────────────────────
          The home surface. Quiet by construction: when nothing happened it does
          not render, and the welcome hero stands in its place. */
@@ -3947,7 +3953,7 @@
 
         .auth-card {
           background: var(--bg);
-          border-radius: 22px;
+          border-radius: var(--r-panel);
           padding: 44px 38px;
           width: 420px;
           box-shadow: var(--shadow-float);
