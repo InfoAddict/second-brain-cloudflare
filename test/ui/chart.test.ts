@@ -148,7 +148,7 @@ describe("chart legend and aria-label totals", () => {
     const ctx = loadWithDom();
     const { chartEl, legendEl, tableEl } = buildChartDom();
     // Ten days, source A always 2/day (raw total 20), source B always 1/day
-    // (raw total 10) — every avg7 bucket reports exactly those steady values,
+    // (raw total 10), every avg7 bucket reports exactly those steady values,
     // so if the legend summed the bucketed rows instead of the raw ones, a
     // steady-state series would still read correctly here; the point of this
     // fixture is the grand total, which must be 30 either way, catching a
@@ -174,5 +174,18 @@ describe("chart legend and aria-label totals", () => {
     ctx.renderActivityChart(chartEl, { rows, series: [{ name: "All sources" }], mode: "day" });
     expect(legendEl.innerHTML).toMatch(/All sources.*7/);
     expect(chartEl.attrs["aria-label"]).toMatch(/7/);
+  });
+
+  it("in week mode, reports the real calendar span, not the bucket count", () => {
+    // The 365-day range buckets 365 raw days into about 52 weekly rows; the
+    // aria-label used to read rows.length for "days" too, so it announced
+    // "53 saved per week over the last 53 days" instead of 365.
+    const ctx = loadWithDom();
+    const { chartEl } = buildChartDom();
+    const totalsRows = Array.from({ length: 365 }, (_, i) => ({ d: String(i), label: String(i), s: [1] }));
+    const weeklyRows = Array.from({ length: 53 }, (_, i) => ({ d: String(i), label: `Week of ${i}`, s: [7] }));
+    ctx.renderActivityChart(chartEl, { rows: weeklyRows, series: [{ name: "All sources" }], mode: "week", totalsRows });
+    expect(chartEl.attrs["aria-label"]).toContain("365 days");
+    expect(chartEl.attrs["aria-label"]).not.toContain("53 days");
   });
 });

@@ -1,7 +1,7 @@
 /**
  * The nightly KV recorder GET /stats/night reads back from. Isolated from the
  * scheduled() wiring (test/integration/stats-night.test.ts covers that end to
- * end) so its own contract — one full record, one put, never throws — is
+ * end) so its own contract, one full record, one put, never throws, is
  * pinned directly.
  */
 import { describe, it, expect, vi } from "vitest";

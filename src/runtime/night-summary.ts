@@ -3,7 +3,7 @@ import type { Env } from "../env";
 /**
  * What the nightly maintenance passes did, written once per workspace per
  * night by src/index.ts's scheduled() handler and read back by GET
- * /stats/night. Never derived from D1 at read time — see the comment on that
+ * /stats/night. Never derived from D1 at read time, see the comment on that
  * route for why (edges has no index to make "since last night" cheap).
  */
 export interface NightSummary {
@@ -20,7 +20,7 @@ export function nightSummaryKey(workspaceId: string): string {
 
 /**
  * Writes the whole record in one KV put, never partially. Callers pass every
- * count they have in hand at once — there is no append/patch form — so a pass
+ * count they have in hand at once, there is no append/patch form, so a pass
  * that threw before this runs simply leaves last night's record in place
  * rather than corrupting it with a half-built one.
  *

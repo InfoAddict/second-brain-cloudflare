@@ -77,7 +77,7 @@ describe("GET /stats/activity", () => {
     const claudeSeries = data.series.find((s: any) => s.source === "claude-desktop");
     expect(claudeSeries.counts).toHaveLength(7);
     const totalClaude = claudeSeries.counts.reduce((a: number, b: number) => a + b, 0);
-    expect(totalClaude).toBe(2); // "a" and "c" — never "other"
+    expect(totalClaude).toBe(2); // "a" and "c", never "other"
 
     const gmailSeries = data.series.find((s: any) => s.source === "email-gmail");
     expect(gmailSeries.counts).toHaveLength(7);

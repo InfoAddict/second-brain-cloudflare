@@ -54,7 +54,7 @@ describe("runGraphPass", () => {
 
     await runGraphPass(env, ctx);
 
-    expect(db.edges).toHaveLength(1); // unchanged — "linked" already had an edge
+    expect(db.edges).toHaveLength(1); // unchanged, "linked" already had an edge
   });
 
   it("prunes weak old inferred edges but keeps explicit and recent ones", async () => {
@@ -98,7 +98,7 @@ describe("runGraphPass", () => {
 
     // Both "lonely" and "neighbor" are unlinked candidates in the same snapshot
     // (taken before either gets an edge), so the backfill visits the pair from
-    // both sides and queues one relates_to insert each time — 2, even though
+    // both sides and queues one relates_to insert each time, 2, even though
     // the symmetric-edge canonicalization means they land on the same row.
     await expect(runGraphPass(env, ctx)).resolves.toEqual({ inserted: 2 });
   });

@@ -16,7 +16,7 @@ const DEFAULT_EDGE_WEIGHT = 0.5;
  *
  * It says "workspace" and not "layer", and it does not name WHICH side to move,
  * because the check is `source.workspace_id !== target.workspace_id` and three
- * shapes reach it — only one of which has a personal side:
+ * shapes reach it, only one of which has a personal side:
  *
  *   - personal <-> company, the ordinary case;
  *   - company A <-> company B, for a member of two teams: both are the company
@@ -49,8 +49,8 @@ export function allowedKindsFor(type: EdgeType): readonly MemoryKind[] | null {
 /**
  * Does a pair of memory kinds satisfy an edge type's `allowedKinds`?
  *
- * One gate for every writer — POST /link, the MCP link tool, capture-time
- * `follows` and the insight pass — because a type whose meaning depends on the
+ * One gate for every writer, POST /link, the MCP link tool, capture-time
+ * `follows` and the insight pass, because a type whose meaning depends on the
  * kinds it joins is only as good as the least careful writer.
  *
  * An unknown kind is refused rather than waved through: `null` means the
@@ -74,7 +74,7 @@ export function kindsAllowEdge(
  *
  * A module constant and deliberately NOT config: it is a claim about how people
  * write, not a deployment knob, and every brain that tuned it separately would
- * make `follows` mean something different per brain — which is exactly what the
+ * make `follows` mean something different per brain, which is exactly what the
  * type exists to stop. Start at 30 minutes; GET /stats/graph?deep=1 reports the
  * real gap distribution, which is what should move it.
  */
@@ -86,7 +86,7 @@ export const GRAPH_FOLLOWS_WINDOW_MS = 30 * 60_000;
  * parity reason as CROSS_WORKSPACE_LINK_MESSAGE: the two surfaces are one
  * operation and must not drift.
  *
- * It names the fix, because "not allowed" alone leaves the caller guessing —
+ * It names the fix, because "not allowed" alone leaves the caller guessing,
  * an unclassified memory looks identical to a wrongly-classified one from
  * outside.
  */
@@ -105,7 +105,7 @@ export function kindOfRow(row: { tags?: string | null }): MemoryKind | null {
 }
 
 /**
- * The INSERT createEdge issues, prepared and bound but not run — so a caller
+ * The INSERT createEdge issues, prepared and bound but not run, so a caller
  * with several edges to write can hand them all to env.DB.batch(...) as one
  * subrequest instead of paying one subrequest per createEdge call.
  *
@@ -131,7 +131,7 @@ export function edgeInsertStatement(
      * the same pair while competing with it for the fanout cap.
      *
      * Expressed in the statement rather than as a lookup, so it costs no
-     * additional D1 call — the whole reason edge writes are batched.
+     * additional D1 call, the whole reason edge writes are batched.
      */
     onlyIfNoTypedEdge?: boolean;
   },
@@ -231,7 +231,7 @@ export async function inferEdgesOnWrite(
   // Edges inherit the SOURCE entry's workspace rather than the column default:
   // the nightly graph backfill (src/graph/pass.ts) runs corpus-wide by design, and
   // without this copy every edge it inferred would land in "" no matter which
-  // workspace the entry itself lives in — invisible to that owner's scoped walks.
+  // workspace the entry itself lives in, invisible to that owner's scoped walks.
   //
   // The neighbours' workspaces come back from the SAME statement, which is what
   // makes the check below free: one read per write batch either way, no
@@ -262,7 +262,7 @@ export async function inferEdgesOnWrite(
    * The kind the `follows` gate reads.
    *
    * The caller passes one only on the capture path, where the classifier has
-   * just run and `null` is a real answer meaning classification failed — so an
+   * just run and `null` is a real answer meaning classification failed, so an
    * explicit null is honoured rather than second-guessed from the tags. Every
    * other caller (the nightly backfill, the update path, the append path) passes
    * nothing, and for those the row's own classifier kind is already in hand from
@@ -276,7 +276,7 @@ export async function inferEdgesOnWrite(
   /**
    * A mirrored record is a mailbox or calendar entry, not a thought someone had
    * next. An import writes dozens of them minutes apart, and typing those as
-   * `follows` would describe the order the mailbox synced — the shape of a bulk
+   * `follows` would describe the order the mailbox synced, the shape of a bulk
    * write, which is the artefact the burst guard already refuses by another
    * route. Cheap to exclude: the source is on the row the workspace check reads.
    */
@@ -284,7 +284,7 @@ export async function inferEdgesOnWrite(
 
   const newCreatedAt = createdAtById.get(newId) ?? null;
   // Absent from the read means the entry does not exist, which is refused
-  // below — so an unknown neighbour is not "same workspace" either.
+  // below, so an unknown neighbour is not "same workspace" either.
   const sameWorkspace = (id: string) => workspaceById.get(id) === workspaceId;
   /** Strictly earlier than the new entry, and close enough to be one thought. */
   const precedesInWindow = (id: string) => {
@@ -295,7 +295,7 @@ export async function inferEdgesOnWrite(
   };
 
   // The burst guard. A bulk import or a chunked transcript writes many episodic
-  // entries at once, and each would "follow" the last — a chain that records the
+  // entries at once, and each would "follow" the last, a chain that records the
   // shape of the write rather than the thinking. So `follows` is claimed only
   // when exactly one candidate qualifies. Measured over the neighbours that were
   // going to be linked anyway, which costs nothing; it is not a general check
@@ -313,7 +313,7 @@ export async function inferEdgesOnWrite(
     // of the three paths that reach here, two send the vector index no workspace
     // filter at all.
     //
-    //   - src/graph/pass.ts (nightly backfill) queries unfiltered on purpose —
+    //   - src/graph/pass.ts (nightly backfill) queries unfiltered on purpose,
     //     its candidate rows include entries whose vectors predate workspace
     //     stamping, so a filter on that field can match nothing (see the comment
     //     there);
@@ -321,17 +321,17 @@ export async function inferEdgesOnWrite(
     //     neighborsFromVectorQuery (src/graph/traverse.ts), a plain unfiltered
     //     query;
     //   - only src/capture/entry.ts's capture path filters, via
-    //     checkDuplicateAndContradiction — and that filter is best-effort by
+    //     checkDuplicateAndContradiction, and that filter is best-effort by
     //     contract anyway (src/vectorize/scope.ts degrades to an unfiltered query
     //     on a filter-shaped rejection and latches it per isolate).
     //
     // So a foreign neighbour arriving here is the ordinary case rather than the
-    // degraded one, and this check — which reads both endpoints' workspaces from
-    // `entries`, the authoritative source, never from vector metadata — is the
+    // degraded one, and this check, which reads both endpoints' workspaces from
+    // `entries`, the authoritative source, never from vector metadata, is the
     // only thing that makes the invariant true.
     //
-    // A neighbour with no `entries` row at all — a vector that outlived the
-    // entry it indexed — is refused here too, which it did NOT used to be.
+    // A neighbour with no `entries` row at all, a vector that outlived the
+    // entry it indexed, is refused here too, which it did NOT used to be.
     //
     // The edge such a neighbour produces is unreachable: every graph read
     // hydrates both endpoints through the caller's scope and drops what is
@@ -355,7 +355,7 @@ export async function inferEdgesOnWrite(
     if (n.id === followsTarget) {
       // Typed replaces generic: an earlier pass may already have drawn the
       // undirected relates_to this edge supersedes. Only the INFERRED one goes
-      // — a relates_to the user drew themselves is a statement, not a guess.
+      //, a relates_to the user drew themselves is a statement, not a guess.
       //
       // Ordered immediately before the insert in the same batch, because the
       // two are one replacement: issued as separate calls, a failure between
@@ -372,8 +372,8 @@ export async function inferEdgesOnWrite(
       continue;
     }
 
-    // Guarded: a later write touching a pair that already has a typed edge —
-    // an edit, an append, the nightly backfill — falls to this branch outside
+    // Guarded: a later write touching a pair that already has a typed edge,
+    // an edit, an append, the nightly backfill, falls to this branch outside
     // the follows window and would otherwise stack relates_to on top of it.
     const generic = edgeInsertStatement(newId, n.id, "relates_to", { weight: n.score, provenance: "inferred", workspaceId, onlyIfNoTypedEdge: true }, env);
     if (generic) { statements.push(generic); inserted++; }
@@ -383,7 +383,7 @@ export async function inferEdgesOnWrite(
   // Worker's 50-subrequest budget embedding chunks before it ever gets here, so
   // a call per edge is what puts a large multi-chunk capture over the line.
   if (statements.length) await env.DB.batch(statements);
-  // Counts INSERTs only, not the paired DELETE above a typed follows edge — a
+  // Counts INSERTs only, not the paired DELETE above a typed follows edge, a
   // replacement is one edge, not zero or two. Read by the nightly graph pass
   // (src/graph/pass.ts) to report "links inferred" in GET /stats/night.
   return inserted;

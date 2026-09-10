@@ -138,6 +138,88 @@ describe("decisions panel", () => {
   });
 });
 
+describe("decisions thread refit", () => {
+  // fakeDoc()'s el() has a stub querySelector (always null), fine for
+  // asserting panel presence, but refitThread needs a DOM that actually
+  // traverses appended children, the same shape chart.test.ts's harness uses.
+  function makeNode(tag = "div") {
+    const node: any = {
+      tag,
+      className: "",
+      offsetTop: 0,
+      style: {} as Record<string, string>,
+      children: [] as any[],
+      classList: { add() {}, remove() {}, contains: () => false },
+      appendChild(c: any) {
+        node.children.push(c);
+        return c;
+      },
+      querySelector(sel: string): any {
+        return queryOne(node, sel);
+      },
+      querySelectorAll(sel: string): any[] {
+        const out: any[] = [];
+        collectAll(node, sel, out);
+        return out;
+      },
+    };
+    return node;
+  }
+  function matches(node: any, sel: string): boolean {
+    return sel.startsWith(".") ? (node.className || "").split(/\s+/).includes(sel.slice(1)) : false;
+  }
+  function queryOne(root: any, sel: string): any {
+    for (const c of root.children) {
+      if (matches(c, sel)) return c;
+      const found = queryOne(c, sel);
+      if (found) return found;
+    }
+    return null;
+  }
+  function collectAll(root: any, sel: string, out: any[]) {
+    for (const c of root.children) {
+      if (matches(c, sel)) out.push(c);
+      collectAll(c, sel, out);
+    }
+  }
+
+  it("spans exactly the first dot to the last stop's dot, and updates when a stop settles and shrinks the layout", () => {
+    const ctx: any = { console };
+    vm.createContext(ctx);
+    vm.runInContext(readFileSync(resolve(ROOT, "public/js/board.js"), "utf8"), ctx);
+
+    const body = makeNode();
+    const thread = makeNode();
+    thread.className = "thread";
+    body.appendChild(thread);
+    const stop1 = makeNode();
+    stop1.className = "stop";
+    stop1.offsetTop = 0;
+    const stop2 = makeNode();
+    stop2.className = "stop";
+    stop2.offsetTop = 100;
+    const stop3 = makeNode();
+    stop3.className = "stop";
+    stop3.offsetTop = 200;
+    body.appendChild(stop1);
+    body.appendChild(stop2);
+    body.appendChild(stop3);
+
+    ctx.refitThread(body);
+    expect(thread.style.top).toBe(`${stop1.offsetTop + 9}px`);
+    expect(thread.style.height).toBe(`${stop3.offsetTop + 25 - (stop1.offsetTop + 9)}px`);
+
+    // Confirm/Dismiss settling a stop hides its body and actions, shrinking
+    // it, modeled here as the last stop moving up, the real effect of the
+    // stop above it (or itself) getting shorter. A thread still sized for
+    // the old, taller layout would run past this new last dot.
+    stop3.offsetTop = 120;
+    ctx.refitThread(body);
+    expect(thread.style.top).toBe(`${stop1.offsetTop + 9}px`);
+    expect(thread.style.height).toBe(`${stop3.offsetTop + 25 - (stop1.offsetTop + 9)}px`);
+  });
+});
+
 describe("growth panel", () => {
   it("renders from brief.activity when there is data, and hides otherwise", async () => {
     const { ids, document } = fakeDoc();
@@ -172,11 +254,44 @@ describe("growth panel", () => {
     expect(ids2.board.children.find((c: any) => c.dataset.panel === "growth")).toBeUndefined();
   });
 
+  it("against an older Worker (no /stats/activity), shows the 14-day fallback with no range control or table toggle, and a note instead", async () => {
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      // /stats/activity 404s; only /brief's 14-day activity is available.
+      fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({
+      ok: true,
+      total: 10,
+      activity: Array.from({ length: 14 }, (_, i) => ({ day: i, count: i })),
+      sources: [],
+      topics: [],
+      patterns: [],
+      attention: { unindexed: 0, stale: 0, patterns: 0 },
+    });
+    const growth = ids.board.children.find((c: any) => c.dataset.panel === "growth");
+    expect(growth, "growth panel should still render from the 14-day fallback").toBeTruthy();
+    expect(growth.head.children.find((c: any) => c.className === "seg"), "no range control against an older Worker").toBeUndefined();
+    expect(growth.body.children.some((c: any) => c.className && c.className.includes("btn-secondary")), "no table toggle either").toBe(false);
+    const note = growth.body.children.find((c: any) => c.className === "chart-note");
+    expect(note, "a note explains why both controls are absent").toBeTruthy();
+    expect(note.textContent.length).toBeGreaterThan(0);
+  });
+
   it("attaches the panel to the board before measuring the chart container", async () => {
     // renderActivityChart reads chartEl.clientWidth/clientHeight to size the
     // SVG viewBox. A detached element (or one whose ancestor chain is not in
     // the document yet) reports both as 0, which silently falls back to a
-    // hardcoded box that then letterboxes inside the real container — this
+    // hardcoded box that then letterboxes inside the real container, this
     // regressed once already by drawing the chart before appending the panel.
     const { ids, document } = fakeDoc();
     const ctx: any = {

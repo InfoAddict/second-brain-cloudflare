@@ -3608,22 +3608,31 @@
         margin-bottom: 14px;
       }
 
+      /* The neutral outlined chip from the mockup, not a peach/gold pill —
+         used by both the board's decisions panel (board.js) and the older
+         #brief fallback (brief.js) it replaces, so the two read the same. */
       .attn {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        background: none;
-        border: 1px solid var(--border-input);
-        border-radius: 999px;
-        padding: 6px 12px;
-        font-size: 12.5px;
-        color: var(--warn);
+        gap: 8px;
+        height: 32px;
+        background: var(--bg-card);
+        border: 1px solid var(--line);
+        border-radius: var(--r-chip-outline);
+        padding: 0 12px 0 10px;
+        font-size: 13.5px;
+        color: var(--text-primary);
         cursor: pointer;
         font-family: var(--font-sans);
       }
 
+      .attn i {
+        color: var(--text-secondary);
+        font-size: 16px;
+      }
+
       .attn:hover {
-        background: var(--surface-2);
+        background: var(--surface-muted);
       }
 
       /* ── Home: dashboard header + command-bar composer ──────────────────

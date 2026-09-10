@@ -147,7 +147,10 @@ function renderActivityChart(el, opts) {
   }
 
   const grandTotal = sumRows.reduce((n, r) => n + r.s.reduce((a, b) => a + b, 0), 0)
-  el.setAttribute('aria-label', t('board.chartAriaLabel', { n: rows.length, unit: copy.unit, days: rows.length, total: formatNumberUI(grandTotal) }))
+  // `days` is the real calendar span (sumRows holds one row per actual day,
+  // even in week mode where `rows` holds ~52 weekly buckets); using
+  // rows.length there read "53 days" for a 365-day range.
+  el.setAttribute('aria-label', t('board.chartAriaLabel', { n: rows.length, unit: copy.unit, days: sumRows.length, total: formatNumberUI(grandTotal) }))
 
   // Live geometry the shared hover/keyboard handlers below read fresh on every
   // event, rather than closing over this call's rows/x/y: the handlers are

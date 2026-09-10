@@ -197,6 +197,57 @@
   cursor: default;
 }
 
+/* Board buttons (template.html's .btn/.btn-primary/.btn-secondary/.btn-sm):
+   primary fills --action, secondary is transparent with a hairline border.
+   --on-accent, not a hardcoded white, so the primary label stays readable
+   once --action turns pale in dark theme. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: var(--r-button);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-feedback) var(--ease-standard),
+    border-color var(--dur-feedback) var(--ease-standard),
+    color var(--dur-feedback) var(--ease-standard);
+}
+
+.btn-primary {
+  background: var(--action);
+  color: var(--on-accent);
+}
+.btn-primary:hover {
+  background: var(--action-hover);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border-color: var(--line);
+}
+.btn-secondary:hover {
+  background: var(--surface-muted);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.btn-sm {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
 @media (max-width: 1240px) {
   .span8 {
     grid-column: span 12;
@@ -260,6 +311,10 @@
   position: relative;
   padding-left: 26px;
   margin-top: 16px;
+  /* A guard, not the fix: refitThread (board.js) keeps the thread sized to
+     its stops, but this stops a stale height from ever visibly running past
+     the ledger's own box if a refit is ever missed. */
+  overflow: hidden;
 }
 
 .thread {
@@ -650,6 +705,16 @@
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+/* Shown instead of the range control and table toggle against an older
+   Worker, which has neither to switch between. */
+.chart-note {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .legend-item {

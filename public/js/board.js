@@ -73,14 +73,15 @@ function boardPanel(id, { title, sub, action, span }) {
 }
 
 /**
- * The decisions thread's one authored motion: it draws once through the
- * stops on first render. Looks within panel.body (not document) so it never
- * touches another panel's thread. A safe no-op wherever real layout is not
- * available (server-side, or the lightweight test harness, which does not
- * parse innerHTML back into queryable nodes).
+ * Sizes the thread line to span exactly its first stop's dot to its last
+ * stop's dot, within `body` (a panel's .panel-body, or any ancestor of a
+ * single stop that settled). Callable as often as layout changes — settling
+ * a stop shrinks it, and a thread sized for the old, taller layout runs on
+ * past the last dot into whatever panel sits below. A safe no-op wherever
+ * real layout is not available (server-side, or the lightweight test
+ * harness, which does not parse innerHTML back into queryable nodes).
  */
-function fitThread(panel) {
-  const body = panel && panel.body
+function refitThread(body) {
   const thread = body && body.querySelector && body.querySelector('.thread')
   if (!thread) return
   const stops = body.querySelectorAll('.stop')
@@ -89,8 +90,29 @@ function fitThread(panel) {
   const top = (first.offsetTop || 0) + 9, end = (last.offsetTop || 0) + 25
   thread.style.top = top + 'px'
   thread.style.height = Math.max(end - top, 0) + 'px'
+}
+
+/**
+ * The decisions thread's one authored motion: it draws once through the
+ * stops on first render, then keeps refitting itself as the ledger's own
+ * content changes size (a stop settling after Confirm/Dismiss) via one
+ * ResizeObserver per panel, replaced rather than stacked if this panel is
+ * ever rebuilt.
+ */
+function fitThread(panel) {
+  const body = panel && panel.body
+  refitThread(body)
+  const thread = body && body.querySelector && body.querySelector('.thread')
+  if (!thread) return
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => fn()
   raf(() => thread.classList.add('drawn'))
+
+  const ledger = body.querySelector('.ledger')
+  if (ledger && typeof ResizeObserver === 'function') {
+    if (panel._threadObserver) panel._threadObserver.disconnect()
+    panel._threadObserver = new ResizeObserver(() => refitThread(body))
+    panel._threadObserver.observe(ledger)
+  }
 }
 
 /** Panel renderers register here in display order; each appends a .panel or nothing. */
@@ -184,7 +206,7 @@ function renderResurfacePanel(board, brief) {
   const m = brief && brief.resurface
   if (!m) return
   const panel = boardPanel('reread', { title: t('brief.worthRereading'), sub: t('board.rereadSub'), span: 4 })
-  const meta = [m.source ? sourceBadge(m.source).label : null, m.created_at ? formatDateUI(m.created_at, { year: 'numeric', month: 'short', day: 'numeric' }) : null]
+  const meta = [m.source ? sourceDisplayName(m.source) : null, m.created_at ? formatDateUI(m.created_at, { year: 'numeric', month: 'short', day: 'numeric' }) : null]
     .filter(Boolean)
     .join(' · ')
   const tags = humanTags(m.tags || [])
@@ -209,6 +231,39 @@ function renderResurfacePanel(board, brief) {
 
 function capitalizeFirst(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+/**
+ * Proper display names for known sources. sourceBadge()'s own labels are
+ * lowercase by design for the compact monospace meta line on a memory card
+ * ("claude code · 2d ago"), and capitalizeFirst() alone only fixes a
+ * single-word label — it turns "claude code" into "Claude code" and
+ * "chatgpt" into "Chatgpt", both wrong for a chart legend, tooltip, table
+ * header or row read at a glance. Keyed on the raw source string (both the
+ * hyphenated form the Worker stores and sourceBadge's own space-joined
+ * label, so either input resolves), falling back to capitalizeFirst on
+ * sourceBadge's label for anything not in this table.
+ */
+const SOURCE_DISPLAY_NAMES = {
+  'claude-code': 'Claude Code',
+  'claude code': 'Claude Code',
+  chatgpt: 'ChatGPT',
+  obsidian: 'Obsidian',
+  gmail: 'Gmail',
+  icloud: 'iCloud',
+  notion: 'Notion',
+  'web-ui': 'Dashboard',
+  dashboard: 'Dashboard',
+  ios: 'Phone',
+  phone: 'Phone',
+  shortcut: 'Phone',
+  cli: 'CLI',
+  'calendar-google': 'Google Calendar',
+  github: 'GitHub',
+}
+function sourceDisplayName(source) {
+  const known = SOURCE_DISPLAY_NAMES[String(source ?? '').trim().toLowerCase()]
+  return known || capitalizeFirst(sourceBadge(source).label)
 }
 
 /**
@@ -276,31 +331,48 @@ async function renderGrowthPanel(board, brief) {
   const panel = boardPanel('growth', { title: t('board.growthTitle'), sub: t('board.growthSubDay'), span: 8 })
   panel.className += ' growth'
 
-  const seg = document.createElement('div')
-  seg.className = 'seg'
-  seg.setAttribute('role', 'radiogroup')
-  seg.setAttribute('aria-label', t('board.rangeLabel'))
-  const segButtons = [['30', t('board.range30')], ['90', t('board.range90')], ['365', t('board.range365')]].map(([val, label]) => {
-    const b = document.createElement('button')
-    b.type = 'button'
-    b.setAttribute('role', 'radio')
-    b.dataset.range = val
-    const checked = live ? val === '90' : val === '30'
-    b.setAttribute('aria-checked', String(checked))
-    b.tabIndex = checked ? 0 : -1
-    b.disabled = !live
-    b.textContent = label
-    seg.appendChild(b)
-    return b
-  })
-  panel.head.appendChild(seg)
+  // The range control and the table toggle both depend on live per-source
+  // data from /stats/activity; against an older Worker (the 14-day /brief
+  // fallback below) they would be dead controls with nothing to switch
+  // between, so neither renders at all — a muted note says why instead.
+  let segButtons = []
+  let asTableBtn = null
+  if (live) {
+    const seg = document.createElement('div')
+    seg.className = 'seg'
+    seg.setAttribute('role', 'radiogroup')
+    seg.setAttribute('aria-label', t('board.rangeLabel'))
+    segButtons = [['30', t('board.range30')], ['90', t('board.range90')], ['365', t('board.range365')]].map(([val, label]) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.setAttribute('role', 'radio')
+      b.dataset.range = val
+      const checked = val === '90'
+      b.setAttribute('aria-checked', String(checked))
+      b.tabIndex = checked ? 0 : -1
+      b.disabled = false
+      b.textContent = label
+      seg.appendChild(b)
+      return b
+    })
+    panel.head.appendChild(seg)
 
-  const asTableBtn = document.createElement('button')
-  asTableBtn.type = 'button'
-  asTableBtn.className = 'digest-btn'
-  asTableBtn.setAttribute('aria-expanded', 'false')
-  asTableBtn.textContent = t('board.chartShowTable')
-  panel.head.appendChild(asTableBtn)
+    asTableBtn = document.createElement('button')
+    asTableBtn.type = 'button'
+    asTableBtn.className = 'btn btn-secondary btn-sm'
+    asTableBtn.setAttribute('aria-expanded', 'false')
+    asTableBtn.textContent = t('board.chartShowTable')
+    panel.head.appendChild(asTableBtn)
+
+    seg.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      e.preventDefault()
+      const i = segButtons.indexOf(document.activeElement)
+      const next = segButtons[((i === -1 ? 0 : i) + (e.key === 'ArrowRight' ? 1 : segButtons.length - 1)) % segButtons.length]
+      next.focus()
+      next.onclick()
+    })
+  }
 
   const chartEl = document.createElement('div')
   chartEl.className = 'chart'
@@ -314,28 +386,37 @@ async function renderGrowthPanel(board, brief) {
   const legend = document.createElement('div')
   legend.className = 'legend'
 
-  const tableScroll = document.createElement('div')
-  tableScroll.className = 'table-scroll'
-  const table = document.createElement('table')
-  table.className = 'data-table'
-  table.hidden = true
-  const caption = document.createElement('caption')
-  caption.className = 'vh'
-  table.appendChild(caption)
-  table.appendChild(document.createElement('thead'))
-  table.appendChild(document.createElement('tbody'))
-  tableScroll.appendChild(table)
-
   panel.body.appendChild(chartEl)
   panel.body.appendChild(legend)
-  panel.body.appendChild(tableScroll)
 
-  // The toggle updates itself in place and keeps focus; it never rebuilds the panel.
-  asTableBtn.onclick = () => {
-    table.hidden = !table.hidden
-    asTableBtn.textContent = table.hidden ? t('board.chartShowTable') : t('board.chartHideTable')
-    asTableBtn.setAttribute('aria-expanded', String(!table.hidden))
-    asTableBtn.focus()
+  if (live) {
+    const tableScroll = document.createElement('div')
+    tableScroll.className = 'table-scroll'
+    const table = document.createElement('table')
+    table.className = 'data-table'
+    table.hidden = true
+    const caption = document.createElement('caption')
+    caption.className = 'vh'
+    table.appendChild(caption)
+    table.appendChild(document.createElement('thead'))
+    table.appendChild(document.createElement('tbody'))
+    tableScroll.appendChild(table)
+    panel.body.appendChild(tableScroll)
+
+    // The toggle updates itself in place and keeps focus; it never rebuilds the panel.
+    asTableBtn.onclick = () => {
+      table.hidden = !table.hidden
+      asTableBtn.textContent = table.hidden ? t('board.chartShowTable') : t('board.chartHideTable')
+      asTableBtn.setAttribute('aria-expanded', String(!table.hidden))
+      asTableBtn.focus()
+    }
+  } else {
+    // No range control and no table toggle against an older Worker: both
+    // would be dead controls with nothing to switch between. Say why.
+    const note = document.createElement('p')
+    note.className = 'chart-note'
+    note.textContent = t('board.chartNeedsUpdate')
+    panel.body.appendChild(note)
   }
 
   let range = 90
@@ -348,7 +429,7 @@ async function renderGrowthPanel(board, brief) {
       const mode = range === 30 ? 'day' : range === 365 ? 'week' : 'avg7'
       const seriesDefs = buildActivitySeries(data)
       const seriesMeta = seriesDefs.map((sd) => ({
-        name: sd.isOther ? t('board.seriesOther') : capitalizeFirst(sourceBadge(sd.source).label),
+        name: sd.isOther ? t('board.seriesOther') : sourceDisplayName(sd.source),
       }))
       const rawRows = []
       for (let i = 0; i < data.days; i++) {
@@ -373,21 +454,10 @@ async function renderGrowthPanel(board, brief) {
 
   segButtons.forEach((b) => {
     b.onclick = () => {
-      if (b.disabled) return
       range = Number(b.dataset.range)
       segButtons.forEach((o) => { const on = o === b; o.setAttribute('aria-checked', String(on)); o.tabIndex = on ? 0 : -1 })
       draw()
     }
-  })
-  seg.addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-    e.preventDefault()
-    const enabled = segButtons.filter((b) => !b.disabled)
-    if (!enabled.length) return
-    const i = enabled.indexOf(document.activeElement)
-    const next = enabled[((i === -1 ? 0 : i) + (e.key === 'ArrowRight' ? 1 : enabled.length - 1)) % enabled.length]
-    next.focus()
-    next.onclick()
   })
 
   // Attached before drawing: renderActivityChart reads chartEl.clientWidth/
@@ -505,7 +575,7 @@ async function renderRecalledPanel(board) {
   panel.body.innerHTML = `<div class="rows">${entries
     .map((m) => {
       const badge = sourceBadge(m.source)
-      const meta = [badge.label, m.created_at ? formatDateUI(m.created_at, { month: 'short', day: 'numeric' }) : null].filter(Boolean).join(' · ')
+      const meta = [sourceDisplayName(m.source), m.created_at ? formatDateUI(m.created_at, { month: 'short', day: 'numeric' }) : null].filter(Boolean).join(' · ')
       return `<div class="row">
         <div class="row-t">${escHtml(titleLine(m.content))}</div>
         <div class="row-n num">${escHtml(tPlural('board.recalls', m.recall_count))}</div>
@@ -601,16 +671,16 @@ async function renderUpkeepPanel(board) {
     .slice(0, 4)
     .map(
       (c) =>
-        `<div class="task"><div class="task-t">${escHtml(c.tag)}<span>${escHtml(tPlural('upkeep.digestEntries', c.count))}</span></div><button class="digest-btn" type="button" onclick="runDigest('${escAttr(c.tag)}', this)">${escHtml(t('upkeep.digestAction'))}</button></div>`,
+        `<div class="task"><div class="task-t">${escHtml(c.tag)}<span>${escHtml(tPlural('upkeep.digestEntries', c.count))}</span></div><button class="btn btn-secondary btn-sm" type="button" onclick="runDigest('${escAttr(c.tag)}', this)">${escHtml(t('upkeep.digestAction'))}</button></div>`,
     )
   if (unvectorized > 0) {
     rows.push(
-      `<div class="task"><div class="task-t">${escHtml(t('upkeep.vectorizeLabel'))}<span>${escHtml(tPlural('upkeep.vectorizeNote', unvectorized))}</span></div><button class="digest-btn" type="button" onclick="runVectorize(this)">${escHtml(t('upkeep.vectorizeAction'))}</button></div>`,
+      `<div class="task"><div class="task-t">${escHtml(t('upkeep.vectorizeLabel'))}<span>${escHtml(tPlural('upkeep.vectorizeNote', unvectorized))}</span></div><button class="btn btn-secondary btn-sm" type="button" onclick="runVectorize(this)">${escHtml(t('upkeep.vectorizeAction'))}</button></div>`,
     )
   }
   if (unclassified > 0) {
     rows.push(
-      `<div class="task"><div class="task-t">${escHtml(t('upkeep.classifyLabel'))}<span>${escHtml(tPlural('upkeep.classifyNote', unclassified))}</span></div><button class="digest-btn" type="button" onclick="runClassify(this)">${escHtml(t('upkeep.classifyAction'))}</button></div>`,
+      `<div class="task"><div class="task-t">${escHtml(t('upkeep.classifyLabel'))}<span>${escHtml(tPlural('upkeep.classifyNote', unclassified))}</span></div><button class="btn btn-secondary btn-sm" type="button" onclick="runClassify(this)">${escHtml(t('upkeep.classifyAction'))}</button></div>`,
     )
   }
 
@@ -700,14 +770,27 @@ BOARD_PANELS.push(
   renderTopicsPanel,
 )
 
-/** Worker version and index health, at the foot of the rail/top bar. */
+/**
+ * Worker version and index health, at the foot of the rail/top bar, plus
+ * which Worker this is (from WORKER_URL's own host, never the page's — the
+ * desktop app's page origin says nothing about which Worker it talks to).
+ * Lets a reviewer tell production from a local Worker at a glance.
+ */
 async function renderRailNote() {
+  let host = ''
+  try { host = WORKER_URL ? new URL(WORKER_URL).host : '' } catch { host = '' }
+  const hostLine = host ? t('board.railHost', { host }) : ''
+
+  const topbarStatus = document.getElementById('topbar-status')
+  if (topbarStatus) topbarStatus.title = hostLine
+
   const el = document.getElementById('sb-version-note')
   if (!el) return
   const health = await boardFetch('/health')
   if (!health) { el.textContent = ''; return }
   const indexOk = !health.vectorize || health.vectorize.ok !== false
-  el.innerHTML = `<b>${escHtml(t('board.railVersion', { v: health.version || '' }))}</b>${escHtml(indexOk ? t('board.railIndexOk') : t('board.railIndexDegraded'))}`
+  el.innerHTML = `<b>${escHtml(t('board.railVersion', { v: health.version || '' }))}</b>${escHtml(indexOk ? t('board.railIndexOk') : t('board.railIndexDegraded'))}` +
+    (hostLine ? `<br>${escHtml(hostLine)}` : '')
 }
 
 async function renderBoard(brief) {
