@@ -1,5 +1,7 @@
-/* Shares the dashboard and marketing site's visual language with system fonts
-   only — setup must render fully offline. */
+@font-face { font-family: "DM Sans"; src: url("/fonts/dm-sans-400.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "DM Sans"; src: url("/fonts/dm-sans-500.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "DM Sans"; src: url("/fonts/dm-sans-600.ttf") format("truetype"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Sora"; src: url("/fonts/sora.ttf") format("truetype"); font-weight: 100 800; font-display: swap; }
 *,
 *::before,
 *::after {
@@ -13,23 +15,23 @@
      Warm paper and near-black ink come directly from the product surfaces.
      Brand orange can carry control chrome and dark text; `--accent-press`
      remains the darker accessible orange for text on light backgrounds. */
-  --bg: #f7f4ef;
-  --bg-card: #fffdfa;
+  --bg: #ffffff;
+  --bg-card: #ffffff;
   --bg-sunken: #ffffff;
   --accent: #fd540a;
-  --accent-btn: #fa5208;
-  --accent-press: #a83200;
+  --accent-btn: #cc4109;
+  --accent-press: #a63508;
   --accent-soft: rgba(253, 84, 10, 0.1);
   --accent-strong: rgba(253, 84, 10, 0.17);
-  --on-accent: #161616;
-  --text-primary: #161616;
-  --text-secondary: #68635f;
-  --text-tertiary: #756f69;
+  --on-accent: #ffffff;
+  --text-primary: #202124;
+  --text-secondary: #61646c;
+  --text-tertiary: #74767d;
   --text: var(--text-primary);
   --text-dim: var(--text-secondary);
-  --border: rgba(22, 22, 22, 0.1);
-  --border-strong: rgba(22, 22, 22, 0.2);
-  --border-hover: rgba(22, 22, 22, 0.4);
+  --border: #e2e4e8;
+  --border-strong: #c9ccd2;
+  --border-hover: #9ca0a8;
   --danger: #b42318;
   --danger-soft: rgba(180, 35, 24, 0.08);
   --danger-strong: rgba(180, 35, 24, 0.16);
@@ -50,15 +52,16 @@
   --s-8: 40px;
 
   /* ── Radii ── product-card restraint, with pills reserved for badges. */
-  --r-sm: 6px;
-  --r-md: 9px;
+  --r-sm: 4px;
+  --r-md: 7px;
   --r-lg: 12px;
-  --r-xl: 16px;
+  --r-xl: 14px;
   --r-pill: 999px;
 
   /* ── Type ── serif for the one heading, sans for everything that is read. */
-  --font-serif: Georgia, "Times New Roman", serif;
-  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Sora", sans-serif;
+  --font-display: "Sora", sans-serif;
+  --font-sans: "DM Sans", sans-serif;
   --font-mono: ui-monospace, Menlo, Consolas, monospace;
   --fs-display: 34px;
   --fs-title: 21px;
@@ -69,20 +72,65 @@
   --fs-2xs: 11px;
 
   /* ── Elevation ── almost flat, like the dashboard and site cards. */
-  --shadow-sm: 0 1px 2px rgba(22, 22, 22, 0.035);
-  --shadow-card: 0 1px 2px rgba(22, 22, 22, 0.035);
-  --shadow-lift: 0 2px 4px rgba(22, 22, 22, 0.045), 0 10px 24px rgba(22, 22, 22, 0.075);
-  --shadow-key: 0 2px 0 #c73e05;
+  --shadow-sm: 0 12px 32px #2021240b;
+  --shadow-card: 0 12px 32px #2021240b;
+  --shadow-lift: 0 12px 32px #2021240b;
+  --shadow-key: 0 12px 32px #2021240b;
 
   /* ── Focus ── one ring, stated once. A cream gap so it reads on a filled
      button too, then the darker orange against either surface. */
-  --focus-ring: 0 0 0 2px var(--bg-card), 0 0 0 4px var(--accent-press);
-  --focus-ring-soft: 0 0 0 3px var(--accent-soft);
+  --focus-ring: 0 0 0 3px var(--accent-ink);
+  --focus-ring-soft: 0 0 0 3px var(--accent-ink);
 
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --brand-orange: #fd540a;
+  --action: #cc4109;
+  --action-hover: #a63508;
+  --accent-ink: #bd410e;
+  --line: #e2e4e8;
+  --border-soft: #e2e4e8;
+  --surface-muted: #f3f4f6;
+  --charcoal: #17181b;
+  --r-chip: 4px;
+  --r-input: 6px;
+  --r-button: 7px;
+  --r-card: 12px;
+  --r-panel: 14px;
+  --dur-feedback: 150ms;
+  --dur-state: 260ms;
+  --dur-layout: 420ms;
+  --dur-focal: 700ms;
+  --ease-exit: cubic-bezier(.4, 0, 1, 1);
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease: var(--ease-standard);
   /* Ridge, the pop-up mascot. The character reads ~200px wide; a short window
      (min height 560px) scales him down so he can't dominate a cramped screen. */
   --ridge-size: clamp(150px, 28.5vh, 200px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181b;
+    --bg-card: #202124;
+    --bg-sunken: #17181b;
+    --text-primary: #f7f7f8;
+    --text-secondary: #b7bac1;
+    --text-tertiary: #9498a1;
+    --border: #393c43;
+    --border-strong: #535761;
+    --border-hover: #737782;
+    --line: #393c43;
+    --border-soft: #393c43;
+    --surface-muted: #292b30;
+    --accent-soft: rgba(255, 154, 97, .15);
+    --accent-strong: rgba(255, 154, 97, .24);
+    --action: #e55a20;
+    --action-hover: #ff7840;
+    --accent-btn: var(--action);
+    --accent-press: var(--action-hover);
+    --accent-ink: #ff9a61;
+    --danger-soft: rgba(255, 122, 111, .16);
+    --ok-soft: rgba(75, 192, 135, .16);
+  }
 }
 
 html,

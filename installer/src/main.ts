@@ -2881,7 +2881,11 @@ function applyWindowTitle() {
 async function boot() {
   initI18n();
   mountRidge();
-  applyWindowTitle();
+  try {
+    applyWindowTitle();
+  } catch {
+    // The browser preview has no Tauri window runtime.
+  }
   window.addEventListener(LOCALE_CHANGE_EVENT, () => {
     applyWindowTitle();
     currentScreen?.();
