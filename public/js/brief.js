@@ -123,6 +123,19 @@ function renderBrief(data) {
   const el = document.getElementById('brief')
   const hero = document.getElementById('recall-welcome')
 
+  // The board (board.js) owns every one of these panels now: the decisions
+  // thread has the patterns and the attention chips, the growth chart has the
+  // activity strip and (in its legend) the source proportions, and its own
+  // reread panel has the resurfaced memory. Rendering the legacy #brief block
+  // alongside it would show the same insights and numbers twice on one
+  // screen, so this only falls back to the inline block below when board.js
+  // has not loaded (a stale cache, or a build that predates it).
+  if (typeof renderBoard === 'function') {
+    if (el) el.style.display = 'none'
+    renderBoard(data)
+    return
+  }
+
   // Topics live under the home input, where they read as questions worth
   // asking. Repeating them here as a panel said the same thing twice on one
   // screen.
@@ -180,10 +193,7 @@ function renderBrief(data) {
   // Attention is the most actionable thing here, so it decides on its own
   // whether the brief has something to say. Gating it behind the panels meant a
   // brain whose only news was "2 not searchable" showed nothing at all.
-  if (!attention && !panels.length && !cards.length) {
-    if (typeof renderBoard === 'function') renderBoard(data)
-    return
-  }
+  if (!attention && !panels.length && !cards.length) return
 
   // The home composition owns the top of the screen now, so the brief renders
   // below it and leads with the row that asks for something rather than with
@@ -195,7 +205,6 @@ function renderBrief(data) {
     `<div class="brief-eyebrow">${escHtml(t('brief.eyebrow'))}</div>` +
     (panels.length ? `<div class="brief-grid">${panels.join('')}</div>` : '') +
     cards.join('')
-  if (typeof renderBoard === 'function') renderBoard(data)
 }
 
 /** Confirm or dismiss without leaving the brief; the row settles in place. */

@@ -193,26 +193,11 @@ function renderResurfacePanel(board, brief) {
 }
 BOARD_PANELS.push(renderResurfacePanel)
 
-/**
- * Where memories come from, as a proportion list. Temporary: Task 1.5 folds
- * this into the growth chart's legend, at which point this panel is removed.
- */
-function renderSourcesPanel(board, brief) {
-  const rows = (brief && brief.sources) || []
-  if (!rows.length) return
-  const total = rows.reduce((n, s) => n + s.count, 0) || 1
-  const panel = boardPanel('sources-from', { title: t('brief.whereFrom'), span: 4 })
-  panel.body.innerHTML = `<div class="rows">${rows
-    .slice(0, 4)
-    .map((s) => {
-      const badge = sourceBadge(s.source)
-      const pct = Math.round((s.count / total) * 100)
-      return `<div class="src"><i class="ti ${badge.icon}"></i><span class="src-name">${escHtml(badge.label)}<span class="src-meta num">${pct}% · ${escHtml(formatNumberUI(s.count))}</span></span></div>`
-    })
-    .join('')}</div>`
-  board.appendChild(panel)
-}
-BOARD_PANELS.push(renderSourcesPanel)
+// Task 1.4 had a temporary "Where from" proportion panel here. Task 1.5's
+// growth chart legend is its replacement (per the plan: "the 'Where from'
+// proportion rows move into the chart legend in Task 1.5"), so it is gone —
+// Phase 1's chart has only one aggregate series until /stats/activity
+// (Phase 3) exists, at which point the legend carries a row per source.
 
 /**
  * "Memories over time": a stacked area chart. Until /stats/activity exists
@@ -363,7 +348,9 @@ async function renderGraphPanel(board, brief) {
     if (!s || !tn) continue
     svg += `<line x1="${sx(s.cx).toFixed(1)}" y1="${sy(s.cy).toFixed(1)}" x2="${sx(tn.cx).toFixed(1)}" y2="${sy(tn.cy).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
   }
-  for (const c of clusters) svg += `<circle cx="${sx(c.cx).toFixed(1)}" cy="${sy(c.cy).toFixed(1)}" r="${(c.R * scale).toFixed(1)}" fill="rgba(32,33,36,.045)" stroke="rgba(32,33,36,.28)"/>`
+  // fill/stroke-opacity (not a baked-in rgba) so the ring reads as a faint
+  // wash of ink in either theme instead of vanishing on a dark ground.
+  for (const c of clusters) svg += `<circle cx="${sx(c.cx).toFixed(1)}" cy="${sy(c.cy).toFixed(1)}" r="${(c.R * scale).toFixed(1)}" fill="var(--text-primary)" fill-opacity="0.045" stroke="var(--text-primary)" stroke-opacity="0.28"/>`
   for (const n of nodes) {
     const r = (3.5 + Math.min(2.5, (n.importance || 0) * 0.5)).toFixed(1)
     svg += `<circle cx="${sx(n.cx).toFixed(1)}" cy="${sy(n.cy).toFixed(1)}" r="${r}" fill="var(--text-secondary)" stroke="var(--bg-card)" stroke-width="2"/>`
