@@ -395,7 +395,7 @@ async function loadRecent() {
   // so it is allowed to populate a moment late.
   maybeRevealActorFilter()
   try {
-    allEntries = await apiList(50, memoryLayerFilter, memoryActorFilter)
+    allEntries = await apiList(50, memoryLayerFilter, memoryActorFilter, selectedTag)
     // Through the filters, not straight to render: reloading used to reset the
     // list to everything while the filter controls still read "work" and
     // "past 7 days", which now happens after every capture rather than only

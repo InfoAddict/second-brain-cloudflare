@@ -61,8 +61,13 @@ async function openCapsuleMemory(id, trigger) {
 }
 
 function browseBoardTag(tag) {
-  if (typeof switchTab === 'function') switchTab('memories')
+  // Tag set before the tab switch: switchTab('memories') is what actually
+  // triggers loadRecent(), and loadRecent reads selectedTag synchronously (to
+  // build the /list?tag= request) before its first await — set the other way
+  // round, the fetch would go out with whatever tag was selected before this
+  // click, not this one.
   if (typeof onTagChange === 'function') onTagChange(tag)
+  if (typeof switchTab === 'function') switchTab('memories')
 }
 
 // Built with createElement/appendChild rather than innerHTML+querySelector so
@@ -1028,7 +1033,7 @@ async function renderBoard(brief) {
   // shares the one fetch); total_contradictions is absent on an older Worker,
   // in which case the tile stays out rather than showing a false zero.
   if (recalled && typeof recalled.total_contradictions === 'number') {
-    tilesEl.appendChild(boardTile('contradictions', { n: recalled.total_contradictions, label: t('board.tileContradictions'), delta: t('board.tileContradictionsDelta'), quiet: true, ariaLabel: t('board.tileOpenContradictions'), onClick: () => { switchTab('memories'); onTagChange('contradiction-resolved') } }))
+    tilesEl.appendChild(boardTile('contradictions', { n: recalled.total_contradictions, label: t('board.tileContradictions'), delta: t('board.tileContradictionsDelta'), quiet: true, ariaLabel: t('board.tileOpenContradictions'), onClick: () => { onTagChange('contradiction-resolved'); switchTab('memories') } }))
   }
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {
