@@ -137,7 +137,7 @@ export default {
     const slice = await nextWorkspace(env);
     // The three passes used to be three independent waitUntil()s so one
     // failing never delayed or hid the others. They still run concurrently
-    // and still log their own failures independently below — bundled into one
+    // and still log their own failures independently below, bundled into one
     // job() only so their counts can be collected once the night is over and
     // handed to recordNightSummary in a single, fully-built write (never a
     // partial record; see src/runtime/night-summary.ts). insightsProposed is
@@ -160,7 +160,7 @@ export default {
       //
       // `== null` deliberately, not `!slice`: "" is the legacy pre-team bucket
       // and a genuine ring member (src/runtime/rotation.ts), so it must write
-      // night:'' like any other slice — only null/undefined skip the write.
+      // night:'' like any other slice. Only null/undefined skip the write.
       // GET /stats/night reads it back for admins via readableWorkspaces.
       if (slice == null) return;
 

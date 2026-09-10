@@ -203,7 +203,7 @@ export async function handleBriefRoutes(
           content: resurfaceRow.content,
           source: resurfaceRow.source,
           // A malformed tags column (hand-edited, or a migration bug) must not
-          // 500 the whole endpoint every day this row is picked — see
+          // 500 the whole endpoint every day this row is picked, see
           // src/insight/candidates.ts's parseTags, the shared safe parser.
           tags: parseTags(resurfaceRow.tags),
           created_at: resurfaceRow.created_at,

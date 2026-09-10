@@ -211,7 +211,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin, not just the ceiling: 11 D1 statements (unchanged from before
     // the night-summary recorder) plus the ONE OAUTH_KV.put it adds per
     // maintenance invocation. If this number moves, say why in the same
-    // commit — see the scope-checker test's convention for this pattern.
+    // commit, see the scope-checker test's convention for this pattern.
     expect(statements.length).toBe(12);
   });
 

@@ -77,7 +77,7 @@ describe("GET /stats/night", () => {
     const m = await migrated();
     sq = m.sq;
     // The owner bootstraps as role "admin" (src/lib/tenancy.ts), and
-    // readableWorkspaces appends "" for admins only (src/lib/scope.ts) — the
+    // readableWorkspaces appends "" for admins only (src/lib/scope.ts), the
     // legacy pre-team bucket a solo brain's rotation can still land the
     // maintenance cron on (src/runtime/rotation.ts).
     const roots = await ensureTenantBootstrap(m.env);
