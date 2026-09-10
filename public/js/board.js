@@ -146,11 +146,11 @@ function renderDecisionPanel(board, brief) {
   }
 
   const panel = boardPanel('decide', { title: t('board.decideTitle'), sub: t('board.decideSub'), span: 4 })
+  panel.className += ' decide' // the mockup's 1240px override (full width, not half) keys off this
   panel.body.innerHTML = `<div class="ledger"><div class="thread" aria-hidden="true"></div>${stops.join('')}</div>`
   board.appendChild(panel)
   fitThread(panel)
 }
-BOARD_PANELS.push(renderDecisionPanel)
 
 /** Bars proportional to their own max, not to each other's panel's max. */
 function boardBars(rows, onClick) {
@@ -178,7 +178,6 @@ function renderTopicsPanel(board, brief) {
   )
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderTopicsPanel)
 
 /** "Worth re-reading": the one high-importance memory nobody has recalled lately. */
 function renderResurfacePanel(board, brief) {
@@ -203,7 +202,6 @@ function renderResurfacePanel(board, brief) {
     </div>`
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderResurfacePanel)
 
 // Task 1.4 had a temporary "Where from" proportion panel here. The growth
 // chart legend below is its replacement (per the plan: "the 'Where from'
@@ -395,7 +393,6 @@ async function renderGrowthPanel(board, brief) {
   await draw()
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderGrowthPanel)
 
 /**
  * "How it connects": a static packed preview of the same topic clusters the
@@ -481,7 +478,6 @@ async function renderGraphPanel(board, brief) {
   panel.body.appendChild(legend)
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderGraphPanel)
 
 /**
  * "What you keep coming back to": the most-recalled memories, all time.
@@ -507,7 +503,6 @@ async function renderRecalledPanel(board) {
     .join('')}</div>`
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderRecalledPanel)
 
 /**
  * "Last night": last night's maintenance summary from /stats/night. Hidden
@@ -532,7 +527,6 @@ async function renderNightPanel(board) {
     .join('')}</div>`
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderNightPanel)
 
 /**
  * One literal translate call per type, not a lookup keyed by a runtime
@@ -581,7 +575,6 @@ async function renderLinksPanel(board) {
   panel.body.innerHTML = html
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderLinksPanel)
 
 /** Upkeep: the chores a brain can name but not do for itself. */
 async function renderUpkeepPanel(board) {
@@ -613,7 +606,6 @@ async function renderUpkeepPanel(board) {
   panel.body.innerHTML = `<div class="rows">${rows.join('')}</div>`
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderUpkeepPanel)
 
 function integrationIcon(provider) {
   if (/^email-/.test(provider)) return 'ti-mail'
@@ -645,7 +637,6 @@ async function renderSourcesStatusPanel(board) {
     .join('')}</div>`
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderSourcesStatusPanel)
 
 /** The prompt capsule: what every connected tool loads before anything else. */
 async function renderCapsulePanel(board) {
@@ -680,7 +671,22 @@ async function renderCapsulePanel(board) {
   panel.body.innerHTML = `<div class="slots">${rows.join('')}</div>`
   board.appendChild(panel)
 }
-BOARD_PANELS.push(renderCapsulePanel)
+
+// Registration order is display order. Rows fill 8/4, 7/5, 3/3/3/3, 4/4/4
+// (see board.css's span classes and its 1240/900/700 breakpoints).
+BOARD_PANELS.push(
+  renderGrowthPanel,
+  renderDecisionPanel,
+  renderGraphPanel,
+  renderRecalledPanel,
+  renderNightPanel,
+  renderUpkeepPanel,
+  renderSourcesStatusPanel,
+  renderCapsulePanel,
+  renderResurfacePanel,
+  renderLinksPanel,
+  renderTopicsPanel,
+)
 
 /** Worker version and index health, at the foot of the rail/top bar. */
 async function renderRailNote() {
@@ -708,6 +714,11 @@ async function renderBoard(brief) {
   if (recalled && typeof recalled.total_recalls === 'number') {
     tilesEl.appendChild(boardTile('recalls', { n: recalled.total_recalls, label: t('board.tileRecalls'), delta: t('board.tileRecallsDelta'), quiet: true }))
   }
+  // A fourth "contradictions settled" tile is not wired: no Worker endpoint
+  // returns it, and the worker cookbook's guidance is that deriving it from
+  // `contradiction_wins`/`updated_at` at read time is not established as
+  // cheap enough to add casually — the merged Worker branch does not attempt
+  // it either. Leave the tile out until a real endpoint exists.
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {
     try { await fn(board, brief) } catch (e) { console.error('board panel failed:', e) }

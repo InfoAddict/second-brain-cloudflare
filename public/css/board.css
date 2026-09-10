@@ -200,6 +200,11 @@
   .span8 {
     grid-column: span 12;
   }
+  /* The decisions thread needs full width before it needs to stack, unlike
+     the other span4 panels — matches the mockup's `.span4.decide` override. */
+  .span4.decide {
+    grid-column: span 12;
+  }
   .span7,
   .span5 {
     grid-column: span 6;
@@ -243,6 +248,9 @@
   }
   .panel {
     padding: 16px 16px 18px;
+  }
+  .bar {
+    grid-template-columns: 96px minmax(0, 1fr) 40px;
   }
 }
 
@@ -703,7 +711,7 @@
 @media (max-width: 700px) {
   .chart {
     flex: none;
-    height: 220px;
+    height: 240px;
     min-height: 0;
   }
 }

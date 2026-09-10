@@ -77,7 +77,7 @@ describe("board tiles", () => {
     });
     const tiles = ids["board-tiles"].children;
     expect(ids["board-tiles"].hidden).toBe(false);
-    // connections hidden on 404, recalls and contradictions absent (Phase 3)
+    // connections and recalls hidden: their endpoints 404 in this fixture; contradictions has no endpoint at all
     expect(tiles.map((t: any) => t.dataset.tile)).toEqual(["memories"]);
     expect(tiles[0].innerHTML).toMatch(/1,204/);
     expect(tiles[0].innerHTML).toMatch(/35/); // last 7 days summed like home.js does
@@ -403,5 +403,64 @@ describe("graph preview panel", () => {
     vm.runInContext(src, ctx);
     await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
     expect(ids.board.children.find((c: any) => c.dataset.panel === "graph")).toBeTruthy();
+  });
+});
+
+describe("panel registration order", () => {
+  it("renders every panel in the final reading order when every endpoint answers", async () => {
+    const { ids, document } = fakeDoc();
+    function nodesAndEdges(n: number) {
+      const nodes = Array.from({ length: n }, (_, i) => ({ id: `n${i}`, tags: [i % 2 ? "alpha" : "beta"], importance: i % 5 }));
+      const edges = nodes.slice(1).map((node, i) => ({ source: nodes[i].id, target: node.id, weight: 1 }));
+      return { nodes, edges };
+    }
+    const responses: Record<string, any> = {
+      "/stats/graph": { ok: true, edgeTypes: { relates_to: 10, follows: 5 } },
+      "/stats/recalled": { ok: true, total_recalls: 40, entries: [{ id: "a", content: "x".repeat(30), source: "claude-code", created_at: Date.now(), recall_count: 4 }] },
+      "/stats/night": { ok: true, ranAt: Date.now(), linksInferred: 3, insightsProposed: 1, digestsWritten: 1, claimsFlagged: 1 },
+      "/graph?limit=120": { ok: true, ...nodesAndEdges(8) },
+      "/stats": { ok: true, digest_candidates: [{ tag: "second-brain", count: 12 }], unvectorized: 0, unclassified: 0 },
+      "/integrations": { ok: true, integrations: [{ provider: "gmail", name: "Gmail", connected: true, lastSyncedAt: Date.now() }] },
+      "/prompt-capsules/core": { ok: true, populated: true, sections: [{ slot: "identity", source_entry_id: "a" }], omitted_slots: [] },
+    };
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) => {
+        const hit = Object.keys(responses).find((path) => url.includes(path));
+        return hit ? { ok: true, json: async () => responses[hit] } : { ok: false, status: 404, json: async () => ({}) };
+      },
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({
+      ok: true,
+      total: 1204,
+      activity: Array.from({ length: 14 }, (_, i) => ({ day: i, count: 5 })),
+      sources: [],
+      topics: [{ tag: "second-brain", count: 40 }],
+      patterns: [{ id: "p1", content: "x".repeat(40) }],
+      resurface: { id: "r1", content: "y".repeat(60), source: "claude-code", created_at: Date.now(), tags: [] },
+      attention: { unindexed: 1, stale: 1, patterns: 1 },
+    });
+    expect(ids.board.children.map((c: any) => c.dataset.panel)).toEqual([
+      "growth",
+      "decide",
+      "graph",
+      "recalled",
+      "night",
+      "upkeep",
+      "sources",
+      "capsule",
+      "reread",
+      "links",
+      "topics",
+    ]);
+    expect(ids["board-tiles"].children.map((c: any) => c.dataset.tile)).toEqual(["memories", "connections", "recalls"]);
   });
 });
