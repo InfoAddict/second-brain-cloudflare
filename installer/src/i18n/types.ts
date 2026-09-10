@@ -85,6 +85,7 @@ export type Messages = {
       entriesNone: string;
       pickLabel: string;
       inUse: string;
+      unknownValue: string;
       storageWarning: string;
       pickNote: string;
       /**

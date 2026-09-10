@@ -111,7 +111,7 @@ export const QUOTES: Record<QuoteId, Quote> = {
   },
   mustafa: {
     id: "mustafa",
-    text: "The resolution logic IS the product - everything else is storage.",
+    text: "The resolution logic IS the product — everything else is storage.",
     author: "Mustafa Arian",
     source: "productHunt",
   },

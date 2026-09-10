@@ -705,8 +705,8 @@ function migrationPicker(e: MigrationEstimate): HTMLElement[] {
 
 function migrationConfirm(): HTMLElement[] {
   const e = migration.estimate;
-  const chunks = e ? num(e.chunksAtLeast) : "-";
-  const rounds = e ? num(roundsFor(e.chunksAtLeast)) : "-";
+  const chunks = e ? num(e.chunksAtLeast) : t("settingsPanel.migration.unknownValue");
+  const rounds = e ? num(roundsFor(e.chunksAtLeast)) : t("settingsPanel.migration.unknownValue");
   const points = h("ul", { class: "settings-migration-points" });
   for (const key of ["point1", "point2", "point3", "point4"] as const) {
     points.append(h("li", {}, [t(`settingsPanel.migration.${key}`, { chunks, rounds })]));
