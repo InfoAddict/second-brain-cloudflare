@@ -474,7 +474,7 @@
          onto it, which is what makes the title and body get read out. -->
     <div id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body" tabindex="-1">
       <div class="confirm-sheet">
-        <h3 id="confirm-title" data-i18n="memories.confirmTitle">Forget this memory?</h3>
+        <h2 id="confirm-title" data-i18n="memories.confirmTitle">Forget this memory?</h2>
         <p id="confirm-body" data-i18n="memories.confirmBody">This can't be undone. The memory will be removed from your brain.</p>
         <label class="confirm-check" id="confirm-check-row" style="display: none">
           <input type="checkbox" id="confirm-checkbox" />
@@ -489,7 +489,7 @@
 
     <div id="append-sheet">
       <div class="append-inner">
-        <h3 data-i18n="memories.appendTitle">Add an update</h3>
+        <h2 data-i18n="memories.appendTitle">Add an update</h2>
         <div class="append-context" id="append-context-preview"></div>
         <div class="append-input-wrap">
           <textarea id="append-textarea" placeholder="What's changed or new?" data-i18n="memories.appendPlaceholder" data-i18n-attr="placeholder" rows="3"></textarea>
@@ -504,7 +504,7 @@
     <div id="edit-sheet">
       <div class="edit-inner">
         <div class="edit-header">
-          <h3 data-i18n="memories.editTitle">Edit memory</h3>
+          <h2 data-i18n="memories.editTitle">Edit memory</h2>
           <div class="edit-sub" id="edit-sub"></div>
         </div>
         <div class="append-input-wrap edit-input-wrap">
@@ -523,7 +523,7 @@
     <div id="view-sheet">
       <div class="view-inner">
         <div class="view-header">
-          <h3 data-i18n="memories.viewTitle">Memory</h3>
+          <h2 data-i18n="memories.viewTitle">Memory</h2>
           <button class="btn-close-icon" onclick="closeView()"><i class="ti ti-x"></i></button>
         </div>
         <!-- One scroll region between a fixed header and fixed actions. These
@@ -560,7 +560,7 @@
            control here is an immediate verb — Digest, Restore, Export — and a
            "Save" that fired nine irreversible actions at once would be a trap. -->
       <div class="menu-inner">
-        <h3 data-i18n="menu.title">Your brain</h3>
+        <h2 data-i18n="menu.title">Your brain</h2>
 
         <!-- Chores. Each section hides itself when there is nothing to do, so
              on a healthy brain this whole group disappears. -->
@@ -621,7 +621,7 @@
         <div class="view-header">
           <div style="display: flex; align-items: center; gap: 10px">
             <button class="btn-close-icon" id="integrations-back" onclick="backToMenu()" title="Back to settings" data-i18n="integrations.backSettings" data-i18n-attr="title"><i class="ti ti-arrow-left"></i></button>
-            <h3 style="margin-bottom: 0" id="integrations-title" data-i18n="menu.integrations">Integrations</h3>
+            <h2 style="margin-bottom: 0" id="integrations-title" data-i18n="menu.integrations">Integrations</h2>
           </div>
           <button class="btn-close-icon" onclick="closeIntegrations()"><i class="ti ti-x"></i></button>
         </div>
@@ -638,7 +638,7 @@
         <div class="view-header">
           <div style="display: flex; align-items: center; gap: 10px">
             <button class="btn-close-icon" onclick="backToMenuFromPatterns()" title="Back to settings" data-i18n="integrations.backSettings" data-i18n-attr="title"><i class="ti ti-arrow-left"></i></button>
-            <h3 style="margin-bottom: 0" data-i18n="patterns.title">Insights noticed</h3>
+            <h2 style="margin-bottom: 0" data-i18n="patterns.title">Insights noticed</h2>
           </div>
           <button class="btn-close-icon" onclick="closePatternsSheet()"><i class="ti ti-x"></i></button>
         </div>
@@ -661,7 +661,7 @@
     <div id="stale-sheet">
       <div class="menu-inner patterns-inner">
         <div class="view-header">
-          <h3 style="margin-bottom: 0" data-i18n="stale.title">May be out of date</h3>
+          <h2 style="margin-bottom: 0" data-i18n="stale.title">May be out of date</h2>
           <button class="btn-close-icon" onclick="closeStaleSheet()"><i class="ti ti-x"></i></button>
         </div>
         <p class="digest-note" id="stale-intro" data-i18n="stale.intro">These were true when you wrote them and carry a claim that ages. Update one to confirm it, add to it, keep it as still true, or forget it.</p>

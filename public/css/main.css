@@ -1825,7 +1825,7 @@
       .menu-inner,
       .view-inner {
         background: var(--bg);
-        border-radius: 24px 24px 0 0;
+        border-radius: var(--r-panel) var(--r-panel) 0 0;
         width: 100%;
         max-width: 440px;
         box-shadow: var(--shadow-sheet);
@@ -1863,21 +1863,25 @@
         max-height: 90vh;
       }
 
-      .confirm-sheet h3,
-      .append-inner h3,
-      .edit-inner h3,
-      .menu-inner h3,
-      .view-header h3 {
-        font-family: var(--font-serif);
-        font-size: 21px;
+      /* Sheet and dialog titles: Sora 17px as h2, per the system's panel
+         anatomy (confirm, append, edit, view, menu, integrations, patterns
+         and stale sheets all promoted from h3, same ids). */
+      .confirm-sheet h2,
+      .append-inner h2,
+      .edit-inner h2,
+      .menu-inner h2,
+      .view-header h2 {
+        font-family: var(--font-display);
+        font-size: 17px;
         font-weight: 500;
         margin-bottom: 9px;
-        letter-spacing: -0.01em;
+        letter-spacing: -0.02em;
         color: var(--text-primary);
       }
 
       .confirm-sheet p {
-        font-size: 14px;
+        font-family: var(--font-sans);
+        font-size: 15px;
         color: var(--text-secondary);
         margin-bottom: 22px;
         line-height: 1.55;
@@ -1927,10 +1931,10 @@
       }
 
       .view-content {
-        font-family: var(--font-serif);
-        font-size: 17px;
+        font-family: var(--font-sans);
+        font-size: 15px;
         color: var(--text-primary);
-        line-height: 1.62;
+        line-height: 1.6;
         overflow-y: auto;
         margin-bottom: 18px;
         white-space: pre-wrap;
@@ -1959,16 +1963,19 @@
            without it the text simply stopped mid-sentence at the buttons with
            nothing saying the rest was still there. */
         padding-top: 14px;
-        border-top: 0.5px solid var(--border);
+        border-top: 1px solid var(--line);
       }
 
+      /* View-sheet actions: Append and Edit are secondary (transparent,
+         hairline border); Forget is destructive (--danger, white label),
+         the same treatment as the confirm sheet's own Forget button. */
       .btn-view-append,
       .btn-view-edit,
       .btn-view-forget {
         flex: 1;
         padding: 13px;
-        border: none;
-        border-radius: 13px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-button);
         font-family: var(--font-sans);
         font-size: 13.5px;
         font-weight: 500;
@@ -1977,11 +1984,12 @@
         align-items: center;
         justify-content: center;
         gap: 6px;
-        background: var(--surface-2);
+        background: transparent;
         color: var(--text-primary);
         transition:
-          background 0.15s,
-          color 0.15s;
+          background-color var(--dur-feedback) var(--ease-standard),
+          border-color var(--dur-feedback) var(--ease-standard),
+          color var(--dur-feedback) var(--ease-standard);
       }
 
       .btn-view-append i,
@@ -1992,15 +2000,16 @@
 
       .btn-view-append:hover,
       .btn-view-edit:hover {
-        background: var(--surface-3);
+        background: var(--surface-muted);
       }
 
       .btn-view-forget {
-        color: var(--danger);
+        background: var(--danger);
+        border-color: var(--danger);
+        color: #fff;
       }
       .btn-view-forget:hover {
-        background: var(--danger);
-        color: #fff;
+        opacity: 0.92;
       }
 
       .confirm-actions,
@@ -2009,32 +2018,34 @@
         gap: 10px;
       }
 
+      /* Secondary: transparent with a hairline border. */
       .btn-cancel,
       .btn-append-cancel {
         flex: 1;
         padding: 14px;
-        background: var(--surface-2);
-        border: none;
-        border-radius: 13px;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: var(--r-button);
         font-family: var(--font-sans);
         font-size: 14.5px;
         font-weight: 500;
         color: var(--text-primary);
         cursor: pointer;
-        transition: background 0.15s;
+        transition: background-color var(--dur-feedback) var(--ease-standard);
       }
 
       .btn-cancel:hover,
       .btn-append-cancel:hover {
-        background: var(--surface-3);
+        background: var(--surface-muted);
       }
 
+      /* Destructive: --danger fill, white label. */
       .btn-delete {
         flex: 1;
         padding: 14px;
         background: var(--danger);
-        border: none;
-        border-radius: 13px;
+        border: 1px solid var(--danger);
+        border-radius: var(--r-button);
         font-family: var(--font-sans);
         font-size: 14.5px;
         font-weight: 600;
@@ -2047,22 +2058,24 @@
         opacity: 0.92;
       }
 
+      /* Primary: --action fill, white label. */
       .btn-append-save {
         flex: 1;
         padding: 14px;
-        background: var(--accent);
-        border: none;
-        border-radius: 13px;
+        background: var(--action);
+        border: 1px solid var(--action);
+        border-radius: var(--r-button);
         font-family: var(--font-sans);
         font-size: 14.5px;
         font-weight: 600;
         color: var(--on-accent);
         cursor: pointer;
-        transition: background 0.15s;
+        transition: background-color var(--dur-feedback) var(--ease-standard);
       }
 
       .btn-append-save:hover {
-        background: var(--accent-press);
+        background: var(--action-hover);
+        border-color: var(--action-hover);
       }
 
       .btn-append-save:disabled {
@@ -2071,16 +2084,15 @@
       }
 
       .append-context {
-        font-family: var(--font-serif);
-        font-style: italic;
+        font-family: var(--font-sans);
         font-size: 13.5px;
         color: var(--text-secondary);
         margin-bottom: 16px;
         line-height: 1.5;
         padding: 12px 14px;
-        background: var(--bg-card);
-        border: 0.5px solid var(--border-card);
-        border-radius: 12px;
+        background: var(--surface-muted);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-card);
         display: -webkit-box;
         -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
@@ -2223,7 +2235,7 @@
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        border: 0.5px solid var(--border);
+        border: 1px solid var(--line);
         cursor: pointer;
         font-family: var(--font-sans);
         transition:
@@ -2246,7 +2258,7 @@
       }
 
       /* ============ MENU SHEET ============ */
-      .menu-inner h3 {
+      .menu-inner h2 {
         margin-bottom: 18px;
       }
 
@@ -2303,7 +2315,7 @@
         align-items: center;
         gap: 12px;
         padding: 15px 0;
-        border-top: 0.5px solid var(--border);
+        border-top: 1px solid var(--line);
         cursor: pointer;
         color: var(--text-primary);
         font-size: 15px;
@@ -2336,16 +2348,16 @@
       .about-credits {
         margin: 18px 0 14px;
         padding: 14px 16px;
-        background: var(--bg-card);
-        border: 0.5px solid var(--border-card);
-        border-radius: var(--radius-card);
+        background: var(--surface-muted);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-card);
         font-size: 13px;
         color: var(--text-secondary);
         line-height: 1.5;
       }
 
       .about-credits-label {
-        font-family: var(--font-serif);
+        font-family: var(--font-sans);
         font-size: 15px;
         font-weight: 500;
         color: var(--text-primary);
@@ -2404,13 +2416,13 @@
          stacked ("UPKEEP" over "READY TO COMPRESS") read as two peers rather
          than as a heading and its contents. */
       .menu-group-label {
-        font-family: var(--font-serif);
+        font-family: var(--font-sans);
         font-size: 15px;
         font-weight: 500;
         color: var(--text-primary);
         margin-bottom: 10px;
         padding-bottom: 7px;
-        border-bottom: 0.5px solid var(--border);
+        border-bottom: 1px solid var(--line);
       }
 
       .digest-section {
@@ -2444,8 +2456,8 @@
         flex-shrink: 0;
         padding: 10px 0;
         margin-bottom: 4px;
-        border-top: 0.5px solid var(--border);
-        border-bottom: 0.5px solid var(--border);
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
         position: sticky;
         top: 0;
         background: var(--bg);
@@ -2487,7 +2499,7 @@
          per-memory judgement rather than a bulk one. */
       .stale-row {
         padding: 12px 2px;
-        border-bottom: 0.5px solid var(--border);
+        border-bottom: 1px solid var(--line);
       }
 
       .stale-row:last-child {
@@ -2519,7 +2531,7 @@
         align-items: flex-start;
         gap: 11px;
         padding: 12px 2px;
-        border-bottom: 0.5px solid var(--border);
+        border-bottom: 1px solid var(--line);
         cursor: pointer;
       }
 
@@ -2545,7 +2557,7 @@
       }
 
       .pattern-text {
-        font-family: var(--font-serif);
+        font-family: var(--font-sans);
         font-size: 15px;
         line-height: 1.5;
         color: var(--text-primary);
@@ -2692,7 +2704,7 @@
       }
 
       .integration-row + .integration-row {
-        border-top: 0.5px solid var(--border-input);
+        border-top: 1px solid var(--line);
       }
 
       .integration-category-row {
@@ -2703,7 +2715,7 @@
         padding: 15px 4px;
         background: transparent;
         border: none;
-        border-bottom: 0.5px solid var(--border-input);
+        border-bottom: 1px solid var(--line);
         font-family: inherit;
         font-size: 14px;
         color: var(--text-primary);
@@ -2774,8 +2786,8 @@
         min-width: 0;
         padding: 8px 10px;
         background: transparent;
-        border: 0.5px solid var(--border-input);
-        border-radius: 9px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-input);
         font-size: 13px;
         font-family: inherit;
         color: var(--text-primary);
@@ -3216,8 +3228,7 @@
       /* The sentence that explains a verdict, in the voice the rest of the
          product uses rather than the tag it is stored as. */
       .view-brain-note {
-        font-family: var(--font-serif);
-        font-style: italic;
+        font-family: var(--font-sans);
         font-size: 13px;
         line-height: 1.5;
         color: var(--text-secondary);
@@ -3226,7 +3237,6 @@
 
       .view-brain-note--warn {
         color: var(--warn);
-        font-style: normal;
         font-family: var(--font-sans);
       }
 
@@ -3855,9 +3865,9 @@
       .coach-mark {
         margin-top: 10px;
         padding: 12px 14px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--surface-2);
+        border: 1px solid var(--line);
+        border-radius: var(--r-card);
+        background: var(--surface-muted);
       }
 
       .coach-mark-title {
@@ -3988,7 +3998,7 @@
         .edit-inner,
         .menu-inner,
         .view-inner {
-          border-radius: 18px;
+          border-radius: var(--r-panel);
           max-width: 420px;
           transform: translateY(16px) scale(0.98);
           /* Bottom-sheet shadow points upward; on centered modals it reads as a
@@ -4694,4 +4704,16 @@
       .memory-card--selected {
         outline: 1px solid var(--accent);
         outline-offset: -1px;
+      }
+
+      /* ============ FOCUS ============
+         One visible ring for every control, system-wide: 3px --accent-ink
+         offset 4px. Last in the file so it wins the source-order tie against
+         every earlier `outline: none` reset paired with a focus-time border
+         or box-shadow substitute — those stay as an extra cue, this is the
+         one that is always there. */
+      :is(a, button, input, select, textarea, [tabindex]):focus-visible {
+        outline: 3px solid var(--accent-ink);
+        outline-offset: 4px;
+        border-radius: var(--r-button);
       }
