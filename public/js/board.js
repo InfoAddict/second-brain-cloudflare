@@ -509,6 +509,80 @@ async function renderRecalledPanel(board) {
 }
 BOARD_PANELS.push(renderRecalledPanel)
 
+/**
+ * "Last night": last night's maintenance summary from /stats/night. Hidden
+ * when ranAt is null — nothing recorded yet, either a brand new Worker or
+ * the nightly pass has not run once. insightsProposed is 0 on most nights
+ * since the weekly insight pass runs on its own cron, not every night; that
+ * row hides at 0 rather than showing a permanent zero.
+ */
+async function renderNightPanel(board) {
+  const data = await boardFetch('/stats/night')
+  if (!data || data.ranAt == null) return
+
+  const rows = [{ n: data.linksInferred, label: t('board.nightLinks') }]
+  if (data.insightsProposed > 0) rows.push({ n: data.insightsProposed, label: t('board.nightInsights') })
+  rows.push({ n: data.digestsWritten, label: t('board.nightDigests') })
+  rows.push({ n: data.claimsFlagged, label: t('board.nightClaims') })
+
+  const sub = t('board.nightSub', { time: formatDateUI(data.ranAt, { hour: 'numeric', minute: '2-digit' }) })
+  const panel = boardPanel('night', { title: t('board.nightTitle'), sub, span: 3 })
+  panel.body.innerHTML = `<div class="night">${rows
+    .map((r) => `<div class="night-row"><span class="night-n num">${escHtml(formatNumberUI(r.n))}</span><span class="night-t">${escHtml(r.label)}</span></div>`)
+    .join('')}</div>`
+  board.appendChild(panel)
+}
+BOARD_PANELS.push(renderNightPanel)
+
+/**
+ * One literal translate call per type, not a lookup keyed by a runtime
+ * string — src/graph/types.ts's EDGE_TYPES is a closed set of 8, so this
+ * reads like renderCapsulePanel's slotLabel further down: the i18n scanner only
+ * credits a key it can read as a plain quoted literal.
+ */
+function edgeTypeLabel(type) {
+  if (type === 'relates_to') return t('board.edge.relates_to')
+  if (type === 'follows') return t('board.edge.follows')
+  if (type === 'supersedes') return t('board.edge.supersedes')
+  if (type === 'decided') return t('board.edge.decided')
+  if (type === 'about_person') return t('board.edge.about_person')
+  if (type === 'part_of_project') return t('board.edge.part_of_project')
+  if (type === 'caused_by') return t('board.edge.caused_by')
+  if (type === 'drawn_from') return t('board.edge.drawn_from')
+  return type
+}
+
+/**
+ * "Kinds of links": the edge-type histogram /stats/graph already returns for
+ * the connections tile, reused here via boardFetchOnce rather than fetched
+ * twice. The three biggest types draw as bars; the rest as a compact
+ * two-column count list, so a long tail of rare types stays readable instead
+ * of a row of near-invisible slivers.
+ */
+async function renderLinksPanel(board) {
+  const data = await boardFetchOnce('graph', '/stats/graph')
+  const edgeTypes = data && data.edgeTypes
+  if (!edgeTypes) return
+  const rows = Object.entries(edgeTypes)
+    .map(([type, count]) => ({ type, label: edgeTypeLabel(type), count: Number(count) }))
+    .filter((r) => r.count > 0)
+    .sort((a, b) => b.count - a.count)
+  if (!rows.length) return
+
+  const total = rows.reduce((n, r) => n + r.count, 0)
+  const panel = boardPanel('links', { title: t('board.linksTitle'), sub: tPlural('board.linksSub', total), span: 4 })
+  const rest = rows.slice(3)
+  let html = boardBars(rows.slice(0, 3))
+  if (rest.length) {
+    html += `<div class="link-chips">${rest
+      .map((r) => `<div class="link-chip"><span>${escHtml(r.label)}</span><span class="num">${escHtml(formatNumberUI(r.count))}</span></div>`)
+      .join('')}</div>`
+  }
+  panel.body.innerHTML = html
+  board.appendChild(panel)
+}
+BOARD_PANELS.push(renderLinksPanel)
+
 /** Upkeep: the chores a brain can name but not do for itself. */
 async function renderUpkeepPanel(board) {
   const data = await boardFetch('/stats')

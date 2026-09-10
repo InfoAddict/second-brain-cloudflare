@@ -263,6 +263,105 @@ describe("recalled panel", () => {
   });
 });
 
+describe("night panel", () => {
+  function fetchFor(payload: any) {
+    return async (url: string) => (url.includes("/stats/night") ? { ok: true, json: async () => payload } : { ok: false, status: 404, json: async () => ({}) });
+  }
+  const brief = { ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } };
+
+  it("renders four rows when insights were proposed", async () => {
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: fetchFor({ ok: true, ranAt: Date.now(), linksInferred: 41, insightsProposed: 2, digestsWritten: 1, claimsFlagged: 3 }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard(brief);
+    const panel = ids.board.children.find((c: any) => c.dataset.panel === "night");
+    expect(panel, "night panel should render").toBeTruthy();
+    expect((panel.body.innerHTML.match(/night-row/g) || []).length).toBe(4);
+  });
+
+  it("hides the insights row at zero and hides the whole panel when ranAt is null", async () => {
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: fetchFor({ ok: true, ranAt: Date.now(), linksInferred: 5, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0 }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard(brief);
+    const panel = ids.board.children.find((c: any) => c.dataset.panel === "night");
+    expect((panel.body.innerHTML.match(/night-row/g) || []).length).toBe(3);
+
+    const { ids: ids2, document: document2 } = fakeDoc();
+    const ctx2: any = { ...ctx, document: document2, fetch: fetchFor({ ok: true, ranAt: null }) };
+    vm.createContext(ctx2);
+    vm.runInContext(src, ctx2);
+    await ctx2.renderBoard(brief);
+    expect(ids2.board.children.find((c: any) => c.dataset.panel === "night")).toBeUndefined();
+  });
+});
+
+describe("links panel", () => {
+  const brief = { ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } };
+
+  it("renders bars for the top 3 edge types and a two-column list for the rest", async () => {
+    const { ids, document } = fakeDoc();
+    const edgeTypes = { relates_to: 2140, follows: 812, supersedes: 96, decided: 74, about_person: 60, part_of_project: 48, caused_by: 30 };
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) => (url.includes("/stats/graph") ? { ok: true, json: async () => ({ ok: true, edgeTypes }) } : { ok: false, status: 404, json: async () => ({}) }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard(brief);
+    const panel = ids.board.children.find((c: any) => c.dataset.panel === "links");
+    expect(panel, "links panel should render").toBeTruthy();
+    expect((panel.body.innerHTML.match(/class="bar"/g) || []).length).toBe(3);
+    expect((panel.body.innerHTML.match(/link-chip"/g) || []).length).toBe(4);
+    const connectionsTile = ids["board-tiles"].children.find((t: any) => t.dataset.tile === "connections");
+    expect(connectionsTile, "the connections tile should reuse the same /stats/graph fetch").toBeTruthy();
+  });
+
+  it("hides when /stats/graph has no edgeTypes", async () => {
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard(brief);
+    expect(ids.board.children.find((c: any) => c.dataset.panel === "links")).toBeUndefined();
+  });
+});
+
 describe("graph preview panel", () => {
   function nodesAndEdges(n: number) {
     const nodes = Array.from({ length: n }, (_, i) => ({ id: `n${i}`, tags: [i % 2 ? "alpha" : "beta"], importance: i % 5 }));

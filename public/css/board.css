@@ -746,6 +746,62 @@
   }
 }
 
+/* ── Last night ───────────────────────────────────────────────────────── */
+.night {
+  margin-top: 8px;
+}
+
+.night-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.night-row:first-child {
+  border-top: 0;
+}
+
+.night-n {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.night-t {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* ── Kinds of links: the two-column tail beneath the top-3 bars ────────── */
+.link-chips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.link-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.link-chip .num {
+  color: var(--text-primary);
+}
+
 /* ── Upkeep and connected sources ─────────────────────────────────────── */
 .task {
   display: flex;
