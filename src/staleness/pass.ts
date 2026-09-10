@@ -33,8 +33,13 @@ const SYSTEM_TAG_EXCLUSIONS = [
 /** The row as the pass last saw it — the CAS guard is built from exactly these values. */
 type Snapshot = { id: string; tags: string; content: string };
 
-/** `retryable` marks a CAS, whose result decides whether the row needs another attempt. */
-type Write = { id: string; stmt: D1PreparedStatement; retryable: boolean };
+/**
+ * `retryable` marks a CAS, whose result decides whether the row needs another
+ * attempt. `flags` marks a write that, if it commits, newly adds stale:as-of
+ * to a row that did not already carry it — read by the caller to count
+ * "claims flagged" for GET /stats/night. A cursor-only write never flags.
+ */
+type Write = { id: string; stmt: D1PreparedStatement; retryable: boolean; flags: boolean };
 
 function classify(tags: string[], content: string): string[] {
   const classified = classifyVolatility(content, tags);
@@ -71,11 +76,15 @@ function classify(tags: string[], content: string): string[] {
 // that a 128 MB isolate could have built. The candidate query already materialises all 25
 // bodies in one response, so the write side is not the first place this would break;
 // STALENESS_PASS_LIMIT is the knob if it ever does.
-function casWrite(env: Env, snap: Snapshot, now: number): D1PreparedStatement {
-  const nextTags = JSON.stringify(classify(JSON.parse(snap.tags), snap.content));
-  return env.DB.prepare(
+function casWrite(env: Env, snap: Snapshot, now: number): { stmt: D1PreparedStatement; flags: boolean } {
+  const originalTags = JSON.parse(snap.tags);
+  const wasFlagged = hasStaleAsOf(originalTags);
+  const nextTagsArr = classify(originalTags, snap.content);
+  const flags = !wasFlagged && hasStaleAsOf(nextTagsArr);
+  const stmt = env.DB.prepare(
     `UPDATE entries SET tags = ?, staleness_checked_at = ? WHERE id = ? AND tags = ? AND content = ?`,
-  ).bind(nextTags, now, snap.id, snap.tags, snap.content);
+  ).bind(JSON.stringify(nextTagsArr), now, snap.id, snap.tags, snap.content);
+  return { stmt, flags };
 }
 
 // The candidate query orders by COALESCE(staleness_checked_at, 0) ASC, so a row left NULL
@@ -89,15 +98,16 @@ function planWrite(env: Env, snap: Snapshot, now: number): Write {
   try {
     // A deprecated row is never classified; it only needs to stop being a candidate.
     if (getStatus(JSON.parse(snap.tags)) === "deprecated") {
-      return { id: snap.id, stmt: cursorWrite(env, snap.id, now), retryable: false };
+      return { id: snap.id, stmt: cursorWrite(env, snap.id, now), retryable: false, flags: false };
     }
-    return { id: snap.id, stmt: casWrite(env, snap, now), retryable: true };
+    const { stmt, flags } = casWrite(env, snap, now);
+    return { id: snap.id, stmt, retryable: true, flags };
   } catch (e) {
     // Tags that will not parse cannot be classified on this attempt or any other, so there
     // is nothing to retry — but the cursor still has to move, or the row parks at the front
     // of the queue forever.
     console.error(`Staleness pass failed for ${snap.id} (non-fatal):`, e);
-    return { id: snap.id, stmt: cursorWrite(env, snap.id, now), retryable: false };
+    return { id: snap.id, stmt: cursorWrite(env, snap.id, now), retryable: false, flags: false };
   }
 }
 
@@ -175,7 +185,7 @@ export async function runStalenessPass(
   env: Env,
   _ctx: ExecutionContext,
   workspaceId?: string | null,
-): Promise<void> {
+): Promise<{ flagged: number }> {
   await initializeDatabase(env);
 
   const cutoff = Date.now() - STALENESS_AGE_MS;
@@ -197,7 +207,7 @@ export async function runStalenessPass(
     candidates = results.map(r => ({ id: r.id, tags: r.tags ?? "[]", content: r.content }));
   } catch (e) {
     console.error("Staleness pass query failed (non-fatal):", e);
-    return;
+    return { flagged: 0 };
   }
 
   // Rows still owed a write. A row leaves this list only by landing its CAS, by being
@@ -207,6 +217,9 @@ export async function runStalenessPass(
   // the cursor is still owed: a row that keeps a NULL cursor sorts first on every future
   // pass forever, so dropping it here would be exactly the camping bug the cursor prevents.
   const cursorFailed: string[] = [];
+  // Rows that landed a CAS which newly added stale:as-of. Read by the caller to
+  // report "claims flagged" for GET /stats/night.
+  let flagged = 0;
 
   for (let attempt = 0; attempt < STALENESS_CAS_ATTEMPTS && unsettled.length; attempt++) {
     if (attempt > 0) {
@@ -222,7 +235,10 @@ export async function runStalenessPass(
     const changes = await runWrites(env, writes);
     const lost = new Set<string>();
     writes.forEach((w, i) => {
-      if (changes[i] !== 0) return;
+      if (changes[i] !== 0) {
+        if (w.flags) flagged++;
+        return;
+      }
       // A CAS reporting no change usually lost a race and is worth re-reading. A cursor
       // write reporting none only ever means the write failed — the row is not a candidate
       // for reclassification, it just still needs its cursor moved.
@@ -236,6 +252,8 @@ export async function runStalenessPass(
   // UPDATE on a row deleted meanwhile is a harmless no-op, so nothing needs excluding.
   const owed = [...unsettled.map(snap => snap.id), ...cursorFailed];
   if (owed.length) {
-    await runWrites(env, owed.map(id => ({ id, stmt: cursorWrite(env, id, now), retryable: false })));
+    await runWrites(env, owed.map(id => ({ id, stmt: cursorWrite(env, id, now), retryable: false, flags: false })));
   }
+
+  return { flagged };
 }

@@ -6,7 +6,7 @@ import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from
 import { intParam, json } from "../lib/http";
 import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
-import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, scopeWhere } from "../lib/scope";
+import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
@@ -27,6 +27,7 @@ import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candida
 import { adminAuditEvent } from "../lib/admin-audit";
 import { auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
+import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -766,6 +767,127 @@ export async function handleAdminRoutes(
         under7d: Number(gaps?.under7d ?? 0),
         older: Number(gaps?.older ?? 0),
       },
+    });
+  }
+
+  // GET /stats/activity — per-source capture volume over N days, for the
+  // dashboard's growth chart. Per-caller, not admin (see the /patterns
+  // precedent above): same shape as GET /brief's activity strip, widened to
+  // bucket by source as well as by day.
+  if (url.pathname === "/stats/activity" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const days = intParam(url, "days", { fallback: 90, min: 7, max: 365 });
+    if (days instanceof Response) return days;
+
+    const scope = scopeWhere(auth);
+    const now = Date.now();
+    const since = now - days * 86400000;
+    // Uses idx_entries_workspace_created: the workspace predicate seeks, the
+    // created_at cutoff range-scans from there — the same cost class as
+    // GET /brief's activity query. One statement, pivoted into per-source
+    // series below.
+    const { results } = await env.DB.prepare(
+      `SELECT source, CAST(created_at / 86400000 AS INTEGER) AS day, COUNT(*) AS n
+       FROM entries WHERE created_at >= ? AND ${scope.clause}
+       GROUP BY source, day`,
+    ).bind(since, ...scope.bindings).all();
+
+    const today = Math.floor(now / 86400000);
+    const start = today - (days - 1);
+    const bySource = new Map<string, Map<number, number>>();
+    for (const r of results as { source: string | null; day: number; n: number }[]) {
+      const source = r.source ?? "unknown";
+      const byDay = bySource.get(source) ?? new Map<number, number>();
+      byDay.set(r.day, Number(r.n));
+      bySource.set(source, byDay);
+    }
+
+    const series = [...bySource.entries()]
+      .map(([source, byDay]) => {
+        const counts: number[] = [];
+        for (let d = start; d <= today; d++) counts.push(byDay.get(d) ?? 0);
+        return { source, counts, total: counts.reduce((a, b) => a + b, 0) };
+      })
+      .sort((a, b) => b.total - a.total)
+      .map(({ source, counts }) => ({ source, counts }));
+
+    return json({ ok: true, days, start, series });
+  }
+
+  // GET /stats/recalled — the dashboard's "most recalled" panel. No index on
+  // recall_count: ORDER BY ... LIMIT sorts the caller's own scoped rows
+  // (already narrowed to the caller by idx_entries_workspace_created's
+  // leading column) once per dashboard open, which the worker cookbook
+  // accepts as a cost at this scale. Do not add an index for this alone.
+  if (url.pathname === "/stats/recalled" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limit = intParam(url, "limit", { fallback: 5, min: 1, max: 20 });
+    if (limit instanceof Response) return limit;
+
+    const scope = scopeWhere(auth);
+    // Same exclusions as /stats' digest-candidate query above: rollups,
+    // proposed patterns and insights are not "your own" recalled memories.
+    const exclusions = `tags NOT LIKE '%"rolled-up"%'
+       AND tags NOT LIKE '%"synthesized"%'
+       AND tags NOT LIKE '%"auto-pattern"%'
+       AND tags NOT LIKE '%"auto-insight"%'`;
+
+    const [rows, totalRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, source, created_at, recall_count
+         FROM entries WHERE ${scope.clause} AND ${exclusions}
+         ORDER BY recall_count DESC, created_at DESC LIMIT ?`,
+      ).bind(...scope.bindings, limit).all(),
+      env.DB.prepare(
+        `SELECT SUM(recall_count) AS total FROM entries WHERE ${scope.clause} AND ${exclusions}`,
+      ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      total_recalls: Number(totalRow?.total ?? 0),
+      entries: (rows.results as any[]).map(r => ({
+        id: r.id as string,
+        content: r.content as string,
+        source: r.source as string,
+        created_at: r.created_at as number,
+        recall_count: Number(r.recall_count ?? 0),
+      })),
+    });
+  }
+
+  // GET /stats/night — last night's maintenance summary, read from KV. Never
+  // derived from D1 at read time: edges has no index on workspace_id or
+  // created_at, so counting "links inferred since last night" here would be a
+  // full scan of the edge table on every dashboard open (the same cost class
+  // GET /stats/graph?deep=1 refuses to let run on a schedule). The nightly
+  // scheduled() handler writes the summary once per workspace per night
+  // instead (src/runtime/night-summary.ts); this only reads it back.
+  if (url.pathname === "/stats/night" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    // readableWorkspaces, not a hand-built list: it appends "" for admins,
+    // the legacy pre-team bucket the maintenance rotation can still land on
+    // (src/runtime/rotation.ts), which every other scoped read already covers.
+    const workspaceIds = readableWorkspaces(auth);
+    const records = (await Promise.all(
+      workspaceIds.map(id => readNightSummary(env, id)),
+    )).filter((r): r is NightSummary => r !== null);
+
+    if (!records.length) return json({ ok: true, ranAt: null });
+
+    return json({
+      ok: true,
+      ranAt: Math.max(...records.map(r => r.ranAt)),
+      linksInferred: records.reduce((sum, r) => sum + r.linksInferred, 0),
+      insightsProposed: records.reduce((sum, r) => sum + r.insightsProposed, 0),
+      digestsWritten: records.reduce((sum, r) => sum + r.digestsWritten, 0),
+      claimsFlagged: records.reduce((sum, r) => sum + r.claimsFlagged, 0),
     });
   }
 
