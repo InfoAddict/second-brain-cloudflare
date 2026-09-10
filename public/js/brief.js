@@ -32,7 +32,7 @@ async function loadBrief() {
     if (typeof renderHome === 'function') renderHome(briefData)
     // returnHome() renders the brief itself (it may be showing a stale one
     // from before a conversation), so the first load must not also render it
-    // here — two un-awaited renderBoard() runs would race and interleave.
+    // here. Two un-awaited renderBoard() runs would race and interleave.
     if (!homeInitialized && typeof returnHome === 'function') {
       homeInitialized = true
       returnHome()

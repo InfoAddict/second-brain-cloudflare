@@ -371,7 +371,7 @@ function renderViewTimeline(entry) {
   if (!el) return
   const items = entry.timeline || []
   // A shared memory nobody has edited or appended yet still has a reason two
-  // buttons are greyed out, and that reason lives in this section — so an
+  // buttons are greyed out, and that reason lives in this section, so an
   // empty timeline hides History only when there is also no lock note to show.
   const locked = entry.can_edit === false && !!entry.actor_name
   if (!items.length && !locked) {

@@ -281,7 +281,7 @@ describe("the daily brief", () => {
   });
 
   // Regression: loadBrief() used to call renderBrief(briefData) directly and
-  // then, on the first load, also call returnHome() — which itself renders
+  // then, on the first load, also call returnHome(), which itself renders
   // the brief again. Two un-awaited renderBoard() runs raced, doubling every
   // tile and panel. Spies on renderBoard (via renderBrief's own dispatch) to
   // count how many render passes the first load actually triggers.

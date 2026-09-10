@@ -3,7 +3,7 @@
  * name /graph nodes actually carry, and pruning the canvas to that author.
  *
  * The pure narrowing logic (filterGraphByActor) is unit-tested directly in
- * graph-clusters.test.ts; this file is about the wiring around it — the id
+ * graph-clusters.test.ts; this file is about the wiring around it: the id
  * from #actor-filter-recent has to become the same "You" / real-name string
  * the server puts on actor_name before that function can match anything.
  * initGraphSim itself (packing/drawing) is exercised in graph-layer.test.ts;
@@ -89,8 +89,8 @@ function setup(nodes: unknown[], edges: unknown[] = []) {
   ctx.initI18n("en");
 
   // initGraphSim's packing/drawing is exercised elsewhere (graph-layer.test.ts);
-  // here it is replaced with a spy so loadGraph's own decision — which nodes
-  // and edges survive the actor filter — can be asserted directly. A function
+  // here it is replaced with a spy so loadGraph's own decision (which nodes
+  // and edges survive the actor filter) can be asserted directly. A function
   // *declaration* becomes a property of the vm's global object, and loadGraph
   // looks that identifier up fresh on every call, so reassigning it from the
   // host after runInContext is enough to intercept it.
@@ -103,7 +103,7 @@ function setup(nodes: unknown[], edges: unknown[] = []) {
 
 const node = (over: Record<string, unknown>) => ({ id: "", label: "x", tags: [], ...over });
 
-describe("graph author filter — resolving the selected id to a node's actor_name", () => {
+describe("graph author filter: resolving the selected id to a node's actor_name", () => {
   const nodes = [
     node({ id: "mine", actor_name: "You" }),
     node({ id: "graces", actor_name: "Grace Hopper" }),

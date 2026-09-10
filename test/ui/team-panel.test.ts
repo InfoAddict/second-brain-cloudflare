@@ -135,7 +135,7 @@ function setup(fetchImpl: (url: string, init?: any) => Promise<any>) {
   }
   // makeEl()'s querySelector always returns null, fine for every other
   // element here, but focusTeamTokenHeading() reads wrap.querySelector('h2')
-  // to find the heading it moves focus to — give that one element a fake
+  // to find the heading it moves focus to: give that one element a fake
   // heading with a spy-able focus() so the rotation-focus test can observe it.
   const tokenHeading = makeEl();
   const tokenHeadingFocusCalls: number[] = [];
@@ -256,7 +256,7 @@ describe("team panel", () => {
   });
 
   // Regression: the roster used to be plain divs (.team-table/.team-head/
-  // .team-row) — zero table semantics, so a screen reader got a flat wall of
+  // .team-row), zero table semantics, so a screen reader got a flat wall of
   // text with no way to ask "whose row is this" or "which column am I in".
   it("renders the roster as a real table with a caption, four column headers, and a labelled cell per row", async () => {
     const { ctx, els } = setup(
@@ -268,8 +268,8 @@ describe("team panel", () => {
     expect(html).toMatch(/<caption class="sr-only">[^<]+<\/caption>/);
     const headings = [...html.matchAll(/<th scope="col">([^<]*)<\/th>/g)].map((m) => m[1]);
     expect(headings).toEqual(["Member", "Role", "Captures", "Actions"]);
-    // One <tr> per member, and every <td> in it carries a data-label —
-    // main.css's phone-width stacking (max-width: 700px) reads that
+    // One <tr> per member, and every <td> in it carries a data-label.
+    // Main.css's phone-width stacking (max-width: 700px) reads that
     // attribute to show a heading beside a cell once the table stacks.
     const rows = [...html.matchAll(/<tr class="team-row[^"]*">([\s\S]*?)<\/tr>/g)];
     expect(rows).toHaveLength(2); // Ada and Bob
@@ -497,8 +497,8 @@ describe("team panel", () => {
   });
 
   // Tone per caller: suspend and remove are the sheet's default (danger,
-  // "btn-delete") because both cut a member off from something real —
-  // access, or their own private memories — with no undo button beside them.
+  // "btn-delete") because both cut a member off from something real (access,
+  // or their own private memories), with no undo button beside them.
   // Rotating a token is neither: the old token still works until the new one
   // is actually used, so it renders primary, the same treatment the bulk
   // share/private move gets (bulk-select.test.ts).
@@ -1104,7 +1104,7 @@ describe("team panel", () => {
    * Regression: rotateTeamToken used to reveal the token and focus its
    * heading BEFORE calling done(), and done() -> dismissConfirmSheet()
    * synchronously returns focus to whatever opened the sheet (the rotate
-   * icon button) — so that return-focus ran second, in the same tick, and
+   * icon button), so that return-focus ran second, in the same tick, and
    * stole focus straight back off the heading it had just landed on.
    * showTeamToken is now deferred a microtask past done() specifically so
    * its focus call is the one that runs last.

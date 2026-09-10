@@ -697,7 +697,7 @@ describe("activity filters", () => {
     ];
     const { ctx, els } = setup(async () => ok(rows));
     await ctx.maybeRevealActivity();
-    // Three rows before any filter is applied — the fixture, not yet narrowed.
+    // Three rows before any filter is applied: the fixture, not yet narrowed.
     expect((els.get("activity-list").innerHTML.match(/class="activity-row"/g) ?? []).length).toBe(3);
 
     const all = makeRadio(true);

@@ -63,7 +63,7 @@ async function openCapsuleMemory(id, trigger) {
 function browseBoardTag(tag) {
   // Tag set before the tab switch: switchTab('memories') is what actually
   // triggers loadRecent(), and loadRecent reads selectedTag synchronously (to
-  // build the /list?tag= request) before its first await — set the other way
+  // build the /list?tag= request) before its first await: set the other way
   // round, the fetch would go out with whatever tag was selected before this
   // click, not this one.
   if (typeof onTagChange === 'function') onTagChange(tag)

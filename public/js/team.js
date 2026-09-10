@@ -328,7 +328,7 @@ function teamMemberRow(m) {
     .map(escHtml)
     .join(' · ')
   // One <td> per <th> in renderTeam's header row: member, role, captures
-  // (the default-share control — its own inline label already says
+  // (the default-share control, its own inline label already says
   // "Captures:", teamShareSelect), actions. data-label on every cell is what
   // the phone-width stacking (main.css, max-width: 700px) reads to show a
   // heading beside a cell once the columns no longer exist as columns.
@@ -549,8 +549,8 @@ function showTeamToken(token, name, email) {
   wrap.style.display = ''
   if (wrap.scrollIntoView) wrap.scrollIntoView({ block: 'nearest' })
   // A status line rather than the static title carrying aria-live: the title
-  // never changes text, so a screen reader has nothing to announce from it —
-  // this one exists to say the token is ready, once, the moment it is.
+  // never changes text, so a screen reader has nothing to announce from it.
+  // This one exists to say the token is ready, once, the moment it is.
   const status = document.getElementById('team-token-status')
   if (status) status.textContent = t('team.tokenReady')
   focusTeamTokenHeading()
@@ -559,8 +559,8 @@ function showTeamToken(token, name, email) {
 /**
  * Separated from showTeamToken so rotateTeamToken can defer this one step
  * past the confirm sheet's own dismissal. dismissConfirmSheet() (confirm-
- * sheet.js) synchronously returns focus to whatever opened the sheet — the
- * rotate icon button — so calling this in the same tick as that dismissal had
+ * sheet.js) synchronously returns focus to whatever opened the sheet, the
+ * rotate icon button, so calling this in the same tick as that dismissal had
  * the sheet's own focus-return fire second and steal focus straight back off
  * the heading it had just landed on. submitNewMember has no confirm sheet in
  * its path, so it still calls this synchronously from inside showTeamToken.
@@ -696,7 +696,7 @@ async function rotateTeamToken(id) {
       // that opened this sheet. Revealing the token and focusing its heading
       // first would have that return-focus run second, in the same tick, and
       // steal focus straight back off the heading. A microtask is late enough
-      // to land after it — done()'s own focus-return is entirely synchronous,
+      // to land after it: done()'s own focus-return is entirely synchronous,
       // so anything queued after it runs, even one tick later, is already
       // ordered correctly.
       done()

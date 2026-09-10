@@ -339,7 +339,7 @@ describe("memories author filter", () => {
 
   // Regression: the tag filter only ever narrowed whichever `n` most-recent
   // rows loadRecent had already fetched, so a real tag with matches outside
-  // that window read as "no results" — this is exactly what the contradictions
+  // that window read as "no results": this is exactly what the contradictions
   // tile hit, since its tag never appears in the select and so was easy to
   // miss testing without a server-side filter. selectedTag is set directly
   // (nav.js, which owns onTagChange, is not part of this file's SRC) the same

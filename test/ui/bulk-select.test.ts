@@ -332,7 +332,7 @@ describe("memories multi-select — the mode", () => {
   });
 
   // Regression: the checkbox wrapped in an empty <label> with no accessible
-  // name — a screen reader announced "checkbox", not which memory it selects.
+  // name: a screen reader announced "checkbox", not which memory it selects.
   it("gives every select checkbox an accessible name that identifies its memory", async () => {
     const { ctx, cards } = setup({ entries: THREE });
     await ctx.loadRecent();
@@ -630,7 +630,7 @@ describe("bulk layer move — the question", () => {
     expect(h.el("confirm-accept-btn").textContent).toBe("Make private");
   });
 
-  // Sharing or unsharing is reversible in one tap either way, not a delete —
+  // Sharing or unsharing is reversible in one tap either way, not a delete:
   // the sheet used to render every caller red/danger regardless of severity,
   // which told the truth about "Forget" and lied about this one.
   it("renders the accept button as primary, not danger, for both directions of a reversible move", async () => {

@@ -717,10 +717,10 @@ function assignGraphClusters(nodes, edges) {
 
 /**
  * Narrows a graph to one author's nodes, pruning edges that no longer join two
- * surviving nodes. Matches by actor_name — the server never puts actor_id on
+ * surviving nodes. Matches by actor_name (the server never puts actor_id on
  * /graph nodes (src/graph/types.ts), only the resolved display name, the same
  * "You" / real name / "Owner" / "Former member" string GET /list and GET
- * /recall already print — so the caller has to resolve the selected filter's
+ * /recall already print), so the caller has to resolve the selected filter's
  * user id to that same name (loadGraph in graph-canvas.js does this) before
  * calling in here. A falsy name is "no filter": returns the input unchanged.
  */

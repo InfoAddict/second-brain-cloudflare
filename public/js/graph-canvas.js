@@ -35,13 +35,13 @@ function onGraphLayerChange(value) {
 }
 
 /**
- * /graph nodes carry actor_name, never actor_id (src/graph/types.ts) — the
+ * /graph nodes carry actor_name, never actor_id (src/graph/types.ts), the
  * same resolved display string GET /list and GET /recall already print.
  * #actor-filter-recent's options hold ids (loadMemoryAuthors/renderAuthorOptions
  * in recent.js), so the selected id has to be mapped through the loaded
  * roster to that same name before it can match a node. The caller's own row
- * resolves to the literal "You" the server also uses — untranslated by
- * design, see src/lib/actors.ts — not the translated option label.
+ * resolves to the literal "You" the server also uses (untranslated by
+ * design, see src/lib/actors.ts), not the translated option label.
  */
 function actorNameForGraphFilter(actorId) {
   if (typeof memoryAuthors === 'undefined' || !memoryAuthors) return null

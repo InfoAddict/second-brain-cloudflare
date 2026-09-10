@@ -48,7 +48,7 @@ function fakeDoc() {
     };
     // Real DOM: setting innerHTML (to anything, including '') discards
     // whatever children appendChild had put there. Board panels rely on this
-    // to clear board-tiles/board between renders, so the mock has to match —
+    // to clear board-tiles/board between renders, so the mock has to match,
     // otherwise a second render's appended tiles pile up next to the first's.
     Object.defineProperty(e, "innerHTML", {
       get() { return html; },
@@ -108,7 +108,7 @@ describe("board tiles", () => {
 
 describe("render token", () => {
   // Regression: loadBrief's first-load path used to call renderBoard twice
-  // (once directly, once via returnHome), and the two un-awaited runs raced —
+  // (once directly, once via returnHome), and the two un-awaited runs raced:
   // every panel and three tiles rendered twice. Simulated here by calling
   // renderBoard twice without awaiting either, and letting the OLDER call's
   // /stats/graph fetch resolve only after the NEWER call has already finished.
@@ -140,7 +140,7 @@ describe("render token", () => {
 
     const older = ctx.renderBoard(brief);
     const newer = ctx.renderBoard(brief);
-    // The newer call's fetch resolves first; the older call's resolves after —
+    // The newer call's fetch resolves first; the older call's resolves after:
     // the exact "finishes late" ordering the live bug hit on every reload.
     deferred[2]();
     await newer;

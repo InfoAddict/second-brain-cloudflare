@@ -294,7 +294,7 @@ describe("packGraphCircles", () => {
 
 describe("filterGraphByActor", () => {
   // Regression: /graph nodes carry actor_name, never actor_id (src/graph/
-  // types.ts) — the client filter used to compare against actor_id and so
+  // types.ts), the client filter used to compare against actor_id and so
   // never matched anything, hiding the whole canvas behind the empty state
   // for every author selection.
   const nodes = [
@@ -304,9 +304,9 @@ describe("filterGraphByActor", () => {
     { id: "d", actor_name: null },
   ];
   const edges = [
-    { source: "a", target: "b" }, // crosses authors — must not survive either filter
-    { source: "a", target: "c" }, // both You — survives the "You" filter
-    { source: "b", target: "d" }, // crosses authors — must not survive
+    { source: "a", target: "b" }, // crosses authors: must not survive either filter
+    { source: "a", target: "c" }, // both You: survives the "You" filter
+    { source: "b", target: "d" }, // crosses authors: must not survive
   ];
 
   it("keeps only the named author's nodes and prunes edges that no longer join two survivors", () => {

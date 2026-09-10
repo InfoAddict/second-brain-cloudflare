@@ -4173,7 +4173,7 @@
          quiet icon actions that only speak on hover. */
 
       /* Present to a screen reader, invisible on screen. Used for the roster
-         table's <caption> and the token-ready status line — content that
+         table's <caption> and the token-ready status line: content that
          orients or announces, with nothing to draw. */
       .sr-only {
         position: absolute;
@@ -4273,7 +4273,7 @@
 
       /* The two single-setting boxes (team name, your capture default,
          renderTeamMember) and the member's own read-only roster
-         (teamRosterRow) reuse .team-table/.team-row as a plain grid row —
+         (teamRosterRow) reuse .team-table/.team-row as a plain grid row,
          not the real <table> the ADMIN roster below renders (renderTeam),
          which gets its own tag-scoped rules further down. Scoped to `div`
          so it cannot also match the roster's <tr class="team-row">: a grid
@@ -4295,7 +4295,7 @@
       }
 
       /* The admin member roster: a real <table> (renderTeam/teamMemberRow,
-         js/team.js) — not a div roster, so a screen reader gets row/column
+         js/team.js), not a div roster, so a screen reader gets row/column
          semantics instead of a flat wall of spans. */
       table.team-table {
         border-collapse: collapse;
@@ -4686,7 +4686,7 @@
       /* The admin roster table (renderTeam/teamMemberRow, js/team.js): at
          phone width four columns side by side no longer fit, so each row
          stacks and each cell shows its own header through a data-label
-         attribute instead — the site's comparison-table technique. <thead>
+         attribute instead (the site's comparison-table technique). <thead>
          stays in the DOM and in the accessibility tree (visually hidden, not
          display:none), so a screen reader still gets the real column
          headers; only sighted users see them replaced by the per-cell label. */
