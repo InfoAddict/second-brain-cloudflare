@@ -385,23 +385,24 @@ button {
   font-size: var(--fs-body);
   font-weight: 600;
   border: 1px solid transparent;
-  border-radius: var(--r-md);
+  min-height: 44px;
+  border-radius: var(--r-button);
   cursor: pointer;
-  transition: background 0.18s, border-color 0.18s, color 0.18s,
-    box-shadow 0.18s, transform 0.12s var(--ease), opacity 0.18s;
+  transition: background var(--dur-feedback) var(--ease-standard), border-color var(--dur-feedback) var(--ease-standard), color var(--dur-feedback) var(--ease-standard), box-shadow var(--dur-feedback) var(--ease-standard), opacity var(--dur-feedback) var(--ease-standard);
 }
 
 button:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-ink);
+  outline-offset: 4px;
 }
 
 button:active:not(:disabled) {
-  transform: translateY(1px) scale(0.995);
+  transform: none;
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.55;
   cursor: default;
   transform: none;
   box-shadow: none;
@@ -410,33 +411,34 @@ button:disabled {
 .btn-primary {
   display: block;
   width: 100%;
-  padding: 14px var(--s-4);
-  background: var(--accent-btn);
-  border-color: rgba(22, 22, 22, 0.22);
+  padding: 10px var(--s-4);
+  background: var(--action);
+  border-color: var(--action);
   color: var(--on-accent);
   letter-spacing: -0.005em;
-  box-shadow: var(--shadow-key);
+  box-shadow: none;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #ec4c08;
-  border-color: rgba(22, 22, 22, 0.36);
+  background: var(--action-hover);
+  border-color: var(--action-hover);
 }
 
 .btn-primary:active:not(:disabled) {
-  box-shadow: 0 1px 0 rgba(22, 22, 22, 0.14);
+  box-shadow: none;
 }
 
 .btn-secondary {
-  padding: var(--s-2) var(--s-4);
-  background: var(--accent-soft);
-  color: var(--accent-press);
+  padding: 10px var(--s-4);
+  background: transparent;
+  border-color: var(--line);
+  color: var(--text-primary);
   font-size: var(--fs-sm);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-btn);
+  background: var(--surface-muted);
+  border-color: var(--border-hover);
 }
 
 .btn-ghost {
@@ -448,14 +450,15 @@ button:disabled {
 }
 
 .btn-danger {
-  padding: var(--s-2) var(--s-4);
-  background: var(--danger-soft);
-  color: var(--danger);
+  padding: 10px var(--s-4);
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
   font-size: var(--fs-sm);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: var(--danger-strong);
+  background: #8f1d16;
   border-color: var(--danger);
 }
 
@@ -466,8 +469,9 @@ button:disabled {
 .btn-primary.btn-danger {
   padding: var(--s-4);
   font-size: var(--fs-body);
-  border-color: var(--danger);
-  box-shadow: var(--shadow-sm);
+  background: var(--danger);
+  color: #fff;
+  box-shadow: none;
 }
 
 /* A button stacked under the one above it, full width. Replaces the inline
@@ -503,18 +507,35 @@ input[type="text"] {
   width: 100%;
   padding: var(--s-4);
   background: var(--bg-card);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  border-radius: var(--r-input);
   font-family: var(--font-sans);
   font-size: var(--fs-body);
   color: var(--text-primary);
   outline: none;
-  transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+  transition: border-color var(--dur-feedback) var(--ease-standard), box-shadow var(--dur-feedback) var(--ease-standard), background var(--dur-feedback) var(--ease-standard);
   user-select: text;
 }
 
 input::placeholder {
   color: var(--text-tertiary);
+}
+
+input[type="password"]:focus,
+input[type="text"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent-ink);
+  box-shadow: 0 0 0 3px var(--accent-ink);
+  outline: 0;
+  outline-offset: 4px;
+}
+
+a {
+  color: var(--text-primary);
+  text-decoration-color: var(--line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 input:hover:not(:focus) {
@@ -1542,11 +1563,7 @@ body.settings-page #app {
 @keyframes ridge-pop-in {
   0% {
     opacity: 0;
-    transform: translateY(20px) scale(0.7);
-  }
-  60% {
-    opacity: 1;
-    transform: translateY(-4px) scale(1.04);
+    transform: translateY(10px) scale(.96);
   }
   100% {
     opacity: 1;
@@ -1566,11 +1583,11 @@ body.settings-page #app {
 }
 
 [data-ridge-phase="popping"] .ridge-figure {
-  animation: ridge-pop-in 320ms var(--ease);
+  animation: ridge-pop-in var(--dur-state) var(--ease-standard);
 }
 
 [data-ridge-phase="popping-out"] {
-  animation: ridge-pop-out 250ms var(--ease) forwards;
+  animation: ridge-pop-out var(--dur-feedback) var(--ease-exit) forwards;
 }
 
 /* Ridge's bubble is a card like any other — same cream, same defined edge,
