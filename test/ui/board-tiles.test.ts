@@ -391,6 +391,32 @@ describe("recalled panel", () => {
     const recallsTile = ids["board-tiles"].children.find((t: any) => t.dataset.tile === "recalls");
     expect(recallsTile, "recalls tile should fill from total_recalls").toBeTruthy();
     expect(recallsTile.innerHTML).toMatch(/2,318/);
+    // No total_contradictions in this fixture (an older Worker's shape): the
+    // fourth tile stays out rather than showing a false zero.
+    expect(ids["board-tiles"].children.map((t: any) => t.dataset.tile)).toEqual(["memories", "recalls"]);
+  });
+
+  it("adds a fourth contradictions tile from the same /stats/recalled response when total_contradictions is present", async () => {
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) =>
+        url.includes("/stats/recalled")
+          ? { ok: true, json: async () => ({ ok: true, total_recalls: 2318, total_contradictions: 12, entries: [] }) }
+          : { ok: false, status: 404, json: async () => ({}) },
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+    expect(ids["board-tiles"].children.map((t: any) => t.dataset.tile)).toEqual(["memories", "recalls", "contradictions"]);
+    const tile = ids["board-tiles"].children.find((t: any) => t.dataset.tile === "contradictions");
+    expect(tile.innerHTML).toMatch(/12/);
   });
 
   it("hides the panel and omits the tile when the endpoint has no entries", async () => {

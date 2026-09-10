@@ -809,11 +809,12 @@ async function renderBoard(brief) {
   if (recalled && typeof recalled.total_recalls === 'number') {
     tilesEl.appendChild(boardTile('recalls', { n: recalled.total_recalls, label: t('board.tileRecalls'), delta: t('board.tileRecallsDelta'), quiet: true }))
   }
-  // A fourth "contradictions settled" tile is not wired: no Worker endpoint
-  // returns it, and the worker cookbook's guidance is that deriving it from
-  // `contradiction_wins`/`updated_at` at read time is not established as
-  // cheap enough to add casually, and the merged Worker branch does not attempt
-  // it either. Leave the tile out until a real endpoint exists.
+  // Same /stats/recalled response the recalls tile above reads (boardFetchOnce
+  // shares the one fetch); total_contradictions is absent on an older Worker,
+  // in which case the tile stays out rather than showing a false zero.
+  if (recalled && typeof recalled.total_contradictions === 'number') {
+    tilesEl.appendChild(boardTile('contradictions', { n: recalled.total_contradictions, label: t('board.tileContradictions'), delta: t('board.tileContradictionsDelta'), quiet: true }))
+  }
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {
     try { await fn(board, brief) } catch (e) { console.error('board panel failed:', e) }
