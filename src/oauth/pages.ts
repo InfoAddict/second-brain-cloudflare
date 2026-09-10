@@ -43,6 +43,16 @@ export const OAUTH_BRAND_LOCKUP = `<picture>
       <img class="brand-lockup" src="/brand-lockup.png" alt="Second Brain" width="174" height="25" />
     </picture>`;
 
+// Ampersand first so the entities introduced below survive later passes.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export function oauthPageHtml(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
@@ -51,7 +61,7 @@ export function oauthPageHtml(title: string, body: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="theme-color" content="#17181b" media="(prefers-color-scheme: dark)" />
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   <style>${OAUTH_PAGE_STYLES}</style>
 </head>
 <body>
@@ -72,17 +82,17 @@ export function loginHtml(error?: string): string {
       <input type="password" name="password" placeholder="Bearer token (your setup password)" autofocus autocomplete="current-password" />
       <button type="submit">Connect</button>
     </form>
-    <div class="auth-error">${error ? error : ""}</div>
+    <div class="auth-error">${error ? escapeHtml(error) : ""}</div>
   `);
 }
 
 export function authorizeErrorHtml(hint: string, detail?: string): string {
   const detailBlock = detail
-    ? `<p class="auth-detail">${detail}</p>`
+    ? `<p class="auth-detail">${escapeHtml(detail)}</p>`
     : "";
   return oauthPageHtml("Second Brain: sign-in error", `
     <h1>Could not start sign-in</h1>
-    <p class="auth-hint">${hint}</p>
+    <p class="auth-hint">${escapeHtml(hint)}</p>
     ${detailBlock}
   `);
 }
