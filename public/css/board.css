@@ -368,6 +368,57 @@
   color: var(--text-secondary);
 }
 
+/* ── Recalled rows ────────────────────────────────────────────────────── */
+.board .rows .row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 3px 14px;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+
+.board .rows .row:first-child {
+  border-top: 0;
+}
+
+.board .row-t {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.board .row-m {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.board .row-n {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* ── Open rows (sources-from-brief) ──────────────────────────────────────── */
 .board .rows {
   margin-top: 8px;

@@ -208,6 +208,61 @@ describe("growth panel", () => {
   });
 });
 
+describe("recalled panel", () => {
+  function fetchFor(entries: any[], total: number) {
+    return async (url: string) =>
+      url.includes("/stats/recalled")
+        ? { ok: true, json: async () => ({ ok: true, total_recalls: total, entries }) }
+        : { ok: false, status: 404, json: async () => ({}) };
+  }
+
+  it("renders rows from /stats/recalled and fills the recalls tile from total_recalls", async () => {
+    const { ids, document } = fakeDoc();
+    const entries = [
+      { id: "a", content: "x".repeat(40), source: "claude-code", created_at: Date.now(), recall_count: 23 },
+      { id: "b", content: "y".repeat(40), source: "obsidian", created_at: Date.now(), recall_count: 12 },
+    ];
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: fetchFor(entries, 2318),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+    const panel = ids.board.children.find((c: any) => c.dataset.panel === "recalled");
+    expect(panel, "recalled panel should render").toBeTruthy();
+    expect((panel.body.innerHTML.match(/class="row"/g) || []).length).toBe(2);
+    const recallsTile = ids["board-tiles"].children.find((t: any) => t.dataset.tile === "recalls");
+    expect(recallsTile, "recalls tile should fill from total_recalls").toBeTruthy();
+    expect(recallsTile.innerHTML).toMatch(/2,318/);
+  });
+
+  it("hides the panel and omits the tile when the endpoint has no entries", async () => {
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+    expect(ids.board.children.find((c: any) => c.dataset.panel === "recalled")).toBeUndefined();
+    expect(ids["board-tiles"].children.find((t: any) => t.dataset.tile === "recalls")).toBeUndefined();
+  });
+});
+
 describe("graph preview panel", () => {
   function nodesAndEdges(n: number) {
     const nodes = Array.from({ length: n }, (_, i) => ({ id: `n${i}`, tags: [i % 2 ? "alpha" : "beta"], importance: i % 5 }));

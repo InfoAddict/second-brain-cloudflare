@@ -9,6 +9,18 @@ async function boardFetch(path) {
   } catch { return null }
 }
 
+// Some endpoints back both a tile and a panel (e.g. /stats/graph, /stats/recalled);
+// this caches the first fetch of a render pass so the second reader gets the
+// same response instead of hitting the Worker twice. Cleared at the top of
+// every renderBoard() call so a refresh sees fresh data.
+let _boardFetchCache = new Map()
+async function boardFetchOnce(key, path) {
+  if (_boardFetchCache.has(key)) return _boardFetchCache.get(key)
+  const data = await boardFetch(path)
+  _boardFetchCache.set(key, data)
+  return data
+}
+
 function boardTile(id, { n, label, delta, quiet }) {
   const el = document.createElement('div')
   el.className = 'tile'; el.dataset.tile = id
@@ -471,6 +483,32 @@ async function renderGraphPanel(board, brief) {
 }
 BOARD_PANELS.push(renderGraphPanel)
 
+/**
+ * "What you keep coming back to": the most-recalled memories, all time.
+ * Shares its fetch with the recalls tile — renderBoard calls boardFetchOnce
+ * with this same key first, so this never hits the Worker twice.
+ */
+async function renderRecalledPanel(board) {
+  const data = await boardFetchOnce('recalled', '/stats/recalled?limit=5')
+  const entries = (data && data.entries) || []
+  if (!entries.length) return
+
+  const panel = boardPanel('recalled', { title: t('board.recalledTitle'), sub: t('board.recalledSub'), span: 5 })
+  panel.body.innerHTML = `<div class="rows">${entries
+    .map((m) => {
+      const badge = sourceBadge(m.source)
+      const meta = [badge.label, m.created_at ? formatDateUI(m.created_at, { month: 'short', day: 'numeric' }) : null].filter(Boolean).join(' · ')
+      return `<div class="row">
+        <div class="row-t">${escHtml(titleLine(m.content))}</div>
+        <div class="row-n num">${escHtml(tPlural('board.recalls', m.recall_count))}</div>
+        <div class="row-m"><i class="ti ${badge.icon}"></i>${escHtml(meta)}</div>
+      </div>`
+    })
+    .join('')}</div>`
+  board.appendChild(panel)
+}
+BOARD_PANELS.push(renderRecalledPanel)
+
 /** Upkeep: the chores a brain can name but not do for itself. */
 async function renderUpkeepPanel(board) {
   const data = await boardFetch('/stats')
@@ -583,13 +621,18 @@ async function renderRailNote() {
 async function renderBoard(brief) {
   const tilesEl = document.getElementById('board-tiles'), board = document.getElementById('board')
   if (!tilesEl || !board) return
+  _boardFetchCache = new Map()
   tilesEl.innerHTML = ''; board.innerHTML = ''
   const week = ((brief && brief.activity) || []).slice(-7).reduce((n, d) => n + (d.count || 0), 0)
   if (brief && brief.total) tilesEl.appendChild(boardTile('memories', { n: brief.total, label: t('board.tileMemories'), delta: t('board.tileWeek', { n: formatNumberUI(week) }) }))
-  const graph = await boardFetch('/stats/graph')
+  const graph = await boardFetchOnce('graph', '/stats/graph')
   if (graph && graph.edgeTypes) {
     const total = Object.values(graph.edgeTypes).reduce((a, b) => a + Number(b), 0)
     tilesEl.appendChild(boardTile('connections', { n: total, label: t('board.tileConnections') }))
+  }
+  const recalled = await boardFetchOnce('recalled', '/stats/recalled?limit=5')
+  if (recalled && typeof recalled.total_recalls === 'number') {
+    tilesEl.appendChild(boardTile('recalls', { n: recalled.total_recalls, label: t('board.tileRecalls'), delta: t('board.tileRecallsDelta'), quiet: true }))
   }
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {
