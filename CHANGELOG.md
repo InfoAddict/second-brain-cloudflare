@@ -2,6 +2,32 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [3.2.0] — Dashboard and installer redesign
+
+**Dashboard redesign**
+
+- The dashboard has a new look, in a lighter, warmer visual system that carries through both light and dark. Sora and DM Sans are now self-hosted with the app instead of loaded from Google Fonts.
+- Recall and Remember are no longer separate tabs. One command bar reads what you type and guesses whether you are asking a question or saving a memory, always shows that guess before acting on it, and is one tap away from being overridden.
+- The home screen is a board of panels built from your own data: things that need a decision (pending insights and aging claims on one thread, oldest first), how your memories connect (a graph preview clustered by topic), what you keep coming back to (your most-recalled memories), last night's maintenance run, upkeep chores, your connected sources and when each last synced, your prompt capsule, memories worth re-reading, your most-used topics, and a breakdown of the kinds of links between memories.
+- Four tiles across the top of the board show your memory count, connections, recalls, and contradictions settled at a glance.
+- The "Memories over time" chart now breaks activity down by source, with 30-day, 90-day, and 1-year ranges and a table view of the same numbers.
+- The chart, the most-recalled panel, and last night's panel are backed by three new Worker endpoints, listed below; an older Worker still runs the dashboard, it just does not show those three panels yet.
+
+**Installer restyle**
+
+- The desktop installer now uses the same design system as the dashboard, with self-hosted fonts, dark mode, and clearer copy.
+
+**Worker endpoints**
+
+- New: `GET /stats/activity?days=N` returns per-source capture counts by day, for the dashboard's activity chart.
+- New: `GET /stats/recalled?limit=N` returns your most-recalled memories, a running total of recalls, and a running total of contradictions settled in your favor, for the dashboard's "what you keep coming back to" panel.
+- New: `GET /stats/night` reports what last night's maintenance run did (links inferred, digests written, claims flagged as aging), read from a per-workspace summary the nightly cron now writes.
+- `GET /brief`'s resurfaced memory now includes its `source` and `tags`.
+
+**OAuth pages**
+
+- The OAuth sign-in and sign-in-error pages (`/oauth/authorize`) now use the dashboard's design system: Sora/DM Sans loaded from same-origin `/fonts/`, the brand lockup image in place of the circular brain glyph, and light/dark tokens matched to `prefers-color-scheme`.
+
 ## [3.1.0] — Prompt Capsules
 
 Contributed by @oudouusa.

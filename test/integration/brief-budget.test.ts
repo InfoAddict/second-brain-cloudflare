@@ -160,12 +160,19 @@ describe("GET /brief", () => {
   it("resurfaces an old important memory, never a recent or trivial one", async () => {
     sq = await migrated();
     const now = Date.now();
-    sq.seed({ id: "old-important", content: "The pricing floor is $6k", createdAt: now - 200 * DAY, importanceScore: 4 });
+    sq.seed({
+      id: "old-important", content: "The pricing floor is $6k", createdAt: now - 200 * DAY,
+      importanceScore: 4, source: "claude-desktop", tags: ["pricing"],
+    });
     sq.seed({ id: "old-trivial", content: "Renewed the domain", createdAt: now - 200 * DAY, importanceScore: 1 });
     sq.seed({ id: "new-important", content: "Shipped today", createdAt: now - HOUR, importanceScore: 5 });
 
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
     expect(data.resurface?.id).toBe("old-important");
+    // The dashboard's resurface panel shows where a memory came from and its
+    // tags alongside the content, so both ride along on the same row.
+    expect(data.resurface?.source).toBe("claude-desktop");
+    expect(data.resurface?.tags).toEqual(["pricing"]);
   });
 
   it("returns a complete activity strip, including the days nothing happened", async () => {
@@ -227,6 +234,25 @@ describe("GET /brief", () => {
 
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
     expect(data.resurface?.id).toBe("only-one");
+  });
+
+  it("answers 200 with tags: [] when the resurfaced row's tags column is not valid JSON", async () => {
+    sq = await migrated();
+    sq.seed({
+      id: "corrupt-tags", content: "Old and important, but hand-edited badly",
+      createdAt: Date.now() - 200 * DAY, importanceScore: 4,
+    });
+    // Bypasses seed()'s JSON.stringify: a hand-edited row or a migration bug,
+    // not something a normal write path can produce. The RESURFACE_FILTER's
+    // tags NOT LIKE clauses are substring checks, so this row is still
+    // resurface-eligible at the SQL layer even though its tags cannot parse.
+    sq.db.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind("not valid json{{", "corrupt-tags").run();
+
+    const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.resurface?.id).toBe("corrupt-tags");
+    expect(data.resurface?.tags).toEqual([]);
   });
 
   it("answers cleanly on a brain with nothing to say", async () => {

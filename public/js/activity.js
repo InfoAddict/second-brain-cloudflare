@@ -21,6 +21,24 @@ const ACTIVITY_PAGE = 50
  *  here — the server decides what "newest first" means, and two orderings of
  *  the same audit trail is one ordering too many. */
 let activityRows = []
+let activityFilter = 'all'
+
+function activityFilterFor(event) {
+  if (event === 'shared' || event === 'unshared') return 'shared'
+  if (event === 'insight_confirmed' || event === 'insight_dismissed') return 'insights'
+  if (/^(member_|team_|integration_)/.test(event || '')) return 'members'
+  return 'all'
+}
+
+function setActivityFilter(filter, button) {
+  activityFilter = filter
+  document.querySelectorAll('.activity-filters [role="radio"]').forEach((el) => {
+    const selected = el === button
+    el.setAttribute('aria-checked', String(selected))
+    el.classList.toggle('active', selected)
+  })
+  renderActivity()
+}
 
 /**
  * The one place that decides whether a GET /team/activity body is usable.
@@ -197,8 +215,9 @@ function activityRow(row) {
 function renderActivity() {
   const list = document.getElementById('activity-list')
   if (list) {
-    list.innerHTML = activityRows.length
-      ? activityRows.map(activityRow).join('')
+    const rows = activityFilter === 'all' ? activityRows : activityRows.filter((row) => activityFilterFor(row.event) === activityFilter)
+    list.innerHTML = rows.length
+      ? rows.map(activityRow).join('')
       : `<p class="digest-note">${escHtml(t('activity.empty'))}</p>`
   }
   const btn = document.getElementById('activity-more')
