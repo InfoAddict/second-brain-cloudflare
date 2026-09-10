@@ -226,7 +226,7 @@ async function briefResolvePattern(id, action, btn) {
     const label = card.querySelector('.brief-label')
     if (label) { label.tabIndex = -1; label.focus() }
     // Settling this stop shrinks it (its body and actions hide), so the
-    // thread — sized once at first render for the taller layout — has to be
+    // thread (sized once at first render for the taller layout) has to be
     // refit or it runs on past the last dot into the panel below. The
     // ResizeObserver in board.js's fitThread also catches this, but that
     // fires async on the next frame; refitting here too keeps it in sync

@@ -746,7 +746,7 @@
       }
 
       /* ============================================================
-       CONVERSATION — .ex-q a user bubble, .ex-a an answer on paper
+       CONVERSATION: .ex-q a user bubble, .ex-a an answer on paper
        ============================================================ */
       #recall-messages {
         gap: 14px;
@@ -1021,7 +1021,7 @@
 
       /* ============ MEMORY CARD ============
          System anatomy: paper, 12px radius, a hairline border, no shadow at
-         rest — the card shadow appears only on hover and for a cited card. */
+         rest. The card shadow appears only on hover and for a cited card. */
       .memory-card {
         background: var(--bg-card);
         border: 1px solid var(--border-card);
@@ -1225,7 +1225,7 @@
         font-size: 14px;
       }
 
-      /* ============ RECENT — a list of memory cards ============ */
+      /* ============ RECENT: a list of memory cards ============ */
       #recent-list {
         flex: 1;
         overflow-y: auto;
@@ -1270,9 +1270,9 @@
 
       /* ── The memory is the hero, on a desktop-width card ──────────────────
          Measured before this block: a card was 158px tall and its content was
-         46px of that — the memory occupied 29% of its own card. The bands
-         collapse into ONE quiet line — source, time, tags and the actions
-         share a row and truncate rather than stack — but only where a card is
+         46px of that. The memory occupied 29% of its own card. The bands
+         collapse into ONE quiet line (source, time, tags and the actions
+         share a row and truncate rather than stack) but only where a card is
          wide enough to give tags real room. At 390px the same squeeze left
          Append, Edit and the overflow button (about 170px) and the meta line
          (about 115px) almost nothing, so a tag chip rendered as one clipped
@@ -1295,7 +1295,7 @@
         }
 
         /* Shares the meta line and scrolls within it, rather than owning a
-           full-width row of its own — room enough here for that to work. */
+           full-width row of its own, room enough here for that to work. */
         #recent-list .card-tags {
           order: 1;
           flex: 1 1 auto;
@@ -1429,7 +1429,7 @@
         display: none;
       }
 
-      /* Filters: 36px rectangles with a hairline border, not pills — they
+      /* Filters: 36px rectangles with a hairline border, not pills. They
          switch to charcoal/white when selected, like the view toggle above. */
       .filter-inner {
         display: flex;
@@ -3353,7 +3353,7 @@
         flex-shrink: 0;
       }
 
-      /* Related memories: open rows on a hairline, not boxes — this list was
+      /* Related memories: open rows on a hairline, not boxes. This list was
          previously unstyled entirely (browser defaults). */
       .view-related-label {
         font-size: 11px;
@@ -3608,7 +3608,7 @@
         margin-bottom: 14px;
       }
 
-      /* The neutral outlined chip from the mockup, not a peach/gold pill —
+      /* The neutral outlined chip from the mockup, not a peach/gold pill,
          used by both the board's decisions panel (board.js) and the older
          #brief fallback (brief.js) it replaces, so the two read the same. */
       .attn {
@@ -3675,7 +3675,7 @@
       }
 
       /* The command bar. One row: textarea, the mode guess, the hashtag hint,
-         the send button — a single decision surface rather than a box with a
+         the send button, a single decision surface rather than a box with a
          toolbar underneath it. */
       .composer {
         display: flex;
@@ -4742,7 +4742,7 @@
          One visible ring for every control, system-wide: 3px --accent-ink
          offset 4px. Last in the file so it wins the source-order tie against
          every earlier `outline: none` reset paired with a focus-time border
-         or box-shadow substitute — those stay as an extra cue, this is the
+         or box-shadow substitute. Those stay as an extra cue, this is the
          one that is always there. */
       :is(a, button, input, select, textarea, [tabindex]):focus-visible {
         outline: 3px solid var(--accent-ink);

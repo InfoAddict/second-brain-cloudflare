@@ -354,8 +354,8 @@ export async function inferEdgesOnWrite(
 
     if (n.id === followsTarget) {
       // Typed replaces generic: an earlier pass may already have drawn the
-      // undirected relates_to this edge supersedes. Only the INFERRED one goes
-      //, a relates_to the user drew themselves is a statement, not a guess.
+      // undirected relates_to this edge supersedes. Only the INFERRED one goes.
+      // A relates_to the user drew themselves is a statement, not a guess.
       //
       // Ordered immediately before the insert in the same batch, because the
       // two are one replacement: issued as separate calls, a failure between

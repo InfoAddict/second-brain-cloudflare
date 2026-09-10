@@ -75,7 +75,7 @@ function boardPanel(id, { title, sub, action, span }) {
 /**
  * Sizes the thread line to span exactly its first stop's dot to its last
  * stop's dot, within `body` (a panel's .panel-body, or any ancestor of a
- * single stop that settled). Callable as often as layout changes — settling
+ * single stop that settled). Callable as often as layout changes. Settling
  * a stop shrinks it, and a thread sized for the old, taller layout runs on
  * past the last dot into whatever panel sits below. A safe no-op wherever
  * real layout is not available (server-side, or the lightweight test
@@ -121,7 +121,7 @@ const BOARD_PANELS = []
 /**
  * One insight, in the exact card markup brief.js already emits (briefCard,
  * label, body, actions) so briefResolvePattern's `btn.closest('.brief-card')`
- * still finds it — the "stop" ledger classes ride alongside, not instead.
+ * still finds it. The "stop" ledger classes ride alongside, not instead.
  */
 function buildInsightStop(p) {
   const { text, shape } = splitInsightShape(p.content)
@@ -237,7 +237,7 @@ function capitalizeFirst(s) {
  * Proper display names for known sources. sourceBadge()'s own labels are
  * lowercase by design for the compact monospace meta line on a memory card
  * ("claude code · 2d ago"), and capitalizeFirst() alone only fixes a
- * single-word label — it turns "claude code" into "Claude code" and
+ * single-word label. It turns "claude code" into "Claude code" and
  * "chatgpt" into "Chatgpt", both wrong for a chart legend, tooltip, table
  * header or row read at a glance. Keyed on the raw source string (both the
  * hyphenated form the Worker stores and sourceBadge's own space-joined
@@ -334,7 +334,7 @@ async function renderGrowthPanel(board, brief) {
   // The range control and the table toggle both depend on live per-source
   // data from /stats/activity; against an older Worker (the 14-day /brief
   // fallback below) they would be dead controls with nothing to switch
-  // between, so neither renders at all — a muted note says why instead.
+  // between, so neither renders at all. A muted note says why instead.
   let segButtons = []
   let asTableBtn = null
   if (live) {
@@ -472,12 +472,12 @@ async function renderGrowthPanel(board, brief) {
 /**
  * "How it connects": a static packed preview of the same topic clusters the
  * Memories screen's graph draws (assignGraphClusters, packGraphNodes,
- * packGraphCircles — all pure, unit-tested helpers in utils.js). One level of
+ * packGraphCircles, all pure, unit-tested helpers in utils.js). One level of
  * clustering only; the full graph's sub-topic nesting is more than a 560x340
  * preview needs.
  *
  * Per DIRECTION.md's review finding, topic clusters carry no hue meaning here
- * (unlike the chart's source palette) — every node and ring draws neutral, so
+ * (unlike the chart's source palette). Every node and ring draws neutral, so
  * identity comes from the label, not a color that would fail a colorblind
  * reader on an arbitrary tag.
  */
@@ -772,7 +772,7 @@ BOARD_PANELS.push(
 
 /**
  * Worker version and index health, at the foot of the rail/top bar, plus
- * which Worker this is (from WORKER_URL's own host, never the page's — the
+ * which Worker this is (from WORKER_URL's own host, never the page's. The
  * desktop app's page origin says nothing about which Worker it talks to).
  * Lets a reviewer tell production from a local Worker at a glance.
  */
