@@ -73,6 +73,28 @@ describe("GET /stats/night", () => {
     });
   });
 
+  it("an admin also sums the legacy '' bucket via readableWorkspaces", async () => {
+    const m = await migrated();
+    sq = m.sq;
+    // The owner bootstraps as role "admin" (src/lib/tenancy.ts), and
+    // readableWorkspaces appends "" for admins only (src/lib/scope.ts) — the
+    // legacy pre-team bucket a solo brain's rotation can still land the
+    // maintenance cron on (src/runtime/rotation.ts).
+    const roots = await ensureTenantBootstrap(m.env);
+    await m.kv.put(nightSummaryKey(""), JSON.stringify(
+      { ranAt: 1700000300000, linksInferred: 10, insightsProposed: 0, digestsWritten: 10, claimsFlagged: 10 },
+    ));
+    await m.kv.put(nightSummaryKey(roots.ownerPersonalWorkspaceId), JSON.stringify(
+      { ranAt: 1700000000000, linksInferred: 1, insightsProposed: 0, digestsWritten: 1, claimsFlagged: 1 },
+    ));
+
+    const data = await (await worker.fetch(req("GET", "/stats/night"), m.env, ctx)).json() as any;
+    expect(data).toEqual({
+      ok: true, ranAt: 1700000300000,
+      linksInferred: 11, insightsProposed: 0, digestsWritten: 11, claimsFlagged: 11,
+    });
+  });
+
   it("never returns another workspace's record", async () => {
     const m = await migrated();
     sq = m.sq;

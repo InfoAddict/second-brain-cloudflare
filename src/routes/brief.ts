@@ -6,6 +6,7 @@ import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL } from "../memory/stale";
+import { parseTags } from "../insight/candidates";
 
 /**
  * GET /brief — what the brain did while you were away.
@@ -201,7 +202,10 @@ export async function handleBriefRoutes(
           id: resurfaceRow.id,
           content: resurfaceRow.content,
           source: resurfaceRow.source,
-          tags: JSON.parse(resurfaceRow.tags || "[]"),
+          // A malformed tags column (hand-edited, or a migration bug) must not
+          // 500 the whole endpoint every day this row is picked — see
+          // src/insight/candidates.ts's parseTags, the shared safe parser.
+          tags: parseTags(resurfaceRow.tags),
           created_at: resurfaceRow.created_at,
         }
       : null,

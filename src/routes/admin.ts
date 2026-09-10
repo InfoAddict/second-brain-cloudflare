@@ -6,7 +6,7 @@ import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from
 import { intParam, json } from "../lib/http";
 import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
-import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, scopeWhere } from "../lib/scope";
+import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
@@ -871,7 +871,10 @@ export async function handleAdminRoutes(
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    const workspaceIds = [auth.personalWorkspaceId, ...auth.companyWorkspaceIds];
+    // readableWorkspaces, not a hand-built list: it appends "" for admins,
+    // the legacy pre-team bucket the maintenance rotation can still land on
+    // (src/runtime/rotation.ts), which every other scoped read already covers.
+    const workspaceIds = readableWorkspaces(auth);
     const records = (await Promise.all(
       workspaceIds.map(id => readNightSummary(env, id)),
     )).filter((r): r is NightSummary => r !== null);

@@ -236,6 +236,25 @@ describe("GET /brief", () => {
     expect(data.resurface?.id).toBe("only-one");
   });
 
+  it("answers 200 with tags: [] when the resurfaced row's tags column is not valid JSON", async () => {
+    sq = await migrated();
+    sq.seed({
+      id: "corrupt-tags", content: "Old and important, but hand-edited badly",
+      createdAt: Date.now() - 200 * DAY, importanceScore: 4,
+    });
+    // Bypasses seed()'s JSON.stringify: a hand-edited row or a migration bug,
+    // not something a normal write path can produce. The RESURFACE_FILTER's
+    // tags NOT LIKE clauses are substring checks, so this row is still
+    // resurface-eligible at the SQL layer even though its tags cannot parse.
+    sq.db.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind("not valid json{{", "corrupt-tags").run();
+
+    const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.resurface?.id).toBe("corrupt-tags");
+    expect(data.resurface?.tags).toEqual([]);
+  });
+
   it("answers cleanly on a brain with nothing to say", async () => {
     sq = await migrated();
     const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;

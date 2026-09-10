@@ -33,6 +33,12 @@ const MAINTENANCE_CRON = "0 1 * * *";
 // many statements it carries. Counting prepares instead would price the batched writes in
 // the compression and staleness passes as if they were still one round trip per row —
 // which is exactly the cost this budget is meant to track.
+//
+// KV is billed into the SAME `statements` ledger, not a separate counter: a
+// KVNamespace.get/put is its own subrequest against the same free-plan
+// ceiling D1 competes for (the night-summary recorder's one OAUTH_KV.put per
+// maintenance invocation is the case this exists to catch), so a budget test
+// that only watched D1 would go blind to it growing.
 function countingEnv(db: D1Mock, overrides: Partial<Env> = {}) {
   const statements: string[] = [];
   const bill = (sql: string) => statements.push(sql.replace(/\s+/g, " ").trim());
@@ -49,7 +55,15 @@ function countingEnv(db: D1Mock, overrides: Partial<Env> = {}) {
     exec(sql: string) { bill(sql); return db.exec(sql); },
     batch: (stmts: any[]) => { bill("BATCH"); return db.batch(stmts.map((s: any) => s.__inner ?? s)); },
   } as unknown as D1Database;
-  return { env: makeTestEnv(db, { DB, VECTORIZE: makeVectorizeMock(), ...overrides }), statements, prepared };
+
+  const baseKV = overrides.OAUTH_KV ?? makeTestEnv(db).OAUTH_KV;
+  const OAUTH_KV = {
+    ...baseKV,
+    get: (...a: Parameters<KVNamespace["get"]>) => { bill(`KV GET ${a[0]}`); return (baseKV.get as any)(...a); },
+    put: (...a: Parameters<KVNamespace["put"]>) => { bill(`KV PUT ${a[0]}`); return (baseKV.put as any)(...a); },
+  } as unknown as KVNamespace;
+
+  return { env: makeTestEnv(db, { DB, VECTORIZE: makeVectorizeMock(), ...overrides, OAUTH_KV }), statements, prepared };
 }
 
 // Each tag gets more than the ten eligible entries a digest needs, so nightly compression
@@ -194,6 +208,11 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     expect(statements.length).toBeLessThanOrEqual(FREE_PLAN_SUBREQUESTS);
+    // Exact pin, not just the ceiling: 11 D1 statements (unchanged from before
+    // the night-summary recorder) plus the ONE OAUTH_KV.put it adds per
+    // maintenance invocation. If this number moves, say why in the same
+    // commit — see the scope-checker test's convention for this pattern.
+    expect(statements.length).toBe(12);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

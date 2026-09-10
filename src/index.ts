@@ -157,6 +157,11 @@ export default {
       // No single workspace to attribute the summary to: an empty corpus (nothing
       // ran) or a rotation read failure (the passes fell back to a whole-corpus
       // scan pre-v3 style, which spans every workspace, not one).
+      //
+      // `== null` deliberately, not `!slice`: "" is the legacy pre-team bucket
+      // and a genuine ring member (src/runtime/rotation.ts), so it must write
+      // night:'' like any other slice — only null/undefined skip the write.
+      // GET /stats/night reads it back for admins via readableWorkspaces.
       if (slice == null) return;
 
       await recordNightSummary(env, slice, {
