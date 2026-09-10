@@ -58,6 +58,7 @@ function makeNode(tag = "div") {
     clientWidth: 640,
     clientHeight: 280,
     parentElement: null as any,
+    _listeners: {} as Record<string, Array<(e: any) => void>>,
     classList: {
       add(c: string) { if (!this.contains(c)) node.className = `${node.className} ${c}`.trim(); },
       remove(c: string) { node.className = node.className.split(/\s+/).filter((name: string) => name && name !== c).join(" "); },
@@ -75,7 +76,12 @@ function makeNode(tag = "div") {
       node.children.push(child);
       return child;
     },
-    addEventListener() {},
+    addEventListener(type: string, fn: (e: any) => void) {
+      (node._listeners[type] ||= []).push(fn);
+    },
+    dispatchEvent(evt: any) {
+      (node._listeners[evt.type] || []).forEach((fn: (e: any) => void) => fn(evt));
+    },
     getBoundingClientRect() {
       return { left: 0, top: 0, width: 640, height: 280 };
     },
@@ -189,6 +195,26 @@ describe("chart legend and aria-label totals", () => {
     expect(legendEl.children[0].classList.contains("is-solo")).toBe(true);
     expect(legendEl.children[1].classList.contains("is-muted")).toBe(true);
     legendEl.children[0].onclick();
+    expect(legendEl.children[0].classList.contains("is-solo")).toBe(false);
+    expect(legendEl.children[1].classList.contains("is-muted")).toBe(false);
+  });
+
+  // Regression: legend-item buttons are siblings of the svg, not descendants
+  // of the chart container, so a keydown while a legend button has focus (the
+  // natural place focus sits right after toggling isolation) never used to
+  // bubble to the container's Escape listener. Escape from the container
+  // itself still worked, which this suite already covered implicitly via the
+  // solo/muted test above; this one dispatches from the legend instead.
+  it("clears solo/muted isolation on Escape dispatched from the legend itself, not just the chart", () => {
+    const ctx = loadWithDom();
+    const { chartEl, legendEl } = buildChartDom();
+    ctx.renderActivityChart(chartEl, { rows: [{ d: "0", label: "Mon", s: [3, 4] }], series: [{ name: "One" }, { name: "Two" }], mode: "day" });
+    legendEl.children[0].onclick();
+    expect(legendEl.children[0].classList.contains("is-solo")).toBe(true);
+    expect(legendEl.children[1].classList.contains("is-muted")).toBe(true);
+
+    legendEl.dispatchEvent({ type: "keydown", key: "Escape" });
+
     expect(legendEl.children[0].classList.contains("is-solo")).toBe(false);
     expect(legendEl.children[1].classList.contains("is-muted")).toBe(false);
   });

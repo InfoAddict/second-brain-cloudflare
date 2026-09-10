@@ -223,7 +223,12 @@ function renderActivityChart(el, opts) {
       showAt(Math.round(((e.clientX - r.left - st.padL) / st.innerW) * (st.rows.length - 1)))
     })
     el.addEventListener('mouseleave', hide)
-    el.addEventListener('keydown', (e) => {
+    // Legend-item buttons are siblings of the svg, not descendants of it, so a
+    // keydown while one of them has focus (the natural place focus sits right
+    // after toggling isolation) never bubbles to a listener on just the chart
+    // container. One handler, wired to both targets, so Escape clears the
+    // isolation from wherever focus actually is.
+    const handleChartKeydown = (e) => {
       const st = el._chart
       if (!st) return
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -235,6 +240,8 @@ function renderActivityChart(el, opts) {
         applySolo()
         hide()
       }
-    })
+    }
+    el.addEventListener('keydown', handleChartKeydown)
+    if (legend && legend.addEventListener) legend.addEventListener('keydown', handleChartKeydown)
   }
 }
