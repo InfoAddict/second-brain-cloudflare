@@ -241,7 +241,6 @@ function valuePanel(): HTMLElement | null {
   if (!quote) return null;
 
   const panel = h("figure", { class: "value-panel", "aria-label": t("value.label") }, [
-    h("p", { class: "value-kicker" }, [t("value.editorialHeading")]),
     h("div", { class: "value-quote-wrap" }, [
       // Typographic furniture, not punctuation: the words are stored without
       // it, every locale draws the same mark, and a reader would otherwise
