@@ -68,6 +68,91 @@ against the page rather than maintained by hand.
 | Sheet listeners, `init()` | `js/app.js` |
 | Escaping, graph layout, vectorize banner | `utils.js` (existing) |
 | About credits | `credits.js` |
+| Self-hosted fonts (Sora, DM Sans) | `public/fonts/` (`@font-face` in `css/main.css`, no `<link>` tag) |
+
+## The home board (`js/board.js`, `js/chart.js`, `css/board.css`)
+
+The home screen's board is a set of panels rendered from data the Worker
+already has, with no client-side invention: a panel that cannot get real data
+does not render, rather than showing a placeholder or a zero.
+
+`renderBoard(brief)` is the entry point, called once on load and again on
+refresh. It clears `#board-tiles` and `#board`, builds the four tiles (memory
+count from `brief.total`, connections from `GET /stats/graph`, recalls and
+contradictions from `GET /stats/recalled?limit=5`), then calls every function
+in `BOARD_PANELS` in order and appends whatever each one returns.
+
+`BOARD_PANELS` is a plain array of panel-render functions, and registration
+order is display order:
+
+```
+renderGrowthPanel, renderDecisionPanel, renderGraphPanel, renderRecalledPanel,
+renderNightPanel, renderUpkeepPanel, renderSourcesStatusPanel,
+renderCapsulePanel, renderResurfacePanel, renderLinksPanel, renderTopicsPanel
+```
+
+Each panel reads one endpoint (a few share one; see below), decides for
+itself whether it has enough to show, and returns nothing when it does not.
+`renderBoard` awaits each in turn inside a `try/catch`, so one panel throwing
+never takes down the rest of the board.
+
+**`boardFetch(path)` is the hide-on-missing contract every panel is built
+on.** It fetches `path` against `WORKER_URL` with the caller's bearer token
+and returns `null`, never throwing and never returning a partial or
+fabricated shape, on any of: a network error, a non-ok HTTP status, or a body
+with `ok: false`. Every panel renderer checks its own required fields on the
+result and returns early (rendering nothing) when they are missing. This is
+the same pattern `brief.js` already used for `/brief` against an older
+Worker, generalized to every board panel: a 403 or 404 from an endpoint an
+older Worker does not have yet, or a field a newer Worker has not started
+returning yet, makes that one panel not exist rather than rendering broken or
+half-empty.
+
+**`boardFetchOnce(key, path)`** memoizes the first fetch of a render pass in
+a `Map` that `renderBoard` clears at the top of every call, so two readers of
+the same endpoint in one render share a single request instead of hitting the
+Worker twice. `GET /stats/graph` backs the connections tile, the "how it
+connects" graph preview, and the "kinds of links" panel; `GET
+/stats/recalled?limit=5` backs the recalls tile, the contradictions tile, and
+the "what you keep coming back to" panel. Both go through `boardFetchOnce`
+keyed `'graph'` and `'recalled'` respectively; every other panel's endpoint is
+read once per render and goes through plain `boardFetch`.
+
+**Endpoints each panel reads:**
+
+| Panel | Endpoint |
+|-------|----------|
+| Growth chart ("Memories over time") | `GET /stats/activity?days=N`, falls back to `brief.activity` |
+| Needs a decision | `brief` (insights + stale claims, no separate fetch) |
+| How it connects (graph preview) | `GET /graph?limit=120`, tile count from `GET /stats/graph` |
+| What you keep coming back to (most recalled) | `GET /stats/recalled?limit=5` |
+| Last night | `GET /stats/night` |
+| Upkeep | `GET /stats` |
+| Sources | `GET /integrations` |
+| Prompt capsule | `GET /prompt-capsules/core` |
+| Worth re-reading | `brief` (resurface field, no separate fetch) |
+| Kinds of links | `GET /stats/graph` |
+| Topics | `brief` (topics field, no separate fetch) |
+| Rail note (version, index health, connected host) | `GET /health` |
+
+**Fallback behavior against an older Worker.** The growth chart is the one
+panel with a real degraded mode rather than a binary show/hide: it always
+fetches `/stats/activity?days=90` first, and if that comes back live (an
+array of per-source series) it renders the full chart with a 30/90/365 range
+control and a table toggle. If it does not, the panel still renders from the
+14-day single-series strip `brief.activity` already carries, but the range
+control and table toggle are removed outright rather than shown disabled,
+with a muted note (`board.chartNeedsUpdate`) explaining that sources and
+longer ranges need the Worker update this dashboard ships with. Every other
+panel is a hard hide: no data, no partial render. The contradictions tile is
+the clearest example: it only appears when `total_contradictions` is a
+number in the `/stats/recalled` response, so an older Worker's brain shows
+three tiles, not a fourth tile reading zero. The last night panel makes the
+same distinction one level deeper: a `null` `ranAt` means a real response
+from a Worker that has the endpoint but has not completed a nightly run yet,
+and is treated the same as a missing endpoint (the panel hides), while a
+non-`null` `ranAt` with `insightsProposed: 0` still renders (that row alone
+hides at zero, since the weekly insight pass does not run every night).
 
 ## The destructive-action sheet (`js/confirm-sheet.js`)
 
