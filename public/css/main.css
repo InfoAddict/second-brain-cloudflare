@@ -403,7 +403,7 @@
       }
 
       #auth-overlay input::placeholder {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       #auth-overlay input:focus {
@@ -449,7 +449,8 @@
         align-items: center;
         gap: 12px;
         height: 60px;
-        padding: 0 12px 0 20px;
+        box-sizing: border-box;
+        padding: 8px 12px 8px 20px;
         border-bottom: 1px solid var(--line);
         background: var(--bg);
         flex-shrink: 0;
@@ -708,7 +709,7 @@
 
       .bubble-time {
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         padding: 0 6px;
         margin-top: 4px;
         text-align: right;
@@ -737,7 +738,7 @@
         width: 7px;
         height: 7px;
         border-radius: 50%;
-        background: var(--text-tertiary);
+        background: var(--text-secondary);
         animation: bounce 1.3s infinite ease-in-out;
       }
 
@@ -988,7 +989,7 @@
         font-family: var(--font-serif);
         font-style: italic;
         font-size: 13px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         padding: 8px 0 4px 16px;
         animation: bubble-in 0.36s var(--ease) both;
       }
@@ -1019,7 +1020,7 @@
 
       #screen-home .input-field::placeholder {
         font-style: italic;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       #screen-home .send-btn {
@@ -1405,7 +1406,7 @@
       #recent-list .card-action-btn {
         padding: 4px 6px;
         font-size: 10.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       #recent-list .card-action-btn:hover {
@@ -1453,7 +1454,7 @@
 
       .mem-caption {
         font-size: 12.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1526,7 +1527,7 @@
       }
 
       .filter-field::placeholder {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       select.filter-field {
@@ -1657,7 +1658,7 @@
       }
 
       .input-field::placeholder {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       .send-btn {
@@ -1696,7 +1697,7 @@
 
       .input-hint {
         font-size: 11.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         padding: 0 4px 8px;
       }
 
@@ -1755,7 +1756,7 @@
         justify-content: center;
         padding: 56px 32px;
         gap: 10px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         font-family: var(--font-serif);
         font-style: italic;
         font-size: 15px;
@@ -1768,7 +1769,7 @@
         font-size: 34px;
         margin-bottom: 4px;
         font-style: normal;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       .first-run-steps {
@@ -2135,7 +2136,7 @@
       }
 
       .append-input-wrap textarea::placeholder {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       .edit-existing-tags {
@@ -2147,7 +2148,7 @@
 
       .edit-hint {
         font-size: 12px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 14px;
       }
 
@@ -2192,7 +2193,7 @@
          row opened it. */
       .edit-sub {
         font-size: 12.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 14px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -2375,7 +2376,7 @@
         text-transform: uppercase;
         letter-spacing: 0.06em;
         font-weight: 500;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin: 0 0 6px;
       }
 
@@ -2437,7 +2438,7 @@
 
       .digest-section-label {
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         text-transform: uppercase;
         letter-spacing: 0.06em;
         font-weight: 500;
@@ -2522,7 +2523,7 @@
       .stale-when {
         display: block;
         font-size: 12px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 8px;
       }
 
@@ -2572,7 +2573,7 @@
 
       .pattern-when {
         font-size: 11.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       .pattern-sources {
@@ -2592,7 +2593,7 @@
       }
 
       .pattern-source--gone {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         font-style: italic;
       }
 
@@ -2642,13 +2643,13 @@
 
       .digest-candidate-count {
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       /* Browsers do not inherit font-family into form controls: a <button>,
          <select>, <input> or <textarea> falls back to a system font unless you
          say otherwise. Half the controls in this app — 207 of 416 — were
-         rendering in Arial next to Geist copy, which is most of why the
+         rendering in Arial next to DM Sans copy, which is most of why the
          interface read as unfinished.
 
          font-family only, not the `font` shorthand: size, weight and
@@ -2690,7 +2691,7 @@
 
       .digest-note {
         font-size: 12px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         line-height: 1.5;
         margin-bottom: 10px;
       }
@@ -2744,10 +2745,10 @@
       .integration-category-summary {
         margin-left: auto;
         font-size: 12px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
       .integration-category-chevron {
-        color: var(--text-tertiary) !important;
+        color: var(--text-secondary) !important;
         font-size: 16px !important;
       }
 
@@ -2769,7 +2770,7 @@
       .integration-state {
         margin-left: auto;
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       .integration-state.connected {
@@ -3035,7 +3036,7 @@
         gap: 10px;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 6px;
       }
 
@@ -3177,7 +3178,7 @@
         gap: 12px;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 14px;
         flex-shrink: 0;
       }
@@ -3206,7 +3207,7 @@
         font-size: 10px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 8px;
       }
 
@@ -3441,7 +3442,7 @@
         font-size: 10px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 6px;
       }
 
@@ -3547,7 +3548,7 @@
       .src-n {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         min-width: 22px;
         text-align: right;
       }
@@ -3686,7 +3687,7 @@
       }
 
       .home-field::placeholder {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       /* The prediction, always visible and always one tap from being overridden.
@@ -4192,7 +4193,7 @@
       }
 
       .team-row.suspended .team-name {
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
       }
 
       .team-name {
@@ -4205,7 +4206,7 @@
 
       .team-sub {
         font-size: 11.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-top: 2px;
       }
 
@@ -4221,7 +4222,7 @@
         padding: 6px;
         border-radius: 8px;
         cursor: pointer;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         font-size: 15px;
         line-height: 1;
         display: inline-flex;
@@ -4262,7 +4263,7 @@
       }
 
       .team-select-wrap select:hover {
-        border-color: var(--text-tertiary);
+        border-color: var(--text-secondary);
       }
 
       .team-select-wrap select:focus {
@@ -4274,7 +4275,7 @@
         position: absolute;
         right: 9px;
         font-size: 12px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         pointer-events: none;
         transition: color 0.15s;
       }
@@ -4380,7 +4381,7 @@
         align-items: center;
         gap: 7px;
         font-size: 11.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         white-space: nowrap;
       }
 
@@ -4436,7 +4437,7 @@
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-bottom: 8px;
       }
 
@@ -4450,7 +4451,7 @@
          footnote on the history, not another entry in it. */
       .view-timeline-note {
         font-size: 12px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         padding: 6px 0 0;
       }
 
@@ -4585,7 +4586,7 @@
 
       .activity-when {
         font-size: 11.5px;
-        color: var(--text-tertiary);
+        color: var(--text-secondary);
         margin-top: 2px;
       }
 
