@@ -4171,6 +4171,22 @@
          A roster that reads like a table without being one: hairline
          rows in a single rounded container, an aligned header, and
          quiet icon actions that only speak on hover. */
+
+      /* Present to a screen reader, invisible on screen. Used for the roster
+         table's <caption> and the token-ready status line — content that
+         orients or announces, with nothing to draw. */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
       .team-page-bar h2 {
         margin: 0;
         font-family: var(--font-display);
@@ -4208,6 +4224,15 @@
       #team-add-role { flex: 0 1 auto; }
       .team-activity-actions { margin-top: 10px; }
       .activity-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+      /* Selected state, exactly .seg's (board.css): charcoal fill, white text.
+         Each filter is a standalone .btn-secondary rather than a segment
+         inside one shared track, so its own border is pulled to match rather
+         than left as a lighter ring around the darker fill. */
+      .activity-filters button[aria-checked='true'] {
+        background: var(--text-primary);
+        border-color: var(--text-primary);
+        color: var(--on-accent);
+      }
       /* Team name editor. Matches the org-default pill above the roster: same
          border, radius and surface, so the two settings rows read as a pair. */
       .team-name-row {
@@ -4215,8 +4240,8 @@
         align-items: center;
         gap: 10px;
         padding: 10px 14px;
-        border: 0.5px solid var(--border-input);
-        border-radius: 13px;
+        border: 1px solid var(--border-input);
+        border-radius: 14px;
         background: var(--surface-2);
       }
 
@@ -4238,14 +4263,22 @@
       }
 
       .team-table {
-        border: 0.5px solid var(--border-input);
-        border-radius: 13px;
+        /* Panel vocabulary, not the settings-row one: 1px var(--line) and the
+           board's 14px radius, no --surface-2 box around it. */
+        border: 1px solid var(--line);
+        border-radius: 14px;
         overflow: hidden;
         background: var(--surface);
       }
 
-      .team-head,
-      .team-row {
+      /* The two single-setting boxes (team name, your capture default,
+         renderTeamMember) and the member's own read-only roster
+         (teamRosterRow) reuse .team-table/.team-row as a plain grid row —
+         not the real <table> the ADMIN roster below renders (renderTeam),
+         which gets its own tag-scoped rules further down. Scoped to `div`
+         so it cannot also match the roster's <tr class="team-row">: a grid
+         display on a table row breaks the table it sits in. */
+      div.team-row {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto auto;
         gap: 16px;
@@ -4253,7 +4286,23 @@
         padding: 10px 14px;
       }
 
-      .team-head {
+      div.team-row + div.team-row {
+        border-top: 1px solid var(--border-input);
+      }
+
+      .team-row.suspended .team-name {
+        color: var(--text-secondary);
+      }
+
+      /* The admin member roster: a real <table> (renderTeam/teamMemberRow,
+         js/team.js) — not a div roster, so a screen reader gets row/column
+         semantics instead of a flat wall of spans. */
+      table.team-table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+
+      table.team-table th {
         font-size: 10.5px;
         font-weight: 500;
         letter-spacing: 0.08em;
@@ -4262,15 +4311,19 @@
            living-thread palette (only on --bg-card); --text-secondary does. */
         color: var(--text-secondary);
         background: var(--surface-2);
-        border-bottom: 0.5px solid var(--border-input);
+        text-align: left;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-input);
       }
 
-      .team-row + .team-row {
-        border-top: 0.5px solid var(--border-input);
+      table.team-table td {
+        padding: 10px 14px;
+        vertical-align: middle;
+        border-top: 1px solid var(--border-input);
       }
 
-      .team-row.suspended .team-name {
-        color: var(--text-secondary);
+      table.team-table tbody tr:first-child td {
+        border-top: 0;
       }
 
       .team-name {
@@ -4332,7 +4385,7 @@
         font-weight: 500;
         color: var(--text-secondary);
         background: var(--surface);
-        border: 0.5px solid var(--border-input);
+        border: 1px solid var(--border-input);
         border-radius: 9px;
         padding: 5px 26px 5px 11px;
         cursor: pointer;
@@ -4398,7 +4451,7 @@
         align-items: center;
         border-radius: var(--radius-pill);
         background: var(--surface-3);
-        border: 0.5px solid var(--border-input);
+        border: 1px solid var(--border-input);
         /* The input is on top; without this the track would eat its own clicks
            in browsers that hit-test the sibling first. */
         pointer-events: none;
@@ -4410,7 +4463,7 @@
         height: 17px;
         border-radius: 50%;
         background: var(--switch-knob);
-        border: 0.5px solid var(--border-input);
+        border: 1px solid var(--border-input);
         box-shadow: var(--shadow-card);
         transition: transform 0.18s var(--ease);
       }
@@ -4594,25 +4647,18 @@
           min-height: 32px;
         }
 
-        /* The roster is a three-column grid — member, capture policy, actions —
-           and its two `auto` tracks demand more width than a phone has, so they
-           were laid over the first column instead of wrapping: a member's email
-           rendered on top of the "Captures:" label, and the role chip on top of
-           it again. Stack it. The column headings go with it, because they name
-           columns that no longer exist once the row is vertical. */
-        .team-head {
-          display: none;
-        }
-
-        .team-row {
+        /* The two single-setting boxes (team name, your capture default) and
+           the member's own read-only roster are still a plain grid row at
+           this width — a three-column grid demands more width than a phone
+           has, so they were laid over the first column instead of wrapping.
+           Stack it. The admin roster's real <table> gets its own stacking
+           rules below (max-width: 700px): it needs data-label, not just a
+           narrower grid. */
+        div.team-row {
           grid-template-columns: minmax(0, 1fr);
           gap: 10px;
           align-items: flex-start;
           padding: 14px;
-        }
-
-        .team-capture {
-          justify-content: flex-start;
         }
 
         .team-actions {
@@ -4634,6 +4680,59 @@
           flex: 1 0 100%;
           max-width: none;
           order: 2;
+        }
+      }
+
+      /* The admin roster table (renderTeam/teamMemberRow, js/team.js): at
+         phone width four columns side by side no longer fit, so each row
+         stacks and each cell shows its own header through a data-label
+         attribute instead — the site's comparison-table technique. <thead>
+         stays in the DOM and in the accessibility tree (visually hidden, not
+         display:none), so a screen reader still gets the real column
+         headers; only sighted users see them replaced by the per-cell label. */
+      @media (max-width: 700px) {
+        table.team-table thead {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
+        }
+
+        table.team-table,
+        table.team-table tbody,
+        table.team-table tr,
+        table.team-table td {
+          display: block;
+          width: 100%;
+        }
+
+        table.team-table tr.team-row {
+          padding: 14px;
+        }
+
+        table.team-table tr.team-row + tr.team-row {
+          border-top: 1px solid var(--border-input);
+        }
+
+        table.team-table td {
+          padding: 6px 0;
+          border-top: 0;
+        }
+
+        table.team-table td[data-label]::before {
+          content: attr(data-label);
+          display: block;
+          font-size: 10.5px;
+          font-weight: 500;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--text-secondary);
+          margin-bottom: 4px;
         }
       }
 

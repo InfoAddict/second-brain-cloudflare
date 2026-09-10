@@ -334,7 +334,12 @@
                      token must stay on screen until it has been copied, and a
                      modal invites dismissing it by accident. -->
                 <section id="team-token-reveal" class="panel team-panel token-reveal" style="display: none">
-                  <h2 tabindex="-1"><i class="ti ti-key"></i> <span aria-live="polite" data-i18n="team.tokenTitle">One-time sign-in token</span> <span id="team-token-for"></span></h2>
+                  <h2 tabindex="-1"><i class="ti ti-key"></i> <span data-i18n="team.tokenTitle">One-time sign-in token</span> <span id="team-token-for"></span></h2>
+                  <!-- The title text never changes, so aria-live on it announces
+                       nothing. This status line does: it is the thing that
+                       actually changes when the token becomes ready, so it is
+                       the thing that carries aria-live. -->
+                  <span id="team-token-status" class="sr-only" aria-live="polite"></span>
                   <p class="digest-note" data-i18n="team.tokenWarning">Copy it now — you will not see this again.</p>
                   <div class="team-actions-row">
                     <code id="team-token-value"></code>
@@ -443,7 +448,7 @@
                      once the roster probe answers, so without this the section
                      and its Export CSV button are on screen for that whole round
                      trip — and for good if the probe never settles. -->
-                <div id="team-activity" class="panel team-panel" style="display: none">
+                <section id="team-activity" class="panel team-panel" style="display: none">
                   <h2 data-i18n="activity.title">Recent activity</h2>
                   <p class="digest-note" data-i18n="activity.intro">Who changed what, newest first. Kept as a record — nothing here can be edited.</p>
                   <div class="activity-filters" role="radiogroup" aria-label="Activity filter">
@@ -457,7 +462,7 @@
                     <button class="digest-btn" id="activity-export" type="button" onclick="exportActivityCsv(this)" data-i18n="activity.exportCsv">Export CSV</button>
                     <button class="digest-btn" id="activity-more" type="button" hidden onclick="loadMoreActivity(this)" data-i18n="activity.more">Show more</button>
                   </div>
-                </div>
+                </section>
               </div>
             </div>
           </div>
