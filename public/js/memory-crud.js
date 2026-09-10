@@ -370,7 +370,11 @@ function renderViewTimeline(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.timeline || []
-  if (!items.length) {
+  // A shared memory nobody has edited or appended yet still has a reason two
+  // buttons are greyed out, and that reason lives in this section — so an
+  // empty timeline hides History only when there is also no lock note to show.
+  const locked = entry.can_edit === false && !!entry.actor_name
+  if (!items.length && !locked) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
@@ -387,7 +391,7 @@ function renderViewTimeline(entry) {
   }
   // Two greyed-out buttons with no explanation read as a broken screen, so the
   // reason sits at the end of the history that establishes it.
-  if (entry.can_edit === false && entry.actor_name) {
+  if (locked) {
     lines.push(`<div class="view-timeline-note">${escHtml(t('memories.authorLocked', { name: entry.actor_name }))}</div>`)
   }
   el.style.display = ''

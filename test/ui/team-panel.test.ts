@@ -496,6 +496,33 @@ describe("team panel", () => {
     expect(bodies).toEqual([{ id: "u2", suspended: true }]);
   });
 
+  // Tone per caller: suspend and remove are the sheet's default (danger,
+  // "btn-delete") because both cut a member off from something real —
+  // access, or their own private memories — with no undo button beside them.
+  // Rotating a token is neither: the old token still works until the new one
+  // is actually used, so it renders primary, the same treatment the bulk
+  // share/private move gets (bulk-select.test.ts).
+  it("renders the accept button as danger for suspend and remove", async () => {
+    const { ctx, els } = setup(
+      jsonFetch([{ match: (u) => u.endsWith("/team/members"), reply: () => ({ ok: true, status: 200, json: async () => ADMIN_OK }) }]),
+    );
+    await ctx.loadTeam();
+    await ctx.setTeamSuspended("u2", true);
+    expect(els.get("confirm-accept-btn").className).toBe("btn-delete");
+
+    await ctx.removeTeamMember("u2");
+    expect(els.get("confirm-accept-btn").className).toBe("btn-delete");
+  });
+
+  it("renders the accept button as primary for a token rotation", async () => {
+    const { ctx, els } = setup(
+      jsonFetch([{ match: (u) => u.endsWith("/team/members"), reply: () => ({ ok: true, status: 200, json: async () => ADMIN_OK }) }]),
+    );
+    await ctx.loadTeam();
+    await ctx.rotateTeamToken("u2");
+    expect(els.get("confirm-accept-btn").className).toBe("btn-primary confirm-accept-primary");
+  });
+
   it("restoring posts immediately, opens no sheet, and reports success via toast", async () => {
     const bodies: any[] = [];
     const { ctx, els, appended } = setup(
