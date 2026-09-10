@@ -42,6 +42,11 @@ async function loadGraph() {
   try {
     const res = await fetch(`${WORKER_URL}/graph${graphLayerFilter ? `?workspace=${encodeURIComponent(graphLayerFilter)}` : ''}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     const data = await res.json()
+    if (typeof memoryActorFilter !== 'undefined' && memoryActorFilter && Array.isArray(data.nodes)) {
+      const ids = new Set(data.nodes.filter((node) => node.actor_id === memoryActorFilter).map((node) => node.id))
+      data.nodes = data.nodes.filter((node) => ids.has(node.id))
+      data.edges = (data.edges || []).filter((edge) => ids.has(edge.source) && ids.has(edge.target))
+    }
     if (!data.ok || !data.nodes || !data.nodes.length) {
       graphState = null
       canvas.style.display = 'none'

@@ -370,7 +370,7 @@ function renderViewTimeline(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.timeline || []
-  if (!items.length && !entry.actor_name) {
+  if (!items.length) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
@@ -544,7 +544,7 @@ async function loadRelated(id, el) {
             const when = c.linkedAt
               ? ' · ' + formatDateUI(c.linkedAt, { year: 'numeric', month: 'short', day: 'numeric' })
               : ''
-            return `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)} · ${escHtml(who)}${escHtml(when)}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" title="${escAttr(t('memories.removeLink'))}"><i class="ti ti-unlink"></i></button></div>`
+            return `<div class="related-item" data-id="${escHtml(c.id)}" data-type="${escHtml(c.type)}"><button class="related-open"><span class="related-type">${escHtml(c.label)} · ${escHtml(who)}${escHtml(when)}</span>${escHtml((c.content || '').slice(0, 80))}</button><button class="related-unlink" aria-label="${escAttr(t('memories.removeLink'))}" title="${escAttr(t('memories.removeLink'))}"><i class="ti ti-unlink"></i></button></div>`
           },
         )
         .join('')

@@ -445,6 +445,7 @@ function onLayerFilterChange(value) {
 
 function onActorFilterChange(value) {
   memoryActorFilter = value || null
+  if (document.getElementById('mem-graph')?.style.display !== 'none') loadGraph()
   loadRecent()
 }
 
@@ -574,7 +575,7 @@ function makeRecentCard(entry) {
   const selecting = TEAM_MODE && selectMode
   const picked = selecting && selectedMemoryIds.has(entry.id)
   const selectBox = selecting
-    ? `<label class="card-select"><input type="checkbox" ${picked ? 'checked' : ''} onchange="toggleMemorySelection('${escAttr(entry.id)}', this.checked)" /></label>`
+    ? `<label class="card-select"><input type="checkbox" aria-label="${escAttr(t('memories.selectMemory', { title }))}" ${picked ? 'checked' : ''} onchange="toggleMemorySelection('${escAttr(entry.id)}', this.checked)" /></label>`
     : ''
   const card = document.createElement('div')
   card.className = 'memory-card' + (isSynthesized ? ' card--synthesized' : '') + (isRolledUp ? ' card--rolled-up' : '') + (isStale ? ' card--stale' : '') + (selecting ? ' memory-card--selecting' : '') + (picked ? ' memory-card--selected' : '')
