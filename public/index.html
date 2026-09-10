@@ -49,22 +49,19 @@
 
     <div id="app" style="display: none">
       <div id="sidebar">
-        <div class="sb-logo">
-          <div class="brain-avatar">
-            <i class="ti ti-brain"></i>
-          </div>
-          <div>
-            <div class="sb-brand-name">Second Brain</div>
-            <!-- Which company's shared layer this member writes into. Hidden on a
-                 solo brain, where there is no other layer to distinguish. -->
-            <div class="sb-brand-team" id="sb-team-name" style="display: none"></div>
-            <div class="sb-brand-status" id="sb-status" data-i18n="nav.statusEmpty">always remembers</div>
-          </div>
+        <div class="brand">
+          <img src="/brand-lockup.png" alt="Second Brain" width="567" height="80" />
+        </div>
+        <div class="rail-status">
+          <!-- Which company's shared layer this member writes into. Hidden on a
+               solo brain, where there is no other layer to distinguish. -->
+          <div class="sb-brand-team" id="sb-team-name" style="display: none"></div>
+          <div class="sb-brand-status num" id="sb-status" data-i18n="nav.statusEmpty">always remembers</div>
         </div>
         <!-- Two destinations, not four. Recall and Remember were verbs and the
              home input does both; Recent and Graph were two projections of one
              corpus, so they are one place with a view toggle. -->
-        <nav class="sb-nav">
+        <nav class="sb-nav" aria-label="Screens">
           <button class="sb-tab active" id="sb-tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
           <button class="sb-tab" id="sb-tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
           <!-- Hidden until GET /team/members answers 200 — see js/team.js. -->
@@ -75,14 +72,14 @@
                is the only way to get fresh data without quitting. -->
           <button class="sb-footer-btn refresh-now" onclick="refreshAll()" title="Refresh" data-i18n="nav.refresh" data-i18n-attr="title"><i class="ti ti-refresh"></i><span data-i18n="nav.refresh">Refresh</span></button>
           <button class="sb-footer-btn" onclick="openMenu()"><i class="ti ti-settings"></i><span data-i18n="nav.settings">Settings</span></button>
+          <!-- Filled by renderRailNote() in js/board.js (Task 1.7); empty until then. -->
+          <p class="rail-note" id="sb-version-note"></p>
         </div>
       </div>
 
       <div id="main-panel">
         <div id="topbar">
-          <div class="brain-avatar">
-            <i class="ti ti-brain"></i>
-          </div>
+          <img src="/brand-mark.png" alt="" width="32" height="19" />
           <div class="topbar-info">
             <div class="topbar-name">Second Brain</div>
             <!-- Same line the sidebar carries. The sidebar is hidden on phone

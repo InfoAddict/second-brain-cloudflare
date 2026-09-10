@@ -447,32 +447,26 @@
       #topbar {
         display: flex;
         align-items: center;
-        gap: 11px;
-        padding: 14px 18px 12px;
+        gap: 12px;
+        height: 60px;
+        padding: 0 12px 0 20px;
+        border-bottom: 1px solid var(--line);
         background: var(--bg);
         flex-shrink: 0;
-        position: relative;
+        position: sticky;
+        top: 0;
         z-index: 10;
       }
 
-      .brain-avatar {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        background: var(--accent-soft);
-        color: var(--accent);
-        display: flex;
-        align-items: center;
-        justify-content: center;
+      #topbar > img {
+        width: 32px;
+        height: auto;
         flex-shrink: 0;
       }
 
-      .brain-avatar i {
-        font-size: 20px;
-      }
-
-      /* identity spots render the brand mark instead of the icon-font glyph */
-      .brain-avatar i.ti-brain,
+      /* The rail and top bar now render the brand-lockup/brand-mark images
+         directly (see index.html); .brain-avatar is retired there. The auth
+         card still uses the icon-font glyph mask below until Task 2.3. */
       #auth-overlay .brain-logo i.ti-brain {
         font-size: 0;
         width: 62%;
@@ -481,7 +475,6 @@
         mask: var(--sb-mark) center / contain no-repeat;
         -webkit-mask: var(--sb-mark) center / contain no-repeat;
       }
-      .brain-avatar i.ti-brain::before,
       #auth-overlay .brain-logo i.ti-brain::before {
         content: none;
       }
@@ -492,18 +485,18 @@
       }
 
       .topbar-name {
-        font-family: var(--font-serif);
-        font-size: 18px;
-        font-weight: 500;
+        font-family: var(--font-display);
+        font-size: 16px;
+        font-weight: 600;
         color: var(--text-primary);
-        line-height: 1.15;
-        letter-spacing: -0.01em;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
       }
 
       .topbar-status {
-        font-size: 11.5px;
+        font-size: 12px;
         color: var(--text-secondary);
-        line-height: 1.3;
+        line-height: 1.2;
         margin-top: 1px;
         display: flex;
         align-items: center;
@@ -523,25 +516,24 @@
         background: none;
         border: none;
         cursor: pointer;
-        color: var(--text-secondary);
-        width: 38px;
-        height: 38px;
-        border-radius: 50%;
+        color: var(--text-primary);
+        width: 40px;
+        height: 40px;
+        border-radius: var(--r-button);
         display: flex;
         align-items: center;
         justify-content: center;
         transition:
-          background 0.15s,
-          color 0.15s;
+          background var(--dur-feedback) var(--ease-standard),
+          color var(--dur-feedback) var(--ease-standard);
       }
 
       .topbar-menu i {
-        font-size: 22px;
+        font-size: 20px;
       }
 
       .topbar-menu:hover {
-        background: var(--surface-2);
-        color: var(--text-primary);
+        background: var(--surface-muted);
       }
 
       /* ============ SCREENS ============ */
@@ -588,7 +580,7 @@
       /* ============ BOTTOM NAV ============ */
       #navbar {
         display: flex;
-        border-top: 0.5px solid var(--border);
+        border-top: 1px solid var(--line);
         background: var(--bg);
         flex-shrink: 0;
         padding: 9px 8px calc(16px + env(safe-area-inset-bottom));
@@ -604,31 +596,38 @@
         border: none;
         cursor: pointer;
         padding: 6px 0;
-        color: var(--text-tertiary);
-        transition: color 0.2s var(--ease);
+        color: var(--text-secondary);
+        position: relative;
+        transition: color var(--dur-feedback) var(--ease-standard);
       }
 
       .nav-tab i {
         font-size: 22px;
-        transition: transform 0.32s var(--ease-spring);
       }
 
       .nav-tab span {
-        font-family: var(--font-serif);
-        font-size: 11.5px;
+        font-family: var(--font-sans);
+        font-size: 11px;
+        font-weight: 500;
         letter-spacing: 0.005em;
       }
 
       .nav-tab.active {
-        color: var(--accent-ink);
+        color: var(--text-primary);
       }
 
-      .nav-tab.active i {
-        transform: translateY(-1px);
-      }
-
-      .nav-tab:active i {
-        transform: scale(0.84);
+      /* Accent underline at the top of the active tab, mirroring the rail's
+         accent dot on the active link. */
+      .nav-tab.active::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 50%;
+        width: 28px;
+        margin-left: -14px;
+        height: 3px;
+        background: var(--accent-ink);
+        border-radius: 0 0 3px 3px;
       }
 
       /* ============ CHAT BUBBLES ============ */
@@ -2840,26 +2839,29 @@
 
       /* ============ DESKTOP SIDEBAR ============ */
       #sidebar {
-        width: 248px;
+        width: 232px;
         flex-shrink: 0;
         flex-direction: column;
+        gap: 6px;
         background: var(--bg);
-        border-right: 0.5px solid var(--border);
-        padding: 20px 12px 22px;
+        border-right: 1px solid var(--line);
+        padding: 26px 22px 22px;
       }
 
-      .sb-logo {
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        padding: 6px 10px 26px;
+      .brand {
+        display: block;
+        width: 174px;
+        margin: 2px 0 0 2px;
       }
 
-      .sb-brand-name {
-        font-family: var(--font-serif);
-        font-size: 16px;
-        font-weight: 500;
-        color: var(--text-primary);
+      .brand img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .rail-status {
+        margin: 14px 0 22px 2px;
       }
 
       /* The team a member belongs to, between the product name and the status
@@ -2878,95 +2880,131 @@
       }
 
       .sb-brand-team {
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 500;
-        line-height: 1.35;
+        line-height: 1.4;
         color: var(--accent-ink);
-        margin-top: 2px;
-        max-width: 148px;
+        max-width: 188px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
 
       .sb-brand-status {
-        font-size: 11.5px;
+        font-size: 13px;
         color: var(--text-secondary);
-        margin-top: 1px;
+        margin-top: 2px;
       }
 
       .sb-nav {
-        flex: 1;
         display: flex;
         flex-direction: column;
-        gap: 3px;
+        gap: 2px;
       }
 
       .sb-tab {
         display: flex;
         align-items: center;
-        gap: 11px;
-        padding: 10px 11px;
-        border-radius: 10px;
+        gap: 10px;
+        height: 40px;
+        padding: 0 10px 0 22px;
+        border: 0;
+        border-radius: var(--r-button);
         background: none;
-        border: none;
         cursor: pointer;
         color: var(--text-secondary);
-        font-size: 14.5px;
-        font-family: var(--font-serif);
+        font-size: 14px;
+        font-weight: 500;
+        font-family: var(--font-sans);
         width: 100%;
         text-align: left;
+        position: relative;
         transition:
-          background 0.15s,
-          color 0.15s;
+          color var(--dur-feedback) var(--ease-standard),
+          background-color var(--dur-feedback) var(--ease-standard);
       }
 
       .sb-tab i {
-        font-size: 19px;
+        font-size: 18px;
         flex-shrink: 0;
       }
 
       .sb-tab:hover {
-        background: var(--surface-2);
+        background: var(--surface-muted);
         color: var(--text-primary);
       }
 
       .sb-tab.active {
-        background: var(--accent-soft);
-        color: var(--accent-ink);
+        background: none;
+        color: var(--text-primary);
+      }
+
+      /* The accent dot marking the active screen, mirroring the mockup's
+         .rail-link[aria-current]::before. */
+      .sb-tab.active::before {
+        content: '';
+        position: absolute;
+        left: 8px;
+        top: 50%;
+        width: 6px;
+        height: 6px;
+        margin-top: -3px;
+        border-radius: 50%;
+        background: var(--accent-ink);
       }
 
       .sb-footer {
-        padding-top: 12px;
-        border-top: 0.5px solid var(--border);
+        margin-top: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
       }
 
       .sb-footer-btn {
         display: flex;
         align-items: center;
-        gap: 11px;
-        padding: 10px 11px;
-        border-radius: 10px;
+        gap: 10px;
+        height: 40px;
+        padding: 0 10px 0 22px;
+        border: 0;
+        border-radius: var(--r-button);
         background: none;
-        border: none;
         cursor: pointer;
         color: var(--text-secondary);
-        font-size: 14.5px;
+        font-size: 14px;
+        font-weight: 500;
         font-family: var(--font-sans);
         width: 100%;
         text-align: left;
         transition:
-          background 0.15s,
-          color 0.15s;
+          color var(--dur-feedback) var(--ease-standard),
+          background-color var(--dur-feedback) var(--ease-standard);
       }
 
       .sb-footer-btn:hover {
-        background: var(--surface-2);
+        background: var(--surface-muted);
         color: var(--text-primary);
       }
 
       .sb-footer-btn i {
-        font-size: 19px;
+        font-size: 18px;
+        flex-shrink: 0;
+      }
+
+      /* Filled by renderRailNote() (Task 1.7): Worker version + index health. */
+      .rail-note {
+        margin: 18px 2px 0;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.45;
+      }
+
+      .rail-note b {
+        display: block;
+        font-weight: 500;
+        color: var(--text-primary);
       }
 
       /* ============ DESKTOP ============ */
