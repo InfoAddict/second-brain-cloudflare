@@ -402,7 +402,13 @@ describe("graph preview panel", () => {
     vm.createContext(ctx);
     vm.runInContext(src, ctx);
     await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
-    expect(ids.board.children.find((c: any) => c.dataset.panel === "graph")).toBeTruthy();
+    const panel = ids.board.children.find((c: any) => c.dataset.panel === "graph");
+    expect(panel).toBeTruthy();
+    // The text fallback for the in-SVG cluster labels, which CSS hides below
+    // 700px where there is no room to set them without overlap.
+    const clusterLegend = panel.body.children.find((c: any) => c.className === "graph-cluster-legend num");
+    expect(clusterLegend, "graph-cluster-legend should be present").toBeTruthy();
+    expect(clusterLegend.textContent.length).toBeGreaterThan(0);
   });
 });
 

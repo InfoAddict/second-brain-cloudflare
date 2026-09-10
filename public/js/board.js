@@ -230,8 +230,8 @@ function buildActivitySeries(data) {
 
 /**
  * Buckets raw daily rows into the mode the range control asked for: 30 days
- * shows the raw counts, 90 a centered 7-day average, 365 weekly sums —
- * mirrors docs/design-mockups/dashboard/template.html's `bucketed()`. The
+ * shows the raw counts, 90 a centered 7-day average, 365 weekly sums,
+ * mirroring docs/design-mockups/dashboard/template.html's `bucketed()`. The
  * average's window can only look inside the fetched days (no data exists
  * before `start`), so it narrows near the two ends of whatever range is on
  * screen rather than reaching further back.
@@ -267,7 +267,7 @@ function bucketActivityRows(rawRows, mode) {
 async function renderGrowthPanel(board, brief) {
   const brief14 = (brief && brief.activity) || []
   // One fetch decides both whether the panel shows at all and, when it does,
-  // paints the default 90-day range — draw() below reuses this result rather
+  // paints the default 90-day range; draw() below reuses this result rather
   // than fetching /stats/activity a second time for the initial paint.
   const initial = await boardFetch('/stats/activity?days=90')
   const live = !!(initial && Array.isArray(initial.series) && initial.series.length)
@@ -279,7 +279,7 @@ async function renderGrowthPanel(board, brief) {
   const seg = document.createElement('div')
   seg.className = 'seg'
   seg.setAttribute('role', 'radiogroup')
-  seg.setAttribute('aria-label', 'Range')
+  seg.setAttribute('aria-label', t('board.rangeLabel'))
   const segButtons = [['30', t('board.range30')], ['90', t('board.range90')], ['365', t('board.range365')]].map(([val, label]) => {
     const b = document.createElement('button')
     b.type = 'button'
@@ -471,17 +471,24 @@ async function renderGraphPanel(board, brief) {
   const wrap = document.createElement('div')
   wrap.className = 'graph'
   wrap.innerHTML = `<svg class="graph-svg" viewBox="0 0 ${W} ${H}" aria-hidden="true">${svg}</svg>`
+  // The in-SVG cluster labels (.graph-label) hide below 700px, where there is
+  // no room to set them without overlapping; this text version takes over at
+  // that width instead of leaving cluster identity behind entirely.
+  const clusterLegend = document.createElement('p')
+  clusterLegend.className = 'graph-cluster-legend num'
+  clusterLegend.textContent = clusters.map((c) => `${c.id} ${formatNumberUI(c.members.length)}`).join(' · ')
   const legend = document.createElement('p')
   legend.className = 'graph-legend num'
   legend.innerHTML = `<span>${escHtml(t('board.graphLegend', { shown: formatNumberUI(nodes.length), total: formatNumberUI((brief && brief.total) || nodes.length), topics: clusters.length }))}</span><span>${escHtml(t('board.graphSize'))}</span>`
   panel.body.appendChild(wrap)
+  panel.body.appendChild(clusterLegend)
   panel.body.appendChild(legend)
   board.appendChild(panel)
 }
 
 /**
  * "What you keep coming back to": the most-recalled memories, all time.
- * Shares its fetch with the recalls tile — renderBoard calls boardFetchOnce
+ * Shares its fetch with the recalls tile: renderBoard calls boardFetchOnce
  * with this same key first, so this never hits the Worker twice.
  */
 async function renderRecalledPanel(board) {
@@ -506,7 +513,7 @@ async function renderRecalledPanel(board) {
 
 /**
  * "Last night": last night's maintenance summary from /stats/night. Hidden
- * when ranAt is null — nothing recorded yet, either a brand new Worker or
+ * when ranAt is null, nothing recorded yet, either a brand new Worker or
  * the nightly pass has not run once. insightsProposed is 0 on most nights
  * since the weekly insight pass runs on its own cron, not every night; that
  * row hides at 0 rather than showing a permanent zero.
@@ -530,7 +537,7 @@ async function renderNightPanel(board) {
 
 /**
  * One literal translate call per type, not a lookup keyed by a runtime
- * string — src/graph/types.ts's EDGE_TYPES is a closed set of 8, so this
+ * string. src/graph/types.ts's EDGE_TYPES is a closed set of 8, so this
  * reads like renderCapsulePanel's slotLabel further down: the i18n scanner only
  * credits a key it can read as a plain quoted literal.
  */
@@ -717,7 +724,7 @@ async function renderBoard(brief) {
   // A fourth "contradictions settled" tile is not wired: no Worker endpoint
   // returns it, and the worker cookbook's guidance is that deriving it from
   // `contradiction_wins`/`updated_at` at read time is not established as
-  // cheap enough to add casually — the merged Worker branch does not attempt
+  // cheap enough to add casually, and the merged Worker branch does not attempt
   // it either. Leave the tile out until a real endpoint exists.
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {

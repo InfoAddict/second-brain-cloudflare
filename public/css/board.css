@@ -130,9 +130,10 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 32px;
   border: 0;
   background: none;
-  padding: 0 0 1px;
+  padding: 0 4px 1px;
   font-size: 13.5px;
   font-weight: 500;
   color: var(--text-primary);
@@ -201,7 +202,7 @@
     grid-column: span 12;
   }
   /* The decisions thread needs full width before it needs to stack, unlike
-     the other span4 panels — matches the mockup's `.span4.decide` override. */
+     the other span4 panels; matches the mockup's `.span4.decide` override. */
   .span4.decide {
     grid-column: span 12;
   }
@@ -748,9 +749,21 @@
   color: var(--text-secondary);
 }
 
+/* Text stand-in for the in-SVG .graph-label text, shown only where that text
+   is hidden (below 700px, where there is no room to set it without overlap). */
+.graph-cluster-legend {
+  display: none;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 700px) {
   .graph-label {
     display: none;
+  }
+  .graph-cluster-legend {
+    display: block;
   }
 }
 

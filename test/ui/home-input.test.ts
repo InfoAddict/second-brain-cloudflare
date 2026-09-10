@@ -195,6 +195,9 @@ describe("leaving home, and coming back", () => {
     // a conversation with nothing to type into.
     expect(ctx.document.getElementById("screen-home").classList.contains("home-visible")).toBe(false);
     expect(ctx.document.getElementById("home").style.display).toBe("none");
+    // The board is part of home, not the conversation; it must not float above it.
+    expect(ctx.document.getElementById("board-tiles").style.display).toBe("none");
+    expect(ctx.document.getElementById("board").style.display).toBe("none");
   });
 
   it("comes back making no claim about a sentence nobody has written", () => {
@@ -226,5 +229,7 @@ describe("leaving home, and coming back", () => {
     ctx.returnHome();
     expect(ctx.document.getElementById("screen-home").classList.contains("home-visible")).toBe(true);
     expect(ctx.document.getElementById("home").style.display).toBe("");
+    expect(ctx.document.getElementById("board-tiles").style.display).toBe("");
+    expect(ctx.document.getElementById("board").style.display).toBe("");
   });
 });

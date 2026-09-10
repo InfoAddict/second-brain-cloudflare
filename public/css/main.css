@@ -3748,7 +3748,11 @@
         font-style: italic;
       }
 
-      .composer .send-btn {
+      /* #screen-home scoped: #screen-home .send-btn above (line ~1026) is an ID
+         selector and would otherwise win over a plain `.composer .send-btn`,
+         leaving the composer's button transparent instead of the action-orange
+         square the mockup shows. */
+      #screen-home .composer .send-btn {
         width: 42px;
         height: 42px;
         flex-shrink: 0;
@@ -3756,11 +3760,11 @@
         background: var(--action);
       }
 
-      .composer .send-btn:hover {
+      #screen-home .composer .send-btn:hover {
         background: var(--action-hover);
       }
 
-      .composer .send-btn i {
+      #screen-home .composer .send-btn i {
         color: #fff;
       }
 
