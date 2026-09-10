@@ -1076,16 +1076,16 @@
         color: var(--text-primary);
       }
 
-      /* ============ MEMORY CARD (recall sources) ============ */
+      /* ============ MEMORY CARD ============
+         System anatomy: paper, 12px radius, a hairline border, no shadow at
+         rest — the card shadow appears only on hover and for a cited card. */
       .memory-card {
         background: var(--bg-card);
-        border: 0.5px solid var(--border-card);
-        border-radius: var(--radius-card);
-        padding: 12px 14px;
-        box-shadow: var(--shadow-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-card);
+        padding: 14px 16px;
         transition:
-          transform 0.25s var(--ease),
-          box-shadow 0.25s var(--ease),
+          box-shadow var(--dur-feedback) var(--ease-standard),
           opacity 0.3s;
         animation: card-in 0.42s var(--ease) both;
       }
@@ -1100,7 +1100,7 @@
       }
 
       .memory-card:hover {
-        box-shadow: var(--shadow-float);
+        box-shadow: var(--shadow-card);
       }
 
       .memory-card.card--rolled-up {
@@ -1220,9 +1220,10 @@
       }
 
       .tag-chip {
-        background: var(--surface-2);
+        background: var(--surface-muted);
         color: var(--text-tag);
-        font-size: 11px;
+        font-size: 12px;
+        font-weight: 500;
         padding: 3px 10px;
         border-radius: var(--radius-tag);
         white-space: nowrap;
@@ -1281,7 +1282,7 @@
         font-size: 14px;
       }
 
-      /* ============ RECENT — numbered editorial list ============ */
+      /* ============ RECENT — a list of memory cards ============ */
       #recent-list {
         flex: 1;
         overflow-y: auto;
@@ -1289,60 +1290,30 @@
            a phone, the panel edge on a desktop — which reads as the list being
            cut off rather than ended. */
         padding: 14px 18px 22px;
-        counter-reset: memo;
         -webkit-overflow-scrolling: touch;
       }
 
+      /* The open-row rule: a date group is a hairline heading, not a box. */
       .date-group {
         margin-bottom: 22px;
       }
 
       .date-label {
-        font-family: var(--font-serif);
-        font-style: italic;
-        font-weight: 400;
-        font-size: 15px;
+        font-family: var(--font-sans);
+        font-weight: 500;
+        font-size: 12.5px;
         color: var(--text-secondary);
-        margin: 0 2px 6px;
-        letter-spacing: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0 2px 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line);
       }
 
       #recent-list .recent-cards {
         display: flex;
         flex-direction: column;
-        gap: 0;
-      }
-
-      /* recent rows: strip the card chrome, become editorial entries */
-      #recent-list .memory-card {
-        background: transparent;
-        border: none;
-        border-top: 0.5px solid var(--line-soft);
-        border-radius: 0;
-        box-shadow: none;
-        padding: 14px 2px 14px 34px;
-        position: relative;
-        counter-increment: memo;
-      }
-
-      #recent-list .memory-card:first-child {
-        border-top: none;
-      }
-
-      #recent-list .memory-card::before {
-        content: counter(memo, decimal-leading-zero);
-        position: absolute;
-        left: 2px;
-        top: 15px;
-        font-family: var(--font-serif);
-        font-style: italic;
-        font-size: 13px;
-        color: var(--accent-ink);
-        font-variant-numeric: tabular-nums;
-      }
-
-      #recent-list .memory-card:hover {
-        box-shadow: none;
+        gap: 10px;
       }
 
       #recent-list .card-content {
@@ -1354,44 +1325,45 @@
         margin-top: 8px;
       }
 
-      /* ── The memory is the hero ───────────────────────────────────────────
+      /* ── The memory is the hero, on a desktop-width card ──────────────────
          Measured before this block: a card was 158px tall and its content was
-         46px of that — the memory occupied 29% of its own card, and five of
-         them fitted on a phone holding 2,394. The other 112px was chrome:
-         three stacked bands (a meta line, a tag row forced onto its own line by
-         `flex: 1 0 100%`, and a 44px action row) all competing at the same
-         visual weight.
+         46px of that — the memory occupied 29% of its own card. The bands
+         collapse into ONE quiet line — source, time, tags and the actions
+         share a row and truncate rather than stack — but only where a card is
+         wide enough to give tags real room. At 390px the same squeeze left
+         Append, Edit and the overflow button (about 170px) and the meta line
+         (about 115px) almost nothing, so a tag chip rendered as one clipped
+         letter. Below 768px the tags keep their own full-width row instead
+         (the general .card-footer rule further down already wraps there). */
+      @media (min-width: 768px) {
+        #recent-list .card-footer {
+          margin-top: 8px;
+          gap: 10px;
+          flex-wrap: nowrap;
+        }
 
-         The bands collapse into ONE quiet line — source, time, tags and the
-         actions share a row and truncate rather than stack — and the content
-         keeps everything that buys back. */
-      #recent-list .card-footer {
-        margin-top: 8px;
-        gap: 10px;
-        flex-wrap: nowrap;
-      }
+        /* Reading order on the line: where it came from and when, then what it
+           is about, then what you can do to it. Provenance first because it is
+           the thing that orients you in a list of 2,394. */
+        #recent-list .card-meta {
+          margin-bottom: 0;
+          flex-shrink: 0;
+          order: 0;
+        }
 
-      /* Reading order on the line: where it came from and when, then what it is
-         about, then what you can do to it. Provenance first because it is the
-         thing that orients you in a list of 2,394. */
-      #recent-list .card-meta {
-        margin-bottom: 0;
-        flex-shrink: 0;
-        order: 0;
-      }
+        /* Shares the meta line and scrolls within it, rather than owning a
+           full-width row of its own — room enough here for that to work. */
+        #recent-list .card-tags {
+          order: 1;
+          flex: 1 1 auto;
+          min-width: 0;
+        }
 
-      /* `flex: 1 0 100%` is what pushed the tags onto a line of their own. They
-         share the meta line now and scroll within it, as they already did. */
-      #recent-list .card-tags {
-        order: 1;
-        flex: 1 1 auto;
-        min-width: 0;
-      }
-
-      #recent-list .card-actions {
-        order: 2;
-        margin-left: auto;
-        flex-shrink: 0;
+        #recent-list .card-actions {
+          order: 2;
+          margin-left: auto;
+          flex-shrink: 0;
+        }
       }
 
       /* 44px was well past the 32px this project holds itself to, and it set the
@@ -1431,7 +1403,7 @@
         padding: 10px 18px;
         flex-shrink: 0;
         background: var(--bg);
-        border-bottom: 0.5px solid var(--border);
+        border-bottom: 1px solid var(--line);
       }
 
       /* Grows to fill a phone, stops well short of it on a wide window — two
@@ -1460,12 +1432,16 @@
         white-space: nowrap;
       }
 
+      /* A bordered rectangle group, same anatomy as board.css's .seg range
+         control: the resting state is a plain outline, the active member
+         switches to charcoal fill with white text. */
       .view-toggle {
         display: flex;
         gap: 2px;
         padding: 2px;
-        background: var(--surface-2);
-        border-radius: var(--radius-pill);
+        background: none;
+        border: 1px solid var(--line);
+        border-radius: var(--r-button);
         flex-shrink: 0;
         /* Pinned right in both views. Capping the filters at 420px stopped them
            filling the bar, which left the toggle stranded mid-row in list view
@@ -1477,42 +1453,50 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 6px 12px;
+        height: 32px;
+        padding: 0 12px;
         border: none;
         background: none;
-        border-radius: var(--radius-pill);
+        border-radius: 5px;
         cursor: pointer;
         color: var(--text-secondary);
         font-family: var(--font-sans);
         font-size: 13px;
+        font-weight: 500;
         transition:
-          background 0.15s,
-          color 0.15s;
+          background-color var(--dur-state) var(--ease-standard),
+          color var(--dur-state) var(--ease-standard);
       }
 
       .view-toggle-btn i {
         font-size: 16px;
       }
 
-      .view-toggle-btn.active {
-        background: var(--bg-card);
+      .view-toggle-btn:hover:not(.active) {
+        background: var(--surface-muted);
         color: var(--text-primary);
-        box-shadow: var(--shadow-card);
+      }
+
+      .view-toggle-btn.active {
+        background: var(--text-primary);
+        color: var(--on-accent);
       }
 
       #recent-list[hidden] {
         display: none;
       }
 
+      /* Filters: 36px rectangles with a hairline border, not pills — they
+         switch to charcoal/white when selected, like the view toggle above. */
       .filter-inner {
         display: flex;
         align-items: center;
+        height: 36px;
         background: var(--bg-card);
-        border: 0.5px solid var(--border-input);
-        border-radius: var(--radius-pill);
-        padding: 7px 8px 7px 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--r-button);
+        padding: 0 10px 0 14px;
         gap: 8px;
-        box-shadow: var(--shadow-card);
       }
 
       .filter-field {
@@ -1757,8 +1741,7 @@
         padding: 56px 32px;
         gap: 10px;
         color: var(--text-secondary);
-        font-family: var(--font-serif);
-        font-style: italic;
+        font-family: var(--font-sans);
         font-size: 15px;
         line-height: 1.5;
         text-align: center;
@@ -1768,7 +1751,6 @@
       .empty-state i {
         font-size: 34px;
         margin-bottom: 4px;
-        font-style: normal;
         color: var(--text-secondary);
       }
 
@@ -1777,7 +1759,6 @@
         padding-left: 20px;
         text-align: left;
         font-family: var(--font-sans);
-        font-style: normal;
         font-size: 14px;
         line-height: 1.65;
         color: var(--text-secondary);
@@ -3275,7 +3256,9 @@
       }
 
       .memory-card--cited {
-        box-shadow: 0 0 0 2px var(--accent);
+        box-shadow:
+          0 0 0 2px var(--accent),
+          var(--shadow-card);
         transition: box-shadow 0.3s ease;
       }
 
@@ -4503,10 +4486,10 @@
         }
 
         /* .filter-field carries no padding of its own — it is a bare input
-           inside a padded .filter-inner pill, so the pill looks like the control
-           while the thing that actually takes the tap is one line tall (17px).
-           Filling the pill costs nothing visually and makes the hit area match
-           what the eye already believes it is aiming at. */
+           inside the 36px .filter-inner rectangle, so the rectangle looks like
+           the control while the thing that actually takes the tap is one line
+           tall (17px). Filling it costs nothing visually and makes the hit
+           area match what the eye already believes it is aiming at. */
         .filter-field {
           min-height: 32px;
         }
@@ -4608,7 +4591,7 @@
         flex-wrap: wrap;
         align-items: center;
         padding: 10px 18px;
-        border-bottom: 0.5px solid var(--border);
+        border-bottom: 1px solid var(--line);
       }
 
       /* Two kinds of button share this bar and they are not equivalent.
@@ -4688,22 +4671,19 @@
         outline-offset: 2px;
       }
 
-      /* In select mode the tick takes over the gutter the row number sits in.
-         Two leading markers on one row is clutter, and the number is the less
-         useful of the two while you are picking rows. Putting the tick in the
-         gutter rather than in the flow also means the content column does not
-         move when select mode turns on — the list does not reflow under your
-         thumb. */
-      #recent-list .memory-card--selecting::before {
-        content: none;
+      /* In select mode the tick takes a reserved gutter on the card's own
+         padding box rather than pushing the title down a line. */
+      #recent-list .memory-card--selecting {
+        position: relative;
+        padding-left: 46px;
       }
 
       #recent-list .memory-card--selecting > .card-select {
         position: absolute;
-        left: 1px;
+        left: 14px;
         /* Optically centred on the title's first line rather than the card:
            a tall card would otherwise float its tick somewhere near the tags. */
-        top: 8px;
+        top: 14px;
         margin: 0;
         justify-content: center;
       }
