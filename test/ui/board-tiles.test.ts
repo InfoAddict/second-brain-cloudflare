@@ -17,6 +17,7 @@ function fakeDoc() {
   const el = (tag = "div") => {
     const cls = new Set<string>();
     const attrs: Record<string, string> = {};
+    let html = "";
     const e: any = {
       tag,
       children: [] as any[],
@@ -24,7 +25,6 @@ function fakeDoc() {
       style: {},
       hidden: false,
       className: "",
-      innerHTML: "",
       textContent: "",
       setAttribute(k: string, v: string) {
         attrs[k] = String(v);
@@ -46,6 +46,15 @@ function fakeDoc() {
       },
       addEventListener() {},
     };
+    // Real DOM: setting innerHTML (to anything, including '') discards
+    // whatever children appendChild had put there. Board panels rely on this
+    // to clear board-tiles/board between renders, so the mock has to match —
+    // otherwise a second render's appended tiles pile up next to the first's.
+    Object.defineProperty(e, "innerHTML", {
+      get() { return html; },
+      set(v: string) { html = v; e.children.length = 0; },
+      enumerable: true,
+    });
     made.push(e);
     return e;
   };
@@ -94,6 +103,56 @@ describe("board tiles", () => {
     expect(tiles.map((t: any) => t.dataset.tile)).toEqual(["memories"]);
     expect(tiles[0].innerHTML).toMatch(/1,204/);
     expect(tiles[0].innerHTML).toMatch(/35/); // last 7 days summed like home.js does
+  });
+});
+
+describe("render token", () => {
+  // Regression: loadBrief's first-load path used to call renderBoard twice
+  // (once directly, once via returnHome), and the two un-awaited runs raced —
+  // every panel and three tiles rendered twice. Simulated here by calling
+  // renderBoard twice without awaiting either, and letting the OLDER call's
+  // /stats/graph fetch resolve only after the NEWER call has already finished.
+  it("an older renderBoard call that resolves late appends nothing once a newer call has started", async () => {
+    const { ids, document } = fakeDoc();
+    const deferred: Record<number, () => void> = {};
+    let graphFetches = 0;
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) => {
+        if (url.includes("/stats/graph")) {
+          graphFetches += 1;
+          const which = graphFetches;
+          await new Promise<void>((resolve) => { deferred[which] = resolve; });
+          return { ok: true, json: async () => ({ ok: true, edgeTypes: { relates_to: 2 } }) };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      },
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    const brief = { ok: true, total: 4, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } };
+
+    const older = ctx.renderBoard(brief);
+    const newer = ctx.renderBoard(brief);
+    // The newer call's fetch resolves first; the older call's resolves after —
+    // the exact "finishes late" ordering the live bug hit on every reload.
+    deferred[2]();
+    await newer;
+    deferred[1]();
+    await older;
+
+    const tiles = ids["board-tiles"].children;
+    expect(tiles.filter((tl: any) => tl.dataset.tile === "memories")).toHaveLength(1);
+    expect(tiles.filter((tl: any) => tl.dataset.tile === "connections")).toHaveLength(1);
+    // The older call was still mid-flight when the newer one cleared and
+    // re-owned `board`; it must not have appended any panels into it either.
+    expect(ids.board.children.length).toBeGreaterThan(0);
   });
 });
 

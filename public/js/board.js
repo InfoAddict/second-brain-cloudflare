@@ -14,6 +14,10 @@ async function boardFetch(path) {
 // same response instead of hitting the Worker twice. Cleared at the top of
 // every renderBoard() call so a refresh sees fresh data.
 let _boardFetchCache = new Map()
+// Owns a render pass: renderBoard bumps this at the start of every call and
+// checks it after each await, so a stale call that is still in flight when a
+// newer one starts stops appending instead of racing it into the same DOM.
+let _boardRenderToken = 0
 async function boardFetchOnce(key, path) {
   if (_boardFetchCache.has(key)) return _boardFetchCache.get(key)
   const data = await boardFetch(path)
@@ -999,6 +1003,10 @@ async function renderRailNote() {
 async function renderBoard(brief) {
   const tilesEl = document.getElementById('board-tiles'), board = document.getElementById('board')
   if (!tilesEl || !board) return
+  // Claim this render pass. Any earlier pass still awaiting a fetch checks
+  // this after it resumes and bails rather than appending into a container a
+  // newer pass has already cleared and started repopulating.
+  const token = ++_boardRenderToken
   tilesEl.style.display = ''
   board.style.display = ''
   _boardFetchCache = new Map()
@@ -1006,11 +1014,13 @@ async function renderBoard(brief) {
   const week = ((brief && brief.activity) || []).slice(-7).reduce((n, d) => n + (d.count || 0), 0)
   if (brief && brief.total) tilesEl.appendChild(boardTile('memories', { n: brief.total, label: t('board.tileMemories'), delta: t('board.tileWeek', { n: formatNumberUI(week) }), ariaLabel: t('board.tileOpenMemories'), onClick: () => switchTab('memories') }))
   const graph = await boardFetchOnce('graph', '/stats/graph')
+  if (token !== _boardRenderToken) return
   if (graph && graph.edgeTypes) {
     const total = Object.values(graph.edgeTypes).reduce((a, b) => a + Number(b), 0)
     tilesEl.appendChild(boardTile('connections', { n: total, label: t('board.tileConnections'), ariaLabel: t('board.tileOpenGraph'), onClick: () => { switchTab('memories'); setMemoryView('graph') } }))
   }
   const recalled = await boardFetchOnce('recalled', '/stats/recalled?limit=5')
+  if (token !== _boardRenderToken) return
   if (recalled && typeof recalled.total_recalls === 'number') {
     tilesEl.appendChild(boardTile('recalls', { n: recalled.total_recalls, label: t('board.tileRecalls'), delta: t('board.tileRecallsDelta'), quiet: true, ariaLabel: t('board.tileGoRecalled'), onClick: () => { const panel = board.querySelector('[data-panel="recalled"]'); if (panel) { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); const heading = panel.querySelector('h2'); if (heading) { heading.tabIndex = -1; heading.focus() } } } }))
   }
@@ -1022,7 +1032,9 @@ async function renderBoard(brief) {
   }
   tilesEl.hidden = tilesEl.children.length === 0
   for (const fn of BOARD_PANELS) {
+    if (token !== _boardRenderToken) return
     try { await fn(board, brief) } catch (e) { console.error('board panel failed:', e) }
   }
+  if (token !== _boardRenderToken) return
   try { await renderRailNote() } catch (e) { console.error('rail note failed:', e) }
 }

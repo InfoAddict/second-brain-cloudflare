@@ -30,10 +30,14 @@ async function loadBrief() {
       briefData.patternsTotal = await loadMoreInsightsTotal()
     }
     if (typeof renderHome === 'function') renderHome(briefData)
-    renderBrief(briefData)
+    // returnHome() renders the brief itself (it may be showing a stale one
+    // from before a conversation), so the first load must not also render it
+    // here — two un-awaited renderBoard() runs would race and interleave.
     if (!homeInitialized && typeof returnHome === 'function') {
       homeInitialized = true
       returnHome()
+    } else {
+      renderBrief(briefData)
     }
   } catch {
     // Offline or a stale deploy — the welcome hero is a fine fallback.
