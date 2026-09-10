@@ -5,6 +5,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 ## [Unreleased]
 
 - New: `GET /stats/activity?days=N` returns per-source capture counts by day, for the dashboard's activity chart.
+- New: `GET /stats/recalled?limit=N` returns your most-recalled memories and a running total of recalls, for the dashboard's "what you keep coming back to" panel.
 
 ## [3.1.0] — Prompt Capsules
 

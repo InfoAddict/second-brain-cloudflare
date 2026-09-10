@@ -283,6 +283,19 @@ describe("cross-user isolation — read surfaces", () => {
     expect(aliceTotal).toBe(2); // her private row plus the shared one, never Bob's
   });
 
+  it("GET /stats/recalled never prints a colleague's memory", async () => {
+    const bobRecalled = await jsonOf(await call("GET", "/stats/recalled?limit=20", bobToken));
+    const bobContents = bobRecalled.entries.map((e: any) => e.content as string).join(" ");
+    expect(bobContents).toContain("Bob private");
+    expect(bobContents).toContain("Company handbook");
+    expect(bobContents).not.toContain("Alice private");
+
+    const aliceRecalled = await jsonOf(await call("GET", "/stats/recalled?limit=20", ALICE));
+    const aliceContents = aliceRecalled.entries.map((e: any) => e.content as string).join(" ");
+    expect(aliceContents).toContain("Alice private");
+    expect(aliceContents).not.toContain("Bob private");
+  });
+
   it("the admin's review queues never print a member's private memory", async () => {
     // The sharpest form of the rule: the SAME admin token gets a 404 from
     // /entry for these rows, and both queues were handing back their full text.

@@ -815,6 +815,50 @@ export async function handleAdminRoutes(
     return json({ ok: true, days, start, series });
   }
 
+  // GET /stats/recalled — the dashboard's "most recalled" panel. No index on
+  // recall_count: ORDER BY ... LIMIT sorts the caller's own scoped rows
+  // (already narrowed to the caller by idx_entries_workspace_created's
+  // leading column) once per dashboard open, which the worker cookbook
+  // accepts as a cost at this scale. Do not add an index for this alone.
+  if (url.pathname === "/stats/recalled" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limit = intParam(url, "limit", { fallback: 5, min: 1, max: 20 });
+    if (limit instanceof Response) return limit;
+
+    const scope = scopeWhere(auth);
+    // Same exclusions as /stats' digest-candidate query above: rollups,
+    // proposed patterns and insights are not "your own" recalled memories.
+    const exclusions = `tags NOT LIKE '%"rolled-up"%'
+       AND tags NOT LIKE '%"synthesized"%'
+       AND tags NOT LIKE '%"auto-pattern"%'
+       AND tags NOT LIKE '%"auto-insight"%'`;
+
+    const [rows, totalRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, source, created_at, recall_count
+         FROM entries WHERE ${scope.clause} AND ${exclusions}
+         ORDER BY recall_count DESC, created_at DESC LIMIT ?`,
+      ).bind(...scope.bindings, limit).all(),
+      env.DB.prepare(
+        `SELECT SUM(recall_count) AS total FROM entries WHERE ${scope.clause} AND ${exclusions}`,
+      ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      total_recalls: Number(totalRow?.total ?? 0),
+      entries: (rows.results as any[]).map(r => ({
+        id: r.id as string,
+        content: r.content as string,
+        source: r.source as string,
+        created_at: r.created_at as number,
+        recall_count: Number(r.recall_count ?? 0),
+      })),
+    });
+  }
+
   // GET /health — index/runtime health, used by the dashboard banner, the
   // README verify step, and external uptime checks. Authenticated like the
   // rest of the API but deliberately NOT admin-gated: it reports index state,
