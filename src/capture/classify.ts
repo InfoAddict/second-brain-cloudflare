@@ -107,7 +107,9 @@ export function classifyThenInfer(
   env: Env,
   ctx: ExecutionContext,
   config: Readonly<Config>,
-  infer: (kind: MemoryKind | null) => Promise<void>,
+  // Return value ignored (only .catch() below reads the promise), so a caller
+  // like inferEdgesOnWrite returning a count rather than void still fits.
+  infer: (kind: MemoryKind | null) => Promise<unknown>,
 ): void {
   ctx.waitUntil(
     classifyEntry(content, env, config)

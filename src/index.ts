@@ -10,6 +10,7 @@ import { runGraphPass } from "./graph/pass";
 import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integrations/mirror";
 import { runStalenessPass } from "./staleness/pass";
 import { nextWorkspace } from "./runtime/rotation";
+import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
 import { companyWorkspaceIds, runWeeklyInsights } from "./insight/weekly";
 import { INSIGHT_ACCRUAL_CRON, INSIGHT_TEAM_WEEKLY_CRON, INSIGHT_WEEKLY_CRON } from "./insight/schedule";
@@ -134,8 +135,36 @@ export default {
     // means every pass scans the whole corpus exactly as it did pre-v3. Direct and
     // manual callers — admin routes that re-trigger these passes — never pass a slice.
     const slice = await nextWorkspace(env);
-    job("nightly compression", runNightlyCompression(env, ctx, slice));
-    job("graph pass", runGraphPass(env, ctx, slice));
-    job("staleness pass", runStalenessPass(env, ctx, slice));
+    // The three passes used to be three independent waitUntil()s so one
+    // failing never delayed or hid the others. They still run concurrently
+    // and still log their own failures independently below — bundled into one
+    // job() only so their counts can be collected once the night is over and
+    // handed to recordNightSummary in a single, fully-built write (never a
+    // partial record; see src/runtime/night-summary.ts). insightsProposed is
+    // always 0 here: the weekly insight pass runs on its own cron trigger
+    // (INSIGHT_WEEKLY_CRON / INSIGHT_TEAM_WEEKLY_CRON above) and never inside
+    // this invocation.
+    job("nightly maintenance", (async () => {
+      const [compression, graph, staleness] = await Promise.allSettled([
+        runNightlyCompression(env, ctx, slice),
+        runGraphPass(env, ctx, slice),
+        runStalenessPass(env, ctx, slice),
+      ]);
+      if (compression.status === "rejected") console.error("nightly compression failed (non-fatal):", compression.reason);
+      if (graph.status === "rejected") console.error("graph pass failed (non-fatal):", graph.reason);
+      if (staleness.status === "rejected") console.error("staleness pass failed (non-fatal):", staleness.reason);
+
+      // No single workspace to attribute the summary to: an empty corpus (nothing
+      // ran) or a rotation read failure (the passes fell back to a whole-corpus
+      // scan pre-v3 style, which spans every workspace, not one).
+      if (slice == null) return;
+
+      await recordNightSummary(env, slice, {
+        digestsWritten: compression.status === "fulfilled" ? compression.value.digestsWritten : 0,
+        linksInferred: graph.status === "fulfilled" ? graph.value.inserted : 0,
+        claimsFlagged: staleness.status === "fulfilled" ? staleness.value.flagged : 0,
+        insightsProposed: 0,
+      });
+    })());
   },
 };

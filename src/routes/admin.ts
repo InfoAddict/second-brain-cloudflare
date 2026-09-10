@@ -27,6 +27,7 @@ import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candida
 import { adminAuditEvent } from "../lib/admin-audit";
 import { auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
+import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -856,6 +857,34 @@ export async function handleAdminRoutes(
         created_at: r.created_at as number,
         recall_count: Number(r.recall_count ?? 0),
       })),
+    });
+  }
+
+  // GET /stats/night — last night's maintenance summary, read from KV. Never
+  // derived from D1 at read time: edges has no index on workspace_id or
+  // created_at, so counting "links inferred since last night" here would be a
+  // full scan of the edge table on every dashboard open (the same cost class
+  // GET /stats/graph?deep=1 refuses to let run on a schedule). The nightly
+  // scheduled() handler writes the summary once per workspace per night
+  // instead (src/runtime/night-summary.ts); this only reads it back.
+  if (url.pathname === "/stats/night" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const workspaceIds = [auth.personalWorkspaceId, ...auth.companyWorkspaceIds];
+    const records = (await Promise.all(
+      workspaceIds.map(id => readNightSummary(env, id)),
+    )).filter((r): r is NightSummary => r !== null);
+
+    if (!records.length) return json({ ok: true, ranAt: null });
+
+    return json({
+      ok: true,
+      ranAt: Math.max(...records.map(r => r.ranAt)),
+      linksInferred: records.reduce((sum, r) => sum + r.linksInferred, 0),
+      insightsProposed: records.reduce((sum, r) => sum + r.insightsProposed, 0),
+      digestsWritten: records.reduce((sum, r) => sum + r.digestsWritten, 0),
+      claimsFlagged: records.reduce((sum, r) => sum + r.claimsFlagged, 0),
     });
   }
 

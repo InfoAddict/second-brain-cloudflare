@@ -218,7 +218,7 @@ export async function inferEdgesOnWrite(
   neighbors: { id: string; score: number }[],
   env: Env,
   opts: { suppressId?: string; newKind?: MemoryKind | null } = {},
-): Promise<void> {
+): Promise<number> {
   // `suppressId` is the entry capture already flagged this one as a duplicate
   // of. It is the highest-scoring neighbour by construction, so left alone it
   // takes an inference slot to record what the duplicate-candidate tag says.
@@ -226,7 +226,7 @@ export async function inferEdgesOnWrite(
     .filter(n => n.id !== newId && n.id !== opts.suppressId && n.score >= EDGE_INFER_THRESHOLD)
     .sort((a, b) => b.score - a.score)
     .slice(0, EDGE_INFER_MAX);
-  if (!top.length) return;
+  if (!top.length) return 0;
 
   // Edges inherit the SOURCE entry's workspace rather than the column default:
   // the nightly graph backfill (src/graph/pass.ts) runs corpus-wide by design, and
@@ -245,6 +245,7 @@ export async function inferEdgesOnWrite(
   const workspaceById = new Map(results.map(r => [r.id, r.workspace_id ?? ""]));
   const workspaceId = workspaceById.get(newId) ?? "";
   const statements: D1PreparedStatement[] = [];
+  let inserted = 0;
 
   // tags and created_at ride along on the statement above rather than costing a
   // second read: the neighbour's kind is in its tags, and `follows` needs both
@@ -367,7 +368,7 @@ export async function inferEdgesOnWrite(
            AND type = 'relates_to' AND provenance = 'inferred'`,
       ).bind(newId, n.id, n.id, newId));
       const typed = edgeInsertStatement(newId, n.id, "follows", { weight: n.score, provenance: "inferred", workspaceId }, env);
-      if (typed) statements.push(typed);
+      if (typed) { statements.push(typed); inserted++; }
       continue;
     }
 
@@ -375,11 +376,15 @@ export async function inferEdgesOnWrite(
     // an edit, an append, the nightly backfill — falls to this branch outside
     // the follows window and would otherwise stack relates_to on top of it.
     const generic = edgeInsertStatement(newId, n.id, "relates_to", { weight: n.score, provenance: "inferred", workspaceId, onlyIfNoTypedEdge: true }, env);
-    if (generic) statements.push(generic);
+    if (generic) { statements.push(generic); inserted++; }
   }
 
   // One call for every edge this write produces. Capture spends most of a
   // Worker's 50-subrequest budget embedding chunks before it ever gets here, so
   // a call per edge is what puts a large multi-chunk capture over the line.
   if (statements.length) await env.DB.batch(statements);
+  // Counts INSERTs only, not the paired DELETE above a typed follows edge — a
+  // replacement is one edge, not zero or two. Read by the nightly graph pass
+  // (src/graph/pass.ts) to report "links inferred" in GET /stats/night.
+  return inserted;
 }

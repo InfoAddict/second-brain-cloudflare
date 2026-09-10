@@ -25,6 +25,7 @@ import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vectorize/scope";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { createMember } from "../../src/lib/team-admin";
+import { nightSummaryKey } from "../../src/runtime/night-summary";
 import type { Env } from "../../src/env";
 
 const ctx = { waitUntil: (_: Promise<any>) => {} } as ExecutionContext;
@@ -294,6 +295,30 @@ describe("cross-user isolation — read surfaces", () => {
     const aliceContents = aliceRecalled.entries.map((e: any) => e.content as string).join(" ");
     expect(aliceContents).toContain("Alice private");
     expect(aliceContents).not.toContain("Bob private");
+  });
+
+  it("GET /stats/night sums the caller's own and company records, never a colleague's personal one", async () => {
+    await env.OAUTH_KV.put(nightSummaryKey(aliceWorkspaceId), JSON.stringify(
+      { ranAt: 1700000000000, linksInferred: 1, insightsProposed: 0, digestsWritten: 1, claimsFlagged: 1 },
+    ));
+    await env.OAUTH_KV.put(nightSummaryKey(bobWorkspaceId), JSON.stringify(
+      { ranAt: 1700000200000, linksInferred: 2, insightsProposed: 0, digestsWritten: 2, claimsFlagged: 2 },
+    ));
+    await env.OAUTH_KV.put(nightSummaryKey(companyWorkspaceId), JSON.stringify(
+      { ranAt: 1700000100000, linksInferred: 4, insightsProposed: 0, digestsWritten: 4, claimsFlagged: 4 },
+    ));
+
+    // Bob's own (2) plus the shared company record (4) — never Alice's personal one (1).
+    expect(await jsonOf(await call("GET", "/stats/night", bobToken))).toEqual({
+      ok: true, ranAt: 1700000200000,
+      linksInferred: 6, insightsProposed: 0, digestsWritten: 6, claimsFlagged: 6,
+    });
+
+    // Alice's own (1) plus the shared company record (4) — never Bob's personal one (2).
+    expect(await jsonOf(await call("GET", "/stats/night", ALICE))).toEqual({
+      ok: true, ranAt: 1700000100000,
+      linksInferred: 5, insightsProposed: 0, digestsWritten: 5, claimsFlagged: 5,
+    });
   });
 
   it("the admin's review queues never print a member's private memory", async () => {
