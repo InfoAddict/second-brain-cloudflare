@@ -928,6 +928,8 @@ async function renderRailNote() {
 async function renderBoard(brief) {
   const tilesEl = document.getElementById('board-tiles'), board = document.getElementById('board')
   if (!tilesEl || !board) return
+  tilesEl.style.display = ''
+  board.style.display = ''
   _boardFetchCache = new Map()
   tilesEl.innerHTML = ''; board.innerHTML = ''
   const week = ((brief && brief.activity) || []).slice(-7).reduce((n, d) => n + (d.count || 0), 0)

@@ -324,8 +324,6 @@ function greetingFor(date) {
 
 /** Fills the greeting and the one number worth putting above the input. */
 function renderHome(data) {
-  const screen = document.getElementById('screen-home')
-  if (screen) screen.classList.add('home-visible')
   const greet = document.getElementById('home-greeting')
   if (greet) greet.textContent = greetingFor(new Date())
 

@@ -16,6 +16,7 @@
 
 /** Cached for the session: the brief describes the night, not the minute. */
 let briefData = null
+let homeInitialized = false
 
 async function loadBrief() {
   const el = document.getElementById('brief')
@@ -30,6 +31,10 @@ async function loadBrief() {
     }
     if (typeof renderHome === 'function') renderHome(briefData)
     renderBrief(briefData)
+    if (!homeInitialized && typeof returnHome === 'function') {
+      homeInitialized = true
+      returnHome()
+    }
   } catch {
     // Offline or a stale deploy — the welcome hero is a fine fallback.
   }
