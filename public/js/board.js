@@ -164,7 +164,7 @@ function buildInsightStop(p) {
     <div class="brief-label" aria-live="polite">${escHtml(label)}</div>
     <div class="brief-body">${escHtml(text)}</div>
     <div class="brief-actions">
-      <button class="digest-btn" onclick="briefResolvePattern('${escAttr(p.id)}', 'confirm', this)">${escHtml(t('brief.confirm'))}</button>
+      <button class="digest-btn digest-btn--primary" onclick="briefResolvePattern('${escAttr(p.id)}', 'confirm', this)">${escHtml(t('brief.confirm'))}</button>
       <button class="digest-btn danger" onclick="briefResolvePattern('${escAttr(p.id)}', 'dismiss', this)">${escHtml(t('brief.dismiss'))}</button>
     </div>
   </article>`

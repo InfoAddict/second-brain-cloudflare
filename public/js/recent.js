@@ -445,7 +445,7 @@ function onLayerFilterChange(value) {
 
 function onActorFilterChange(value) {
   memoryActorFilter = value || null
-  if (document.getElementById('mem-graph')?.style.display !== 'none') loadGraph()
+  if (typeof loadGraph === 'function' && document.getElementById('mem-graph')?.style.display !== 'none') loadGraph()
   loadRecent()
 }
 

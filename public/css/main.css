@@ -2606,10 +2606,10 @@
       .digest-btn {
         font-size: 12px;
         font-weight: 500;
-        color: var(--accent-ink);
-        background: var(--accent-soft);
-        border: none;
-        border-radius: var(--radius-pill);
+        color: var(--text-primary);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 7px;
         padding: 5px 12px;
         cursor: pointer;
         white-space: nowrap;
@@ -2617,7 +2617,7 @@
       }
 
       .digest-btn:hover {
-        background: rgba(253, 84, 10, 0.14);
+        background: var(--surface-muted);
       }
 
       .digest-btn:disabled {
@@ -2629,6 +2629,16 @@
         animation: spin 0.7s linear infinite;
         display: inline-block;
       }
+
+      .digest-btn--primary,
+      .confirm-accept-primary {
+        background: var(--action);
+        border-color: var(--action);
+        color: var(--on-accent);
+      }
+
+      .digest-btn--primary:hover,
+      .confirm-accept-primary:hover { background: var(--action-hover); }
 
 
       .digest-note {

@@ -443,7 +443,7 @@
                      once the roster probe answers, so without this the section
                      and its Export CSV button are on screen for that whole round
                      trip — and for good if the probe never settles. -->
-                <section class="panel team-panel" id="team-activity" style="display: none">
+                <div id="team-activity" class="panel team-panel" style="display: none">
                   <h2 data-i18n="activity.title">Recent activity</h2>
                   <p class="digest-note" data-i18n="activity.intro">Who changed what, newest first. Kept as a record — nothing here can be edited.</p>
                   <div class="activity-filters" role="radiogroup" aria-label="Activity filter">
@@ -457,7 +457,7 @@
                     <button class="digest-btn" id="activity-export" type="button" onclick="exportActivityCsv(this)" data-i18n="activity.exportCsv">Export CSV</button>
                     <button class="digest-btn" id="activity-more" type="button" hidden onclick="loadMoreActivity(this)" data-i18n="activity.more">Show more</button>
                   </div>
-                </section>
+                </div>
               </div>
             </div>
           </div>
@@ -653,7 +653,7 @@
             <span id="patterns-selected-label" data-i18n="patterns.selectAll">Select all</span>
           </label>
           <div class="patterns-bulk-actions">
-            <button class="digest-btn" id="patterns-confirm-btn" onclick="resolveSelectedPatterns('confirm', this)" disabled data-i18n="brief.confirm">Confirm</button>
+            <button class="digest-btn digest-btn--primary" id="patterns-confirm-btn" onclick="resolveSelectedPatterns('confirm', this)" disabled data-i18n="brief.confirm">Confirm</button>
             <button class="digest-btn danger" id="patterns-dismiss-btn" onclick="resolveSelectedPatterns('dismiss', this)" disabled data-i18n="brief.dismiss">Dismiss</button>
           </div>
         </div>
