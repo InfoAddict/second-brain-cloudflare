@@ -646,3 +646,31 @@ describe("panel registration order", () => {
     expect(ids["board-tiles"].children.map((c: any) => c.dataset.tile)).toEqual(["memories", "connections", "recalls"]);
   });
 });
+
+describe("rail note", () => {
+  it("renders from the /health body even when the top-level ok flag is false", async () => {
+    const { ids, document } = fakeDoc();
+    ids["sb-version-note"] = document.createElement("p");
+    ids["topbar-status"] = document.createElement("span");
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: false, version: "3.1.0", vectorize: { ok: false }, team: false }),
+      }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderRailNote();
+    expect(ids["sb-version-note"].innerHTML).toContain("3.1.0");
+    expect(ids["sb-version-note"].innerHTML).toContain("Index needs attention");
+    expect(ids["sb-version-note"].innerHTML).toContain("x");
+  });
+});

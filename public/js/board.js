@@ -786,10 +786,19 @@ async function renderRailNote() {
 
   const el = document.getElementById('sb-version-note')
   if (!el) return
-  const health = await boardFetch('/health')
-  if (!health) { el.textContent = ''; return }
-  const indexOk = !health.vectorize || health.vectorize.ok !== false
-  el.innerHTML = `<b>${escHtml(t('board.railVersion', { v: health.version || '' }))}</b>${escHtml(indexOk ? t('board.railIndexOk') : t('board.railIndexDegraded'))}` +
+
+  // Own fetch rather than boardFetch: /health answers 200 with ok:false
+  // whenever Vectorize is absent, and boardFetch nulls any ok:false body.
+  // This note renders from the 200 body regardless of the top-level ok flag.
+  let body
+  try {
+    const res = await fetch(`${WORKER_URL}/health`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    if (!res.ok) { el.textContent = ''; return }
+    body = await res.json()
+  } catch { el.textContent = ''; return }
+
+  const indexOk = !!(body.vectorize && body.vectorize.ok)
+  el.innerHTML = `<b>${escHtml(t('board.railVersion', { v: body.version || '' }))}</b>${escHtml(indexOk ? t('board.railIndexOk') : t('board.railIndexDegraded'))}` +
     (hostLine ? `<br>${escHtml(hostLine)}` : '')
 }
 
