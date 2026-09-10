@@ -1143,9 +1143,9 @@ li.error .check-icon {
 /* Selected reads as selected on its own — a warm fill and full-strength ink,
    not a cream chip one shade off the cream page behind it. */
 .rail-btn.on {
-  background: var(--accent-soft);
-  border-color: transparent;
-  color: var(--accent-press);
+  background: var(--surface-muted);
+  border-color: var(--line);
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
@@ -1256,8 +1256,8 @@ body.settings-page #app {
   align-items: center;
   gap: 0.4rem;
   padding: 0.35rem 0.7rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
   font-size: 0.85rem;
   cursor: pointer;
   color: var(--text-primary);
@@ -1342,11 +1342,10 @@ body.settings-page #app {
   max-width: none;
   margin: 0 auto;
   padding: 0.85rem 56px 0.85rem 276px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
   /* Opaque: cards scroll underneath this bar. */
-  background: rgba(247, 244, 239, 0.96);
-  box-shadow: 0 -8px 24px rgba(22, 22, 22, 0.04);
-  backdrop-filter: blur(12px);
+  background: var(--bg);
+  box-shadow: none;
 }
 
 @media (max-width: 720px) {
@@ -1603,10 +1602,10 @@ body.settings-page #app {
   pointer-events: auto;
   max-width: 260px;
   background: var(--bg-card);
-  border: 0.5px solid var(--border-strong);
-  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
   padding: var(--s-3) var(--s-7) var(--s-3) var(--s-4);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-card);
   font-size: var(--fs-sm);
   line-height: 1.45;
   color: var(--text-primary);
