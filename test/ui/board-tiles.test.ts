@@ -172,6 +172,41 @@ describe("growth panel", () => {
     expect(ids2.board.children.find((c: any) => c.dataset.panel === "growth")).toBeUndefined();
   });
 
+  it("attaches the panel to the board before measuring the chart container", async () => {
+    // renderActivityChart reads chartEl.clientWidth/clientHeight to size the
+    // SVG viewBox. A detached element (or one whose ancestor chain is not in
+    // the document yet) reports both as 0, which silently falls back to a
+    // hardcoded box that then letterboxes inside the real container — this
+    // regressed once already by drawing the chart before appending the panel.
+    const { ids, document } = fakeDoc();
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    let attachedWhenDrawn: boolean | null = null;
+    ctx.renderActivityChart = () => {
+      attachedWhenDrawn = ids.board.children.some((c: any) => c.dataset && c.dataset.panel === "growth");
+    };
+    await ctx.renderBoard({
+      ok: true,
+      total: 10,
+      activity: Array.from({ length: 14 }, (_, i) => ({ day: i, count: i })),
+      sources: [],
+      topics: [],
+      patterns: [],
+      attention: { unindexed: 0, stale: 0, patterns: 0 },
+    });
+    expect(attachedWhenDrawn).toBe(true);
+  });
+
   it("upgrades to /stats/activity by source, with a live enabled range control", async () => {
     const { ids, document } = fakeDoc();
     const days = 90;

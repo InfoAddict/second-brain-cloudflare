@@ -80,7 +80,14 @@ function chartTipTotal(mode, total) {
  */
 function renderActivityChart(el, opts) {
   if (!el) return
-  const { rows, series, mode, subEl } = opts
+  // totalsRows: the unbucketed daily rows behind `rows`, for the legend and
+  // aria-label window totals. In avg7 mode `rows` holds overlapping 7-day
+  // averages, so summing it directly would count each real capture roughly
+  // seven times over, diluted; falls back to `rows` itself when the caller
+  // has nothing more raw to offer (day and week modes, where summing `rows`
+  // is already exact).
+  const { rows, series, mode, subEl, totalsRows } = opts
+  const sumRows = totalsRows || rows
   const svg = el.querySelector('svg')
   if (!svg) return
   const copy = chartModeCopy(mode)
@@ -120,7 +127,7 @@ function renderActivityChart(el, opts) {
 
   const legend = el.parentElement && el.parentElement.querySelector('.legend')
   if (legend) {
-    const sums = series.map((_, k) => rows.reduce((n, r) => n + (r.s[k] || 0), 0))
+    const sums = series.map((_, k) => sumRows.reduce((n, r) => n + (r.s[k] || 0), 0))
     const all = sums.reduce((a, b) => a + b, 0) || 1
     legend.innerHTML = series
       .map((s, k) => `<span class="legend-item"><i style="background:${colors[k]}"></i>${escHtml(s.name)} <span class="num">${escHtml(formatNumberUI(sums[k]))} · ${Math.round((sums[k] / all) * 100)}%</span></span>`)
@@ -139,8 +146,8 @@ function renderActivityChart(el, opts) {
       .join('')
   }
 
-  const total = totals.reduce((a, b) => a + b, 0)
-  el.setAttribute('aria-label', t('board.chartAriaLabel', { n: rows.length, unit: copy.unit, days: rows.length, total: formatNumberUI(total) }))
+  const grandTotal = sumRows.reduce((n, r) => n + r.s.reduce((a, b) => a + b, 0), 0)
+  el.setAttribute('aria-label', t('board.chartAriaLabel', { n: rows.length, unit: copy.unit, days: rows.length, total: formatNumberUI(grandTotal) }))
 
   // Live geometry the shared hover/keyboard handlers below read fresh on every
   // event, rather than closing over this call's rows/x/y: the handlers are

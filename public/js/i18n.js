@@ -1557,10 +1557,21 @@ function localeTag() {
   return currentLocale === 'it' ? 'it-IT' : 'en-US'
 }
 
-/** UI-only dates. Do not use for LLM/chat payload serialization. */
+/**
+ * UI-only dates. Do not use for LLM/chat payload serialization.
+ *
+ * toLocaleDateString forces a date onto the output even when `options` asks
+ * for time fields only (year/month/day default to "numeric" behind the
+ * scenes), so a caller wanting just a clock time gets "9/9/2026, 3:48 PM"
+ * instead of "3:48 PM". Routed through toLocaleTimeString in that one case;
+ * every other combination (date alone, or date plus time) is unaffected.
+ */
 function formatDateUI(value, options) {
   const d = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(d.getTime())) return ''
+  const hasDatePart = options && (options.year || options.month || options.day || options.weekday)
+  const hasTimePart = options && (options.hour || options.minute || options.second)
+  if (hasTimePart && !hasDatePart) return d.toLocaleTimeString(localeTag(), options)
   return d.toLocaleDateString(localeTag(), options)
 }
 

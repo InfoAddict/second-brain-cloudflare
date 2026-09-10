@@ -38,3 +38,141 @@ describe("chart math", () => {
     ]);
   });
 });
+
+/**
+ * A fake DOM capable enough to drive renderActivityChart end to end: unlike
+ * the board-tiles harness (whose querySelector is a stub returning null,
+ * fine for testing panel presence but not chart internals), this one
+ * actually resolves `el.querySelector('svg')` and
+ * `el.parentElement.querySelector('.legend'/'.data-table')`.
+ */
+function makeNode(tag = "div") {
+  const node: any = {
+    tag,
+    className: "",
+    children: [] as any[],
+    attrs: {} as Record<string, string>,
+    style: {},
+    innerHTML: "",
+    textContent: "",
+    clientWidth: 640,
+    clientHeight: 280,
+    parentElement: null as any,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    setAttribute(k: string, v: string) {
+      node.attrs[k] = String(v);
+    },
+    getAttribute(k: string) {
+      return node.attrs[k] ?? null;
+    },
+    appendChild(child: any) {
+      child.parentElement = node;
+      node.children.push(child);
+      return child;
+    },
+    addEventListener() {},
+    getBoundingClientRect() {
+      return { left: 0, top: 0, width: 640, height: 280 };
+    },
+    querySelector(sel: string): any {
+      return queryOne(node, sel);
+    },
+    querySelectorAll(sel: string): any[] {
+      const out: any[] = [];
+      collectAll(node, sel, out);
+      return out;
+    },
+  };
+  return node;
+}
+function matches(node: any, sel: string): boolean {
+  if (sel.startsWith(".")) return (node.className || "").split(/\s+/).includes(sel.slice(1));
+  if (sel.startsWith("#")) return node.attrs && node.attrs.id === sel.slice(1);
+  return node.tag === sel;
+}
+function queryOne(root: any, sel: string): any {
+  for (const c of root.children) {
+    if (matches(c, sel)) return c;
+    const found = queryOne(c, sel);
+    if (found) return found;
+  }
+  return null;
+}
+function collectAll(root: any, sel: string, out: any[]) {
+  for (const c of root.children) {
+    if (matches(c, sel)) out.push(c);
+    collectAll(c, sel, out);
+  }
+}
+function buildChartDom() {
+  const body = makeNode("div");
+  const chartEl = makeNode("div");
+  chartEl.className = "chart";
+  chartEl.appendChild(makeNode("svg"));
+  const legendEl = makeNode("div");
+  legendEl.className = "legend";
+  const tableEl = makeNode("table");
+  tableEl.className = "data-table";
+  tableEl.appendChild(makeNode("caption"));
+  tableEl.appendChild(makeNode("thead"));
+  tableEl.appendChild(makeNode("tbody"));
+  body.appendChild(chartEl);
+  body.appendChild(legendEl);
+  body.appendChild(tableEl);
+  return { chartEl, legendEl, tableEl };
+}
+function loadWithDom() {
+  const src = ["public/js/i18n.js", "public/utils.js", "public/js/chart.js"]
+    .map((f) => readFileSync(resolve(ROOT, f), "utf8"))
+    .join("\n");
+  const documentElement = { lang: "en" };
+  const ctx: any = {
+    console,
+    Intl,
+    localStorage: { getItem: () => null, setItem() {} },
+    navigator: { language: "en-US" },
+    document: {
+      createElement: (tag: string) => makeNode(tag),
+      createElementNS: (_ns: string, tag: string) => makeNode(tag),
+      getElementById: () => null,
+      documentElement,
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  return ctx;
+}
+
+describe("chart legend and aria-label totals", () => {
+  it("sums the raw daily counts, not the bucketed (averaged) values, in avg7 mode", () => {
+    const ctx = loadWithDom();
+    const { chartEl, legendEl, tableEl } = buildChartDom();
+    // Ten days, source A always 2/day (raw total 20), source B always 1/day
+    // (raw total 10) — every avg7 bucket reports exactly those steady values,
+    // so if the legend summed the bucketed rows instead of the raw ones, a
+    // steady-state series would still read correctly here; the point of this
+    // fixture is the grand total, which must be 30 either way, catching a
+    // regression where the legend or aria-label divides by the window length
+    // or otherwise drifts from the true sum.
+    const rawRows = Array.from({ length: 10 }, (_, i) => ({ d: String(i), label: String(i), s: [2, 1] }));
+    const series = [{ name: "Source A" }, { name: "Source B" }];
+    ctx.tableEl = tableEl;
+    ctx.legendEl = legendEl;
+    ctx.renderActivityChart(chartEl, { rows: rawRows, series, mode: "avg7", totalsRows: rawRows });
+    expect(legendEl.innerHTML).toMatch(/Source A.*20/);
+    expect(legendEl.innerHTML).toMatch(/Source B.*10/);
+    expect(chartEl.attrs["aria-label"]).toMatch(/30/);
+  });
+
+  it("falls back to summing the plotted rows when no totalsRows is given (day/week modes)", () => {
+    const ctx = loadWithDom();
+    const { chartEl, legendEl } = buildChartDom();
+    const rows = [
+      { d: "0", label: "Mon", s: [3] },
+      { d: "1", label: "Tue", s: [4] },
+    ];
+    ctx.renderActivityChart(chartEl, { rows, series: [{ name: "All sources" }], mode: "day" });
+    expect(legendEl.innerHTML).toMatch(/All sources.*7/);
+    expect(chartEl.attrs["aria-label"]).toMatch(/7/);
+  });
+});

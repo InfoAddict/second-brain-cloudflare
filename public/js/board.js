@@ -360,7 +360,7 @@ async function renderGrowthPanel(board, brief) {
         })
       }
       const rows = bucketActivityRows(rawRows, mode)
-      if (typeof renderActivityChart === 'function') renderActivityChart(chartEl, { rows, series: seriesMeta, mode, subEl: panel.subEl })
+      if (typeof renderActivityChart === 'function') renderActivityChart(chartEl, { rows, series: seriesMeta, mode, subEl: panel.subEl, totalsRows: rawRows })
     } else {
       // Older Worker (or a range refetch that failed): the 14-day single
       // series /brief already returns, honestly scoped as "last 14 days".
@@ -390,8 +390,13 @@ async function renderGrowthPanel(board, brief) {
     next.onclick()
   })
 
-  await draw()
+  // Attached before drawing: renderActivityChart reads chartEl.clientWidth/
+  // clientHeight to size the SVG viewBox, and a detached element (or one
+  // whose ancestor chain is not yet in the document) reports both as 0,
+  // silently falling back to a hardcoded 640x280 box that then letterboxes
+  // inside whatever size the container turns out to be.
   board.appendChild(panel)
+  await draw()
 }
 
 /**
