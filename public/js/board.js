@@ -469,6 +469,8 @@ async function renderGrowthPanel(board, brief) {
   await draw()
 }
 
+const GRAPH_SVG_NS = 'http://www.w3.org/2000/svg'
+
 /**
  * "How it connects": a static packed preview of the same topic clusters the
  * Memories screen's graph draws (assignGraphClusters, packGraphNodes,
@@ -477,9 +479,16 @@ async function renderGrowthPanel(board, brief) {
  * preview needs.
  *
  * Per DIRECTION.md's review finding, topic clusters carry no hue meaning here
- * (unlike the chart's source palette). Every node and ring draws neutral, so
- * identity comes from the label, not a color that would fail a colorblind
- * reader on an arbitrary tag.
+ * (unlike the chart's source palette): every node and ring draws neutral at
+ * rest, so identity comes from the label, not a color that would fail a
+ * colorblind reader on an arbitrary tag. Clicking a label is the one place
+ * brand orange enters this panel, as a deliberate, user-driven exception.
+ *
+ * Built with createElementNS/createElement + appendChild rather than one
+ * innerHTML string (like boardPanel, for the same reason) so every node,
+ * ring, edge and label stays a live, clickable reference in both a real DOM
+ * and the fake-DOM test harness, which does not parse innerHTML back into
+ * queryable nodes.
  */
 async function renderGraphPanel(board, brief) {
   const data = await boardFetch('/graph?limit=120')
@@ -520,21 +529,73 @@ async function renderGraphPanel(board, brief) {
   const sx = (v) => v * scale + ox, sy = (v) => v * scale + oy
 
   const byId = new Map(nodes.map((n) => [n.id, n]))
-  let svg = ''
+  const svgEl = (tag) => document.createElementNS(GRAPH_SVG_NS, tag)
+
+  const svg = svgEl('svg')
+  svg.setAttribute('class', 'graph-svg')
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+
+  const nodeEls = new Map() // cluster id -> [circle]
+  const ringEls = new Map() // cluster id -> circle
+  const labelEls = new Map() // cluster id -> text
+  const chipEls = new Map() // cluster id -> button
+  const edgeEls = [] // { el, a, b }
+  const clusterSize = new Map(clusters.map((c) => [c.id, c.members.length]))
+
   for (const e of edges) {
     const s = byId.get(e.source), tn = byId.get(e.target)
     if (!s || !tn) continue
-    svg += `<line x1="${sx(s.cx).toFixed(1)}" y1="${sy(s.cy).toFixed(1)}" x2="${sx(tn.cx).toFixed(1)}" y2="${sy(tn.cy).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`
+    const line = svgEl('line')
+    line.setAttribute('x1', sx(s.cx).toFixed(1))
+    line.setAttribute('y1', sy(s.cy).toFixed(1))
+    line.setAttribute('x2', sx(tn.cx).toFixed(1))
+    line.setAttribute('y2', sy(tn.cy).toFixed(1))
+    line.classList.add('graph-edge')
+    // Same-cluster edges carry the one cluster id they belong to; an edge
+    // crossing clusters carries both ends instead, so the highlight rule
+    // ("touching the active cluster") can tell the two cases apart.
+    if (s.cluster === tn.cluster) line.dataset.cluster = s.cluster
+    else { line.dataset.a = s.cluster; line.dataset.b = tn.cluster }
+    svg.appendChild(line)
+    edgeEls.push({ el: line, a: s.cluster, b: tn.cluster })
   }
   // fill/stroke-opacity (not a baked-in rgba) so the ring reads as a faint
   // wash of ink in either theme instead of vanishing on a dark ground.
-  for (const c of clusters) svg += `<circle cx="${sx(c.cx).toFixed(1)}" cy="${sy(c.cy).toFixed(1)}" r="${(c.R * scale).toFixed(1)}" fill="var(--text-primary)" fill-opacity="0.045" stroke="var(--text-primary)" stroke-opacity="0.28"/>`
+  for (const c of clusters) {
+    const ring = svgEl('circle')
+    ring.setAttribute('cx', sx(c.cx).toFixed(1))
+    ring.setAttribute('cy', sy(c.cy).toFixed(1))
+    ring.setAttribute('r', (c.R * scale).toFixed(1))
+    ring.classList.add('graph-ring')
+    ring.dataset.cluster = c.id
+    svg.appendChild(ring)
+    ringEls.set(c.id, ring)
+  }
   for (const n of nodes) {
     const r = (3.5 + Math.min(2.5, (n.importance || 0) * 0.5)).toFixed(1)
-    svg += `<circle cx="${sx(n.cx).toFixed(1)}" cy="${sy(n.cy).toFixed(1)}" r="${r}" fill="var(--text-secondary)" stroke="var(--bg-card)" stroke-width="2"/>`
+    const circle = svgEl('circle')
+    circle.setAttribute('cx', sx(n.cx).toFixed(1))
+    circle.setAttribute('cy', sy(n.cy).toFixed(1))
+    circle.setAttribute('r', r)
+    circle.classList.add('graph-node')
+    circle.dataset.cluster = n.cluster
+    svg.appendChild(circle)
+    if (!nodeEls.has(n.cluster)) nodeEls.set(n.cluster, [])
+    nodeEls.get(n.cluster).push(circle)
   }
   for (const c of clusters) {
-    svg += `<text class="graph-label" x="${sx(c.cx).toFixed(1)}" y="${(sy(c.cy - c.R) - 6).toFixed(1)}" text-anchor="middle">${escHtml(c.id)} <tspan class="graph-n">${c.members.length}</tspan></text>`
+    const label = svgEl('text')
+    label.setAttribute('x', sx(c.cx).toFixed(1))
+    label.setAttribute('y', (sy(c.cy - c.R) - 6).toFixed(1))
+    label.setAttribute('text-anchor', 'middle')
+    label.setAttribute('role', 'button')
+    label.setAttribute('tabindex', '0')
+    label.setAttribute('aria-pressed', 'false')
+    label.classList.add('graph-label')
+    label.dataset.cluster = c.id
+    label.innerHTML = `${escHtml(c.id)} <tspan class="graph-n">${formatNumberUI(c.members.length)}</tspan>`
+    svg.appendChild(label)
+    labelEls.set(c.id, label)
   }
 
   const panel = boardPanel('graph', {
@@ -545,19 +606,81 @@ async function renderGraphPanel(board, brief) {
   })
   const wrap = document.createElement('div')
   wrap.className = 'graph'
-  wrap.innerHTML = `<svg class="graph-svg" viewBox="0 0 ${W} ${H}" aria-hidden="true">${svg}</svg>`
+  wrap.appendChild(svg)
+
   // The in-SVG cluster labels (.graph-label) hide below 700px, where there is
-  // no room to set them without overlapping; this text version takes over at
-  // that width instead of leaving cluster identity behind entirely.
+  // no room to set them without overlapping; this chip row takes over at
+  // that width instead of leaving cluster identity, or the ability to
+  // highlight one, behind entirely. Same words as the label ("travel 4").
   const clusterLegend = document.createElement('p')
   clusterLegend.className = 'graph-cluster-legend num'
-  clusterLegend.textContent = clusters.map((c) => `${c.id} ${formatNumberUI(c.members.length)}`).join(' · ')
+  for (const c of clusters) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'graph-chip'
+    chip.dataset.cluster = c.id
+    chip.setAttribute('aria-pressed', 'false')
+    chip.textContent = `${c.id} ${formatNumberUI(c.members.length)}`
+    clusterLegend.appendChild(chip)
+    chipEls.set(c.id, chip)
+  }
+
   const legend = document.createElement('p')
   legend.className = 'graph-legend num'
   legend.innerHTML = `<span>${escHtml(t('board.graphLegend', { shown: formatNumberUI(nodes.length), total: formatNumberUI((brief && brief.total) || nodes.length), topics: clusters.length }))}</span><span>${escHtml(t('board.graphSize'))}</span>`
+
+  // Announces the active cluster for assistive tech; the highlight itself is
+  // silent (color/opacity only) otherwise.
+  const live = document.createElement('p')
+  live.className = 'vh'
+  live.setAttribute('aria-live', 'polite')
+
+  let active = null
+  function applyActive(id) {
+    active = id
+    const on = !!active
+    for (const [cid, els] of nodeEls) {
+      for (const el of els) { el.classList.toggle('is-active', cid === active); el.classList.toggle('is-dimmed', on && cid !== active) }
+    }
+    for (const [cid, ring] of ringEls) {
+      ring.classList.toggle('is-active', cid === active)
+      ring.classList.toggle('is-dimmed', on && cid !== active)
+    }
+    for (const [cid, label] of labelEls) {
+      label.classList.toggle('is-active', cid === active)
+      label.setAttribute('aria-pressed', String(cid === active))
+    }
+    for (const [cid, chip] of chipEls) {
+      chip.classList.toggle('is-active', cid === active)
+      chip.setAttribute('aria-pressed', String(cid === active))
+    }
+    for (const { el, a, b } of edgeEls) el.classList.toggle('is-dimmed', on && a !== active && b !== active)
+    live.textContent = active
+      ? t('board.graphShowing', { tag: active, n: formatNumberUI(clusterSize.get(active) || 0) })
+      : t('board.graphShowingAll')
+  }
+  function toggleCluster(id) { applyActive(active === id ? null : id) }
+  function clearActive() { if (active) applyActive(null) }
+  applyActive(null)
+
+  for (const c of clusters) {
+    const onActivate = () => toggleCluster(c.id)
+    labelEls.get(c.id).onclick = onActivate
+    labelEls.get(c.id).onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      onActivate()
+    }
+    chipEls.get(c.id).onclick = onActivate
+  }
+  // A click that lands on the svg itself (not a shape within it) is empty canvas.
+  svg.onclick = (e) => { if (e.target === svg) clearActive() }
+  panel.addEventListener('keydown', (e) => { if (e.key === 'Escape') clearActive() })
+
   panel.body.appendChild(wrap)
   panel.body.appendChild(clusterLegend)
   panel.body.appendChild(legend)
+  panel.body.appendChild(live)
   board.appendChild(panel)
 }
 

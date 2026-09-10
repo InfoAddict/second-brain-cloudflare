@@ -794,10 +794,70 @@
   display: block;
 }
 
+.graph-node {
+  fill: var(--text-secondary);
+  stroke: var(--bg-card);
+  stroke-width: 2;
+  transition: fill var(--dur-state) var(--ease-standard), opacity var(--dur-state) var(--ease-standard);
+}
+
+/* The one place this panel takes on brand orange: a user's own click, never
+   the default render (see the renderGraphPanel comment in board.js). */
+.graph-node.is-active {
+  fill: var(--brand-orange);
+}
+
+.graph-node.is-dimmed {
+  opacity: 0.3;
+}
+
+.graph-ring {
+  fill: var(--text-primary);
+  fill-opacity: 0.045;
+  stroke: var(--text-primary);
+  stroke-opacity: 0.28;
+  transition:
+    stroke var(--dur-state) var(--ease-standard),
+    fill var(--dur-state) var(--ease-standard),
+    opacity var(--dur-state) var(--ease-standard);
+}
+
+.graph-ring.is-active {
+  stroke: var(--brand-orange);
+  stroke-opacity: 1;
+  fill: color-mix(in srgb, var(--brand-orange) 6%, transparent);
+}
+
+.graph-ring.is-dimmed {
+  opacity: 0.4;
+}
+
+.graph-edge {
+  stroke: var(--line);
+  stroke-width: 1;
+  transition: opacity var(--dur-state) var(--ease-standard);
+}
+
+.graph-edge.is-dimmed {
+  opacity: 0.15;
+}
+
 .graph-label {
   font-family: var(--font-sans);
   font-size: 11.5px;
   fill: var(--text-secondary);
+  cursor: pointer;
+  transition: fill var(--dur-state) var(--ease-standard);
+}
+
+.graph-label:hover,
+.graph-label:focus-visible {
+  text-decoration: underline;
+}
+
+.graph-label.is-active {
+  fill: var(--text-primary);
+  font-weight: 600;
 }
 
 .graph-n {
@@ -814,13 +874,35 @@
   color: var(--text-secondary);
 }
 
-/* Text stand-in for the in-SVG .graph-label text, shown only where that text
-   is hidden (below 700px, where there is no room to set it without overlap). */
+/* Row of chips standing in for the in-SVG .graph-label controls, shown only
+   where those hide (below 700px, where there is no room to set them without
+   overlap). Same words, same click-to-highlight behavior. */
 .graph-cluster-legend {
   display: none;
+  flex-wrap: wrap;
+  gap: 6px 14px;
   margin-top: 8px;
   font-size: 12.5px;
+}
+
+.graph-chip {
+  font: inherit;
   color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: color var(--dur-state) var(--ease-standard);
+}
+
+.graph-chip:hover,
+.graph-chip:focus-visible {
+  text-decoration: underline;
+}
+
+.graph-chip.is-active {
+  color: var(--brand-orange);
+  font-weight: 600;
 }
 
 @media (max-width: 700px) {
@@ -828,7 +910,17 @@
     display: none;
   }
   .graph-cluster-legend {
-    display: block;
+    display: flex;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-node,
+  .graph-ring,
+  .graph-edge,
+  .graph-label,
+  .graph-chip {
+    transition: none !important;
   }
 }
 

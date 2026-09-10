@@ -15,6 +15,8 @@ const src = ["public/js/i18n.js", "public/utils.js", "public/js/state.js", "publ
 function fakeDoc() {
   const made: any[] = [];
   const el = (tag = "div") => {
+    const cls = new Set<string>();
+    const attrs: Record<string, string> = {};
     const e: any = {
       tag,
       children: [] as any[],
@@ -24,14 +26,24 @@ function fakeDoc() {
       className: "",
       innerHTML: "",
       textContent: "",
-      setAttribute() {},
+      setAttribute(k: string, v: string) {
+        attrs[k] = String(v);
+      },
+      getAttribute(k: string) {
+        return k in attrs ? attrs[k] : null;
+      },
       appendChild(c: any) {
         this.children.push(c);
         return c;
       },
       querySelector: () => null,
       querySelectorAll: () => [],
-      classList: { add() {}, remove() {}, toggle() {} },
+      classList: {
+        add(c: string) { cls.add(c); },
+        remove(c: string) { cls.delete(c); },
+        toggle(c: string, on?: boolean) { (on === undefined ? !cls.has(c) : on) ? cls.add(c) : cls.delete(c); },
+        contains(c: string) { return cls.has(c); },
+      },
       addEventListener() {},
     };
     made.push(e);
@@ -44,6 +56,7 @@ function fakeDoc() {
     document: {
       getElementById: (id: string) => ids[id] ?? null,
       createElement: el,
+      createElementNS: (_ns: string, tag: string) => el(tag),
       querySelector: () => null,
       querySelectorAll: () => [],
       documentElement: { lang: "en" },
@@ -580,11 +593,110 @@ describe("graph preview panel", () => {
     await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
     const panel = ids.board.children.find((c: any) => c.dataset.panel === "graph");
     expect(panel).toBeTruthy();
-    // The text fallback for the in-SVG cluster labels, which CSS hides below
-    // 700px where there is no room to set them without overlap.
+    // The chip-row fallback for the in-SVG cluster labels, which CSS hides
+    // below 700px where there is no room to set them without overlap.
     const clusterLegend = panel.body.children.find((c: any) => c.className === "graph-cluster-legend num");
     expect(clusterLegend, "graph-cluster-legend should be present").toBeTruthy();
-    expect(clusterLegend.textContent.length).toBeGreaterThan(0);
+    expect(clusterLegend.children.length).toBeGreaterThan(0);
+    for (const chip of clusterLegend.children) {
+      expect(chip.tag).toBe("button");
+      expect(chip.getAttribute("aria-pressed")).toBe("false");
+      expect(chip.textContent.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("clicking a cluster label highlights that cluster, toggles off on a second click, and announces the change", async () => {
+    const { ids, document } = fakeDoc();
+    // Two 3-node clusters plus one same-cluster edge each and one edge crossing
+    // them, so the dim rule ("touching the active cluster") has a case on
+    // every side: an active same-cluster edge, a dimmed same-cluster edge and
+    // an active cross-cluster edge.
+    const nodes = [
+      { id: "a0", tags: ["travel"], importance: 1 },
+      { id: "a1", tags: ["travel"], importance: 1 },
+      { id: "a2", tags: ["travel"], importance: 1 },
+      { id: "b0", tags: ["money"], importance: 1 },
+      { id: "b1", tags: ["money"], importance: 1 },
+      { id: "b2", tags: ["money"], importance: 1 },
+    ];
+    const edges = [
+      { source: "a0", target: "a1", weight: 1 },
+      { source: "b0", target: "b1", weight: 1 },
+      { source: "a2", target: "b2", weight: 1 },
+    ];
+    const ctx: any = {
+      document,
+      window: {},
+      localStorage: { getItem: () => null, setItem() {} },
+      fetch: async (url: string) => (url.includes("/graph") ? { ok: true, json: async () => ({ ok: true, nodes, edges }) } : { ok: false, status: 404, json: async () => ({}) }),
+      console,
+      Intl,
+      WORKER_URL: "http://x",
+      AUTH_TOKEN: "t",
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    await ctx.renderBoard({ ok: true, total: 10, activity: [], sources: [], topics: [], patterns: [], attention: { unindexed: 0, stale: 0, patterns: 0 } });
+
+    const panel = ids.board.children.find((c: any) => c.dataset.panel === "graph");
+    const wrap = panel.body.children.find((c: any) => c.className === "graph");
+    const svg = wrap.children[0];
+    const live = panel.body.children.find((c: any) => c.className === "vh");
+    expect(live.getAttribute("aria-live")).toBe("polite");
+
+    const byClass = (cls: string) => svg.children.filter((c: any) => c.classList.contains(cls));
+    const nodeEls = byClass("graph-node");
+    const ringEls = byClass("graph-ring");
+    const labelEls = byClass("graph-label");
+    const edgeEls = byClass("graph-edge");
+    const travelLabel = labelEls.find((l: any) => l.dataset.cluster === "travel");
+    const moneyLabel = labelEls.find((l: any) => l.dataset.cluster === "money");
+    const travelRing = ringEls.find((r: any) => r.dataset.cluster === "travel");
+    const moneyRing = ringEls.find((r: any) => r.dataset.cluster === "money");
+    const aaEdge = edgeEls.find((e: any) => e.dataset.cluster === "travel");
+    const bbEdge = edgeEls.find((e: any) => e.dataset.cluster === "money");
+    const crossEdge = edgeEls.find((e: any) => e.dataset.a || e.dataset.b);
+    expect(crossEdge.dataset.a).toBe("travel");
+    expect(crossEdge.dataset.b).toBe("money");
+
+    // Invoke the label's click handler directly, the same function the
+    // mobile chip's onclick shares.
+    travelLabel.onclick();
+
+    for (const n of nodeEls) {
+      const active = n.dataset.cluster === "travel";
+      expect(n.classList.contains("is-active")).toBe(active);
+      expect(n.classList.contains("is-dimmed")).toBe(!active);
+    }
+    expect(travelRing.classList.contains("is-active")).toBe(true);
+    expect(moneyRing.classList.contains("is-dimmed")).toBe(true);
+    expect(travelLabel.classList.contains("is-active")).toBe(true);
+    expect(travelLabel.getAttribute("aria-pressed")).toBe("true");
+    expect(moneyLabel.classList.contains("is-active")).toBe(false);
+    expect(moneyLabel.getAttribute("aria-pressed")).toBe("false");
+    expect(aaEdge.classList.contains("is-dimmed")).toBe(false); // same-cluster, active
+    expect(bbEdge.classList.contains("is-dimmed")).toBe(true); // same-cluster, other
+    expect(crossEdge.classList.contains("is-dimmed")).toBe(false); // touches active
+    expect(live.textContent).toBe("Showing travel · 3 memories");
+
+    const clusterLegend = panel.body.children.find((c: any) => c.className === "graph-cluster-legend num");
+    const travelChip = clusterLegend.children.find((c: any) => c.dataset.cluster === "travel");
+    expect(travelChip.classList.contains("is-active")).toBe(true);
+    expect(travelChip.getAttribute("aria-pressed")).toBe("true");
+
+    // Clicking the active label again clears every highlight.
+    travelLabel.onclick();
+    for (const n of [...nodeEls, ...ringEls, ...labelEls, ...edgeEls]) {
+      expect(n.classList.contains("is-active")).toBe(false);
+      expect(n.classList.contains("is-dimmed")).toBe(false);
+    }
+    expect(travelLabel.getAttribute("aria-pressed")).toBe("false");
+    expect(live.textContent).toBe("Showing all topics");
+
+    // The mobile chip drives the same shared handler.
+    travelChip.onclick();
+    expect(travelLabel.classList.contains("is-active")).toBe(true);
+    expect(live.textContent).toBe("Showing travel · 3 memories");
   });
 });
 
