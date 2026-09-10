@@ -446,6 +446,12 @@
                 <section class="panel team-panel" id="team-activity" style="display: none">
                   <h2 data-i18n="activity.title">Recent activity</h2>
                   <p class="digest-note" data-i18n="activity.intro">Who changed what, newest first. Kept as a record — nothing here can be edited.</p>
+                  <div class="activity-filters" role="radiogroup" aria-label="Activity filter">
+                    <button class="btn btn-secondary btn-sm active" type="button" role="radio" aria-checked="true" onclick="setActivityFilter('all', this)" data-i18n="activity.filterAll">All</button>
+                    <button class="btn btn-secondary btn-sm" type="button" role="radio" aria-checked="false" onclick="setActivityFilter('shared', this)" data-i18n="activity.filterShared">Shared</button>
+                    <button class="btn btn-secondary btn-sm" type="button" role="radio" aria-checked="false" onclick="setActivityFilter('insights', this)" data-i18n="activity.filterInsights">Insights</button>
+                    <button class="btn btn-secondary btn-sm" type="button" role="radio" aria-checked="false" onclick="setActivityFilter('members', this)" data-i18n="activity.filterMembers">Members</button>
+                  </div>
                   <div id="activity-list" aria-live="polite"></div>
                   <div class="filter-inner team-activity-actions">
                     <button class="digest-btn" id="activity-export" type="button" onclick="exportActivityCsv(this)" data-i18n="activity.exportCsv">Export CSV</button>

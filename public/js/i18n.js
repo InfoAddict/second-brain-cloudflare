@@ -724,6 +724,10 @@ const I18N_EN = {
     empty: 'Nothing has happened on this team yet.',
     loadFailed: 'Could not load the activity log.',
     more: 'Show more',
+    filterAll: 'All',
+    filterShared: 'Shared',
+    filterInsights: 'Insights',
+    filterMembers: 'Members',
     // A trail outlives the people in it: an actor row can point at an account
     // that is gone, and a shared-memory row at a memory that is.
     unknownActor: 'Removed account',
@@ -1486,6 +1490,10 @@ const I18N_IT = {
     empty: 'Non è ancora successo nulla in questo team.',
     loadFailed: 'Impossibile caricare il registro attività.',
     more: 'Mostra altro',
+    filterAll: 'Tutti',
+    filterShared: 'Condivisi',
+    filterInsights: 'Intuizioni',
+    filterMembers: 'Membri',
     unknownActor: 'Account rimosso',
     memoryGone: 'Ricordo non più leggibile',
     evMemberCreated: 'Ha aggiunto una persona',

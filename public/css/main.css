@@ -4197,6 +4197,7 @@
       .team-add-fields { flex-wrap: wrap; }
       #team-add-role { flex: 0 1 auto; }
       .team-activity-actions { margin-top: 10px; }
+      .activity-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
       /* Team name editor. Matches the org-default pill above the roster: same
          border, radius and surface, so the two settings rows read as a pair. */
       .team-name-row {
