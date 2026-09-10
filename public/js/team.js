@@ -533,6 +533,8 @@ function showTeamToken(token, name, email) {
   if (mailBtn) mailBtn.style.display = lastTeamInvite.email ? '' : 'none'
   wrap.style.display = ''
   if (wrap.scrollIntoView) wrap.scrollIntoView({ block: 'nearest' })
+  const heading = wrap.querySelector('h2')
+  if (heading && typeof heading.focus === 'function') heading.focus()
 }
 
 function closeTeamTokenReveal() {

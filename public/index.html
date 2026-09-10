@@ -306,8 +306,8 @@
                both the admin check and the roster. A personal install never
                sees this screen exist. -->
           <div class="screen" id="screen-team">
-            <div class="mem-bar">
-              <h2 style="margin: 0; font-family: var(--font-serif); font-size: 15px; font-weight: 500;" data-i18n="team.title">Team</h2>
+            <div class="mem-bar team-page-bar">
+              <h2 data-i18n="team.title">Team</h2>
             </div>
 
             <!-- Last resort, not the member's screen. Reached only when NEITHER
@@ -326,35 +326,35 @@
                  and role and nothing else. Read-only on purpose — every write on
                  this screen is behind requireAdmin on the Worker, so a control
                  here would be a control the server refuses. -->
-            <div id="team-member-view" style="display: none; flex: 1; overflow-y: auto; padding: 24px 28px;"></div>
+            <div id="team-member-view" class="team-content" style="display: none"></div>
 
-            <div id="team-body" style="display: none; flex: 1; overflow-y: auto; padding: 24px 28px;">
-              <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div id="team-body" class="team-content" style="display: none">
+              <div class="team-panels">
                 <!-- One-time token reveal. A section rather than a dialog: the
                      token must stay on screen until it has been copied, and a
                      modal invites dismissing it by accident. -->
-                <div id="team-token-reveal" style="display: none; padding: 14px 16px; border: 0.5px solid var(--border-input); border-radius: 13px; background: var(--surface-2);">
-                  <div class="digest-section-label"><i class="ti ti-key"></i> <span data-i18n="team.tokenTitle">One-time sign-in token</span> <span id="team-token-for"></span></div>
+                <section id="team-token-reveal" class="panel team-panel token-reveal" style="display: none">
+                  <h2 tabindex="-1"><i class="ti ti-key"></i> <span aria-live="polite" data-i18n="team.tokenTitle">One-time sign-in token</span> <span id="team-token-for"></span></h2>
                   <p class="digest-note" data-i18n="team.tokenWarning">Copy it now — you will not see this again.</p>
-                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                    <code id="team-token-value" style="font-size: 12px; word-break: break-all;"></code>
+                  <div class="team-actions-row">
+                    <code id="team-token-value"></code>
                     <button class="digest-btn" id="team-copy-btn" type="button" onclick="copyTeamToken()" data-i18n="team.copy">Copy</button>
                     <button class="digest-btn" id="team-invite-copy-btn" type="button" onclick="copyInviteMessage()" data-i18n="invite.copy">Copy invite message</button>
                     <button class="digest-btn" id="team-invite-mail-btn" type="button" onclick="emailInvite()" style="display: none" data-i18n="invite.email">Email invite</button>
-                    <button class="digest-btn danger" type="button" onclick="closeTeamTokenReveal()" data-i18n="team.done">Done</button>
+                    <button class="digest-btn" type="button" onclick="closeTeamTokenReveal()" data-i18n="team.done">Done</button>
                   </div>
-                </div>
+                </section>
 
-                <div>
-                  <div class="digest-section-label" style="margin-bottom: 10px;" data-i18n="team.nameLabel">Team name</div>
+                <section class="panel team-panel">
+                  <h2 data-i18n="team.nameLabel">Team name</h2>
                   <form class="team-name-row" id="team-name-form" onsubmit="submitTeamName(); return false">
                     <i class="ti ti-users-group team-name-icon"></i>
                     <input class="filter-field team-name-input" id="team-name-input" maxlength="60"
                            placeholder="Team name" data-i18n="team.namePlaceholderTeam" data-i18n-attr="placeholder" autocomplete="off" />
-                    <button class="digest-btn" id="team-name-btn" type="submit" data-i18n="team.nameSave">Save</button>
+                    <button class="btn btn-primary" id="team-name-btn" type="submit" data-i18n="team.nameSave">Save</button>
                   </form>
                   <p class="digest-note team-name-note" data-i18n="team.nameHint">Everyone on the team sees this name.</p>
-                </div>
+                </section>
 
                 <!-- Team mode. The ONE team control a solo owner sees, and a
                      deliberate exception to "no team UI on a solo brain": it is
@@ -366,11 +366,11 @@
                      toggleable and announced as a checkbox. renderTeamMode()
                      in js/team.js sets checked, disabled and the hint on every
                      render, in both branches. -->
-                <div id="team-mode-row">
-                  <div class="digest-section-label" style="margin-bottom: 10px;" data-i18n="team.modeTitle">Team mode</div>
-                  <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 0.5px solid var(--border-input); border-radius: 13px; background: var(--surface-2);">
-                    <i class="ti ti-users-group" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
-                    <span style="font-size: 12.5px; color: var(--text-secondary); flex-shrink: 0" data-i18n="team.modeLabel">Shared team layer</span>
+                <section class="panel team-panel" id="team-mode-row">
+                  <h2 data-i18n="team.modeTitle">Team mode</h2>
+                  <div class="team-open-row">
+                    <i class="ti ti-users-group"></i>
+                    <span data-i18n="team.modeLabel">Shared team layer</span>
                     <label class="sb-switch">
                       <input type="checkbox" class="sb-switch-input" id="team-mode-toggle" onchange="setTeamMode(this.checked)" />
                       <span class="sb-switch-track"><span class="sb-switch-knob"></span></span>
@@ -380,16 +380,16 @@
                        depends on how many people are on the team, and a
                        data-i18n key here would overwrite that on every locale
                        change. -->
-                  <p class="digest-note" id="team-mode-hint" style="margin-top: 8px;"></p>
-                </div>
+                  <p class="digest-note" id="team-mode-hint"></p>
+                </section>
 
-                <div>
-                  <div class="digest-section-label" style="margin-bottom: 10px;" data-i18n="team.membersLabel">Members</div>
+                <section class="panel team-panel">
+                  <h2 data-i18n="team.membersLabel">Members</h2>
                   <!-- Org-wide capture default. Its own pill, label and control
                        on one centered line — this was the cramped pair. -->
-                  <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 0.5px solid var(--border-input); border-radius: 13px; background: var(--surface-2); margin-bottom: 12px;">
-                    <i class="ti ti-eye" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
-                    <span style="font-size: 12.5px; color: var(--text-secondary); flex-shrink: 0" data-i18n="team.orgDefaultLabel">New captures default to</span>
+                  <div class="team-open-row">
+                    <i class="ti ti-eye"></i>
+                    <span data-i18n="team.orgDefaultLabel">New captures default to</span>
                     <span class="team-select-wrap"><select class="team-select" id="team-org-default" onchange="setTeamOrgDefault(this.value)" title="Org-wide default; members with their own override ignore this">
                       <option value="personal" data-i18n="team.sharePersonal">Personal (private)</option>
                       <option value="company" data-i18n="team.shareCompany">Company (shared)</option>
@@ -404,9 +404,9 @@
                        render. The hint is inside the wrapper too — it is the
                        half that says "everyone's review queue" out loud. -->
                   <div id="team-insights-row" style="display: none">
-                    <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 0.5px solid var(--border-input); border-radius: 13px; background: var(--surface-2); margin-bottom: 12px;">
-                      <i class="ti ti-bulb" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
-                      <span style="font-size: 12.5px; color: var(--text-secondary); flex-shrink: 0" data-i18n="team.insightsLabel">Weekly team insights</span>
+                    <div class="team-open-row">
+                      <i class="ti ti-bulb"></i>
+                      <span data-i18n="team.insightsLabel">Weekly team insights</span>
                       <span class="team-select-wrap"><select class="team-select" id="team-insights" onchange="setTeamInsights(this.value)">
                         <option value="off" data-i18n="team.insightsOff">Off</option>
                         <option value="on" data-i18n="team.insightsOn">On</option>
@@ -414,24 +414,24 @@
                     </div>
                     <p class="digest-note" data-i18n="team.insightsHint">When this is on, once a week the brain looks for connections between shared memories and puts what it finds in everyone's review queue.</p>
                   </div>
-                  <div id="team-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
-                </div>
+                  <div id="team-list"></div>
+                </section>
 
-                <div>
-                  <div class="digest-section-label" style="margin-bottom: 10px;" data-i18n="team.addTitle">Add member</div>
+                <section class="panel team-panel">
+                  <h2 data-i18n="team.addTitle">Add member</h2>
                   <form id="team-add-form" onsubmit="submitNewMember(); return false">
-                    <div class="filter-inner" style="flex-wrap: wrap;">
+                    <div class="filter-inner team-add-fields">
                       <input class="filter-field" id="team-add-name" placeholder="Name" data-i18n="team.namePlaceholder" data-i18n-attr="placeholder" autocomplete="off" />
                       <input class="filter-field" id="team-add-email" placeholder="Email (optional)" data-i18n="team.emailPlaceholder" data-i18n-attr="placeholder" autocomplete="off" />
-                      <select class="filter-field" id="team-add-role" style="flex: 0 1 auto;">
+                      <select class="filter-field" id="team-add-role">
                         <option value="member" data-i18n="team.roleMember">Member</option>
                         <option value="admin" data-i18n="team.roleAdmin">Admin</option>
                       </select>
-                      <button class="digest-btn" id="team-add-btn" type="submit" data-i18n="team.addAction">Add member</button>
+                      <button class="btn btn-primary" id="team-add-btn" type="submit" data-i18n="team.addAction">Add member</button>
                     </div>
-                    <p class="integration-error" id="team-add-error" style="display: none; margin-top: 8px;"></p>
+                    <p class="integration-error" id="team-add-error" style="display: none"></p>
                   </form>
-                </div>
+                </section>
 
                 <!-- Recent activity. Admin-only by construction: this whole panel is
                      #team-body, which only renders when GET /team/members answered 200.
@@ -443,15 +443,15 @@
                      once the roster probe answers, so without this the section
                      and its Export CSV button are on screen for that whole round
                      trip — and for good if the probe never settles. -->
-                <div id="team-activity" style="display: none">
-                  <div class="digest-section-label" style="margin-bottom: 10px;" data-i18n="activity.title">Recent activity</div>
+                <section class="panel team-panel" id="team-activity" style="display: none">
+                  <h2 data-i18n="activity.title">Recent activity</h2>
                   <p class="digest-note" data-i18n="activity.intro">Who changed what, newest first. Kept as a record — nothing here can be edited.</p>
-                  <div id="activity-list"></div>
-                  <div class="filter-inner" style="margin-top: 10px;">
+                  <div id="activity-list" aria-live="polite"></div>
+                  <div class="filter-inner team-activity-actions">
                     <button class="digest-btn" id="activity-export" type="button" onclick="exportActivityCsv(this)" data-i18n="activity.exportCsv">Export CSV</button>
                     <button class="digest-btn" id="activity-more" type="button" hidden onclick="loadMoreActivity(this)" data-i18n="activity.more">Show more</button>
                   </div>
-                </div>
+                </section>
               </div>
             </div>
           </div>
