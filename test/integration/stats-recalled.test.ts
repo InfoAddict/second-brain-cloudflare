@@ -30,11 +30,12 @@ async function migrated(): Promise<{ sq: SqliteD1; env: Env }> {
 function seed(
   sqlite: SqliteD1, id: string, workspaceId: string, actorId: string,
   content: string, recallCount: number, source = "test", tags: string[] = [],
+  contradictionWins = 0,
 ) {
   sqlite.db.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, recall_count)
-     VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)`,
-  ).bind(id, content, JSON.stringify(tags), source, Date.now(), Date.now(), workspaceId, actorId, recallCount).run();
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, recall_count, contradiction_wins)
+     VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`,
+  ).bind(id, content, JSON.stringify(tags), source, Date.now(), Date.now(), workspaceId, actorId, recallCount, contradictionWins).run();
 }
 
 describe("GET /stats/recalled", () => {
@@ -49,7 +50,7 @@ describe("GET /stats/recalled", () => {
     const m = await migrated();
     sq = m.sq;
     const data = await (await worker.fetch(req("GET", "/stats/recalled"), m.env, ctx)).json() as any;
-    expect(data).toEqual({ ok: true, total_recalls: 0, entries: [] });
+    expect(data).toEqual({ ok: true, total_recalls: 0, total_contradictions: 0, entries: [] });
   });
 
   it("orders by recall_count desc, tie-broken by created_at desc, and sums total_recalls", async () => {
@@ -88,6 +89,22 @@ describe("GET /stats/recalled", () => {
     const data = await (await worker.fetch(req("GET", "/stats/recalled"), m.env, ctx)).json() as any;
     expect(data.entries.map((e: any) => e.id)).toEqual(["real"]);
     expect(data.total_recalls).toBe(5);
+  });
+
+  it("sums contradiction_wins over the same scoped set, excluding another workspace's rows", async () => {
+    const m = await migrated();
+    sq = m.sq;
+    const roots = await ensureTenantBootstrap(m.env);
+
+    seed(sq, "a", roots.ownerPersonalWorkspaceId, roots.ownerUserId, "Won some", 1, "test", [], 3);
+    seed(sq, "b", roots.ownerPersonalWorkspaceId, roots.ownerUserId, "Never contradicted", 1, "test", [], 0);
+    seed(sq, "c", roots.ownerPersonalWorkspaceId, roots.ownerUserId, "Won a lot", 1, "test", [], 5);
+
+    // A second workspace's row: its contradiction_wins must never be counted.
+    seed(sq, "other", "ws-someone-else", "user-someone-else", "Not mine", 1, "test", [], 7);
+
+    const data = await (await worker.fetch(req("GET", "/stats/recalled"), m.env, ctx)).json() as any;
+    expect(data.total_contradictions).toBe(8); // 3 + 0 + 5, never the foreign row's 7
   });
 
   it("clamps limit to the 1..20 range and defaults to 5", async () => {

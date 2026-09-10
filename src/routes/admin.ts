@@ -843,13 +843,15 @@ export async function handleAdminRoutes(
          ORDER BY recall_count DESC, created_at DESC LIMIT ?`,
       ).bind(...scope.bindings, limit).all(),
       env.DB.prepare(
-        `SELECT SUM(recall_count) AS total FROM entries WHERE ${scope.clause} AND ${exclusions}`,
+        `SELECT SUM(recall_count) AS total, SUM(contradiction_wins) AS contradictions
+         FROM entries WHERE ${scope.clause} AND ${exclusions}`,
       ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
     return json({
       ok: true,
       total_recalls: Number(totalRow?.total ?? 0),
+      total_contradictions: Number(totalRow?.contradictions ?? 0),
       entries: (rows.results as any[]).map(r => ({
         id: r.id as string,
         content: r.content as string,
