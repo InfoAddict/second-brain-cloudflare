@@ -13,6 +13,7 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="stylesheet" href="css/main.css" />
     <link rel="stylesheet" href="css/graph.css" />
+    <link rel="stylesheet" href="css/board.css" />
   </head>
 
   <body>
@@ -159,6 +160,10 @@
                   </div>
                 </div>
               </div>
+              <!-- Stat tiles and the board panels, both rendered by board.js
+                   from data the brief and small rollup endpoints return. -->
+              <section class="tiles" id="board-tiles" hidden aria-label="Brain at a glance"></section>
+              <div class="board" id="board"></div>
               <div class="brief" id="brief" style="display: none"></div>
               <div class="recall-hero" id="recall-welcome" style="display: none">
                 <div class="eyebrow" data-i18n="recall.eyebrow">Recall</div>
@@ -664,6 +669,8 @@
         <button class="digest-more" id="stale-more" hidden onclick="loadMoreStale(this)"></button>
       </div>
     </div>
+    <!-- The growth chart's one shared hover/keyboard tooltip (js/chart.js). -->
+    <div class="tip" id="board-tip" role="tooltip"></div>
 
     <script src="js/i18n.js"></script>
     <script src="utils.js"></script>
@@ -687,6 +694,8 @@
     <script src="js/activity.js"></script>
     <script src="js/graph-canvas.js"></script>
     <script src="js/brief.js"></script>
+    <script src="js/board.js"></script>
+    <script src="js/chart.js"></script>
     <script src="js/home.js"></script>
     <script src="js/nav.js"></script>
     <script src="js/refresh.js"></script>

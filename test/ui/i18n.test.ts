@@ -457,6 +457,9 @@ describe("dashboard i18n", () => {
     "integrations.connect.calendar-icloud.placeholder",
     "brief.shapeSuffix",
     "download.withTag",
+    // PROPER NOUN — "Worker" names the Cloudflare Worker component; kept
+    // unchanged in Italian same as "Second Brain" (auth.brand) above.
+    "board.railVersion",
   ].sort();
 
   it("has no Italian string left as a copy of its English twin", () => {
@@ -726,6 +729,7 @@ describe("dashboard i18n", () => {
       // the same shape as memory-crud.js's timelineEventLabel below — one known
       // form for this indirection is what keeps this list readable.
       "public/js/activity.js t(keys[event])",
+      "public/js/board.js t(`patterns.shapes.${shape}`)",
       "public/js/brief.js t(`patterns.shapes.${shape}`)",
       // Both of these resolve through captureDefaultKey() in public/utils.js, which
       // returns one of exactly four literals — home.auto{Shared,Personal}{Yours,Org}.

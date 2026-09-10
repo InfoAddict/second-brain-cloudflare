@@ -180,7 +180,10 @@ function renderBrief(data) {
   // Attention is the most actionable thing here, so it decides on its own
   // whether the brief has something to say. Gating it behind the panels meant a
   // brain whose only news was "2 not searchable" showed nothing at all.
-  if (!attention && !panels.length && !cards.length) return
+  if (!attention && !panels.length && !cards.length) {
+    if (typeof renderBoard === 'function') renderBoard(data)
+    return
+  }
 
   // The home composition owns the top of the screen now, so the brief renders
   // below it and leads with the row that asks for something rather than with
@@ -192,6 +195,7 @@ function renderBrief(data) {
     `<div class="brief-eyebrow">${escHtml(t('brief.eyebrow'))}</div>` +
     (panels.length ? `<div class="brief-grid">${panels.join('')}</div>` : '') +
     cards.join('')
+  if (typeof renderBoard === 'function') renderBoard(data)
 }
 
 /** Confirm or dismiss without leaving the brief; the row settles in place. */
@@ -208,8 +212,10 @@ async function briefResolvePattern(id, action, btn) {
     })
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
-    card.innerHTML = `<div class="brief-label">${escHtml(action === 'confirm' ? t('brief.confirmed') : t('brief.dismissed'))}</div>`
-    card.classList.add('brief-card--quiet')
+    card.innerHTML = `<div class="brief-label" aria-live="polite">${escHtml(action === 'confirm' ? t('brief.confirmed') : t('brief.dismissed'))}</div>`
+    card.classList.add('brief-card--quiet', 'stop--settled')
+    const label = card.querySelector('.brief-label')
+    if (label) { label.tabIndex = -1; label.focus() }
   } catch {
     card.querySelectorAll('button').forEach((b) => (b.disabled = false))
     btn.classList.remove('digest-btn--loading')

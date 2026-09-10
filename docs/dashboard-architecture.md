@@ -11,7 +11,7 @@ The one-shot migration script that performed this split was removed after use; d
 | Pure | `utils.js`, `credits.js` | — (DOM optional via injection) |
 | Infra | `js/i18n.js`, `js/state.js`, `js/api.js` | pure |
 | UI kit | `js/theme.js`, `js/ui-chat.js`, `js/toast.js`, `js/coach.js`, `js/confirm-sheet.js` | pure, state |
-| Feature | `js/recall.js`, `js/recent.js`, `js/remember.js`, `js/memory-crud.js`, `js/settings.js`, `js/patterns.js`, `js/stale.js`, `js/integrations.js`, `js/team.js`, `js/activity.js`, `js/graph-canvas.js`, `js/brief.js`, `js/home.js` | infra, UI kit, pure |
+| Feature | `js/recall.js`, `js/recent.js`, `js/remember.js`, `js/memory-crud.js`, `js/settings.js`, `js/patterns.js`, `js/stale.js`, `js/integrations.js`, `js/team.js`, `js/activity.js`, `js/graph-canvas.js`, `js/brief.js`, `js/board.js`, `js/chart.js`, `js/home.js` | infra, UI kit, pure |
 | Shell | `js/nav.js`, `js/refresh.js`, `js/auth.js`, `js/download-app.js`, `js/app.js` | feature, infra |
 | Entry | `index.html` | link/script tags only |
 
@@ -30,7 +30,7 @@ i18n.js → utils.js → credits.js → state.js → toast.js → coach.js
 → confirm-sheet.js → api.js → theme.js → ui-chat.js
 → recall.js → recent.js → remember.js → memory-crud.js
 → settings.js → patterns.js → stale.js → integrations.js → team.js → activity.js
-→ graph-canvas.js → brief.js → home.js
+→ graph-canvas.js → brief.js → board.js → chart.js → home.js
 → nav.js → refresh.js → auth.js → download-app.js → app.js
 ```
 
@@ -45,6 +45,9 @@ against the page rather than maintained by hand.
 |---------|--------|
 | Main CSS (head) | `css/main.css` |
 | Graph / view CSS | `css/graph.css` |
+| Home board tiles and panels | `js/board.js` |
+| Board CSS | `css/board.css` |
+| "Memories over time" chart math and drawing | `js/chart.js` |
 | Global state | `js/state.js` |
 | Toasts | `js/toast.js` |
 | First-run coach marks (`renderCoachMark`) | `js/coach.js` |
