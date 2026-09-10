@@ -3611,27 +3611,31 @@
         background: var(--surface-2);
       }
 
-      /* ── v2.4 home: greeting and one input, composed as a unit ──────────
-         The old layout pinned a hero to the top and the input to the bottom
-         and left a trench between them, which is what made a brain holding
-         two thousand memories feel empty. */
+      /* ── Home: dashboard header + command-bar composer ──────────────────
+         The old layout centred a hero and an input in a trench of empty
+         space. The home screen is a command bar and a board now: the header
+         sits at the top of normal flow, and the board (board.css) follows. */
       .home {
+        padding: 0 0 8px;
+        text-align: left;
+      }
+
+      .home-head {
         display: flex;
         flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: 58vh;
-        padding: 24px 4px 8px;
-        text-align: center;
+        gap: 6px;
       }
 
       .home-greet {
         display: flex;
         align-items: center;
         gap: 12px;
-        font-family: var(--font-serif);
-        font-size: 30px;
+        font-family: var(--font-display);
+        font-size: 32px;
+        font-weight: 500;
+        letter-spacing: -0.03em;
         color: var(--text-primary);
+        margin: 0;
       }
 
       .home-mark {
@@ -3641,35 +3645,40 @@
       }
 
       .home-sub {
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 11.5px;
-        color: var(--text-tertiary);
-        margin-top: 10px;
+        font-size: 15px;
+        color: var(--text-secondary);
+        margin: 0;
       }
 
-      .home-input {
-        width: 100%;
-        max-width: 620px;
-        margin-top: 26px;
+      /* The command bar. One row: textarea, the mode guess, the hashtag hint,
+         the send button — a single decision surface rather than a box with a
+         toolbar underneath it. */
+      .composer {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 64px;
+        margin-top: 20px;
+        padding: 10px 10px 10px 20px;
         background: var(--bg-card);
         border: 1px solid var(--border-input);
-        border-radius: 18px;
-        padding: 14px 16px 10px;
-        text-align: left;
-        transition: border-color 0.15s;
+        border-radius: var(--r-panel);
+        box-shadow: var(--shadow-card);
+        transition: border-color var(--dur-feedback) var(--ease-standard);
       }
 
-      .home-input:focus-within {
-        border-color: var(--accent);
+      .composer:focus-within {
+        border-color: var(--text-primary);
       }
 
       .home-field {
-        width: 100%;
+        flex: 1;
+        min-width: 0;
         border: 0;
         background: none;
         resize: none;
         outline: none;
-        font-family: var(--font-serif);
+        font-family: var(--font-sans);
         font-size: 16px;
         line-height: 1.5;
         color: var(--text-primary);
@@ -3680,66 +3689,83 @@
         color: var(--text-tertiary);
       }
 
-      .home-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 10px;
-      }
-
-      /* Mode pill anchors left; the layer target and send button anchor right,
-         as one cluster. A middle-anchored dropdown in a full-width box reads
-         as floating — this way the wide middle is just the textarea's space. */
-      .home-row #home-mode {
-        margin-right: auto;
-      }
-
       /* The prediction, always visible and always one tap from being overridden.
          Hidden only while the field is empty, when there is nothing to predict. */
       .home-mode {
         display: inline-flex;
         align-items: center;
         gap: 7px;
+        flex-shrink: 0;
+        height: 32px;
         background: none;
-        border: 1px solid var(--border-input);
-        border-radius: 999px;
-        padding: 5px 12px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 11px;
-        color: var(--text-secondary);
+        border: 1px solid var(--border-soft);
+        border-radius: var(--r-chip-outline);
+        padding: 0 10px;
+        font-family: var(--font-sans);
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-primary);
+        white-space: nowrap;
         cursor: pointer;
         visibility: hidden;
+        transition:
+          background-color var(--dur-state) var(--ease-standard),
+          border-color var(--dur-state) var(--ease-standard);
       }
 
       .home-mode:hover {
-        border-color: var(--accent);
-        color: var(--accent-ink);
+        background: var(--surface-muted);
       }
 
       .home-mode-dot {
-        width: 6px;
-        height: 6px;
+        width: 5px;
+        height: 5px;
         border-radius: 50%;
-        background: var(--text-tertiary);
+        background: var(--accent-ink);
+      }
+
+      .home-mode--remember {
+        background: var(--surface-muted);
+        border-color: transparent;
       }
 
       .home-mode--remember .home-mode-dot {
-        background: var(--accent);
+        background: var(--text-primary);
       }
 
-      .home-topics {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 8px;
-        margin-top: 18px;
+      /* Add #tags anywhere, shown inline in the bar at desktop widths. */
+      .hint {
+        flex-shrink: 0;
+        font-size: 13px;
+        color: var(--text-secondary);
+        white-space: nowrap;
       }
 
+      .hint .hashtag,
+      .home-hint-mobile .hashtag {
+        color: var(--accent-ink);
+        font-style: italic;
+      }
+
+      .composer .send-btn {
+        width: 42px;
+        height: 42px;
+        flex-shrink: 0;
+        border-radius: var(--r-button);
+        background: var(--action);
+      }
+
+      .composer .send-btn:hover {
+        background: var(--action-hover);
+      }
+
+      .composer .send-btn i {
+        color: #fff;
+      }
+
+      /* The receipt from the last capture, one line under the bar. */
       .home-more {
-        width: 100%;
-        max-width: 620px;
-        margin-top: 14px;
-        text-align: left;
+        margin-top: 10px;
       }
 
       /* With nothing to show this element is zero-height, and its margin was
@@ -3750,28 +3776,88 @@
         margin-top: 0;
       }
 
-      /* On the home screen the old bottom bars are redundant: the input above
-         is the input, and a tag filter with nothing to filter is furniture. */
+      /* On the home screen the old bottom bars are redundant: the composer
+         above is the input, and a tag filter with nothing to filter is
+         furniture. The suggestions row moved inside #home (the .quick group
+         below), so it is not in this list. */
       #screen-home.home-visible .input-bar,
-      #screen-home.home-visible .suggestions-row,
       #screen-home.home-visible .filter-bar {
         display: none;
       }
 
-      /* The hashtag lesson, inherited from the deleted Remember tab — which was
-         the only place the product ever taught it. */
-      .home-hint {
+      /* The hashtag lesson repeated below the bar for widths where .hint
+         (inline in the composer) is hidden. Hidden by default; the 900px
+         breakpoint below swaps the two. */
+      .home-hint-mobile {
+        display: none;
         font-size: 12.5px;
-        color: var(--text-tertiary);
-        text-align: center;
-        margin-top: 10px;
+        color: var(--text-secondary);
+        margin: 8px 0 0;
+      }
+
+      @media (max-width: 899px) {
+        .hint {
+          display: none;
+        }
+        .home-hint-mobile {
+          display: block;
+        }
       }
 
       .home-layer-hint {
         font-size: 12px;
-        color: var(--text-tertiary);
-        text-align: center;
+        color: var(--text-secondary);
         margin-top: 8px;
+      }
+
+      /* Topic chips and suggestions share one row: "Ask about" plus what the
+         brain has actually been fed, then a divider, then the recall prompts
+         that used to appear only once a conversation had started. */
+      .quick {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .quick-label {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-right: 2px;
+      }
+
+      .home-topics {
+        display: contents;
+      }
+
+      .quick-sep {
+        width: 1px;
+        height: 20px;
+        background: var(--line);
+        margin: 0 2px;
+      }
+
+      .quick .suggestions-row {
+        flex: 1 0 100%;
+        padding: 0;
+        margin-top: 2px;
+      }
+
+      @media (max-width: 767px) {
+        .quick-sep {
+          display: none;
+        }
+        .composer {
+          flex-wrap: wrap;
+          padding: 14px 10px 10px 16px;
+        }
+        .home-field {
+          flex: 1 0 100%;
+        }
+        .composer .send-btn {
+          margin-left: auto;
+        }
       }
 
       /* First-run coach marks (js/coach.js). An inline callout under the
@@ -3814,11 +3900,6 @@
         color: var(--text-secondary);
         text-decoration: underline;
         cursor: pointer;
-      }
-
-      .home-hint .hashtag {
-        color: var(--accent-ink);
-        font-style: italic;
       }
 
       @media (min-width: 768px) {

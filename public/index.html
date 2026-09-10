@@ -95,15 +95,17 @@
         <div id="screens">
           <div class="screen active" id="screen-home">
             <div id="recall-messages">
-              <!-- The home composition: greeting + one input, centred as a unit.
-                   Hidden the moment a conversation starts. -->
+              <!-- The home composition: greeting + command bar, top-anchored as a
+                   dashboard header. Hidden the moment a conversation starts. -->
               <div class="home" id="home">
-                <div class="home-greet">
-                  <span class="home-mark"><i class="ti ti-sparkles"></i></span>
-                  <span id="home-greeting" data-i18n="home.greetingDefault">Hello</span>
+                <div class="home-head">
+                  <h1 class="home-greet">
+                    <span class="home-mark"><i class="ti ti-sparkles"></i></span>
+                    <span id="home-greeting" data-i18n="home.greetingDefault">Hello</span>
+                  </h1>
+                  <p class="home-sub num" id="home-sub"></p>
                 </div>
-                <div class="home-sub" id="home-sub"></div>
-                <div class="home-input">
+                <section class="composer" aria-label="Ask, or tell me something to remember">
                   <textarea
                     class="home-field"
                     id="home-field"
@@ -112,24 +114,23 @@
                     onkeydown="handleHomeKey(event)"
                     oninput="onHomeInput(this)"
                   ></textarea>
-                  <div class="home-row">
-                    <button class="home-mode" id="home-mode" onclick="toggleHomeMode()" title="Switch between asking and remembering" data-i18n="home.modeTitle" data-i18n-attr="title">
-                      <span class="home-mode-dot"></span><span id="home-mode-label" data-i18n="home.willSearch">will search</span>
-                    </button>
-                    <!-- Team-layer target for captures. Hidden on solo brains;
-                         Auto defers to the member's configured default. -->
-                    <span id="home-layer-wrap" style="display: none">
-                      <span class="team-select-wrap">
-                        <select class="team-select" id="home-layer" onchange="onHomeLayerChange(this.value)" title="Default uses your team's configured policy; Personal and Shared pin it for this memory">
-                          <option value="" data-i18n="home.layerAuto">Default</option>
-                          <option value="personal" data-i18n="home.layerPersonal">Personal</option>
-                          <option value="company" data-i18n="home.layerShared">Shared</option>
-                        </select><i class="ti ti-chevron-down"></i>
-                      </span>
+                  <button class="home-mode" id="home-mode" onclick="toggleHomeMode()" title="Switch between asking and remembering" data-i18n="home.modeTitle" data-i18n-attr="title">
+                    <span class="home-mode-dot"></span><span id="home-mode-label" data-i18n="home.willSearch">will search</span>
+                  </button>
+                  <!-- Team-layer target for captures. Hidden on solo brains;
+                       Auto defers to the member's configured default. -->
+                  <span id="home-layer-wrap" style="display: none">
+                    <span class="team-select-wrap">
+                      <select class="team-select" id="home-layer" onchange="onHomeLayerChange(this.value)" title="Default uses your team's configured policy; Personal and Shared pin it for this memory">
+                        <option value="" data-i18n="home.layerAuto">Default</option>
+                        <option value="personal" data-i18n="home.layerPersonal">Personal</option>
+                        <option value="company" data-i18n="home.layerShared">Shared</option>
+                      </select><i class="ti ti-chevron-down"></i>
                     </span>
-                    <button class="send-btn" onclick="submitHome()"><i class="ti ti-arrow-up"></i></button>
-                  </div>
-                </div>
+                  </span>
+                  <span class="hint" data-i18n="home.hintHtml" data-i18n-html>Add <span class="hashtag">#tags</span> anywhere to file it</span>
+                  <button class="send-btn" onclick="submitHome()"><i class="ti ti-arrow-up"></i></button>
+                </section>
                 <!-- What Auto resolves to, or which layer is pinned for this capture.
                      Hidden on solo brains and until /team/me answers. -->
                 <div class="home-layer-hint" id="home-layer-hint" style="display: none"></div>
@@ -137,11 +138,26 @@
                      renderComposerCoach() in js/home.js. Empty and hidden on a
                      solo brain, and once both marks have been dismissed. -->
                 <div class="coach-mark" id="coach-home" hidden></div>
-                <!-- The one thing worth keeping from the deleted Remember tab:
-                     it was the only place hashtags were ever taught. -->
-                <div class="home-hint" data-i18n="home.hintHtml" data-i18n-html>Add <span class="hashtag">#tags</span> anywhere to file it</div>
-                <div class="home-topics" id="home-topics"></div>
+                <!-- The receipt from the last capture. -->
                 <div class="home-more" id="home-more"></div>
+                <!-- The hashtag lesson, inherited from the deleted Remember tab.
+                     Repeated below the bar for widths where the inline hint
+                     above hides. -->
+                <p class="home-hint-mobile" data-i18n="home.hintHtml" data-i18n-html>Add <span class="hashtag">#tags</span> anywhere to file it</p>
+                <div class="quick" role="group" aria-label="Quick questions">
+                  <span class="quick-label" data-i18n="home.topicsLabel">Ask about</span>
+                  <div class="home-topics" id="home-topics"></div>
+                  <span class="quick-sep" aria-hidden="true"></span>
+                  <div class="suggestions-row">
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugWorkingOn'))" data-i18n="recall.sugWorkingOn">What am I working on?</button>
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugDecidedRecently'))" data-i18n="recall.sugDecidedRecently">What did I decide recently?</button>
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugTasks'))" data-i18n="recall.sugTasks">Show my tasks</button>
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugGoals'))" data-i18n="recall.sugGoals">What are my goals?</button>
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugIdeas'))" data-i18n="recall.sugIdeas">What ideas do I have?</button>
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugLastWeekQuery'))" data-i18n="recall.sugLastWeek">Last week</button>
+                    <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugThisMonthQuery'))" data-i18n="recall.sugThisMonth">This month</button>
+                  </div>
+                </div>
               </div>
               <div class="brief" id="brief" style="display: none"></div>
               <div class="recall-hero" id="recall-welcome" style="display: none">
@@ -159,15 +175,6 @@
                   <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
               </div>
-            </div>
-            <div class="suggestions-row">
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugWorkingOn'))" data-i18n="recall.sugWorkingOn">What am I working on?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugDecidedRecently'))" data-i18n="recall.sugDecidedRecently">What did I decide recently?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugTasks'))" data-i18n="recall.sugTasks">Show my tasks</button>
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugGoals'))" data-i18n="recall.sugGoals">What are my goals?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugIdeas'))" data-i18n="recall.sugIdeas">What ideas do I have?</button>
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugLastWeekQuery'))" data-i18n="recall.sugLastWeek">Last week</button>
-              <button class="suggestion-pill" onclick="sendSuggestion(t('recall.sugThisMonthQuery'))" data-i18n="recall.sugThisMonth">This month</button>
             </div>
             <div class="input-bar">
               <div class="input-inner">
