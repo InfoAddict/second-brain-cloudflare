@@ -261,7 +261,7 @@ function renderIntegrationCard(info) {
         noun: integrationNoun(p, info.itemCount),
         layer: info.mirrorWorkspace === 'company' ? t('team.shareCompany') : t('team.sharePersonal'),
       }))}</p>
-      <button class="digest-btn" id="move-${p}" onclick="moveIntegrationMemories('${p}', this)"><i class="ti ti-arrow-right"></i> ${escHtml(t('integrations.moveNow'))}</button>
+      <button class="digest-btn" id="move-${p}" onclick="confirmMoveIntegrationMemories('${p}', this)"><i class="ti ti-arrow-right"></i> ${escHtml(t('integrations.moveNow'))}</button>
       <p class="digest-note" id="move-note-${p}" aria-live="polite"></p>`
     : ''
   return `
@@ -416,6 +416,32 @@ async function syncIntegration(provider, btn) {
     btn.style.color = 'var(--danger)'
     setTimeout(loadIntegrations, 3000)
   }
+}
+
+/**
+ * The confirmation gate (locked decision 11): openDangerConfirm is the
+ * question, moveIntegrationMemories is the operation, and they are two
+ * functions so the drain can keep running after the sheet closes, the same
+ * way confirmBulkLayerMove's own drain outlives its sheet (public/js/recent.js).
+ * Reads itemCount and mirrorWorkspace off integrationsInfo — the same source
+ * disconnectIntegration reads its own confirmation facts from.
+ */
+function confirmMoveIntegrationMemories(provider, btn) {
+  const info = integrationsInfo.find((i) => i.provider === provider) || {}
+  const sharing = info.mirrorWorkspace === 'company'
+  const noun = integrationNoun(provider, info.itemCount)
+  openDangerConfirm({
+    title: t('danger.confirmMoveTitle'),
+    body: tPlural(`${sharing ? 'integrations.confirmMoveBodyShared' : 'integrations.confirmMoveBodyPersonal'}`, info.itemCount, {
+      n: info.itemCount,
+      noun,
+    }),
+    confirmLabel: t('integrations.moveNow'),
+    onConfirm: (_checked, done) => {
+      done()
+      moveIntegrationMemories(provider, btn)
+    },
+  })
 }
 
 /**

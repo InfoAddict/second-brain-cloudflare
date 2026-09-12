@@ -526,6 +526,19 @@ const I18N_EN = {
     moveStoppedPartway:
       'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
     moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
+    // The confirmation gate (locked decision 11, #347): states the count, the
+    // target layer, and — since only the shared layer changes who can read
+    // them — who ends up able to read the memories. The two directions say
+    // different things on purpose: moving to personal is not "the team will
+    // be able to read them".
+    confirmMoveBodyShared: {
+      one: 'Moves the {n} {noun} already synced into the shared team layer, where it lands visible to the whole team.',
+      other: 'Moves the {n} {noun} already synced into the shared team layer, where they land visible to the whole team.',
+    },
+    confirmMoveBodyPersonal: {
+      one: 'Moves the {n} {noun} already synced into your personal layer, where it lands visible only to you.',
+      other: 'Moves the {n} {noun} already synced into your personal layer, where they land visible only to you.',
+    },
   },
   team: {
     title: 'Team',
@@ -713,6 +726,7 @@ const I18N_EN = {
     removeLinkTitle: 'Remove this link?',
     removeLinkAction: 'Remove link',
     disconnectTitle: 'Disconnect this integration?',
+    confirmMoveTitle: 'Move these memories?',
   },
   coach: {
     dismiss: 'Got it',
@@ -1331,6 +1345,14 @@ const I18N_IT = {
     moveStoppedPartway:
       'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
+    confirmMoveBodyShared: {
+      one: 'Sposta il {n} {noun} già sincronizzato nel livello condiviso del team, dove finisce visibile a tutto il team.',
+      other: 'Sposta i {n} {noun} già sincronizzati nel livello condiviso del team, dove finiscono visibili a tutto il team.',
+    },
+    confirmMoveBodyPersonal: {
+      one: 'Sposta il {n} {noun} già sincronizzato nel tuo livello personale, dove finisce visibile solo a te.',
+      other: 'Sposta i {n} {noun} già sincronizzati nel tuo livello personale, dove finiscono visibili solo a te.',
+    },
   },
   team: {
     title: 'Team',
@@ -1519,6 +1541,7 @@ const I18N_IT = {
     removeLinkTitle: 'Rimuovere questo collegamento?',
     removeLinkAction: 'Rimuovi collegamento',
     disconnectTitle: 'Disconnettere questa integrazione?',
+    confirmMoveTitle: 'Spostare questi ricordi?',
   },
   coach: {
     dismiss: 'Ho capito',
