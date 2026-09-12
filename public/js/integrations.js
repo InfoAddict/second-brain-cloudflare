@@ -295,27 +295,62 @@ async function connectIntegration(provider, btn) {
 }
 
 /**
- * Move a connected integration's mirror layer without disconnecting. On
- * failure, restore the select to what it showed before the user's change and
- * surface the error inline — the select must never keep displaying a layer
- * the server did not accept.
+ * Move a connected integration's mirror layer without disconnecting.
+ *
+ * Only an EXPLICIT rejection from the Worker (a parsed JSON body with
+ * `ok: false`, e.g. a 403) proves the write never landed — that is the one
+ * case it is safe to restore `previousValue` locally. Two other failure
+ * shapes can happen AFTER the Worker has already committed and audited the
+ * change: `res.json()` throwing on a non-JSON body (a plain-text 404 from the
+ * generic router, or a Cloudflare 502/504 HTML page replacing a response
+ * whose origin write already succeeded) and the fetch promise rejecting after
+ * the request was served. For those, guessing at `previousValue` could show
+ * "personal" while the server holds "company", so instead this re-reads the
+ * server's actual state via loadIntegrations() (which re-renders from a fresh
+ * GET and swallows its own errors) and surfaces the error alongside it. The
+ * select is disabled for the duration of the request so a second rapid
+ * change cannot fire an overlapping last-write-wins request.
  */
 async function changeIntegrationLayer(provider, selectEl, previousValue) {
-  const next = selectEl.value
+  if (selectEl.disabled) return
   const errEl = document.getElementById(`err-${provider}`)
   if (errEl) errEl.textContent = ''
+  selectEl.disabled = true
+  const requested = selectEl.value
   try {
-    const res = await fetch(`${WORKER_URL}/integrations/${provider}/layer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ workspace: next }),
-    })
-    const data = await res.json()
-    if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.couldNotConnectShort'))
+    let res
+    try {
+      res = await fetch(`${WORKER_URL}/integrations/${provider}/layer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+        body: JSON.stringify({ workspace: requested }),
+      })
+    } catch (e) {
+      // The request may have already been served — do not guess.
+      await loadIntegrations()
+      if (errEl) errEl.textContent = e.message || t('integrations.layerChangeFailedShort')
+      return
+    }
+    let data
+    try {
+      data = await res.json()
+    } catch {
+      // Non-JSON body (plain-text 404, or a gateway HTML page) — same "may
+      // have already committed" uncertainty as above.
+      await loadIntegrations()
+      if (errEl) errEl.textContent = t('integrations.layerChangeFailedShort')
+      return
+    }
+    if (!res.ok || !data.ok) {
+      // An explicit, parsed rejection — the server did not commit, so
+      // restoring the pre-change value is accurate, not a guess.
+      selectEl.value = previousValue
+      if (errEl) errEl.textContent = data.error || t('integrations.layerChangeFailedShort')
+      return
+    }
     await loadIntegrations()
-  } catch (e) {
-    selectEl.value = previousValue
-    if (errEl) errEl.textContent = e.message || t('integrations.couldNotConnectShort')
+  } finally {
+    selectEl.disabled = false
   }
 }
 
