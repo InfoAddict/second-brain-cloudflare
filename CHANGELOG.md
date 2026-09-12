@@ -2,6 +2,14 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [3.2.1] — Scoped keyword recall fix
+
+**Fixes**
+
+- Keyword recall no longer lets memories you cannot read consume your candidate limit. Multiple search terms were combined with `OR` without grouping, and because SQL binds `AND` more tightly than `OR`, a filter that followed applied only to the last term: on a team brain the workspace scope was enforced against one term instead of all of them, and the same held for the time window on a dated query. Rows from other people's workspaces were discarded after the fact, but they had already filled the candidate window, so real matches were pushed out of it before scoring. The alternatives are now parenthesised whenever a filter follows. Recall with a single term, or with no filter at all, produces byte-identical SQL to before (#342).
+
+This is a Worker-only patch. It ships with the next desktop app release rather than one of its own.
+
 ## [3.2.0] — Dashboard and installer redesign
 
 **Dashboard redesign**
