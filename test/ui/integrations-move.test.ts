@@ -446,6 +446,86 @@ describe("connected-row move-already-synced action", () => {
       expect(note.textContent).not.toMatch(/safe to try again|safe to resume/i);
     });
   });
+
+  // ─── vectorFailures reaches a human (#347, third round on this defect) ───
+  //
+  // The server has always computed vectorFailures; nothing on the client
+  // reads it. An operator who sees "10 moved" has no reason to run anything
+  // again, so the entries repair-eligible via moveEntry's no_change branch
+  // never actually get repaired, and stay unfindable by the team in their
+  // new layer indefinitely.
+
+  describe("vectorFailures reaches the operator", () => {
+    it("when the drain finishes but a genuinely broken index leaves entries unrepaired, states the consequence in plain terms — not a raw count", async () => {
+      // vectorFailures never decreases across passes (5, then 5 again) — the
+      // no-progress condition pinned in move-loop.test.ts stops the drain
+      // rather than retrying forever, and the leftover count must reach the
+      // operator honestly.
+      let call = 0;
+      const ctx = load(true, true, true, async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          const isRepairPass = call > 1;
+          return {
+            ok: true, status: 200,
+            json: async () => ({
+              ok: true,
+              moved: isRepairPass ? 0 : 10,
+              alreadyThere: isRepairPass ? 10 : 0,
+              missing: 0, refused: 0,
+              vectorFailures: 5,
+              remaining: 0, cursor: null,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      await ctx.moveIntegrationMemories("notion", btn);
+
+      const note = ctx.document.getElementById("move-note-notion");
+      const text = note.textContent as string;
+      // The facts a person can act on, not the field name:
+      expect(text, "must not just print the jargon count").not.toMatch(/vector ?fail/i);
+      expect(text, "how many are affected").toMatch(/\b5\b/);
+      expect(text, "reassures the move itself happened").toMatch(/moved/i);
+      expect(text, "states they cannot be found/searched yet in the new spot").toMatch(/search|find/i);
+      expect(text, "gives an action to take").toMatch(/try again|run.*again|retry|move again/i);
+      // Not the success checkmark — something is still genuinely wrong.
+      expect(btn.innerHTML).not.toMatch(/ti-check/);
+    });
+
+    it("says nothing extra about vector failures when the repair pass fully succeeds", async () => {
+      let call = 0;
+      const ctx = load(true, true, true, async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          const isRepairPass = call > 1;
+          return {
+            ok: true, status: 200,
+            json: async () => ({
+              ok: true,
+              moved: isRepairPass ? 0 : 10,
+              alreadyThere: isRepairPass ? 10 : 0,
+              missing: 0, refused: 0,
+              vectorFailures: isRepairPass ? 0 : 3, // repaired on the second pass
+              remaining: 0, cursor: null,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      await ctx.moveIntegrationMemories("notion", btn);
+
+      expect(call, "expected a repair pass to run automatically").toBe(2);
+      const note = ctx.document.getElementById("move-note-notion");
+      expect(note.textContent).not.toMatch(/search|find|try again/i); // nothing left to warn about
+      expect(btn.innerHTML).toMatch(/ti-check/); // a clean, fully-repaired success
+    });
+  });
 });
 
 function loadWithInfoHelper(

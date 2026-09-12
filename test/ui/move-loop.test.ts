@@ -61,6 +61,37 @@ function fakeWorker(total: number, limit: number) {
   return { post, calls };
 }
 
+/** A Worker-side double for the repair-pass contract: `pass` increments every
+ * time `post` is called with a falsy cursor (a fresh walk of the item map),
+ * and `failuresByPass[pass]` is reported once, on that pass's FIRST page —
+ * mirroring the real route's `vectorFailures`, which the server computes
+ * once per call and which a pass can accumulate across several pages. Pages
+ * after the first repeat pass report entries as `alreadyThere`, not `moved`
+ * — moveEntry's own no_change branch is what a repair pass actually walks
+ * into, per #347's self-healing contract. */
+function fakeWorkerWithRepair(total: number, limit: number, failuresByPass: number[], onPass?: (pass: number) => void) {
+  const calls: (string | undefined)[] = [];
+  let pass = -1;
+  const post = async (cursor?: string) => {
+    calls.push(cursor);
+    if (!cursor) { pass++; onPass?.(pass); }
+    const isRepairPass = pass > 0;
+    const start = cursor ? Number(cursor) : 0;
+    const page = Math.max(0, Math.min(limit, total - start));
+    const next = start + page;
+    return {
+      moved: isRepairPass ? 0 : page,
+      alreadyThere: isRepairPass ? page : 0,
+      missing: 0,
+      refused: 0,
+      vectorFailures: !cursor ? (failuresByPass[pass] ?? 0) : 0,
+      remaining: total - next,
+      cursor: next < total ? String(next) : null,
+    };
+  };
+  return { post, calls, passIndex: () => pass };
+}
+
 describe("#347 runMoveLoop", () => {
   it("is exported as a real function on public/js/integrations.js's module scope", () => {
     const runMoveLoop = loadRunMoveLoop();
@@ -158,5 +189,81 @@ describe("#347 runMoveLoop", () => {
     // which the assertion below would catch instead.
     expect(totals.moved).toBe(TOTAL);
     expect(calls.length).toBe(500);
+  });
+
+  // ─── Repair passes (#347, the "vectorFailures reaches no one" round) ──────
+  //
+  // The server counts entries whose D1 row moved but whose Vectorize
+  // re-stamp was not confirmed (`vectorFailures`, src/routes/integrations.ts)
+  // — a real and common outcome once the budget-bounded restamp
+  // (move-subrequest-budget.test.ts) has to skip entries to stay under the
+  // free-plan ceiling. moveEntry's `no_change` branch now carries vectorIds
+  // specifically so a SECOND walk of the same item map repairs them. Nothing
+  // triggered that second walk: `grep -n vectorFailures public/js/integrations.js`
+  // finds no reads at all today, so an operator sees "10 moved" and has no
+  // reason to run anything again.
+
+  describe("self-repair when a pass ends with outstanding vectorFailures", () => {
+    it("starts a repair pass when the first pass ends with vectorFailures > 0, and stops once a pass reports zero", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      const { post, calls } = fakeWorkerWithRepair(40, 40, [3, 0]);
+
+      const totals = await runMoveLoop("notion", post);
+
+      // One page per pass here (limit === total) — two passes total.
+      expect(calls.length).toBe(2);
+      expect(totals.moved).toBe(40); // pass 1
+      expect(totals.alreadyThere).toBe(40); // pass 2's repair walk
+      expect(totals.vectorFailures).toBe(0);
+    });
+
+    it("keeps repairing across multiple passes while outstanding failures strictly decrease", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      const { post, calls, passIndex } = fakeWorkerWithRepair(40, 40, [10, 5, 2, 0]);
+
+      const totals = await runMoveLoop("notion", post);
+
+      expect(passIndex()).toBe(3); // four passes, 0-indexed
+      expect(calls.length).toBe(4);
+      expect(totals.vectorFailures).toBe(0);
+    });
+
+    it("does not attempt a repair pass at all when the first pass has zero vector failures", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      const { post, calls } = fakeWorker(150, 40); // no vectorFailures field at all
+
+      const totals = await runMoveLoop("notion", post);
+
+      expect(calls.length).toBe(4); // unchanged from the no-repair baseline test above
+      expect(totals.vectorFailures ?? 0).toBe(0);
+    });
+
+    it("stops after a pass that makes no progress, rather than retrying a genuinely broken index forever, and reports the true outstanding count", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      let calls = 0;
+      let pass = -1;
+      const post = async (cursor?: string) => {
+        calls++;
+        if (!cursor) pass++;
+        // A THIRD pass would mean the no-progress condition failed to stop
+        // the drain — fail the test immediately rather than let it spin.
+        if (pass > 1) throw new Error("runMoveLoop attempted a pass beyond the one that made no progress");
+        const isRepairPass = pass > 0;
+        return {
+          moved: isRepairPass ? 0 : 10,
+          alreadyThere: isRepairPass ? 10 : 0,
+          missing: 0, refused: 0,
+          vectorFailures: 5, // identical every pass — Vectorize is genuinely down, never improves
+          remaining: 0, cursor: null,
+        };
+      };
+
+      const totals = await runMoveLoop("notion", post);
+
+      expect(pass).toBe(1); // the initial pass, plus exactly one repair attempt
+      // The truth, not a silent zero: whatever stays broken must be visible
+      // to whatever reads this return value (the UI's consequence copy).
+      expect(totals.vectorFailures).toBe(5);
+    });
   });
 });
