@@ -14,15 +14,35 @@
  *     because only the owner may run a move (locked decision 1). This is why
  *     it must render nothing extra on the two solo-brain fixtures pinned in
  *     integration-provenance.test.ts: those already run with TEAM_MODE false.
- *   - Button id `move-${p}`, calling `moveIntegrationMemories(provider, btn)`.
+ *   - Button id `move-${p}`, calling `confirmMoveIntegrationMemories(provider, btn)`
+ *     — NOT `moveIntegrationMemories` directly. This was corrected after the
+ *     first round shipped the operation with no confirmation gate at all
+ *     (one click moved every synced memory into the shared team layer): the
+ *     button's onclick must go through a confirmation step first, per locked
+ *     decision 11 (`openDangerConfirm` is the gate) and the `confirmBulkLayerMove`
+ *     precedent in public/js/recent.js, which gates the same action at
+ *     smaller scale the same way.
+ *   - `confirmMoveIntegrationMemories(provider, btn)` reads the connection's
+ *     `itemCount` and `mirrorWorkspace` off `integrationsInfo` (the same
+ *     module-level array `disconnectIntegration` already reads), opens
+ *     `openDangerConfirm` with a body stating the count, the target layer, and
+ *     that the team will be able to read the memories there once shared, and
+ *     only on confirm calls `moveIntegrationMemories(provider, btn)` — the
+ *     gate and the operation are two functions, per locked decision 11
+ *     ("openDangerConfirm is the confirmation gate only, not the operation's
+ *     home"), so the drain can keep running after the sheet closes, the same
+ *     way `confirmBulkLayerMove`'s own drain outlives its sheet.
  *   - A dedicated progress/result element `id="move-note-${p}"`, distinct from
  *     the #346/sync `note-${p}` element (trap 11 in the UI contract: two
  *     drains writing the same node would fight over it).
- *   - `moveIntegrationMemories` drives `runMoveLoop` (see move-loop.test.ts)
- *     and, on a mid-drain failure, writes the `upkeep.restore*`-style "stopped
- *     partway, safe to resume" copy into `move-note-${p}` rather than the
- *     plain "failed" `syncIntegration` shows today, and never leaves the
- *     button in a success-styled state when the drain did not finish.
+ *   - `moveIntegrationMemories` (the operation, unchanged by the confirmation
+ *     fix — still callable directly, which is how this file's drain and
+ *     partial-failure tests exercise it) drives `runMoveLoop` (see
+ *     move-loop.test.ts) and, on a mid-drain failure, writes the
+ *     `upkeep.restore*`-style "stopped partway, safe to resume" copy into
+ *     `move-note-${p}` rather than the plain "failed" `syncIntegration` shows
+ *     today, and never leaves the button in a success-styled state when the
+ *     drain did not finish.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -104,6 +124,14 @@ function load(teamMode: boolean, admin: boolean, owner: boolean, fetchImpl?: (ur
     `WORKER_URL = "https://example.test"; AUTH_TOKEN = "tok"; var TEAM_MODE = ${teamMode}; integrationsAdmin = ${admin}; integrationsOwner = ${owner};`,
     ctx,
   );
+  // `integrationsInfo` is the same module-level array disconnectIntegration
+  // already reads its `info` from (test/ui/disconnect-sheet.test.ts's own
+  // harness) — confirmMoveIntegrationMemories needs it for the confirmation
+  // body's facts (item count, target layer).
+  ctx.__setIntegrations = (list: any[]) => {
+    ctx.__list = list;
+    vm.runInContext("integrationsInfo = globalThis.__list", ctx);
+  };
   ctx.__els = els;
   return ctx;
 }
@@ -139,13 +167,95 @@ describe("connected-row move-already-synced action", () => {
     expect(soloBrain.renderIntegrationCard({ ...BASE, mirrorWorkspace: "personal" })).not.toContain(`id="move-notion"`);
   });
 
-  it("the move control's handler is a real function, not a typo'd name", () => {
-    const ctx = load(true, true, true);
+  it("the move control's handler is a real function that gates on confirmation, not the operation itself", () => {
+    const ctx = load(true, true, true, async (url: string) => {
+      // If clicking the button reaches the network at all before a
+      // confirmation, that is exactly the defect this test exists to catch —
+      // record it as a call rather than answering it, so the assertion below
+      // can tell a bypassed gate apart from a slow one.
+      ctx.calls.push({ url });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    });
+    ctx.__setIntegrations([{ provider: "notion", name: "Notion", itemCount: 12, mirrorWorkspace: "company" }]);
     const html = ctx.renderIntegrationCard({ ...BASE, mirrorWorkspace: "company" });
     const m = html.match(/id="move-notion"[^>]*onclick="([a-zA-Z_$][\w$]*)\(/);
     expect(m, 'expected an onclick="someHandler(...)" attribute on the move control').not.toBeNull();
     const handlerName = (m as RegExpMatchArray)[1];
     expect(typeof ctx[handlerName]).toBe("function");
+    // The pinned name itself: the button must not point straight at the
+    // operation. See this file's header comment for why.
+    expect(handlerName).toBe("confirmMoveIntegrationMemories");
+
+    const btn = ctx.document.getElementById("move-notion");
+    ctx[handlerName]("notion", btn);
+    expect(ctx.calls.length, "the handler made a request before the user confirmed anything").toBe(0);
+  });
+
+  describe("confirmation gate (locked decision 11)", () => {
+    function loadWithInfo(fetchImpl?: (url: string, init?: any) => Promise<any>, itemCount = 12, mirrorWorkspace: "company" | "personal" = "company") {
+      const ctx = load(true, true, true, fetchImpl);
+      ctx.__setIntegrations([{ provider: "notion", name: "Notion", itemCount, mirrorWorkspace }]);
+      return ctx;
+    }
+
+    it("asks before moving anything, stating how many memories, which layer, and that the team will be able to read them", () => {
+      const ctx = loadWithInfo();
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+
+      expect(ctx.__els.get("confirm-dialog").classList.contains("open")).toBe(true);
+      const body = ctx.__els.get("confirm-body").textContent as string;
+      // The facts, not the wording: how many, which layer, and that sharing
+      // means the team can read them — the exact confusion a silent one-click
+      // move would cause.
+      expect(body).toMatch(/12/);
+      expect(body).toMatch(/company|shared team layer/i);
+      expect(body).toMatch(/team|everyone|colleague/i);
+      expect(body).toMatch(/read|see|access|visible/i);
+      // Nothing has happened yet — the sheet is the question, not the answer.
+      expect(ctx.calls.length).toBe(0);
+    });
+
+    it("names the personal layer when that is the connection's current target, not a hardcoded 'company'", () => {
+      const ctx = loadWithInfo(undefined, 5, "personal");
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+
+      const body = ctx.__els.get("confirm-body").textContent as string;
+      expect(body).toMatch(/5/);
+      expect(body).toMatch(/personal/i);
+    });
+
+    it("makes no request at all if the confirmation is dismissed", () => {
+      const ctx = loadWithInfo();
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      expect(ctx.__els.get("confirm-dialog").classList.contains("open")).toBe(true);
+      ctx.closeConfirm();
+
+      expect(ctx.__els.get("confirm-dialog").classList.contains("open")).toBe(false);
+      expect(ctx.calls.length).toBe(0);
+    });
+
+    it("runs the drain once the user confirms", async () => {
+      const ctx = loadWithInfo(async (url: string, init?: any) => {
+        ctx.calls.push({ url, init });
+        if (url.includes("/integrations/notion/move")) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, moved: 12, alreadyThere: 0, missing: 0, refused: 0, remaining: 0, cursor: null }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      expect(ctx.calls.length).toBe(0); // still just the question
+      await ctx.runConfirmAction();
+
+      expect(ctx.calls.some((c: any) => c.url.includes("/integrations/notion/move"))).toBe(true);
+    });
   });
 
   it("drains a multi-page move to completion and shows a completed, non-partial result", async () => {
