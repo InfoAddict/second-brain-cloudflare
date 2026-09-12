@@ -138,4 +138,25 @@ describe("#347 runMoveLoop", () => {
     expect(totals.moved).toBe(0);
     expect(totals.refused).toBe(40);
   });
+
+  // Mutation-pass finding (#347 review item 15): a naive re-read of
+  // syncIntegration's OWN drain loop (public/js/integrations.js) would copy
+  // its `guard < 40` iteration cap, which resolves SUCCESSFULLY once the cap
+  // is hit even with real backlog left (see the header comment in this file
+  // and UI contract §2/§9 trap 10) — silent, not thrown. This file's earlier
+  // tests never exceed 4 pages, so a reintroduced cap at, say, 40 would sail
+  // through them unnoticed. Drive it past any plausible hardcoded cap.
+  it("does not silently report completion if a hardcoded iteration cap is reintroduced — drives well past 40 pages", async () => {
+    const runMoveLoop = loadRunMoveLoop();
+    const TOTAL = 500 * 40; // 500 pages at a realistic per-page size
+    const { post, calls } = fakeWorker(TOTAL, 40);
+
+    const totals = await runMoveLoop("notion", post);
+
+    // Either it genuinely completed (this assertion), or — if some future
+    // change caps iterations — runMoveLoop must reject rather than resolve,
+    // which the assertion below would catch instead.
+    expect(totals.moved).toBe(TOTAL);
+    expect(calls.length).toBe(500);
+  });
 });

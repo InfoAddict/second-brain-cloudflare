@@ -128,6 +128,10 @@ function moveRequest(cursor?: string, token?: string) {
   return req("POST", "/integrations/notion/move", { body: cursor ? { cursor } : {}, ...(token ? { token } : {}) });
 }
 
+function moveRequestWithBody(body: Record<string, unknown>, token?: string) {
+  return req("POST", "/integrations/notion/move", { body, ...(token ? { token } : {}) });
+}
+
 describe("#347 move already-synced integration memories", () => {
   it("moves 3 mirrored entries personal to company: ids unchanged, content unchanged, actor unchanged, edges follow, vectors re-stamped", async () => {
     const { vectorize, upsert, getByIds } = makeStatefulVectorizeMock();
@@ -203,8 +207,15 @@ describe("#347 move already-synced integration memories", () => {
     let settled = false;
     const movePromise = worker.fetch(moveRequest(), env, moveCall.ctx).then((r) => { settled = true; return r; });
 
-    // Let every microtask that doesn't need the gate run.
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // A REAL timer, not a handful of microtask ticks: three `await
+    // Promise.resolve()`s pass whether or not the re-stamp is awaited,
+    // because the ordinary D1/sqlite pipeline hasn't resolved by then either
+    // — that made the original version of this test coincidental rather than
+    // diagnostic (it passed even with the await removed). A deferred
+    // (ctx.waitUntil'd) re-stamp lets the handler return within a few real
+    // event-loop turns of its own, well under this delay; only a genuinely
+    // awaited re-stamp stays pending for the full 30ms the gate is held.
+    await new Promise((resolve) => setTimeout(resolve, 30));
     expect(settled, "the response resolved before the vector re-stamp finished — it must be awaited, not deferred").toBe(false);
 
     release();
@@ -357,5 +368,194 @@ describe("#347 move already-synced integration memories", () => {
       missing: 1,
       refused: 0,
     });
+  });
+
+  // ─── Adversarial-review findings ────────────────────────────────────────
+
+  /** Wraps a raw sqlite handle so one bound value makes exactly the matching
+   * statement throw — the rest of the connection behaves normally. Used to
+   * simulate a single row failing mid-batch (a D1 hiccup on one row) without
+   * touching every other statement the route issues (the audit insert, the
+   * other rows' own SELECT/batch calls). */
+  function poisonedD1(sqliteDb: any, matchSql: string, poison: string) {
+    const wrap = (stmt: any, sql: string, bound: unknown[]): any => ({
+      bind: (...a: unknown[]) => wrap(stmt.bind(...a), sql, a),
+      run: () => { if (sql.includes(matchSql) && bound.includes(poison)) throw new Error("D1 is down for this row"); return stmt.run(); },
+      first: (...a: unknown[]) => { if (sql.includes(matchSql) && bound.includes(poison)) throw new Error("D1 is down for this row"); return stmt.first(...a); },
+      all: () => { if (sql.includes(matchSql) && bound.includes(poison)) throw new Error("D1 is down for this row"); return stmt.all(); },
+      __inner: stmt,
+    });
+    return {
+      prepare(sql: string) { return wrap(sqliteDb.prepare(sql), sql, []); },
+      exec(sql: string) { return sqliteDb.exec(sql); },
+      batch: (stmts: any[]) => sqliteDb.batch(stmts.map((s: any) => s.__inner ?? s)),
+    } as unknown as D1Database;
+  }
+
+  it("a throw partway through a batch reports what actually moved, rather than losing it or 500ing the whole call", async () => {
+    const d1 = makeSqliteD1();
+    const { vectorize } = makeStatefulVectorizeMock();
+    const kv = makeMemoryKV();
+    const env = { ...makeTestEnv(d1.db as unknown as D1Mock, { VECTORIZE: vectorize, OAUTH_KV: kv }), AUTH_TOKEN: "test-token" } as Env;
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    const roots = await ensureTenantBootstrap(env);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 3);
+
+    // Poison the MIDDLE entry's own scoped SELECT (share.ts's moveEntry), so
+    // the first and third entries in the batch still succeed around it.
+    (env as any).DB = poisonedD1(d1.db, "SELECT id, workspace_id, actor_id, vector_ids FROM entries", ids[1]);
+    await connectNotion(env, itemMapFor(ids), "company");
+
+    const res = await worker.fetch(moveRequest(), env, makeCtx().ctx);
+    expect(res.status, "a single row's failure must not 500 the whole request").toBe(200);
+    const data = await res.json() as any;
+    expect(data.moved).toBe(2); // the two good rows, not 0 and not lost
+    // Pinned new field: a per-item throw is counted, not silently dropped and
+    // not folded into `missing` (which means "gone", a different fact) or
+    // `refused` (which means "author lock").
+    expect(data.errored).toBe(1);
+
+    const rows = await Promise.all(ids.map((id) =>
+      env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = ?`).bind(id).first<{ workspace_id: string }>(),
+    ));
+    expect(rows[0]!.workspace_id).toBe(roots.companyWorkspaceId);
+    expect(rows[1]!.workspace_id).toBe(roots.ownerPersonalWorkspaceId); // untouched — its own write never committed
+    expect(rows[2]!.workspace_id).toBe(roots.companyWorkspaceId);
+  });
+
+  it("an audit-write failure does not fail a request that has already moved data", async () => {
+    const d1 = makeSqliteD1();
+    const { vectorize } = makeStatefulVectorizeMock();
+    const kv = makeMemoryKV();
+    const env = { ...makeTestEnv(d1.db as unknown as D1Mock, { VECTORIZE: vectorize, OAUTH_KV: kv }), AUTH_TOKEN: "test-token" } as Env;
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    const roots = await ensureTenantBootstrap(env);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 2);
+    await connectNotion(env, itemMapFor(ids), "company");
+
+    // Poison the admin_events INSERT itself — every other statement (the
+    // entries/edges moves, the scoped SELECTs) is untouched.
+    (env as any).DB = poisonedD1(d1.db, "INSERT INTO admin_events", "integration_memories_moved");
+
+    const res = await worker.fetch(moveRequest(), env, makeCtx().ctx);
+    expect(res.status, "the D1 move already committed — an audit-write failure must not turn that into a 500").toBe(200);
+    const data = await res.json() as any;
+    expect(data.moved).toBe(2);
+
+    for (const id of ids) {
+      const row = await env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = ?`).bind(id).first<{ workspace_id: string }>();
+      expect(row!.workspace_id).toBe(roots.companyWorkspaceId);
+    }
+  });
+
+  it("the target layer always comes from the connection's stored mirrorWorkspace, never from the request body", async () => {
+    const { vectorize } = makeStatefulVectorizeMock();
+    const { env, roots } = await makeEnv(vectorize);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 1);
+    // Connection is set to PERSONAL — nothing to move into company, in theory.
+    await connectNotion(env, itemMapFor(ids), "personal");
+
+    // A request body naming a different target: if the server ever reads
+    // this instead of the connection's own config, it moves the owner's
+    // private mirror into the shared layer on a client's say-so alone.
+    const res = await worker.fetch(moveRequestWithBody({ workspace: "company" }), env, makeCtx().ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.target).toBe("personal");
+
+    const row = await env.DB.prepare(`SELECT workspace_id FROM entries WHERE id = ?`).bind(ids[0]).first<{ workspace_id: string }>();
+    expect(row!.workspace_id).toBe(roots.ownerPersonalWorkspaceId);
+  });
+
+  it("does not write back to the integration's KV record at all — it must stay byte-identical across a move call (#348)", async () => {
+    const { vectorize } = makeStatefulVectorizeMock();
+    const { env, roots } = await makeEnv(vectorize);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 3);
+    await connectNotion(env, itemMapFor(ids), "company");
+
+    const before = await env.OAUTH_KV.get("integrations:notion");
+    expect(before).toBeTruthy();
+
+    const res = await worker.fetch(moveRequest(), env, makeCtx().ctx);
+    expect(res.status).toBe(200);
+
+    const after = await env.OAUTH_KV.get("integrations:notion");
+    expect(after).toBe(before); // byte-identical — no progress marker, no cursor, nothing written back
+  });
+
+  it("resumes correctly when the cursor's key has disappeared from itemMap between two pages (a sync deleted it mid-drain)", async () => {
+    const { vectorize } = makeStatefulVectorizeMock();
+    const { env, roots } = await makeEnv(vectorize);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 12); // more than one batch (10)
+    await connectNotion(env, itemMapFor(ids), "company");
+
+    const first = await worker.fetch(moveRequest(), env, makeCtx().ctx);
+    expect(first.status).toBe(200);
+    const firstData = await first.json() as any;
+    expect(firstData.moved).toBe(10);
+    expect(firstData.remaining).toBe(2);
+    const cursor = firstData.cursor as string;
+    expect(cursor).toBeTruthy();
+
+    // Exactly the scenario calendar.ts:642 / notion.ts:274 produce: the item
+    // this cursor points at is gone from itemMap by the time the next page
+    // runs, because a sync in between deleted it.
+    const record = JSON.parse((await env.OAUTH_KV.get("integrations:notion")) as string);
+    delete record.itemMap[cursor];
+    await env.OAUTH_KV.put("integrations:notion", JSON.stringify(record));
+
+    const second = await worker.fetch(moveRequest(cursor), env, makeCtx().ctx);
+    expect(second.status).toBe(200);
+    const secondData = await second.json() as any;
+    // Today's bug: keys.indexOf(cursor) === -1 restarts at 0, re-processing
+    // the 9 already-moved entries (as spurious alreadyThere) instead of
+    // continuing with the 2 that were never touched.
+    expect(secondData.moved).toBe(2);
+    expect(secondData.alreadyThere).toBe(0);
+    expect(secondData.remaining).toBe(0);
+    expect(secondData.cursor).toBeNull();
+
+    const { results } = await env.DB.prepare(`SELECT id, workspace_id FROM entries WHERE source = 'notion'`).all<{ id: string; workspace_id: string }>();
+    for (const row of results) expect(row.workspace_id).toBe(roots.companyWorkspaceId);
+  });
+
+  it("refuses a page whose confirmed target no longer matches the connection's current layer, rather than silently moving into the new one", async () => {
+    const { vectorize } = makeStatefulVectorizeMock();
+    const { env, roots } = await makeEnv(vectorize);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 12);
+    await connectNotion(env, itemMapFor(ids), "company");
+
+    // The client captured "company" at confirmation time and sends it on
+    // every page (pinned contract — see this file's report).
+    const first = await worker.fetch(moveRequestWithBody({ expectedTarget: "company" }), env, makeCtx().ctx);
+    expect(first.status).toBe(200);
+    const firstData = await first.json() as any;
+    expect(firstData.moved).toBe(10);
+    const cursor = firstData.cursor as string;
+
+    // The layer changes mid-drain (#346's own route, or a direct KV edit —
+    // either way, the connection now targets personal).
+    await connectNotion(env, JSON.parse((await env.OAUTH_KV.get("integrations:notion")) as string).itemMap, "personal");
+
+    const second = await worker.fetch(moveRequestWithBody({ cursor, expectedTarget: "company" }), env, makeCtx().ctx);
+    expect(second.status).toBe(409);
+    const secondData = await second.json() as any;
+    expect(secondData.ok).toBe(false);
+    expect(typeof secondData.error).toBe("string");
+    expect(secondData.error.length).toBeGreaterThan(0);
+    expect(secondData.moved).toBeUndefined(); // not a completed move of zero, either
+
+    // The two remaining entries must be untouched — not moved into personal.
+    const { results } = await env.DB.prepare(`SELECT id, workspace_id FROM entries WHERE source = 'notion'`).all<{ id: string; workspace_id: string }>();
+    const untouched = results.filter((r) => r.workspace_id === roots.ownerPersonalWorkspaceId);
+    expect(untouched.length).toBe(2);
   });
 });

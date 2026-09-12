@@ -322,4 +322,138 @@ describe("connected-row move-already-synced action", () => {
     const note = ctx.document.getElementById("move-note-notion");
     expect(note.textContent.length).toBeGreaterThan(0);
   });
+
+  // ─── Adversarial-review findings ────────────────────────────────────────
+
+  it("a 403 refusal is surfaced with its reason and is NOT presented as something safe to retry — retrying can never fix a permission refusal", async () => {
+    const ctx = load(true, true, true, async (url: string) => {
+      if (url.includes("/integrations/notion/move")) {
+        return { ok: false, status: 403, json: async () => ({ ok: false, error: "Only the brain's owner can move these memories" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+    });
+    const btn = ctx.document.getElementById("move-notion");
+
+    await ctx.moveIntegrationMemories("notion", btn);
+
+    const note = ctx.document.getElementById("move-note-notion");
+    expect(note.textContent).toMatch(/owner/i); // the real reason, not a generic failure
+    expect(note.textContent).not.toMatch(/safe to try again|resum/i);
+  });
+
+  it("a 403 partway through a drain (some pages already moved) still does not offer 'safe to try again' — the reason is a refusal, not a transient failure", async () => {
+    let call = 0;
+    const ctx = load(true, true, true, async (url: string) => {
+      if (url.includes("/integrations/notion/move")) {
+        call++;
+        if (call === 1) return { ok: true, status: 200, json: async () => ({ ok: true, moved: 10, alreadyThere: 0, missing: 0, refused: 0, remaining: 5, cursor: "10" }) };
+        return { ok: false, status: 403, json: async () => ({ ok: false, error: "The connection's layer changed — only the owner may resume this move" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+    });
+    const btn = ctx.document.getElementById("move-notion");
+
+    await ctx.moveIntegrationMemories("notion", btn);
+
+    const note = ctx.document.getElementById("move-note-notion");
+    expect(note.textContent).not.toMatch(/safe to try again|resum/i);
+  });
+
+  it("presentation: does not render success when moved is 0 and missing is greater than 0", async () => {
+    const ctx = load(true, true, true, async (url: string) => {
+      if (url.includes("/integrations/notion/move")) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, moved: 0, alreadyThere: 0, missing: 8, refused: 0, remaining: 0, cursor: null }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+    });
+    const btn = ctx.document.getElementById("move-notion");
+
+    await ctx.moveIntegrationMemories("notion", btn);
+
+    expect(btn.innerHTML, "0 moved with 8 stale pointers must not read as a checkmarked success").not.toMatch(/ti-check/);
+  });
+
+  it("presentation: the in-progress count reflects actual moves, not missing pointers counted as if they moved", async () => {
+    // Snapshot the note's text right as page 2 is requested — that is
+    // exactly between page 1's onProgress write and the drain's completion
+    // summary overwriting it, the only window this figure is observable in.
+    let midDrainNote = "";
+    let call = 0;
+    const ctx = load(true, true, true, async (url: string) => {
+      if (url.includes("/integrations/notion/move")) {
+        call++;
+        if (call === 2) midDrainNote = ctx.document.getElementById("move-note-notion").textContent;
+        if (call === 1) {
+          // Page 1: 2 really moved, 8 merely missing (stale pointers). The
+          // onProgress figure must read "2", not "10".
+          return { ok: true, status: 200, json: async () => ({ ok: true, moved: 2, alreadyThere: 0, missing: 8, refused: 0, remaining: 2, cursor: "10" }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, moved: 2, alreadyThere: 0, missing: 0, refused: 0, remaining: 0, cursor: null }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+    });
+    const btn = ctx.document.getElementById("move-notion");
+
+    await ctx.moveIntegrationMemories("notion", btn);
+
+    expect(midDrainNote).not.toMatch(/\b10\b/);
+    expect(midDrainNote).toMatch(/\b2\b/);
+  });
+
+  describe("the confirmed layer binds the drain (locked decision on server truth, #347 review item 4)", () => {
+    it("sends the layer confirmed at dialog-open time on every page of the drain, not a value re-read live per page", async () => {
+      const seenBodies: any[] = [];
+      const ctx = loadWithInfoHelper(async (url: string, init?: any) => {
+        if (url.includes("/integrations/notion/move")) {
+          seenBodies.push(JSON.parse(init.body));
+          const n = seenBodies.length;
+          if (n === 1) return { ok: true, status: 200, json: async () => ({ ok: true, moved: 10, alreadyThere: 0, missing: 0, refused: 0, remaining: 2, cursor: "10" }) };
+          return { ok: true, status: 200, json: async () => ({ ok: true, moved: 2, alreadyThere: 0, missing: 0, refused: 0, remaining: 0, cursor: null }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      }, 12, "company");
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      await ctx.runConfirmAction();
+
+      expect(seenBodies.length).toBe(2);
+      // Pinned request field (see this file's report): the client threads the
+      // layer it showed the user at confirm time on every page.
+      for (const body of seenBodies) expect(body.expectedTarget).toBe("company");
+    });
+
+    it("treats a 409 (the server's layer changed since confirmation) as a hard stop requiring re-confirmation, not a resumable failure", async () => {
+      let call = 0;
+      const ctx = loadWithInfoHelper(async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          if (call === 1) return { ok: true, status: 200, json: async () => ({ ok: true, moved: 10, alreadyThere: 0, missing: 0, refused: 0, remaining: 2, cursor: "10" }) };
+          return { ok: false, status: 409, json: async () => ({ ok: false, error: "The layer changed since you confirmed this move — reload and try again." }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      }, 12, "company");
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      await ctx.runConfirmAction();
+
+      const note = ctx.document.getElementById("move-note-notion");
+      expect(note.textContent).toMatch(/layer/i);
+      // Distinct from the ordinary "stopped partway, safe to resume" copy:
+      // blindly resuming here would move into a layer the user never agreed
+      // to, so the honest copy asks for a fresh confirmation instead.
+      expect(note.textContent).not.toMatch(/safe to try again|safe to resume/i);
+    });
+  });
 });
+
+function loadWithInfoHelper(
+  fetchImpl: (url: string, init?: any) => Promise<any>,
+  itemCount = 12,
+  mirrorWorkspace: "company" | "personal" = "company",
+) {
+  const ctx = load(true, true, true, fetchImpl);
+  ctx.__setIntegrations([{ provider: "notion", name: "Notion", itemCount, mirrorWorkspace }]);
+  return ctx;
+}
