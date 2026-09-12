@@ -526,6 +526,142 @@ describe("connected-row move-already-synced action", () => {
       expect(btn.innerHTML).toMatch(/ti-check/); // a clean, fully-repaired success
     });
   });
+
+  // ─── `errored` reaching the operator (#347, the fourth round) ────────────
+  //
+  // src/routes/integrations.ts computes and returns `errored` (a per-item
+  // moveEntry throw, non-fatal to the batch); runMoveLoop's totals object
+  // never carried it. Concrete failure mode: a D1 problem makes every
+  // moveEntry throw, the server reports moved:0 errored:10 per page and
+  // keeps advancing (remaining eventually hits 0), and today's dashboard
+  // renders the plain success branch — green check, "0 moved", note reads
+  // "Nothing left to move." Everything failed and the UI says all clear.
+
+  describe("errored reaches the operator", () => {
+    it("a drain where every item errored does NOT render as success — green check or 'nothing left to move'", async () => {
+      const ctx = load(true, true, true, async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, moved: 0, alreadyThere: 0, missing: 0, refused: 0, errored: 10, vectorFailures: 0, remaining: 0, cursor: null }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      await ctx.moveIntegrationMemories("notion", btn);
+
+      expect(btn.innerHTML, "10 failures rendered as a green checkmark is exactly the defect this test exists to catch").not.toMatch(/ti-check/);
+      const note = ctx.document.getElementById("move-note-notion");
+      const text = note.textContent as string;
+      expect(text, "must not read as the ordinary empty-map message").not.toBe(ctx.t("integrations.moveResultNone"));
+      expect(text, "how many were affected").toMatch(/\b10\b/);
+      expect(text, "states the memories could not be moved").toMatch(/could not|failed to move|were not moved|couldn.t/i);
+      expect(text, "gives an action to take").toMatch(/try again|contact|check|retry/i);
+    });
+
+    // The same claim generalized: the rule must be "nothing productive
+    // happened" (moved + alreadyThere === 0 while something was processed),
+    // not "the missing counter specifically is nonzero" — a mix of failure
+    // reasons must trip the same guard, or a future counter that means
+    // failure (like `errored` was, until this round) will slip through the
+    // same way `errored` just did.
+    it("a mix of failure reasons with nothing productive moved is still not rendered as success, not just a single hardcoded counter", async () => {
+      // Deliberately WITHOUT `missing` (the one counter the previous round
+      // already special-cased): refused + errored alone, zero moved, zero
+      // alreadyThere. If the guard is "moved===0 && missing>0" rather than
+      // "nothing productive happened", this fixture sails past it exactly
+      // the way plain `errored` did.
+      const ctx = load(true, true, true, async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, moved: 0, alreadyThere: 0, missing: 0, refused: 2, errored: 8, vectorFailures: 0, remaining: 0, cursor: null }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      await ctx.moveIntegrationMemories("notion", btn);
+
+      expect(btn.innerHTML).not.toMatch(/ti-check/);
+    });
+  });
+
+  // ─── Repair passes must not double-count what the user sees (#347) ──────
+
+  describe("repair passes report the item map once, not once per pass", () => {
+    it("the final missing/refused counts shown are the item map's real counts, not multiplied by the number of repair passes", async () => {
+      let call = 0;
+      const ctx = load(true, true, true, async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          const isRepairPass = call > 1;
+          return {
+            ok: true, status: 200,
+            json: async () => ({
+              ok: true,
+              moved: isRepairPass ? 0 : 15,
+              alreadyThere: isRepairPass ? 15 : 0,
+              missing: 5, // the same 5 dead pointers, re-encountered every pass
+              refused: 0,
+              vectorFailures: isRepairPass ? 0 : 5,
+              remaining: 0, cursor: null,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      await ctx.moveIntegrationMemories("notion", btn);
+
+      expect(call, "expected exactly one automatic repair pass").toBe(2);
+      const note = ctx.document.getElementById("move-note-notion");
+      // 5 dead pointers, not 10 — the repair pass re-walking the map must not
+      // double the number the user is told about.
+      expect(note.textContent).toMatch(/\b5\b/);
+      expect(note.textContent).not.toMatch(/\b10\b/);
+    });
+
+    it("the in-progress figure does not inflate across repair passes — a 150-item connection reads out of 150, never 300", async () => {
+      let call = 0;
+      const ctx = load(true, true, true, async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          const isRepairPass = call > 1;
+          return {
+            ok: true, status: 200,
+            json: async () => ({
+              ok: true,
+              moved: isRepairPass ? 0 : 150,
+              alreadyThere: isRepairPass ? 150 : 0,
+              missing: 0, refused: 0,
+              vectorFailures: isRepairPass ? 0 : 10,
+              remaining: 0, cursor: null,
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      });
+      const btn = ctx.document.getElementById("move-notion");
+
+      // Every write to the note element, including the one made by the
+      // SECOND (repair) pass's own onProgress call — the exact moment the
+      // reported bug shows up, and one no "snapshot before the next fetch"
+      // trick can see, because there is no third call to snapshot before.
+      const noteEl = ctx.document.getElementById("move-note-notion");
+      const writes: string[] = [];
+      let raw = "";
+      Object.defineProperty(noteEl, "textContent", {
+        get: () => raw,
+        set: (v: string) => { raw = v; writes.push(v); },
+      });
+
+      await ctx.moveIntegrationMemories("notion", btn);
+
+      expect(call).toBe(2);
+      // Nothing the operator was shown, at any point, may claim a 300-item
+      // connection — this brain only ever had 150 items.
+      for (const write of writes) expect(write).not.toMatch(/300/);
+    });
+  });
 });
 
 function loadWithInfoHelper(

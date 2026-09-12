@@ -266,4 +266,93 @@ describe("#347 runMoveLoop", () => {
       expect(totals.vectorFailures).toBe(5);
     });
   });
+
+  // ─── `errored` reaching the totals (#347, fourth round on this defect) ───
+  //
+  // The server has always computed `errored` (src/routes/integrations.ts) —
+  // a per-item moveEntry throw, non-fatal to the batch. runMoveLoop's totals
+  // object never included it, so it was accumulated nowhere and displayed
+  // nowhere: a D1 problem that makes every moveEntry throw returns
+  // moved:0, errored:10 per page, forever advancing, and the drain finishes
+  // having "succeeded" with nothing to show for it.
+
+  describe("errored survives the drain into totals", () => {
+    it("accumulates `errored` across pages the same way moved/missing/refused already do", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      let call = 0;
+      const post = async () => {
+        call++;
+        const done = call >= 3;
+        return {
+          moved: 0, alreadyThere: 0, missing: 0, refused: 0, errored: 10,
+          remaining: done ? 0 : 10, cursor: done ? null : String(call * 10),
+        };
+      };
+
+      const totals = await runMoveLoop("notion", post);
+
+      expect(totals.errored).toBe(30); // 10 per page, 3 pages — not dropped, not just the last page's value
+    });
+  });
+
+  // ─── Repair passes must not double-count what the user sees ─────────────
+  //
+  // A repair pass re-walks the WHOLE item map from the beginning to give
+  // moveEntry's no_change branch a chance to fix stale Vectorize stamps. The
+  // same 5 dead itemMap pointers are therefore "missing" again on every
+  // pass, and the same real entries are "alreadyThere" again once they've
+  // already moved — real per-CALL facts, but not new information for the
+  // person reading the total: the item map has 5 stale pointers, not 10 or
+  // 15, no matter how many repair passes it took to settle Vectorize.
+
+  describe("repair passes report the item map once, not once per pass", () => {
+    it("does not add a repair pass's missing/refused counts on top of the first pass's", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      let pass = -1;
+      const post = async (cursor?: string) => {
+        if (!cursor) pass++;
+        const isRepairPass = pass > 0;
+        return {
+          moved: isRepairPass ? 0 : 15,
+          alreadyThere: isRepairPass ? 15 : 0,
+          missing: 5, // the same 5 dead pointers, every single pass
+          refused: 0,
+          vectorFailures: isRepairPass ? 0 : 5, // repaired on the second pass
+          remaining: 0, cursor: null,
+        };
+      };
+
+      const totals = await runMoveLoop("notion", post);
+
+      expect(pass).toBe(1); // confirms a repair pass actually ran
+      expect(totals.missing).toBe(5); // not 10
+    });
+
+    it("does not inflate the progress denominator across repair passes — a 150-item map reports out of 150, not 300", async () => {
+      const runMoveLoop = loadRunMoveLoop();
+      const seen: { done: number; total: number }[] = [];
+      let pass = -1;
+      const post = async (cursor?: string) => {
+        if (!cursor) pass++;
+        const isRepairPass = pass > 0;
+        return {
+          moved: isRepairPass ? 0 : 150,
+          alreadyThere: isRepairPass ? 150 : 0,
+          missing: 0, refused: 0,
+          vectorFailures: isRepairPass ? 0 : 10,
+          remaining: 0, cursor: null,
+        };
+      };
+
+      await runMoveLoop("notion", post, (progress: any) => seen.push(progress));
+
+      expect(pass).toBe(1);
+      // Every progress event reported must describe the 150-item map, not a
+      // repair-inflated 300.
+      for (const { done, total } of seen) {
+        expect(done).toBeLessThanOrEqual(150);
+        expect(total).toBeLessThanOrEqual(150);
+      }
+    });
+  });
 });
