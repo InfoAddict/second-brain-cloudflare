@@ -7,6 +7,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 **Fixes**
 
 - An admin can now move a connected integration between the personal and shared team layers without disconnecting and reconnecting it. The connected row's provenance line gains a select next to it, admin-only, preselected to the integration's current layer; changing it takes effect immediately and only affects where future syncs land — it does not move memories already synced (that stays #347) (#346).
+- The brain's owner can now move memories a connection already synced into its current layer, in place — ids, content, authorship and edges are preserved, and vectors are re-stamped so scoped recall finds them in the new layer immediately. It runs as a bounded, resumable drain (own memories only, one batch at a time), reports moved/already-there/missing/refused counts separately, and is owner-only: mirrored memories live in the owner's own workspace, so anyone else is refused with a reason rather than told "moved 0" as if it had worked (#347).
 
 ## [3.2.1] — Scoped keyword recall fix
 
