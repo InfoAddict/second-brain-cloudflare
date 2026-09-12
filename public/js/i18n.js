@@ -523,6 +523,7 @@ const I18N_EN = {
     moveResultRefused: { one: '{n} refused', other: '{n} refused' },
     moveResultMissing: { one: '{n} missing', other: '{n} missing' },
     moveResultNone: 'Nothing left to move',
+    moveResultNeedsRepair: 'Not yet searchable',
     moveStoppedPartway:
       'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
     moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
@@ -530,6 +531,14 @@ const I18N_EN = {
     // neither sentence uses the "safe to try again"/"resume" family.
     moveRefusedOwner: "Refused — only the brain's owner can move these memories.",
     moveLayerChanged: 'The layer changed since this move was confirmed. Reconfirm to continue.',
+    // The drain's own repair passes (runMoveLoop) already retry while
+    // outstanding vectorFailures keep improving; this is what's left when a
+    // pass stops without reaching zero. The move itself succeeded — only
+    // search hasn't caught up — so this must reassure, not alarm.
+    moveVectorFailures: {
+      one: '{n} memory moved successfully but is not yet searchable in its new layer — run the move again to finish repairing it.',
+      other: '{n} memories moved successfully but are not yet searchable in their new layer — run the move again to finish repairing them.',
+    },
     // The confirmation gate (locked decision 11, #347): states the count, the
     // target layer, and — since only the shared layer changes who can read
     // them — who ends up able to read the memories. The two directions say
@@ -1346,11 +1355,16 @@ const I18N_IT = {
     moveResultRefused: { one: '{n} rifiutato', other: '{n} rifiutati' },
     moveResultMissing: { one: '{n} mancante', other: '{n} mancanti' },
     moveResultNone: 'Niente da spostare',
+    moveResultNeedsRepair: 'Non ancora ricercabile',
     moveStoppedPartway:
       'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
     moveRefusedOwner: 'Rifiutato — solo il proprietario del brain può spostare questi ricordi.',
     moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
+    moveVectorFailures: {
+      one: '{n} ricordo spostato correttamente ma non ancora ricercabile nel suo nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
+      other: '{n} ricordi spostati correttamente ma non ancora ricercabili nel loro nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
+    },
     confirmMoveBodyShared: {
       one: 'Sposta il {n} {noun} già sincronizzato nel livello condiviso del team, dove finisce visibile a tutto il team.',
       other: 'Sposta i {n} {noun} già sincronizzati nel livello condiviso del team, dove finiscono visibili a tutto il team.',

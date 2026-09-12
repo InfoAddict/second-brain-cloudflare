@@ -569,8 +569,16 @@ async function moveIntegrationMemories(provider, btn, expectedTarget) {
     // Missing pointers with nothing actually moved must not read as success —
     // there's nothing to check-mark, only stale references to report.
     const emptySuccess = totals.moved === 0 && totals.missing > 0
+    // A drain that finishes with outstanding vectorFailures did move the D1
+    // rows, but the repair passes inside runMoveLoop couldn't close the gap
+    // (a genuinely broken index, most likely) — real, not the "all clear"
+    // checkmark, since search still can't see those entries in their new layer.
+    const hasVectorFailures = (totals.vectorFailures ?? 0) > 0
     if (emptySuccess) {
       btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('integrations.moveResultNone'))}`
+      btn.style.color = ''
+    } else if (hasVectorFailures) {
+      btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('integrations.moveResultNeedsRepair'))}`
       btn.style.color = ''
     } else {
       btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('integrations.moveResultMoved', totals.moved, { n: totals.moved }))}`
@@ -584,6 +592,9 @@ async function moveIntegrationMemories(provider, btn, expectedTarget) {
       if (totals.refused > 0) parts.push(tPlural('integrations.moveResultRefused', totals.refused, { n: totals.refused }))
       if (totals.missing > 0) parts.push(tPlural('integrations.moveResultMissing', totals.missing, { n: totals.missing }))
       note.textContent = parts.length ? parts.join(' · ') : t('integrations.moveResultNone')
+      if (hasVectorFailures) {
+        note.textContent += ' ' + tPlural('integrations.moveVectorFailures', totals.vectorFailures, { n: totals.vectorFailures })
+      }
     }
     setTimeout(loadIntegrations, 900)
     refreshAll()
