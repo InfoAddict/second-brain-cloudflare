@@ -10,7 +10,7 @@ import {
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
 import { json } from "../lib/http";
-import { adminAuditEvent } from "../lib/admin-audit";
+import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
 import { forgetEntry } from "../capture/lifecycle";
@@ -297,21 +297,14 @@ export async function handleIntegrationsRoutes(
       const remaining = keys.length - processedThrough;
       const cursor = remaining > 0 && batchKeys.length > 0 ? batchKeys[batchKeys.length - 1] : null;
 
-      // Written directly and awaited (not adminAuditEvent's fire-and-forget
-      // ctx.waitUntil) so the row is committed before the response returns —
-      // the same "don't claim what hasn't landed yet" reasoning as the vector
-      // re-stamp above.
-      await env.DB.prepare(
-        `INSERT INTO admin_events (id, actor_id, target_user_id, workspace_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        crypto.randomUUID(),
-        auth.userId,
-        "",
-        "",
-        "integration_memories_moved",
-        JSON.stringify({ provider: provider.id, target, moved, alreadyThere, missing, refused }),
-        Date.now(),
-      ).run();
+      // Awaited (not adminAuditEvent's fire-and-forget ctx.waitUntil) so the
+      // row is committed before the response returns — the same "don't claim
+      // what hasn't landed yet" reasoning as the vector re-stamp above.
+      await writeAdminEvent(env, {
+        actorId: auth.userId,
+        event: "integration_memories_moved",
+        payload: { provider: provider.id, target, moved, alreadyThere, missing, refused },
+      });
 
       return json({
         ok: true,
