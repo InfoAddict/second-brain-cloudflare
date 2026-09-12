@@ -21,7 +21,8 @@ export type AdminEventName =
   | "team_renamed"
   | "integration_connected"
   | "integration_disconnected"
-  | "integration_layer_changed";
+  | "integration_layer_changed"
+  | "integration_memories_moved";
 
 export function adminAuditEvent(
   env: Env,

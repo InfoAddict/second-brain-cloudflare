@@ -16,6 +16,15 @@ import { listRoster } from "../lib/team-admin";
 import { forgetEntry } from "../capture/lifecycle";
 import { getReadableEntry, assertCanMutateEntry } from "../lib/entry-access";
 import { makeMirrorStore, mirrorWriteContext } from "../integrations/mirror";
+import { moveEntry, restampVectorWorkspace } from "../capture/share";
+import { scopeWrite } from "../lib/scope";
+import { ensureTenantBootstrap } from "../lib/tenancy";
+
+// Batch size for POST /integrations/:provider/move. No external fetch on this
+// path (unlike a sync batch), so the ceiling is D1+Vectorize cost, not API
+// rate limits — 2 D1 executions per moved entry keeps 10 items well under the
+// free plan's 50-subrequest budget (see move-subrequest-budget.test.ts).
+const MOVE_BATCH_SIZE = 10;
 
 export async function handleIntegrationsRoutes(
   request: Request,
@@ -45,6 +54,10 @@ export async function handleIntegrationsRoutes(
     const ids = integrations.map((i) => i.connectedByUserId).filter(Boolean) as string[];
     const roster = ids.length ? await listRoster(env, auth.companyWorkspaceIds) : [];
     const nameOf = new Map(roster.map((r) => [r.userId, r.name]));
+    // Whether this caller is the tenant owner — the only identity #347's move
+    // route will run for, since mirrored memories live in the owner's
+    // workspace. Cheap: ensureTenantBootstrap memoises per DB binding.
+    const roots = await ensureTenantBootstrap(env);
     // Read is open to every member; the write actions below are not. The flag
     // lets the dashboard render a member the connection state without also
     // rendering Connect and Disconnect buttons that can only answer 403.
@@ -59,6 +72,7 @@ export async function handleIntegrationsRoutes(
         connectedBy: connectedByUserId ? nameOf.get(connectedByUserId) ?? null : null,
       })),
       admin: auth.role === "admin",
+      owner: auth.userId === roots.ownerUserId,
     });
   }
 
@@ -74,7 +88,7 @@ export async function handleIntegrationsRoutes(
   // If per-member connections land later, this gate is what comes off, together
   // with the storage key. test/integration/integrations-tenancy.test.ts pins the
   // current contract either way.
-  const integrationRoute = url.pathname.match(/^\/integrations\/([a-z0-9-]+)\/(connect|sync|disconnect|layer)$/);
+  const integrationRoute = url.pathname.match(/^\/integrations\/([a-z0-9-]+)\/(connect|sync|disconnect|layer|move)$/);
   if (integrationRoute && request.method === "POST") {
     const auth = await requireAdmin(request, env);
     if (auth instanceof Response) return auth;
@@ -198,6 +212,118 @@ export async function handleIntegrationsRoutes(
         payload: { provider: provider.id, from: current, to: next },
       });
       return json({ ok: true, provider: provider.id, mirrorWorkspace: next, changed: true });
+    }
+
+    // move — walk a connection's itemMap, moving already-mirrored memories
+    // into the connection's CURRENT layer (never a request parameter — the
+    // same narrowMirrorLayer read the layer route itself uses, so this can
+    // never disagree with what a future sync will write).
+    //
+    // Owner only, no impersonation (#347 locked decision 1). Mirrored rows
+    // live in the tenant owner's workspace, so moveEntry's own scoped SELECT —
+    // run against a non-owner admin's identity — would silently match nothing
+    // and report "moved 0" as if it had succeeded. Refusing here, before any
+    // work, is what tells the caller the truth instead. This is why the
+    // refusal response below carries none of the count fields: a completed
+    // zero-item move and a refused attempt must not look alike.
+    if (action === "move") {
+      let body: { cursor?: string } = {};
+      try { body = await request.json(); } catch { /* empty body — start from the beginning */ }
+
+      const roots = await ensureTenantBootstrap(env);
+      if (auth.userId !== roots.ownerUserId) {
+        return json(
+          { ok: false, error: "Only the brain's owner can move memories this connection already synced — they live in the owner's own workspace." },
+          403,
+        );
+      }
+
+      const record = await loadIntegration(env, provider.id);
+      if (!record) return json({ ok: false, error: `${provider.name} is not connected` }, 404);
+
+      const target = narrowMirrorLayer(record.config?.mirrorWorkspace);
+      // Stateless cursor: no progress is ever written back to the integration
+      // record (#348 is about that record's own writers; this feature adds no
+      // new one). The cursor is just a position in the itemMap's own sorted
+      // keys, resumed by the caller passing it back.
+      const keys = Object.keys(record.itemMap).sort();
+      let startIndex = 0;
+      if (body.cursor) {
+        const idx = keys.indexOf(body.cursor);
+        startIndex = idx === -1 ? 0 : idx + 1;
+      }
+      const batchKeys = keys.slice(startIndex, startIndex + MOVE_BATCH_SIZE);
+
+      // moveEntry (src/capture/share.ts) is reused as-is — no new SQL. It runs
+      // with the CALLER's identity, which by this point is confirmed to be the
+      // owner, so its scoped SELECT sees exactly the workspaces mirrored
+      // memories actually live in.
+      let moved = 0;
+      let alreadyThere = 0;
+      let missing = 0;
+      let refused = 0;
+      const vectorIds: string[] = [];
+      for (const key of batchKeys) {
+        const mapped = record.itemMap[key];
+        const result = await moveEntry(mapped.entryId, target, env, auth);
+        switch (result.status) {
+          case "shared":
+          case "unshared":
+            moved++;
+            vectorIds.push(...result.vectorIds);
+            break;
+          case "no_change":
+            alreadyThere++;
+            break;
+          case "not_found":
+            // A stale itemMap pointer (deleted elsewhere) or an entry outside
+            // the owner's own readable set — either way, not a move, and not
+            // a reason to abort the rest of the batch.
+            missing++;
+            break;
+          case "forbidden":
+            refused++;
+            break;
+        }
+      }
+
+      // Awaited, not deferred into ctx.waitUntil the way /share does it — the
+      // response must not claim a move that scoped recall cannot see yet.
+      if (vectorIds.length) {
+        await restampVectorWorkspace(env, vectorIds, scopeWrite(auth, target));
+      }
+
+      const processedThrough = startIndex + batchKeys.length;
+      const remaining = keys.length - processedThrough;
+      const cursor = remaining > 0 && batchKeys.length > 0 ? batchKeys[batchKeys.length - 1] : null;
+
+      // Written directly and awaited (not adminAuditEvent's fire-and-forget
+      // ctx.waitUntil) so the row is committed before the response returns —
+      // the same "don't claim what hasn't landed yet" reasoning as the vector
+      // re-stamp above.
+      await env.DB.prepare(
+        `INSERT INTO admin_events (id, actor_id, target_user_id, workspace_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        crypto.randomUUID(),
+        auth.userId,
+        "",
+        "",
+        "integration_memories_moved",
+        JSON.stringify({ provider: provider.id, target, moved, alreadyThere, missing, refused }),
+        Date.now(),
+      ).run();
+
+      return json({
+        ok: true,
+        provider: provider.id,
+        target,
+        moved,
+        alreadyThere,
+        missing,
+        refused,
+        remaining,
+        cursor,
+      });
     }
 
     // disconnect — remove the connection. Mirrored memories are kept
