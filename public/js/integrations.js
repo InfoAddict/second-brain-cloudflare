@@ -430,6 +430,11 @@ function confirmMoveIntegrationMemories(provider, btn) {
   const info = integrationsInfo.find((i) => i.provider === provider) || {}
   const sharing = info.mirrorWorkspace === 'company'
   const noun = integrationNoun(provider, info.itemCount)
+  // Captured HERE, at confirmation time, and threaded through every page of
+  // the drain (#347 review item 5) — moveIntegrationMemories never re-reads
+  // the connection's live layer mid-drain, so a layer flip after the user
+  // confirmed cannot silently move memories somewhere they never agreed to.
+  const expectedTarget = sharing ? 'company' : 'personal'
   openDangerConfirm({
     title: t('danger.confirmMoveTitle'),
     body: tPlural(`${sharing ? 'integrations.confirmMoveBodyShared' : 'integrations.confirmMoveBodyPersonal'}`, info.itemCount, {
@@ -437,9 +442,13 @@ function confirmMoveIntegrationMemories(provider, btn) {
       noun,
     }),
     confirmLabel: t('integrations.moveNow'),
-    onConfirm: (_checked, done) => {
+    // done() closes the sheet immediately and unconditionally — the drain
+    // outlives the sheet (locked decision 11) — but the handler still awaits
+    // moveIntegrationMemories so a caller driving confirmation programmatically
+    // (or runConfirmAction itself) can await the full drain if it chooses to.
+    onConfirm: async (_checked, done) => {
       done()
-      moveIntegrationMemories(provider, btn)
+      await moveIntegrationMemories(provider, btn, expectedTarget)
     },
   })
 }
@@ -477,7 +486,10 @@ async function runMoveLoop(provider, post, onProgress) {
     totals.alreadyThere += res.alreadyThere ?? 0
     totals.missing += res.missing ?? 0
     totals.refused += res.refused ?? 0
-    const done = totals.moved + totals.alreadyThere + totals.missing + totals.refused
+    // Reflects actual moves (plus already-there, which is idempotent success),
+    // never missing or refused — those didn't move anything, so counting them
+    // here would inflate the in-progress figure past what actually happened.
+    const done = totals.moved + totals.alreadyThere
     const remaining = res.remaining ?? 0
     if (onProgress) onProgress({ done, total: done + remaining })
     if (remaining > 0 && res.cursor === sentCursor) {
@@ -494,7 +506,7 @@ async function runMoveLoop(provider, post, onProgress) {
  * move stopped partway and that resuming is safe — the upkeep.restore*
  * convention, not syncIntegration's bare "failed" with no count.
  */
-async function moveIntegrationMemories(provider, btn) {
+async function moveIntegrationMemories(provider, btn, expectedTarget) {
   if (btn.disabled) return
   const note = document.getElementById(`move-note-${provider}`)
   btn.disabled = true
@@ -504,15 +516,21 @@ async function moveIntegrationMemories(provider, btn) {
     const res = await fetch(`${WORKER_URL}/integrations/${provider}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify(cursor ? { cursor } : {}),
+      body: JSON.stringify({ ...(cursor ? { cursor } : {}), ...(expectedTarget ? { expectedTarget } : {}) }),
     })
     let data
     try {
       data = await res.json()
     } catch {
-      throw new Error(t('integrations.moveFailedShort'))
+      const err = new Error(t('integrations.moveFailedShort'))
+      err.status = res.status
+      throw err
     }
-    if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.moveFailedShort'))
+    if (!res.ok || !data.ok) {
+      const err = new Error(data.error || t('integrations.moveFailedShort'))
+      err.status = res.status
+      throw err
+    }
     return data
   }
   try {
@@ -524,9 +542,17 @@ async function moveIntegrationMemories(provider, btn) {
         })
       }
     })
+    // Missing pointers with nothing actually moved must not read as success —
+    // there's nothing to check-mark, only stale references to report.
+    const emptySuccess = totals.moved === 0 && totals.missing > 0
+    if (emptySuccess) {
+      btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('integrations.moveResultNone'))}`
+      btn.style.color = ''
+    } else {
+      btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('integrations.moveResultMoved', totals.moved, { n: totals.moved }))}`
+      btn.style.color = 'var(--good)'
+    }
     btn.classList.remove('digest-btn--loading')
-    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('integrations.moveResultMoved', totals.moved, { n: totals.moved }))}`
-    btn.style.color = 'var(--good)'
     btn.disabled = false
     if (note) {
       const parts = []
@@ -544,9 +570,22 @@ async function moveIntegrationMemories(provider, btn) {
     btn.disabled = false
     const movedSoFar = e.partial ? e.partial.moved : 0
     if (note) {
-      note.textContent = movedSoFar > 0
-        ? t('integrations.moveStoppedPartway', { n: movedSoFar })
-        : t('integrations.moveFailedFirstCall')
+      if (e.status === 403) {
+        // A permission refusal, never a transient failure — retrying (or
+        // "resuming") can never fix it, so this copy is deliberately never
+        // the retry-safe / resume-safe family, no matter how much already
+        // moved before the refusal landed.
+        note.textContent = t('integrations.moveRefusedOwner')
+      } else if (e.status === 409) {
+        // The confirmed layer no longer matches the connection's current
+        // one — a fresh confirmation is required, not a resume: blindly
+        // continuing would move memories into a layer the user never agreed to.
+        note.textContent = t('integrations.moveLayerChanged')
+      } else if (movedSoFar > 0) {
+        note.textContent = t('integrations.moveStoppedPartway', { n: movedSoFar })
+      } else {
+        note.textContent = t('integrations.moveFailedFirstCall')
+      }
     }
   }
 }

@@ -526,6 +526,10 @@ const I18N_EN = {
     moveStoppedPartway:
       'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
     moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
+    // Refusals, not transient failures — retrying can never fix either, so
+    // neither sentence uses the "safe to try again"/"resume" family.
+    moveRefusedOwner: "Refused — only the brain's owner can move these memories.",
+    moveLayerChanged: 'The layer changed since this move was confirmed. Reconfirm to continue.',
     // The confirmation gate (locked decision 11, #347): states the count, the
     // target layer, and — since only the shared layer changes who can read
     // them — who ends up able to read the memories. The two directions say
@@ -1345,6 +1349,8 @@ const I18N_IT = {
     moveStoppedPartway:
       'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
+    moveRefusedOwner: 'Rifiutato — solo il proprietario del brain può spostare questi ricordi.',
+    moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
     confirmMoveBodyShared: {
       one: 'Sposta il {n} {noun} già sincronizzato nel livello condiviso del team, dove finisce visibile a tutto il team.',
       other: 'Sposta i {n} {noun} già sincronizzati nel livello condiviso del team, dove finiscono visibili a tutto il team.',
