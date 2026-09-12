@@ -468,10 +468,23 @@ function confirmMoveIntegrationMemories(provider, btn) {
  * spinning forever — distinct from a batch that is all refusals but whose
  * cursor keeps advancing, which is real progress through the map even though
  * nothing moved.
+ *
+ * A finished pass (cursor exhausted) whose vectorFailures is greater than
+ * zero means some entries moved in D1 but never got their Vectorize stamp
+ * confirmed — moveEntry's no_change branch now carries vectorIds so a fresh
+ * walk of the item map (a "repair pass": another call with no cursor) can
+ * fix them, since they come back as alreadyThere and get re-stamped. Only
+ * worth another pass while it is actually improving: each pass's
+ * vectorFailures must be strictly less than the one before it (the first
+ * pass is compared against Infinity, so any non-zero result earns one
+ * attempt). That strictly-decreasing rule is self-bounding, so there is no
+ * separate retry cap.
  */
 async function runMoveLoop(provider, post, onProgress) {
   const totals = { moved: 0, alreadyThere: 0, missing: 0, refused: 0 }
   let cursor
+  let prevPassFailures = Infinity
+  let passFailures = 0
   for (;;) {
     const sentCursor = cursor
     let res
@@ -486,6 +499,9 @@ async function runMoveLoop(provider, post, onProgress) {
     totals.alreadyThere += res.alreadyThere ?? 0
     totals.missing += res.missing ?? 0
     totals.refused += res.refused ?? 0
+    // The server reports vectorFailures once per call, so a multi-page pass
+    // accumulates it across its own pages.
+    passFailures += res.vectorFailures ?? 0
     // Reflects actual moves (plus already-there, which is idempotent success),
     // never missing or refused — those didn't move anything, so counting them
     // here would inflate the in-progress figure past what actually happened.
@@ -496,7 +512,15 @@ async function runMoveLoop(provider, post, onProgress) {
       throw new Error('Move did not advance — the cursor is stalled')
     }
     cursor = res.cursor
-    if (!cursor) return totals
+    if (!cursor) {
+      if (passFailures > 0 && passFailures < prevPassFailures) {
+        prevPassFailures = passFailures
+        passFailures = 0
+        continue // cursor is already falsy — next call starts a fresh pass
+      }
+      totals.vectorFailures = passFailures
+      return totals
+    }
   }
 }
 
