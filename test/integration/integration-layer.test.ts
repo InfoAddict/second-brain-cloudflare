@@ -112,6 +112,9 @@ describe("POST /integrations/notion/layer", () => {
     seeded.itemMap = { p1: { entryId: "e-1", version: "v1" } as any };
     seeded.lastSyncedAt = 1_700_000_000_000;
     seeded.lastSyncError = "temporary blip";
+    // Pinned to the past, not "whatever connect() just stamped" — so the
+    // updatedAt-advances assertion below can't pass by same-millisecond luck.
+    seeded.updatedAt = 1_700_000_000_000;
     await env.OAUTH_KV.put("integrations:notion", JSON.stringify(seeded));
     const before = (await loadIntegration(env, "notion"))!;
 
@@ -128,6 +131,10 @@ describe("POST /integrations/notion/layer", () => {
     expect(after.lastSyncError).toBe(before.lastSyncError);
     expect(after.workspaceName).toBe(before.workspaceName);
     expect(after.credentials).toEqual(before.credentials);
+    // The other half of the no-op test's "updatedAt stays put when nothing
+    // changed": a REAL change must stamp updatedAt, or a stale record would
+    // silently keep whatever freshness a caller infers from it.
+    expect(after.updatedAt).toBeGreaterThan(before.updatedAt);
   });
 
   it("a member cannot change the layer", async () => {
@@ -141,6 +148,13 @@ describe("POST /integrations/notion/layer", () => {
   it("404s for a provider that is not connected", async () => {
     const res = await call("POST", "/integrations/notion/layer", ADMIN, { workspace: "company" });
     expect(res.status).toBe(404);
+    // Body too, not just the status: the dispatcher's own catch-all for an
+    // unmatched path also returns 404, and so does disconnect's not-connected
+    // check — this pins the layer branch's own error text, matching sync's
+    // and disconnect's "<name> is not connected" shape, so a revert of the
+    // dispatch regex or of this branch's own 404 cannot pass unnoticed.
+    const data = await res.json() as any;
+    expect(data).toEqual({ ok: false, error: "Notion is not connected" });
   });
 
   it("setting the layer to its current value is a no-op: no save happens", async () => {
