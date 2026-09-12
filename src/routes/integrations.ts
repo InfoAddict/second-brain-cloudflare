@@ -5,6 +5,7 @@ import {
   saveIntegration,
   deleteIntegration,
   integrationStatus,
+  narrowMirrorLayer,
 } from "../integrations";
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
@@ -89,7 +90,7 @@ export async function handleIntegrationsRoutes(
       try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
       const token = body.token?.trim();
       if (!token) return json({ ok: false, error: "token is required" }, 400);
-      const mirrorWorkspace = body.workspace === "company" ? "company" : "personal";
+      const mirrorWorkspace = narrowMirrorLayer(body.workspace);
 
       let workspaceName: string;
       try {
@@ -162,17 +163,25 @@ export async function handleIntegrationsRoutes(
     // anything already mirrored (moving those is #347). No token needed, so
     // this is the route that replaces the disconnect+reconnect dance.
     if (action === "layer") {
+      // Body first, THEN the record — right before the save — so the
+      // read-to-write window is one KV round-trip. A slow POST that read the
+      // record before its body arrived would hold a pre-sync snapshot open;
+      // a saveIntegration landing in that gap (Notion re-mirroring pages
+      // under new ids, or email's checkpoint/ingestedIds) would get written
+      // back over here. Same discipline advanceRotationCursor already
+      // follows in src/integrations/mirror.ts. The 404 below doesn't depend
+      // on the body, so parsing it first costs nothing.
+      let body: { workspace?: string };
+      try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
       const record = await loadIntegration(env, provider.id);
       if (!record) {
         return json({ ok: false, error: `${provider.name} is not connected` }, 404);
       }
-      let body: { workspace?: string };
-      try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
       // Same narrowing on the way in as connect uses, and the same narrowing
       // applied to the STORED value before comparing — a malformed config
       // blob must not look like a change (or a non-change) that it isn't.
-      const next = body.workspace === "company" ? "company" : "personal";
-      const current = record.config?.mirrorWorkspace === "company" ? "company" : "personal";
+      const next = narrowMirrorLayer(body.workspace);
+      const current = narrowMirrorLayer(record.config?.mirrorWorkspace);
       if (next === current) {
         return json({ ok: true, provider: provider.id, mirrorWorkspace: current, changed: false });
       }
