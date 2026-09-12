@@ -18,6 +18,10 @@ const INTEGRATION_ICONS = {
 
 /** Whether this caller may change connections; see loadIntegrations. */
 let integrationsAdmin = true
+/** Whether this caller IS the tenant owner; see loadIntegrations. Only the
+ * owner may run POST /integrations/:provider/move (#347) — mirrored
+ * memories live in the owner's own workspace. */
+let integrationsOwner = true
 
 function integrationCategoryName(id) {
   const keys = {
@@ -57,6 +61,10 @@ async function loadIntegrations() {
     // change them. Absent (an older Worker) reads as admin, which is what a
     // single-user brain is.
     integrationsAdmin = data.admin !== false
+    // Same absent-reads-as-true fallback as integrationsAdmin, for an older
+    // Worker that predates the `owner` field — a solo brain has no other
+    // owner it could be.
+    integrationsOwner = data.owner !== false
     renderIntegrations()
   } catch {
     el.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loadFailed'))}</p>`
@@ -242,12 +250,27 @@ function renderIntegrationCard(info) {
       </p>
       <div class="integration-error" id="err-${p}"></div>`
     : ''
+  // Moving already-synced memories into the layer above (#347). Strictly
+  // narrower than layerControl's own gate: only the tenant owner may run this,
+  // because mirrored memories live in the owner's workspace and moveEntry run
+  // as anyone else would silently match nothing. `move-note-${p}` is its own
+  // element, deliberately NOT `note-${p}` — that one is sync's own progress
+  // surface, and the two drains must not fight over one text node.
+  const moveControl = TEAM_MODE && integrationsAdmin && integrationsOwner
+    ? `<p class="digest-note">${escHtml(tPlural('integrations.moveHint', info.itemCount, {
+        noun: integrationNoun(p, info.itemCount),
+        layer: info.mirrorWorkspace === 'company' ? t('team.shareCompany') : t('team.sharePersonal'),
+      }))}</p>
+      <button class="digest-btn" id="move-${p}" onclick="moveIntegrationMemories('${p}', this)"><i class="ti ti-arrow-right"></i> ${escHtml(t('integrations.moveNow'))}</button>
+      <p class="digest-note" id="move-note-${p}" aria-live="polite"></p>`
+    : ''
   return `
     <div class="integration-row">
       <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state connected">${escHtml(info.workspaceName || t('integrations.connected'))}</span></div>
       <p class="digest-note" id="note-${p}">${escHtml(count)} &middot; ${escHtml(t('integrations.lastSync', { when: last }))}</p>
       ${provenance ? `<p class="digest-note">${escHtml(provenance)}</p>` : ''}
       ${layerControl}
+      ${moveControl}
       ${err}
       ${integrationsAdmin
         ? `<div class="integration-actions">
@@ -392,6 +415,113 @@ async function syncIntegration(provider, btn) {
     btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('integrations.syncFailed'))}`
     btn.style.color = 'var(--danger)'
     setTimeout(loadIntegrations, 3000)
+  }
+}
+
+/**
+ * Pure drain loop for POST /integrations/:provider/move — no DOM, so it can be
+ * driven with a fake `post` in tests (see test/ui/move-loop.test.ts). Calls
+ * `post(cursor)` with `undefined` first, then the previous response's own
+ * `cursor`, until a response comes back with a falsy cursor.
+ *
+ * Unlike syncIntegration's guard-counted loop, a mid-drain failure here does
+ * NOT throw away what was already moved: the thrown Error carries a `.partial`
+ * totals object, so the caller can say "N moved so far, safe to resume"
+ * instead of a bare "failed". A batch that reports `remaining > 0` but returns
+ * the SAME cursor it was called with is a stalled drain (the server made no
+ * forward progress through the item map) and fails loudly rather than
+ * spinning forever — distinct from a batch that is all refusals but whose
+ * cursor keeps advancing, which is real progress through the map even though
+ * nothing moved.
+ */
+async function runMoveLoop(provider, post, onProgress) {
+  const totals = { moved: 0, alreadyThere: 0, missing: 0, refused: 0 }
+  let cursor
+  for (;;) {
+    const sentCursor = cursor
+    let res
+    try {
+      res = await post(cursor)
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e))
+      err.partial = { ...totals }
+      throw err
+    }
+    totals.moved += res.moved ?? 0
+    totals.alreadyThere += res.alreadyThere ?? 0
+    totals.missing += res.missing ?? 0
+    totals.refused += res.refused ?? 0
+    const done = totals.moved + totals.alreadyThere + totals.missing + totals.refused
+    const remaining = res.remaining ?? 0
+    if (onProgress) onProgress({ done, total: done + remaining })
+    if (remaining > 0 && res.cursor === sentCursor) {
+      throw new Error('Move did not advance — the cursor is stalled')
+    }
+    cursor = res.cursor
+    if (!cursor) return totals
+  }
+}
+
+/**
+ * Drive runMoveLoop against the real Worker route, reporting progress into
+ * move-note-${provider} and, on a mid-drain failure, saying plainly that the
+ * move stopped partway and that resuming is safe — the upkeep.restore*
+ * convention, not syncIntegration's bare "failed" with no count.
+ */
+async function moveIntegrationMemories(provider, btn) {
+  if (btn.disabled) return
+  const note = document.getElementById(`move-note-${provider}`)
+  btn.disabled = true
+  btn.classList.add('digest-btn--loading')
+  btn.innerHTML = `<i class="ti ti-loader-2"></i> ${escHtml(t('integrations.moving'))}`
+  const post = async (cursor) => {
+    const res = await fetch(`${WORKER_URL}/integrations/${provider}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify(cursor ? { cursor } : {}),
+    })
+    let data
+    try {
+      data = await res.json()
+    } catch {
+      throw new Error(t('integrations.moveFailedShort'))
+    }
+    if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.moveFailedShort'))
+    return data
+  }
+  try {
+    const totals = await runMoveLoop(provider, post, ({ done }) => {
+      if (note) {
+        note.textContent = t('integrations.movingProgress', {
+          n: done,
+          noun: integrationNoun(provider, done),
+        })
+      }
+    })
+    btn.classList.remove('digest-btn--loading')
+    btn.innerHTML = `<i class="ti ti-check"></i> ${escHtml(tPlural('integrations.moveResultMoved', totals.moved, { n: totals.moved }))}`
+    btn.style.color = 'var(--good)'
+    btn.disabled = false
+    if (note) {
+      const parts = []
+      if (totals.moved > 0) parts.push(tPlural('integrations.moveResultMoved', totals.moved, { n: totals.moved }))
+      if (totals.refused > 0) parts.push(tPlural('integrations.moveResultRefused', totals.refused, { n: totals.refused }))
+      if (totals.missing > 0) parts.push(tPlural('integrations.moveResultMissing', totals.missing, { n: totals.missing }))
+      note.textContent = parts.length ? parts.join(' · ') : t('integrations.moveResultNone')
+    }
+    setTimeout(loadIntegrations, 900)
+    refreshAll()
+  } catch (e) {
+    btn.classList.remove('digest-btn--loading')
+    btn.innerHTML = `<i class="ti ti-alert-triangle"></i> ${escHtml(t('integrations.moveFailedShort'))}`
+    btn.style.color = 'var(--danger)'
+    btn.disabled = false
+    const movedSoFar = e.partial ? e.partial.moved : 0
+    if (note) {
+      note.textContent = movedSoFar > 0
+        ? t('integrations.moveStoppedPartway', { n: movedSoFar })
+        : t('integrations.moveFailedFirstCall')
+    }
   }
 }
 

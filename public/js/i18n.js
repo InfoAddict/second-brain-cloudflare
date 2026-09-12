@@ -508,6 +508,24 @@ const I18N_EN = {
     mirrorShared: 'Synced memories land in the shared team layer',
     mirrorLayerNewSyncsOnly: 'Applies to new syncs only — memories already synced stay where they are.',
     connectedOn: 'Connected {when}',
+    // #347 — moving memories a connection already synced into its current
+    // layer. Owner-only, so this whole family only ever renders for the
+    // caller who can act on it.
+    moveHint: {
+      one: 'Move the {n} {noun} already synced into "{layer}".',
+      other: 'Move the {n} {noun} already synced into "{layer}".',
+    },
+    moveNow: 'Move now',
+    moving: 'Moving…',
+    movingProgress: 'Moving… {n} {noun} so far',
+    moveFailedShort: 'Move failed',
+    moveResultMoved: { one: '{n} moved', other: '{n} moved' },
+    moveResultRefused: { one: '{n} refused', other: '{n} refused' },
+    moveResultMissing: { one: '{n} missing', other: '{n} missing' },
+    moveResultNone: 'Nothing left to move',
+    moveStoppedPartway:
+      'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
+    moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
   },
   team: {
     title: 'Team',
@@ -751,6 +769,7 @@ const I18N_EN = {
     evIntegrationConnected: 'Connected an integration',
     evIntegrationDisconnected: 'Disconnected an integration',
     evIntegrationLayerChanged: 'Changed where an integration’s memories land',
+    evIntegrationMemoriesMoved: 'Moved an integration’s already-synced memories',
     evShared: 'Shared a memory with the team',
     evUnshared: 'Made a memory personal again',
     evInsightConfirmed: 'Confirmed an insight',
@@ -1297,6 +1316,21 @@ const I18N_IT = {
     mirrorShared: 'I ricordi sincronizzati finiscono nel livello condiviso del team',
     mirrorLayerNewSyncsOnly: 'Vale solo per le nuove sincronizzazioni — i ricordi già sincronizzati restano dove sono.',
     connectedOn: 'Collegata il {when}',
+    moveHint: {
+      one: 'Sposta i {n} {noun} già sincronizzati in "{layer}".',
+      other: 'Sposta i {n} {noun} già sincronizzati in "{layer}".',
+    },
+    moveNow: 'Sposta ora',
+    moving: 'Spostamento…',
+    movingProgress: 'Spostamento… {n} {noun} finora',
+    moveFailedShort: 'Spostamento non riuscito',
+    moveResultMoved: { one: '{n} spostato', other: '{n} spostati' },
+    moveResultRefused: { one: '{n} rifiutato', other: '{n} rifiutati' },
+    moveResultMissing: { one: '{n} mancante', other: '{n} mancanti' },
+    moveResultNone: 'Niente da spostare',
+    moveStoppedPartway:
+      'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
+    moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
   },
   team: {
     title: 'Team',
@@ -1524,6 +1558,7 @@ const I18N_IT = {
     evIntegrationConnected: 'Ha collegato un’integrazione',
     evIntegrationDisconnected: 'Ha scollegato un’integrazione',
     evIntegrationLayerChanged: 'Ha cambiato dove finiscono i ricordi di un’integrazione',
+    evIntegrationMemoriesMoved: 'Ha spostato i ricordi già sincronizzati di un’integrazione',
     evShared: 'Ha condiviso un ricordo col team',
     evUnshared: 'Ha reso di nuovo personale un ricordo',
     evInsightConfirmed: 'Ha confermato un insight',
