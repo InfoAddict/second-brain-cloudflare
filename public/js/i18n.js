@@ -505,6 +505,7 @@ const I18N_EN = {
     connectedByLabel: 'Connected by {name}',
     mirrorPersonal: 'Synced memories land in the personal layer',
     mirrorShared: 'Synced memories land in the shared team layer',
+    mirrorLayerNewSyncsOnly: 'Applies to new syncs only — memories already synced stay where they are.',
     connectedOn: 'Connected {when}',
   },
   team: {
@@ -748,6 +749,7 @@ const I18N_EN = {
     evTeamRenamed: 'Renamed the team',
     evIntegrationConnected: 'Connected an integration',
     evIntegrationDisconnected: 'Disconnected an integration',
+    evIntegrationLayerChanged: 'Changed where an integration syncs to',
     evShared: 'Shared a memory with the team',
     evUnshared: 'Made a memory personal again',
     evInsightConfirmed: 'Confirmed an insight',
@@ -1291,6 +1293,7 @@ const I18N_IT = {
     connectedByLabel: 'Collegata da {name}',
     mirrorPersonal: 'I ricordi sincronizzati finiscono nel livello personale',
     mirrorShared: 'I ricordi sincronizzati finiscono nel livello condiviso del team',
+    mirrorLayerNewSyncsOnly: 'Vale solo per le nuove sincronizzazioni — i ricordi già sincronizzati restano dove sono.',
     connectedOn: 'Collegata il {when}',
   },
   team: {
@@ -1518,6 +1521,7 @@ const I18N_IT = {
     evTeamRenamed: 'Ha rinominato il team',
     evIntegrationConnected: 'Ha collegato un’integrazione',
     evIntegrationDisconnected: 'Ha scollegato un’integrazione',
+    evIntegrationLayerChanged: 'Ha cambiato dove sincronizza un’integrazione',
     evShared: 'Ha condiviso un ricordo col team',
     evUnshared: 'Ha reso di nuovo personale un ricordo',
     evInsightConfirmed: 'Ha confermato un insight',

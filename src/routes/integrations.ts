@@ -73,7 +73,7 @@ export async function handleIntegrationsRoutes(
   // If per-member connections land later, this gate is what comes off, together
   // with the storage key. test/integration/integrations-tenancy.test.ts pins the
   // current contract either way.
-  const integrationRoute = url.pathname.match(/^\/integrations\/([a-z0-9-]+)\/(connect|sync|disconnect)$/);
+  const integrationRoute = url.pathname.match(/^\/integrations\/([a-z0-9-]+)\/(connect|sync|disconnect|layer)$/);
   if (integrationRoute && request.method === "POST") {
     const auth = await requireAdmin(request, env);
     if (auth instanceof Response) return auth;
@@ -156,6 +156,39 @@ export async function handleIntegrationsRoutes(
         makeMirrorStore(env, await mirrorWriteContext(env, record)),
       );
       return json(result, result.ok ? 200 : 502);
+    }
+
+    // layer — move where FUTURE syncs land, without touching the token or
+    // anything already mirrored (moving those is #347). No token needed, so
+    // this is the route that replaces the disconnect+reconnect dance.
+    if (action === "layer") {
+      const record = await loadIntegration(env, provider.id);
+      if (!record) {
+        return json({ ok: false, error: `${provider.name} is not connected` }, 404);
+      }
+      let body: { workspace?: string };
+      try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+      // Same narrowing on the way in as connect uses, and the same narrowing
+      // applied to the STORED value before comparing — a malformed config
+      // blob must not look like a change (or a non-change) that it isn't.
+      const next = body.workspace === "company" ? "company" : "personal";
+      const current = record.config?.mirrorWorkspace === "company" ? "company" : "personal";
+      if (next === current) {
+        return json({ ok: true, provider: provider.id, mirrorWorkspace: current, changed: false });
+      }
+      await saveIntegration(env, {
+        ...record,
+        config: { ...record.config, mirrorWorkspace: next },
+        updatedAt: Date.now(),
+      });
+      // Own event name, not integration_connected with a boolean — the
+      // member_suspended/member_unsuspended precedent (see disconnect below).
+      adminAuditEvent(env, ctx, {
+        actorId: auth.userId,
+        event: "integration_layer_changed",
+        payload: { provider: provider.id, from: current, to: next },
+      });
+      return json({ ok: true, provider: provider.id, mirrorWorkspace: next, changed: true });
     }
 
     // disconnect — remove the connection. Mirrored memories are kept

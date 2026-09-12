@@ -226,11 +226,28 @@ function renderIntegrationCard(info) {
         t(`${info.mirrorWorkspace === 'company' ? 'integrations.mirrorShared' : 'integrations.mirrorPersonal'}`),
         info.connectedAt ? t('integrations.connectedOn', { when: new Date(info.connectedAt).toLocaleDateString(localeTag()) }) : null,
       ].filter(Boolean).join(' · ')
+  // Admin-only control that lets an already-connected integration move layers
+  // without a disconnect/reconnect. Same two-option markup as the not-connected
+  // row's select, preselected from the record's current mirrorWorkspace. Gated
+  // on TEAM_MODE && integrationsAdmin so a member or a solo brain sees neither
+  // this select nor its error slot — see integration-provenance.test.ts's
+  // pinned solo-brain fixtures, which this must leave untouched.
+  const layerControl = TEAM_MODE && integrationsAdmin
+    ? `<p class="digest-note">
+        <span class="team-select-wrap"><select class="team-select" id="ws-${p}" title="${escAttr(t('integrations.mirrorLayerTitle'))}" onchange="changeIntegrationLayer('${p}', this, '${info.mirrorWorkspace === 'company' ? 'company' : 'personal'}')">
+          <option value="personal"${info.mirrorWorkspace === 'company' ? '' : ' selected'}>${escHtml(t('team.sharePersonal'))}</option>
+          <option value="company"${info.mirrorWorkspace === 'company' ? ' selected' : ''}>${escHtml(t('team.shareCompany'))}</option>
+        </select><i class="ti ti-chevron-down"></i></span>
+        ${escHtml(t('integrations.mirrorLayerNewSyncsOnly'))}
+      </p>
+      <div class="integration-error" id="err-${p}"></div>`
+    : ''
   return `
     <div class="integration-row">
       <div class="integration-head"><i class="ti ${icon}"></i><span>${escHtml(info.name)}</span><span class="integration-state connected">${escHtml(info.workspaceName || t('integrations.connected'))}</span></div>
       <p class="digest-note" id="note-${p}">${escHtml(count)} &middot; ${escHtml(t('integrations.lastSync', { when: last }))}</p>
       ${provenance ? `<p class="digest-note">${escHtml(provenance)}</p>` : ''}
+      ${layerControl}
       ${err}
       ${integrationsAdmin
         ? `<div class="integration-actions">
@@ -274,6 +291,31 @@ async function connectIntegration(provider, btn) {
     errEl.textContent = e.message || t('auth.couldNotConnect')
     btn.disabled = false
     btn.textContent = t('auth.connect')
+  }
+}
+
+/**
+ * Move a connected integration's mirror layer without disconnecting. On
+ * failure, restore the select to what it showed before the user's change and
+ * surface the error inline — the select must never keep displaying a layer
+ * the server did not accept.
+ */
+async function changeIntegrationLayer(provider, selectEl, previousValue) {
+  const next = selectEl.value
+  const errEl = document.getElementById(`err-${provider}`)
+  if (errEl) errEl.textContent = ''
+  try {
+    const res = await fetch(`${WORKER_URL}/integrations/${provider}/layer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ workspace: next }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || t('integrations.couldNotConnectShort'))
+    await loadIntegrations()
+  } catch (e) {
+    selectEl.value = previousValue
+    if (errEl) errEl.textContent = e.message || t('integrations.couldNotConnectShort')
   }
 }
 

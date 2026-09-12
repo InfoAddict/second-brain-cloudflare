@@ -172,6 +172,7 @@ function activityEventLabel(event) {
     team_renamed: 'activity.evTeamRenamed',
     integration_connected: 'activity.evIntegrationConnected',
     integration_disconnected: 'activity.evIntegrationDisconnected',
+    integration_layer_changed: 'activity.evIntegrationLayerChanged',
     shared: 'activity.evShared',
     unshared: 'activity.evUnshared',
     insight_confirmed: 'activity.evInsightConfirmed',
