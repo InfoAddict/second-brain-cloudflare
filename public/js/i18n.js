@@ -523,6 +523,13 @@ const I18N_EN = {
     moveResultRefused: { one: '{n} refused', other: '{n} refused' },
     moveResultMissing: { one: '{n} missing', other: '{n} missing' },
     moveResultNone: 'Nothing left to move',
+    // Nothing productive happened — refusals, per-item errors, or a mix —
+    // as opposed to moveResultNone, which is only stale pointers. States the
+    // count, that they could not be moved, and what to do next.
+    moveResultFailed: {
+      one: '{n} memory could not be moved — check the connection and try again.',
+      other: '{n} memories could not be moved — check the connection and try again.',
+    },
     moveResultNeedsRepair: 'Not yet searchable',
     moveStoppedPartway:
       'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
@@ -1355,6 +1362,10 @@ const I18N_IT = {
     moveResultRefused: { one: '{n} rifiutato', other: '{n} rifiutati' },
     moveResultMissing: { one: '{n} mancante', other: '{n} mancanti' },
     moveResultNone: 'Niente da spostare',
+    moveResultFailed: {
+      one: '{n} ricordo non è stato spostato — controlla la connessione e riprova.',
+      other: '{n} ricordi non sono stati spostati — controlla la connessione e riprova.',
+    },
     moveResultNeedsRepair: 'Non ancora ricercabile',
     moveStoppedPartway:
       'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
