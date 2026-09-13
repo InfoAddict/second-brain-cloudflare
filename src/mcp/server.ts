@@ -180,8 +180,9 @@ const layerOfRow = (identity: Identity | undefined, row: Record<string, any>) =>
  *
  * The name is information only on the shared layer — a personal row is the
  * reader's own by definition — so a listing with nothing shared on it must not
- * spend a subrequest to learn that. These tools run inside the same 50-subrequest
- * invocation budget as everything else.
+ * spend a D1 call to learn that. These tools run inside the same self-imposed
+ * ~50-call D1 budget per invocation as everything else (the platform's real
+ * ceiling is 1,000 D1/KV/Vectorize calls per invocation).
  */
 async function labelsForRows(
   env: Env,

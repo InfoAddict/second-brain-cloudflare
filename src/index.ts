@@ -60,12 +60,14 @@ export default {
     const job = (name: string, run: Promise<unknown>) =>
       ctx.waitUntil(run.catch((e) => console.error(`${name} failed (non-fatal):`, e)));
 
-    // Two schedules, two budgets (#290). A Worker invocation gets 50 D1 queries and 10 ms
-    // of CPU on the free plan; the maintenance jobs below already spend 30 of those
-    // queries, so the mirror sync gets its own invocation rather than the remainder of
-    // this one. Routing on the cron string is what makes that real — without the branch
-    // both triggers would run everything and the split would cost budget instead of
-    // buying it.
+    // Two schedules, two budgets (#290). The free plan's real subrequest ceiling is
+    // 1,000 D1/KV/Vectorize calls and 50 external fetch()es per invocation, but every
+    // invocation still gets only 10 ms of CPU, and this codebase keeps a much tighter
+    // self-imposed D1 budget (~50 statements) for cost discipline; the maintenance jobs
+    // below already spend 30 of those, so the mirror sync gets its own invocation rather
+    // than the remainder of this one. Routing on the cron string is what makes that
+    // real — without the branch both triggers would run everything and the split would
+    // cost CPU and D1-cost budget instead of buying it.
     if (event.cron === INTEGRATION_SYNC_CRON) {
       job("integration sync", runScheduledIntegrationSync(env));
       return;

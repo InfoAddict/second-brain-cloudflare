@@ -17,8 +17,11 @@ import { parseTags } from "../insight/candidates";
  * being read back; nothing here computes, embeds, or calls a model.
  *
  * BUDGET. Six D1 queries, no AI, no Vectorize, and one HTTP round trip
- * because the alternative — the client asking six endpoints — spends six of
- * the ~50 subrequests a free-plan invocation gets, on every app open. Each
+ * because the alternative — the client asking six endpoints — spends six
+ * times the D1 calls, on every app open, against this codebase's self-imposed
+ * ~50-call D1 budget per invocation (the platform's real ceiling is 1,000).
+ * Six round trips is also six times the request overhead against the free
+ * plan's 10 ms CPU limit. Each
  * query is either indexed (created_at DESC) or bounded by a small LIMIT. The
  * count is pinned by test/integration/brief-budget.test.ts, and that pin is
  * the point: this endpoint is the one thing every user runs every time.
