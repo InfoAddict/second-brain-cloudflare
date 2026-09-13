@@ -8,6 +8,7 @@ import {
   deleteIntegration,
 } from "../integrations";
 import type { IntegrationProvider, MirrorStore } from "./framework";
+import { narrowMirrorLayer } from "./framework";
 import { initializeDatabase } from "../db/init";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteStaleVectors, storeEntry } from "../capture/store";
@@ -227,7 +228,7 @@ export async function mirrorWriteContext(
   env: Env,
   record: { config?: { mirrorWorkspace?: string } } | null,
 ): Promise<WriteContext> {
-  const mirrorWorkspace = record?.config?.mirrorWorkspace === "company" ? "company" : "personal";
+  const mirrorWorkspace = narrowMirrorLayer(record?.config?.mirrorWorkspace);
   try {
     const roots = await ensureTenantBootstrap(env);
     const owner = await resolveIdentityByUserId(env, roots.ownerUserId);
