@@ -379,9 +379,11 @@ export async function inferEdgesOnWrite(
     if (generic) { statements.push(generic); inserted++; }
   }
 
-  // One call for every edge this write produces. Capture spends most of a
-  // Worker's 50-subrequest budget embedding chunks before it ever gets here, so
-  // a call per edge is what puts a large multi-chunk capture over the line.
+  // One call for every edge this write produces. Capture spends most of this
+  // codebase's self-imposed ~50-call D1/AI budget embedding chunks before it
+  // ever gets here, so a call per edge is what puts a large multi-chunk
+  // capture over that self-imposed line (well under the platform's real
+  // 1,000-call ceiling).
   if (statements.length) await env.DB.batch(statements);
   // Counts INSERTs only, not the paired DELETE above a typed follows edge, a
   // replacement is one edge, not zero or two. Read by the nightly graph pass

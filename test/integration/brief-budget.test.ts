@@ -2,11 +2,13 @@
  * GET /brief against real SQLite: what it returns, and what it costs.
  *
  * The brief runs on every app open, so its cost is a product decision, not an
- * implementation detail — a free-plan Worker invocation gets roughly 50 D1
- * queries, and an endpoint that quietly grew to a dozen would eat a quarter of
- * that before the user typed anything. The count is pinned here for the same
- * reason /import's is: the way this regresses is by someone adding "just one
- * more" query to a Promise.all.
+ * implementation detail — this codebase holds a Worker invocation to a
+ * self-imposed budget of roughly 50 D1 calls (the platform's real ceiling is
+ * 1,000 D1/KV/Vectorize calls per invocation), and an endpoint that quietly
+ * grew to a dozen would eat a quarter of that self-imposed budget before the
+ * user typed anything. The count is pinned here for the same reason /import's
+ * is: the way this regresses is by someone adding "just one more" query to a
+ * Promise.all.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import worker from "../../src/index";

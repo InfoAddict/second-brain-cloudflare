@@ -265,11 +265,14 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
  * ALTER shows up immediately).
  * `kind` is what stops a name that appears on both sides from being read as the wrong one.
  *
- * This exists because the fifteen statements it replaces cost fifteen subrequests to
+ * This exists because the fifteen statements it replaces cost fifteen D1 calls to
  * discover that a migrated brain — which is every brain after its first request — needs
- * nothing done (#282). Free-plan invocations get 50 subrequests, ensureDbReady spends
- * them inside the request that triggered it, and GET /graph was already close enough to
- * the ceiling that a cold isolate pushed it over: 59 against a limit of 50, now 47.
+ * nothing done (#282). The free plan's actual ceiling is 1,000 D1/KV/Vectorize calls per
+ * invocation, but this codebase holds itself to a much tighter self-imposed D1 budget
+ * (~50 calls) per request for cost and 10 ms-CPU reasons, and ensureDbReady spends its
+ * share inside the request that triggered it: GET /graph was already close enough to
+ * that self-imposed budget that a cold isolate pushed it over — 59 against a target of
+ * 50, now 47.
  *
  * Cost is one subrequest and one row read per catalogue entry, flat in the number of
  * entries because neither side of the UNION touches table data — measured on real D1
