@@ -477,14 +477,31 @@ function confirmMoveIntegrationMemories(provider, btn) {
  * worth another pass while it is actually improving: each pass's
  * vectorFailures must be strictly less than the one before it (the first
  * pass is compared against Infinity, so any non-zero result earns one
- * attempt). That strictly-decreasing rule is self-bounding, so there is no
- * separate retry cap.
+ * attempt). That strictly-decreasing rule is the termination rule and stays
+ * exactly as written — the ceiling below is a backstop against a future
+ * regression of it, not a retry policy.
+ *
+ * A repair pass re-walks the WHOLE item map from index 0, so `missing` and
+ * `refused` (and `errored` — see below) would double-count on every pass if
+ * accumulated unconditionally: the same stale pointer is "missing" again on
+ * every walk, not a newly discovered one. Only the first pass's counts (and
+ * the progress denominator they drive) are shown to the operator; `moved`
+ * and `alreadyThere` keep accumulating across every pass, since a repair
+ * pass turning a moved-but-unstamped entry into a confirmed alreadyThere IS
+ * new information.
  */
 async function runMoveLoop(provider, post, onProgress) {
-  const totals = { moved: 0, alreadyThere: 0, missing: 0, refused: 0 }
+  const totals = { moved: 0, alreadyThere: 0, missing: 0, refused: 0, errored: 0 }
   let cursor
+  let pass = 0
+  let passCount = 0
   let prevPassFailures = Infinity
   let passFailures = 0
+  // The first pass's own progress figure, frozen once it finishes — used
+  // both to pin the progress denominator during repair passes (which must
+  // not inflate it) and to derive the ceiling below, since a repair pass
+  // cannot discover more items than the first pass already found.
+  let mapSize = null
   for (;;) {
     const sentCursor = cursor
     let res
@@ -497,25 +514,63 @@ async function runMoveLoop(provider, post, onProgress) {
     }
     totals.moved += res.moved ?? 0
     totals.alreadyThere += res.alreadyThere ?? 0
-    totals.missing += res.missing ?? 0
-    totals.refused += res.refused ?? 0
+    if (pass === 0) {
+      totals.missing += res.missing ?? 0
+      totals.refused += res.refused ?? 0
+      totals.errored += res.errored ?? 0
+    }
     // The server reports vectorFailures once per call, so a multi-page pass
     // accumulates it across its own pages.
     passFailures += res.vectorFailures ?? 0
-    // Reflects actual moves (plus already-there, which is idempotent success),
-    // never missing or refused — those didn't move anything, so counting them
-    // here would inflate the in-progress figure past what actually happened.
-    const done = totals.moved + totals.alreadyThere
     const remaining = res.remaining ?? 0
-    if (onProgress) onProgress({ done, total: done + remaining })
+    let done, total
+    if (pass === 0) {
+      // Reflects actual moves (plus already-there, which is idempotent
+      // success), never missing, refused, or errored — those didn't move
+      // anything, so counting them here would inflate the in-progress figure
+      // past what actually happened.
+      done = totals.moved + totals.alreadyThere
+      total = done + remaining
+    } else {
+      // A repair pass re-walks the same map — it cannot make the map bigger
+      // or reveal new items, so the operator sees the size the first pass
+      // already established, not an inflated repeat count.
+      done = mapSize
+      total = mapSize
+    }
+    if (onProgress) onProgress({ done, total })
     if (remaining > 0 && res.cursor === sentCursor) {
       throw new Error('Move did not advance — the cursor is stalled')
     }
     cursor = res.cursor
     if (!cursor) {
+      if (pass === 0) mapSize = done
       if (passFailures > 0 && passFailures < prevPassFailures) {
         prevPassFailures = passFailures
         passFailures = 0
+        pass++
+        passCount++
+        // Backstop against a regression of the strictly-decreasing check
+        // above (a mutation-tested `<=` spins forever): the number of
+        // repair passes can never exceed the number of items in the map,
+        // since vectorFailures is itself bounded by mapSize and strictly
+        // decreases by at least 1 each pass. Anything past that is not a
+        // slow repair, it is a broken termination rule.
+        const ceiling = Math.max(mapSize, 1)
+        if (passCount > ceiling) {
+          throw new Error(
+            `Move did not finish: repair passed ${passCount} times without converging. Stop and check Vectorize/D1 before retrying.`
+          )
+        }
+        // Yield to the macrotask queue between passes so a spinning loop
+        // (e.g. from a regression of the check above) stays interruptible
+        // instead of starving the event loop with a pure microtask cycle.
+        // setTimeout isn't available in every harness this file loads into
+        // (see test/ui/move-loop.test.ts's bare vm context), so fall back to
+        // a plain microtask there rather than throwing.
+        await (typeof setTimeout === 'function'
+          ? new Promise((resolve) => setTimeout(resolve, 0))
+          : Promise.resolve())
         continue // cursor is already falsy — next call starts a fresh pass
       }
       totals.vectorFailures = passFailures
