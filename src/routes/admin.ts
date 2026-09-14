@@ -1170,7 +1170,10 @@ export async function handleAdminRoutes(
   //
   // Takes `id` for one or `ids` for many. Ruling on a backlog one at a time is
   // the actual complaint this answers, and doing it as N single requests would
-  // be N round trips against a Worker that gets ~50 D1 queries per invocation.
+  // be N round trips — cheap against the platform's real 1,000-call ceiling,
+  // but this codebase holds each request to a self-imposed D1 budget of
+  // ~50 calls, and N round trips is N times the request/response overhead and
+  // CPU regardless.
   if (url.pathname === "/patterns/resolve" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;

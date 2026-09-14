@@ -128,7 +128,8 @@ function planWrite(env: Env, snap: Snapshot, now: number): Write {
  * That fallback is deliberately not free. If every batch is rejected AND every per-row
  * replay also fails, the pass degenerates to about 107 subrequests, 1 candidate query,
  * then a rejected batch plus 25 replays on each of three attempts and again on the cursor
- * advance. That is well over the free plan's 50, but it only happens when D1 is refusing
+ * advance. That is well over this codebase's self-imposed ~50-call D1 budget (still nowhere
+ * near the platform's real 1,000-call ceiling), but it only happens when D1 is refusing
  * writes outright, and a pass that spends the budget failing is strictly better than one
  * that abandons 25 rows with NULL cursors for every later run to trip over.
  */

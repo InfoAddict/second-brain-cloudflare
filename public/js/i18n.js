@@ -447,6 +447,7 @@ const I18N_EN = {
     needSecret: 'Paste your secret first.',
     mirrorLayerTitle: 'Where synced memories land',
     couldNotConnectShort: 'Could not connect',
+    layerChangeFailedShort: 'Could not change the layer',
     syncNow: 'Sync now',
     syncing: 'Syncing…',
     syncingProgress: 'Syncing… {n} {noun} so far',
@@ -505,7 +506,59 @@ const I18N_EN = {
     connectedByLabel: 'Connected by {name}',
     mirrorPersonal: 'Synced memories land in the personal layer',
     mirrorShared: 'Synced memories land in the shared team layer',
+    mirrorLayerNewSyncsOnly: 'Applies to new syncs only — memories already synced stay where they are.',
     connectedOn: 'Connected {when}',
+    // #347 — moving memories a connection already synced into its current
+    // layer. Owner-only, so this whole family only ever renders for the
+    // caller who can act on it.
+    moveHint: {
+      one: 'Move the {n} {noun} already synced into "{layer}".',
+      other: 'Move the {n} {noun} already synced into "{layer}".',
+    },
+    moveNow: 'Move now',
+    moving: 'Moving…',
+    movingProgress: 'Moving… {n} {noun} so far',
+    moveFailedShort: 'Move failed',
+    moveResultMoved: { one: '{n} moved', other: '{n} moved' },
+    moveResultRefused: { one: '{n} refused', other: '{n} refused' },
+    moveResultMissing: { one: '{n} missing', other: '{n} missing' },
+    moveResultNone: 'Nothing left to move',
+    // Nothing productive happened — refusals, per-item errors, or a mix —
+    // as opposed to moveResultNone, which is only stale pointers. States the
+    // count, that they could not be moved, and what to do next.
+    moveResultFailed: {
+      one: '{n} memory could not be moved — check the connection and try again.',
+      other: '{n} memories could not be moved — check the connection and try again.',
+    },
+    moveResultNeedsRepair: 'Not yet searchable',
+    moveStoppedPartway:
+      'Moved {n} so far — the move stopped partway. Safe to try again: anything already moved will be skipped, not duplicated.',
+    moveFailedFirstCall: 'Move failed before anything moved. Safe to try again.',
+    // Refusals, not transient failures — retrying can never fix either, so
+    // neither sentence uses the "safe to try again"/"resume" family.
+    moveRefusedOwner: "Refused — only the brain's owner can move these memories.",
+    moveLayerChanged: 'The layer changed since this move was confirmed. Reconfirm to continue.',
+    // The drain's own repair passes (runMoveLoop) already retry while
+    // outstanding vectorFailures keep improving; this is what's left when a
+    // pass stops without reaching zero. The move itself succeeded — only
+    // search hasn't caught up — so this must reassure, not alarm.
+    moveVectorFailures: {
+      one: '{n} memory moved successfully but is not yet searchable in its new layer — run the move again to finish repairing it.',
+      other: '{n} memories moved successfully but are not yet searchable in their new layer — run the move again to finish repairing them.',
+    },
+    // The confirmation gate (locked decision 11, #347): states the count, the
+    // target layer, and — since only the shared layer changes who can read
+    // them — who ends up able to read the memories. The two directions say
+    // different things on purpose: moving to personal is not "the team will
+    // be able to read them".
+    confirmMoveBodyShared: {
+      one: 'Moves the {n} {noun} already synced into the shared team layer, where it lands visible to the whole team.',
+      other: 'Moves the {n} {noun} already synced into the shared team layer, where they land visible to the whole team.',
+    },
+    confirmMoveBodyPersonal: {
+      one: 'Moves the {n} {noun} already synced into your personal layer, where it lands visible only to you.',
+      other: 'Moves the {n} {noun} already synced into your personal layer, where they land visible only to you.',
+    },
   },
   team: {
     title: 'Team',
@@ -693,6 +746,7 @@ const I18N_EN = {
     removeLinkTitle: 'Remove this link?',
     removeLinkAction: 'Remove link',
     disconnectTitle: 'Disconnect this integration?',
+    confirmMoveTitle: 'Move these memories?',
   },
   coach: {
     dismiss: 'Got it',
@@ -748,6 +802,8 @@ const I18N_EN = {
     evTeamRenamed: 'Renamed the team',
     evIntegrationConnected: 'Connected an integration',
     evIntegrationDisconnected: 'Disconnected an integration',
+    evIntegrationLayerChanged: 'Changed where an integration’s memories land',
+    evIntegrationMemoriesMoved: 'Moved an integration’s already-synced memories',
     evShared: 'Shared a memory with the team',
     evUnshared: 'Made a memory personal again',
     evInsightConfirmed: 'Confirmed an insight',
@@ -1236,6 +1292,7 @@ const I18N_IT = {
     needSecret: 'Incolla prima il segreto.',
     mirrorLayerTitle: 'Dove finiscono i ricordi sincronizzati',
     couldNotConnectShort: 'Connessione non riuscita',
+    layerChangeFailedShort: 'Impossibile cambiare il livello',
     syncNow: 'Sincronizza ora',
     syncing: 'Sincronizzazione…',
     syncingProgress: 'Sincronizzazione… {n} {noun} finora',
@@ -1291,7 +1348,42 @@ const I18N_IT = {
     connectedByLabel: 'Collegata da {name}',
     mirrorPersonal: 'I ricordi sincronizzati finiscono nel livello personale',
     mirrorShared: 'I ricordi sincronizzati finiscono nel livello condiviso del team',
+    mirrorLayerNewSyncsOnly: 'Vale solo per le nuove sincronizzazioni — i ricordi già sincronizzati restano dove sono.',
     connectedOn: 'Collegata il {when}',
+    moveHint: {
+      one: 'Sposta i {n} {noun} già sincronizzati in "{layer}".',
+      other: 'Sposta i {n} {noun} già sincronizzati in "{layer}".',
+    },
+    moveNow: 'Sposta ora',
+    moving: 'Spostamento…',
+    movingProgress: 'Spostamento… {n} {noun} finora',
+    moveFailedShort: 'Spostamento non riuscito',
+    moveResultMoved: { one: '{n} spostato', other: '{n} spostati' },
+    moveResultRefused: { one: '{n} rifiutato', other: '{n} rifiutati' },
+    moveResultMissing: { one: '{n} mancante', other: '{n} mancanti' },
+    moveResultNone: 'Niente da spostare',
+    moveResultFailed: {
+      one: '{n} ricordo non è stato spostato — controlla la connessione e riprova.',
+      other: '{n} ricordi non sono stati spostati — controlla la connessione e riprova.',
+    },
+    moveResultNeedsRepair: 'Non ancora ricercabile',
+    moveStoppedPartway:
+      'Spostati {n} finora — lo spostamento si è interrotto a metà. Puoi riprovare senza rischi: quanto già spostato non verrà duplicato.',
+    moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
+    moveRefusedOwner: 'Rifiutato — solo il proprietario del brain può spostare questi ricordi.',
+    moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
+    moveVectorFailures: {
+      one: '{n} ricordo spostato correttamente ma non ancora ricercabile nel suo nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
+      other: '{n} ricordi spostati correttamente ma non ancora ricercabili nel loro nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
+    },
+    confirmMoveBodyShared: {
+      one: 'Sposta il {n} {noun} già sincronizzato nel livello condiviso del team, dove finisce visibile a tutto il team.',
+      other: 'Sposta i {n} {noun} già sincronizzati nel livello condiviso del team, dove finiscono visibili a tutto il team.',
+    },
+    confirmMoveBodyPersonal: {
+      one: 'Sposta il {n} {noun} già sincronizzato nel tuo livello personale, dove finisce visibile solo a te.',
+      other: 'Sposta i {n} {noun} già sincronizzati nel tuo livello personale, dove finiscono visibili solo a te.',
+    },
   },
   team: {
     title: 'Team',
@@ -1480,6 +1572,7 @@ const I18N_IT = {
     removeLinkTitle: 'Rimuovere questo collegamento?',
     removeLinkAction: 'Rimuovi collegamento',
     disconnectTitle: 'Disconnettere questa integrazione?',
+    confirmMoveTitle: 'Spostare questi ricordi?',
   },
   coach: {
     dismiss: 'Ho capito',
@@ -1518,6 +1611,8 @@ const I18N_IT = {
     evTeamRenamed: 'Ha rinominato il team',
     evIntegrationConnected: 'Ha collegato un’integrazione',
     evIntegrationDisconnected: 'Ha scollegato un’integrazione',
+    evIntegrationLayerChanged: 'Ha cambiato dove finiscono i ricordi di un’integrazione',
+    evIntegrationMemoriesMoved: 'Ha spostato i ricordi già sincronizzati di un’integrazione',
     evShared: 'Ha condiviso un ricordo col team',
     evUnshared: 'Ha reso di nuovo personale un ricordo',
     evInsightConfirmed: 'Ha confermato un insight',

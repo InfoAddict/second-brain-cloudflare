@@ -214,8 +214,9 @@ and nothing in the sheet can make it so: an action can be suspended at an
 `await` while another action runs, so there is no "currently running action"
 for a module-level variable to hold.
 
-In tree the sheet has seven callers — memory forget and link removal
-(`memory-crud.js`), integration disconnect (`integrations.js`), token
+In tree the sheet has eight callers — memory forget and link removal
+(`memory-crud.js`), integration disconnect and the move of an integration's
+already-synced memories into its current layer (`integrations.js`), token
 rotation, suspension and removal (`team.js`), and the memories list's bulk
 layer move (`recent.js`) — and every one of them closes with its `done()`. The
 bulk move is the one whose action is long enough for the double-submit guard to

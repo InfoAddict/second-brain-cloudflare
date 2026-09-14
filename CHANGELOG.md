@@ -2,6 +2,28 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [3.3.0] — Moving an integration between layers
+
+**Integrations**
+
+- An admin can now move a connected integration between the personal and shared team layers without disconnecting and reconnecting it. The connected row's provenance line gains a select next to it, admin-only, preselected to the integration's current layer; changing it takes effect immediately and only affects where future syncs land — it does not move memories already synced, which is what the next entry is for (#346).
+- The brain's owner can now move memories a connection already synced into its current layer, in place — ids, content, authorship and edges are preserved, and vectors are re-stamped so scoped recall finds them in the new layer immediately. It runs as a bounded, resumable drain (own memories only, one batch at a time), reports moved/already-there/missing/refused counts separately, and is owner-only: mirrored memories live in the owner's own workspace, so anyone else is refused with a reason rather than told "moved 0" as if it had worked (#347).
+
+**Worker endpoints**
+
+- New: `POST /integrations/:provider/layer` sets where a connected integration's future syncs land, without a reconnect. Admin only.
+- New: `POST /integrations/:provider/move` moves the memories a connection has already synced into its current layer, one bounded batch per call, resumable from a cursor the response returns. Owner only.
+- `GET /integrations` now reports whether the caller is the brain's owner, so the dashboard can show the move only to someone who can actually use it.
+- Two new admin events in the activity feed: `integration_layer_changed` and `integration_memories_moved`.
+
+## [3.2.1] — Scoped keyword recall fix
+
+**Fixes**
+
+- Keyword recall no longer lets memories you cannot read consume your candidate limit. Multiple search terms were combined with `OR` without grouping, and because SQL binds `AND` more tightly than `OR`, a filter that followed applied only to the last term: on a team brain the workspace scope was enforced against one term instead of all of them, and the same held for the time window on a dated query. Rows from other people's workspaces were discarded after the fact, but they had already filled the candidate window, so real matches were pushed out of it before scoring. The alternatives are now parenthesised whenever a filter follows. Recall with a single term, or with no filter at all, produces byte-identical SQL to before (#342).
+
+This is a Worker-only patch. It ships with the next desktop app release rather than one of its own.
+
 ## [3.2.0] — Dashboard and installer redesign
 
 **Dashboard redesign**
