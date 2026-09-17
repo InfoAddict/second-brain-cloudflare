@@ -54,7 +54,7 @@ Second Brain can now be a team's memory without stopping being yours.
 | Personal | Only you | Only you |
 | Shared | Everyone on the team | The author or an admin |
 
-The same Worker supports personal and team use; there is no separate team deployment. In the API, CLI, and MCP tools, the Shared layer is represented by the stable workspace value `company`. See the [Team Setup guide](wiki/Team-Setup) for member management, capture policies, sharing, and upgrades.
+The same Worker supports personal and team use; there is no separate team deployment. In the API, CLI, and MCP tools, the Shared layer is represented by the stable workspace value `company`. See the [Team Setup guide](https://github.com/rahilp/second-brain-cloudflare/wiki/Team-Setup) for member management, capture policies, sharing, and upgrades.
 
 **v3.0.0 scope:** each brain has **one** shared team. The API and MCP layer include optional `team` parameters and a `list_teams` tool so multi-team support can ship later without breaking changes; the dashboard and admin flows do not create or switch between multiple teams yet. See [CHANGELOG.md](CHANGELOG.md).
 
@@ -235,7 +235,7 @@ https://YOUR-WORKER-URL/mcp
 
 Use OAuth where the client supports it, or an `Authorization: Bearer <token>` header for static clients. Query-string token authentication was removed in v3 because URLs can leak through browser history and logs.
 
-Having connection issues? See [Connect to AI Clients → Troubleshooting](wiki/Connect-to-AI-Clients#troubleshooting) (Opera warnings, Cursor OAuth, Claude Code tool visibility).
+Having connection issues? See [Connect to AI Clients → Troubleshooting](https://github.com/rahilp/second-brain-cloudflare/wiki/Connect-to-AI-Clients#troubleshooting) (Opera warnings, Cursor OAuth, Claude Code tool visibility).
 
 ### 3. Manual deployment
 
@@ -247,7 +247,7 @@ npm run vectors:create
 npm run deploy
 ```
 
-Follow the [Setup Guide](wiki/Setup-Guide) for prerequisites, resource creation, deployment verification, and troubleshooting. Then use [Connect to AI Clients](wiki/Connect-to-AI-Clients) for client-specific instructions.
+Follow the [Setup Guide](https://github.com/rahilp/second-brain-cloudflare/wiki/Setup-Guide) for prerequisites, resource creation, deployment verification, and troubleshooting. Then use [Connect to AI Clients](https://github.com/rahilp/second-brain-cloudflare/wiki/Connect-to-AI-Clients) for client-specific instructions.
 
 **Develop locally:**
 
@@ -256,7 +256,7 @@ npm run dev      # start the Worker locally
 npm test         # run the test suite
 ```
 
-See [Local Development](wiki/Local-Development) for mixed local/remote Wrangler configuration and sharing a local brain through a tunnel.
+See [Local Development](https://github.com/rahilp/second-brain-cloudflare/wiki/Local-Development) for mixed local/remote Wrangler configuration and sharing a local brain through a tunnel.
 
 **Verify the deployment** (replace `YOUR-WORKER-URL` and `YOUR-TOKEN`):
 
@@ -280,7 +280,7 @@ A successful response looks like `{"ok":true,"id":"..."}`.
 - **Claude Code:** session hooks that recall project context on start and save the conversation on exit — [`integrations/claude-code-hooks/`](integrations/claude-code-hooks/)
 - **Dashboard:** Capture, recall, browse, graph, share, back up, and restore from the built-in web interface
 
-See [Capture from Anywhere](wiki/Capture-from-Anywhere) for setup and usage instructions.
+See [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wiki/Capture-from-Anywhere) for setup and usage instructions.
 
 ## What's new in v3
 
@@ -293,19 +293,19 @@ See [GitHub Releases](releases) for release notes and previous versions.
 ## Documentation
 
 - [Wiki home](wiki): Documentation index and quick links
-- [Setup Guide](wiki/Setup-Guide): Desktop, one-click, and manual deployment
-- [Team Setup](wiki/Team-Setup): Team mode, member access, sharing rules, capture defaults, and offboarding
-- [Connect to AI Clients](wiki/Connect-to-AI-Clients): ChatGPT, Claude, Claude Code, Codex, Cursor, and other MCP clients
-- [Cursor Instructions](wiki/Cursor-Instructions): MCP setup and Cursor Rules for automatic recall and remember
-- [Capture from Anywhere](wiki/Capture-from-Anywhere): CLI, browser extension, bookmarklet, iOS Shortcuts, and Notion
-- [Notion Integration](wiki/Notion-Integration): Connect, synchronize, and troubleshoot Notion
-- [Web UI](wiki/Web-UI): Dashboard and mobile interface
-- [How It Works](wiki/How-It-Works): Retrieval, ranking, classification, duplicates, and architecture
-- [API Reference](wiki/API-Reference): REST endpoints and MCP tools
-- [How to Upgrade](wiki/How-to-Upgrade): Upgrade an existing deployment
-- [Frequently Asked Questions](wiki/Frequently-Asked-Questions): Design, privacy, costs, and common questions
-- [Obsidian Plugin](wiki/Obsidian-Plugin): Installation, configuration, and sync modes
-- [Local Development](wiki/Local-Development): Run the Worker locally and share it for testing
+- [Setup Guide](https://github.com/rahilp/second-brain-cloudflare/wiki/Setup-Guide): Desktop, one-click, and manual deployment
+- [Team Setup](https://github.com/rahilp/second-brain-cloudflare/wiki/Team-Setup): Team mode, member access, sharing rules, capture defaults, and offboarding
+- [Connect to AI Clients](https://github.com/rahilp/second-brain-cloudflare/wiki/Connect-to-AI-Clients): ChatGPT, Claude, Claude Code, Codex, Cursor, and other MCP clients
+- [Cursor Instructions](https://github.com/rahilp/second-brain-cloudflare/wiki/Cursor-Instructions): MCP setup and Cursor Rules for automatic recall and remember
+- [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wiki/Capture-from-Anywhere): CLI, browser extension, bookmarklet, iOS Shortcuts, and Notion
+- [Notion Integration](https://github.com/rahilp/second-brain-cloudflare/wiki/Notion-Integration): Connect, synchronize, and troubleshoot Notion
+- [Web UI](https://github.com/rahilp/second-brain-cloudflare/wiki/Web-UI): Dashboard and mobile interface
+- [How It Works](https://github.com/rahilp/second-brain-cloudflare/wiki/How-It-Works): Retrieval, ranking, classification, duplicates, and architecture
+- [API Reference](https://github.com/rahilp/second-brain-cloudflare/wiki/API-Reference): REST endpoints and MCP tools
+- [How to Upgrade](https://github.com/rahilp/second-brain-cloudflare/wiki/How-to-Upgrade): Upgrade an existing deployment
+- [Frequently Asked Questions](https://github.com/rahilp/second-brain-cloudflare/wiki/Frequently-Asked-Questions): Design, privacy, costs, and common questions
+- [Obsidian Plugin](https://github.com/rahilp/second-brain-cloudflare/wiki/Obsidian-Plugin): Installation, configuration, and sync modes
+- [Local Development](https://github.com/rahilp/second-brain-cloudflare/wiki/Local-Development): Run the Worker locally and share it for testing
 
 ## Technology and privacy
 
