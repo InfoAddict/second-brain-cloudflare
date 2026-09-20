@@ -140,7 +140,7 @@ describe("connected-row mirror-layer control", () => {
     const ctx = load(true, false);
     const html = ctx.renderIntegrationCard({ ...BASE, mirrorWorkspace: "company" });
     expect(html).not.toContain("<select");
-    expect(html).toContain("Synced memories land in the shared team layer");
+    expect(html).toContain("New memories from this source go to the shared team layer");
   });
 
   it("shows no layer control at all on a solo brain", () => {
