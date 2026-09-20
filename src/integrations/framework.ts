@@ -113,8 +113,27 @@ export async function loadIntegration(env: IntegrationEnv, provider: string): Pr
   }
 }
 
+// Create-or-replace, for connect only — partial updates go through updateIntegration.
 export async function saveIntegration(env: IntegrationEnv, record: IntegrationRecord): Promise<void> {
   await env.OAUTH_KV.put(`${INTEGRATIONS_KEY_PREFIX}${record.provider}`, JSON.stringify(record));
+}
+
+// The ONLY way to update part of an existing record. Every writer that held a
+// record across awaited work and saved it back clobbered whatever landed in
+// between — a mid-sync layer change most damagingly (#348). Reading fresh at
+// save time shrinks the lost-update window from "the whole sync" to "the gap
+// between this read and this put"; KV has no compare-and-swap, so the gap
+// cannot be closed entirely, only made vanishingly small.
+export async function updateIntegration(
+  env: IntegrationEnv,
+  provider: string,
+  mutate: (record: IntegrationRecord) => void,
+): Promise<IntegrationRecord | null> {
+  const record = await loadIntegration(env, provider);
+  if (!record) return null;
+  mutate(record);
+  await saveIntegration(env, record);
+  return record;
 }
 
 export async function deleteIntegration(env: IntegrationEnv, provider: string): Promise<void> {
