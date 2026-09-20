@@ -4,6 +4,10 @@ import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env"
 import { req } from "../helpers/make-request";
 import type { Env } from "../../src/env";
 import { D1Mock } from "../helpers/d1-mock";
+import { buildMcpServer } from "../../src/mcp/server";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { VECTORIZE_GET_BY_IDS_BATCH } from "../../src/constants";
 
 function makeCtx() {
   const pending: Promise<any>[] = [];
@@ -124,5 +128,97 @@ describe("Vectorize unavailable — writes degrade to keyword-only (#270)", () =
     expect(res.status).toBe(500);
     expect(db.entries[0].content).toBe(content);
     expect(db.entries[0].vector_ids).toBe(vector_ids);
+  });
+});
+
+// #352: a failed Vectorize call does not establish WHY it failed. A transient
+// 5xx must not be reported as a missing index.
+describe("recall wording for Vectorize failures (#352)", () => {
+  let db: D1Mock;
+  beforeEach(() => { db = makeTestDb(); });
+
+  const transient = () => makeTestEnv(db, {
+    VECTORIZE: makeVectorizeMock({ query: vi.fn().mockRejectedValue(new Error("vectorize internal error (code 5xx)")) } as any),
+  });
+
+  async function callMcpRecall(env: Env, query: string) {
+    const { ctx } = makeCtx();
+    const server = buildMcpServer(env, ctx);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      const result = await client.callTool({ name: "recall", arguments: { query } });
+      return (result.content as { text: string }[])[0].text;
+    } finally {
+      await client.close();
+    }
+  }
+
+  it("a transient Vectorize query error yields the neutral wording, not a missing-index diagnosis", async () => {
+    const { ctx } = makeCtx();
+    const res = await worker.fetch(req("GET", "/recall?query=nothing+stored+here"), transient(), ctx);
+    const body = await res.json() as any;
+
+    expect(body.semantic_unavailable).toBe(true);
+    expect(body.message).toContain("unavailable or incomplete");
+    expect(body.message).not.toContain("Vectorize index missing");
+    expect(body.message).toContain("may be missing");
+    expect(body.message).toContain("wrangler vectorize create");
+  });
+
+  it("MCP recall states results MAY be keyword-only and does not assert the index is missing", async () => {
+    const text = await callMcpRecall(transient(), "nothing stored here");
+
+    expect(text).toContain("unavailable or incomplete");
+    expect(text).toContain("may be keyword matches only");
+    expect(text).not.toContain("because the Vectorize index is missing");
+    expect(text).toContain("may be missing");
+  });
+
+  it("an absent binding still reports semantic_unavailable with the neutral wording", async () => {
+    const { ctx } = makeCtx();
+    const env = makeTestEnv(db, { VECTORIZE: undefined as any });
+    const res = await worker.fetch(req("GET", "/recall?query=nothing+stored+here"), env, ctx);
+    const body = await res.json() as any;
+
+    expect(body.semantic_unavailable).toBe(true);
+    expect(body.message).toContain("unavailable or incomplete");
+  });
+
+  it("a healthy recall carries no unavailable notice", async () => {
+    const { ctx } = makeCtx();
+    const env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [] }) } as any) });
+    const res = await worker.fetch(req("GET", "/recall?query=nothing+stored+here"), env, ctx);
+    const body = await res.json() as any;
+
+    expect(body.semantic_unavailable).toBe(false);
+    expect(body.message).toBe("Nothing found matching that query.");
+
+    const text = await callMcpRecall(env, "nothing stored here");
+    expect(text).not.toContain("unavailable or incomplete");
+  });
+
+  it("a later getByIds batch failing after an earlier success keeps the successful batch's matches", async () => {
+    // Tag-scoped path: more vector ids than one getByIds batch, so a second call is made.
+    const total = VECTORIZE_GET_BY_IDS_BATCH + 1;
+    const ids = Array.from({ length: total }, (_, i) => `v${i}`);
+    db.entries.push({
+      id: "e1", content: "shared tag entry", tags: JSON.stringify(["shared"]), source: "api",
+      created_at: Date.now(), vector_ids: JSON.stringify(ids), recall_count: 0, importance_score: 0,
+    });
+    const values = new Array(384).fill(0.1);
+    const getByIds = vi.fn()
+      .mockResolvedValueOnce(ids.slice(0, VECTORIZE_GET_BY_IDS_BATCH).map(id => ({ id, values, metadata: { parentId: "e1", isUpdate: false } })))
+      .mockRejectedValueOnce(new Error("vectorize internal error (code 5xx)"));
+    const env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ getByIds } as any) });
+    const { ctx } = makeCtx();
+
+    const res = await worker.fetch(req("GET", "/recall?query=shared+tag+entry&tag=shared"), env, ctx);
+    const body = await res.json() as any;
+
+    expect(getByIds).toHaveBeenCalledTimes(2);
+    expect(body.semantic_unavailable).toBe(true);
+    expect(body.results.length).toBeGreaterThan(0);
   });
 });
