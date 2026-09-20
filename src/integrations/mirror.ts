@@ -11,7 +11,7 @@ import type { IntegrationProvider, MirrorStore } from "./framework";
 import { narrowMirrorLayer } from "./framework";
 import { initializeDatabase } from "../db/init";
 import { forgetEntry } from "../capture/lifecycle";
-import { deleteStaleVectors, storeEntry } from "../capture/store";
+import { deleteStaleVectors, embedContextForRow, storeEntry } from "../capture/store";
 import { classifyEntry } from "../capture/classify";
 import { withKind } from "../memory/kind";
 import { withStatus } from "../memory/status";
@@ -84,7 +84,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
     async updateEntry(id, content) {
       const row = await env.DB.prepare(
         // scope-exempt: by-id: the mirrored row this connector wrote
-        `SELECT tags, source, vector_ids FROM entries WHERE id = ?`
+        `SELECT tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
       ).bind(id).first() as Record<string, any> | null;
       if (!row) return false;
 
@@ -97,9 +97,14 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
         .bind(content, JSON.stringify(refreshedTags), now, id).run();
       const cfg = await config();
+      // The sync's write context decides where a NEW mirror goes (createEntry).
+      // An UPDATE refreshes a row whose home is already decided and may have moved
+      // since this batch's context was resolved (#351) — stamp from the row itself,
+      // exactly as the manual-edit path does.
+      const embedCtx = embedContextForRow(row, writeCtx);
       let newVectorIds: string[] = [];
       try {
-        newVectorIds = (await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, writeCtx)).vectorIds;
+        newVectorIds = (await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx)).vectorIds;
       } catch (e) {
         console.error("Vectorize re-embed failed (non-fatal):", e);
       }
