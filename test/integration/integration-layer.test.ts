@@ -137,6 +137,52 @@ describe("POST /integrations/notion/layer", () => {
     expect(after.updatedAt).toBeGreaterThan(before.updatedAt);
   });
 
+  it("a config key that lands between the route's read and its write survives (#348)", async () => {
+    await call("POST", "/integrations/notion/connect", ADMIN, { token: "admin-notion-token" });
+    // After the route's own read of the record, another writer (a sync landing
+    // email's checkpoint, say) adds a config key and an itemMap entry to KV.
+    const kv = env.OAUTH_KV;
+    const realGet = kv.get.bind(kv) as (key: string) => Promise<string | null>;
+    let armed = true;
+    (kv as any).get = async (key: string) => {
+      const value = await realGet(key);
+      if (armed && key === "integrations:notion") {
+        armed = false;
+        const rec = JSON.parse(value as string);
+        rec.config.landedMidRoute = "kept";
+        rec.itemMap.p9 = { entryId: "e-9", version: "v9" };
+        await kv.put(key, JSON.stringify(rec));
+      }
+      return value;
+    };
+
+    const res = await call("POST", "/integrations/notion/layer", ADMIN, { workspace: "company" });
+    expect(res.status).toBe(200);
+
+    const after = (await loadIntegration(env, "notion"))!;
+    expect(after.config.mirrorWorkspace).toBe("company");
+    expect(after.config.landedMidRoute).toBe("kept");
+    expect(after.itemMap.p9).toEqual({ entryId: "e-9", version: "v9" });
+  });
+
+  it("404s when the record is disconnected between the route's read and its write (#348)", async () => {
+    await call("POST", "/integrations/notion/connect", ADMIN, { token: "admin-notion-token" });
+    const kv = env.OAUTH_KV;
+    const realGet = kv.get.bind(kv) as (key: string) => Promise<string | null>;
+    let armed = true;
+    (kv as any).get = async (key: string) => {
+      const value = await realGet(key);
+      if (armed && key === "integrations:notion") { armed = false; await kv.delete(key); }
+      return value;
+    };
+
+    const res = await call("POST", "/integrations/notion/layer", ADMIN, { workspace: "company" });
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ ok: false, error: "Notion is not connected" });
+    expect(await kv.get("integrations:notion")).toBeNull(); // nothing resurrected
+  });
+
   it("a member cannot change the layer", async () => {
     await call("POST", "/integrations/notion/connect", ADMIN, { token: "admin-notion-token" });
 
