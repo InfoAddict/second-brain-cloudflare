@@ -538,6 +538,7 @@ const I18N_EN = {
     // neither sentence uses the "safe to try again"/"resume" family.
     moveRefusedOwner: "Refused — only the brain's owner can move these memories.",
     moveLayerChanged: 'The layer changed since this move was confirmed. Reconfirm to continue.',
+    moveLayerChangedPartial: 'The layer changed since this move was confirmed. {n} memories already moved to the previously confirmed layer. Reconfirm to decide what happens next.',
     // The drain's own repair passes (runMoveLoop) already retry while
     // outstanding vectorFailures keep improving; this is what's left when a
     // pass stops without reaching zero. The move itself succeeded — only
@@ -1372,6 +1373,7 @@ const I18N_IT = {
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
     moveRefusedOwner: 'Rifiutato — solo il proprietario del brain può spostare questi ricordi.',
     moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
+    moveLayerChangedPartial: 'Il livello è cambiato da quando hai confermato lo spostamento. {n} ricordi sono già stati spostati nel livello confermato in precedenza. Riconferma per decidere come continuare.',
     moveVectorFailures: {
       one: '{n} ricordo spostato correttamente ma non ancora ricercabile nel suo nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
       other: '{n} ricordi spostati correttamente ma non ancora ricercabili nel loro nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
