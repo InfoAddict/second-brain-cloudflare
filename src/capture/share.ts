@@ -60,7 +60,8 @@ export async function moveEntry(
  * Best-effort metadata update; SQL remains the correctness boundary.
  * Never throws (per-chunk catch, not one catch around the whole loop, so one
  * bad chunk doesn't abort the rest) — /share's ctx.waitUntil path depends on
- * that. Returns whether every chunk actually succeeded, for callers (the
+ * that. Returns whether every requested id was verifiably re-stamped (an id
+ * the index no longer returns counts as a failure), for callers (the
  * #347 move route) that need to know rather than just fire-and-forget.
  */
 export async function restampVectorWorkspace(env: Env, vectorIds: string[], workspaceId: string): Promise<{ ok: boolean }> {
@@ -70,6 +71,10 @@ export async function restampVectorWorkspace(env: Env, vectorIds: string[], work
     if (!batch.length) continue;
     try {
       const vectors = await env.VECTORIZE.getByIds(batch);
+      // Ids the index does not return CANNOT have been re-stamped; reporting
+      // them ok let a move claim "searchable in the new layer" for an entry
+      // nothing in the index points at (#355). Missing is a failure, not a skip.
+      if (vectors.length < batch.length) ok = false;
       if (!vectors.length) continue;
       await env.VECTORIZE.upsert(
         vectors.map(v => ({ ...v, metadata: { ...v.metadata, workspace_id: workspaceId } })),
