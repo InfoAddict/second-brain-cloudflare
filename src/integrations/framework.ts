@@ -143,28 +143,37 @@ export async function updateIntegration(
 // key must update the mirror it just created, and a deleted one must not be
 // deleted twice. Record only successful operations.
 export class ItemMapDeltas {
-  private puts: Record<string, ItemMapEntry> = {};
+  // Item ids are arbitrary upstream strings, so nothing here may treat a plain
+  // object's inherited members ("constructor", "__proto__", ...) as entries:
+  // pending state is Map/Set, and the snapshot is read by own property only.
+  private puts = new Map<string, ItemMapEntry>();
   private deletes = new Set<string>();
 
   constructor(private snapshot: Record<string, ItemMapEntry>) {}
 
   get(key: string): ItemMapEntry | undefined {
     if (this.deletes.has(key)) return undefined;
-    return this.puts[key] ?? this.snapshot[key];
+    const put = this.puts.get(key);
+    if (put) return put;
+    return Object.hasOwn(this.snapshot, key) ? this.snapshot[key] : undefined;
   }
 
   put(key: string, entry: ItemMapEntry): void {
     this.deletes.delete(key);
-    this.puts[key] = entry;
+    this.puts.set(key, entry);
   }
 
   delete(key: string): void {
-    delete this.puts[key];
+    this.puts.delete(key);
     this.deletes.add(key);
   }
 
   applyTo(itemMap: Record<string, ItemMapEntry>): void {
-    Object.assign(itemMap, this.puts);
+    // defineProperty, not assignment: `itemMap["__proto__"] = x` would rewire
+    // the prototype instead of creating the key.
+    for (const [key, entry] of this.puts) {
+      Object.defineProperty(itemMap, key, { value: entry, enumerable: true, writable: true, configurable: true });
+    }
     for (const key of this.deletes) delete itemMap[key];
   }
 }
