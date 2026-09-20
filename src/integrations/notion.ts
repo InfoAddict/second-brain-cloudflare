@@ -200,14 +200,18 @@ export function computeSyncPlan(
   itemMap: Record<string, ItemMapEntry>,
   listingComplete: boolean,
 ): SyncPlan {
+  // Item ids are arbitrary external strings, so a plain bracket read can hit an
+  // inherited name ("constructor", "__proto__") and report a mirror that is not there.
+  const mirrored = (id: string) => (Object.hasOwn(itemMap, id) ? itemMap[id] : undefined);
+
   const changed = pages
-    .filter(p => !p.archived && itemMap[p.id]?.version !== p.lastEdited)
+    .filter(p => !p.archived && mirrored(p.id)?.version !== p.lastEdited)
     .sort((a, b) => (a.lastEdited < b.lastEdited ? -1 : 1));
 
   const deleted: string[] = [];
   // Archived/trashed pages are an explicit delete signal even on a truncated listing.
   for (const p of pages) {
-    if (p.archived && itemMap[p.id]) deleted.push(p.id);
+    if (p.archived && mirrored(p.id)) deleted.push(p.id);
   }
   // Silent disappearance (page unshared or connection access revoked) is only
   // trustworthy when the listing was complete — a truncated listing must never
