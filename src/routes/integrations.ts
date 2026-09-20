@@ -370,7 +370,7 @@ export async function handleIntegrationsRoutes(
         await writeAdminEvent(env, {
           actorId: auth.userId,
           event: "integration_memories_moved",
-          payload: { provider: provider.id, target, moved, alreadyThere, missing, refused },
+          payload: { provider: provider.id, target, moved, alreadyThere, missing, refused, errored, vectorFailures },
         });
       } catch (e) {
         console.error("admin_events insert failed for integration_memories_moved (non-fatal):", e);
