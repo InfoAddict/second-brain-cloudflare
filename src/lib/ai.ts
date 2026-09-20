@@ -30,9 +30,15 @@ function extractChunkText(d: any): string {
 }
 
 function consumeSseLine(line: string, onText: (chunk: string) => void): void {
-  if (!line.startsWith("data: ") || line.includes("[DONE]")) return;
+  if (!line.startsWith("data:")) return;
+  // SSE permits exactly one optional space after the field colon.
+  const payload = line.slice(line.startsWith("data: ") ? 6 : 5);
+  // The completion sentinel is the WHOLE payload, never a substring of one —
+  // an answer may legitimately contain the text "[DONE]". trimEnd() tolerates
+  // the trailing \r a CRLF stream leaves after splitting on \n.
+  if (payload.trimEnd() === "[DONE]") return;
   try {
-    const d = JSON.parse(line.slice(6));
+    const d = JSON.parse(payload);
     const text = extractChunkText(d);
     if (text) onText(text);
   } catch (e) {
