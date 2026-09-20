@@ -436,6 +436,7 @@ export function computeCalendarPlan(
   metaByKey: Record<string, CalendarMetaEntry>,
   nowMs: number,
 ): CalendarPlan {
+  // Occurrence keys come from feed-supplied UIDs, so guard against inherited names.
   const mirrored = (key: string) => (Object.hasOwn(itemMap, key) ? itemMap[key] : undefined);
 
   const present = new Set(occurrences.map((o) => o.key));
