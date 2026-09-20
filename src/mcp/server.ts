@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveConfig } from "../config";
 import { z } from "zod";
 import type { Env } from "../env";
-import { VECTORIZE_FIX_HINT } from "../constants";
+import { SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
 import { appendToEntry, updateEntryContent } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
@@ -586,7 +586,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId });
 
       const notice = semanticUnavailable
-        ? `Note: semantic search is unavailable because the Vectorize index is missing, so these are keyword matches only. Fix: ${VECTORIZE_FIX_HINT}.\n\n`
+        ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
         : "";
 
       if (!matches.length) {
