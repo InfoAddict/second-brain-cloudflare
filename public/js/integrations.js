@@ -695,7 +695,7 @@ async function moveIntegrationMemories(provider, btn, expectedTarget) {
         // The operator can only decide WHAT to reconfirm if told how much
         // already landed in the layer they originally confirmed (#355).
         note.textContent = movedSoFar > 0
-          ? t('integrations.moveLayerChangedPartial', { n: movedSoFar })
+          ? tPlural('integrations.moveLayerChangedPartial', movedSoFar, { n: movedSoFar })
           : t('integrations.moveLayerChanged')
       } else if (movedSoFar > 0) {
         note.textContent = t('integrations.moveStoppedPartway', { n: movedSoFar })
