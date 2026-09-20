@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
-import { LLM_MODEL, VECTORIZE_FIX_HINT } from "../constants";
+import { LLM_MODEL, SEMANTIC_UNAVAILABLE_DETAIL } from "../constants";
 import { buildEntryFilterQuery } from "../capture/entry";
 import { compressTag } from "../compression/digest";
 import { CORS_HEADERS, intParam, json, readWorkspaceParam, readTeamQueryParam } from "../lib/http";
@@ -142,7 +142,7 @@ export async function handleRecallRoutes(
         query_used: queryUsed,
         semantic_unavailable: semanticUnavailable,
         message: semanticUnavailable
-          ? `Semantic search unavailable (Vectorize index missing). Fix: ${VECTORIZE_FIX_HINT}.`
+          ? `Semantic search was unavailable or incomplete for this query, so only keyword and tag matches were considered. ${SEMANTIC_UNAVAILABLE_DETAIL}`
           : "Nothing found matching that query.",
       });
     }

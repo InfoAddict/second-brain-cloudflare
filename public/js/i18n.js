@@ -504,8 +504,8 @@ const I18N_EN = {
       },
     },
     connectedByLabel: 'Connected by {name}',
-    mirrorPersonal: 'Synced memories land in the personal layer',
-    mirrorShared: 'Synced memories land in the shared team layer',
+    mirrorPersonal: 'New memories from this source go to the personal layer',
+    mirrorShared: 'New memories from this source go to the shared team layer',
     mirrorLayerNewSyncsOnly: 'Applies to new syncs only — memories already synced stay where they are.',
     connectedOn: 'Connected {when}',
     // #347 — moving memories a connection already synced into its current
@@ -538,6 +538,10 @@ const I18N_EN = {
     // neither sentence uses the "safe to try again"/"resume" family.
     moveRefusedOwner: "Refused — only the brain's owner can move these memories.",
     moveLayerChanged: 'The layer changed since this move was confirmed. Reconfirm to continue.',
+    moveLayerChangedPartial: {
+      one: 'The layer changed since this move was confirmed. {n} memory already moved to the previously confirmed layer. Reconfirm to decide what happens next.',
+      other: 'The layer changed since this move was confirmed. {n} memories already moved to the previously confirmed layer. Reconfirm to decide what happens next.',
+    },
     // The drain's own repair passes (runMoveLoop) already retry while
     // outstanding vectorFailures keep improving; this is what's left when a
     // pass stops without reaching zero. The move itself succeeded — only
@@ -1346,8 +1350,8 @@ const I18N_IT = {
       },
     },
     connectedByLabel: 'Collegata da {name}',
-    mirrorPersonal: 'I ricordi sincronizzati finiscono nel livello personale',
-    mirrorShared: 'I ricordi sincronizzati finiscono nel livello condiviso del team',
+    mirrorPersonal: 'I nuovi ricordi da questa fonte vanno nel livello personale',
+    mirrorShared: 'I nuovi ricordi da questa fonte vanno nel livello condiviso del team',
     mirrorLayerNewSyncsOnly: 'Vale solo per le nuove sincronizzazioni — i ricordi già sincronizzati restano dove sono.',
     connectedOn: 'Collegata il {when}',
     moveHint: {
@@ -1372,6 +1376,10 @@ const I18N_IT = {
     moveFailedFirstCall: 'Spostamento non riuscito, niente è stato spostato. Puoi riprovare senza rischi.',
     moveRefusedOwner: 'Rifiutato — solo il proprietario del brain può spostare questi ricordi.',
     moveLayerChanged: 'Il livello è cambiato da quando hai confermato lo spostamento. Riconferma per continuare.',
+    moveLayerChangedPartial: {
+      one: 'Il livello è cambiato da quando hai confermato lo spostamento. {n} ricordo è già stato spostato nel livello confermato in precedenza. Riconferma per decidere come continuare.',
+      other: 'Il livello è cambiato da quando hai confermato lo spostamento. {n} ricordi sono già stati spostati nel livello confermato in precedenza. Riconferma per decidere come continuare.',
+    },
     moveVectorFailures: {
       one: '{n} ricordo spostato correttamente ma non ancora ricercabile nel suo nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',
       other: '{n} ricordi spostati correttamente ma non ancora ricercabili nel loro nuovo livello — esegui di nuovo lo spostamento per completare la riparazione.',

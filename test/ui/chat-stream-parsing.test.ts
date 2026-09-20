@@ -70,6 +70,34 @@ describe("consumeChatSseLine()", () => {
     const ctx = load();
     expect(() => ctx.consumeChatSseLine("data: not-json", () => {})).not.toThrow();
   });
+
+  it("keeps literal [DONE] text inside a JSON payload (response shape)", () => {
+    const ctx = load();
+    let out = "";
+    ctx.consumeChatSseLine('data: {"response":"Keep [DONE] in this sentence."}', (t: string) => (out += t));
+    expect(out).toBe("Keep [DONE] in this sentence.");
+  });
+
+  it("keeps literal [DONE] text inside a JSON payload (choices delta shape)", () => {
+    const ctx = load();
+    let out = "";
+    ctx.consumeChatSseLine('data: {"choices":[{"delta":{"content":"Keep [DONE] here."}}]}', (t: string) => (out += t));
+    expect(out).toBe("Keep [DONE] here.");
+  });
+
+  it("still treats the bare completion sentinel as a sentinel, with or without CR", () => {
+    const ctx = load();
+    let out = "";
+    ctx.feedChatStream("", 'data: {"response":"before "}\n\ndata: [DONE]\r\n\n', (t: string) => (out += t));
+    expect(out).toBe("before ");
+  });
+
+  it("parses a data: line without the optional space after the colon", () => {
+    const ctx = load();
+    let out = "";
+    ctx.consumeChatSseLine('data:{"response":"hello"}', (t: string) => (out += t));
+    expect(out).toBe("hello");
+  });
 });
 
 describe("feedChatStream() — assembling the /chat answer", () => {

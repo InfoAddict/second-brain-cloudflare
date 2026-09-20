@@ -370,6 +370,42 @@ describe("#347 move already-synced integration memories", () => {
     });
   });
 
+  // The audit row is the durable record of a move; the response counters
+  // alone vanish with the request (#355).
+  it("the audit payload also carries errored and vectorFailures, not just the successes", async () => {
+    const d1 = makeSqliteD1();
+    const { vectorize, upsert } = makeStatefulVectorizeMock();
+    const env = { ...makeTestEnv(d1.db as unknown as D1Mock, { VECTORIZE: vectorize, OAUTH_KV: makeMemoryKV() }), AUTH_TOKEN: "test-token" } as Env;
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    const roots = await ensureTenantBootstrap(env);
+    const helper = makeCtx();
+    const ids = await seedMirrored(env, roots, helper, 3);
+
+    // One entry's own SELECT throws (errored); one re-stamp upsert rejects
+    // (vectorFailures). Armed after seeding so capture's own upserts succeed.
+    (env as any).DB = poisonedD1(d1.db, "SELECT id, workspace_id, actor_id, vector_ids FROM entries", ids[1]);
+    upsert.mockRejectedValueOnce(new Error("vectorize is down"));
+    await connectNotion(env, itemMapFor(ids), "company");
+
+    await worker.fetch(moveRequest(), env, makeCtx().ctx);
+
+    const { results } = await env.DB.prepare(
+      `SELECT payload FROM admin_events WHERE event = 'integration_memories_moved'`,
+    ).all<{ payload: string }>();
+    expect(results.length).toBe(1);
+    expect(JSON.parse(results[0].payload)).toEqual({
+      provider: "notion",
+      target: "company",
+      moved: 2,
+      alreadyThere: 0,
+      missing: 0,
+      refused: 0,
+      errored: 1,
+      vectorFailures: 1,
+    });
+  });
+
   // ─── Adversarial-review findings ────────────────────────────────────────
 
   /** Wraps a raw sqlite handle so one bound value makes exactly the matching

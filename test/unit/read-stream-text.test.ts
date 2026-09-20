@@ -26,6 +26,25 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
 }
 
 describe("readStreamText()", () => {
+  it("keeps literal [DONE] text inside a JSON payload (response shape)", async () => {
+    const input = 'data: {"response":"Keep [DONE] in this sentence."}\n\n';
+    expect(await readStreamText(new Response(input).body!)).toBe("Keep [DONE] in this sentence.");
+  });
+
+  it("keeps literal [DONE] text inside a JSON payload (choices delta shape)", async () => {
+    const input = 'data: {"choices":[{"delta":{"content":"Keep [DONE] here."}}]}\n\n';
+    expect(await readStreamText(new Response(input).body!)).toBe("Keep [DONE] here.");
+  });
+
+  it("still treats the bare completion sentinel as a sentinel, with or without CR", async () => {
+    const input = 'data: {"response":"before "}\n\ndata: [DONE]\r\n\n';
+    expect(await readStreamText(new Response(input).body!)).toBe("before ");
+  });
+
+  it("parses a data: line without the optional space after the colon", async () => {
+    const input = 'data:{"response":"hello"}\n\n';
+    expect(await readStreamText(new Response(input).body!)).toBe("hello");
+  });
   it("reassembles a single SSE line split across two chunks at an arbitrary byte offset", async () => {
     const line = 'data: {"response":"the quick brown fox jumps"}\n';
     const bytes = new TextEncoder().encode(line);

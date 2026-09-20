@@ -14,7 +14,7 @@ import { withVolatility, type Volatility } from "../memory/volatility";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 
 /** Re-embedding must stamp vectors from the row being edited, not the caller's default write target. */
-function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: WriteContext): WriteContext {
+export function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: WriteContext): WriteContext {
   return { workspaceId: typeof row.workspace_id === "string" ? row.workspace_id : "", actorId: writeCtx.actorId };
 }
 

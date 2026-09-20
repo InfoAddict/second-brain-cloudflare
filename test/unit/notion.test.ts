@@ -134,6 +134,30 @@ describe("computeSyncPlan", () => {
     expect(plan.deleted).toEqual(["a"]);
     expect(plan.changed).toEqual([]); // archived pages are never re-ingested
   });
+
+  it("archived + inherited-name id must not be scheduled for deletion: nothing is mirrored under it", () => {
+    expect(computeSyncPlan([page("constructor", "2026-01-01T00:00:00Z", true)], {}, true).deleted).toEqual([]);
+  });
+
+  it("a non-archived inherited-name id is simply new work", () => {
+    expect(computeSyncPlan([page("toString", "2026-01-01T00:00:00Z")], {}, true).changed.map(p => p.id)).toEqual(["toString"]);
+  });
+
+  it("__proto__ inherited-name id is simply new work when non-archived", () => {
+    expect(computeSyncPlan([page("__proto__", "2026-01-01T00:00:00Z")], {}, true).changed.map(p => p.id)).toEqual(["__proto__"]);
+  });
+
+  it("a legitimate own-property entry with key 'constructor' is still found and deleted when archived", () => {
+    const itemMap = { constructor: { entryId: "e1", version: "v1" } } as unknown as Record<string, ItemMapEntry>;
+    const plan = computeSyncPlan([page("constructor", "2026-01-01T00:00:00Z", true)], itemMap, true);
+    expect(plan.deleted).toEqual(["constructor"]);
+  });
+
+  it("a legitimate own-property entry with key 'constructor' is not marked changed when version matches", () => {
+    const itemMap = { constructor: { entryId: "e1", version: "2026-01-01T00:00:00Z" } } as unknown as Record<string, ItemMapEntry>;
+    const plan = computeSyncPlan([page("constructor", "2026-01-01T00:00:00Z")], itemMap, true);
+    expect(plan.changed.map(p => p.id)).toEqual([]);
+  });
 });
 
 describe("integrationStatus", () => {

@@ -2,6 +2,24 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [3.3.1] — Fixes from the integration review wave
+
+**Integrations**
+
+- The connected row no longer states where a connection's memories land as though it were true of everything already synced. It now describes the setting itself — "New memories from this source go to the shared team layer" — which is what the layer actually governs, since changing it affects future syncs only. Members see the same sentence an admin does, without needing the admin-only caveat beside the control to make sense of it (#350).
+- A sync running while memories are being moved between layers no longer reverts the move. When a mirrored page changes upstream, its vectors are re-embedded into the workspace the memory currently lives in rather than the one the sync was configured for, so a memory moved into the shared layer stays findable there by everyone who should see it (#351).
+- Concurrent writes to an integration's stored record no longer overwrite each other. Every partial update now applies to a freshly read record instead of to a copy loaded when the sync started, so a layer change made during a long sync survives it. KV offers no compare-and-swap, so this narrows the window from the length of a whole sync to the gap between one read and one write rather than closing it entirely (#348).
+- Moving an integration's memories now reports what the server already knew. A drain that stalls says how many memories had moved instead of claiming none had; a layer change detected mid-move says how many landed in the previously confirmed layer before it stopped; and a memory whose vectors are absent from the index is counted as needing repair rather than reported as searchable in its new layer (#355).
+- The activity feed's `integration_memories_moved` event records errored and unsearchable counts alongside the successes, so the audit trail cannot report "moved 10" for a run where three could not be re-indexed (#355).
+- Sync planning reads an integration's item map by own property, so an external item whose id happens to match a built-in JavaScript property name is treated as new work rather than as something already mirrored (#368).
+
+**Recall and chat**
+
+- An answer containing the literal text `[DONE]` is no longer swallowed. Both the Worker and the dashboard treated that text anywhere in a streamed line as the end-of-stream marker and dropped the whole line; the marker is now compared against the complete data payload instead. Streamed lines without a space after `data:` are parsed correctly now too (#353).
+- Recall no longer diagnoses a missing Vectorize index whenever a search fails. A failed query does not establish why it failed, so both the REST and MCP messages now say that semantic search was unavailable or incomplete and offer the missing index as one possible cause rather than as the answer (#352).
+
+The desktop app is released at this version alongside the Worker; it has no changes of its own in this release.
+
 ## [3.3.0] — Moving an integration between layers
 
 **Integrations**

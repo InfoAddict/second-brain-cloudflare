@@ -128,6 +128,39 @@ describe("share/unshare re-stamps Vectorize workspace_id", () => {
     for (const v of allUpserted) expect(v.metadata.workspace_id).toBe("ws-company");
   });
 
+  // ok means "every requested id verifiably re-stamped": an id the index no
+  // longer returns cannot have been (#355).
+  it("reports failure when the index has no vectors for the requested ids", async () => {
+    const { vectorize, upsert } = makeStatefulVectorizeMock(); // empty store: getByIds resolves []
+
+    const res = await restampVectorWorkspace({ VECTORIZE: vectorize } as unknown as Env, ["v1", "v2"], "ws");
+
+    expect(res.ok).toBe(false);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("reports failure when the index returns only some of the requested ids, but still re-stamps the ones it has", async () => {
+    const { vectorize, upsert, store } = makeStatefulVectorizeMock();
+    store.set("v1", { id: "v1", values: [0.1], metadata: { workspace_id: "old" } });
+
+    const res = await restampVectorWorkspace({ VECTORIZE: vectorize } as unknown as Env, ["v1", "v2"], "ws");
+
+    expect(res.ok).toBe(false);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0].map((v: { id: string }) => v.id)).toEqual(["v1"]);
+    expect(store.get("v1")!.metadata.workspace_id).toBe("ws");
+  });
+
+  it("reports ok when every requested id is returned and re-stamped", async () => {
+    const { vectorize, store } = makeStatefulVectorizeMock();
+    store.set("v1", { id: "v1", values: [0.1], metadata: { workspace_id: "old" } });
+    store.set("v2", { id: "v2", values: [0.2], metadata: { workspace_id: "old" } });
+
+    const res = await restampVectorWorkspace({ VECTORIZE: vectorize } as unknown as Env, ["v1", "v2"], "ws");
+
+    expect(res.ok).toBe(true);
+  });
+
   it("a Vectorize getByIds failure does not change POST /share's status code, body, or the D1 move", async () => {
     const { vectorize, getByIds } = makeStatefulVectorizeMock();
     getByIds.mockRejectedValue(new Error("Vectorize is down"));

@@ -33,9 +33,13 @@ function extractChatChunkText(d) {
 }
 
 function consumeChatSseLine(line, onText) {
-  if (!line.startsWith('data: ') || line.includes('[DONE]')) return
+  if (!line.startsWith('data:')) return
+  // SSE permits exactly one optional space after the field colon.
+  const payload = line.slice(line.startsWith('data: ') ? 6 : 5)
+  // Sentinel = the WHOLE payload, never a substring; trimEnd tolerates CRLF.
+  if (payload.trimEnd() === '[DONE]') return
   try {
-    const d = JSON.parse(line.slice(6))
+    const d = JSON.parse(payload)
     const text = extractChatChunkText(d)
     if (text) onText(text)
   } catch (e) {
