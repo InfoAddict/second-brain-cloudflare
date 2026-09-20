@@ -443,6 +443,18 @@ describe("computeCalendarPlan", () => {
     const plan = computeCalendarPlan([], map, meta, ms("2026-07-15T00:00:00Z"));
     expect(plan.deletedKeys).toEqual([]);
   });
+
+  it("treats an occurrence with inherited-name key as changed (new work) and does not delete it", () => {
+    const plan = computeCalendarPlan([occ({ key: "constructor" })], {}, {}, ms("2026-07-01T00:00:00Z"));
+    expect(plan.changed.map((o) => o.key)).toEqual(["constructor"]);
+    expect(plan.deletedKeys).toEqual([]);
+  });
+
+  it("a legitimate own-property entry with key 'constructor' and matching version is not marked changed", () => {
+    const map = itemMap({ constructor: "v1" });
+    const plan = computeCalendarPlan([occ({ key: "constructor", version: "v1" })], map, {}, ms("2026-07-01T00:00:00Z"));
+    expect(plan.changed.map((o) => o.key)).toEqual([]);
+  });
 });
 
 describe("computeRetentionPrune", () => {

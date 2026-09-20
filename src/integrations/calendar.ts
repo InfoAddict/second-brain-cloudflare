@@ -436,15 +436,18 @@ export function computeCalendarPlan(
   metaByKey: Record<string, CalendarMetaEntry>,
   nowMs: number,
 ): CalendarPlan {
+  // Occurrence keys come from feed-supplied UIDs, so guard against inherited names.
+  const mirrored = (key: string) => (Object.hasOwn(itemMap, key) ? itemMap[key] : undefined);
+
   const present = new Set(occurrences.map((o) => o.key));
   const changed = occurrences
-    .filter((o) => itemMap[o.key]?.version !== o.version)
+    .filter((o) => mirrored(o.key)?.version !== o.version)
     .sort((a, b) => a.start - b.start); // oldest first → partial batches converge
 
   const deletedKeys: string[] = [];
   for (const key of Object.keys(itemMap)) {
     if (present.has(key)) continue;
-    const meta = metaByKey[key];
+    const meta = Object.hasOwn(metaByKey, key) ? metaByKey[key] : undefined;
     // Vanished from the feed: delete only if it was UPCOMING (cancelled before
     // it happened). A past occurrence just aged out of the window → keep it.
     if (meta && meta.start > nowMs) deletedKeys.push(key);
