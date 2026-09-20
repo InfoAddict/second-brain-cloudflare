@@ -8,7 +8,7 @@
  */
 
 import type { IntegrationEnv, IntegrationProvider, ItemMapEntry, MirrorStore, SyncOutcome } from "./framework";
-import { loadIntegration, saveIntegration } from "./framework";
+import { loadIntegration, updateIntegration } from "./framework";
 
 // ─── API client ───────────────────────────────────────────────────────────────
 
@@ -232,15 +232,22 @@ async function runNotionSync(env: IntegrationEnv, store: MirrorStore): Promise<S
   try {
     ({ pages, complete } = await notionListPages(record.credentials.token));
   } catch (e) {
-    record.status = "error";
-    record.lastSyncError = e instanceof Error ? e.message : String(e);
-    record.updatedAt = Date.now();
-    await saveIntegration(env, record);
-    return { ok: false, error: record.lastSyncError };
+    const error = e instanceof Error ? e.message : String(e);
+    await updateIntegration(env, notionProvider.id, (r) => {
+      r.status = "error";
+      r.lastSyncError = error;
+      r.updatedAt = Date.now();
+    });
+    return { ok: false, error };
   }
 
   const plan = computeSyncPlan(pages, record.itemMap, complete);
   const batch = plan.changed.slice(0, SYNC_PAGE_BATCH);
+
+  // `record` is only the read snapshot (credentials, plan input). Writes are
+  // deltas, applied to a freshly read record at save time (#348).
+  const itemMapPuts: Record<string, ItemMapEntry> = {};
+  const itemMapDeletes: string[] = [];
 
   let created = 0, updated = 0, failed = 0;
   for (const page of batch) {
@@ -249,12 +256,12 @@ async function runNotionSync(env: IntegrationEnv, store: MirrorStore): Promise<S
       const content = buildPageContent(page.title, page.url, text);
       const existing = record.itemMap[page.id];
       if (existing && await store.updateEntry(existing.entryId, content)) {
-        record.itemMap[page.id] = { entryId: existing.entryId, version: page.lastEdited };
+        itemMapPuts[page.id] = { entryId: existing.entryId, version: page.lastEdited };
         updated++;
       } else {
         // New page — or its mirror was deleted out-of-band; (re-)create it.
         const entryId = await store.createEntry(content, [notionProvider.id], notionProvider.id);
-        record.itemMap[page.id] = { entryId, version: page.lastEdited };
+        itemMapPuts[page.id] = { entryId, version: page.lastEdited };
         created++;
       }
     } catch (e) {
@@ -271,18 +278,22 @@ async function runNotionSync(env: IntegrationEnv, store: MirrorStore): Promise<S
     if (!mapped) continue;
     try {
       await store.deleteEntry(mapped.entryId);
-      delete record.itemMap[pageId];
+      itemMapDeletes.push(pageId);
       deleted++;
     } catch (e) {
       console.error(`Notion mirror delete failed for page ${pageId} (non-fatal):`, e);
     }
   }
 
-  record.status = "connected";
-  record.lastSyncedAt = Date.now();
-  record.lastSyncError = null;
-  record.updatedAt = Date.now();
-  await saveIntegration(env, record);
+  // null (disconnected mid-sync) needs no handling: nothing left to record against.
+  await updateIntegration(env, notionProvider.id, (r) => {
+    Object.assign(r.itemMap, itemMapPuts);
+    for (const id of itemMapDeletes) delete r.itemMap[id];
+    r.status = "connected";
+    r.lastSyncedAt = Date.now();
+    r.lastSyncError = null;
+    r.updatedAt = Date.now();
+  });
 
   return {
     ok: true,
