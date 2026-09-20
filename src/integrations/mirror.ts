@@ -4,7 +4,7 @@ import {
   INTEGRATION_PROVIDERS,
   getProvider,
   loadIntegration,
-  saveIntegration,
+  updateIntegration,
   deleteIntegration,
 } from "../integrations";
 import type { IntegrationProvider, MirrorStore } from "./framework";
@@ -270,10 +270,8 @@ export async function mirrorWriteContext(
  */
 async function advanceRotationCursor(env: Env, providerId: string): Promise<void> {
   try {
-    const record = await loadIntegration(env, providerId);
-    if (!record) return; // disconnected mid-run — nothing to advance
-    record.updatedAt = Date.now();
-    await saveIntegration(env, record);
+    // null when disconnected mid-run — nothing to advance.
+    await updateIntegration(env, providerId, (r) => { r.updatedAt = Date.now(); });
   } catch (e) {
     console.error(`Integration rotation cursor did not advance for ${providerId} (non-fatal):`, e);
   }

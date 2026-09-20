@@ -19,7 +19,7 @@ import type {
   MirrorStore,
   SyncOutcome,
 } from "./framework";
-import { loadIntegration, saveIntegration } from "./framework";
+import { ItemMapDeltas, loadIntegration, updateIntegration } from "./framework";
 
 // ── Tunable constants ──────────────────────────────────────────────────────
 const DAY_MS = 86_400_000;
@@ -588,11 +588,13 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
     const body = await fetchIcs(normalizeUrl(record.credentials.token));
     occurrences = parseAndExpand(body, now - PAST_LOOKBACK_MS, now + FUTURE_WINDOW_MS);
   } catch (e) {
-    record.status = "error";
-    record.lastSyncError = e instanceof Error ? e.message : String(e);
-    record.updatedAt = now;
-    await saveIntegration(env, record);
-    return { ok: false, error: record.lastSyncError };
+    const error = e instanceof Error ? e.message : String(e);
+    await updateIntegration(env, providerId, (r) => {
+      r.status = "error";
+      r.lastSyncError = error;
+      r.updatedAt = now;
+    });
+    return { ok: false, error };
   }
 
   const meta = getMeta(record);
@@ -608,18 +610,23 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
   });
   const batch = creatable.slice(0, SYNC_EVENT_BATCH);
 
+  // `record` is only the read snapshot. Writes are deltas, applied to a freshly
+  // read record at save time (#348); in-batch lookups go through the deltas so
+  // they see this run's earlier work.
+  const delta = new ItemMapDeltas(record.itemMap);
+
   let created = 0, updated = 0, failed = 0;
   for (const occ of batch) {
     try {
       const content = buildEventContent(occ);
-      const existing = record.itemMap[occ.key];
+      const existing = delta.get(occ.key);
       if (existing && (await store.updateEntry(existing.entryId, content))) {
-        record.itemMap[occ.key] = { entryId: existing.entryId, version: occ.version };
+        delta.put(occ.key, { entryId: existing.entryId, version: occ.version });
         updated++;
       } else {
         // New occurrence — or its mirror was deleted out-of-band; (re-)create it.
         const entryId = await store.createEntry(content, ["calendar", providerId], providerId);
-        record.itemMap[occ.key] = { entryId, version: occ.version };
+        delta.put(occ.key, { entryId, version: occ.version });
         created++;
       }
       meta[occ.key] = { start: occ.start, end: occ.end, isRecurring: occ.isRecurring };
@@ -641,10 +648,10 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
 
   let deleted = 0;
   for (const key of toDelete) {
-    const mapped = record.itemMap[key];
+    const mapped = delta.get(key);
     try {
       if (mapped) await store.deleteEntry(mapped.entryId);
-      delete record.itemMap[key];
+      delta.delete(key);
       delete meta[key];
       if (mapped) deleted++;
     } catch (e) {
@@ -652,12 +659,15 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
     }
   }
 
-  (record.config as any).calendarMeta = meta;
-  record.status = "connected";
-  record.lastSyncedAt = now;
-  record.lastSyncError = null;
-  record.updatedAt = now;
-  await saveIntegration(env, record);
+  // calendarMeta is the only config key calendar owns.
+  await updateIntegration(env, providerId, (r) => {
+    r.config = { ...r.config, calendarMeta: meta };
+    delta.applyTo(r.itemMap);
+    r.status = "connected";
+    r.lastSyncedAt = now;
+    r.lastSyncError = null;
+    r.updatedAt = now;
+  });
 
   return {
     ok: true,
