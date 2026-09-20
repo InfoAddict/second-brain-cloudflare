@@ -184,6 +184,8 @@ describe("recall wording for Vectorize failures (#352)", () => {
 
     expect(body.semantic_unavailable).toBe(true);
     expect(body.message).toContain("unavailable or incomplete");
+    expect(body.message).not.toContain("Vectorize index missing");
+    expect(body.message).toContain("may be missing");
   });
 
   it("a healthy recall carries no unavailable notice", async () => {
@@ -204,7 +206,7 @@ describe("recall wording for Vectorize failures (#352)", () => {
     const total = VECTORIZE_GET_BY_IDS_BATCH + 1;
     const ids = Array.from({ length: total }, (_, i) => `v${i}`);
     db.entries.push({
-      id: "e1", content: "shared tag entry", tags: JSON.stringify(["shared"]), source: "api",
+      id: "e1", content: "quarterly pricing review", tags: JSON.stringify(["shared"]), source: "api",
       created_at: Date.now(), vector_ids: JSON.stringify(ids), recall_count: 0, importance_score: 0,
     });
     const values = new Array(384).fill(0.1);
@@ -214,11 +216,13 @@ describe("recall wording for Vectorize failures (#352)", () => {
     const env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ getByIds } as any) });
     const { ctx } = makeCtx();
 
-    const res = await worker.fetch(req("GET", "/recall?query=shared+tag+entry&tag=shared"), env, ctx);
+    // No token overlap with the entry's content: the keyword rows cannot surface it,
+    // so it can only appear via the first batch's dense vectors.
+    const res = await worker.fetch(req("GET", "/recall?query=zebra+migration+patterns&tag=shared"), env, ctx);
     const body = await res.json() as any;
 
     expect(getByIds).toHaveBeenCalledTimes(2);
     expect(body.semantic_unavailable).toBe(true);
-    expect(body.results.length).toBeGreaterThan(0);
+    expect(body.results.map((r: any) => r.id)).toEqual(["e1"]);
   });
 });
