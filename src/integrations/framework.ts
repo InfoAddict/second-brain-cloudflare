@@ -136,6 +136,39 @@ export async function updateIntegration(
   return record;
 }
 
+// A sync's itemMap writes as deltas over its read snapshot (#348). The persisted
+// write is the deltas, applied to a freshly read record; `get` is the sync's
+// own working view (snapshot + earlier puts/deletes this run), which later
+// iterations need to see just as the old in-place writes let them — a repeated
+// key must update the mirror it just created, and a deleted one must not be
+// deleted twice. Record only successful operations.
+export class ItemMapDeltas {
+  private puts: Record<string, ItemMapEntry> = {};
+  private deletes = new Set<string>();
+
+  constructor(private snapshot: Record<string, ItemMapEntry>) {}
+
+  get(key: string): ItemMapEntry | undefined {
+    if (this.deletes.has(key)) return undefined;
+    return this.puts[key] ?? this.snapshot[key];
+  }
+
+  put(key: string, entry: ItemMapEntry): void {
+    this.deletes.delete(key);
+    this.puts[key] = entry;
+  }
+
+  delete(key: string): void {
+    delete this.puts[key];
+    this.deletes.add(key);
+  }
+
+  applyTo(itemMap: Record<string, ItemMapEntry>): void {
+    Object.assign(itemMap, this.puts);
+    for (const key of this.deletes) delete itemMap[key];
+  }
+}
+
 export async function deleteIntegration(env: IntegrationEnv, provider: string): Promise<void> {
   await env.OAUTH_KV.delete(`${INTEGRATIONS_KEY_PREFIX}${provider}`);
 }

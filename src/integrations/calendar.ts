@@ -19,7 +19,7 @@ import type {
   MirrorStore,
   SyncOutcome,
 } from "./framework";
-import { loadIntegration, updateIntegration } from "./framework";
+import { ItemMapDeltas, loadIntegration, updateIntegration } from "./framework";
 
 // ── Tunable constants ──────────────────────────────────────────────────────
 const DAY_MS = 86_400_000;
@@ -608,22 +608,22 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
   const batch = creatable.slice(0, SYNC_EVENT_BATCH);
 
   // `record` is only the read snapshot. Writes are deltas, applied to a freshly
-  // read record at save time (#348).
-  const itemMapPuts: Record<string, ItemMapEntry> = {};
-  const itemMapDeletes: string[] = [];
+  // read record at save time (#348); in-batch lookups go through the deltas so
+  // they see this run's earlier work.
+  const delta = new ItemMapDeltas(record.itemMap);
 
   let created = 0, updated = 0, failed = 0;
   for (const occ of batch) {
     try {
       const content = buildEventContent(occ);
-      const existing = record.itemMap[occ.key];
+      const existing = delta.get(occ.key);
       if (existing && (await store.updateEntry(existing.entryId, content))) {
-        itemMapPuts[occ.key] = { entryId: existing.entryId, version: occ.version };
+        delta.put(occ.key, { entryId: existing.entryId, version: occ.version });
         updated++;
       } else {
         // New occurrence — or its mirror was deleted out-of-band; (re-)create it.
         const entryId = await store.createEntry(content, ["calendar", providerId], providerId);
-        itemMapPuts[occ.key] = { entryId, version: occ.version };
+        delta.put(occ.key, { entryId, version: occ.version });
         created++;
       }
       meta[occ.key] = { start: occ.start, end: occ.end, isRecurring: occ.isRecurring };
@@ -645,10 +645,10 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
 
   let deleted = 0;
   for (const key of toDelete) {
-    const mapped = itemMapPuts[key] ?? record.itemMap[key];
+    const mapped = delta.get(key);
     try {
       if (mapped) await store.deleteEntry(mapped.entryId);
-      itemMapDeletes.push(key);
+      delta.delete(key);
       delete meta[key];
       if (mapped) deleted++;
     } catch (e) {
@@ -656,12 +656,10 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
     }
   }
 
-  // calendarMeta is the only config key calendar owns. Puts before deletes, so
-  // a key both written and pruned this run ends up gone, as it did serially.
+  // calendarMeta is the only config key calendar owns.
   await updateIntegration(env, providerId, (r) => {
     r.config = { ...r.config, calendarMeta: meta };
-    Object.assign(r.itemMap, itemMapPuts);
-    for (const key of itemMapDeletes) delete r.itemMap[key];
+    delta.applyTo(r.itemMap);
     r.status = "connected";
     r.lastSyncedAt = now;
     r.lastSyncError = null;
