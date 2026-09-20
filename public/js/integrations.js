@@ -540,7 +540,9 @@ async function runMoveLoop(provider, post, onProgress) {
     }
     if (onProgress) onProgress({ done, total })
     if (remaining > 0 && res.cursor === sentCursor) {
-      throw new Error('Move did not advance — the cursor is stalled')
+      const err = new Error('Move did not advance — the cursor is stalled')
+      err.partial = { ...totals }
+      throw err
     }
     cursor = res.cursor
     if (!cursor) {
