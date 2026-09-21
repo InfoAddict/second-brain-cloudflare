@@ -292,6 +292,8 @@ See [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wi
 
 ## What's new in v3
 
+v3.4 adds Projects: named, workspace-bound containers for what a memory is about. Group memories by codebase, client, or goal; adopt years of existing tags retroactively through aliases with no migration; manage everything from a new dashboard tab; and let agents discover and use projects through `list_projects` and the `project` parameter. Nightly digests, prompt capsules, exports, and Claude Code hooks are all project-aware.
+
 Team Edition adds Personal and Shared memory layers, per-person authentication, sharing and attribution, author locks, team administration, capture policies, team-aware recall and graphs, and a private-by-default upgrade from v2.
 
 It also hardens tenant isolation across REST, MCP, integrations, imports, insights, graph traversal, and vector search, backed by expanded unit, integration, and UI coverage.
