@@ -3,6 +3,8 @@ import { resolveConfig } from "../config";
 import { initializeDatabase } from "../db/init";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "./eligibility";
 import { compressTag } from "./digest";
+import { prepareActiveProjects, projectRowsOf, type ProjectRow } from "../projects/registry";
+import { PROJECT_TAG_PREFIX } from "../tags/system";
 
 /**
  * How many tags one nightly run may compress.
@@ -77,7 +79,7 @@ export async function runNightlyCompression(
   // eligibility cutoff.
   const sliceSql = workspaceId != null ? `\n      AND entries.workspace_id = ?` : "";
   // scope-exempt: cron: nightly compression, narrowed by the workspace slice in sliceSql
-  const { results } = await env.DB.prepare(`
+  const candidateQuery = env.DB.prepare(`
     SELECT value as tag, COUNT(*) as count
     FROM entries, json_each(entries.tags)
     WHERE ${isTopicTagSql()}
@@ -91,14 +93,44 @@ export async function runNightlyCompression(
     ORDER BY count DESC
   `).bind(...(workspaceId != null
     ? [Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId]
-    : [Date.now() - cfg.COMPRESSION_MIN_AGE_MS])).all();
+    : [Date.now() - cfg.COMPRESSION_MIN_AGE_MS]));
 
-  const tags = await selectTagsForRun(env, results.map(r => r.tag as string));
+  // Registry-driven project digests join the topic candidates, keyed `project:<slug>`, and
+  // share the one bound and cursor: the key space just gains project members. The registry
+  // read rides in ONE batch with the candidate query, so it costs no extra subrequest against
+  // the cron's shared budget. Members are decided by compressTag (the tag or any alias, and
+  // the usual >= 10 eligible entries), so a thin project costs one rotation slot and two
+  // statements, never a wrong digest.
+  const projectsBySlug = new Map<string, ProjectRow[]>();
+  let results: Record<string, unknown>[];
+  try {
+    const [candidates, projects] = await env.DB.batch<Record<string, unknown>>([
+      candidateQuery,
+      prepareActiveProjects(env.DB, workspaceId ?? null),
+    ]);
+    results = candidates.results ?? [];
+    for (const row of projectRowsOf(projects.results)) {
+      projectsBySlug.set(row.id, [...(projectsBySlug.get(row.id) ?? []), row]);
+    }
+  } catch (e) {
+    // The topic digests must not depend on the registry being readable: retry the
+    // candidate query alone rather than lose the night.
+    console.error("Nightly candidate batch failed; running topic digests only (non-fatal):", e);
+    projectsBySlug.clear();
+    results = (await candidateQuery.all<Record<string, unknown>>()).results ?? [];
+  }
+  const projectKeys = [...projectsBySlug.keys()].sort().map(slug => `${PROJECT_TAG_PREFIX}${slug}`);
+
+  const tags = await selectTagsForRun(env, [...results.map(r => r.tag as string), ...projectKeys]);
 
   let digestsWritten = 0;
   for (const tag of tags) {
     try {
-      const result = await compressTag(tag, env, ctx);
+      const rows = tag.startsWith(PROJECT_TAG_PREFIX) ? projectsBySlug.get(tag.slice(PROJECT_TAG_PREFIX.length)) : undefined;
+      // Only the workspaces that hold the project are rolled up, each on its own.
+      const result = await compressTag(tag, env, ctx, rows
+        ? { workspaceIds: [...new Set(rows.map(r => r.workspace_id))], project: rows }
+        : undefined);
       if (result.synthesizedId) digestsWritten++;
     } catch (e) {
       console.error(`Compression failed for tag "${tag}" (non-fatal):`, e);

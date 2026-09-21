@@ -114,6 +114,26 @@ export async function listProjects(
   return results.map(toRow);
 }
 
+/**
+ * The nightly rotation's read as a prepared statement, so the cron can batch it with its
+ * candidate query and pay one subrequest for both: the night's workspace's active rows, or,
+ * on the null-slice fallback (empty corpus or a failed rotation read), every workspace's.
+ */
+export function prepareActiveProjects(db: D1Database, workspaceId: string | null): D1PreparedStatement {
+  if (workspaceId !== null) {
+    return db.prepare(`SELECT ${COLUMNS} FROM projects WHERE workspace_id IN (?) AND status = 'active' ORDER BY lower(name), id, workspace_id`).bind(workspaceId);
+  }
+  return db.prepare(
+    // scope-exempt: cron: null-slice fallback reads every workspace's registry; a row only names a project to digest, and each digest is built inside that row's own workspace
+    `SELECT ${COLUMNS} FROM projects WHERE status = 'active' ORDER BY lower(name), id, workspace_id`,
+  );
+}
+
+/** Decode the rows of prepareActiveProjects (or any projects SELECT of COLUMNS). */
+export function projectRowsOf(results: readonly unknown[] | undefined): ProjectRow[] {
+  return (results ?? []).map(r => toRow(r as RawRow));
+}
+
 /** Every readable row for one slug (the same slug can exist in several workspaces). */
 export async function getProject(db: D1Database, workspaceIds: string[], slug: string): Promise<ProjectRow[]> {
   if (!workspaceIds.length) return [];
