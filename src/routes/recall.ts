@@ -10,6 +10,7 @@ import { layerOf, scopeWhereForRead, readScopeWorkspaces } from "../lib/scope";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { recallEntries } from "../recall/search";
+import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
 
 /** Add the caller's workspace predicate before ORDER BY and LIMIT. */
@@ -62,7 +63,12 @@ export async function handleRecallRoutes(
       actor = resolved.actorId;
     }
 
-    const { sql, bindings } = scopeEntryFilterQuery(identity, buildEntryFilterQuery({ n, tag, after, before, actor }), workspace, team);
+    // Resolved among the same workspaces the entry read may see, so a slug that only
+    // exists in a colleague's personal workspace is unknown here, never a silent empty list.
+    const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
+    if (project instanceof Response) return project;
+
+    const { sql, bindings } = scopeEntryFilterQuery(identity, buildEntryFilterQuery({ n, tag, after, before, actor, project }), workspace, team);
     const { results } = await env.DB.prepare(sql).bind(...bindings).all();
     const rows = results as Record<string, unknown>[];
     // Each row reports its layer so the dashboard can badge cards and offer

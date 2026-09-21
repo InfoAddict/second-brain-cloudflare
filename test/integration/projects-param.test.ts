@@ -186,3 +186,62 @@ describe("POST /capture with project", () => {
   });
 });
 
+describe("GET /list with project", () => {
+  beforeEach(async () => {
+    await createProject(ALICE, { id: "site", name: "Site", aliases: ["hosting"] });
+    seed("member", aliceWs, ["project:site", "infra"]);
+    seed("aliased", aliceWs, ["hosting"]);
+    seed("other", aliceWs, ["infra"]);
+    seed("other-project", aliceWs, ["project:app"]);
+    seed("bobs", bobWs, ["project:site"], { actorId: bobId });
+    seed("shared", companyWs, ["project:site"]);
+  });
+
+  const ids = async (path: string, token = ALICE) => (await jsonOf(await call("GET", path, token))).map((e: any) => e.id).sort();
+
+  it("returns members and alias-matched entries across the readable layers, nothing else", async () => {
+    // "shared" is a company-layer member: membership is the tag, wherever Alice can read it.
+    expect(await ids("/list?project=site&n=50")).toEqual(["aliased", "member", "shared"]);
+  });
+
+  it("ANDs with the tag filter", async () => {
+    expect(await ids("/list?project=site&tag=infra&n=50")).toEqual(["member"]);
+    expect(await ids("/list?project=site&tag=hosting&n=50")).toEqual(["aliased"]);
+  });
+
+  it("stays inside the caller's scope and follows the layer filter", async () => {
+    await createProject(ALICE, { id: "site", name: "Company Site", workspace: "company" });
+
+    expect(await ids("/list?project=site&n=50&workspace=company")).toEqual(["shared"]);
+    expect(await ids("/list?project=site&n=50&workspace=personal")).toEqual(["aliased", "member"]);
+    // Bob sees the company row and his own, never Alice's personal ones.
+    await createProject(bobToken, { id: "site", name: "Bob Site" });
+    expect(await ids("/list?project=site&n=50", bobToken)).toEqual(["bobs", "shared"]);
+  });
+
+  it("still filters an archived project", async () => {
+    await call("PATCH", "/projects/site", ALICE, { status: "archived" });
+    expect(await ids("/list?project=site&n=50")).toEqual(["aliased", "member", "shared"]);
+  });
+
+  it("404s an unknown project and names the known ones", async () => {
+    const res = await call("GET", "/list?project=nope", ALICE);
+
+    expect(res.status).toBe(404);
+    expect(await jsonOf(res)).toEqual({ ok: false, error: 'unknown project "nope"', known_projects: ["site"] });
+  });
+
+  it("does not resolve a colleague's personal project", async () => {
+    const res = await call("GET", "/list?project=site", bobToken);
+    expect(res.status).toBe(404);
+    expect((await jsonOf(res)).known_projects).toEqual([]);
+  });
+
+  it("400s an invalid slug and ignores an empty one", async () => {
+    const bad = await call("GET", "/list?project=Bad%20Slug!", ALICE);
+    expect(bad.status).toBe(400);
+    expect((await jsonOf(bad)).error).toBe(BAD_SLUG);
+    expect((await ids("/list?project=&n=50")).length).toBe(5);
+  });
+});
+

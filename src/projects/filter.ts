@@ -27,3 +27,12 @@ export function projectFilterSql(rows: readonly ProjectRow[], column = "tags"): 
   if (!patterns.length) return { clause: "0", bindings: [] };
   return { clause: `(${patterns.map(() => `${column} LIKE ? ${TAG_LIKE_ESCAPE}`).join(" OR ")})`, bindings: patterns };
 }
+
+/** Most LIKE patterns one project filter may carry; keeps every statement under D1's bound-parameter ceiling. */
+export const MAX_PROJECT_PATTERNS = 40;
+
+/** Lowercased tags that make an entry a member: the project tag and every alias. For JS re-checks. */
+export function projectMemberTags(rows: readonly ProjectRow[]): Set<string> {
+  if (!rows.length) return new Set();
+  return new Set([`${PROJECT_TAG_PREFIX}${rows[0].id}`, ...rows.flatMap(r => r.aliases)].map(t => t.toLowerCase()));
+}
