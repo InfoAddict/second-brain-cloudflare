@@ -161,6 +161,9 @@ describe("entries.updated_at is never read without a created_at fallback", () =>
   it("every TypeScript read of a raw updated_at column falls back to created_at", () => {
     const offenders: string[] = [];
     for (const file of files) {
+      // Registry rows carry their own nullable updated_at (null until first edit) and
+      // surface it as-is; it is not entries.updated_at.
+      if (/^src\/(projects\/|routes\/projects\.ts$)/.test(relative(ROOT, file).replace(/\\/g, "/"))) continue;
       for (const read of rawTsReads(readFileSync(file, "utf8"))) {
         if (read.coalesced) continue;
         offenders.push(`${relative(ROOT, file)} — uncoalesced read: ${read.text.slice(0, 110)}`);
