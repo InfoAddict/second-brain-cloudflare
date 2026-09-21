@@ -13,6 +13,9 @@ import { auditEvent } from "../lib/audit";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { getTagVocabulary } from "../tags/vocabulary";
 
+/** Most entries GET /tags?counts=1 reads; matches the /projects counts cap. */
+const TAG_COUNTS_SCAN_LIMIT = 5000;
+
 export async function handleEntriesRoutes(
   request: Request,
   url: URL,
@@ -38,7 +41,29 @@ export async function handleEntriesRoutes(
   if (url.pathname === "/tags" && request.method === "GET") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
-    return json(await getTagVocabulary(env, ctx, auth));
+    const tags = await getTagVocabulary(env, ctx, auth);
+    const counts = url.searchParams.get("counts");
+    if (counts !== "1" && counts !== "true") return json(tags);
+
+    // counts=1: the same tags with how many memories carry each. One bounded scan of
+    // the caller's rows, tallied here; the cached vocabulary keeps the tag set and order.
+    // A capped scan undercounts, so it says so in a header rather than the body shape.
+    const scope = scopeWhere(auth);
+    const { results } = await env.DB.prepare(
+      `SELECT tags FROM entries WHERE ${scope.clause} LIMIT ${TAG_COUNTS_SCAN_LIMIT}`
+    ).bind(...scope.bindings).all<{ tags: string }>();
+    const tally = new Map<string, number>();
+    for (const row of results) {
+      let rowTags: unknown;
+      try { rowTags = JSON.parse(row.tags); } catch { continue; }
+      if (!Array.isArray(rowTags)) continue;
+      for (const tag of new Set(rowTags)) {
+        if (typeof tag === "string") tally.set(tag, (tally.get(tag) ?? 0) + 1);
+      }
+    }
+    const response = json(tags.map(tag => ({ tag, count: tally.get(tag) ?? 0 })));
+    if (results.length >= TAG_COUNTS_SCAN_LIMIT) response.headers.set("X-Counts-Approximate", "1");
+    return response;
   }
 
   // GET /export — complete backup: every entry plus the edges table. Single
