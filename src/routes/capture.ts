@@ -14,7 +14,7 @@ import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/vo
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
-async function writeContextFor(
+export async function writeContextFor(
   env: Env,
   identity: Identity,
   target?: unknown,
