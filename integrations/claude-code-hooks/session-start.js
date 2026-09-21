@@ -42,7 +42,7 @@ function readSessionCache(sessionId, now = Date.now(), dir) {
 }
 
 /** The requests to try, in order. The project arm returns [] on a miss and 404 before the
- * project's first capture registers it; both fall through to the next arm. */
+ * project's first capture registers it; both fall through to the next arm, as does a 400 (a slug this Worker rejects). */
 function buildRecallPlan(project, workspace, now = Date.now()) {
   if (project) {
     const query = `${project} decisions and context`;
@@ -137,7 +137,7 @@ async function main() {
       return fail(`recall failed: ${e?.name === 'TimeoutError' ? `no reply within ${RECALL_TIMEOUT_MS / 1000}s` : e?.message ?? 'network error'}`);
     }
     if (!res.ok) {
-      if (res.status === 404 && step.project) continue; // project not registered yet
+      if ((res.status === 404 || res.status === 400) && step.project) continue; // not registered yet, or a slug this Worker rejects
       let code = '';
       try { code = String((await res.json())?.code ?? ''); } catch { /* not JSON */ }
       return fail(`recall failed: HTTP ${res.status}${code ? ` ${code}` : ''}${hintFor(res.status)}`);

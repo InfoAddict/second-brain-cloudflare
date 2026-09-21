@@ -2,7 +2,7 @@
 'use strict';
 const fs = require('node:fs');
 const {
-  loadCredentials, resolveWorkspace, readStdinJson, parseProjectName, gitRemoteUrl,
+  loadCredentials, resolveWorkspace, readStdinJson, parseProjectLabel, projectSlug, gitRemoteUrl,
   fetchWithTimeout, fail, hintFor, workerMajorVersion, noticeOncePerDay,
 } = require('./common');
 
@@ -164,7 +164,8 @@ function readTranscriptTail(filePath, {
  */
 function formatSession(turns, meta, { maxChars = MAX_CONTENT_CHARS, assistantCap = ASSISTANT_LINE_CAP } = {}) {
   const date = (meta.timestamp || new Date().toISOString()).slice(0, 10);
-  const where = meta.project ? `${meta.project}${meta.gitBranch ? '@' + meta.gitBranch : ''}` : 'unknown project';
+  const label = meta.projectName ?? meta.project;
+  const where = label ? `${label}${meta.gitBranch ? '@' + meta.gitBranch : ''}` : 'unknown project';
   const header = `Claude Code session ${meta.sessionId || '?'} — ${where} — ${date} (${meta.reason || 'other'})`;
   if (!turns.length) return header;
 
@@ -222,13 +223,16 @@ function shouldCapture(turns) {
 function buildCaptureBody(turns, meta) {
   let content = redactSecrets(formatSession(turns, meta), meta.token);
   if (content.length > MAX_CONTENT_CHARS) content = content.slice(0, MAX_CONTENT_CHARS - 1) + '…';
-  return {
+  // The raw name stays a tag: old Workers ignore `project`, and a dotted name is not a legal slug.
+  const rawName = meta.projectName ?? meta.project;
+  const body = {
     content,
     source: 'claude-code',
-    tags: [],
-    project: meta.project,
+    tags: rawName ? [rawName] : [],
     workspace: meta.workspace,
   };
+  if (meta.project) body.project = meta.project;
+  return body;
 }
 
 async function main() {
@@ -250,8 +254,10 @@ async function main() {
   if (!turns.length) return;
   const last = turns[turns.length - 1];
   const cwd = typeof payload?.cwd === 'string' && payload.cwd ? payload.cwd : last.cwd;
+  const projectName = parseProjectLabel(cwd ? gitRemoteUrl(cwd) : null, cwd);
   const meta = {
-    project: parseProjectName(cwd ? gitRemoteUrl(cwd) : null, cwd),
+    project: projectSlug(projectName),
+    projectName,
     gitBranch: last.gitBranch,
     sessionId: typeof payload?.session_id === 'string' ? payload.session_id : last.sessionId,
     timestamp: last.timestamp,

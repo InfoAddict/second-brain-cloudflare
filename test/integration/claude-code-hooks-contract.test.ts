@@ -25,7 +25,7 @@ const FIXTURE = join(HOOKS, "fixtures/sample-transcript.jsonl");
 const ctx = { waitUntil: (_: Promise<any>) => {} } as ExecutionContext;
 
 interface Captured { method: string; url: string; body: string }
-interface StubBehaviour { healthVersion?: string; recallStatus?: number; recallResults?: unknown[]; delayMs?: number; unknownProject?: boolean }
+interface StubBehaviour { healthVersion?: string; recallStatus?: number; recallResults?: unknown[]; delayMs?: number; unknownProject?: boolean; badProject?: boolean }
 
 let server: Server;
 let origin = "";
@@ -48,6 +48,8 @@ beforeAll(async () => {
           if (behaviour.recallStatus && behaviour.recallStatus >= 400) return reply(behaviour.recallStatus, { ok: false, code: "unauthorized" });
           if (behaviour.unknownProject && req.url.includes("project="))
             return reply(404, { ok: false, error: 'unknown project "x"', known_projects: [] });
+          if (behaviour.badProject && req.url.includes("project="))
+            return reply(400, { ok: false, code: "invalid_project" });
           return reply(200, { ok: true, results: behaviour.recallResults ?? [{ id: "m1", content: "a remembered thing", truncated: false }], insight: null });
         }
         return reply(200, { ok: true, id: "new-id" });
@@ -170,6 +172,24 @@ describe("session-start.js", () => {
     expect(recalls).toHaveLength(2);
     expect(new URL(`http://x${recalls[0].url}`).searchParams.get("project")).toBeTruthy();
     expect(new URL(`http://x${recalls[1].url}`).searchParams.get("project")).toBeNull();
+  });
+
+  it("falls back to free text when the Worker rejects the project slug (400)", async () => {
+    behaviour.badProject = true;
+    const r = await runHook("session-start.js", startPayload());
+    expect(r.code).toBe(0);
+    expect(r.stdout.startsWith("[Second Brain] Context recalled")).toBe(true);
+    const recalls = captured.filter(c => c.url.startsWith("/recall?"));
+    expect(recalls).toHaveLength(2);
+    expect(new URL(`http://x${recalls[1].url}`).searchParams.get("project")).toBeNull();
+  });
+
+  it("still fails loudly on other project-arm errors (500)", async () => {
+    behaviour.recallStatus = 500;
+    const r = await runHook("session-start.js", startPayload());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/recall failed: HTTP 500/);
+    expect(captured.filter(c => c.url.startsWith("/recall?"))).toHaveLength(1);
   });
 
   it("surfaces a rejected token: stderr line and exit 1 (the #327 failure mode, made visible)", async () => {
