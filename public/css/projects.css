@@ -1,0 +1,326 @@
+/* ── Projects (public/js/projects.js) ─────────────────────────────────────
+   A list of named homes for memories, and the form that makes one. Built from
+   the dashboard's own tokens: .panel and .btn (board.css), .tag-chip and
+   .team-select-wrap (main.css). Small text on muted surfaces is
+   --text-secondary, the standing design decision. */
+
+/* The screen's own components set `display`, which beats the hidden attribute. */
+#screen-projects [hidden] {
+  display: none !important;
+}
+
+.projects-new-btn {
+  margin-left: auto;
+}
+
+.projects-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  -webkit-overflow-scrolling: touch;
+}
+
+#projects-list-view {
+  max-width: 880px;
+}
+
+/* ── Empty state ── */
+.projects-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 520px;
+  margin: 0 auto 24px;
+  padding: 28px 8px 4px;
+  text-align: center;
+}
+
+.projects-empty > i {
+  font-size: 34px;
+  color: var(--accent-ink);
+  margin-bottom: 4px;
+}
+
+.projects-empty h3 {
+  font-size: 20px;
+  color: var(--text-primary);
+}
+
+.projects-empty p {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.projects-empty .projects-empty-start {
+  margin-top: 4px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* ── Create form ── */
+.project-create {
+  margin-bottom: 20px;
+}
+
+.project-create > h2 {
+  margin-bottom: 14px;
+}
+
+.project-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.project-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.project-input {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-input);
+  border-radius: var(--r-input);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  resize: vertical;
+  transition:
+    border-color var(--dur-feedback) var(--ease-standard),
+    box-shadow var(--dur-feedback) var(--ease-standard);
+}
+
+.project-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.project-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Live slug preview under the name: a hint, then the slug, or the reason
+   there is none. Reserves its line so the form does not jump as it changes. */
+.project-slug {
+  min-height: 18px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.project-slug--ready {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-primary);
+}
+
+.project-slug--error {
+  color: var(--danger);
+}
+
+.project-create-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+#project-create-error {
+  margin-top: 10px;
+}
+
+/* ── Rows: one hairline container, like the team roster ── */
+.project-rows {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+  overflow: hidden;
+}
+
+.project-rows:empty {
+  display: none;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-feedback) var(--ease-standard);
+}
+
+.project-row:first-child {
+  border-top: 0;
+}
+
+.project-row:hover {
+  background: var(--surface-muted);
+}
+
+.project-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.project-row-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.project-row-name {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row-desc {
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row-meta {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.project-row-slug {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.project-row-count {
+  min-width: 88px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.project-row-go {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+/* Archived rows recede: smaller, lighter weight, ink from the secondary step. */
+.project-row--archived {
+  min-height: 52px;
+}
+
+.project-row--archived .project-row-name {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* ── Archived section ── */
+.projects-archived {
+  margin-top: 24px;
+}
+
+.projects-archived-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-feedback) var(--ease-standard);
+}
+
+.projects-archived-toggle:hover {
+  color: var(--text-primary);
+}
+
+/* A drawn chevron rather than an icon glyph: the toggle's label is replaced
+   as text, which would take a child <i> with it. */
+.projects-archived-toggle::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-feedback) var(--ease-standard);
+}
+
+.projects-archived-toggle[aria-expanded='true']::before {
+  transform: rotate(45deg);
+}
+
+@media (max-width: 767px) {
+  .projects-content {
+    padding: 16px;
+  }
+
+  /* Name and chevron on one line; slug, badge and count wrap underneath. */
+  .project-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    row-gap: 8px;
+    padding: 14px 16px;
+  }
+
+  .project-row-meta {
+    flex-wrap: wrap;
+    grid-column: 1 / -1;
+    gap: 6px 10px;
+  }
+
+  .project-row-count {
+    min-width: 0;
+    margin-left: auto;
+  }
+
+  .project-input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-row,
+  .project-input,
+  .projects-archived-toggle,
+  .projects-archived-toggle::before {
+    transition: none;
+  }
+}

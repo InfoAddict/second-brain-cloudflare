@@ -74,6 +74,9 @@ function switchTab(tab) {
   // Only the projection on screen pays for itself; the graph is the expensive
   // one and stays unfetched until someone asks to see it.
   if (tab === 'memories') memoryView === 'graph' ? loadGraph() : loadRecent()
+  // The registry is small and changes rarely, but a project created from an AI
+  // tool while this window sat open is exactly what someone arriving here wants.
+  if (tab === 'projects' && typeof loadProjects === 'function') loadProjects()
   // Home shows counts and a brief that were fetched at startup, so arriving
   // back at it is exactly when they are most likely to be out of date. Rate
   // limited, so tab-flicking does not re-run the brief's queries each time.

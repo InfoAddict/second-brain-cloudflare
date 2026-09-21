@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="css/main.css" />
     <link rel="stylesheet" href="css/graph.css" />
     <link rel="stylesheet" href="css/board.css" />
+    <link rel="stylesheet" href="css/projects.css" />
   </head>
 
   <body>
@@ -63,6 +64,7 @@
         <nav class="sb-nav" aria-label="Screens">
           <button class="sb-tab active" id="sb-tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
           <button class="sb-tab" id="sb-tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
+          <button class="sb-tab" id="sb-tab-projects" onclick="switchTab('projects')"><i class="ti ti-folders"></i><span data-i18n="nav.projects">Projects</span></button>
           <!-- Hidden until GET /team/members answers 200 — see js/team.js. -->
           <button class="sb-tab" id="sb-tab-team" onclick="switchTab('team')" style="display: none"><i class="ti ti-users-group"></i><span data-i18n="nav.team">Team</span></button>
         </nav>
@@ -301,6 +303,69 @@
             </div>
           </div>
 
+          <!-- Projects: a named home for related memories. Membership is a
+               project:<slug> tag on ordinary entries, so this screen manages the
+               registry only. Rendered by js/projects.js from GET /projects. -->
+          <div class="screen" id="screen-projects">
+            <div class="mem-bar team-page-bar">
+              <h2 data-i18n="projects.title">Projects</h2>
+              <button class="btn btn-primary btn-sm projects-new-btn" id="project-new-btn" type="button" hidden aria-expanded="false" aria-controls="project-create" onclick="toggleProjectCreate()"><i class="ti ti-plus"></i><span data-i18n="projects.newProject">New project</span></button>
+            </div>
+
+            <div class="projects-content" id="projects-body">
+              <div id="projects-list-view">
+                <!-- No active projects yet. Shown with the create form open and
+                     focused, so the first thing to do is also the obvious one. -->
+                <div class="projects-empty" id="projects-empty" hidden>
+                  <i class="ti ti-folders"></i>
+                  <h3 data-i18n="projects.emptyTitle">Give your memories a home</h3>
+                  <p data-i18n="projects.emptyBody">A project is a named home for memories about one thing: a website, a trip, a client. Memories filed under a project stay together in search and on the graph, and your AI tools can file into one for you.</p>
+                  <p class="projects-empty-start" data-i18n="projects.emptyStart">Name your first project below.</p>
+                </div>
+
+                <section class="panel project-create" id="project-create" hidden aria-labelledby="project-create-title">
+                  <h2 id="project-create-title" data-i18n="projects.createTitle">New project</h2>
+                  <form id="project-create-form" onsubmit="submitProject(); return false" novalidate>
+                    <div class="project-field">
+                      <label for="project-name" data-i18n="projects.nameLabel">Project name</label>
+                      <input class="project-input" id="project-name" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Website relaunch" data-i18n="projects.namePlaceholder" data-i18n-attr="placeholder" oninput="onProjectNameInput()" />
+                      <!-- Filled by onProjectNameInput() on every keystroke, never
+                           by data-i18n: its copy depends on what has been typed. -->
+                      <p class="project-slug" id="project-slug-preview" aria-live="polite"></p>
+                    </div>
+                    <div class="project-field">
+                      <label for="project-desc" data-i18n="projects.descLabel">Description</label>
+                      <textarea class="project-input" id="project-desc" rows="2" maxlength="1000" placeholder="What is this project about? (optional)" data-i18n="projects.descPlaceholder" data-i18n-attr="placeholder"></textarea>
+                    </div>
+                    <div class="project-create-actions">
+                      <!-- Team brains only: a project is bound to one workspace.
+                           renderProjectsList() sets this display in both branches. -->
+                      <span id="project-layer-wrap" style="display: none">
+                        <span class="team-select-wrap">
+                          <select class="team-select" id="project-layer" onchange="onProjectNameInput()" aria-label="Where this project lives" data-i18n="projects.layerLabel" data-i18n-attr="aria-label">
+                            <option value="" data-i18n="home.layerAuto">Default</option>
+                            <option value="personal" data-i18n="home.layerPersonal">Personal</option>
+                            <option value="company" data-i18n="home.layerShared">Shared</option>
+                          </select><i class="ti ti-chevron-down"></i>
+                        </span>
+                      </span>
+                      <button class="btn btn-primary" id="project-create-btn" type="submit" disabled data-i18n="projects.create">Create project</button>
+                    </div>
+                    <p class="integration-error" id="project-create-error" role="alert" hidden></p>
+                  </form>
+                </section>
+
+                <div class="project-rows" id="projects-list"></div>
+
+                <!-- Archived projects stay out of the way: collapsed, quieter. -->
+                <div class="projects-archived" id="projects-archived" hidden>
+                  <button class="projects-archived-toggle" id="projects-archived-toggle" type="button" aria-expanded="false" aria-controls="projects-archived-list" onclick="toggleProjectsArchived()"></button>
+                  <div class="project-rows" id="projects-archived-list" hidden></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Team administration. Both nav entries above ship hidden; they
                appear only once GET /team/members has answered 200, which is
                both the admin check and the roster. A personal install never
@@ -471,6 +536,7 @@
         <div id="navbar">
           <button class="nav-tab active" id="tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
           <button class="nav-tab" id="tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
+          <button class="nav-tab" id="tab-projects" onclick="switchTab('projects')"><i class="ti ti-folders"></i><span data-i18n="nav.projects">Projects</span></button>
           <button class="nav-tab" id="tab-team" onclick="switchTab('team')" style="display: none"><i class="ti ti-users-group"></i><span data-i18n="nav.team">Team</span></button>
         </div>
       </div>
@@ -701,6 +767,7 @@
     <script src="js/integrations.js"></script>
     <script src="js/team.js"></script>
     <script src="js/activity.js"></script>
+    <script src="js/projects.js"></script>
     <script src="js/graph-canvas.js"></script>
     <script src="js/brief.js"></script>
     <script src="js/board.js"></script>

@@ -48,6 +48,49 @@ async function apiList(n = 50, workspace, actor, tag) {
   return res.json()
 }
 
+/**
+ * One request to the /projects routes, resolved to { ok, status, data }.
+ *
+ * Not thrown on a non-2xx: callers branch on the status (409 means the slug is
+ * taken, which the create form explains rather than reports as a failure).
+ * A rejected promise still means the network itself failed.
+ */
+async function projectsRequest(method, path, body) {
+  const res = await fetch(`${WORKER_URL}${path}`, {
+    method,
+    headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${AUTH_TOKEN}` },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  let data = {}
+  try {
+    data = await res.json()
+  } catch {}
+  return { ok: res.ok, status: res.status, data }
+}
+
+/** Registry rows with per-project counts; archived ones included, split client-side. */
+function apiProjects() {
+  return projectsRequest('GET', '/projects?counts=1&include_archived=1')
+}
+
+function apiProjectCreate(body) {
+  return projectsRequest('POST', '/projects', body)
+}
+
+/** `workspace` is the row's layer: the same slug can exist in two workspaces. */
+function projectPath(slug, workspace) {
+  const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+  return `/projects/${encodeURIComponent(slug)}${q}`
+}
+
+function apiProjectPatch(slug, body, workspace) {
+  return projectsRequest('PATCH', projectPath(slug, workspace), body)
+}
+
+function apiProjectDelete(slug, workspace) {
+  return projectsRequest('DELETE', projectPath(slug, workspace))
+}
+
 /** Move a memory between the personal and company layers (MOVE semantics). */
 async function apiShare(id, workspace) {
   const res = await fetch(`${WORKER_URL}/share`, {
