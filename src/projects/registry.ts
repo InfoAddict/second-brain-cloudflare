@@ -102,6 +102,47 @@ function cleanAliases(value: unknown): string[] {
   return out;
 }
 
+export interface ImportedProject {
+  id: string;
+  name: string;
+  description: string;
+  aliases: string[];
+  status: ProjectStatus;
+  created_at: number;
+  /** camelCase: this is projects.updated_at, not the entries column the coalescing guard watches. */
+  updatedAt: number | null;
+}
+
+/** One project of a backup file, held to the same rules as a create; the failure names why. */
+export function parseImportedProject(raw: unknown): { ok: true; project: ImportedProject } | { ok: false; id: string; detail: string } {
+  const o = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  if (!o) return { ok: false, id: "", detail: "project must be an object" };
+  const id = typeof o.id === "string" ? o.id : "";
+  try {
+    const status = o.status ?? "active";
+    if (status !== "active" && status !== "archived") throw new InvalidProjectInputError('status must be "active" or "archived"');
+    const created_at = o.created_at ?? Date.now();
+    if (typeof created_at !== "number" || !Number.isFinite(created_at)) throw new InvalidProjectInputError("created_at must be a number");
+    const updated_at = o.updated_at ?? null;
+    if (updated_at !== null && (typeof updated_at !== "number" || !Number.isFinite(updated_at))) throw new InvalidProjectInputError("updated_at must be a number");
+    return {
+      ok: true,
+      project: {
+        id: assertSlug(o.id),
+        name: cleanText(o.name, "name", MAX_PROJECT_NAME_CHARS, true),
+        description: cleanText(o.description ?? "", "description", MAX_PROJECT_DESCRIPTION_CHARS, false),
+        aliases: cleanAliases(o.aliases ?? []),
+        status,
+        created_at,
+        updatedAt: updated_at,
+      },
+    };
+  } catch (e) {
+    if (e instanceof InvalidProjectInputError) return { ok: false, id, detail: e.message };
+    throw e;
+  }
+}
+
 export async function listProjects(
   db: D1Database,
   workspaceIds: string[],

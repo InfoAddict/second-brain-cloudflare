@@ -32,7 +32,7 @@ describe("GET /export", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
-    expect(data.version).toBe(2);
+    expect(data.version).toBe(3);
     expect(typeof data.exported_at).toBe("number");
     expect(data.entries).toHaveLength(150);
     // newest first

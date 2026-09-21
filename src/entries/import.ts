@@ -4,6 +4,7 @@ import { isSymmetric, isValidEdgeType } from "../graph/edges";
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+import { parseImportedProject, type ImportedProject } from "../projects/registry";
 
 /**
  * Default page size: array positions examined per call, inserts and skips alike.
@@ -51,7 +52,14 @@ export interface ImportEdgeResult {
   detail?: string;
 }
 
-export type ImportResultItem = ImportEntryResult | ImportEdgeResult;
+export interface ImportProjectResult {
+  project_id: string;
+  status: "imported" | "skipped" | "failed";
+  reason?: string;
+  detail?: string;
+}
+
+export type ImportResultItem = ImportEntryResult | ImportEdgeResult | ImportProjectResult;
 
 export interface ExportEntry {
   id: string;
@@ -75,10 +83,22 @@ export interface ExportEdge {
   created_at?: number;
 }
 
+export interface ExportProject {
+  id: string;
+  name: string;
+  description?: string;
+  aliases?: string[];
+  status?: string;
+  created_at?: number;
+  updated_at?: number | null;
+}
+
 export interface ExportPayload {
   version?: number;
   entries: ExportEntry[];
   edges?: ExportEdge[];
+  /** Absent in exports taken before projects existed (version 2). */
+  projects?: ExportProject[];
 }
 
 export interface ImportOptions {
@@ -88,6 +108,8 @@ export interface ImportOptions {
   offset?: number;
   /** Index into `edges` where this call's page starts. */
   edgeOffset?: number;
+  /** Index into `projects` where this call's page starts. */
+  projectOffset?: number;
   /**
    * Whose workspace/actor the imported rows and edges are stamped with. Defaults
    * to OWNER_WRITE_CONTEXT ('', '') so existing unit fixtures compile — routes
@@ -104,12 +126,18 @@ export interface ImportSummary {
   edges_imported: number;
   edges_skipped: number;
   edges_failed: number;
+  projects_imported: number;
+  projects_skipped: number;
+  projects_failed: number;
   remaining_entries: number;
   remaining_edges: number;
+  remaining_projects: number;
   /** Pass back as ?offset= to continue. Equals entries.length when entries are done. */
   next_offset: number;
   /** Pass back as ?edge_offset= to continue. Advances only once entries are done. */
   next_edge_offset: number;
+  /** Pass back as ?project_offset= to continue. Advances only once entries are done. */
+  next_project_offset: number;
   results: ImportResultItem[];
   vectorize_hint: string;
 }
@@ -191,14 +219,17 @@ export function parseImportBody(
 ): { ok: true; payload: ExportPayload } | { ok: false; error: string } {
   if (!body || typeof body !== "object") return { ok: false, error: "body must be an object" };
   const o = body as Record<string, unknown>;
-  if (o.version !== undefined && o.version !== 2) return { ok: false, error: "version must be 2" };
+  // 3 added projects; 2 (no projects) restores as before.
+  if (o.version !== undefined && o.version !== 2 && o.version !== 3) return { ok: false, error: "version must be 2 or 3" };
   if (!Array.isArray(o.entries)) return { ok: false, error: "entries must be an array" };
+  if (o.projects !== undefined && !Array.isArray(o.projects)) return { ok: false, error: "projects must be an array" };
   return {
     ok: true,
     payload: {
       version: o.version as number | undefined,
       entries: o.entries as ExportEntry[],
       edges: o.edges as ExportEdge[] | undefined,
+      projects: o.projects as ExportProject[] | undefined,
     },
   };
 }
@@ -405,6 +436,80 @@ async function flushEdgeBatch(
   }
 }
 
+const PROJECT_INSERT_SQL =
+  `INSERT INTO projects (id, workspace_id, name, description, aliases, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id, id) DO NOTHING`;
+
+async function loadExistingProjectIds(env: Env, workspaceId: string, ids: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  // The workspace id takes one of the bound parameters.
+  const chunk = D1_MAX_BOUND_PARAMS - 1;
+  for (let i = 0; i < ids.length; i += chunk) {
+    const batch = ids.slice(i, i + chunk);
+    const { results } = await env.DB.prepare(
+      `SELECT id FROM projects WHERE workspace_id = ? AND id IN (${batch.map(() => "?").join(", ")})`,
+    ).bind(workspaceId, ...batch).all() as { results: { id: string }[] };
+    for (const row of results) found.add(row.id);
+  }
+  return found;
+}
+
+function bindProjectInsert(env: Env, p: ImportedProject, writeCtx: WriteContext) {
+  return env.DB.prepare(PROJECT_INSERT_SQL).bind(
+    p.id, writeCtx.workspaceId, p.name, p.description, JSON.stringify(p.aliases), p.status, p.created_at, p.updatedAt,
+  );
+}
+
+/**
+ * One page of projects, into the caller's workspace. An existing (workspace, id) keeps
+ * its row, as an existing entry id does. Nothing is queried for an empty page.
+ */
+async function importProjectsPage(
+  env: Env,
+  page: ExportProject[],
+  writeCtx: WriteContext,
+  results: ImportResultItem[],
+): Promise<{ imported: number; skipped: number; failed: number }> {
+  const counts = { imported: 0, skipped: 0, failed: 0 };
+  if (!page.length) return counts;
+
+  const parsed = page.map(raw => parseImportedProject(raw));
+  const existing = await loadExistingProjectIds(env, writeCtx.workspaceId, parsed.flatMap(p => (p.ok ? [p.project.id] : [])));
+
+  const pending: ImportedProject[] = [];
+  for (const p of parsed) {
+    if (!p.ok) {
+      counts.failed++;
+      results.push({ project_id: p.id, status: "failed", reason: "invalid_project", detail: p.detail });
+    } else if (existing.has(p.project.id)) {
+      counts.skipped++;
+    } else {
+      // Queued ids count as seen, so a duplicate later in the page is a skip.
+      existing.add(p.project.id);
+      pending.push(p.project);
+    }
+  }
+
+  for (let i = 0; i < pending.length; i += IMPORT_D1_BATCH_SIZE) {
+    const chunk = pending.slice(i, i + IMPORT_D1_BATCH_SIZE);
+    const settle = (p: ImportedProject) => { counts.imported++; results.push({ project_id: p.id, status: "imported" }); };
+    try {
+      await env.DB.batch(chunk.map(p => bindProjectInsert(env, p, writeCtx)));
+      chunk.forEach(settle);
+    } catch {
+      for (const p of chunk) {
+        try {
+          await bindProjectInsert(env, p, writeCtx).run();
+          settle(p);
+        } catch (e) {
+          counts.failed++;
+          results.push({ project_id: p.id, status: "failed", reason: "insert_error", detail: formatDbError(e) });
+        }
+      }
+    }
+  }
+  return counts;
+}
+
 /**
  * One page of a restore. `offset`/`edgeOffset` are positions in the payload arrays,
  * and a call examines exactly one page: entries[offset .. offset+limit), then — only
@@ -421,6 +526,7 @@ async function flushEdgeBatch(
  *
  * Re-running a page is safe: existing ids and edge keys are skipped, and the
  * ON CONFLICT upsert makes a re-inserted edge a weight merge rather than an error.
+ * Projects page the same way once entries are done, and an existing project is kept.
  */
 export async function importExportPayload(
   env: Env,
@@ -432,6 +538,8 @@ export async function importExportPayload(
   const edges = body.edges ?? [];
   const offset = Math.min(Math.max(opts.offset ?? 0, 0), entries.length);
   const edgeOffset = Math.min(Math.max(opts.edgeOffset ?? 0, 0), edges.length);
+  const projects = body.projects ?? [];
+  const projectOffset = Math.min(Math.max(opts.projectOffset ?? 0, 0), projects.length);
   const writeCtx = opts.writeCtx ?? OWNER_WRITE_CONTEXT;
 
   const results: ImportResultItem[] = [];
@@ -490,6 +598,8 @@ export async function importExportPayload(
   // Deferred until the entries array is exhausted, so every endpoint an edge can
   // name either predates this import or was written by an earlier page.
   let next_edge_offset = edgeOffset;
+  let next_project_offset = projectOffset;
+  let projectCounts = { imported: 0, skipped: 0, failed: 0 };
   if (remaining_entries === 0) {
     const edgePage = edges.slice(edgeOffset, edgeOffset + limit);
     next_edge_offset = edgeOffset + edgePage.length;
@@ -540,6 +650,12 @@ export async function importExportPayload(
     }
     edges_imported += edgeBatchCounters.imported;
     edges_failed += edgeBatchCounters.failed;
+
+    // Projects ride the same call as the edges page, on their own cursor, so a client
+    // that only knows entries and edges still restores the first page of them.
+    const projectPage = projects.slice(projectOffset, projectOffset + limit);
+    next_project_offset = projectOffset + projectPage.length;
+    projectCounts = await importProjectsPage(env, projectPage, writeCtx, results);
   }
 
   return {
@@ -550,10 +666,15 @@ export async function importExportPayload(
     edges_imported,
     edges_skipped,
     edges_failed,
+    projects_imported: projectCounts.imported,
+    projects_skipped: projectCounts.skipped,
+    projects_failed: projectCounts.failed,
     remaining_entries,
     remaining_edges: edges.length - next_edge_offset,
+    remaining_projects: projects.length - next_project_offset,
     next_offset,
     next_edge_offset,
+    next_project_offset,
     results,
     vectorize_hint: "POST /vectorize-pending until remaining is 0",
   };
