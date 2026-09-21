@@ -329,6 +329,58 @@ describe("project filter", () => {
     expect(lists.at(-1)!.query.has("project")).toBe(false);
   });
 
+  describe("when the selected project is archived elsewhere", () => {
+    const archived = () => ({ "GET /projects": { body: { projects: ACTIVE.filter((r) => r.id !== "website") } } });
+    const lists = (h: any) => h.calls.filter((c: any) => c.path === "/list");
+
+    async function selectWebsite(h: any, tab: string) {
+      await h.ctx.loadComposerProjects();
+      h.run(`currentTab = "${tab}"`);
+      h.ctx.onProjectFilterChange("website");
+      await drain();
+    }
+
+    it("reloads the Memories list unfiltered instead of leaving the old rows under All projects", async () => {
+      let projects: any = { projects: ACTIVE };
+      const h = boot({ "GET /projects": () => ({ body: projects }) });
+      await selectWebsite(h, "memories");
+      const before = lists(h).length;
+
+      projects = { projects: ACTIVE.filter((r) => r.id !== "website") };
+      await h.ctx.loadComposerProjects();
+      await drain();
+
+      expect(h.els.get("project-filter-recent").value).toBe("");
+      expect(lists(h).length).toBe(before + 1);
+      expect(lists(h).at(-1).query.has("project")).toBe(false);
+    });
+
+    it("does not fetch a list when Memories is not the current tab", async () => {
+      let projects: any = { projects: ACTIVE };
+      const h = boot({ "GET /projects": () => ({ body: projects }) });
+      await selectWebsite(h, "home");
+      const before = lists(h).length;
+
+      projects = archived()["GET /projects"].body;
+      await h.ctx.loadComposerProjects();
+      await drain();
+
+      expect(lists(h).length).toBe(before);
+    });
+
+    it("does not reload when no project filter was selected", async () => {
+      const h = boot();
+      await h.ctx.loadComposerProjects();
+      h.run(`currentTab = "memories"`);
+      const before = lists(h).length;
+
+      await h.ctx.loadComposerProjects();
+      await drain();
+
+      expect(lists(h).length).toBe(before);
+    });
+  });
+
   it("is sent with a recall, alongside the tag", async () => {
     const h = boot({}, { lenient: true });
     await h.ctx.loadComposerProjects();

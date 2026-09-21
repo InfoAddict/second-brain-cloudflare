@@ -700,7 +700,8 @@ function renderProjectPickers() {
   }
   // A choice that has since been archived or deleted is not offered any more.
   if (!composerProjects.some((p) => p.id === composerProject)) composerProject = ''
-  if (!composerProjects.some((p) => p.id === selectedProject)) selectedProject = ''
+  const filterVanished = selectedProject !== '' && !composerProjects.some((p) => p.id === selectedProject)
+  if (filterVanished) selectedProject = ''
 
   const pick = document.getElementById('home-project')
   if (pick) {
@@ -719,6 +720,8 @@ function renderProjectPickers() {
     const fwrap = document.getElementById(`project-filter-wrap-${which}`)
     if (fwrap) fwrap.style.display = has ? '' : 'none'
   }
+  // The rows on screen were filtered by the project that just went away.
+  if (filterVanished && currentTab === 'memories' && typeof loadRecent === 'function') loadRecent()
 }
 
 /** Pickers take the active rows once, de-duplicated by slug (first workspace wins). */
