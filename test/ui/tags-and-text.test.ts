@@ -86,6 +86,38 @@ describe("isSystemTag / humanTags", () => {
   });
 });
 
+describe("project tags", () => {
+  const { isSystemTag, humanTags, projectTagsOf } = load();
+
+  it("reserves the project: namespace, so it never renders as a plain chip", () => {
+    expect(isSystemTag("project:my-app")).toBe(true);
+    expect(isSystemTag("Project:My-App")).toBe(true);
+    expect(humanTags(["work", "project:my-app", "idea"])).toEqual(["work", "idea"]);
+  });
+
+  it("does not swallow a plain tag that merely starts with the word project", () => {
+    expect(isSystemTag("project")).toBe(false);
+    expect(isSystemTag("projects-2026")).toBe(false);
+    expect(humanTags(["project", "projects-2026"])).toEqual(["project", "projects-2026"]);
+  });
+
+  it("projectTagsOf returns the slugs, in order and without duplicates", () => {
+    expect(projectTagsOf(["work", "project:website", "idea", "project:app", "project:website"])).toEqual([
+      "website",
+      "app",
+    ]);
+  });
+
+  it("projectTagsOf normalizes case and skips anything that is not a valid slug", () => {
+    expect(projectTagsOf(["Project:Website", "project:", "project:bad slug!", "project:-lead"])).toEqual(["website"]);
+  });
+
+  it("projectTagsOf is safe on malformed input", () => {
+    expect(projectTagsOf(null as any)).toEqual([]);
+    expect(projectTagsOf(["", null, 42, "project:ok"] as any)).toEqual(["ok"]);
+  });
+});
+
 describe("stripToPlainText / titleLine", () => {
   const { stripToPlainText, titleLine, relativeTime, sourceBadge } = load();
 

@@ -440,7 +440,14 @@ const SYSTEM_TAG_PREFIXES = [
   'stale:',
   'capsule:',
   'capsule-slot:',
+  'project:',
 ]
+
+/** Membership tag written on a memory that belongs to a project: `project:<slug>`. */
+const PROJECT_TAG_PREFIX = 'project:'
+
+/** Same grammar the Worker enforces (src/tags/system.ts PROJECT_SLUG_RE). */
+const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 /**
  * Bare markers the Worker writes: compression, pattern mining, dedupe, and the
@@ -493,6 +500,23 @@ function isSystemTag(tag) {
 /** The tags worth showing a person, in their original order. */
 function humanTags(tags) {
   return (Array.isArray(tags) ? tags : []).filter((t) => !isSystemTag(t))
+}
+
+/**
+ * The project slugs a memory belongs to, from its `project:<slug>` tags.
+ * Those tags are hidden from plain chips (see SYSTEM_TAG_PREFIXES); this is
+ * what the project chip and the graph clusterer read instead.
+ */
+function projectTagsOf(tags) {
+  const out = []
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    if (typeof tag !== 'string') continue
+    const t = tag.trim().toLowerCase()
+    if (!t.startsWith(PROJECT_TAG_PREFIX)) continue
+    const slug = t.slice(PROJECT_TAG_PREFIX.length)
+    if (PROJECT_SLUG_RE.test(slug) && !out.includes(slug)) out.push(slug)
+  }
+  return out
 }
 
 /* ---- Graph view: topic clustering + static packed layout ------------------------------
@@ -911,5 +935,5 @@ if (typeof module !== 'undefined' && module.exports) {
   // downloadTextFile is deliberately absent: it needs a live URL and Blob, and
   // it is exercised through its two callers (exportMemories in js/settings.js
   // and exportActivityCsv in js/activity.js) rather than in isolation.
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml };
 }
