@@ -57,11 +57,19 @@ function failure(e: unknown): Response {
  */
 async function tallyMembers(env: Env, identity: Identity, opts: { layer?: "personal" | "company"; teamId?: string }) {
   const scope = scopeWhereForRead(identity, opts);
-  const { results } = await env.DB.prepare(
-    `SELECT workspace_id, tags FROM entries INDEXED BY idx_entries_project
+  const scan = (hint: string) => env.DB.prepare(
+    `SELECT workspace_id, tags FROM entries${hint}
       WHERE ${scope.clause} AND instr(lower(tags), '"project:') > 0
       LIMIT ${COUNTS_SCAN_LIMIT}`,
   ).bind(...scope.bindings).all<{ workspace_id: string; tags: string }>();
+  let results: { workspace_id: string; tags: string }[];
+  try {
+    ({ results } = await scan(" INDEXED BY idx_entries_project"));
+  } catch (e) {
+    // Just upgraded: the index is created after the projects table. Same scan, no hint.
+    if (!/no such index: idx_entries_project/i.test(String((e as Error)?.message ?? e))) throw e;
+    ({ results } = await scan(""));
+  }
 
   const counts = new Map<string, number>();
   for (const row of results) {

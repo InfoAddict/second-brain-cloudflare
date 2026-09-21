@@ -243,6 +243,32 @@ describe("GET /projects?counts=1", () => {
     expect(entries[0]).toMatch(/LIMIT 5000/);
   });
 
+  it("still answers when idx_entries_project does not exist yet, by retrying without the hint", async () => {
+    // A just-upgraded brain: the table is there, the index is created a beat later.
+    sqlite.db.prepare(`DROP INDEX idx_entries_project`).run();
+    await call("GET", "/projects", ALICE);
+    sqlite.issued.length = 0;
+
+    const res = await call("GET", "/projects?counts=1", ALICE);
+
+    expect(res.status).toBe(200);
+    const { projects } = await jsonOf(res);
+    expect(Object.fromEntries(projects.map((p: any) => [`${p.layer}/${p.id}`, p.count]))).toEqual({ "personal/site": 3, "personal/app": 2, "company/site": 1 });
+    const entries = sqlite.issued.filter(s => /\bFROM entries\b/i.test(s));
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toContain("INDEXED BY idx_entries_project");
+    expect(entries[1]).not.toContain("INDEXED BY");
+  });
+
+  it("does not swallow an unrelated failure of the counts scan", async () => {
+    const prepare = env.DB.prepare.bind(env.DB);
+    (env.DB as { prepare: unknown }).prepare = (sql: string) => {
+      if (/INDEXED BY idx_entries_project/.test(sql)) throw new Error("D1_ERROR: database is locked");
+      return prepare(sql);
+    };
+    await expect(call("GET", "/projects?counts=1", ALICE)).rejects.toThrow(/database is locked/);
+  });
+
   it("flags counts_approximate when the 5000 row scan is exhausted", async () => {
     const insert = sqlite.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id, actor_id) VALUES (?, 'c', ?, 'test', 1, '[]', ?, ?)`);
     for (let i = 0; i < 5001; i++) await insert.bind(`big-${i}`, '["project:app"]', aliceWs, aliceId).run();
