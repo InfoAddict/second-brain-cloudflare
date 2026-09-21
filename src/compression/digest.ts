@@ -16,7 +16,9 @@ export async function synthesizeDigest(
   tag: string,
   rows: { id: string; content: string }[],
   env: Env,
-  config: Readonly<Config> = DEFAULTS
+  config: Readonly<Config> = DEFAULTS,
+  /** A project digest's display name; the key itself (project:<slug>) is never shown. */
+  label?: string,
 ): Promise<string> {
   if (!rows.length) return "";
 
@@ -24,12 +26,14 @@ export async function synthesizeDigest(
     .map((r, i) => `[${i + 1}] ${r.content.slice(0, 400)}`)
     .join("\n\n");
 
-  const prompt = `You are a second brain assistant. Based on these stored memories tagged "${tag}", write a single cohesive paragraph describing the current state of this area — what has been done, decided, and is being worked toward. Write as one flowing paragraph, not a list.
+  const subject = label === undefined ? `tagged "${tag}"` : `in the project "${label}"`;
+  const stateOf = label === undefined ? `"${tag}"` : `the project "${label}"`;
+  const prompt = `You are a second brain assistant. Based on these stored memories ${subject}, write a single cohesive paragraph describing the current state of this area — what has been done, decided, and is being worked toward. Write as one flowing paragraph, not a list.
 
 Memories:
 ${memoriesList}
 
-State of "${tag}":`;
+State of ${stateOf}:`;
 
   let digest = "";
   try {
@@ -179,10 +183,12 @@ export async function compressTag(
     }
 
     const rows = rawEntries.map(r => ({ id: r.id as string, content: r.content as string }));
-    const digestText = await synthesizeDigest(tag, rows, env, cfg);
+    const label = workspaceRows?.[0].name;
+    const digestText = await synthesizeDigest(tag, rows, env, cfg, label);
     if (!digestText) continue;
 
-    const content = `[Synthesized from ${rows.length} entries tagged "${tag}"]\n\n${digestText}`;
+    const provenance = label === undefined ? `tagged "${tag}"` : `in project "${label}"`;
+    const content = `[Synthesized from ${rows.length} entries ${provenance}]\n\n${digestText}`;
     // The digest inherits the partition's workspace and keeps actor "" — system-
     // authored, like every pre-team pipeline row.
     const result = await captureEntry(content, ["synthesized", tag], "system", env, ctx, cfg,

@@ -91,6 +91,23 @@ describe("nightly per-project digests", () => {
     expect(await rolledUp()).toBe(25);
   });
 
+  it("labels the digest with the project's name, not its raw key or 'tagged'", async () => {
+    await createProject(db, WS, { id: "signpath", name: "SignPath", aliases: ["hosting"] });
+    seed(WS, ["project:signpath"], 6);
+    seed(WS, ["hosting"], 6);
+
+    await run(WS);
+
+    const stored = await sqlite.db.prepare(`SELECT content FROM entries WHERE tags LIKE '%"synthesized"%'`).first() as { content: string };
+    expect(stored.content.startsWith('[Synthesized from 12 entries in project "SignPath"]')).toBe(true);
+    expect(stored.content).not.toContain("tagged");
+    const prompt = (env.AI.run as any).mock.calls.map((c: any[]) => c[1]?.messages?.[0]?.content).find((c: unknown) => typeof c === "string" && c.includes("Memories:"));
+    // The seeded memories quote the raw key, so only the instruction part is checked.
+    const instruction = (prompt as string).split("Memories:")[0] + (prompt as string).split("State of")[1];
+    expect(instruction).toContain('project "SignPath"');
+    expect(instruction).not.toContain("project:signpath");
+  });
+
   it("uses the existing 10-entry threshold: 9 is skipped, 10 is digested", async () => {
     await createProject(db, WS, { id: "thin", name: "Thin" });
     await createProject(db, WS, { id: "enough", name: "Enough" });
