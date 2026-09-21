@@ -64,6 +64,11 @@ export function isWorkerOwnedTag(tag: string): boolean {
   return RESERVED_TAG_PREFIXES.some((p) => t.startsWith(p));
 }
 
+/** The grammar error for a project slug, or null when it is valid. One string, everywhere. */
+export function projectSlugError(slug: string): string | null {
+  return PROJECT_SLUG_RE.test(slug) ? null : `invalid project tag "${slug}": must match [a-z0-9][a-z0-9_-]{0,63}`;
+}
+
 /**
  * Error text for the first `project:<x>` tag whose `<x>` breaks the slug grammar, or
  * null. The prefix matches case-insensitively and trimmed, as captureEntry normalizes
@@ -74,12 +79,16 @@ export function projectTagError(tags: readonly unknown[]): string | null {
     if (typeof tag !== "string") continue;
     const t = tag.trim();
     if (!t.toLowerCase().startsWith(PROJECT_TAG_PREFIX)) continue;
-    const slug = t.slice(PROJECT_TAG_PREFIX.length);
-    if (!PROJECT_SLUG_RE.test(slug)) {
-      return `invalid project tag "${slug}": must match [a-z0-9][a-z0-9_-]{0,63}`;
-    }
+    const error = projectSlugError(t.slice(PROJECT_TAG_PREFIX.length));
+    if (error) return error;
   }
   return null;
+}
+
+/** The tag list with `project:<slug>` unioned in (multi-project membership stays legal). */
+export function withProjectTag(tags: readonly string[], slug: string): string[] {
+  const tag = `${PROJECT_TAG_PREFIX}${slug}`;
+  return tags.some(t => t.trim().toLowerCase() === tag) ? [...tags] : [...tags, tag];
 }
 
 /** True for both Prompt Capsule namespaces, case-insensitively. */
