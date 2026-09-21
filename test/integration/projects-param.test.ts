@@ -335,3 +335,47 @@ describe("GET /digest with project", () => {
   });
 });
 
+describe("GET /graph with project", () => {
+  beforeEach(async () => {
+    await createProject(ALICE, { id: "site", name: "Site", aliases: ["hosting"] });
+    seed("m1", aliceWs, ["project:site"]);
+    seed("m2", aliceWs, ["project:site"]);
+    seed("a1", aliceWs, ["hosting"]);
+    seed("o1", aliceWs, ["infra"]);
+    seed("o2", aliceWs, ["infra"]);
+    seed("o3", aliceWs, ["infra"]);
+    seedEdge("e1", "m1", "o1", 0.9);
+    seedEdge("e2", "o2", "o3", 0.95); // strongest edge, but no member endpoint
+    seedEdge("e3", "a1", "o2", 0.5);
+    seedEdge("e4", "m2", "m1", 0.4);
+  });
+
+  const pairs = (g: any) => g.edges.map((e: any) => [e.source, e.target].sort().join("-")).sort();
+
+  it("without project the strongest edge leads, as before", async () => {
+    const g = await jsonOf(await call("GET", "/graph", ALICE));
+    expect(pairs(g)).toContain("o2-o3");
+  });
+
+  it("seeds only from edges that touch a member or an alias-matched entry", async () => {
+    const g = await jsonOf(await call("GET", "/graph?project=site", ALICE));
+
+    expect(pairs(g)).toEqual(["a1-o2", "m1-m2", "m1-o1"]);
+    expect(g.nodes.map((n: any) => n.id).sort()).toEqual(["a1", "m1", "m2", "o1", "o2"]);
+  });
+
+  it("404s an unknown project and hides a colleague's", async () => {
+    expect((await call("GET", "/graph?project=nope", ALICE)).status).toBe(404);
+    expect((await call("GET", "/graph?project=site", bobToken)).status).toBe(404);
+  });
+
+  it("does not leak another workspace's members through an alias", async () => {
+    seed("bobs", bobWs, ["hosting"], { actorId: bobId });
+    seed("bobs-peer", bobWs, ["infra"], { actorId: bobId });
+    seedEdge("eb", "bobs", "bobs-peer", 0.99, bobWs);
+
+    const g = await jsonOf(await call("GET", "/graph?project=site", ALICE));
+    expect(g.nodes.map((n: any) => n.id)).not.toContain("bobs");
+  });
+});
+

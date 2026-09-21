@@ -1127,11 +1127,15 @@ describe("the checker over the real source tree", () => {
   // one statement splicing scope.clause into its WHERE, so it passes on its
   // merits. Exempt/scope-checked/outer-join are UNCHANGED.
   //
+  // MOVED queries 104 -> 105 by the project-restricted seed scan in buildGraph
+  // (src/graph/traverse.ts): a CTE over entries plus the edge scan, both splicing
+  // scope.clause, so it passes on its merits. Exempt/scope-checked/outer-join UNCHANGED.
+  //
   // As the tool printed it:
-  //   ✔ scope check: 104 queries, 53 documented exceptions, 7 scope-checked
+  //   ✔ scope check: 105 queries, 53 documented exceptions, 7 scope-checked
   //     (clause assembled in JS), 1 scope-outer-join (clause governs a column,
   //     not the row set)
-  it("reports exactly 104 queries, 53 exceptions, 7 scope-checked and 1 outer-join", () => {
+  it("reports exactly 105 queries, 53 exceptions, 7 scope-checked and 1 outer-join", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1146,7 +1150,7 @@ describe("the checker over the real source tree", () => {
       { queries, exempt, checked, outerJoin },
       "check:scope counts moved. If that was deliberate, say so out loud and " +
         "update this expectation in the same commit.",
-    ).toEqual({ queries: 104, exempt: 53, checked: 7, outerJoin: 1 });
+    ).toEqual({ queries: 105, exempt: 53, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
