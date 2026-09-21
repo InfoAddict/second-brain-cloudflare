@@ -19,6 +19,14 @@
 export const CAPSULE_TAG_PREFIX = "capsule:";
 export const CAPSULE_SLOT_TAG_PREFIX = "capsule-slot:";
 
+/**
+ * Project membership. A display/topic namespace, deliberately NOT in RESERVED_TAG_PREFIXES
+ * below: users and agents add and remove it through ordinary tag replacement.
+ */
+export const PROJECT_TAG_PREFIX = "project:";
+/** Slug grammar shared by the registry, project tags, and the capsule project id. */
+export const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
 /** Namespaces the Worker writes and owns; `prefix:value` shaped. */
 const RESERVED_TAG_PREFIXES = [
   "kind:",
@@ -54,6 +62,33 @@ export function isWorkerOwnedTag(tag: string): boolean {
   if (!t) return false;
   if (PIPELINE_TAG_NAMES.has(t)) return true;
   return RESERVED_TAG_PREFIXES.some((p) => t.startsWith(p));
+}
+
+/** The grammar error for a project slug, or null when it is valid. One string, everywhere. */
+export function projectSlugError(slug: string): string | null {
+  return PROJECT_SLUG_RE.test(slug) ? null : `invalid project tag "${slug}": must match [a-z0-9][a-z0-9_-]{0,63}`;
+}
+
+/**
+ * Error text for the first `project:<x>` tag whose `<x>` breaks the slug grammar, or
+ * null. The prefix matches case-insensitively and trimmed, as captureEntry normalizes
+ * it; the slug itself must already be lowercase so no mixed-case row is ever written.
+ */
+export function projectTagError(tags: readonly unknown[]): string | null {
+  for (const tag of tags) {
+    if (typeof tag !== "string") continue;
+    const t = tag.trim();
+    if (!t.toLowerCase().startsWith(PROJECT_TAG_PREFIX)) continue;
+    const error = projectSlugError(t.slice(PROJECT_TAG_PREFIX.length));
+    if (error) return error;
+  }
+  return null;
+}
+
+/** The tag list with `project:<slug>` unioned in (multi-project membership stays legal). */
+export function withProjectTag(tags: readonly string[], slug: string): string[] {
+  const tag = `${PROJECT_TAG_PREFIX}${slug}`;
+  return tags.some(t => t.trim().toLowerCase() === tag) ? [...tags] : [...tags, tag];
 }
 
 /** True for both Prompt Capsule namespaces, case-insensitively. */

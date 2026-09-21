@@ -3,6 +3,7 @@ import type { Env } from "../../src/env";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { createMember } from "../../src/lib/team-admin";
+import { createProject } from "../../src/projects/registry";
 import { defaultHandler } from "../../src/routes";
 import { buildMcpServer } from "../../src/mcp/server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -373,6 +374,43 @@ describe("prompt capsule routes", () => {
     );
     expect(duplicateHead.status).toBe(200);
     expect(await duplicateHead.text()).toBe("");
+  });
+
+  // The registry is not consulted: capsule ids predate projects and callers invent them.
+  it("still serves a project capsule whose id is not in the projects registry, over REST and MCP", async () => {
+    await createProject(sqlite.db as unknown as D1Database, identity.personalWorkspaceId, { id: "website", name: "Website" });
+    await seed("invented-state", "Caller-invented project state", [
+      "capsule:project:caller-invented", "capsule-slot:current-state", "status:canonical",
+    ]);
+
+    const rest = await defaultHandler.fetch(req("GET", "/prompt-capsules/projects/caller-invented"), env, ctx);
+    expect(rest.status).toBe(200);
+    expect(await rest.json()).toMatchObject({
+      kind: "project",
+      project_id: "caller-invented",
+      sections: [{ slot: "current-state", source_entry_id: "invented-state" }],
+    });
+
+    const server = buildMcpServer(env, ctx, identity);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "prompt-capsule-test", version: "1.0.0" });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      const result = await client.callTool({
+        name: "get_prompt_capsule",
+        arguments: { kind: "project", project_id: "caller-invented", workspace: "personal" },
+      });
+      expect(result.isError).toBeFalsy();
+      const envelope = JSON.parse((result.content as Array<{ text?: string }>)[0]?.text ?? "null");
+      expect(envelope.ok).toBe(true);
+      expect(envelope.capsule).toMatchObject({ project_id: "caller-invented", sections: [{ source_entry_id: "invented-state" }] });
+    } finally {
+      await client.close();
+    }
+
+    // Reading never registers the id.
+    const { results } = await sqlite.db.prepare(`SELECT id FROM projects`).all();
+    expect((results as { id: string }[]).map(r => r.id)).toEqual(["website"]);
   });
 
   it("supports the full 64-character project id without a D1 LIKE pattern", async () => {

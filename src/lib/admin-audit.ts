@@ -25,6 +25,17 @@ export type AdminEventName =
   | "integration_memories_moved";
 
 /**
+ * Project registry events. Audited to the same INSERT-only table but deliberately a
+ * separate union: GET /team/activity is deployment-wide and would show one member's
+ * personal project names to every admin, so its admin arm skips the `project_` prefix.
+ */
+export type ProjectEventName =
+  | "project_created"
+  | "project_updated"
+  | "project_deleted"
+  | "project_autocreated";
+
+/**
  * The one place that writes admin_events. Awaited — callers that need the row
  * committed before responding (e.g. the #347 move route, same "don't claim
  * what hasn't landed yet" reasoning as its awaited vector re-stamp) call this
@@ -37,7 +48,7 @@ export function writeAdminEvent(
     actorId: string;
     targetUserId?: string;
     workspaceId?: string;
-    event: AdminEventName;
+    event: AdminEventName | ProjectEventName;
     payload?: Record<string, unknown>;
   },
 ): Promise<void> {
@@ -65,7 +76,7 @@ export function adminAuditEvent(
     actorId: string;
     targetUserId?: string;
     workspaceId?: string;
-    event: AdminEventName;
+    event: AdminEventName | ProjectEventName;
     payload?: Record<string, unknown>;
   },
 ): void {

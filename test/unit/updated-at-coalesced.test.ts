@@ -85,7 +85,9 @@ function rawSqlReads(sql: string, relPath: string): Finding[] {
   // can never be NULL. A fragment naming NO table is NOT exempt: `ORDER BY updated_at
   // DESC` assigned to a constant and interpolated into a query elsewhere is the single
   // most likely way this bug gets reintroduced, and it names no table at all.
-  if (/\bedges\b/.test(sql) && !/\bentries\b/.test(sql)) return [];
+  // projects.updated_at is its own nullable column (registry rows, not memories), so
+  // statements on `projects` alone are exempt the same way.
+  if ((/\bedges\b/.test(sql) || /\bprojects\b/.test(sql)) && !/\bentries\b/.test(sql)) return [];
 
   const declarations = spans(sql, /ADD\s+COLUMN\s+updated_at/gi);
   // COALESCE or the equivalent IFNULL, with or without a table qualifier — a JOIN forces
@@ -159,6 +161,9 @@ describe("entries.updated_at is never read without a created_at fallback", () =>
   it("every TypeScript read of a raw updated_at column falls back to created_at", () => {
     const offenders: string[] = [];
     for (const file of files) {
+      // Registry rows carry their own nullable updated_at (null until first edit) and
+      // surface it as-is; it is not entries.updated_at.
+      if (/^src\/(projects\/|routes\/projects\.ts$)/.test(relative(ROOT, file).replace(/\\/g, "/"))) continue;
       for (const read of rawTsReads(readFileSync(file, "utf8"))) {
         if (read.coalesced) continue;
         offenders.push(`${relative(ROOT, file)} — uncoalesced read: ${read.text.slice(0, 110)}`);

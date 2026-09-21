@@ -2,6 +2,27 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [3.4.0] — Projects
+
+**Projects**
+
+- Memories can now belong to named projects. A project is a workspace-bound registry entry (slug, display name, description, archived flag); membership is a reserved `project:<slug>` tag on ordinary memories, so every existing filter, recall, digest, and graph path understands it with no re-indexing and no data migration.
+- Aliases adopt existing memories retroactively: a project can claim plain tags you already use, and every project filter matches them alongside the explicit tag. Years of old memories join a project with zero row rewrites.
+- New REST surface: `GET/POST/PATCH/DELETE /projects`, plus a `project=` parameter on `POST /capture`, `GET /list`, `GET /recall`, `GET /digest`, and `GET /graph`. Unknown slugs on reads return `404` with up to ten `known_projects`; capture auto-creates silently.
+- New MCP tool `list_projects`, and a `project` parameter on `remember`, `recall`, and `list_recent`. `remember` silently registers a project the first time it is named; `recall` reports an unknown slug loudly instead of returning an empty result. Tool descriptions teach the four-axis model: workspace is who can see it, project is what it is about, tags are free-form facets, source is where it came from.
+- The dashboard gains a Projects tab: create with a live slug preview, browse each project's memories, edit aliases with tag suggestions and counts, generate a project digest on demand, see prompt-capsule slot status, archive with undo, and delete with the guarantee that memories are kept — only the grouping is removed. The composer gets a project picker and the Memories and recall views a project filter; the graph clusters by project first.
+- Nightly compression now writes per-project digests, one workspace at a time using only that workspace's own registry row, at the same eligibility threshold as topic digests.
+- Prompt capsule project ids are now registered project slugs, enumerable and validated, while unregistered ids keep serving exactly as before.
+- Backups carry projects: `GET /export` is a version 3 payload with a `projects` array and `POST /import` restores names, descriptions, aliases, and archived status. Version 2 and unversioned files still import.
+- Claude Code hooks derive a Worker-legal project slug (dotted repo names like `next.js` no longer fail capture), keep the raw name as a tag, pass `project` on capture and recall, and fall back gracefully when the project is not registered yet.
+
+**Fixes**
+
+- The `/digest` error message now states the real eligibility threshold (10 entries); it previously claimed 20.
+- `GET /tags` accepts `counts=1` to return per-tag memory counts, with an `X-Counts-Approximate` header when the scan is capped; CORS now exposes `ETag` and `X-Counts-Approximate` for cross-origin dashboards.
+- The 64-tag capture cap governs caller-supplied tags only; worker-added `project:` and `volatility:` tags no longer make a previously valid capture fail.
+- `/projects` answers unsupported methods with `405` and an `Allow` header.
+
 ## [3.3.1] — Fixes from the integration review wave
 
 **Integrations**

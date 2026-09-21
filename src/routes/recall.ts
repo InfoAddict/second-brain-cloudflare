@@ -10,6 +10,7 @@ import { layerOf, scopeWhereForRead, readScopeWorkspaces } from "../lib/scope";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { recallEntries } from "../recall/search";
+import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
 
 /** Add the caller's workspace predicate before ORDER BY and LIMIT. */
@@ -62,7 +63,12 @@ export async function handleRecallRoutes(
       actor = resolved.actorId;
     }
 
-    const { sql, bindings } = scopeEntryFilterQuery(identity, buildEntryFilterQuery({ n, tag, after, before, actor }), workspace, team);
+    // Resolved among the same workspaces the entry read may see, so a slug that only
+    // exists in a colleague's personal workspace is unknown here, never a silent empty list.
+    const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
+    if (project instanceof Response) return project;
+
+    const { sql, bindings } = scopeEntryFilterQuery(identity, buildEntryFilterQuery({ n, tag, after, before, actor, project }), workspace, team);
     const { results } = await env.DB.prepare(sql).bind(...bindings).all();
     const rows = results as Record<string, unknown>[];
     // Each row reports its layer so the dashboard can badge cards and offer
@@ -132,8 +138,11 @@ export async function handleRecallRoutes(
     // payload. Renderers that show the whole memory (the dashboard) pass full=1.
     const full = ["1", "true", "yes"].includes((url.searchParams.get("full") ?? "").toLowerCase());
 
+    const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
+    if (project instanceof Response) return project;
+
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
 
     if (!matches.length) {
       return json({
@@ -233,19 +242,38 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
     const identity = auth;
-    const tag = url.searchParams.get("tag")?.trim();
-    if (!tag) return json({ ok: false, error: "tag parameter is required" }, 400);
+    const tag = url.searchParams.get("tag")?.trim() || undefined;
+    const projectParam = url.searchParams.get("project")?.trim() || undefined;
+    if (tag && projectParam) return json({ ok: false, error: "pass either tag or project, not both" }, 400);
+    if (!tag && !projectParam) return json({ ok: false, error: "tag or project parameter is required" }, 400);
     const workspaceFilter = readWorkspaceParam(url);
     if (workspaceFilter instanceof Response) return workspaceFilter;
     const team = readTeamQueryParam(url, identity, workspaceFilter);
     if (team instanceof Response) return team;
 
-    const result = await compressTag(tag, env, ctx, {
+    if (projectParam) {
+      const rows = await readProjectParam(env, identity, url, { layer: workspaceFilter, teamId: team });
+      if (rows instanceof Response) return rows;
+      if (!rows) return json({ ok: false, error: "tag or project parameter is required" }, 400);
+      const slug = rows[0].id;
+      // Only workspaces that actually hold the project are rolled up: the registry is
+      // workspace-bound, so a slug tagged elsewhere is not this project.
+      const projectResult = await compressTag(`project:${slug}`, env, ctx, {
+        workspaceIds: [...new Set(rows.map(r => r.workspace_id))],
+        project: rows,
+      });
+      if (!projectResult.synthesizedId) {
+        return json({ project: slug, error: "Could not create digest — project may have fewer than 10 eligible entries or was recently compressed", source_count: projectResult.entriesUsed });
+      }
+      return json({ project: slug, synthesis: projectResult.text, entry_id: projectResult.synthesizedId, source_count: projectResult.entriesUsed });
+    }
+
+    const result = await compressTag(tag!, env, ctx, {
       workspaceIds: readScopeWorkspaces(identity, { layer: workspaceFilter, teamId: team }),
     });
 
     if (!result.synthesizedId) {
-      return json({ tag, error: "Could not create digest — tag may have fewer than 20 entries or was recently compressed", source_count: result.entriesUsed });
+      return json({ tag, error: "Could not create digest — tag may have fewer than 10 eligible entries or was recently compressed", source_count: result.entriesUsed });
     }
 
     return json({ tag, synthesis: result.text, entry_id: result.synthesizedId, source_count: result.entriesUsed });

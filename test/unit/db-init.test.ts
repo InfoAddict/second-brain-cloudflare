@@ -45,6 +45,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "workspaces", "prompt_capsule_revisions", "idx_workspaces_kind", "users", "idx_users_token_hash", "idx_users_email",
   "memberships", "idx_memberships_workspace", "entry_events", "idx_entry_events_entry", "idx_entry_events_created",
   "admin_events", "idx_admin_events_created", "maintenance_cursor", "idx_entries_workspace_created", "idx_entries_capsule",
+  // Projects registry; idx_entries_project is post-column like the capsule index.
+  "projects", "idx_projects_workspace", "idx_entries_project",
   ...PROMPT_CAPSULE_TRIGGERS];
 // Columns in the base CREATE of entries since v3 — present on every brain init touches.
 const BASE_COLUMNS = ["id", "content", "tags", "source", "created_at", "vector_ids", "workspace_id", "actor_id"];
@@ -211,7 +213,8 @@ describe("initializeDatabase updated_at migration", () => {
       // no duplicates, so the repair path behind the email index never runs.
       // MOVED 37 -> 42 by the Prompt Capsule revision table and its four
       // triggers, which make invalidation atomic with entry writes.
-      expect(migrated).toBe(43); // 22 base objects + 14 ALTERs + 5 post-column objects + the email-index CREATE
+      // MOVED 43 -> 46 by the projects table, idx_projects_workspace and idx_entries_project.
+      expect(migrated).toBe(46); // 24 base objects + 14 ALTERs + 6 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(7); // three probes plus four prepared trigger DDLs
       expect(touchesEntries(execd)).toEqual([]);
@@ -527,7 +530,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 35 -> 36 by idx_entry_events_created; see the sibling pin above.
     // MOVED 36 -> 38 by idx_memberships_workspace and idx_users_email.
     // MOVED 38 -> 43 by the Prompt Capsule revision table and its four triggers.
-    expect(cold).toBe(44); // one probe, then the 42 statements a new brain needs
+    // MOVED 44 -> 47 by the projects table and its two indexes.
+    expect(cold).toBe(47); // one probe, then the 46 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

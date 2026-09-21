@@ -27,17 +27,20 @@ function loadRunImportLoop(): (payload: any, post: any, onProgress?: any) => Pro
 }
 
 /** A Worker-side double: pages positionally, exactly like importExportPayload. */
-function fakeWorker(entryCount: number, edgeCount: number, limit: number) {
+function fakeWorker(entryCount: number, edgeCount: number, limit: number, projectCount = 0) {
   const calls: string[] = [];
   const post = async (query: string) => {
     calls.push(query);
     const offset = Number(new URLSearchParams(query).get("offset"));
     const edgeOffset = Number(new URLSearchParams(query).get("edge_offset"));
+    const projectOffset = Number(new URLSearchParams(query).get("project_offset"));
     const page = Math.max(0, Math.min(limit, entryCount - offset));
     const next_offset = offset + page;
     const entriesDone = next_offset >= entryCount;
     const edgePage = entriesDone ? Math.max(0, Math.min(limit, edgeCount - edgeOffset)) : 0;
     const next_edge_offset = edgeOffset + edgePage;
+    const projectPage = entriesDone ? Math.max(0, Math.min(limit, projectCount - projectOffset)) : 0;
+    const next_project_offset = projectOffset + projectPage;
     return {
       imported: page,
       skipped: 0,
@@ -45,10 +48,13 @@ function fakeWorker(entryCount: number, edgeCount: number, limit: number) {
       edges_imported: edgePage,
       edges_skipped: 0,
       edges_failed: 0,
+      projects_imported: projectPage,
       next_offset,
       next_edge_offset,
+      next_project_offset,
       remaining_entries: entryCount - next_offset,
       remaining_edges: edgeCount - next_edge_offset,
+      remaining_projects: projectCount - next_project_offset,
     };
   };
   return { post, calls };
@@ -67,11 +73,41 @@ describe("runImportLoop", () => {
     // 3 entry pages (40+40+20); the third also runs edge page 1 (40); one more
     // call finishes the last 10 edges.
     expect(calls).toEqual([
-      "offset=0&edge_offset=0",
-      "offset=40&edge_offset=0",
-      "offset=80&edge_offset=0",
-      "offset=100&edge_offset=40",
+      "offset=0&edge_offset=0&project_offset=0",
+      "offset=40&edge_offset=0&project_offset=0",
+      "offset=80&edge_offset=0&project_offset=0",
+      "offset=100&edge_offset=40&project_offset=0",
     ]);
+  });
+
+  it("keeps walking until the projects are done too, and counts them", async () => {
+    const runImportLoop = loadRunImportLoop();
+    const { post, calls } = fakeWorker(10, 0, 40, 100);
+    const seen: number[] = [];
+
+    const totals = await runImportLoop({ entries: new Array(10), edges: [], projects: new Array(100) }, post, ({ done, total }: any) => seen.push(done / total));
+
+    expect(totals.projects_imported).toBe(100);
+    expect(calls).toEqual([
+      "offset=0&edge_offset=0&project_offset=0",
+      "offset=10&edge_offset=0&project_offset=40",
+      "offset=10&edge_offset=0&project_offset=80",
+    ]);
+    expect(seen.at(-1)).toBe(1);
+  });
+
+  it("still finishes against a Worker from before projects, which echoes no project cursor", async () => {
+    const runImportLoop = loadRunImportLoop();
+    const { post } = fakeWorker(50, 0, 40);
+    const old = async (q: string) => {
+      const { next_project_offset, remaining_projects, projects_imported, ...rest } = await post(q);
+      return rest;
+    };
+
+    const totals = await runImportLoop({ entries: new Array(50), edges: [], projects: new Array(3) }, old);
+
+    expect(totals.imported).toBe(50);
+    expect(totals.projects_imported).toBe(0);
   });
 
   it("reports progress after every page", async () => {

@@ -6,7 +6,9 @@ let pendingForgetId = null,
   pendingForgetCard = null
 let currentTab = 'home',
   selectedTag = '',
-  selectedTimeRange = ''
+  selectedTimeRange = '',
+  /** Project slug narrowing the Memories list and recall; '' = every project. */
+  selectedProject = ''
 /** 'list' | 'graph' — which projection of the corpus the Memories screen shows. */
 let memoryView = 'list'
 let currentCount = 0

@@ -21,7 +21,7 @@ Store important content from YOUR OWN responses too — call remember after resp
 
 NEVER rely on your own built-in memory or conversation history for facts about the user. If you would normally save a memory, call remember instead. Always.
 
-Auto-detect the current topic or project and include it as a tag (e.g. if discussing a website, tag it "website"; if discussing a specific company or product, use that name as a tag). Always combine specific tags with generic ones.
+Memories live on four axes: **workspace** = who can see it (personal / company / team) — tenancy, unchanged. **project** = what it's about — a named, managed container. **tags** = free-form facets, unchanged. **source** = where it came from, unchanged. Auto-detect the current project and pass `project` on remember; call list_projects to discover projects in scope.
 
 Before making ANY recommendation, suggestion, or action item, first recall from memory to check if you have already made that recommendation or if the user has already completed it. Frame the query with intent: 'User is about to X — have I recommended this before or has it been done?' If it has already been recommended, acknowledge that and either confirm it's still the right move or suggest an alternative. Never repeat a recommendation without first checking. This applies to: promotion tasks, outreach targets, content to create, platforms to post on, people to contact, and any other repeatable action.
 
@@ -80,7 +80,7 @@ Tags to use:
 - idea — concepts, plans, brainstorms, half-formed thoughts
 - context — background info about ongoing situations, constraints, environment
 - codex-response — summaries of important responses or recommendations
-- [auto-detected project/topic tag] — always combine with one of the above (e.g. ["task", "second-brain"])
+- project — pass by name; a memory can belong to one or more projects. Prefer project over a bare topic tag when one applies.
 
 Volatility (optional, on remember / append / update):
 Pass `volatility` whenever you can judge how long the fact will stay true. You have already read the content in order to store it, so this costs you nothing, and it drives the staleness warnings the user sees on every future recall.

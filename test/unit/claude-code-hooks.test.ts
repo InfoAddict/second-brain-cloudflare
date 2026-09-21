@@ -55,19 +55,51 @@ describe("common.parseProjectName", () => {
   it("produces a tag-safe name", () => {
     expect(common.parseProjectName(null, "/tmp/My Project (v2)")).toBe("my-project-v2");
   });
+  it("folds dots into a Worker-legal slug and keeps the dotted name as the label", () => {
+    expect(common.parseProjectName("git@github.com:vercel/next.js.git", "/x")).toBe("next-js");
+    expect(common.parseProjectLabel("git@github.com:vercel/next.js.git", "/x")).toBe("next.js");
+    expect(common.parseProjectName(null, "/home/u/site.com")).toBe("site-com");
+    expect(common.parseProjectName(null, "/home/u/.dotfiles")).toBe("dotfiles");
+    expect(common.parseProjectLabel(null, "/home/u/.dotfiles")).toBe(".dotfiles");
+  });
+  it("only ever yields a slug the Worker accepts, or null", () => {
+    const SLUG = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+    const names = [
+      "next.js", "site.com", ".dotfiles", "..", "...", "a.b.c.d", "My App", "café", "naïve-project", "日本語",
+      "emoji-😀-app", "_private", "-dash", "--x--", "x".repeat(80), `${"ab.".repeat(40)}z`, "!!!", "___", "...---...",
+      "UPPER.Case_Name", "with space and.dots", "1.2.3", "a".repeat(64), "a".repeat(65),
+    ];
+    for (const name of names) {
+      for (const slug of [
+        common.parseProjectName(null, `/home/u/${name}`),
+        common.parseProjectName(`git@github.com:o/${name}.git`, "/x"),
+        common.parseProjectName(`https://github.com/o/${name}`, "/x"),
+      ]) {
+        if (slug !== null) expect(slug, JSON.stringify(name)).toMatch(SLUG);
+      }
+    }
+  });
+  it("returns null when nothing usable remains", () => {
+    expect(common.parseProjectName(null, "/home/u/!!!")).toBeNull();
+    expect(common.parseProjectName(null, "/home/u/___")).toBeNull();
+    expect(common.parseProjectName(null, "/home/u/日本語")).toBeNull();
+  });
+  it("caps the slug at 64 characters", () => {
+    expect(common.parseProjectName(null, `/home/u/${"x".repeat(80)}`)).toBe("x".repeat(64));
+  });
 });
 
 describe("session-start.buildRecallPlan / buildRecallUrl", () => {
-  it("tries the project tag first, then free text, both scoped to the workspace", () => {
+  it("tries the project first, then free text, both scoped to the workspace", () => {
     const plan = start.buildRecallPlan("brain-app", "personal");
     expect(plan).toHaveLength(2);
-    expect(plan[0]).toMatchObject({ tag: "brain-app", workspace: "personal" });
-    expect(plan[1].tag).toBeUndefined();
+    expect(plan[0]).toMatchObject({ project: "brain-app", workspace: "personal" });
+    expect(plan[1].project).toBeUndefined();
     const url = new URL(start.buildRecallUrl("https://w.example", plan[0]));
     expect(url.pathname).toBe("/recall");
     expect(url.searchParams.get("query")).toContain("brain-app");   // the parameter GET /recall reads
     expect(url.searchParams.get("q")).toBeNull();                    // the one that caused #327
-    expect(url.searchParams.get("tag")).toBe("brain-app");
+    expect(url.searchParams.get("project")).toBe("brain-app");
     expect(url.searchParams.get("workspace")).toBe("personal");
     expect(url.searchParams.get("full")).toBeNull();
   });
@@ -258,8 +290,19 @@ describe("session-end.formatSession / shouldCapture / buildCaptureBody", () => {
   });
   it("builds the capture body the Worker accepts", () => {
     const turns = end.readTranscriptTail(FIXTURE);
-    expect(end.buildCaptureBody(turns, meta)).toMatchObject({ source: "claude-code", tags: ["sample"], workspace: "personal" });
-    expect(end.buildCaptureBody(turns, { ...meta, project: null }).tags).toEqual([]);
+    expect(end.buildCaptureBody(turns, meta)).toMatchObject({ source: "claude-code", project: "sample", workspace: "personal" });
+    expect(end.buildCaptureBody(turns, { ...meta, project: null })).not.toHaveProperty("project");
+  });
+  it("sends the raw project name as a tag alongside the legal slug", () => {
+    const turns = end.readTranscriptTail(FIXTURE);
+    const body = end.buildCaptureBody(turns, { ...meta, project: "next-js", projectName: "next.js" });
+    expect(body).toMatchObject({ project: "next-js", tags: ["next.js"] });
+  });
+  it("omits the project but keeps the tag when the name has no legal slug", () => {
+    const turns = end.readTranscriptTail(FIXTURE);
+    const body = end.buildCaptureBody(turns, { ...meta, project: null, projectName: "..." });
+    expect(body).not.toHaveProperty("project");
+    expect(body.tags).toEqual(["..."]);
   });
 });
 

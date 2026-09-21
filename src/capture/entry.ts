@@ -10,6 +10,8 @@ import { deleteStaleVectors, reembedOrThrow, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
 import { getVolatility, withVolatility } from "../memory/volatility";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { projectFilterSql } from "../projects/filter";
+import type { ProjectRow } from "../projects/registry";
 import { rememberTags } from "../tags/vocabulary";
 import { isCapsuleTag } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
@@ -28,6 +30,8 @@ export function buildEntryFilterQuery(params: {
    * on a large team and 500'd the request.
    */
   actor?: string;
+  /** Registry rows for one project: entries carrying its tag or any alias. ANDed with `tag`. */
+  project?: readonly ProjectRow[];
 }): { sql: string; bindings: (string | number)[] } {
   const conds: string[] = [];
   const bindings: (string | number)[] = [];
@@ -36,6 +40,11 @@ export function buildEntryFilterQuery(params: {
   // list everything. A read, so over-broad rather than destructive — but a filter that
   // silently stops filtering is worse than one that returns nothing.
   if (params.tag) { conds.push(`tags LIKE ? ${TAG_LIKE_ESCAPE}`); bindings.push(tagLikePattern(params.tag)); }
+  if (params.project) {
+    const project = projectFilterSql(params.project);
+    conds.push(project.clause);
+    bindings.push(...project.bindings);
+  }
   // An equality on one id, ANDed with everything else including the caller's
   // scope clause — so it can only ever narrow what the scope already allowed.
   // Tested against undefined rather than truthiness for the reason the tag

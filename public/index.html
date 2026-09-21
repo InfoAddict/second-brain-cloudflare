@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="css/main.css" />
     <link rel="stylesheet" href="css/graph.css" />
     <link rel="stylesheet" href="css/board.css" />
+    <link rel="stylesheet" href="css/projects.css" />
   </head>
 
   <body>
@@ -63,6 +64,7 @@
         <nav class="sb-nav" aria-label="Screens">
           <button class="sb-tab active" id="sb-tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
           <button class="sb-tab" id="sb-tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
+          <button class="sb-tab" id="sb-tab-projects" onclick="switchTab('projects')"><i class="ti ti-folders"></i><span data-i18n="nav.projects">Projects</span></button>
           <!-- Hidden until GET /team/members answers 200 — see js/team.js. -->
           <button class="sb-tab" id="sb-tab-team" onclick="switchTab('team')" style="display: none"><i class="ti ti-users-group"></i><span data-i18n="nav.team">Team</span></button>
         </nav>
@@ -127,6 +129,14 @@
                       </select><i class="ti ti-chevron-down"></i>
                     </span>
                   </span>
+                  <!-- Which project a memory is filed under. Hidden until the
+                       brain has one; remembers the last choice (sb-project-last).
+                       Filled by renderProjectPickers() in js/projects.js. -->
+                  <span id="home-project-wrap" style="display: none">
+                    <span class="team-select-wrap">
+                      <select class="team-select" id="home-project" onchange="onHomeProjectChange(this.value)" aria-label="File under a project" data-i18n="projects.pickerLabel" data-i18n-attr="aria-label"></select><i class="ti ti-chevron-down"></i>
+                    </span>
+                  </span>
                   <span class="hint" data-i18n="home.hintHtml" data-i18n-html>Add <span class="hashtag">#tags</span> anywhere to file it</span>
                   <button class="send-btn" onclick="submitHome()" aria-label="Send" data-i18n="home.sendLabel" data-i18n-attr="aria-label"><i class="ti ti-arrow-up"></i></button>
                 </section>
@@ -177,6 +187,10 @@
                 <select class="filter-field" id="tag-filter-recall" onchange="onTagChange(this.value)">
                   <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
+                <span class="project-filter" id="project-filter-wrap-recall" style="display: none">
+                  <i class="ti ti-folder" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
+                  <select class="filter-field" id="project-filter-recall" onchange="onProjectFilterChange(this.value)" aria-label="Filter by project" data-i18n="projects.filterLabel" data-i18n-attr="aria-label"></select>
+                </span>
               </div>
             </div>
             <div class="input-bar">
@@ -218,6 +232,10 @@
                 <select class="filter-field" id="tag-filter-recent" onchange="onTagChange(this.value)">
                   <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
+                <span class="project-filter" id="project-filter-wrap-recent" style="display: none">
+                  <i class="ti ti-folder" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
+                  <select class="filter-field" id="project-filter-recent" onchange="onProjectFilterChange(this.value)" aria-label="Filter by project" data-i18n="projects.filterLabel" data-i18n-attr="aria-label"></select>
+                </span>
                 <select class="filter-field" id="time-filter-recent" onchange="onTimeRangeChange(this.value)" style="min-width: 0">
                   <option value="" data-i18n="memories.allTime">All time</option>
                   <option value="today" data-i18n="memories.today">Today</option>
@@ -250,7 +268,7 @@
                    palette (graph-canvas.js). The canvas draws its own legend with
                    the real colours and counts, so this says what the picture is
                    instead of mislabelling it. -->
-              <div class="mem-caption" id="mem-legend" hidden data-i18n="memories.legend">Grouped by tag · tap a memory to open it</div>
+              <div class="mem-caption" id="mem-legend" hidden data-i18n="memories.legend">Grouped by project and tag · tap a memory to open it</div>
               <div class="view-toggle" role="tablist" aria-label="How to view your memories" data-i18n="memories.viewAria" data-i18n-attr="aria-label">
                 <button class="view-toggle-btn active" id="mem-view-list" role="tab" aria-selected="true" onclick="setMemoryView('list')" title="By time" data-i18n="memories.viewListTitle" data-i18n-attr="title">
                   <i class="ti ti-list"></i><span data-i18n="memories.viewList">List</span>
@@ -297,6 +315,140 @@
                 <button class="graph-btn" onclick="graphZoom(1.25)" title="Zoom in" data-i18n="graph.zoomIn" data-i18n-attr="title"><i class="ti ti-plus"></i></button>
                 <button class="graph-btn" onclick="graphFit()" title="Fit to view" data-i18n="graph.fit" data-i18n-attr="title"><i class="ti ti-maximize"></i></button>
                 <button class="graph-btn" onclick="loadGraph()" title="Re-lay out" data-i18n="graph.relayout" data-i18n-attr="title"><i class="ti ti-refresh"></i></button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Projects: a named home for related memories. Membership is a
+               project:<slug> tag on ordinary entries, so this screen manages the
+               registry only. Rendered by js/projects.js from GET /projects. -->
+          <div class="screen" id="screen-projects">
+            <div class="mem-bar team-page-bar">
+              <h2 data-i18n="projects.title">Projects</h2>
+              <button class="btn btn-primary btn-sm projects-new-btn" id="project-new-btn" type="button" hidden aria-expanded="false" aria-controls="project-create" onclick="toggleProjectCreate()"><i class="ti ti-plus"></i><span data-i18n="projects.newProject">New project</span></button>
+            </div>
+
+            <div class="projects-content" id="projects-body">
+              <div id="projects-list-view">
+                <!-- No active projects yet. Shown with the create form open and
+                     focused, so the first thing to do is also the obvious one. -->
+                <div class="projects-empty" id="projects-empty" hidden>
+                  <i class="ti ti-folders"></i>
+                  <h3 data-i18n="projects.emptyTitle">Give your memories a home</h3>
+                  <p data-i18n="projects.emptyBody">A project is a named home for memories about one thing: a website, a trip, a client. Memories filed under a project stay together in search and on the graph, and your AI tools can file into one for you.</p>
+                  <p class="projects-empty-start" data-i18n="projects.emptyStart">Name your first project below.</p>
+                </div>
+
+                <section class="panel project-create" id="project-create" hidden aria-labelledby="project-create-title">
+                  <h2 id="project-create-title" data-i18n="projects.createTitle">New project</h2>
+                  <form id="project-create-form" onsubmit="submitProject(); return false" novalidate>
+                    <div class="project-field">
+                      <label for="project-name" data-i18n="projects.nameLabel">Project name</label>
+                      <input class="project-input" id="project-name" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Website relaunch" data-i18n="projects.namePlaceholder" data-i18n-attr="placeholder" oninput="onProjectNameInput()" />
+                      <!-- Filled by onProjectNameInput() on every keystroke, never
+                           by data-i18n: its copy depends on what has been typed. -->
+                      <p class="project-slug" id="project-slug-preview" aria-live="polite"></p>
+                    </div>
+                    <div class="project-field">
+                      <label for="project-desc" data-i18n="projects.descLabel">Description</label>
+                      <textarea class="project-input" id="project-desc" rows="2" maxlength="1000" placeholder="What is this project about? (optional)" data-i18n="projects.descPlaceholder" data-i18n-attr="placeholder"></textarea>
+                    </div>
+                    <div class="project-create-actions">
+                      <!-- Team brains only: a project is bound to one workspace.
+                           renderProjectsList() sets this display in both branches. -->
+                      <span id="project-layer-wrap" style="display: none">
+                        <span class="team-select-wrap">
+                          <select class="team-select" id="project-layer" onchange="onProjectNameInput()" aria-label="Where this project lives" data-i18n="projects.layerLabel" data-i18n-attr="aria-label">
+                            <option value="" data-i18n="home.layerAuto">Default</option>
+                            <option value="personal" data-i18n="home.layerPersonal">Personal</option>
+                            <option value="company" data-i18n="home.layerShared">Shared</option>
+                          </select><i class="ti ti-chevron-down"></i>
+                        </span>
+                      </span>
+                      <button class="btn btn-primary" id="project-create-btn" type="submit" disabled data-i18n="projects.create">Create project</button>
+                    </div>
+                    <p class="integration-error" id="project-create-error" role="alert" hidden></p>
+                  </form>
+                </section>
+
+                <div class="project-rows" id="projects-list"></div>
+
+                <!-- Archived projects stay out of the way: collapsed, quieter. -->
+                <div class="projects-archived" id="projects-archived" hidden>
+                  <button class="projects-archived-toggle" id="projects-archived-toggle" type="button" aria-expanded="false" aria-controls="projects-archived-list" onclick="toggleProjectsArchived()"></button>
+                  <div class="project-rows" id="projects-archived-list" hidden></div>
+                </div>
+              </div>
+
+              <!-- One project, opened from a row. Sections are filled by
+                   js/projects.js; the memories reuse the Memories screen's card. -->
+              <div id="projects-detail-view" hidden>
+                <button class="project-back" id="project-back-btn" type="button" onclick="backToProjects()"><i class="ti ti-arrow-left"></i><span data-i18n="projects.back">All projects</span></button>
+                <header class="project-head" id="project-head"></header>
+
+                <div class="project-sections">
+                  <section class="panel project-section" aria-labelledby="project-memories-title">
+                    <h2 id="project-memories-title" data-i18n="projects.memoriesTitle">Memories</h2>
+                    <div class="recent-cards" id="project-memories"></div>
+                    <p class="digest-note project-memories-note" id="project-memories-note" hidden></p>
+                  </section>
+
+                  <section class="panel project-section" aria-labelledby="project-aliases-title">
+                    <h2 id="project-aliases-title" data-i18n="projects.aliasesTitle">Aliases</h2>
+                    <p class="panel-sub" data-i18n="projects.aliasesHelp">An alias pulls a tag you already use into this project. Memories with that tag show up here, and nothing is rewritten.</p>
+                    <div class="project-alias-chips" id="project-aliases"></div>
+                    <form class="project-alias-add" onsubmit="addProjectAlias(); return false" novalidate>
+                      <input class="project-input" id="project-alias-input" type="text" maxlength="128" autocomplete="off" autocapitalize="none" placeholder="Add an existing tag" aria-label="Add an existing tag" data-i18n="projects.aliasPlaceholder" data-i18n-attr="placeholder|aria-label" oninput="onProjectAliasInput()" />
+                      <button class="btn btn-secondary" type="submit" data-i18n="projects.aliasAdd">Add</button>
+                    </form>
+                    <p class="integration-error" id="project-alias-error" role="alert" hidden></p>
+                    <div class="project-alias-suggest" id="project-alias-suggest"></div>
+                  </section>
+
+                  <div class="project-pair">
+                    <section class="panel project-section" aria-labelledby="project-digest-title">
+                      <h2 id="project-digest-title" data-i18n="projects.digestTitle">Digest</h2>
+                      <p class="panel-sub" data-i18n="projects.digestHelp">Condense this project's memories into one summary memory. The originals are kept.</p>
+                      <div class="project-section-actions">
+                        <button class="btn btn-secondary" id="project-digest-btn" type="button" onclick="runProjectDigest()" data-i18n="projects.digestAction">Create digest</button>
+                      </div>
+                      <div class="project-digest-result" id="project-digest-result" aria-live="polite"></div>
+                    </section>
+
+                    <section class="panel project-section" aria-labelledby="project-capsule-title">
+                      <h2 id="project-capsule-title" data-i18n="board.capsuleTitle">Prompt capsule</h2>
+                      <p class="panel-sub" data-i18n="projects.capsuleSub">What connected AI tools load before they work on this project.</p>
+                      <div id="project-capsule"></div>
+                    </section>
+                  </div>
+
+                  <section class="panel project-section" aria-labelledby="project-details-title">
+                    <h2 id="project-details-title" data-i18n="projects.detailsTitle">Details</h2>
+                    <form onsubmit="saveProjectDetails(); return false" novalidate>
+                      <div class="project-field">
+                        <label for="project-edit-name" data-i18n="projects.nameLabel">Project name</label>
+                        <input class="project-input" id="project-edit-name" type="text" maxlength="120" autocomplete="off" oninput="onProjectEditInput()" />
+                      </div>
+                      <div class="project-field">
+                        <label for="project-edit-desc" data-i18n="projects.descLabel">Description</label>
+                        <textarea class="project-input" id="project-edit-desc" rows="3" maxlength="1000" placeholder="What is this project about? (optional)" data-i18n="projects.descPlaceholder" data-i18n-attr="placeholder" oninput="onProjectEditInput()"></textarea>
+                      </div>
+                      <div class="project-section-actions">
+                        <button class="btn btn-primary" id="project-save-btn" type="submit" disabled data-i18n="projects.save">Save changes</button>
+                      </div>
+                      <p class="integration-error" id="project-edit-error" role="alert" hidden></p>
+                    </form>
+                  </section>
+
+                  <section class="panel project-section" aria-labelledby="project-manage-title">
+                    <h2 id="project-manage-title" data-i18n="projects.manageTitle">Archive or delete</h2>
+                    <p class="panel-sub" data-i18n="projects.archiveHelp">An archived project leaves the pickers and the nightly digest. Nothing is deleted, and you can restore it any time.</p>
+                    <div class="project-section-actions">
+                      <button class="btn btn-secondary" id="project-archive-btn" type="button" onclick="toggleProjectArchived()" data-i18n="projects.archive">Archive project</button>
+                      <button class="btn btn-secondary project-delete-btn" id="project-delete-btn" type="button" onclick="confirmDeleteProject()" data-i18n="projects.delete">Delete project</button>
+                    </div>
+                  </section>
+                </div>
               </div>
             </div>
           </div>
@@ -471,6 +623,7 @@
         <div id="navbar">
           <button class="nav-tab active" id="tab-home" onclick="switchTab('home')"><i class="ti ti-home"></i><span data-i18n="nav.home">Home</span></button>
           <button class="nav-tab" id="tab-memories" onclick="switchTab('memories')"><i class="ti ti-stack-2"></i><span data-i18n="nav.memories">Memories</span></button>
+          <button class="nav-tab" id="tab-projects" onclick="switchTab('projects')"><i class="ti ti-folders"></i><span data-i18n="nav.projects">Projects</span></button>
           <button class="nav-tab" id="tab-team" onclick="switchTab('team')" style="display: none"><i class="ti ti-users-group"></i><span data-i18n="nav.team">Team</span></button>
         </div>
       </div>
@@ -701,6 +854,7 @@
     <script src="js/integrations.js"></script>
     <script src="js/team.js"></script>
     <script src="js/activity.js"></script>
+    <script src="js/projects.js"></script>
     <script src="js/graph-canvas.js"></script>
     <script src="js/brief.js"></script>
     <script src="js/board.js"></script>
