@@ -4,6 +4,9 @@ import { captureEntry } from "../capture/entry";
 import { DIGEST_MAX_TOKENS, LLM_MODEL } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { projectFilterSql } from "../projects/filter";
+import type { ProjectRow } from "../projects/registry";
+import { PROJECT_TAG_PREFIX } from "../tags/system";
 import {
   compressionEligibilitySql,
   isTopicTag,
@@ -68,6 +71,12 @@ async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): P
 export interface CompressTagOptions {
   /** When set, roll up only these workspaces and scope the 24h cooldown per workspace. */
   workspaceIds?: string[];
+  /**
+   * Registry-driven project digest: `tag` is `project:<slug>`, and members are the entries
+   * carrying that tag or any alias in these rows (all rows for the one slug). The `project:`
+   * namespace is otherwise refused as a topic, so only a registry row can open this door.
+   */
+  project?: readonly ProjectRow[];
 }
 
 export async function compressTag(
@@ -76,8 +85,10 @@ export async function compressTag(
   ctx: ExecutionContext,
   opts?: CompressTagOptions,
 ): Promise<{ synthesizedId: string | null; entriesUsed: number; text: string }> {
-  // Reject bookkeeping tags before the configuration lookup.
-  if (!isTopicTag(tag)) {
+  // Reject bookkeeping tags before the configuration lookup. A project digest is the one
+  // exception, and only when the key really is that project's own tag.
+  const projectRows = opts?.project?.length ? opts.project : undefined;
+  if (projectRows ? tag !== `${PROJECT_TAG_PREFIX}${projectRows[0].id}` : !isTopicTag(tag)) {
     return { synthesizedId: null, entriesUsed: 0, text: "" };
   }
   const cfg = await resolveConfig(env);
@@ -132,9 +143,12 @@ export async function compressTag(
       continue;
     }
 
+    const member = projectRows
+      ? projectFilterSql(projectRows)
+      : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
     const { results: rawEntries } = await env.DB.prepare(`
       SELECT id, content FROM entries
-      WHERE tags LIKE ? ${TAG_LIKE_ESCAPE}
+      WHERE ${member.clause}
         AND tags NOT LIKE '%"synthesized"%'
         AND tags NOT LIKE '%"auto-pattern"%'
         AND tags NOT LIKE '%"auto-insight"%'
@@ -145,7 +159,7 @@ export async function compressTag(
         AND workspace_id = ?
       ORDER BY created_at DESC
       LIMIT 50
-    `).bind(tagLikePattern(tag), Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId).all();
+    `).bind(...member.bindings, Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId).all();
 
     if (rawEntries.length < 10) {
       continue;

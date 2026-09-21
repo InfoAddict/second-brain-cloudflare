@@ -13,6 +13,8 @@ import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-en
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { createMember } from "../../src/lib/team-admin";
+import { compressTag } from "../../src/compression/digest";
+import { getProject } from "../../src/projects/registry";
 import type { Env } from "../../src/env";
 
 const BASE = "http://localhost";
@@ -242,6 +244,94 @@ describe("GET /list with project", () => {
     expect(bad.status).toBe(400);
     expect((await jsonOf(bad)).error).toBe(BAD_SLUG);
     expect((await ids("/list?project=&n=50")).length).toBe(5);
+  });
+});
+
+describe("GET /digest with project", () => {
+  beforeEach(async () => {
+    await createProject(ALICE, { id: "site", name: "Site", aliases: ["hosting"] });
+  });
+
+  const seedMembers = (n: number, aliased = 0) => {
+    for (let i = 0; i < n; i++) seed(`m${i}`, aliceWs, ["project:site"], { createdAt: OLD + i });
+    for (let i = 0; i < aliased; i++) seed(`a${i}`, aliceWs, ["hosting"], { createdAt: OLD + 100 + i });
+  };
+
+  it("400s when both tag and project are given", async () => {
+    const res = await call("GET", "/digest?tag=x&project=site", ALICE);
+    expect(res.status).toBe(400);
+    expect((await jsonOf(res)).error).toMatch(/tag or project/);
+  });
+
+  it("400s when neither is given", async () => {
+    const res = await call("GET", "/digest", ALICE);
+    expect(res.status).toBe(400);
+  });
+
+  it("digests members and alias-matched entries into a synthesized, project-tagged entry", async () => {
+    seedMembers(8, 4);
+    seed("outsider", aliceWs, ["infra"], { createdAt: OLD });
+
+    const res = await call("GET", "/digest?project=site", ALICE);
+
+    const body = await jsonOf(res);
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ project: "site", source_count: 12, entry_id: expect.any(String), synthesis: expect.any(String) });
+    const digest = await sqlite.db.prepare(`SELECT tags, workspace_id FROM entries WHERE id = ?`).bind(body.entry_id).first() as { tags: string; workspace_id: string };
+    expect(JSON.parse(digest.tags)).toEqual(expect.arrayContaining(["synthesized", "project:site"]));
+    expect(digest.workspace_id).toBe(aliceWs);
+    const rolled = (await sqlite.db.prepare(`SELECT id FROM entries WHERE tags LIKE '%"rolled-up"%' ORDER BY id`).all()).results as { id: string }[];
+    expect(rolled).toHaveLength(12);
+    expect(rolled.map(r => r.id)).not.toContain("outsider");
+  });
+
+  it("uses the existing 10-entry threshold and says so", async () => {
+    seedMembers(9);
+
+    const res = await call("GET", "/digest?project=site", ALICE);
+
+    const body = await jsonOf(res);
+    expect(body.project).toBe("site");
+    expect(body.entry_id).toBeUndefined();
+    expect(body.error).toBe("Could not create digest — project may have fewer than 10 eligible entries or was recently compressed");
+    expect(body.source_count).toBe(0);
+  });
+
+  it("works for an archived project and does not repeat inside the 24h cooldown", async () => {
+    seedMembers(12);
+    await call("PATCH", "/projects/site", ALICE, { status: "archived" });
+
+    expect((await jsonOf(await call("GET", "/digest?project=site", ALICE))).entry_id).toBeTruthy();
+    seedMembers(0);
+    for (let i = 20; i < 40; i++) seed(`n${i}`, aliceWs, ["project:site"], { createdAt: OLD + i });
+    const again = await jsonOf(await call("GET", "/digest?project=site", ALICE));
+    expect(again.entry_id).toBeUndefined();
+  });
+
+  it("404s an unknown project and never digests a colleague's", async () => {
+    expect((await call("GET", "/digest?project=nope", ALICE)).status).toBe(404);
+    seedMembers(12);
+    expect((await call("GET", "/digest?project=site", bobToken)).status).toBe(404);
+    expect((await sqlite.db.prepare(`SELECT COUNT(*) AS n FROM entries WHERE tags LIKE '%"rolled-up"%'`).first() as { n: number }).n).toBe(0);
+  });
+
+  it("compressTag only opens the project door for that project's own key", async () => {
+    seedMembers(12);
+    const rows = await getProject(env.DB, [aliceWs], "site");
+
+    const wrongKey = await compressTag("project:other", env, ctx, { workspaceIds: [aliceWs], project: rows });
+    const noRows = await compressTag("project:site", env, ctx, { workspaceIds: [aliceWs] });
+
+    expect(wrongKey.synthesizedId).toBeNull();
+    expect(noRows.synthesizedId).toBeNull();
+    expect((await sqlite.db.prepare(`SELECT COUNT(*) AS n FROM entries WHERE tags LIKE '%"rolled-up"%'`).first() as { n: number }).n).toBe(0);
+  });
+
+  it("refuses a bare project: tag through ?tag=, since only the registry drives project digests", async () => {
+    seedMembers(12);
+    const body = await jsonOf(await call("GET", "/digest?tag=project:site", ALICE));
+    expect(body.entry_id).toBeUndefined();
+    expect((await sqlite.db.prepare(`SELECT COUNT(*) AS n FROM entries WHERE tags LIKE '%"rolled-up"%'`).first() as { n: number }).n).toBe(0);
   });
 });
 

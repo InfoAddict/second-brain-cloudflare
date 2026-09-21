@@ -239,14 +239,33 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
     const identity = auth;
-    const tag = url.searchParams.get("tag")?.trim();
-    if (!tag) return json({ ok: false, error: "tag parameter is required" }, 400);
+    const tag = url.searchParams.get("tag")?.trim() || undefined;
+    const projectParam = url.searchParams.get("project")?.trim() || undefined;
+    if (tag && projectParam) return json({ ok: false, error: "pass either tag or project, not both" }, 400);
+    if (!tag && !projectParam) return json({ ok: false, error: "tag or project parameter is required" }, 400);
     const workspaceFilter = readWorkspaceParam(url);
     if (workspaceFilter instanceof Response) return workspaceFilter;
     const team = readTeamQueryParam(url, identity, workspaceFilter);
     if (team instanceof Response) return team;
 
-    const result = await compressTag(tag, env, ctx, {
+    if (projectParam) {
+      const rows = await readProjectParam(env, identity, url, { layer: workspaceFilter, teamId: team });
+      if (rows instanceof Response) return rows;
+      if (!rows) return json({ ok: false, error: "tag or project parameter is required" }, 400);
+      const slug = rows[0].id;
+      // Only workspaces that actually hold the project are rolled up: the registry is
+      // workspace-bound, so a slug tagged elsewhere is not this project.
+      const projectResult = await compressTag(`project:${slug}`, env, ctx, {
+        workspaceIds: [...new Set(rows.map(r => r.workspace_id))],
+        project: rows,
+      });
+      if (!projectResult.synthesizedId) {
+        return json({ project: slug, error: "Could not create digest — project may have fewer than 10 eligible entries or was recently compressed", source_count: projectResult.entriesUsed });
+      }
+      return json({ project: slug, synthesis: projectResult.text, entry_id: projectResult.synthesizedId, source_count: projectResult.entriesUsed });
+    }
+
+    const result = await compressTag(tag!, env, ctx, {
       workspaceIds: readScopeWorkspaces(identity, { layer: workspaceFilter, teamId: team }),
     });
 
