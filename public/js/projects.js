@@ -240,6 +240,7 @@ async function submitProject() {
 let projectDetail = null
 /** Tags a person already uses, as [{ tag, count }] — count null when unknown. */
 let projectVocab = []
+let projectVocabApprox = false
 /** Digest in flight: the button is held down and a second press is ignored. */
 let projectDigesting = false
 
@@ -441,9 +442,14 @@ function renderProjectAliases() {
  */
 async function loadProjectVocab() {
   let raw = []
+  projectVocabApprox = false
   try {
     const res = await fetch(`${WORKER_URL}/tags?counts=1`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
-    if (res.ok) raw = await res.json()
+    if (res.ok) {
+      raw = await res.json()
+      // The Worker's tally stops at a row cap; counts past it are lower bounds.
+      projectVocabApprox = res.headers.get('X-Counts-Approximate') === '1'
+    }
   } catch {}
   const topics = new Map()
   if (typeof briefData !== 'undefined' && briefData) {
@@ -470,7 +476,7 @@ function renderProjectSuggestions() {
       items
         .map(
           (v) =>
-            `<button type="button" class="topic-chip" title="${escHtml(t('projects.aliasSuggestTitle', { tag: v.tag }))}" onclick="addProjectAlias('${escAttr(v.tag)}')">${escHtml(v.tag)}${v.count == null ? '' : `<span>${escHtml(formatNumberUI(v.count))}</span>`}</button>`,
+            `<button type="button" class="topic-chip" title="${escHtml(t('projects.aliasSuggestTitle', { tag: v.tag }))}" onclick="addProjectAlias('${escAttr(v.tag)}')">${escHtml(v.tag)}${v.count == null ? '' : `<span>${escHtml(formatNumberUI(v.count))}${projectVocabApprox ? '+' : ''}</span>`}</button>`,
         )
         .join('')
     : ''

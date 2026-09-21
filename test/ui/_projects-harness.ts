@@ -98,7 +98,7 @@ function pageElements(): Map<string, any> {
   return out;
 }
 
-export type Reply = { status?: number; body?: any };
+export type Reply = { status?: number; body?: any; headers?: Record<string, string> };
 export type Call = { method: string; path: string; query: URLSearchParams; body: any; headers: Record<string, string> };
 type Handler = Reply | ((call: Call) => Reply);
 
@@ -125,6 +125,7 @@ export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode
     return {
       ok: status >= 200 && status < 300,
       status,
+      headers: { get: (name: string) => reply.headers?.[name] ?? null },
       json: async () => reply.body ?? {},
       text: async () => JSON.stringify(reply.body ?? {}),
     };

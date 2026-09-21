@@ -291,6 +291,22 @@ describe("alias suggestions", () => {
     expect(out).toContain("addProjectAlias('plain')");
   });
 
+  it("mark the counts as lower bounds when the Worker says the tally was capped", async () => {
+    const tags = [{ tag: "cycling", count: 3 }, { tag: "zen", count: 9 }, { tag: "plain" }];
+    const h = await open({ "GET /tags": { body: tags, headers: { "X-Counts-Approximate": "1" } } });
+    const out = html(h);
+    expect(out).toMatch(/cycling[\s\S]*?>3\+</);
+    expect(out).toMatch(/zen[\s\S]*?>9\+</);
+    // Still no number where none is known.
+    expect(out).toMatch(/plain<\/button>/);
+  });
+
+  it("leave the counts exact when the header is absent", async () => {
+    const h = await open({ "GET /tags": { body: [{ tag: "cycling", count: 3 }] } });
+    expect(html(h)).toMatch(/cycling[\s\S]*?>3</);
+    expect(html(h)).not.toContain("3+");
+  });
+
   it("narrow as the alias is typed", async () => {
     const h = await open();
     h.els.get("project-alias-input").value = "cyc";
