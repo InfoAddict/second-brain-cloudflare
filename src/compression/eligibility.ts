@@ -6,7 +6,7 @@ import { STATUS_PREFIX } from "../memory/status";
 import { KIND_PREFIX } from "../memory/kind";
 import { VOLATILITY_PREFIX } from "../memory/volatility";
 import { STALE_AS_OF } from "../memory/stale";
-import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX } from "../tags/system";
+import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_TAG_PREFIX } from "../tags/system";
 
 export const COMPRESSION_IMPORTANCE_THRESHOLD = 4;   // importance >= this → protected
 export const COMPRESSION_MIN_RECALL = 2;             // recalled >= this many times → protected
@@ -45,6 +45,8 @@ const RESERVED_TAG_PREFIXES = [
   VOLATILITY_PREFIX,
   CAPSULE_TAG_PREFIX,
   CAPSULE_SLOT_TAG_PREFIX,
+  // Membership, not a topic: project digests come from the registry, not tag frequency.
+  PROJECT_TAG_PREFIX,
 ];
 const RESERVED_TAGS = [STALE_AS_OF];
 

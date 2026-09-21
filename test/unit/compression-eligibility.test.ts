@@ -4,7 +4,7 @@ import { STATUS_PREFIX } from "../../src/memory/status";
 import { KIND_PREFIX } from "../../src/memory/kind";
 import { VOLATILITY_PREFIX } from "../../src/memory/volatility";
 import { STALE_AS_OF } from "../../src/memory/stale";
-import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX } from "../../src/tags/system";
+import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_TAG_PREFIX } from "../../src/tags/system";
 
 describe("compressionEligibilitySql", () => {
   it("includes the importance, recall+age, and contradiction-win clauses", () => {
@@ -48,6 +48,7 @@ describe("reserved tags", () => {
     `${VOLATILITY_PREFIX}state`,
     `${CAPSULE_TAG_PREFIX}core`,
     `${CAPSULE_SLOT_TAG_PREFIX}current-state`,
+    `${PROJECT_TAG_PREFIX}website`,
     STALE_AS_OF,
   ];
 
@@ -66,6 +67,7 @@ describe("reserved tags", () => {
       VOLATILITY_PREFIX,
       CAPSULE_TAG_PREFIX,
       CAPSULE_SLOT_TAG_PREFIX,
+      PROJECT_TAG_PREFIX,
     ]) {
       expect(sql).toContain(`value NOT LIKE '${prefix}%'`);
     }
@@ -122,7 +124,7 @@ describe("reserved tags", () => {
   });
 
   it("reserves the namespace, not the bare word", () => {
-    for (const tag of ["volatility", "stale", "status", "kind", "capsule", "capsule-slot", "work"]) {
+    for (const tag of ["volatility", "stale", "status", "kind", "capsule", "capsule-slot", "project", "work"]) {
       expect(isTopicTag(tag)).toBe(true); // a user may legitimately tag something "stale"
     }
   });
