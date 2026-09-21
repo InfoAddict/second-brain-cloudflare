@@ -85,7 +85,9 @@ function rawSqlReads(sql: string, relPath: string): Finding[] {
   // can never be NULL. A fragment naming NO table is NOT exempt: `ORDER BY updated_at
   // DESC` assigned to a constant and interpolated into a query elsewhere is the single
   // most likely way this bug gets reintroduced, and it names no table at all.
-  if (/\bedges\b/.test(sql) && !/\bentries\b/.test(sql)) return [];
+  // projects.updated_at is its own nullable column (registry rows, not memories), so
+  // statements on `projects` alone are exempt the same way.
+  if ((/\bedges\b/.test(sql) || /\bprojects\b/.test(sql)) && !/\bentries\b/.test(sql)) return [];
 
   const declarations = spans(sql, /ADD\s+COLUMN\s+updated_at/gi);
   // COALESCE or the equivalent IFNULL, with or without a table qualifier — a JOIN forces

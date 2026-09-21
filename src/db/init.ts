@@ -128,6 +128,10 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   idx_admin_events_created: `CREATE INDEX IF NOT EXISTS idx_admin_events_created ON admin_events(created_at DESC)`,
   // Single-row table driving the nightly round-robin over workspaces.
   maintenance_cursor: `CREATE TABLE IF NOT EXISTS maintenance_cursor (id INTEGER PRIMARY KEY CHECK (id = 1), workspace_id TEXT NOT NULL DEFAULT '', advanced_at INTEGER NOT NULL DEFAULT 0)`,
+  // Project registry. Additive: membership lives in entries.tags as project:<slug>, so old
+  // code ignores this table and rollback is a no-op. Never backfilled.
+  projects: `CREATE TABLE IF NOT EXISTS projects (id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', aliases TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER, PRIMARY KEY (workspace_id, id))`,
+  idx_projects_workspace: `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id, status)`,
 };
 
 /**
@@ -226,6 +230,9 @@ const ADMIN_EVENTS_COLUMNS: Record<string, string> = {
 const POST_COLUMN_OBJECTS: Record<string, string> = {
   idx_entries_capsule: `CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '"capsule:') > 0`,
   idx_entries_workspace_created: `CREATE INDEX IF NOT EXISTS idx_entries_workspace_created ON entries(workspace_id, created_at DESC)`,
+  // Membership scans (GET /projects?counts=1) stay off ordinary memories. Post-column
+  // because workspace_id arrives by ALTER on older brains.
+  idx_entries_project: `CREATE INDEX IF NOT EXISTS idx_entries_project ON entries(workspace_id, id) WHERE instr(lower(tags), '"project:') > 0`,
   prompt_capsule_entry_insert: `CREATE TRIGGER IF NOT EXISTS prompt_capsule_entry_insert
     AFTER INSERT ON entries
     WHEN instr(lower(NEW.tags), '"capsule:') > 0 OR instr(lower(NEW.tags), '"capsule-slot:') > 0
