@@ -223,5 +223,11 @@ export async function handleProjectsRoutes(
     return json({ ok: true, deleted: true });
   }
 
-  return null;
+  // Anonymous callers are refused first, so they learn nothing about the methods.
+  const auth = await requireIdentity(request, env);
+  if (auth instanceof Response) return auth;
+  const allow = isCollection ? "GET, POST" : "PATCH, DELETE";
+  const response = json({ ok: false, error: `Use ${allow.replace(", ", " or ")} here` }, 405);
+  response.headers.set("Allow", allow);
+  return response;
 }

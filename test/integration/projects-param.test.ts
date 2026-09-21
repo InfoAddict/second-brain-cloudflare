@@ -129,6 +129,23 @@ describe("POST /capture with project", () => {
     expect(JSON.parse(row.tags)).toEqual(expect.arrayContaining(["project:website"]));
   });
 
+  it("caps the tags AFTER the project tag is added, with the same error", async () => {
+    const sixtyFour = Array.from({ length: 64 }, (_, i) => `t${i}`);
+    const over = await call("POST", "/capture", ALICE, { content: "too many once the project joins", tags: sixtyFour, project: "website" });
+    expect(over.status).toBe(400);
+    expect((await jsonOf(over)).error).toBe("tags must contain at most 64 NUL-free strings of at most 128 characters");
+    expect(await registry()).toEqual([]);
+
+    const fits = await call("POST", "/capture", ALICE, { content: "room for the project", tags: sixtyFour.slice(0, 63), project: "website" });
+    expect(fits.status).toBe(200);
+    expect((await jsonOf(fits)).tags).toHaveLength(64);
+  });
+
+  it("does not count a project tag the caller already sent toward the cap twice", async () => {
+    const tags = [...Array.from({ length: 63 }, (_, i) => `t${i}`), "project:website"];
+    expect((await call("POST", "/capture", ALICE, { content: "already tagged", tags, project: "website" })).status).toBe(200);
+  });
+
   it("does not re-create, re-audit or overwrite an existing project", async () => {
     await createProject(ALICE, { id: "website", name: "The Website", description: "keep me" });
     await env.DB.prepare(`DELETE FROM admin_events`).run();

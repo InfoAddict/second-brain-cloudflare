@@ -197,6 +197,37 @@ describe("GET /projects", () => {
   });
 });
 
+describe("unsupported methods on /projects", () => {
+  beforeEach(async () => {
+    await call("POST", "/projects", ALICE, { id: "site", name: "Site" });
+  });
+
+  it("answer 405 with an Allow header on the collection", async () => {
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      const res = await call(method, "/projects", ALICE, method === "DELETE" ? undefined : {});
+      expect(res.status, method).toBe(405);
+      expect(res.headers.get("allow")).toBe("GET, POST");
+    }
+  });
+
+  it("answer 405 with an Allow header on an item, GET included", async () => {
+    for (const method of ["GET", "POST", "PUT"]) {
+      const res = await call(method, "/projects/site", ALICE, method === "GET" ? undefined : {});
+      expect(res.status, method).toBe(405);
+      expect(res.headers.get("allow")).toBe("PATCH, DELETE");
+    }
+  });
+
+  it("refuse an anonymous caller before judging the method", async () => {
+    expect((await call("PUT", "/projects", null, {})).status).toBe(401);
+  });
+
+  it("leave the supported methods alone", async () => {
+    expect((await call("GET", "/projects", ALICE)).status).toBe(200);
+    expect((await call("PATCH", "/projects/site", ALICE, { name: "Site 2" })).status).toBe(200);
+  });
+});
+
 describe("GET /projects?counts=1", () => {
   beforeEach(async () => {
     await call("POST", "/projects", ALICE, { id: "site", name: "Site", aliases: ["hosting"] });

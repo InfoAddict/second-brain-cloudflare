@@ -46,9 +46,12 @@ describe("projectFilterSql", () => {
     expect(bindings).toEqual(expandProjectFilter([row({ aliases: ["hosting"] })]).patterns);
   });
 
-  it("defaults the column to tags and matches nothing for no rows", () => {
+  it("defaults the column to tags", () => {
     expect(projectFilterSql([row()]).clause).toMatch(/^\(tags LIKE \?/);
-    expect(projectFilterSql([])).toEqual({ clause: "0", bindings: [] });
+  });
+
+  it("throws for no rows rather than quietly matching nothing", () => {
+    expect(() => projectFilterSql([])).toThrow(/no project rows/);
   });
 
   it("selects members and alias matches, and nothing else, in real SQLite", async () => {

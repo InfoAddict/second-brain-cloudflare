@@ -21,10 +21,10 @@ export function expandProjectFilter(rows: readonly ProjectRow[]): { patterns: st
   return { patterns };
 }
 
-/** The OR group as a SQL clause. `0` (matches nothing) when there is no project to expand. */
+/** The OR group as a SQL clause. Throws for no rows: an empty filter must not pass as "matches nothing". */
 export function projectFilterSql(rows: readonly ProjectRow[], column = "tags"): { clause: string; bindings: string[] } {
   const { patterns } = expandProjectFilter(rows);
-  if (!patterns.length) return { clause: "0", bindings: [] };
+  if (!patterns.length) throw new Error("projectFilterSql: no project rows to filter by");
   return { clause: `(${patterns.map(() => `${column} LIKE ? ${TAG_LIKE_ESCAPE}`).join(" OR ")})`, bindings: patterns };
 }
 
