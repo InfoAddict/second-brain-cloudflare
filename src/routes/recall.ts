@@ -245,7 +245,7 @@ Be specific and complete. Concision means leaving out filler, never leaving out 
     });
 
     if (!result.synthesizedId) {
-      return json({ tag, error: "Could not create digest — tag may have fewer than 20 entries or was recently compressed", source_count: result.entriesUsed });
+      return json({ tag, error: "Could not create digest — tag may have fewer than 10 eligible entries or was recently compressed", source_count: result.entriesUsed });
     }
 
     return json({ tag, synthesis: result.text, entry_id: result.synthesizedId, source_count: result.entriesUsed });

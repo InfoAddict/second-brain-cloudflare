@@ -92,4 +92,16 @@ describe("GET /digest", () => {
     expect(data.source_count).toBe(12);
     expect(db.entries.filter(e => JSON.parse(e.tags).includes("rolled-up"))).toHaveLength(12);
   });
+
+  // The message must state the real threshold: digest.ts skips a tag with fewer than 10
+  // eligible entries, and this text once said 20.
+  it("names the real eligibility threshold when a tag has too few entries", async () => {
+    seed(["thin-tag"], 3);
+
+    const res = await worker.fetch(req("GET", "/digest?tag=thin-tag"), env, ctx);
+
+    const data = await res.json() as any;
+    expect(data.error).toBe("Could not create digest — tag may have fewer than 10 eligible entries or was recently compressed");
+    expect(data.source_count).toBe(0);
+  });
 });
