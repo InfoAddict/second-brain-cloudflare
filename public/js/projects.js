@@ -283,6 +283,8 @@ async function openProject(slug, layer) {
   document.getElementById('project-digest-result').innerHTML = ''
   showProjectsView(true)
   renderProjectDetail()
+  // The row that was pressed has just left the screen; keyboard focus goes to the way back.
+  document.getElementById('project-back-btn').focus()
   await Promise.all([loadProjectMemories(), loadProjectVocab()])
 }
 

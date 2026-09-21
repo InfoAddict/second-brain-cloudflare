@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
-import { PROJECT_ROWS, PROJECT_SCRIPTS, drain, setupProjects } from "./_projects-harness";
+import { PROJECT_ROWS, PROJECT_SCRIPTS, drain, setupProjects, type ProjectRow } from "./_projects-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const HTML = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
@@ -23,7 +23,7 @@ const CAPSULE_ENTRIES = [
   { id: "c2", content: "A draft decision.", tags: tagsOf("capsule:project:website", "capsule-slot:decisions", "status:draft") },
 ];
 
-type Row = (typeof PROJECT_ROWS)[number];
+type Row = ProjectRow;
 
 /** A Worker that remembers what was patched or deleted, like the real one. */
 function world(over: Record<string, any> = {}, opts: { memories?: any[]; capsule?: any[]; tags?: any } = {}) {
@@ -70,6 +70,11 @@ describe("opening a project", () => {
     expect(h.els.get("projects-list-view").hidden).toBe(false);
     expect(h.els.get("projects-detail-view").hidden).toBe(true);
     expect(HTML).toContain('onclick="backToProjects()"');
+  });
+
+  it("moves keyboard focus to the back button, since the pressed row has left the screen", async () => {
+    const h = await open();
+    expect(h.els.get("project-back-btn").focusCalls).toBeGreaterThan(0);
   });
 
   it("returns to the list when the Projects tab is pressed again", async () => {

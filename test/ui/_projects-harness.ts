@@ -185,7 +185,20 @@ export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode
 /** Let every pending microtask settle. */
 export const drain = () => new Promise((r) => setTimeout(r, 0));
 
-export const PROJECT_ROWS = [
+export type ProjectRow = {
+  id: string;
+  name: string;
+  description: string;
+  aliases: string[];
+  status: string;
+  workspace_id: string;
+  layer: string;
+  created_at: number;
+  updated_at: number | null;
+  count?: number;
+};
+
+export const PROJECT_ROWS: ProjectRow[] = [
   { id: "website", name: "Website relaunch", description: "Marketing site and docs.\nSecond line.", aliases: ["web", "landing"], status: "active", workspace_id: "personal", layer: "personal", created_at: 1, updated_at: null, count: 12 },
   { id: "trip-rome", name: "Trip to Rome", description: "", aliases: [], status: "active", workspace_id: "company", layer: "company", created_at: 2, updated_at: null, count: 1 },
   { id: "old-app", name: "Old app", description: "Shelved.", aliases: [], status: "archived", workspace_id: "personal", layer: "personal", created_at: 3, updated_at: 4, count: 7 },
