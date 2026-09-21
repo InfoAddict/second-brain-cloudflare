@@ -79,8 +79,9 @@ export async function handleCaptureRoutes(
       ? withVolatility(body.tags ?? [], captureVol.value)
       : body.tags ?? [];
     const captureTags = projectSlug ? withProjectTag(volatileTags, projectSlug) : volatileTags;
-    // The input check ran before the project and volatility tags were added.
-    if (captureTags.length > MAX_INPUT_TAGS) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
+    // MAX_INPUT_TAGS bounds the caller's own tags (checked above). The project: and
+    // volatility: tags the Worker adds may take a capture past it; refusing a capture
+    // over a convenience tag would lose the memory.
 
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;

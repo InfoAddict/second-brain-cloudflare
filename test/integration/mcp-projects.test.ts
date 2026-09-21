@@ -185,6 +185,29 @@ describe("remember with project", () => {
     expect(JSON.parse(row.payload)).toEqual({ slug: "fresh" });
   });
 
+  it("caps the caller's tags only: 64 plus project and volatility stores 66, same as HTTP", async () => {
+    const sixtyFour = Array.from({ length: 64 }, (_, i) => `t${i}`);
+
+    const text = await call("remember", { content: "full tag list, worker adds two more", tags: sixtyFour, project: "website", volatility: "durable" });
+    await settle();
+
+    expect(text).toContain("Stored");
+    const tags = await entryTags(idOf(text));
+    expect(tags).toHaveLength(66);
+    expect(tags).toEqual(expect.arrayContaining(["project:website", "volatility:durable", "t0", "t63"]));
+  });
+
+  it("still refuses 65 caller tags, as HTTP does, and writes nothing", async () => {
+    const sixtyFive = Array.from({ length: 65 }, (_, i) => `t${i}`);
+
+    const res = await withClient(identity, c => c.callTool({ name: "remember", arguments: { content: "one tag too many", tags: sixtyFive, project: "website", volatility: "durable" } }));
+
+    expect((res as any).isError).toBe(true);
+    expect(textOf(res)).toMatch(/64/);
+    expect((await sqlite.db.prepare(`SELECT id FROM entries`).all()).results).toHaveLength(0);
+    expect(await registry()).toEqual([]);
+  });
+
   it("fails a bad slug with the grammar error and writes nothing", async () => {
     const text = await call("remember", { content: "Should not be stored", project: "Bad Slug!" });
 

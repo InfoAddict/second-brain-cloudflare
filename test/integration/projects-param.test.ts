@@ -129,21 +129,31 @@ describe("POST /capture with project", () => {
     expect(JSON.parse(row.tags)).toEqual(expect.arrayContaining(["project:website"]));
   });
 
-  it("caps the tags AFTER the project tag is added, with the same error", async () => {
+  it("caps the caller's tags only: 64 plus project and volatility stores 66", async () => {
     const sixtyFour = Array.from({ length: 64 }, (_, i) => `t${i}`);
-    const over = await call("POST", "/capture", ALICE, { content: "too many once the project joins", tags: sixtyFour, project: "website" });
-    expect(over.status).toBe(400);
-    expect((await jsonOf(over)).error).toBe("tags must contain at most 64 NUL-free strings of at most 128 characters");
-    expect(await registry()).toEqual([]);
 
-    const fits = await call("POST", "/capture", ALICE, { content: "room for the project", tags: sixtyFour.slice(0, 63), project: "website" });
-    expect(fits.status).toBe(200);
-    expect((await jsonOf(fits)).tags).toHaveLength(64);
+    const res = await call("POST", "/capture", ALICE, { content: "full tag list, worker adds two more", tags: sixtyFour, project: "website", volatility: "durable" });
+
+    expect(res.status).toBe(200);
+    const body = await jsonOf(res);
+    expect(body.tags).toHaveLength(66);
+    const row = await sqlite.db.prepare(`SELECT tags FROM entries WHERE id = ?`).bind(body.id).first() as { tags: string };
+    const stored = JSON.parse(row.tags) as string[];
+    expect(stored).toHaveLength(66);
+    expect(stored).toEqual(expect.arrayContaining(["project:website", "volatility:durable", "t0", "t63"]));
+    expect(await registry()).toEqual([{ id: "website", workspace_id: aliceWs, name: "website", status: "active" }]);
   });
 
-  it("does not count a project tag the caller already sent toward the cap twice", async () => {
-    const tags = [...Array.from({ length: 63 }, (_, i) => `t${i}`), "project:website"];
-    expect((await call("POST", "/capture", ALICE, { content: "already tagged", tags, project: "website" })).status).toBe(200);
+  it("still 400s 65 caller tags, with a project and volatility or without", async () => {
+    const sixtyFive = Array.from({ length: 65 }, (_, i) => `t${i}`);
+    const message = "tags must contain at most 64 NUL-free strings of at most 128 characters";
+
+    for (const extra of [{ project: "website", volatility: "durable" }, {}]) {
+      const res = await call("POST", "/capture", ALICE, { content: "one tag too many", tags: sixtyFive, ...extra });
+      expect(res.status).toBe(400);
+      expect((await jsonOf(res)).error).toBe(message);
+    }
+    expect(await registry()).toEqual([]);
   });
 
   it("does not re-create, re-audit or overwrite an existing project", async () => {
