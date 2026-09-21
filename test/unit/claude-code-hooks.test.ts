@@ -58,16 +58,16 @@ describe("common.parseProjectName", () => {
 });
 
 describe("session-start.buildRecallPlan / buildRecallUrl", () => {
-  it("tries the project tag first, then free text, both scoped to the workspace", () => {
+  it("tries the project first, then free text, both scoped to the workspace", () => {
     const plan = start.buildRecallPlan("brain-app", "personal");
     expect(plan).toHaveLength(2);
-    expect(plan[0]).toMatchObject({ tag: "brain-app", workspace: "personal" });
-    expect(plan[1].tag).toBeUndefined();
+    expect(plan[0]).toMatchObject({ project: "brain-app", workspace: "personal" });
+    expect(plan[1].project).toBeUndefined();
     const url = new URL(start.buildRecallUrl("https://w.example", plan[0]));
     expect(url.pathname).toBe("/recall");
     expect(url.searchParams.get("query")).toContain("brain-app");   // the parameter GET /recall reads
     expect(url.searchParams.get("q")).toBeNull();                    // the one that caused #327
-    expect(url.searchParams.get("tag")).toBe("brain-app");
+    expect(url.searchParams.get("project")).toBe("brain-app");
     expect(url.searchParams.get("workspace")).toBe("personal");
     expect(url.searchParams.get("full")).toBeNull();
   });
@@ -258,8 +258,8 @@ describe("session-end.formatSession / shouldCapture / buildCaptureBody", () => {
   });
   it("builds the capture body the Worker accepts", () => {
     const turns = end.readTranscriptTail(FIXTURE);
-    expect(end.buildCaptureBody(turns, meta)).toMatchObject({ source: "claude-code", tags: ["sample"], workspace: "personal" });
-    expect(end.buildCaptureBody(turns, { ...meta, project: null }).tags).toEqual([]);
+    expect(end.buildCaptureBody(turns, meta)).toMatchObject({ source: "claude-code", project: "sample", workspace: "personal" });
+    expect(end.buildCaptureBody(turns, { ...meta, project: null }).project).toBeNull();
   });
 });
 

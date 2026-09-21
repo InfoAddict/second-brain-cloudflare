@@ -225,7 +225,8 @@ function buildCaptureBody(turns, meta) {
   return {
     content,
     source: 'claude-code',
-    tags: meta.project ? [meta.project] : [],
+    tags: [],
+    project: meta.project,
     workspace: meta.workspace,
   };
 }

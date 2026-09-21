@@ -41,12 +41,12 @@ function readSessionCache(sessionId, now = Date.now(), dir) {
   } catch { return null; }
 }
 
-/** The requests to try, in order. The tag arm returns [] on a miss, so the fallback is safe. */
+/** The requests to try, in order. The project arm returns [] on a miss, so the fallback is safe. */
 function buildRecallPlan(project, workspace, now = Date.now()) {
   if (project) {
     const query = `${project} decisions and context`;
     return [
-      { query, tag: project, topK: 5, workspace },
+      { query, project, topK: 5, workspace },
       { query, topK: 5, workspace },
     ];
   }
@@ -58,7 +58,7 @@ function buildRecallUrl(baseUrl, step) {
   p.set('query', step.query);
   p.set('topK', String(step.topK));
   p.set('workspace', step.workspace);
-  if (step.tag) p.set('tag', step.tag);
+  if (step.project) p.set('project', step.project);
   if (step.after) p.set('after', String(step.after));
   return `${baseUrl}/recall?${p.toString()}`;
 }
