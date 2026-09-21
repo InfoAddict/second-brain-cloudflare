@@ -58,8 +58,8 @@ function readStdinJson(timeoutMs = 1500) {
   function parse(s) { try { return s.trim() ? JSON.parse(s) : null; } catch { return null; } }
 }
 
-/** basename of the origin remote (without .git), else basename of cwd, else null for $HOME and /. */
-function parseProjectName(remoteUrl, cwd, home = HOME) {
+/** basename of the origin remote (without .git), else basename of cwd, else null for $HOME and /. Dots kept: the tag form. */
+function parseProjectLabel(remoteUrl, cwd, home = HOME) {
   const clean = (s) => s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   if (remoteUrl) {
     const base = remoteUrl.trim().replace(/[/:]+$/, '').split(/[/:]/).pop().replace(/\.git$/i, '');
@@ -69,6 +69,23 @@ function parseProjectName(remoteUrl, cwd, home = HOME) {
   const resolved = path.resolve(cwd);
   if (resolved === path.resolve(home) || resolved === path.parse(resolved).root) return null;
   return clean(path.basename(resolved)) || null;
+}
+
+/** Mirrors deriveSlug in src/projects/registry.ts: a name the Worker's project grammar accepts, or null. */
+function projectSlug(name) {
+  const slug = String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+    .slice(0, 64)
+    .replace(/[-_]+$/, '');
+  return slug || null;
+}
+
+/** The Worker-legal project slug for this checkout, or null. */
+function parseProjectName(remoteUrl, cwd, home = HOME) {
+  return projectSlug(parseProjectLabel(remoteUrl, cwd, home));
 }
 
 function gitRemoteUrl(cwd) {
@@ -132,6 +149,6 @@ function noticeOncePerDay(key, message, now = Date.now()) {
 
 module.exports = {
   CONFIG_PATH, CACHE_DIR, HEALTH_TTL_MS,
-  loadCredentials, resolveWorkspace, readStdinJson, parseProjectName, gitRemoteUrl,
+  loadCredentials, resolveWorkspace, readStdinJson, parseProjectLabel, projectSlug, parseProjectName, gitRemoteUrl,
   fetchWithTimeout, fail, hintFor, cachePath, workerMajorVersion, noticeOncePerDay,
 };

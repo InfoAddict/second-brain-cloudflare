@@ -33,9 +33,13 @@ function extractChatChunkText(d) {
 }
 
 function consumeChatSseLine(line, onText) {
-  if (!line.startsWith('data: ') || line.includes('[DONE]')) return
+  if (!line.startsWith('data:')) return
+  // SSE permits exactly one optional space after the field colon.
+  const payload = line.slice(line.startsWith('data: ') ? 6 : 5)
+  // Sentinel = the WHOLE payload, never a substring; trimEnd tolerates CRLF.
+  if (payload.trimEnd() === '[DONE]') return
   try {
-    const d = JSON.parse(line.slice(6))
+    const d = JSON.parse(payload)
     const text = extractChatChunkText(d)
     if (text) onText(text)
   } catch (e) {
@@ -99,13 +103,22 @@ async function sendRecall(retryQuery) {
     // of the snippet shortening that keeps API/agent responses small
     const params = new URLSearchParams({ query, topK: '5', hops: '1', full: '1' })
     if (selectedTag) params.set('tag', selectedTag)
+    if (selectedProject) params.set('project', selectedProject)
     const layerSel = document.getElementById('recall-layer')
     const layer = layerSel ? layerSel.value : ''
     if (layer) params.set('workspace', layer)
     const recallRes = await fetch(`${WORKER_URL}/recall?${params}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     const data = await recallRes.json()
     // Server/auth errors must not render as "no results" — let the catch handle them
-    if (!recallRes.ok || !data.ok) throw new Error(data.error || 'recall failed')
+    if (!recallRes.ok || !data.ok) {
+      // A deleted project refuses every later recall too: drop the filter so the
+      // retry that follows is not doomed, and let the error say why.
+      if (selectedProject && recallRes.status === 404) {
+        selectedProject = ''
+        if (typeof renderProjectPickers === 'function') renderProjectPickers()
+      }
+      throw new Error(data.error || 'recall failed')
+    }
     loadingEl.remove()
     if (!data.results || !data.results.length) {
       appendBrainBubble(msgs, t('recall.empty'), 'recall-sys')
@@ -256,7 +269,7 @@ ${entry.hop > 0 ? `<span class="tag-chip tag-chip--hop">${escHtml(tPlural('recal
       </div>`
     })()}
     <div class="card-footer">
-<div class="card-tags">${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
+<div class="card-tags">${projectChipsHtml(entry.tags)}${humanTags(entry.tags).map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>
 <div class="card-actions">
   ${
     entry.id

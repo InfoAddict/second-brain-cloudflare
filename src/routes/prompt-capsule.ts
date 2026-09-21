@@ -3,13 +3,13 @@ import { CORS_HEADERS, json, readWorkspaceParam } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { buildPromptCapsule } from "../prompt-capsule/build";
 import { ifNoneMatchMatches } from "../prompt-capsule/etag";
+import { PROJECT_SLUG_RE } from "../tags/system";
 import {
   PROMPT_CAPSULE_MIME,
 } from "../prompt-capsule/types";
 
 const CORE_PATH = "/prompt-capsules/core";
 const PROJECT_PATH_PREFIX = "/prompt-capsules/projects/";
-const PROJECT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 type CapsuleTarget = { kind: "core" } | { kind: "project"; projectId: string };
 
@@ -24,7 +24,7 @@ function parseTarget(pathname: string): CapsuleTarget | null | "invalid-project-
   } catch {
     return "invalid-project-id";
   }
-  return PROJECT_ID.test(projectId) ? { kind: "project", projectId } : "invalid-project-id";
+  return PROJECT_SLUG_RE.test(projectId) ? { kind: "project", projectId } : "invalid-project-id";
 }
 
 function methodNotAllowed(): Response {

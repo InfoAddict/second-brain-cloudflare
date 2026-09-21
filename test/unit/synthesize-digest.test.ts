@@ -34,6 +34,24 @@ describe("synthesizeDigest()", () => {
     expect(result).toBe("The work on the API redesign is progressing well.");
   });
 
+  it("names a project by its display label, never the raw project: key", async () => {
+    const env = makeTestEnv(undefined, { AI: aiMock("Shipping.") });
+    await synthesizeDigest("project:signpath", [{ id: "1", content: "Started" }], env, undefined, "SignPath");
+    const prompt = (env.AI.run as any).mock.calls[0][1].messages[0].content as string;
+    expect(prompt).toContain('in the project "SignPath"');
+    expect(prompt).toContain('State of the project "SignPath":');
+    expect(prompt).not.toContain("project:signpath");
+    expect(prompt).not.toContain("tagged");
+  });
+
+  it("keeps the topic wording when there is no label", async () => {
+    const env = makeTestEnv(undefined, { AI: aiMock("Fine.") });
+    await synthesizeDigest("work", [{ id: "1", content: "Started" }], env);
+    const prompt = (env.AI.run as any).mock.calls[0][1].messages[0].content as string;
+    expect(prompt).toContain('tagged "work"');
+    expect(prompt).toContain('State of "work":');
+  });
+
   it("returns empty string when LLM throws — does not propagate error", async () => {
     const env = makeTestEnv(undefined, {
       AI: { run: vi.fn().mockRejectedValue(new Error("AI unavailable")) } as unknown as Ai,

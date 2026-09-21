@@ -4,6 +4,9 @@ import { captureEntry } from "../capture/entry";
 import { DIGEST_MAX_TOKENS, LLM_MODEL } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { MAX_PROJECT_PATTERNS, expandProjectFilter, projectFilterSql } from "../projects/filter";
+import type { ProjectRow } from "../projects/registry";
+import { PROJECT_TAG_PREFIX } from "../tags/system";
 import {
   compressionEligibilitySql,
   isTopicTag,
@@ -13,7 +16,9 @@ export async function synthesizeDigest(
   tag: string,
   rows: { id: string; content: string }[],
   env: Env,
-  config: Readonly<Config> = DEFAULTS
+  config: Readonly<Config> = DEFAULTS,
+  /** A project digest's display name; the key itself (project:<slug>) is never shown. */
+  label?: string,
 ): Promise<string> {
   if (!rows.length) return "";
 
@@ -21,12 +26,14 @@ export async function synthesizeDigest(
     .map((r, i) => `[${i + 1}] ${r.content.slice(0, 400)}`)
     .join("\n\n");
 
-  const prompt = `You are a second brain assistant. Based on these stored memories tagged "${tag}", write a single cohesive paragraph describing the current state of this area — what has been done, decided, and is being worked toward. Write as one flowing paragraph, not a list.
+  const subject = label === undefined ? `tagged "${tag}"` : `in the project "${label}"`;
+  const stateOf = label === undefined ? `"${tag}"` : `the project "${label}"`;
+  const prompt = `You are a second brain assistant. Based on these stored memories ${subject}, write a single cohesive paragraph describing the current state of this area — what has been done, decided, and is being worked toward. Write as one flowing paragraph, not a list.
 
 Memories:
 ${memoriesList}
 
-State of "${tag}":`;
+State of ${stateOf}:`;
 
   let digest = "";
   try {
@@ -68,6 +75,14 @@ async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): P
 export interface CompressTagOptions {
   /** When set, roll up only these workspaces and scope the 24h cooldown per workspace. */
   workspaceIds?: string[];
+  /**
+   * Registry-driven project digest: `tag` is `project:<slug>`, and members are the entries
+   * carrying that tag or any alias in these rows (all rows for the one slug). Each workspace
+   * is rolled up with ITS OWN row only, so one workspace's aliases never reach another's
+   * entries. The `project:` namespace is otherwise refused as a topic, so only a registry row
+   * can open this door.
+   */
+  project?: readonly ProjectRow[];
 }
 
 export async function compressTag(
@@ -76,8 +91,10 @@ export async function compressTag(
   ctx: ExecutionContext,
   opts?: CompressTagOptions,
 ): Promise<{ synthesizedId: string | null; entriesUsed: number; text: string }> {
-  // Reject bookkeeping tags before the configuration lookup.
-  if (!isTopicTag(tag)) {
+  // Reject bookkeeping tags before the configuration lookup. A project digest is the one
+  // exception, and only when the key really is that project's own tag.
+  const projectRows = opts?.project?.length ? opts.project : undefined;
+  if (projectRows ? tag !== `${PROJECT_TAG_PREFIX}${projectRows[0].id}` : !isTopicTag(tag)) {
     return { synthesizedId: null, entriesUsed: 0, text: "" };
   }
   const cfg = await resolveConfig(env);
@@ -102,6 +119,17 @@ export async function compressTag(
   let text = "";
 
   for (const workspaceId of workspaces) {
+    // The rollup is destructive, so a project's filter is built from this workspace's row
+    // alone; a workspace without a row has no such project.
+    const workspaceRows = projectRows?.filter(r => r.workspace_id === workspaceId);
+    if (workspaceRows) {
+      if (!workspaceRows.length) continue;
+      if (expandProjectFilter(workspaceRows).patterns.length > MAX_PROJECT_PATTERNS) {
+        console.warn(`Skipping digest of ${tag}: more than ${MAX_PROJECT_PATTERNS} tag patterns in workspace "${workspaceId}"`);
+        continue;
+      }
+    }
+
     // The 24h cooldown stays corpus-wide on purpose for the nightly cron: it gates
     // repetition, not visibility, so checking it across workspaces can only ever
     // postpone a digest by a day — it never moves one user's content into another
@@ -132,9 +160,12 @@ export async function compressTag(
       continue;
     }
 
+    const member = workspaceRows
+      ? projectFilterSql(workspaceRows)
+      : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
     const { results: rawEntries } = await env.DB.prepare(`
       SELECT id, content FROM entries
-      WHERE tags LIKE ? ${TAG_LIKE_ESCAPE}
+      WHERE ${member.clause}
         AND tags NOT LIKE '%"synthesized"%'
         AND tags NOT LIKE '%"auto-pattern"%'
         AND tags NOT LIKE '%"auto-insight"%'
@@ -145,17 +176,19 @@ export async function compressTag(
         AND workspace_id = ?
       ORDER BY created_at DESC
       LIMIT 50
-    `).bind(tagLikePattern(tag), Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId).all();
+    `).bind(...member.bindings, Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId).all();
 
     if (rawEntries.length < 10) {
       continue;
     }
 
     const rows = rawEntries.map(r => ({ id: r.id as string, content: r.content as string }));
-    const digestText = await synthesizeDigest(tag, rows, env, cfg);
+    const label = workspaceRows?.[0].name;
+    const digestText = await synthesizeDigest(tag, rows, env, cfg, label);
     if (!digestText) continue;
 
-    const content = `[Synthesized from ${rows.length} entries tagged "${tag}"]\n\n${digestText}`;
+    const provenance = label === undefined ? `tagged "${tag}"` : `in project "${label}"`;
+    const content = `[Synthesized from ${rows.length} entries ${provenance}]\n\n${digestText}`;
     // The digest inherits the partition's workspace and keeps actor "" — system-
     // authored, like every pre-team pipeline row.
     const result = await captureEntry(content, ["synthesized", tag], "system", env, ctx, cfg,

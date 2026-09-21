@@ -3,6 +3,7 @@ import {
   getProvider,
   loadIntegration,
   saveIntegration,
+  updateIntegration,
   deleteIntegration,
   integrationStatus,
   narrowMirrorLayer,
@@ -187,14 +188,12 @@ export async function handleIntegrationsRoutes(
     // anything already mirrored (moving those is #347). No token needed, so
     // this is the route that replaces the disconnect+reconnect dance.
     if (action === "layer") {
-      // Body first, THEN the record — right before the save — so the
-      // read-to-write window is one KV round-trip. A slow POST that read the
-      // record before its body arrived would hold a pre-sync snapshot open;
-      // a saveIntegration landing in that gap (Notion re-mirroring pages
-      // under new ids, or email's checkpoint/ingestedIds) would get written
-      // back over here. Same discipline advanceRotationCursor already
-      // follows in src/integrations/mirror.ts. The 404 below doesn't depend
-      // on the body, so parsing it first costs nothing.
+      // Body first, THEN the record, so the read below is only ever a moment
+      // old. That read decides `changed`; the write itself is a mutator on a
+      // freshly read record (updateIntegration), so a sync's itemMap or
+      // email's checkpoint/ingestedIds landing in between is never written
+      // back over (#348). The 404 below doesn't depend on the body, so
+      // parsing it first costs nothing.
       let body: { workspace?: string };
       try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
       const record = await loadIntegration(env, provider.id);
@@ -209,11 +208,11 @@ export async function handleIntegrationsRoutes(
       if (next === current) {
         return json({ ok: true, provider: provider.id, mirrorWorkspace: current, changed: false });
       }
-      await saveIntegration(env, {
-        ...record,
-        config: { ...record.config, mirrorWorkspace: next },
-        updatedAt: Date.now(),
+      const saved = await updateIntegration(env, provider.id, (r) => {
+        r.config = { ...r.config, mirrorWorkspace: next };
+        r.updatedAt = Date.now();
       });
+      if (!saved) return json({ ok: false, error: `${provider.name} is not connected` }, 404);
       // Own event name, not integration_connected with a boolean — the
       // member_suspended/member_unsuspended precedent (see disconnect below).
       adminAuditEvent(env, ctx, {
@@ -370,7 +369,7 @@ export async function handleIntegrationsRoutes(
         await writeAdminEvent(env, {
           actorId: auth.userId,
           event: "integration_memories_moved",
-          payload: { provider: provider.id, target, moved, alreadyThere, missing, refused },
+          payload: { provider: provider.id, target, moved, alreadyThere, missing, refused, errored, vectorFailures },
         });
       } catch (e) {
         console.error("admin_events insert failed for integration_memories_moved (non-fatal):", e);

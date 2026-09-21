@@ -23,6 +23,8 @@ function captureReceipt(result, typedTags) {
   // The Worker reports what actually landed on the row, which includes tags it
   // pulled out of the content itself — not just the ones typed here.
   const filed = humanTags(result.tags && result.tags.length ? result.tags : typedTags || [])
+  // The project the memory landed in: hidden as a raw tag everywhere, said here as a chip.
+  const projects = projectChipsHtml(result.tags || [])
 
   let headline = t('home.receiptStored')
   const notes = []
@@ -45,8 +47,8 @@ function captureReceipt(result, typedTags) {
 
   el.innerHTML =
     `<div class="receipt-headline"><span class="receipt-dot"></span>${escHtml(headline)}</div>` +
-    (filed.length
-      ? `<div class="receipt-filed">${escHtml(t('home.receiptFiledUnder'))} ${filed.map((tag) => `<span class="confirm-tag">${escHtml(tag)}</span>`).join('')}</div>`
+    (filed.length || projects
+      ? `<div class="receipt-filed">${escHtml(t('home.receiptFiledUnder'))} ${projects}${filed.map((tag) => `<span class="confirm-tag">${escHtml(tag)}</span>`).join('')}</div>`
       : '') +
     notes.map((n) => `<div class="receipt-note">${escHtml(n)}</div>`).join('')
   return el

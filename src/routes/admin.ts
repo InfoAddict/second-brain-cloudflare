@@ -520,6 +520,7 @@ export async function handleAdminRoutes(
               ae.target_user_id AS subject_id, '' AS entry_id, NULL AS title,
               ae.payload AS payload, ae.created_at AS created_at
          FROM admin_events ae
+        WHERE substr(ae.event, 1, 8) <> 'project_'
        UNION ALL
        SELECT 'entry', ev.id, ev.event, ev.actor_id, '', ev.entry_id,
               substr(m.content, 1, 160), ev.payload, ev.created_at

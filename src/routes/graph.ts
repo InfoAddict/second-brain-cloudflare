@@ -6,6 +6,7 @@ import { createEdge, deleteEdge, isValidEdgeType, kindMismatchMessage, kindOfRow
 import { EDGE_TYPES } from "../graph/types";
 import { buildGraph, getConnections } from "../graph/traverse";
 import { resolveConfig } from "../config";
+import { readProjectParam } from "./project-param";
 
 export async function handleGraphRoutes(
   request: Request,
@@ -116,7 +117,11 @@ export async function handleGraphRoutes(
     const team = readTeamQueryParam(url, auth, workspace);
     if (team instanceof Response) return team;
 
-    const { nodes, edges } = await buildGraph({ seed, limit, only: workspace, teamId: team }, env, await resolveConfig(env), auth);
+    // Restricts the unseeded view to a project's members; an explicit seed walks from that seed regardless.
+    const project = await readProjectParam(env, auth, url, { layer: workspace, teamId: team });
+    if (project instanceof Response) return project;
+
+    const { nodes, edges } = await buildGraph({ seed, limit, only: workspace, teamId: team, project }, env, await resolveConfig(env), auth);
     return json({ ok: true, nodes, edges });
   }
 

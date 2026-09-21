@@ -23,6 +23,7 @@ const EXPECTED_TOOLS = [
   "recall",
   "list_recent",
   "list_teams",
+  "list_projects",
   "get_prompt_capsule",
   "get",
   "append",
@@ -229,7 +230,8 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
     });
 
     it("stays short enough to work as a tool contract", async () => {
-      expect((await descriptions()).recall.length).toBeLessThan(2200);
+      // 2200 before the Projects paragraph; that paragraph is the four-axis contract.
+      expect((await descriptions()).recall.length).toBeLessThan(2500);
     });
   });
 

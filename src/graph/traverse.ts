@@ -6,6 +6,8 @@ import { getStatus } from "../memory/status";
 import { layerOf, scopeWhereForRead } from "../lib/scope";
 import { resolveActorLabel } from "../lib/actors";
 import type { Identity } from "../lib/identity";
+import { projectFilterSql } from "../projects/filter";
+import type { ProjectRow } from "../projects/registry";
 import { edgeLabel } from "./edges";
 import type { Connection, EdgeProvenance, GraphNeighbor, GraphView } from "./types";
 
@@ -269,7 +271,7 @@ export async function getConnections(id: string, type: string | undefined, env: 
   return out;
 }
 
-export async function buildGraph(opts: { seed?: string; limit?: number; only?: "personal" | "company"; teamId?: string }, env: Env, config: Readonly<Config> = DEFAULTS, identity?: Identity): Promise<GraphView> {
+export async function buildGraph(opts: { seed?: string; limit?: number; only?: "personal" | "company"; teamId?: string; project?: readonly ProjectRow[] }, env: Env, config: Readonly<Config> = DEFAULTS, identity?: Identity): Promise<GraphView> {
   // "No cap" resolves to GRAPH_VIEW_MAX_NODES, never to Infinity. Anything that
   // is not a positive finite number — absent, 0, negative, NaN — takes that
   // branch, so a caller who reaches here past the route's own validation still
@@ -294,12 +296,22 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     const neighbors = await expandGraph([opts.seed], { hops: 2, maxNodes: limit, includeDeprecated: true, only: opts.only, teamId: opts.teamId }, env, config, identity);
     nodeIds = [opts.seed, ...neighbors.map(n => n.id)].slice(0, limit);
   } else {
+    // A project view seeds only from edges with at least one member endpoint (its tag or an
+    // alias); the other endpoint rides along as a neighbour. The member set is one CTE, so
+    // the patterns bind once, and both its read and the edge scan carry the caller's scope.
+    // Needs an identity: the route always has one, the identity-less cron callers never pass a project.
+    const project = scope && opts.project ? projectFilterSql(opts.project) : null;
     const { results } = await env.DB.prepare(
-      scope
+      project && scope
+        ? `WITH member AS (SELECT id FROM entries WHERE ${project.clause} AND ${scope.clause})
+           SELECT source_id, target_id FROM edges
+            WHERE ${scope.clause} AND (source_id IN (SELECT id FROM member) OR target_id IN (SELECT id FROM member))
+            ORDER BY weight DESC LIMIT ${limit * 4}`
+        : scope
         ? `SELECT source_id, target_id FROM edges WHERE ${scope.clause} ORDER BY weight DESC LIMIT ${limit * 4}`
         // scope-exempt: identity-less branch: pre-tenancy callers; the scoped arm is the line above
         : `SELECT source_id, target_id FROM edges ORDER BY weight DESC LIMIT ${limit * 4}`
-    ).bind(...(scope?.bindings ?? [])).all() as { results: { source_id: string; target_id: string }[] };
+    ).bind(...(project && scope ? [...project.bindings, ...scope.bindings] : []), ...(scope?.bindings ?? [])).all() as { results: { source_id: string; target_id: string }[] };
     const ids: string[] = [];
     const seenIds = new Set<string>();
     for (const r of results) {

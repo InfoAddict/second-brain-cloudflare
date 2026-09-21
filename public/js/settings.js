@@ -283,7 +283,7 @@ async function runClassify(btn) {
 // they choose to.
 
 /**
- * Walk the /import cursor until entries and edges are both exhausted.
+ * Walk the /import cursor until entries, edges and projects are all exhausted.
  *
  * Split from the DOM so the paging protocol is testable: `post` is
  * `(query) => Promise<summary>`, `onProgress` gets running totals per page.
@@ -291,32 +291,41 @@ async function runClassify(btn) {
  * is why this throws on error and lets the caller offer a retry.
  */
 async function runImportLoop(payload, post, onProgress) {
-  const totals = { imported: 0, skipped: 0, failed: 0, edges_imported: 0, edges_skipped: 0, edges_failed: 0 }
+  const totals = { imported: 0, skipped: 0, failed: 0, edges_imported: 0, edges_skipped: 0, edges_failed: 0, projects_imported: 0, projects_skipped: 0, projects_failed: 0 }
   let offset = 0
   let edgeOffset = 0
+  let projectOffset = 0
   const totalEntries = (payload.entries || []).length
   const totalEdges = (payload.edges || []).length
+  const totalProjects = (payload.projects || []).length
 
   for (;;) {
-    const data = await post(`offset=${offset}&edge_offset=${edgeOffset}`)
+    const data = await post(`offset=${offset}&edge_offset=${edgeOffset}&project_offset=${projectOffset}`)
     totals.imported += data.imported || 0
     totals.skipped += data.skipped || 0
     totals.failed += data.failed || 0
     totals.edges_imported += data.edges_imported || 0
     totals.edges_skipped += data.edges_skipped || 0
     totals.edges_failed += data.edges_failed || 0
+    totals.projects_imported += data.projects_imported || 0
+    totals.projects_skipped += data.projects_skipped || 0
+    totals.projects_failed += data.projects_failed || 0
 
     // Apply the fallback BEFORE the stall check: a pre-cursor Worker echoes no
     // next_offset at all, and comparing against undefined would wave it through
     // into an infinite loop — the exact case the check exists for.
     const nextOffset = data.next_offset ?? offset
     const nextEdgeOffset = data.next_edge_offset ?? edgeOffset
-    const stalled = nextOffset === offset && nextEdgeOffset === edgeOffset
+    // A Worker from before projects echoes neither field, so it never blocks the walk.
+    const nextProjectOffset = data.next_project_offset ?? projectOffset
+    const stalled = nextOffset === offset && nextEdgeOffset === edgeOffset && nextProjectOffset === projectOffset
     offset = nextOffset
     edgeOffset = nextEdgeOffset
-    if (onProgress) onProgress({ done: Math.min(offset + edgeOffset, totalEntries + totalEdges), total: totalEntries + totalEdges, totals })
+    projectOffset = nextProjectOffset
+    const total = totalEntries + totalEdges + totalProjects
+    if (onProgress) onProgress({ done: Math.min(offset + edgeOffset + projectOffset, total), total, totals })
 
-    if ((data.remaining_entries || 0) === 0 && (data.remaining_edges || 0) === 0) return totals
+    if ((data.remaining_entries || 0) === 0 && (data.remaining_edges || 0) === 0 && (data.remaining_projects || 0) === 0) return totals
     if (stalled) throw new Error(t('upkeep.importStalled'))
   }
 }
@@ -441,7 +450,7 @@ async function restoreFromBackup() {
     return
   }
 
-  const total = payload.entries.length + (payload.edges || []).length
+  const total = payload.entries.length + (payload.edges || []).length + (payload.projects || []).length
   renderRestoreProgress(t('upkeep.restoreProgress', { filename: `<strong>${escHtml(file.name)}</strong>` }), 0, total)
   try {
     const totals = await runImportLoop(

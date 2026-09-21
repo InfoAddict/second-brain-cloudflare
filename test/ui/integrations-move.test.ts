@@ -445,6 +445,63 @@ describe("connected-row move-already-synced action", () => {
       // to, so the honest copy asks for a fresh confirmation instead.
       expect(note.textContent).not.toMatch(/safe to try again|safe to resume/i);
     });
+
+    it("a 409 after pages already moved says how many landed in the previously confirmed layer and asks to reconfirm (#355)", async () => {
+      let call = 0;
+      const ctx = loadWithInfoHelper(async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          if (call === 1) return { ok: true, status: 200, json: async () => ({ ok: true, moved: 100, alreadyThere: 0, missing: 0, refused: 0, remaining: 20, cursor: "k" }) };
+          return { ok: false, status: 409, json: async () => ({ ok: false, error: "The layer changed since you confirmed this move — reload and try again." }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      }, 120, "company");
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      await ctx.runConfirmAction();
+
+      const note = ctx.document.getElementById("move-note-notion");
+      expect(note.textContent).toMatch(/100/);
+      expect(note.textContent).toMatch(/Reconfirm to decide what happens next/);
+    });
+
+    it("a 409 after one page already moved uses singular grammar (#355)", async () => {
+      let call = 0;
+      const ctx = loadWithInfoHelper(async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          call++;
+          if (call === 1) return { ok: true, status: 200, json: async () => ({ ok: true, moved: 1, alreadyThere: 0, missing: 0, refused: 0, remaining: 20, cursor: "k" }) };
+          return { ok: false, status: 409, json: async () => ({ ok: false, error: "The layer changed since you confirmed this move — reload and try again." }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      }, 21, "company");
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      await ctx.runConfirmAction();
+
+      const note = ctx.document.getElementById("move-note-notion");
+      expect(note.textContent).toContain("1 memory already moved");
+      expect(note.textContent).not.toContain("1 memories");
+    });
+
+    it("a 409 on the very first page renders the plain layer-changed note with no count (#355)", async () => {
+      const ctx = loadWithInfoHelper(async (url: string) => {
+        if (url.includes("/integrations/notion/move")) {
+          return { ok: false, status: 409, json: async () => ({ ok: false, error: "The layer changed since you confirmed this move — reload and try again." }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true, integrations: [], admin: true, owner: true }) };
+      }, 12, "company");
+      const btn = ctx.document.getElementById("move-notion");
+
+      ctx.confirmMoveIntegrationMemories("notion", btn);
+      await ctx.runConfirmAction();
+
+      const note = ctx.document.getElementById("move-note-notion");
+      expect(note.textContent).toBe("The layer changed since this move was confirmed. Reconfirm to continue.");
+      expect(note.textContent).not.toMatch(/\d/);
+    });
   });
 
   // ─── vectorFailures reaches a human (#347, third round on this defect) ───

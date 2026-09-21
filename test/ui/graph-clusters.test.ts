@@ -115,6 +115,92 @@ describe("assignGraphClusters — outer category", () => {
   });
 });
 
+describe("assignGraphClusters — projects", () => {
+  // A project is something the person said outright, so it outranks anything the
+  // frequency heuristic would infer from their other tags.
+  const cyclists = (n: number, extra: string[] = []) =>
+    Array.from({ length: n }, (_, i) => node(`c${i}`, ["cycling", ...extra]));
+
+  it("clusters on the project slug in preference to the characteristic tag", () => {
+    const nodes = [
+      ...Array.from({ length: 4 }, (_, i) => node(`w${i}`, ["cycling", "project:tour"])),
+      ...cyclists(4).map((n) => ({ ...n, id: `plain-${n.id}` })),
+      ...Array.from({ length: 6 }, (_, i) => node(`r${i}`, ["reading"])),
+    ];
+    assignGraphClusters(nodes);
+    expect(byId(nodes, "w0").cluster).toBe("tour");
+    expect(byId(nodes, "plain-c0").cluster).toBe("cycling");
+  });
+
+  it("honors a project however small, instead of folding it away as a tiny category", () => {
+    const nodes = [
+      ...Array.from({ length: 10 }, (_, i) => node(`a${i}`, ["alpha"])),
+      ...Array.from({ length: 8 }, (_, i) => node(`b${i}`, ["beta"])),
+      node("solo", ["alpha", "project:one-off"]),
+    ];
+    assignGraphClusters(nodes);
+    expect(byId(nodes, "solo").cluster).toBe("one-off");
+  });
+
+  it("takes the first project when a memory belongs to several", () => {
+    const nodes = [node("m", ["project:second", "work", "project:first"]), node("n", ["project:first"])];
+    assignGraphClusters(nodes);
+    expect(byId(nodes, "m").cluster).toBe("second");
+    expect(byId(nodes, "n").cluster).toBe("first");
+  });
+
+  it("leaves memories with no project to the frequency heuristic, unchanged", () => {
+    const plain = () => [
+      ...Array.from({ length: 5 }, (_, i) => node(`g${i}`, ["inbox", "gardening"])),
+      ...Array.from({ length: 4 }, (_, i) => node(`c${i}`, ["inbox", "cooking"])),
+      ...Array.from({ length: 11 }, (_, i) => node(`r${i}`, ["reading"])),
+    ];
+    const before = plain();
+    assignGraphClusters(before);
+    const after = [...plain(), node("p", ["project:x"])];
+    assignGraphClusters(after);
+    for (const n of before) expect(byId(after, n.id).cluster).toBe(n.cluster);
+  });
+
+  it("never names a sub-topic after a project tag", () => {
+    const nodes = [
+      ...Array.from({ length: 6 }, (_, i) => node(`t${i}`, ["travel", "project:rome", "flights"])),
+      ...Array.from({ length: 6 }, (_, i) => node(`r${i}`, ["reading"])),
+    ];
+    assignGraphClusters(nodes);
+    for (const n of nodes) expect(String(n.sub ?? "").startsWith("project:")).toBe(false);
+  });
+
+  it("lets an unplaceable memory join a project through its links", () => {
+    const nodes = [
+      ...Array.from({ length: 4 }, (_, i) => node(`w${i}`, ["project:website"])),
+      node("orphan", ["one-of-a-kind"]),
+    ];
+    assignGraphClusters(nodes, [
+      { source: "orphan", target: "w0", weight: 0.9 },
+      { source: "orphan", target: "w1", weight: 0.8 },
+    ]);
+    expect(byId(nodes, "orphan").cluster).toBe("website");
+  });
+
+  it("ignores a malformed project tag rather than clustering on it", () => {
+    const nodes = [node("x", ["project:Bad Slug!"]), node("y", ["project:"])];
+    assignGraphClusters(nodes);
+    expect(byId(nodes, "x").cluster).toBe("__loose__");
+    expect(byId(nodes, "y").cluster).toBe("__loose__");
+  });
+
+  it("is deterministic with projects in play", () => {
+    const make = () => [
+      ...Array.from({ length: 5 }, (_, i) => node(`a${i}`, ["alpha", i % 2 ? "project:p" : "x"])),
+      ...Array.from({ length: 5 }, (_, i) => node(`b${i}`, ["beta"])),
+    ];
+    const one = assignGraphClusters(make());
+    const two = assignGraphClusters(make());
+    expect(one.map((n: N) => [n.id, n.cluster, n.sub])).toEqual(two.map((n: N) => [n.id, n.cluster, n.sub]));
+  });
+});
+
 describe("assignGraphClusters — structural fallback", () => {
   // Tags cannot place every memory: on a real brain roughly a quarter share no tag
   // with anything else, and on a young one almost nothing has been tagged twice.

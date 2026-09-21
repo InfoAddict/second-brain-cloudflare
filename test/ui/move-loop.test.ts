@@ -153,6 +153,20 @@ describe("#347 runMoveLoop", () => {
     await expect(runMoveLoop("notion", post)).rejects.toThrow(/stalled|did not advance/i);
   });
 
+  it("a stalled cursor still reports what already moved", async () => {
+    const runMoveLoop = loadRunMoveLoop();
+    const pages = [
+      { ok: true, moved: 3, alreadyThere: 0, missing: 0, refused: 0, errored: 0, vectorFailures: 0, remaining: 5, cursor: "k3" },
+      { ok: true, moved: 2, alreadyThere: 0, missing: 0, refused: 0, errored: 0, vectorFailures: 0, remaining: 3, cursor: "k3" }, // same cursor back
+    ];
+    let i = 0;
+    const post = async () => pages[i++];
+
+    const err: any = await runMoveLoop("notion", post).then(() => null, (e: any) => e);
+    expect(err.message).toMatch(/did not advance/);
+    expect(err.partial).toEqual({ moved: 5, alreadyThere: 0, missing: 0, refused: 0, errored: 0 });
+  });
+
   it("keeps draining a batch that is entirely refusals, as long as the cursor keeps advancing", async () => {
     const runMoveLoop = loadRunMoveLoop();
     // Every item in this batch is refused (author lock, or scope loss), but

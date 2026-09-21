@@ -28,6 +28,8 @@ import { localEvidenceOf } from "./root-candidate";
 import { selectGraphRoots, type RootCandidate } from "./root-selector";
 import type { KeywordRow, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { projectFilterSql, projectMemberTags } from "../projects/filter";
+import type { ProjectRow } from "../projects/registry";
 import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
@@ -145,7 +147,7 @@ function fuseDenseAndKeyword(
 }
 
 export async function recallEntries(
-  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean },
+  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[] },
   env: Env,
   ctx: ExecutionContext,
   // Resolved once at request entry by the route/MCP caller and threaded down.
@@ -168,6 +170,11 @@ export async function recallEntries(
   const { query, topK } = params;
   const synthesize = params.synthesize ?? true;
   let { tag, after, before, kind } = params;
+  // A project narrows exactly like a tag: candidates come from the members first (the tag
+  // or any alias), and the same OR group is re-applied at hydration and in the JS re-check.
+  const projectFilter = params.project?.length ? projectFilterSql(params.project) : null;
+  const projectTags = projectMemberTags(params.project ?? []);
+  const memberFirst = Boolean(tag) || projectFilter !== null;
   const hops = Math.max(0, Math.min(cfg.GRAPH_MAX_HOPS, params.hops ?? cfg.DEFAULT_HOPS));
   const now = Date.now();
   let semanticUnavailable = false;
@@ -213,16 +220,20 @@ export async function recallEntries(
 
   let keywordRows: KeywordRow[] = [];
   let results: { matches: VectorizeMatch[] };
-  if (tag) {
+  if (memberFirst) {
     // Escaped: a tag is user data and LIKE reads _ and % as wildcards. This is a read, so
     // the failure is over-broad results rather than the permanent rollup the same bug
     // caused in compressTag — but `?tag=%` silently defeats the filter entirely and
     // returns the whole brain, which is not a recoverable-looking answer either.
     const tagScopeSql = scope ? ` AND ${scope.clause}` : "";
+    const memberConds: string[] = [];
+    const memberBindings: string[] = [];
+    if (tag) { memberConds.push(`tags LIKE ? ${TAG_LIKE_ESCAPE}`); memberBindings.push(tagLikePattern(tag)); }
+    if (projectFilter) { memberConds.push(projectFilter.clause); memberBindings.push(...projectFilter.bindings); }
     // scope-checked: the caller's clause IS applied — tagScopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus tag scan
     const { results: tagRows } = await env.DB.prepare(
-      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE tags LIKE ? ${TAG_LIKE_ESCAPE}${tagScopeSql}`
-    ).bind(tagLikePattern(tag), ...(scope?.bindings ?? [])).all();
+      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql}`
+    ).bind(...memberBindings, ...(scope?.bindings ?? [])).all();
     if (!tagRows.length) return { matches: [], insight: "", semanticUnavailable };
     keywordRows = tagRows as unknown as KeywordRow[];
 
@@ -319,8 +330,8 @@ export async function recallEntries(
       if (!semanticRankByParent.has(parentId)) semanticRankByParent.set(parentId, semanticRankByParent.size + 1);
     });
 
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !tag || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !tag || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
@@ -418,6 +429,10 @@ export async function recallEntries(
   if (tag) {
     d1Filters += ` AND tags LIKE ? ${TAG_LIKE_ESCAPE}`;
     filterBindings.push(tagLikePattern(tag));
+  }
+  if (projectFilter) {
+    d1Filters += ` AND ${projectFilter.clause}`;
+    filterBindings.push(...projectFilter.bindings);
   }
   if (kind && (KIND_VALUES as readonly string[]).includes(kind)) {
     d1Filters += ` AND tags LIKE '%"kind:${kind}"%'`;
@@ -582,6 +597,7 @@ export async function recallEntries(
       const normalizedRowTags = rowTags.map(value => value.toLowerCase());
       if (normalizedRowTags.some(value => ["auto-pattern", "auto-insight", "status:deprecated"].includes(value))) continue;
       if (tag && !normalizedRowTags.includes(tag.toLowerCase())) continue;
+      if (projectFilter && !normalizedRowTags.some(value => projectTags.has(value))) continue;
       if (kind && !rowTags.includes(`kind:${kind}`)) continue;
       if (after !== undefined && Number(row.created_at) < after) continue;
       if (before !== undefined && Number(row.created_at) >= before) continue;

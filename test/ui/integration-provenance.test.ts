@@ -118,18 +118,18 @@ describe("integrations sheet: connection provenance", () => {
       connectedAt: 1772000000000,
     });
     expect(html).toContain("Connected by Alice");
-    expect(html).toContain("Synced memories land in the shared team layer");
+    expect(html).toContain("New memories from this source go to the shared team layer");
   });
 
   it("says personal, not shared, when the mirror workspace is personal — both branches", () => {
     const ctx = load(true);
     const personalHtml = ctx.renderIntegrationCard({ ...BASE, mirrorWorkspace: "personal" });
-    expect(personalHtml).toContain("Synced memories land in the personal layer");
-    expect(personalHtml).not.toContain("Synced memories land in the shared team layer");
+    expect(personalHtml).toContain("New memories from this source go to the personal layer");
+    expect(personalHtml).not.toContain("New memories from this source go to the shared team layer");
 
     const sharedHtml = ctx.renderIntegrationCard({ ...BASE, mirrorWorkspace: "company" });
-    expect(sharedHtml).toContain("Synced memories land in the shared team layer");
-    expect(sharedHtml).not.toContain("Synced memories land in the personal layer");
+    expect(sharedHtml).toContain("New memories from this source go to the shared team layer");
+    expect(sharedHtml).not.toContain("New memories from this source go to the personal layer");
   });
 
   it("names no one and writes no literal 'null' when connectedBy is null", () => {
@@ -159,7 +159,7 @@ describe("integrations sheet: connection provenance", () => {
       connectedAt: 1772000000000,
     });
     expect(html).toContain("Connected by Alice");
-    expect(html).toContain("Synced memories land in the shared team layer");
+    expect(html).toContain("New memories from this source go to the shared team layer");
     expect(html).toContain(ctx.t("integrations.adminsOnly"));
     // The provenance line reads before the reason the member cannot act on it.
     expect(html.indexOf("Connected by Alice")).toBeLessThan(html.indexOf("Only workspace admins"));
@@ -175,8 +175,8 @@ describe("integrations sheet: connection provenance", () => {
     const ctx = load(false);
     const html = ctx.renderIntegrationCard({ ...BASE, connectedBy: "Owner", mirrorWorkspace: "personal" });
     expect(html).not.toContain("Connected by Owner");
-    expect(html).not.toContain("Synced memories land in the personal layer");
-    expect(html).not.toContain("Synced memories land in the shared team layer");
+    expect(html).not.toContain("New memories from this source go to the personal layer");
+    expect(html).not.toContain("New memories from this source go to the shared team layer");
   });
 
   // NOT "byte-identical to the pre-task render": this task's provenance slot
@@ -191,8 +191,8 @@ describe("integrations sheet: connection provenance", () => {
     // (A real solo brain's connectedBy is the owner's name, not this — see
     // above. This fixture is the "field never existed" case, not "solo brain".)
     const html = ctx.renderIntegrationCard({ ...BASE });
-    expect(html).not.toContain("Synced memories land in the personal layer");
-    expect(html).not.toContain("Synced memories land in the shared team layer");
+    expect(html).not.toContain("New memories from this source go to the personal layer");
+    expect(html).not.toContain("New memories from this source go to the shared team layer");
     const nonBlankLines = (html as string).split("\n").map((l: string) => l.trim()).filter(Boolean);
     expect(nonBlankLines).toEqual([
       '<div class="integration-row">',
@@ -226,7 +226,7 @@ describe("integrations sheet: connection provenance", () => {
     });
     expect(html).not.toContain("Connected by");
     expect(html).not.toContain("Connected ");
-    expect(html).not.toContain("Synced memories land in");
+    expect(html).not.toContain("New memories from this source");
 
     const nonBlankLines = (html as string).split("\n").map((l: string) => l.trim()).filter(Boolean);
     expect(nonBlankLines).toEqual([
@@ -252,7 +252,7 @@ describe("integrations sheet: connection provenance", () => {
       connectedAt: 1772000000000,
     });
     expect(html).toContain("Connected by Alice");
-    expect(html).toContain("Synced memories land in the shared team layer");
+    expect(html).toContain("New memories from this source go to the shared team layer");
     expect(html).toContain(
       ctx.t("integrations.connectedOn", {
         when: new Date(1772000000000).toLocaleDateString(ctx.localeTag()),
@@ -269,6 +269,6 @@ describe("integrations sheet: connection provenance", () => {
       connectedAt: 1772000000000,
     });
     expect(html).toContain("Collegata da Alice");
-    expect(html).toContain("I ricordi sincronizzati finiscono nel livello condiviso del team");
+    expect(html).toContain("I nuovi ricordi da questa fonte vanno nel livello condiviso del team");
   });
 });

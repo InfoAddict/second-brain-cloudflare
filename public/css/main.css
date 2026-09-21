@@ -1253,18 +1253,21 @@
         border-bottom: 1px solid var(--line);
       }
 
-      #recent-list .recent-cards {
+      #recent-list .recent-cards,
+      #project-memories {
         display: flex;
         flex-direction: column;
         gap: 10px;
       }
 
-      #recent-list .card-content {
+      #recent-list .card-content,
+      #project-memories .card-content {
         font-size: 14.5px;
         line-height: 1.5;
       }
 
-      #recent-list .card-footer {
+      #recent-list .card-footer,
+      #project-memories .card-footer {
         margin-top: 8px;
       }
 
@@ -1279,7 +1282,8 @@
          letter. Below 768px the tags keep their own full-width row instead
          (the general .card-footer rule further down already wraps there). */
       @media (min-width: 768px) {
-        #recent-list .card-footer {
+        #recent-list .card-footer,
+        #project-memories .card-footer {
           margin-top: 8px;
           gap: 10px;
           flex-wrap: nowrap;
@@ -1288,7 +1292,8 @@
         /* Reading order on the line: where it came from and when, then what it
            is about, then what you can do to it. Provenance first because it is
            the thing that orients you in a list of 2,394. */
-        #recent-list .card-meta {
+        #recent-list .card-meta,
+        #project-memories .card-meta {
           margin-bottom: 0;
           flex-shrink: 0;
           order: 0;
@@ -1296,13 +1301,15 @@
 
         /* Shares the meta line and scrolls within it, rather than owning a
            full-width row of its own, room enough here for that to work. */
-        #recent-list .card-tags {
+        #recent-list .card-tags,
+        #project-memories .card-tags {
           order: 1;
           flex: 1 1 auto;
           min-width: 0;
         }
 
-        #recent-list .card-actions {
+        #recent-list .card-actions,
+        #project-memories .card-actions {
           order: 2;
           margin-left: auto;
           flex-shrink: 0;
@@ -1312,19 +1319,22 @@
       /* 44px was well past the 32px this project holds itself to, and it set the
          height of the whole line: three of these were the tallest thing in the
          footer on every card in the list. */
-      #recent-list .card-action-btn {
+      #recent-list .card-action-btn,
+      #project-memories .card-action-btn {
         min-height: 32px;
         padding-top: 0;
         padding-bottom: 0;
       }
 
-      #recent-list .card-action-btn {
+      #recent-list .card-action-btn,
+      #project-memories .card-action-btn {
         padding: 4px 6px;
         font-size: 10.5px;
         color: var(--text-secondary);
       }
 
-      #recent-list .card-action-btn:hover {
+      #recent-list .card-action-btn:hover,
+      #project-memories .card-action-btn:hover {
         color: var(--text-primary);
       }
 
@@ -1354,7 +1364,7 @@
       .mem-filters {
         flex: 1;
         min-width: 0;
-        max-width: 420px;
+        max-width: 560px;
       }
 
       .mem-filters[hidden],

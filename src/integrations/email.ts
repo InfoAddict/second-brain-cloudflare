@@ -10,7 +10,7 @@
 import PostalMime from "postal-mime";
 import { ImapClient } from "./imap";
 import type { IntegrationEnv, IntegrationProvider, IntegrationRecord, MirrorStore, SyncOutcome } from "./framework";
-import { loadIntegration, saveIntegration } from "./framework";
+import { loadIntegration, updateIntegration } from "./framework";
 
 const DAY_MS = 86_400_000;
 export const FIRST_SYNC_LOOKBACK_MS = 7 * DAY_MS;  // how far back the very first sync reaches
@@ -233,11 +233,13 @@ async function runEmailSync(env: IntegrationEnv, store: MirrorStore, svc: EmailS
   try {
     creds = parseEmailToken(record.credentials.token);
   } catch (e) {
-    record.status = "error";
-    record.lastSyncError = errMsg(e);
-    record.updatedAt = Date.now();
-    await saveIntegration(env, record);
-    return { ok: false, error: record.lastSyncError };
+    const error = errMsg(e);
+    await updateIntegration(env, svc.id, (r) => {
+      r.status = "error";
+      r.lastSyncError = error;
+      r.updatedAt = Date.now();
+    });
+    return { ok: false, error };
   }
 
   const now = Date.now();
@@ -293,23 +295,33 @@ async function runEmailSync(env: IntegrationEnv, store: MirrorStore, svc: EmailS
     // Only advance the checkpoint once the whole candidate set is drained, so a
     // partial batch re-searches the same window next run. Keep a 2-day overlap
     // so nothing slips through day-boundary/timing gaps — dedupe absorbs repeats.
-    if (remaining === 0) cfg.checkpoint = now - OVERLAP_MS;
-    cfg.ingestedIds = [...ingestedIds].slice(-MAX_INGESTED_IDS);
-    (record.config as any) = cfg;
+    const checkpoint = remaining === 0 ? now - OVERLAP_MS : undefined;
+    const nextIngestedIds = [...ingestedIds].slice(-MAX_INGESTED_IDS);
 
-    record.status = "connected";
-    record.lastSyncedAt = now;
-    record.lastSyncError = null;
-    record.updatedAt = now;
-    await saveIntegration(env, record);
+    // checkpoint and ingestedIds are the only config keys email owns (getConfig
+    // reads nothing else). Applied to a freshly read record so a layer change
+    // landing during the IMAP round trips isn't written back over (#348).
+    await updateIntegration(env, svc.id, (r) => {
+      r.config = {
+        ...r.config,
+        ingestedIds: nextIngestedIds,
+        ...(checkpoint !== undefined ? { checkpoint } : {}),
+      };
+      r.status = "connected";
+      r.lastSyncedAt = now;
+      r.lastSyncError = null;
+      r.updatedAt = now;
+    });
 
     return { ok: true, created, updated: 0, deleted: 0, failed, remaining, total: headers.length };
   } catch (e) {
-    record.status = "error";
-    record.lastSyncError = errMsg(e);
-    record.updatedAt = now;
-    await saveIntegration(env, record);
-    return { ok: false, error: record.lastSyncError };
+    const error = errMsg(e);
+    await updateIntegration(env, svc.id, (r) => {
+      r.status = "error";
+      r.lastSyncError = error;
+      r.updatedAt = now;
+    });
+    return { ok: false, error };
   } finally {
     try { await client?.close(); } catch { /* noop */ }
   }

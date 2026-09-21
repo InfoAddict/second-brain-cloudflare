@@ -6,6 +6,7 @@ export const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, POST, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, If-None-Match",
+  "Access-Control-Expose-Headers": "ETag, X-Counts-Approximate",
 };
 
 export function json(data: unknown, status = 200): Response {

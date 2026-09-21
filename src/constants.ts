@@ -105,6 +105,12 @@ export const DIGEST_MAX_TOKENS = 400;
 export const VECTORIZE_FIX_HINT =
   "run `npx wrangler vectorize create second-brain-vectors --dimensions=384 --metric=cosine`, or grant the build token Vectorize Edit and redeploy";
 
+// Shared by REST and MCP recall so the two never diverge in what they claim:
+// a failed Vectorize call does not establish WHY it failed, so the assertion
+// is neutral and the missing-index diagnosis is offered only as a possibility.
+export const SEMANTIC_UNAVAILABLE_DETAIL =
+  `This is often temporary; if it persists, the Vectorize index may be missing (fix: ${VECTORIZE_FIX_HINT}).`;
+
 // Durable marker written once, by src/recall/search.ts and src/capture/duplicate.ts,
 // the first time this isolate's workspace-filter latch (src/vectorize/scope.ts)
 // trips to unsupported. GET /health reads it back so the signal survives isolate

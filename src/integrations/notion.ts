@@ -8,7 +8,7 @@
  */
 
 import type { IntegrationEnv, IntegrationProvider, ItemMapEntry, MirrorStore, SyncOutcome } from "./framework";
-import { loadIntegration, saveIntegration } from "./framework";
+import { ItemMapDeltas, loadIntegration, updateIntegration } from "./framework";
 
 // ─── API client ───────────────────────────────────────────────────────────────
 
@@ -200,14 +200,18 @@ export function computeSyncPlan(
   itemMap: Record<string, ItemMapEntry>,
   listingComplete: boolean,
 ): SyncPlan {
+  // Item ids are arbitrary external strings, so a plain bracket read can hit an
+  // inherited name ("constructor", "__proto__") and report a mirror that is not there.
+  const mirrored = (id: string) => (Object.hasOwn(itemMap, id) ? itemMap[id] : undefined);
+
   const changed = pages
-    .filter(p => !p.archived && itemMap[p.id]?.version !== p.lastEdited)
+    .filter(p => !p.archived && mirrored(p.id)?.version !== p.lastEdited)
     .sort((a, b) => (a.lastEdited < b.lastEdited ? -1 : 1));
 
   const deleted: string[] = [];
   // Archived/trashed pages are an explicit delete signal even on a truncated listing.
   for (const p of pages) {
-    if (p.archived && itemMap[p.id]) deleted.push(p.id);
+    if (p.archived && mirrored(p.id)) deleted.push(p.id);
   }
   // Silent disappearance (page unshared or connection access revoked) is only
   // trustworthy when the listing was complete — a truncated listing must never
@@ -232,29 +236,36 @@ async function runNotionSync(env: IntegrationEnv, store: MirrorStore): Promise<S
   try {
     ({ pages, complete } = await notionListPages(record.credentials.token));
   } catch (e) {
-    record.status = "error";
-    record.lastSyncError = e instanceof Error ? e.message : String(e);
-    record.updatedAt = Date.now();
-    await saveIntegration(env, record);
-    return { ok: false, error: record.lastSyncError };
+    const error = e instanceof Error ? e.message : String(e);
+    await updateIntegration(env, notionProvider.id, (r) => {
+      r.status = "error";
+      r.lastSyncError = error;
+      r.updatedAt = Date.now();
+    });
+    return { ok: false, error };
   }
 
   const plan = computeSyncPlan(pages, record.itemMap, complete);
   const batch = plan.changed.slice(0, SYNC_PAGE_BATCH);
+
+  // `record` is only the read snapshot (credentials, plan input). Writes are
+  // deltas, applied to a freshly read record at save time (#348); in-batch
+  // lookups go through the deltas so they see this run's earlier work.
+  const delta = new ItemMapDeltas(record.itemMap);
 
   let created = 0, updated = 0, failed = 0;
   for (const page of batch) {
     try {
       const text = await notionFetchPageText(record.credentials.token, page.id);
       const content = buildPageContent(page.title, page.url, text);
-      const existing = record.itemMap[page.id];
+      const existing = delta.get(page.id);
       if (existing && await store.updateEntry(existing.entryId, content)) {
-        record.itemMap[page.id] = { entryId: existing.entryId, version: page.lastEdited };
+        delta.put(page.id, { entryId: existing.entryId, version: page.lastEdited });
         updated++;
       } else {
         // New page — or its mirror was deleted out-of-band; (re-)create it.
         const entryId = await store.createEntry(content, [notionProvider.id], notionProvider.id);
-        record.itemMap[page.id] = { entryId, version: page.lastEdited };
+        delta.put(page.id, { entryId, version: page.lastEdited });
         created++;
       }
     } catch (e) {
@@ -267,22 +278,25 @@ async function runNotionSync(env: IntegrationEnv, store: MirrorStore): Promise<S
 
   let deleted = 0;
   for (const pageId of plan.deleted) {
-    const mapped = record.itemMap[pageId];
+    const mapped = delta.get(pageId);
     if (!mapped) continue;
     try {
       await store.deleteEntry(mapped.entryId);
-      delete record.itemMap[pageId];
+      delta.delete(pageId);
       deleted++;
     } catch (e) {
       console.error(`Notion mirror delete failed for page ${pageId} (non-fatal):`, e);
     }
   }
 
-  record.status = "connected";
-  record.lastSyncedAt = Date.now();
-  record.lastSyncError = null;
-  record.updatedAt = Date.now();
-  await saveIntegration(env, record);
+  // null (disconnected mid-sync) needs no handling: nothing left to record against.
+  await updateIntegration(env, notionProvider.id, (r) => {
+    delta.applyTo(r.itemMap);
+    r.status = "connected";
+    r.lastSyncedAt = Date.now();
+    r.lastSyncError = null;
+    r.updatedAt = Date.now();
+  });
 
   return {
     ok: true,

@@ -20,19 +20,21 @@ async function apiMcp(toolName, args) {
   return json.result?.content?.[0]?.text ?? ''
 }
 
-async function apiCapture(content, tags, source, workspace) {
+async function apiCapture(content, tags, source, workspace, project) {
   const res = await fetch(`${WORKER_URL}/capture`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
     // workspace is omitted unless the user picked a layer explicitly — the
     // server's per-member/org default then decides, which is what makes admin
     // policy the quiet default rather than a hard-coded one here.
-    body: JSON.stringify({ content, tags, source: source || 'web-ui', ...(workspace ? { workspace } : {}) }),
+    // project files the memory under a registered project; the Worker unions the
+    // project:<slug> tag in itself.
+    body: JSON.stringify({ content, tags, source: source || 'web-ui', ...(workspace ? { workspace } : {}), ...(project ? { project } : {}) }),
   })
   return res.json()
 }
 
-async function apiList(n = 50, workspace, actor, tag) {
+async function apiList(n = 50, workspace, actor, tag, project) {
   const params = new URLSearchParams({ n: String(n) })
   if (workspace) params.set('workspace', workspace)
   // Only ever set from the shared layer's author filter (js/recent.js), so a
@@ -44,8 +46,60 @@ async function apiList(n = 50, workspace, actor, tag) {
   // as "no results" (this bit the contradictions tile, whose tag is hidden
   // from the select and so was easy to miss testing without it).
   if (tag) params.set('tag', tag)
+  // A project's memories: its own tag plus any aliases it claims, expanded server-side.
+  if (project) params.set('project', project)
   const res = await fetch(`${WORKER_URL}/list?${params}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
   return res.json()
+}
+
+/**
+ * One request to the /projects routes, resolved to { ok, status, data }.
+ *
+ * Not thrown on a non-2xx: callers branch on the status (409 means the slug is
+ * taken, which the create form explains rather than reports as a failure).
+ * A rejected promise still means the network itself failed.
+ */
+async function projectsRequest(method, path, body) {
+  const res = await fetch(`${WORKER_URL}${path}`, {
+    method,
+    headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${AUTH_TOKEN}` },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  let data = {}
+  try {
+    data = await res.json()
+  } catch {}
+  return { ok: res.ok, status: res.status, data }
+}
+
+/**
+ * Registry rows. The Projects screen wants counts and archived rows; a picker
+ * wants neither, and counts cost a scan on the Worker.
+ */
+function apiProjects({ counts = true, includeArchived = true } = {}) {
+  const params = new URLSearchParams()
+  if (counts) params.set('counts', '1')
+  if (includeArchived) params.set('include_archived', '1')
+  const query = String(params)
+  return projectsRequest('GET', query ? `/projects?${query}` : '/projects')
+}
+
+function apiProjectCreate(body) {
+  return projectsRequest('POST', '/projects', body)
+}
+
+/** `workspace` is the row's layer: the same slug can exist in two workspaces. */
+function projectPath(slug, workspace) {
+  const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+  return `/projects/${encodeURIComponent(slug)}${q}`
+}
+
+function apiProjectPatch(slug, body, workspace) {
+  return projectsRequest('PATCH', projectPath(slug, workspace), body)
+}
+
+function apiProjectDelete(slug, workspace) {
+  return projectsRequest('DELETE', projectPath(slug, workspace))
 }
 
 /** Move a memory between the personal and company layers (MOVE semantics). */

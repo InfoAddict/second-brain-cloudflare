@@ -475,8 +475,9 @@ function openView(entry, cardElement) {
   // below now states each one in words, and printing `volatility:state` beside
   // "Lifespan · Current" says the same thing twice, once unreadably.
   const viewTags = humanTags(entry.tags || [])
-  if (viewTags.length > 0) {
-    tagsContainer.innerHTML = viewTags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
+  const viewProjects = projectChipsHtml(entry.tags || [])
+  if (viewProjects || viewTags.length > 0) {
+    tagsContainer.innerHTML = viewProjects + viewTags.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')
   }
   const relatedEl = document.getElementById('view-related')
   relatedEl.style.display = 'none'
