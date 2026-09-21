@@ -435,14 +435,14 @@ function renderProjectAliases() {
 /**
  * The vocabulary, with a count per tag where one is known.
  *
- * GET /tags answers with bare names today, so counts come from the brief's
- * topics for the tags it covers; a Worker that sends { tag, count } objects
- * wins over both. A tag with no known count is still offered, without one.
+ * GET /tags?counts=1 answers { tag, count } objects; an older Worker's bare
+ * names fall back to the brief's topics for the tags it covers. A tag with
+ * no known count is still offered, without one.
  */
 async function loadProjectVocab() {
   let raw = []
   try {
-    const res = await fetch(`${WORKER_URL}/tags`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
+    const res = await fetch(`${WORKER_URL}/tags?counts=1`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     if (res.ok) raw = await res.json()
   } catch {}
   const topics = new Map()
