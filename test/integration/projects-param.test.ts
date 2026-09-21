@@ -14,7 +14,7 @@ import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { createMember } from "../../src/lib/team-admin";
 import { compressTag } from "../../src/compression/digest";
-import { getProject } from "../../src/projects/registry";
+import { createProject as createProjectRow, getProject } from "../../src/projects/registry";
 import type { Env } from "../../src/env";
 
 const BASE = "http://localhost";
@@ -332,6 +332,58 @@ describe("GET /digest with project", () => {
     const body = await jsonOf(await call("GET", "/digest?tag=project:site", ALICE));
     expect(body.entry_id).toBeUndefined();
     expect((await sqlite.db.prepare(`SELECT COUNT(*) AS n FROM entries WHERE tags LIKE '%"rolled-up"%'`).first() as { n: number }).n).toBe(0);
+  });
+});
+
+describe("GET /digest with the same slug in two workspaces", () => {
+  const rolledUpIds = async () =>
+    ((await sqlite.db.prepare(`SELECT id FROM entries WHERE tags LIKE '%"rolled-up"%' ORDER BY id`).all()).results as { id: string }[]).map(r => r.id);
+
+  it("never rolls up entries matched only by the other workspace's alias", async () => {
+    await createProjectRow(env.DB, aliceWs, { id: "roadmap", name: "Roadmap", aliases: ["q3"] });
+    await createProjectRow(env.DB, companyWs, { id: "roadmap", name: "Roadmap", aliases: ["pricing"] });
+    for (let i = 0; i < 12; i++) seed(`p${i}`, aliceWs, ["project:roadmap"], { createdAt: OLD + i });
+    for (let i = 0; i < 12; i++) seed(`c${i}`, companyWs, ["project:roadmap"], { createdAt: OLD + i });
+    // Each is claimed only by the alias of the workspace it does NOT live in.
+    for (let i = 0; i < 12; i++) seed(`ap${i}`, aliceWs, ["pricing"], { createdAt: OLD + i });
+    for (let i = 0; i < 12; i++) seed(`cq${i}`, companyWs, ["q3"], { createdAt: OLD + i });
+
+    const res = await call("GET", "/digest?project=roadmap", ALICE);
+
+    expect(res.status).toBe(200);
+    const rolled = await rolledUpIds();
+    expect(rolled.filter(id => id.startsWith("ap") || id.startsWith("cq"))).toEqual([]);
+    expect(rolled.filter(id => id.startsWith("p"))).toHaveLength(12);
+    expect(rolled.filter(id => id.startsWith("c") && !id.startsWith("cq"))).toHaveLength(12);
+  });
+
+  it("uses each workspace's own aliases for that workspace's rollup", async () => {
+    await createProjectRow(env.DB, aliceWs, { id: "roadmap", name: "Roadmap", aliases: ["q3"] });
+    await createProjectRow(env.DB, companyWs, { id: "roadmap", name: "Roadmap", aliases: ["pricing"] });
+    for (let i = 0; i < 6; i++) seed(`p${i}`, aliceWs, ["project:roadmap"], { createdAt: OLD + i });
+    for (let i = 0; i < 6; i++) seed(`aq${i}`, aliceWs, ["q3"], { createdAt: OLD + i });
+    for (let i = 0; i < 12; i++) seed(`cp${i}`, companyWs, ["pricing"], { createdAt: OLD + i });
+
+    expect((await call("GET", "/digest?project=roadmap", ALICE)).status).toBe(200);
+
+    const rolled = await rolledUpIds();
+    expect(rolled.filter(id => id.startsWith("aq") || id.startsWith("p"))).toHaveLength(12);
+    expect(rolled.filter(id => id.startsWith("cp"))).toHaveLength(12);
+  });
+
+  it("400s and asks for narrowing when the merged aliases exceed the pattern cap", async () => {
+    const aliases = Array.from({ length: 45 }, (_, i) => `tag-${i}`);
+    sqlite.db
+      .prepare(`INSERT INTO projects (id, workspace_id, name, description, aliases, status, created_at) VALUES ('big', ?, 'Big', '', ?, 'active', 1)`)
+      .bind(aliceWs, JSON.stringify(aliases))
+      .run();
+    for (let i = 0; i < 12; i++) seed(`b${i}`, aliceWs, ["project:big"], { createdAt: OLD + i });
+
+    const res = await call("GET", "/digest?project=big", ALICE);
+
+    expect(res.status).toBe(400);
+    expect((await jsonOf(res)).error).toMatch(/narrow/);
+    expect(await rolledUpIds()).toEqual([]);
   });
 });
 

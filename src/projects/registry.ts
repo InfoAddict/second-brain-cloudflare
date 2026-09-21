@@ -124,7 +124,7 @@ export function prepareActiveProjects(db: D1Database, workspaceId: string | null
     return db.prepare(`SELECT ${COLUMNS} FROM projects WHERE workspace_id IN (?) AND status = 'active' ORDER BY lower(name), id, workspace_id`).bind(workspaceId);
   }
   return db.prepare(
-    // scope-exempt: cron: null-slice fallback reads every workspace's registry; a row only names a project to digest, and each digest is built inside that row's own workspace
+    // scope-exempt: cron: null-slice fallback reads every workspace's registry; a row only names a project to digest, and compressTag rolls each workspace up with that workspace's own row alone
     `SELECT ${COLUMNS} FROM projects WHERE status = 'active' ORDER BY lower(name), id, workspace_id`,
   );
 }

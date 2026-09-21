@@ -151,6 +151,73 @@ describe("nightly per-project digests", () => {
     expect(rolled).toHaveLength(11);
   });
 
+  describe("the same slug with different aliases in two workspaces", () => {
+    const rolledIds = async () =>
+      ((await sqlite.db.prepare(`SELECT id FROM entries WHERE tags LIKE '%"rolled-up"%'`).all()).results as { id: string }[]).map(r => r.id);
+    const seedTwoWorkspaces = async () => {
+      await createProject(db, WS, { id: "roadmap", name: "Roadmap", aliases: ["q3"] });
+      await createProject(db, OTHER_WS, { id: "roadmap", name: "Roadmap", aliases: ["pricing"] });
+      seed(WS, ["project:roadmap"], 12);
+      seed(OTHER_WS, ["project:roadmap"], 12);
+      // Only 10 each, so the topic pass (more than 10) cannot claim them either.
+      seed(WS, ["pricing"], 10);
+      seed(OTHER_WS, ["q3"], 10);
+    };
+    const wsOf = async (ids: string[]) =>
+      (await sqlite.db.prepare(`SELECT id, tags, workspace_id FROM entries WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all()).results as { tags: string; workspace_id: string }[];
+
+    it("the null-slice pass never rolls up entries matched only by the other workspace's alias", async () => {
+      await seedTwoWorkspaces();
+
+      // One project key, digested in each workspace holding a row.
+      expect((await run(undefined)).digestsWritten).toBe(1);
+
+      const rolled = await wsOf(await rolledIds());
+      expect(rolled).toHaveLength(24);
+      expect(rolled.filter(r => JSON.parse(r.tags).includes("pricing"))).toEqual([]);
+      expect(rolled.filter(r => JSON.parse(r.tags).includes("q3"))).toEqual([]);
+    });
+
+    it("the sliced pass only touches its own workspace's aliases", async () => {
+      await seedTwoWorkspaces();
+
+      await run(WS);
+
+      const rolled = await wsOf(await rolledIds());
+      expect(rolled).toHaveLength(12);
+      expect(rolled.every(r => r.workspace_id === WS && JSON.parse(r.tags).includes("project:roadmap"))).toBe(true);
+    });
+
+    it("does roll up a workspace's own alias entries", async () => {
+      await createProject(db, WS, { id: "roadmap", name: "Roadmap", aliases: ["q3"] });
+      await createProject(db, OTHER_WS, { id: "roadmap", name: "Roadmap", aliases: ["pricing"] });
+      seed(WS, ["project:roadmap"], 4);
+      seed(WS, ["q3"], 8);
+      seed(OTHER_WS, ["pricing"], 10);
+
+      expect((await run(undefined)).digestsWritten).toBe(1);
+      expect(await rolledIds()).toHaveLength(22);
+    });
+  });
+
+  it("skips a project whose filter exceeds the pattern cap and logs it", async () => {
+    const aliases = Array.from({ length: 45 }, (_, i) => `tag-${i}`);
+    sqlite.db
+      .prepare(`INSERT INTO projects (id, workspace_id, name, description, aliases, status, created_at) VALUES ('big', ?, 'Big', '', ?, 'active', 1)`)
+      .bind(WS, JSON.stringify(aliases))
+      .run();
+    await createProject(db, WS, { id: "small", name: "Small" });
+    seed(WS, ["project:big"], 12);
+    seed(WS, ["project:small"], 12);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect((await run(WS)).digestsWritten).toBe(1);
+
+    expect(await digests()).toEqual([{ tags: ["project:small"], workspace_id: WS }]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("project:big"));
+    warn.mockRestore();
+  });
+
   it("does not digest entries of a workspace that has no registry row for the slug", async () => {
     await createProject(db, WS, { id: "site", name: "Site" });
     seed(OTHER_WS, ["project:site"], 25);

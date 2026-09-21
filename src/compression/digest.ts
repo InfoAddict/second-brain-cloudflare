@@ -4,7 +4,7 @@ import { captureEntry } from "../capture/entry";
 import { DIGEST_MAX_TOKENS, LLM_MODEL } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
-import { projectFilterSql } from "../projects/filter";
+import { MAX_PROJECT_PATTERNS, expandProjectFilter, projectFilterSql } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { PROJECT_TAG_PREFIX } from "../tags/system";
 import {
@@ -73,8 +73,10 @@ export interface CompressTagOptions {
   workspaceIds?: string[];
   /**
    * Registry-driven project digest: `tag` is `project:<slug>`, and members are the entries
-   * carrying that tag or any alias in these rows (all rows for the one slug). The `project:`
-   * namespace is otherwise refused as a topic, so only a registry row can open this door.
+   * carrying that tag or any alias in these rows (all rows for the one slug). Each workspace
+   * is rolled up with ITS OWN row only, so one workspace's aliases never reach another's
+   * entries. The `project:` namespace is otherwise refused as a topic, so only a registry row
+   * can open this door.
    */
   project?: readonly ProjectRow[];
 }
@@ -113,6 +115,17 @@ export async function compressTag(
   let text = "";
 
   for (const workspaceId of workspaces) {
+    // The rollup is destructive, so a project's filter is built from this workspace's row
+    // alone; a workspace without a row has no such project.
+    const workspaceRows = projectRows?.filter(r => r.workspace_id === workspaceId);
+    if (workspaceRows) {
+      if (!workspaceRows.length) continue;
+      if (expandProjectFilter(workspaceRows).patterns.length > MAX_PROJECT_PATTERNS) {
+        console.warn(`Skipping digest of ${tag}: more than ${MAX_PROJECT_PATTERNS} tag patterns in workspace "${workspaceId}"`);
+        continue;
+      }
+    }
+
     // The 24h cooldown stays corpus-wide on purpose for the nightly cron: it gates
     // repetition, not visibility, so checking it across workspaces can only ever
     // postpone a digest by a day — it never moves one user's content into another
@@ -143,8 +156,8 @@ export async function compressTag(
       continue;
     }
 
-    const member = projectRows
-      ? projectFilterSql(projectRows)
+    const member = workspaceRows
+      ? projectFilterSql(workspaceRows)
       : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
     const { results: rawEntries } = await env.DB.prepare(`
       SELECT id, content FROM entries

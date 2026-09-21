@@ -127,7 +127,7 @@ export async function runNightlyCompression(
   for (const tag of tags) {
     try {
       const rows = tag.startsWith(PROJECT_TAG_PREFIX) ? projectsBySlug.get(tag.slice(PROJECT_TAG_PREFIX.length)) : undefined;
-      // Only the workspaces that hold the project are rolled up, each on its own.
+      // Only the workspaces that hold the project are rolled up, each with its own row's aliases.
       const result = await compressTag(tag, env, ctx, rows
         ? { workspaceIds: [...new Set(rows.map(r => r.workspace_id))], project: rows }
         : undefined);
