@@ -577,6 +577,11 @@ const GRAPH_AXIS_TAGS = new Set([
  * structural fallback below. Without it, nodes tags cannot place stay loose.
  *
  * Rules (all thresholds scale with the store, so this works for small and large stores):
+ * - A `project:<slug>` tag is the person's own statement of what a memory is about, so it
+ *   decides the category outright (the first one, if there are several) before any
+ *   frequency reasoning, and is exempt from the tiny-category fold below: two memories
+ *   in a project are still a project. Project tags themselves are system tags, so they
+ *   never reach the sub-topic rule.
  * - System tags never define a cluster or a sub-topic: see isSystemTag. Entries
  *   *tagged* auto-pattern or synthesized never arrive here at all — the Worker leaves
  *   them out of the node set (src/graph/traverse.ts).
@@ -631,7 +636,15 @@ function assignGraphClusters(nodes, edges) {
   const distanceFromTarget = (d) => Math.abs(Math.log(d / TARGET_CLUSTER_SIZE));
 
   // Outer category per node.
+  const pinned = new Set();
   for (const n of nodes) {
+    // Said outright, so it outranks anything inferred from the other tags.
+    const project = projectTagsOf(n.tags)[0];
+    if (project) {
+      n.cluster = project;
+      pinned.add(n);
+      continue;
+    }
     const cands = [...new Set(candidateTags(n))];
     // Topic tags get first refusal; the axis tags are a fallback and never beat a
     // real topic. See GRAPH_AXIS_TAGS.
@@ -659,7 +672,7 @@ function assignGraphClusters(nodes, edges) {
   const csz = new Map();
   for (const n of nodes) csz.set(n.cluster, (csz.get(n.cluster) || 0) + 1);
   for (const n of nodes) {
-    if (SENTINELS.has(n.cluster) || csz.get(n.cluster) >= MIN_OUTER) continue;
+    if (SENTINELS.has(n.cluster) || pinned.has(n) || csz.get(n.cluster) >= MIN_OUTER) continue;
     let alt = null;
     let altSz = MIN_OUTER - 1;
     for (const t of new Set(candidateTags(n))) {

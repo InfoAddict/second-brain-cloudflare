@@ -119,6 +119,9 @@ function initGraphSim(canvas, nodes, edges) {
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
     return `hsl(${h % 360}, 45%, 52%)`
   }
+  // A project's cluster is named by the project; every other cluster by its tag.
+  const projectClusters = new Set(nodes.map((n) => projectTagsOf(n.tags)[0]).filter(Boolean))
+  const clusterLabel = (id) => (projectClusters.has(id) && typeof projectName === 'function' ? projectName(id) : id)
   const clusterColor = new Map()
   const clusterLegend = []
   {
@@ -134,7 +137,7 @@ function initGraphSim(canvas, nodes, edges) {
     ordered.forEach((id) => {
       const color = id === LOOSE_CLUSTER ? LOOSE_COLOR : pi < CLUSTER_PALETTE.length ? CLUSTER_PALETTE[pi++] : clusterHue(id)
       clusterColor.set(id, color)
-      if (id !== LOOSE_CLUSTER) clusterLegend.push({ label: id, color, count: sz.get(id) })
+      if (id !== LOOSE_CLUSTER) clusterLegend.push({ label: clusterLabel(id), color, count: sz.get(id) })
     })
   }
   for (const n of nodes) n.clusterColor = clusterColor.get(n.cluster)
@@ -193,7 +196,7 @@ function initGraphSim(canvas, nodes, edges) {
         n.olx = c.x
         n.oly = c.y
       })
-      outerObjs.push({ id, color, label: id, subs, loose, R: packed.R + 9 })
+      outerObjs.push({ id, color, label: clusterLabel(id), subs, loose, R: packed.R + 9 })
     }
     // pack the category discs on the canvas (largest first)
     const outerPacked = packGraphCircles(
