@@ -25,7 +25,7 @@ const FIXTURE = join(HOOKS, "fixtures/sample-transcript.jsonl");
 const ctx = { waitUntil: (_: Promise<any>) => {} } as ExecutionContext;
 
 interface Captured { method: string; url: string; body: string }
-interface StubBehaviour { healthVersion?: string; recallStatus?: number; recallResults?: unknown[]; delayMs?: number }
+interface StubBehaviour { healthVersion?: string; recallStatus?: number; recallResults?: unknown[]; delayMs?: number; unknownProject?: boolean }
 
 let server: Server;
 let origin = "";
@@ -46,6 +46,8 @@ beforeAll(async () => {
         if (req.url?.startsWith("/health")) return reply(200, { ok: true, version: behaviour.healthVersion ?? "3.0.0" });
         if (req.url?.startsWith("/recall")) {
           if (behaviour.recallStatus && behaviour.recallStatus >= 400) return reply(behaviour.recallStatus, { ok: false, code: "unauthorized" });
+          if (behaviour.unknownProject && req.url.includes("project="))
+            return reply(404, { ok: false, error: 'unknown project "x"', known_projects: [] });
           return reply(200, { ok: true, results: behaviour.recallResults ?? [{ id: "m1", content: "a remembered thing", truncated: false }], insight: null });
         }
         return reply(200, { ok: true, id: "new-id" });
@@ -130,6 +132,19 @@ describe("session-start.js", () => {
     const url = new URL(`http://x${recalls[0].url}`);
     expect(url.searchParams.get("query")).toBeTruthy();
     expect(url.searchParams.get("workspace")).toBe("personal");
+    // The project arm 404s until the project's first capture registers it,
+    // so seed one capture with the same project before replaying.
+    const slug = url.searchParams.get("project");
+    expect(slug).toBeTruthy();
+    const seed = await worker.fetch(
+      new Request("http://localhost/capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+        body: JSON.stringify({ content: "seed memory for the hook contract", project: slug }),
+      }),
+      env, ctx,
+    );
+    expect(seed.status).toBe(200);
     for (const c of recalls) {
       const res = await replay(c);
       expect(res.status, c.url).toBe(200);
@@ -137,13 +152,24 @@ describe("session-start.js", () => {
     }
   });
 
-  it("falls back from the tag arm to free text when the tag arm is empty", async () => {
+  it("falls back from the project arm to free text when the project arm is empty", async () => {
     behaviour.recallResults = [];
     await runHook("session-start.js", startPayload());
     const recalls = captured.filter(c => c.url.startsWith("/recall?"));
     expect(recalls).toHaveLength(2);
-    expect(new URL(`http://x${recalls[0].url}`).searchParams.get("tag")).toBeTruthy();
-    expect(new URL(`http://x${recalls[1].url}`).searchParams.get("tag")).toBeNull();
+    expect(new URL(`http://x${recalls[0].url}`).searchParams.get("project")).toBeTruthy();
+    expect(new URL(`http://x${recalls[1].url}`).searchParams.get("project")).toBeNull();
+  });
+
+  it("falls back to free text when the project is not registered (404)", async () => {
+    behaviour.unknownProject = true;
+    const r = await runHook("session-start.js", startPayload());
+    expect(r.code).toBe(0);
+    expect(r.stdout.startsWith("[Second Brain] Context recalled")).toBe(true);
+    const recalls = captured.filter(c => c.url.startsWith("/recall?"));
+    expect(recalls).toHaveLength(2);
+    expect(new URL(`http://x${recalls[0].url}`).searchParams.get("project")).toBeTruthy();
+    expect(new URL(`http://x${recalls[1].url}`).searchParams.get("project")).toBeNull();
   });
 
   it("surfaces a rejected token: stderr line and exit 1 (the #327 failure mode, made visible)", async () => {

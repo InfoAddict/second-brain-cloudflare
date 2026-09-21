@@ -41,7 +41,8 @@ function readSessionCache(sessionId, now = Date.now(), dir) {
   } catch { return null; }
 }
 
-/** The requests to try, in order. The project arm returns [] on a miss, so the fallback is safe. */
+/** The requests to try, in order. The project arm returns [] on a miss and 404 before the
+ * project's first capture registers it; both fall through to the next arm. */
 function buildRecallPlan(project, workspace, now = Date.now()) {
   if (project) {
     const query = `${project} decisions and context`;
@@ -136,6 +137,7 @@ async function main() {
       return fail(`recall failed: ${e?.name === 'TimeoutError' ? `no reply within ${RECALL_TIMEOUT_MS / 1000}s` : e?.message ?? 'network error'}`);
     }
     if (!res.ok) {
+      if (res.status === 404 && step.project) continue; // project not registered yet
       let code = '';
       try { code = String((await res.json())?.code ?? ''); } catch { /* not JSON */ }
       return fail(`recall failed: HTTP ${res.status}${code ? ` ${code}` : ''}${hintFor(res.status)}`);
