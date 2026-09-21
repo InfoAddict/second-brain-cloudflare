@@ -379,3 +379,65 @@ describe("GET /graph with project", () => {
   });
 });
 
+describe("GET /recall with project", () => {
+  beforeEach(async () => {
+    await createProject(ALICE, { id: "site", name: "Site", aliases: ["hosting"] });
+    seed("member", aliceWs, ["project:site"], { content: "site hosting notes about the deploy" });
+    seed("aliased", aliceWs, ["hosting"], { content: "legacy site hosting notes from before projects" });
+    seed("other", aliceWs, ["infra"], { content: "site hosting notes about something else" });
+    seed("other-project", aliceWs, ["project:app"], { content: "site hosting notes for the app" });
+    seed("bobs", bobWs, ["project:site"], { content: "bobs private site hosting notes", actorId: bobId });
+  });
+
+  const recallIds = async (path: string, token = ALICE) => {
+    const res = await call("GET", path, token);
+    expect(res.status).toBe(200);
+    return (await jsonOf(res)).results.map((r: any) => r.id).sort();
+  };
+
+  it("returns members and alias-matched entries only", async () => {
+    expect(await recallIds("/recall?query=site%20hosting%20notes&project=site&topK=10")).toEqual(["aliased", "member"]);
+  });
+
+  it("without project the same query sees the whole readable set", async () => {
+    expect(await recallIds("/recall?query=site%20hosting%20notes&topK=10")).toEqual(["aliased", "member", "other", "other-project"]);
+  });
+
+  it("ANDs with the tag filter", async () => {
+    expect(await recallIds("/recall?query=site%20hosting%20notes&project=site&tag=hosting&topK=10")).toEqual(["aliased"]);
+  });
+
+  it("never reaches a colleague's private entries", async () => {
+    await createProject(bobToken, { id: "site", name: "Bob Site" });
+    expect(await recallIds("/recall?query=site%20hosting%20notes&project=site&topK=10", bobToken)).toEqual(["bobs"]);
+  });
+
+  it("returns an empty result set for a known project with no members", async () => {
+    await createProject(ALICE, { id: "empty", name: "Empty" });
+    const res = await call("GET", "/recall?query=site%20hosting&project=empty", ALICE);
+    expect(res.status).toBe(200);
+    expect((await jsonOf(res)).results).toEqual([]);
+  });
+
+  it("404s an unknown project with the known slugs, and 400s a bad one", async () => {
+    const res = await call("GET", "/recall?query=x&project=nope", ALICE);
+    expect(res.status).toBe(404);
+    expect(await jsonOf(res)).toEqual({ ok: false, error: 'unknown project "nope"', known_projects: ["site"] });
+    expect((await call("GET", "/recall?query=x&project=Bad%20Slug!", ALICE)).status).toBe(400);
+  });
+
+  it("drops a graph-expanded neighbour that is not a member (hydration filter)", async () => {
+    // Candidates are members only, but hops=1 walks edges to non-members; only the
+    // hydration filter stands between them and the response.
+    seedEdge("r1", "member", "other", 0.9);
+
+    const ids = await recallIds("/recall?query=site%20hosting%20notes&project=site&topK=10&hops=1");
+
+    expect(ids).toEqual(["aliased", "member"]);
+    sqlite.issued.length = 0;
+    await call("GET", "/recall?query=site%20hosting%20notes&project=site&topK=10&hops=1", ALICE);
+    const hydration = sqlite.issued.filter(s => /created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN/.test(s));
+    expect(hydration.length).toBeGreaterThan(0);
+    for (const sql of hydration) expect(sql).toMatch(/tags LIKE \? ESCAPE/);
+  });
+});
