@@ -395,7 +395,15 @@ async function loadRecent() {
   // so it is allowed to populate a moment late.
   maybeRevealActorFilter()
   try {
-    allEntries = await apiList(50, memoryLayerFilter, memoryActorFilter, selectedTag)
+    let listed = await apiList(50, memoryLayerFilter, memoryActorFilter, selectedTag, selectedProject)
+    // A project deleted since it was picked answers 404 with an error object.
+    // Showing everything is better than an error over a filter nobody can see.
+    if (selectedProject && !Array.isArray(listed)) {
+      selectedProject = ''
+      if (typeof loadComposerProjects === 'function') loadComposerProjects()
+      listed = await apiList(50, memoryLayerFilter, memoryActorFilter, selectedTag)
+    }
+    allEntries = listed
     // Through the filters, not straight to render: reloading used to reset the
     // list to everything while the filter controls still read "work" and
     // "past 7 days", which now happens after every capture rather than only
@@ -596,7 +604,7 @@ function makeRecentCard(entry, { selectable = true } = {}) {
     <span class="card-source"><i class="ti ${badge.icon}"></i>${escHtml(badge.label)}</span>
     ${created ? `<span class="card-time" title="${escAttr(new Date(created).toLocaleString(localeTag()))}">${escHtml(relativeTime(created))}</span>` : ''}
   </div>
-  <div class="card-tags">${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
+  <div class="card-tags">${projectChipsHtml(tags)}${shown.map((t) => `<span class="tag-chip">${escHtml(t)}</span>`).join('')}${layerChip}${vecChip}</div>
   <div class="card-actions">
     <button class="card-action-btn append-btn" onclick="openAppend('${escAttr(entry.id)}', '${escAttr(entry.content.slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
     <button class="card-action-btn edit-btn"><i class="ti ti-pencil"></i> ${escHtml(t('memories.edit'))}</button>

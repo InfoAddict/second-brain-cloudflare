@@ -519,6 +519,24 @@ function projectTagsOf(tags) {
   return out
 }
 
+/**
+ * Chips for the projects a memory belongs to, in place of the raw project: tags.
+ *
+ * Here rather than in js/projects.js because the card, the recall card, the
+ * detail sheet and the capture receipt all call it, and several of their tests
+ * load their own module without the Projects screen. The display name comes
+ * from projectName() when js/projects.js is loaded; otherwise the slug is the
+ * name, which is still a readable answer to "which project".
+ */
+function projectChipsHtml(tags) {
+  return projectTagsOf(tags)
+    .map((slug) => {
+      const name = typeof projectName === 'function' ? projectName(slug) : slug
+      return `<span class="tag-chip tag-chip--project" title="${escHtml(t('projects.chipTitle', { name }))}"><i class="ti ti-folder"></i>${escHtml(name)}</span>`
+    })
+    .join('')
+}
+
 /* ---- Graph view: topic clustering + static packed layout ------------------------------
  *
  * The dashboard graph groups memories into topic clusters derived from their tags, at two
@@ -935,5 +953,5 @@ if (typeof module !== 'undefined' && module.exports) {
   // downloadTextFile is deliberately absent: it needs a live URL and Blob, and
   // it is exercised through its two callers (exportMemories in js/settings.js
   // and exportActivityCsv in js/activity.js) rather than in isolation.
-  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml };
+  module.exports = { escHtml, escAttr, toDateStr, parseRecallResult, normalizeEntry, vectorizeHealthBanner, vectorizeBannerHtml, syncVectorizeBanner, workspaceFilterChip, syncWorkspaceFilterChip, isSystemTag, humanTags, projectTagsOf, projectChipsHtml, assignGraphClusters, packGraphNodes, packGraphCircles, filterGraphByActor, captureDefaultKey, csvCell, csvDocument, layerChipHtml };
 }

@@ -132,6 +132,8 @@ function renderProjectsList() {
   else setProjectCreateOpen(projectCreateOpen)
   projectsEmptyShown = isEmpty
   onProjectNameInput()
+  // The pickers read the same registry, so they follow it without another request.
+  setComposerProjects(active)
 }
 
 function toggleProjectsArchived() {
@@ -422,7 +424,7 @@ function renderProjectAliases() {
     ? aliases
         .map(
           (a) =>
-            `<button type="button" class="tag-chip tag-chip--removable" onclick="removeProjectAlias('${escAttr(a)}')" aria-label="${escAttr(t('projects.aliasRemove', { tag: a }))}">${escHtml(a)}<i class="ti ti-x"></i></button>`,
+            `<button type="button" class="tag-chip tag-chip--removable" onclick="removeProjectAlias('${escAttr(a)}')" aria-label="${escHtml(t('projects.aliasRemove', { tag: a }))}">${escHtml(a)}<i class="ti ti-x"></i></button>`,
         )
         .join('')
     : `<span class="project-alias-none">${escHtml(t('projects.aliasNone'))}</span>`
@@ -466,7 +468,7 @@ function renderProjectSuggestions() {
       items
         .map(
           (v) =>
-            `<button type="button" class="topic-chip" title="${escAttr(t('projects.aliasSuggestTitle', { tag: v.tag }))}" onclick="addProjectAlias('${escAttr(v.tag)}')">${escHtml(v.tag)}${v.count == null ? '' : `<span>${escHtml(formatNumberUI(v.count))}</span>`}</button>`,
+            `<button type="button" class="topic-chip" title="${escHtml(t('projects.aliasSuggestTitle', { tag: v.tag }))}" onclick="addProjectAlias('${escAttr(v.tag)}')">${escHtml(v.tag)}${v.count == null ? '' : `<span>${escHtml(formatNumberUI(v.count))}</span>`}</button>`,
         )
         .join('')
     : ''
@@ -655,4 +657,108 @@ function confirmDeleteProject() {
       if (projectDetail === detail) backToProjects()
     },
   })
+}
+
+// ── Everyday surfaces: composer picker, filters, chips ────────────────────
+
+/** Active projects, as the composer picker and the two filters offer them. */
+let composerProjects = []
+/** The picker's slug. null until first read, so storage is not touched at load. */
+let composerProject = null
+const PROJECT_LAST_KEY = 'sb-project-last'
+
+/** The composer's project, or '' for none: what the next capture files under. */
+function selectedComposerProject() {
+  const sel = document.getElementById('home-project')
+  return sel ? sel.value : ''
+}
+
+function projectOptionsHtml(noneLabel) {
+  return (
+    `<option value="">${escHtml(noneLabel)}</option>` +
+    composerProjects.map((p) => `<option value="${escHtml(p.id)}">${escHtml(p.name || p.id)}</option>`).join('')
+  )
+}
+
+/** Paint the composer picker and both filters from composerProjects. */
+function renderProjectPickers() {
+  const has = composerProjects.length > 0
+  if (composerProject === null) {
+    try {
+      composerProject = localStorage.getItem(PROJECT_LAST_KEY) || ''
+    } catch {
+      composerProject = ''
+    }
+  }
+  // A choice that has since been archived or deleted is not offered any more.
+  if (!composerProjects.some((p) => p.id === composerProject)) composerProject = ''
+  if (!composerProjects.some((p) => p.id === selectedProject)) selectedProject = ''
+
+  const pick = document.getElementById('home-project')
+  if (pick) {
+    pick.innerHTML = projectOptionsHtml(t('projects.pickerNone'))
+    pick.value = composerProject
+  }
+  const wrap = document.getElementById('home-project-wrap')
+  if (wrap) wrap.style.display = has ? '' : 'none'
+
+  for (const which of ['recent', 'recall']) {
+    const filter = document.getElementById(`project-filter-${which}`)
+    if (filter) {
+      filter.innerHTML = projectOptionsHtml(t('projects.filterAll'))
+      filter.value = selectedProject
+    }
+    const fwrap = document.getElementById(`project-filter-wrap-${which}`)
+    if (fwrap) fwrap.style.display = has ? '' : 'none'
+  }
+}
+
+/** Pickers take the active rows once, de-duplicated by slug (first workspace wins). */
+function setComposerProjects(rows) {
+  const before = JSON.stringify(composerProjects.map((p) => [p.id, p.name]))
+  const seen = new Set()
+  composerProjects = (rows || []).filter((p) => p.status !== 'archived' && !seen.has(p.id) && seen.add(p.id))
+  renderProjectPickers()
+  // Cards already on screen named their projects before the names arrived.
+  const after = JSON.stringify(composerProjects.map((p) => [p.id, p.name]))
+  if (before !== after && currentTab === 'memories' && allEntries.length && typeof applyRecentFilters === 'function') applyRecentFilters()
+}
+
+/** A light fetch: no counts, no archived rows. Quiet when the Worker has no /projects. */
+async function loadComposerProjects() {
+  try {
+    const res = await apiProjects({ counts: false, includeArchived: false })
+    if (res.ok && Array.isArray(res.data.projects)) setComposerProjects(res.data.projects)
+    else if (res.status === 404) setComposerProjects([])
+  } catch {}
+}
+
+function onHomeProjectChange(slug) {
+  composerProject = slug || ''
+  try {
+    if (slug) localStorage.setItem(PROJECT_LAST_KEY, slug)
+    else localStorage.removeItem(PROJECT_LAST_KEY)
+  } catch {}
+  // A project lives in one workspace, so filing into it means capturing there.
+  // The layer control moves with it, in view, rather than being overridden.
+  const row = composerProjects.find((p) => p.id === slug)
+  if (TEAM_MODE && row && row.layer) {
+    const layer = document.getElementById('home-layer')
+    if (layer) layer.value = row.layer
+    onHomeLayerChange(row.layer)
+  }
+}
+
+/** The Memories and recall filter: one selection, shown in both places. */
+function onProjectFilterChange(slug) {
+  selectedProject = slug || ''
+  renderProjectPickers()
+  // Recall reads the selection when it asks; the list has to be refetched, since
+  // the Worker expands aliases and the browser cannot.
+  if (currentTab === 'memories') loadRecent()
+}
+
+function projectName(slug) {
+  const known = composerProjects.find((p) => p.id === slug) || projectsList.find((p) => p.id === slug)
+  return (known && known.name) || slug
 }

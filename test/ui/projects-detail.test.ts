@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
-import { PROJECT_ROWS, drain, setupProjects } from "./_projects-harness";
+import { PROJECT_ROWS, PROJECT_SCRIPTS, drain, setupProjects } from "./_projects-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const HTML = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
@@ -70,6 +70,22 @@ describe("opening a project", () => {
     expect(h.els.get("projects-list-view").hidden).toBe(false);
     expect(h.els.get("projects-detail-view").hidden).toBe(true);
     expect(HTML).toContain('onclick="backToProjects()"');
+  });
+
+  it("returns to the list when the Projects tab is pressed again", async () => {
+    const w = world();
+    const h = setupProjects({
+      routes: w.routes,
+      scripts: [...PROJECT_SCRIPTS, "public/js/nav.js"],
+      extra: { makeRecentCard: (e: any) => ({ entry: e }) },
+    });
+    h.ctx.switchTab("projects");
+    await drain();
+    await h.ctx.openProject("website", "personal");
+    expect(h.els.get("projects-detail-view").hidden).toBe(false);
+    h.ctx.switchTab("projects");
+    expect(h.els.get("projects-detail-view").hidden).toBe(true);
+    expect(h.els.get("projects-list-view").hidden).toBe(false);
   });
 
   it("does nothing for a project it does not know", async () => {

@@ -23,7 +23,7 @@ export const PROJECT_SCRIPTS = [
   "public/js/projects.js",
 ];
 
-export function makeEl(id = ""): any {
+export function makeEl(id = "", lenient = false): any {
   const attrs = new Map<string, string>();
   const el: any = {
     id,
@@ -62,6 +62,9 @@ export function makeEl(id = ""): any {
     closest: () => null,
     // The toast's action button is the one child a test needs to reach.
     querySelector: (sel: string) => {
+      // Lenient: renderers that wire handlers onto freshly built markup get a
+      // stand-in for whatever they ask for, since innerHTML is never parsed.
+      if (lenient) return (el._stub ??= makeEl("", true));
       if (sel !== ".app-toast-action" || !String(el.innerHTML).includes("app-toast-action")) return null;
       return (el._toastAction ??= makeEl("app-toast-action"));
     },
@@ -99,7 +102,7 @@ export type Reply = { status?: number; body?: any };
 export type Call = { method: string; path: string; query: URLSearchParams; body: any; headers: Record<string, string> };
 type Handler = Reply | ((call: Call) => Reply);
 
-export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode?: boolean; scripts?: string[]; extra?: Record<string, any> } = {}) {
+export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode?: boolean; scripts?: string[]; extra?: Record<string, any>; lenient?: boolean } = {}) {
   const els = pageElements();
   const calls: Call[] = [];
   const appended: any[] = [];
@@ -133,7 +136,7 @@ export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode
     querySelector: () => makeEl(),
     querySelectorAll: () => [],
     getElementById: (id?: string) => els.get(id ?? "") ?? null,
-    createElement: () => makeEl(),
+    createElement: () => makeEl("", opts.lenient),
     addEventListener() {},
     removeEventListener() {},
     body: { style: {}, appendChild: (el: any) => void appended.push(el) },
@@ -174,7 +177,9 @@ export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode
   ctx.initI18n("en");
 
   const toastHtml = () => (appended.length ? (appended[appended.length - 1].innerHTML as string) : "");
-  return { ctx, els, calls, store, appended, toastHtml };
+  /** Evaluate in the page's scope, for the top-level `let` bindings a test needs to set. */
+  const run = (code: string) => vm.runInContext(code, ctx);
+  return { ctx, els, calls, store, appended, toastHtml, run };
 }
 
 /** Let every pending microtask settle. */

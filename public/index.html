@@ -129,6 +129,14 @@
                       </select><i class="ti ti-chevron-down"></i>
                     </span>
                   </span>
+                  <!-- Which project a memory is filed under. Hidden until the
+                       brain has one; remembers the last choice (sb-project-last).
+                       Filled by renderProjectPickers() in js/projects.js. -->
+                  <span id="home-project-wrap" style="display: none">
+                    <span class="team-select-wrap">
+                      <select class="team-select" id="home-project" onchange="onHomeProjectChange(this.value)" aria-label="File under a project" data-i18n="projects.pickerLabel" data-i18n-attr="aria-label"></select><i class="ti ti-chevron-down"></i>
+                    </span>
+                  </span>
                   <span class="hint" data-i18n="home.hintHtml" data-i18n-html>Add <span class="hashtag">#tags</span> anywhere to file it</span>
                   <button class="send-btn" onclick="submitHome()" aria-label="Send" data-i18n="home.sendLabel" data-i18n-attr="aria-label"><i class="ti ti-arrow-up"></i></button>
                 </section>
@@ -179,6 +187,10 @@
                 <select class="filter-field" id="tag-filter-recall" onchange="onTagChange(this.value)">
                   <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
+                <span class="project-filter" id="project-filter-wrap-recall" style="display: none">
+                  <i class="ti ti-folder" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
+                  <select class="filter-field" id="project-filter-recall" onchange="onProjectFilterChange(this.value)" aria-label="Filter by project" data-i18n="projects.filterLabel" data-i18n-attr="aria-label"></select>
+                </span>
               </div>
             </div>
             <div class="input-bar">
@@ -220,6 +232,10 @@
                 <select class="filter-field" id="tag-filter-recent" onchange="onTagChange(this.value)">
                   <option value="" data-i18n="recall.allTags">All tags</option>
                 </select>
+                <span class="project-filter" id="project-filter-wrap-recent" style="display: none">
+                  <i class="ti ti-folder" style="color: var(--text-secondary); font-size: 13px; flex-shrink: 0"></i>
+                  <select class="filter-field" id="project-filter-recent" onchange="onProjectFilterChange(this.value)" aria-label="Filter by project" data-i18n="projects.filterLabel" data-i18n-attr="aria-label"></select>
+                </span>
                 <select class="filter-field" id="time-filter-recent" onchange="onTimeRangeChange(this.value)" style="min-width: 0">
                   <option value="" data-i18n="memories.allTime">All time</option>
                   <option value="today" data-i18n="memories.today">Today</option>

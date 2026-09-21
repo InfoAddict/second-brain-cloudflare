@@ -47,6 +47,7 @@ async function refreshAll({ list = true } = {}) {
 
   refreshInFlight = (async () => {
     const jobs = [updateStatus(), loadBrief(), loadTags()]
+    if (typeof loadComposerProjects === 'function') jobs.push(loadComposerProjects())
     if (list) jobs.push(loadRecent())
     // A project's own memories are a list too, and a card edited there has just
     // changed under it. Not on `list: false`: that caller animates a row out.

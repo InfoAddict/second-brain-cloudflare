@@ -25,6 +25,35 @@
   max-width: 880px;
 }
 
+/* ── Everyday surfaces: filters and chips ── */
+
+/* The wrapper is only there to be hidden as one; its icon and select join the
+   filter row's own flex layout. */
+.project-filter {
+  display: contents;
+}
+
+/* A select is as wide as its longest option; a long project name must not push
+   the composer's input off the row. */
+#home-project {
+  max-width: 168px;
+  text-overflow: ellipsis;
+}
+
+/* A project chip leads a card's tags and reads as the memory's home, in the
+   accent tone the topic chips already use. */
+.tag-chip--project {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.tag-chip--project i {
+  font-size: 12px;
+}
+
 /* ── Empty state ── */
 .projects-empty {
   display: flex;

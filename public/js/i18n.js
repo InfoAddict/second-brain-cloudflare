@@ -641,6 +641,11 @@ const I18N_EN = {
     deleteBody: 'Memories are kept; only the project grouping is removed.',
     deletedToast: 'Project deleted',
     deleteFailed: 'Could not delete the project',
+    pickerNone: 'No project',
+    pickerLabel: 'File under a project',
+    filterAll: 'All projects',
+    filterLabel: 'Filter by project',
+    chipTitle: 'Project: {name}',
   },
   team: {
     title: 'Team',
@@ -1548,6 +1553,11 @@ const I18N_IT = {
     deleteBody: 'I ricordi restano; viene rimosso solo il raggruppamento del progetto.',
     deletedToast: 'Progetto eliminato',
     deleteFailed: 'Impossibile eliminare il progetto',
+    pickerNone: 'Nessun progetto',
+    pickerLabel: 'Salva in un progetto',
+    filterAll: 'Tutti i progetti',
+    filterLabel: 'Filtra per progetto',
+    chipTitle: 'Progetto: {name}',
   },
   team: {
     title: 'Team',

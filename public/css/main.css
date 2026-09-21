@@ -1364,7 +1364,7 @@
       .mem-filters {
         flex: 1;
         min-width: 0;
-        max-width: 420px;
+        max-width: 560px;
       }
 
       .mem-filters[hidden],

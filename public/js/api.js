@@ -20,14 +20,16 @@ async function apiMcp(toolName, args) {
   return json.result?.content?.[0]?.text ?? ''
 }
 
-async function apiCapture(content, tags, source, workspace) {
+async function apiCapture(content, tags, source, workspace, project) {
   const res = await fetch(`${WORKER_URL}/capture`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
     // workspace is omitted unless the user picked a layer explicitly — the
     // server's per-member/org default then decides, which is what makes admin
     // policy the quiet default rather than a hard-coded one here.
-    body: JSON.stringify({ content, tags, source: source || 'web-ui', ...(workspace ? { workspace } : {}) }),
+    // project files the memory under a registered project; the Worker unions the
+    // project:<slug> tag in itself.
+    body: JSON.stringify({ content, tags, source: source || 'web-ui', ...(workspace ? { workspace } : {}), ...(project ? { project } : {}) }),
   })
   return res.json()
 }
@@ -70,9 +72,16 @@ async function projectsRequest(method, path, body) {
   return { ok: res.ok, status: res.status, data }
 }
 
-/** Registry rows with per-project counts; archived ones included, split client-side. */
-function apiProjects() {
-  return projectsRequest('GET', '/projects?counts=1&include_archived=1')
+/**
+ * Registry rows. The Projects screen wants counts and archived rows; a picker
+ * wants neither, and counts cost a scan on the Worker.
+ */
+function apiProjects({ counts = true, includeArchived = true } = {}) {
+  const params = new URLSearchParams()
+  if (counts) params.set('counts', '1')
+  if (includeArchived) params.set('include_archived', '1')
+  const query = String(params)
+  return projectsRequest('GET', query ? `/projects?${query}` : '/projects')
 }
 
 function apiProjectCreate(body) {

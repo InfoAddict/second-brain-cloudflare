@@ -242,7 +242,7 @@ async function submitHome() {
     while ((m = tagRe.exec(text)) !== null) tags.push(m[1])
     const content = text.replace(/#[a-zA-Z][\w-]*/g, '').trim() || text
 
-    const result = await apiCapture(content, tags, 'web-ui', homeLayer)
+    const result = await apiCapture(content, tags, 'web-ui', homeLayer, selectedComposerProject())
     field.value = ''
     autoResize(field)
     if (result.duplicate) {
