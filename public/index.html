@@ -363,6 +363,77 @@
                   <div class="project-rows" id="projects-archived-list" hidden></div>
                 </div>
               </div>
+
+              <!-- One project, opened from a row. Sections are filled by
+                   js/projects.js; the memories reuse the Memories screen's card. -->
+              <div id="projects-detail-view" hidden>
+                <button class="project-back" type="button" onclick="backToProjects()"><i class="ti ti-arrow-left"></i><span data-i18n="projects.back">All projects</span></button>
+                <header class="project-head" id="project-head"></header>
+
+                <div class="project-sections">
+                  <section class="panel project-section" aria-labelledby="project-memories-title">
+                    <h2 id="project-memories-title" data-i18n="projects.memoriesTitle">Memories</h2>
+                    <div class="recent-cards" id="project-memories"></div>
+                    <p class="digest-note project-memories-note" id="project-memories-note" hidden></p>
+                  </section>
+
+                  <section class="panel project-section" aria-labelledby="project-aliases-title">
+                    <h2 id="project-aliases-title" data-i18n="projects.aliasesTitle">Aliases</h2>
+                    <p class="panel-sub" data-i18n="projects.aliasesHelp">An alias pulls a tag you already use into this project. Memories with that tag show up here, and nothing is rewritten.</p>
+                    <div class="project-alias-chips" id="project-aliases"></div>
+                    <form class="project-alias-add" onsubmit="addProjectAlias(); return false" novalidate>
+                      <input class="project-input" id="project-alias-input" type="text" maxlength="128" autocomplete="off" autocapitalize="none" placeholder="Add an existing tag" aria-label="Add an existing tag" data-i18n="projects.aliasPlaceholder" data-i18n-attr="placeholder|aria-label" oninput="onProjectAliasInput()" />
+                      <button class="btn btn-secondary" type="submit" data-i18n="projects.aliasAdd">Add</button>
+                    </form>
+                    <p class="integration-error" id="project-alias-error" role="alert" hidden></p>
+                    <div class="project-alias-suggest" id="project-alias-suggest"></div>
+                  </section>
+
+                  <div class="project-pair">
+                    <section class="panel project-section" aria-labelledby="project-digest-title">
+                      <h2 id="project-digest-title" data-i18n="projects.digestTitle">Digest</h2>
+                      <p class="panel-sub" data-i18n="projects.digestHelp">Condense this project's memories into one summary memory. The originals are kept.</p>
+                      <div class="project-section-actions">
+                        <button class="btn btn-secondary" id="project-digest-btn" type="button" onclick="runProjectDigest()" data-i18n="projects.digestAction">Create digest</button>
+                      </div>
+                      <div class="project-digest-result" id="project-digest-result" aria-live="polite"></div>
+                    </section>
+
+                    <section class="panel project-section" aria-labelledby="project-capsule-title">
+                      <h2 id="project-capsule-title" data-i18n="board.capsuleTitle">Prompt capsule</h2>
+                      <p class="panel-sub" data-i18n="projects.capsuleSub">What connected AI tools load before they work on this project.</p>
+                      <div id="project-capsule"></div>
+                    </section>
+                  </div>
+
+                  <section class="panel project-section" aria-labelledby="project-details-title">
+                    <h2 id="project-details-title" data-i18n="projects.detailsTitle">Details</h2>
+                    <form onsubmit="saveProjectDetails(); return false" novalidate>
+                      <div class="project-field">
+                        <label for="project-edit-name" data-i18n="projects.nameLabel">Project name</label>
+                        <input class="project-input" id="project-edit-name" type="text" maxlength="120" autocomplete="off" oninput="onProjectEditInput()" />
+                      </div>
+                      <div class="project-field">
+                        <label for="project-edit-desc" data-i18n="projects.descLabel">Description</label>
+                        <textarea class="project-input" id="project-edit-desc" rows="3" maxlength="1000" placeholder="What is this project about? (optional)" data-i18n="projects.descPlaceholder" data-i18n-attr="placeholder" oninput="onProjectEditInput()"></textarea>
+                      </div>
+                      <div class="project-section-actions">
+                        <button class="btn btn-primary" id="project-save-btn" type="submit" disabled data-i18n="projects.save">Save changes</button>
+                      </div>
+                      <p class="integration-error" id="project-edit-error" role="alert" hidden></p>
+                    </form>
+                  </section>
+
+                  <section class="panel project-section" aria-labelledby="project-manage-title">
+                    <h2 id="project-manage-title" data-i18n="projects.manageTitle">Archive or delete</h2>
+                    <p class="panel-sub" data-i18n="projects.archiveHelp">An archived project leaves the pickers and the nightly digest. Nothing is deleted, and you can restore it any time.</p>
+                    <div class="project-section-actions">
+                      <button class="btn btn-secondary" id="project-archive-btn" type="button" onclick="toggleProjectArchived()" data-i18n="projects.archive">Archive project</button>
+                      <button class="btn btn-secondary project-delete-btn" id="project-delete-btn" type="button" onclick="confirmDeleteProject()" data-i18n="projects.delete">Delete project</button>
+                    </div>
+                  </section>
+                </div>
+              </div>
             </div>
           </div>
 

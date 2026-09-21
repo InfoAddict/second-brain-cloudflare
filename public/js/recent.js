@@ -527,7 +527,11 @@ function renderRecent(entries) {
   renderBulkBar()
 }
 
-function makeRecentCard(entry) {
+/**
+ * One memory as a card. `selectable: false` is for lists that are not the
+ * Memories screen (a project's own), where selection mode has no bulk bar.
+ */
+function makeRecentCard(entry, { selectable = true } = {}) {
   let tags = []
   try {
     tags = JSON.parse(entry.tags || '[]')
@@ -572,7 +576,7 @@ function makeRecentCard(entry) {
   // expressions are the empty string and the card's markup is byte-identical
   // to what it was before multi-select existed — which is what keeps a solo
   // brain, and every card test written against it, untouched.
-  const selecting = TEAM_MODE && selectMode
+  const selecting = selectable && TEAM_MODE && selectMode
   const picked = selecting && selectedMemoryIds.has(entry.id)
   const selectBox = selecting
     ? `<label class="card-select"><input type="checkbox" aria-label="${escAttr(t('memories.selectMemory', { title }))}" ${picked ? 'checked' : ''} onchange="toggleMemorySelection('${escAttr(entry.id)}', this.checked)" /></label>`

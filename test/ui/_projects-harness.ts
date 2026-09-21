@@ -47,23 +47,37 @@ export function makeEl(id = ""): any {
     addEventListener() {},
     value: "",
     textContent: "",
-    innerHTML: "",
+    children: [] as any[],
     disabled: false,
     checked: false,
     setAttribute: (k: string, v: string) => void attrs.set(k, String(v)),
     getAttribute: (k: string) => attrs.get(k) ?? null,
     hasAttribute: (k: string) => attrs.has(k),
     removeAttribute: (k: string) => void attrs.delete(k),
-    appendChild() {},
+    appendChild: (child: any) => void el.children.push(child),
     remove() {},
     focus() {
       el.focusCalls += 1;
     },
     closest: () => null,
-    querySelector: () => null,
+    // The toast's action button is the one child a test needs to reach.
+    querySelector: (sel: string) => {
+      if (sel !== ".app-toast-action" || !String(el.innerHTML).includes("app-toast-action")) return null;
+      return (el._toastAction ??= makeEl("app-toast-action"));
+    },
     querySelectorAll: () => [],
     dataset: {} as Record<string, string>,
   };
+  // Setting innerHTML replaces the children, as in a browser.
+  let html = "";
+  Object.defineProperty(el, "innerHTML", {
+    get: () => html,
+    set: (v: string) => {
+      html = String(v);
+      el.children.length = 0;
+      el._toastAction = undefined;
+    },
+  });
   return el;
 }
 
@@ -141,6 +155,9 @@ export function setupProjects(opts: { routes?: Record<string, Handler>; teamMode
     alert: () => {},
     setTimeout,
     clearTimeout,
+    // Host globals a browser provides and a bare vm context does not.
+    URL,
+    URLSearchParams,
     module: undefined,
     exports: undefined,
     ...(opts.extra || {}),

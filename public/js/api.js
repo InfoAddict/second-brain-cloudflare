@@ -32,7 +32,7 @@ async function apiCapture(content, tags, source, workspace) {
   return res.json()
 }
 
-async function apiList(n = 50, workspace, actor, tag) {
+async function apiList(n = 50, workspace, actor, tag, project) {
   const params = new URLSearchParams({ n: String(n) })
   if (workspace) params.set('workspace', workspace)
   // Only ever set from the shared layer's author filter (js/recent.js), so a
@@ -44,6 +44,8 @@ async function apiList(n = 50, workspace, actor, tag) {
   // as "no results" (this bit the contradictions tile, whose tag is hidden
   // from the select and so was easy to miss testing without it).
   if (tag) params.set('tag', tag)
+  // A project's memories: its own tag plus any aliases it claims, expanded server-side.
+  if (project) params.set('project', project)
   const res = await fetch(`${WORKER_URL}/list?${params}`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
   return res.json()
 }
