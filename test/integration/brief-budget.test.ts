@@ -82,16 +82,23 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
     expect(res.status).toBe(200);
 
-    // Seven reads, run concurrently, plus v3's fixed identity cost on this
-    // first request against a fresh database: one token→identity join, and
-    // the one-time tenant bootstrap (two lookups + one provisioning batch —
-    // memoised per database, so later app opens pay only the join).
-    // 7 + 1 + 3 = 11. The seventh is the open-loops preview added in Task A
+    // Seven reads — six run concurrently (sources, patterns, activity,
+    // topics, the attention+loops aggregate, the loops preview), the
+    // resurface pick runs after (it needs the topics query's own result) —
+    // plus v3's fixed identity cost on this first request against a fresh
+    // database: one token→identity join, and the one-time tenant bootstrap
+    // (two lookups + one provisioning batch — memoised per database, so
+    // later app opens pay only the join). 7 + 1 + 3 = 11.
+    //
+    // The seventh concurrent read is the open-loops preview added in Task A
     // (brief v2): the count is free (folded into the attention aggregate),
-    // but its three preview rows cost their own SELECT. If this goes up
-    // further, the endpoint got more expensive for every user on every app
-    // open — that is the decision this assertion asks you to make
-    // deliberately.
+    // but its three preview rows cost their own SELECT. The resurface pick
+    // itself is exactly one query here because this fixture has no topic
+    // tags, so Task B's topic-preference probe never runs (see
+    // src/routes/brief.ts's pickResurface) — a brain with topics pays one
+    // query more on the days it picks fresh. If any of this goes up further,
+    // the endpoint got more expensive for every user on every app open —
+    // that is the decision this assertion asks you to make deliberately.
     //
     // This is the COLD path: `users.last_used_at` is NULL on a brain nobody has
     // authenticated against, so this request does owe the stamp. It is still 11,
