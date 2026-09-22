@@ -215,6 +215,35 @@ function renderDecisionPanel(board, brief) {
   fitThread(panel)
 }
 
+/**
+ * "Open loops": up to three of a member's own tagged commitments, with a way
+ * to resolve one without leaving home. `resolveLoop` (loops.js, loaded
+ * before this file) does the actual POST /loops/resolve; this panel just
+ * wires the buttons to it.
+ */
+function renderLoopsPanel(board, brief) {
+  const loops = (brief && brief.loops) || { open: 0, items: [] }
+  if (!loops.open || !loops.items.length) return
+
+  const rows = loops.items
+    .map(
+      (item) => `<div class="task" id="loop-tile-${escAttr(item.id)}">
+        <div class="task-t">${escHtml(titleLine(item.content, 80))}</div>
+        <div class="task-actions">
+          <button class="btn btn-secondary btn-sm" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'done', this)">${escHtml(t('loops.done'))}</button>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="resolveLoop('${escAttr(item.id)}', 'not-task', this)">${escHtml(t('loops.notTask'))}</button>
+        </div>
+      </div>`,
+    )
+    .join('')
+
+  const panel = boardPanel('loops', { title: t('board.loopsTitle'), sub: t('board.loopsSub'), span: 3 })
+  panel.body.innerHTML =
+    `<div class="rows">${rows}</div>` +
+    `<button class="digest-more" type="button" onclick="openLoopsSheet()">${escHtml(t('loops.seeAll'))}</button>`
+  board.appendChild(panel)
+}
+
 /** Bars proportional to their own max, not to each other's panel's max. */
 function boardBars(rows, onClick) {
   const max = Math.max(...rows.map((r) => r.count), 1)
@@ -252,9 +281,14 @@ function renderTopicsPanel(board, brief) {
 }
 
 /** "Worth re-reading": the one high-importance memory nobody has recalled lately. */
+// An id dismissed this session must not reappear even from a cached brief
+// object a tab switch re-renders without a fresh fetch (loadBrief only
+// refetches on an interval; see refresh.js's REFRESH_MIN_INTERVAL_MS).
+let resurfaceDismissedId = null
+
 function renderResurfacePanel(board, brief) {
   const m = brief && brief.resurface
-  if (!m) return
+  if (!m || m.id === resurfaceDismissedId) return
   const panel = boardPanel('reread', { title: t('brief.worthRereading'), sub: t('board.rereadSub'), span: 4 })
   const meta = [m.source ? sourceDisplayName(m.source) : null, m.created_at ? formatDateUI(m.created_at, { year: 'numeric', month: 'short', day: 'numeric' }) : null]
     .filter(Boolean)
@@ -271,6 +305,7 @@ function renderResurfacePanel(board, brief) {
     <div class="memory-card-foot">
       ${tags}
       <button class="digest-btn" type="button" onclick="openAppend('${escAttr(m.id)}', '${escAttr((m.content || '').slice(0, 80))}')"><i class="ti ti-writing"></i> ${escHtml(t('memories.append'))}</button>
+      <button class="digest-btn" type="button" data-resurface-dismiss onclick="dismissResurface('${escAttr(m.id)}', this)">${escHtml(t('brief.dismiss'))}</button>
     </div>`
   const text = panel.body.querySelector('.reread-text')
   if (text) {
@@ -284,6 +319,33 @@ function renderResurfacePanel(board, brief) {
     })
   }
   board.appendChild(panel)
+}
+
+/**
+ * "Not this one" — retires today's pick for good (POST /resurface/dismiss)
+ * and hides the card immediately, without waiting for the next real /brief
+ * fetch. Mutates the cached `briefData` (brief.js) in place and re-renders
+ * from it rather than refetching, the same "optimistic" shape resolveLoop
+ * (loops.js) uses for the open-loops panel.
+ */
+async function dismissResurface(id, btn) {
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`${WORKER_URL}/resurface/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id }),
+    })
+    const data = await res.json()
+    if (!data.ok) throw new Error(data.error || 'failed')
+    resurfaceDismissedId = id
+    if (typeof briefData !== 'undefined' && briefData && briefData.resurface && briefData.resurface.id === id) {
+      briefData.resurface = null
+    }
+    if (typeof renderBoard === 'function' && typeof briefData !== 'undefined' && briefData) renderBoard(briefData)
+  } catch {
+    if (btn) btn.disabled = false
+  }
 }
 
 // Task 1.4 had a temporary "Where from" proportion panel here. The growth
@@ -962,6 +1024,7 @@ function openCapsuleComposer(slot) {
 BOARD_PANELS.push(
   renderGrowthPanel,
   renderDecisionPanel,
+  renderLoopsPanel,
   renderGraphPanel,
   renderRecalledPanel,
   renderNightPanel,

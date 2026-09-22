@@ -831,6 +831,18 @@
         <button class="digest-more" id="stale-more" hidden onclick="loadMoreStale(this)"></button>
       </div>
     </div>
+
+    <!-- The full open-loops queue behind the home panel's three-item preview. -->
+    <div id="loops-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="loops.title">Open loops</h2>
+          <button class="btn-close-icon" onclick="closeLoopsSheet()"><i class="ti ti-x"></i></button>
+        </div>
+        <div id="loops-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
+        <button class="digest-more" id="loops-more" hidden onclick="loadMoreLoops(this)"></button>
+      </div>
+    </div>
     <!-- The growth chart's one shared hover/keyboard tooltip (js/chart.js). -->
     <div class="tip" id="board-tip" role="tooltip"></div>
 
@@ -851,6 +863,7 @@
     <script src="js/settings.js"></script>
     <script src="js/patterns.js"></script>
     <script src="js/stale.js"></script>
+    <script src="js/loops.js"></script>
     <script src="js/integrations.js"></script>
     <script src="js/team.js"></script>
     <script src="js/activity.js"></script>

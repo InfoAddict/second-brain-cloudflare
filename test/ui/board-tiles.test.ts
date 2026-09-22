@@ -852,10 +852,12 @@ describe("panel registration order", () => {
       patterns: [{ id: "p1", content: "x".repeat(40) }],
       resurface: { id: "r1", content: "y".repeat(60), source: "claude-code", created_at: Date.now(), tags: [] },
       attention: { unindexed: 1, stale: 1, patterns: 1 },
+      loops: { open: 2, items: [{ id: "l1", content: "Follow up with the accountant", source: "claude-desktop", tags: ["task"], created_at: Date.now() }] },
     });
     expect(ids.board.children.map((c: any) => c.dataset.panel)).toEqual([
       "growth",
       "decide",
+      "loops",
       "graph",
       "recalled",
       "night",
@@ -867,6 +869,98 @@ describe("panel registration order", () => {
       "topics",
     ]);
     expect(ids["board-tiles"].children.map((c: any) => c.dataset.tile)).toEqual(["memories", "connections", "recalls"]);
+  });
+});
+
+describe("open loops panel", () => {
+  function ctxFor() {
+    const { document } = fakeDoc();
+    const ctx: any = { document, window: {}, console, Intl, WORKER_URL: "http://x", AUTH_TOKEN: "t" };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    return ctx;
+  }
+
+  it("shows up to three open commitments with resolve actions", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(board, {
+      loops: {
+        open: 5,
+        items: [
+          { id: "l1", content: "Follow up with the accountant", source: "claude-desktop", tags: ["task"], created_at: Date.now() },
+          { id: "l2", content: "Send the contract back", source: "claude-desktop", tags: ["task"], created_at: Date.now() },
+        ],
+      },
+    });
+
+    expect(board.children).toHaveLength(1);
+    const html = board.children[0].body.innerHTML;
+    expect(html).toContain("Follow up with the accountant");
+    expect(html).toContain("Send the contract back");
+    expect(html).toContain("resolveLoop('l1', 'done'");
+    expect(html).toContain("resolveLoop('l1', 'not-task'");
+  });
+
+  it("offers a way to the full queue", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(board, { loops: { open: 1, items: [{ id: "l1", content: "A task", source: "cli", tags: ["task"], created_at: Date.now() }] } });
+
+    expect(board.children[0].body.innerHTML).toContain("openLoopsSheet()");
+  });
+
+  it("renders nothing when there are no open loops", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    ctx.renderLoopsPanel(board, { loops: { open: 0, items: [] } });
+    ctx.renderLoopsPanel(board, {});
+
+    expect(board.children).toHaveLength(0);
+  });
+});
+
+describe("resurface card", () => {
+  function ctxFor() {
+    const { document } = fakeDoc();
+    const ctx: any = { document, window: {}, console, Intl, WORKER_URL: "http://x", AUTH_TOKEN: "t" };
+    vm.createContext(ctx);
+    vm.runInContext(src, ctx);
+    return ctx;
+  }
+
+  const memory = { id: "r1", content: "The pricing floor is $6k", source: "claude-desktop", tags: [], created_at: Date.now() };
+
+  it("gives an honest reason for the pick, not the old six-months claim", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    ctx.renderResurfacePanel(board, { resurface: memory });
+
+    expect(board.children[0].subEl.textContent).not.toContain("six months");
+    expect(board.children[0].subEl.textContent).toContain("working on now");
+  });
+
+  it("offers a way to dismiss it", () => {
+    const ctx = ctxFor();
+    const board = ctx.document.createElement("div");
+    ctx.renderResurfacePanel(board, { resurface: memory });
+
+    expect(board.children[0].body.innerHTML).toContain("dismissResurface('r1'");
+  });
+
+  it("hides the card for the session once dismissed, even from a cached brief", async () => {
+    const ctx = ctxFor();
+    ctx.fetch = async () => ({ ok: true, json: async () => ({ ok: true }) });
+    const board1 = ctx.document.createElement("div");
+    ctx.renderResurfacePanel(board1, { resurface: memory });
+    expect(board1.children).toHaveLength(1);
+
+    const btn = { disabled: false };
+    await ctx.dismissResurface("r1", btn);
+
+    const board2 = ctx.document.createElement("div");
+    ctx.renderResurfacePanel(board2, { resurface: memory });
+    expect(board2.children).toHaveLength(0);
   });
 });
 

@@ -1730,6 +1730,7 @@
       #integrations-sheet,
       #patterns-sheet,
       #stale-sheet,
+      #loops-sheet,
       #view-sheet {
         display: none;
         position: fixed;
@@ -1767,6 +1768,7 @@
       #integrations-sheet.open,
       #patterns-sheet.open,
       #stale-sheet.open,
+      #loops-sheet.open,
       #view-sheet.open {
         display: flex;
         opacity: 1;
@@ -4041,6 +4043,7 @@
         #integrations-sheet,
         #patterns-sheet,
         #stale-sheet,
+        #loops-sheet,
         #view-sheet {
           align-items: center;
           justify-content: center;
