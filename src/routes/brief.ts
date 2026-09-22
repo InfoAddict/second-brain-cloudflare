@@ -6,6 +6,7 @@ import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL } from "../memory/stale";
+import { OPEN_LOOP_SQL } from "../memory/loops";
 import { parseTags } from "../insight/candidates";
 
 /**
@@ -16,15 +17,18 @@ import { parseTags } from "../insight/candidates";
  * compressing, linking and judging. Everything below is already-produced work
  * being read back; nothing here computes, embeds, or calls a model.
  *
- * BUDGET. Six D1 queries, no AI, no Vectorize, and one HTTP round trip
- * because the alternative — the client asking six endpoints — spends six
+ * BUDGET. Seven D1 queries, no AI, no Vectorize, and one HTTP round trip
+ * because the alternative — the client asking seven endpoints — spends seven
  * times the D1 calls, on every app open, against this codebase's self-imposed
  * ~50-call D1 budget per invocation (the platform's real ceiling is 1,000).
- * Six round trips is also six times the request overhead against the free
+ * Seven round trips is also seven times the request overhead against the free
  * plan's 10 ms CPU limit. Each
  * query is either indexed (created_at DESC) or bounded by a small LIMIT. The
- * count is pinned by test/integration/brief-budget.test.ts, and that pin is
- * the point: this endpoint is the one thing every user runs every time.
+ * seventh is the open-loops preview (Task A): the count itself is a free
+ * SUM/CASE folded into the existing attention aggregate below, but its three
+ * preview rows need their own SELECT the same way the pattern queue's do.
+ * The count is pinned by test/integration/brief-budget.test.ts, and that pin
+ * is the point: this endpoint is the one thing every user runs every time.
  */
 
 /** Yesterday and today, so an early-morning open still has something to show. */
@@ -72,7 +76,7 @@ export async function handleBriefRoutes(
   const since = now - RECENT_WINDOW_MS;
   const resurfaceBefore = now - RESURFACE_MIN_AGE_MS;
 
-  const [recentRows, patternRows, resurfaceRows, activityRows, topicRows, attentionRow] = await Promise.all([
+  const [recentRows, patternRows, resurfaceRows, activityRows, topicRows, attentionRow, loopItemRows] = await Promise.all([
     // What arrived, and from where. Grouped rather than listed: the point is
     // "your brain grew, from these places", not another feed of rows.
     env.DB.prepare(
@@ -157,13 +161,27 @@ export async function handleBriefRoutes(
     // chip opens. They are two readings of one fact: a chip that promises a
     // number the queue then fails to produce is the defect this replaced, and
     // one predicate is what stops it coming back.
+    // open_loops rides this same aggregate — one more CASE/SUM on a query
+    // already scanning every row, rather than a query of its own — the same
+    // reasoning that put unindexed and stale here together.
     env.DB.prepare(
       `SELECT
          SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
          SUM(CASE WHEN ${STALE_REVIEW_SQL} THEN 1 ELSE 0 END) AS stale,
+         SUM(CASE WHEN ${OPEN_LOOP_SQL} THEN 1 ELSE 0 END) AS open_loops,
          COUNT(*) AS total
        FROM entries WHERE ${scope.clause}`,
     ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
+
+    // The loop queue's own preview: up to three most recent open commitments,
+    // same row shape GET /loops returns, so the panel and the sheet behind it
+    // read identically. One added query, the cost Task A's brief accepts for
+    // showing anything beyond a bare count.
+    env.DB.prepare(
+      `SELECT id, content, source, tags, created_at FROM entries
+       WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+       ORDER BY created_at DESC LIMIT 3`,
+    ).bind(...scope.bindings).all(),
   ]);
 
   const bySource = (recentRows.results as { source: string | null; n: number }[]).map(r => ({
@@ -194,6 +212,16 @@ export async function handleBriefRoutes(
 
   const topics = (topicRows.results as { tag: string; n: number }[]).map(r => ({ tag: r.tag, count: r.n }));
 
+  const loopItems = (loopItemRows.results as {
+    id: string; content: string; source: string; tags: string; created_at: number;
+  }[]).map(r => ({
+    id: r.id,
+    content: r.content,
+    source: r.source,
+    tags: parseTags(r.tags),
+    created_at: r.created_at,
+  }));
+
   return json({
     ok: true,
     window_hours: RECENT_WINDOW_MS / 3600000,
@@ -219,6 +247,10 @@ export async function handleBriefRoutes(
       unindexed: (attentionRow?.unindexed as number) ?? 0,
       stale: (attentionRow?.stale as number) ?? 0,
       patterns: patterns.length,
+    },
+    loops: {
+      open: (attentionRow?.open_loops as number) ?? 0,
+      items: loopItems,
     },
   });
 }

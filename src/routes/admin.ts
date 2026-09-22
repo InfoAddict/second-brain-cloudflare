@@ -15,6 +15,7 @@ import { storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
+import { OPEN_LOOP_SQL, withTaskDone, withoutTask } from "../memory/loops";
 import { getStatus, withStatus } from "../memory/status";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { withKind } from "../memory/kind";
@@ -25,7 +26,7 @@ import { reasonOverPair, restatesRecent } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
 import { adminAuditEvent } from "../lib/admin-audit";
-import { auditEvents, type AuditEventInput } from "../lib/audit";
+import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 
@@ -1162,6 +1163,97 @@ export async function handleAdminRoutes(
     auditEvents(env, ctx, [{ entryId: id, actorId: auth.userId, event: "updated", payload: { stale_confirmed: true } }]);
 
     return json({ ok: true, id });
+  }
+
+  // GET /loops, the open-commitments review queue. Mirrors GET /stale: the
+  // predicate is shared with the count GET /brief puts on its chip
+  // (OPEN_LOOP_SQL) so the two cannot disagree, and this queue exists for the
+  // same reason that one does — a member re-reading a scrollback for "what did
+  // I say I'd do" cannot ask a vector index that question reliably.
+  if (url.pathname === "/loops" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limit = intParam(url, "limit", { fallback: 50, min: 1, max: 100 });
+    if (limit instanceof Response) return limit;
+    const offset = intParam(url, "offset", { fallback: 0, min: 0 });
+    if (offset instanceof Response) return offset;
+
+    const scope = scopeWhere(auth);
+    const [rows, countRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, tags, source, created_at FROM entries
+         WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+         ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      ).bind(...scope.bindings, limit, offset).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}`,
+      ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      entries: (rows.results as Record<string, any>[]).map(r => ({
+        id: r.id as string,
+        content: r.content as string,
+        source: r.source as string,
+        tags: parseTags(r.tags as string),
+        created_at: r.created_at as number,
+      })),
+      total: (countRow?.n as number) ?? 0,
+      limit,
+      offset,
+    });
+  }
+
+  // POST /loops/resolve, close out one open commitment. "done" marks it
+  // finished without disturbing the "task" tag, which is history; "not-task"
+  // means the tag never belonged, so it comes off outright.
+  //
+  // CAS on tags AND content, three attempts — the same guard shape as the
+  // staleness pass's per-row write (src/staleness/pass.ts): tags alone would
+  // not catch a concurrent content-only rewrite landing between the read here
+  // and the write below, and re-reading the row for each attempt means a
+  // retry classifies from what is actually there rather than a snapshot that
+  // just lost a race.
+  if (url.pathname === "/loops/resolve" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; action?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    if (body.action !== "done" && body.action !== "not-task") {
+      return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
+    }
+
+    const id = body.id.trim();
+    const action = body.action;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanEditContent(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const tags: string[] = parseTags(row.tags as string);
+      const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
+
+      const result = await env.DB.prepare(
+        `UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`,
+      ).bind(JSON.stringify(nextTags), id, row.tags, row.content).run();
+
+      // meta.changes is D1's field; the SQLite test double reports rows_written
+      // instead (see test/helpers/sqlite-d1.ts), same fallback as team-admin.ts.
+      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { loop_action: action } });
+        return json({ ok: true, id, action });
+      }
+      // Lost the race — someone else wrote this row between the read and the
+      // write above. Loop back and re-read rather than retrying the stale tags.
+    }
+
+    return json({ ok: false, error: "Could not resolve — try again" }, 409);
   }
 
   // POST /patterns/resolve, confirm or dismiss a proposed insight.

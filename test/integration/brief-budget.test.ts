@@ -82,20 +82,23 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
     expect(res.status).toBe(200);
 
-    // Six reads, run concurrently, plus v3's fixed identity cost on this first
-    // request against a fresh database: one token→identity join, and the
-    // one-time tenant bootstrap (two lookups + one provisioning batch — memoised
-    // per database, so later app opens pay only the join). 6 + 1 + 3 = 10. If
-    // this goes up further, the endpoint got more expensive for every user on
-    // every app open — that is the decision this assertion asks you to make
+    // Seven reads, run concurrently, plus v3's fixed identity cost on this
+    // first request against a fresh database: one token→identity join, and
+    // the one-time tenant bootstrap (two lookups + one provisioning batch —
+    // memoised per database, so later app opens pay only the join).
+    // 7 + 1 + 3 = 11. The seventh is the open-loops preview added in Task A
+    // (brief v2): the count is free (folded into the attention aggregate),
+    // but its three preview rows cost their own SELECT. If this goes up
+    // further, the endpoint got more expensive for every user on every app
+    // open — that is the decision this assertion asks you to make
     // deliberately.
     //
     // This is the COLD path: `users.last_used_at` is NULL on a brain nobody has
-    // authenticated against, so this request does owe the stamp. It is still 10,
+    // authenticated against, so this request does owe the stamp. It is still 11,
     // because the stamp is batched with the identity read rather than issued on
     // its own — a D1 batch is one subrequest whatever it carries. The write
     // really happens; the assertion below proves it landed.
-    expect(sq.issued).toHaveLength(10);
+    expect(sq.issued).toHaveLength(11);
     const stamped = await sq.db
       .prepare(`SELECT last_used_at FROM users WHERE last_used_at IS NOT NULL`)
       .first() as { last_used_at: number } | null;
@@ -124,10 +127,11 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), env, ctx);
 
     expect(res.status).toBe(200);
-    // Six reads and the identity batch. The bootstrap the first open paid for is
-    // gone, and the stamp inside that batch is now a no-op the throttle skips —
-    // the statement is still carried, but it matches no row and writes nothing.
-    expect(sq.issued).toHaveLength(7);
+    // Seven reads and the identity batch. The bootstrap the first open paid for
+    // is gone, and the stamp inside that batch is now a no-op the throttle
+    // skips — the statement is still carried, but it matches no row and writes
+    // nothing.
+    expect(sq.issued).toHaveLength(8);
     expect(cold).toBeGreaterThan(sq.issued.length);
     expect(await stampedAt()).toBe(first);
   });
@@ -265,5 +269,22 @@ describe("GET /brief", () => {
     expect(data.sources).toEqual([]);
     expect(data.patterns).toEqual([]);
     expect(data.resurface).toBeNull();
+    expect(data.loops).toEqual({ open: 0, items: [] });
+  });
+
+  it("reports open commitments, newest first, capped at three", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) {
+      sq.seed({ id: `t${i}`, content: `Task ${i}`, createdAt: now - i * HOUR, tags: ["task"] });
+    }
+    sq.seed({ id: "done", content: "Already finished", createdAt: now, tags: ["task", "task:done"] });
+    sq.seed({ id: "build", content: "Ran a migration", createdAt: now, tags: ["task", "build-log"] });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    expect(data.loops.open).toBe(5);
+    expect(data.loops.items).toHaveLength(3);
+    expect(data.loops.items.map((i: any) => i.id)).toEqual(["t0", "t1", "t2"]);
+    expect(data.loops.items[0]).toMatchObject({ content: "Task 0", source: expect.any(String) });
   });
 });

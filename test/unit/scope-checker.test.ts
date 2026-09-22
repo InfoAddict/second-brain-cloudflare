@@ -1160,7 +1160,9 @@ describe("the checker over the real source tree", () => {
       { queries, exempt, checked, outerJoin },
       "check:scope counts moved. If that was deliberate, say so out loud and " +
         "update this expectation in the same commit.",
-    ).toEqual({ queries: 106, exempt: 53, checked: 6, outerJoin: 1 });
+    // Deliberate: +3 scoped queries for brief v2 Task A (open-loops) — GET
+    // /loops's row SELECT and its COUNT, plus GET /brief's loop-items preview.
+    ).toEqual({ queries: 109, exempt: 53, checked: 6, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
