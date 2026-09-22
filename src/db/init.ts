@@ -132,6 +132,12 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // code ignores this table and rollback is a no-op. Never backfilled.
   projects: `CREATE TABLE IF NOT EXISTS projects (id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', aliases TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER, PRIMARY KEY (workspace_id, id))`,
   idx_projects_workspace: `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id, status)`,
+  // Web Push subscriptions. Additive, like projects above: old code never
+  // reads this table and rollback is a no-op. One row per subscribed
+  // browser/device; endpoint_hash is unique so re-subscribing the same
+  // device replaces rather than duplicates it.
+  push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
+  idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
 };
 
 /**
@@ -163,6 +169,20 @@ const ENTRIES_COLUMNS: Record<string, string> = {
   // an explicit, memoised bootstrap rather than on the migration path.
   workspace_id: `ALTER TABLE entries ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`,
   actor_id: `ALTER TABLE entries ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''`,
+  // The time-anchor primitive. Same nullable, never-backfilled shape as updated_at
+  // above: most rows have no "when" at all, and NULL already reads that way to
+  // every consumer. when_at is epoch ms; when_kind is 'due' | 'event' | 'wake';
+  // when_source is 'explicit' | 'regex' | 'model', naming which of the three
+  // producers (MCP/API caller, src/when/heuristic.ts, src/when/pass.ts) set it.
+  when_at: `ALTER TABLE entries ADD COLUMN when_at INTEGER`,
+  when_kind: `ALTER TABLE entries ADD COLUMN when_kind TEXT`,
+  when_source: `ALTER TABLE entries ADD COLUMN when_source TEXT`,
+  // The nightly model pass already generates a short label ("File the annual
+  // report") to judge whether an entry is a real commitment; this is that
+  // same text, kept instead of discarded, so GET /due can show it instead of
+  // the first 80 characters of raw content. NULL on the explicit and regex
+  // paths, which never generate one.
+  when_label: `ALTER TABLE entries ADD COLUMN when_label TEXT`,
 };
 
 /**

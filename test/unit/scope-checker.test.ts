@@ -1160,7 +1160,18 @@ describe("the checker over the real source tree", () => {
       { queries, exempt, checked, outerJoin },
       "check:scope counts moved. If that was deliberate, say so out loud and " +
         "update this expectation in the same commit.",
-    ).toEqual({ queries: 106, exempt: 53, checked: 6, outerJoin: 1 });
+    // Deliberate: +3 scoped queries for brief v2 Task A (open-loops) — GET
+    // /loops's row SELECT and its COUNT, plus GET /brief's loop-items preview
+    // — and +2 more for Task B (resurface v2)'s new scoped statements in
+    // src/routes/brief.ts: the same-day-stability fetch-by-id, and the
+    // topic-preferred-pool COUNT probe in pickResurface. Deliberate: +1 query
+    // and +1 scope-exempt for src/when/pass.ts's candidate prefilter (a
+    // per-workspace cron slice, same exemption shape as the other nightly
+    // passes). Deliberate: +4 scoped queries for GET /due (overdue rows,
+    // overdue count, upcoming rows, upcoming count). Deliberate: +1 scoped
+    // query for src/push/send.ts's pushDueItems (the due-item SELECT, scoped
+    // to the one workspace it was called for).
+    ).toEqual({ queries: 117, exempt: 54, checked: 6, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

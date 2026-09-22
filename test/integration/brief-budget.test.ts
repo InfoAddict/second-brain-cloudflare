@@ -82,20 +82,30 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), envOf(sq), ctx);
     expect(res.status).toBe(200);
 
-    // Six reads, run concurrently, plus v3's fixed identity cost on this first
-    // request against a fresh database: one token→identity join, and the
-    // one-time tenant bootstrap (two lookups + one provisioning batch — memoised
-    // per database, so later app opens pay only the join). 6 + 1 + 3 = 10. If
-    // this goes up further, the endpoint got more expensive for every user on
-    // every app open — that is the decision this assertion asks you to make
-    // deliberately.
+    // Seven reads — six run concurrently (sources, patterns, activity,
+    // topics, the attention+loops aggregate, the loops preview), the
+    // resurface pick runs after (it needs the topics query's own result) —
+    // plus v3's fixed identity cost on this first request against a fresh
+    // database: one token→identity join, and the one-time tenant bootstrap
+    // (two lookups + one provisioning batch — memoised per database, so
+    // later app opens pay only the join). 7 + 1 + 3 = 11.
+    //
+    // The seventh concurrent read is the open-loops preview added in Task A
+    // (brief v2): the count is free (folded into the attention aggregate),
+    // but its three preview rows cost their own SELECT. The resurface pick
+    // itself is exactly one query here because this fixture has no topic
+    // tags, so Task B's topic-preference probe never runs (see
+    // src/routes/brief.ts's pickResurface) — a brain with topics pays one
+    // query more on the days it picks fresh. If any of this goes up further,
+    // the endpoint got more expensive for every user on every app open —
+    // that is the decision this assertion asks you to make deliberately.
     //
     // This is the COLD path: `users.last_used_at` is NULL on a brain nobody has
-    // authenticated against, so this request does owe the stamp. It is still 10,
+    // authenticated against, so this request does owe the stamp. It is still 11,
     // because the stamp is batched with the identity read rather than issued on
     // its own — a D1 batch is one subrequest whatever it carries. The write
     // really happens; the assertion below proves it landed.
-    expect(sq.issued).toHaveLength(10);
+    expect(sq.issued).toHaveLength(11);
     const stamped = await sq.db
       .prepare(`SELECT last_used_at FROM users WHERE last_used_at IS NOT NULL`)
       .first() as { last_used_at: number } | null;
@@ -124,10 +134,11 @@ describe("GET /brief", () => {
     const res = await worker.fetch(req("GET", "/brief"), env, ctx);
 
     expect(res.status).toBe(200);
-    // Six reads and the identity batch. The bootstrap the first open paid for is
-    // gone, and the stamp inside that batch is now a no-op the throttle skips —
-    // the statement is still carried, but it matches no row and writes nothing.
-    expect(sq.issued).toHaveLength(7);
+    // Seven reads and the identity batch. The bootstrap the first open paid for
+    // is gone, and the stamp inside that batch is now a no-op the throttle
+    // skips — the statement is still carried, but it matches no row and writes
+    // nothing.
+    expect(sq.issued).toHaveLength(8);
     expect(cold).toBeGreaterThan(sq.issued.length);
     expect(await stampedAt()).toBe(first);
   });
@@ -222,6 +233,50 @@ describe("GET /brief", () => {
     expect(data.total).toBe(3);
   });
 
+  it("counts open loops due within 48 hours, at zero extra queries", async () => {
+    // Zero extra queries is proven by the sibling "costs a fixed handful of
+    // D1 queries" tests above staying pinned at their same 10/7 after this
+    // field was added — `due` is a CASE/SUM folded into the query those tests
+    // already measure, not a query of its own. This test is only about the
+    // count being right.
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "due-soon", content: "File the report", createdAt: now - HOUR, tags: ["task"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'due-soon'`).bind(now + HOUR).run();
+    sq.seed({ id: "due-later", content: "Renew next quarter", createdAt: now - HOUR, tags: ["task"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'due-later'`).bind(now + 30 * DAY).run();
+    sq.seed({ id: "no-when", content: "Just a task", createdAt: now - HOUR, tags: ["task"] });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+
+    expect(data.attention.due).toBe(1);
+  });
+
+  // Finding 3: attention.due used to require OPEN_LOOP_SQL (a "task" tag),
+  // but GET /due never did — an untagged remember(when: ...) moved the feed
+  // but never this chip. Both now share DUE_SQL (src/when/input.ts).
+  it("counts an UNTAGGED entry with when_at in the window (Finding 3)", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "untagged-due", content: "Renew the passport", createdAt: now - HOUR, tags: [] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'untagged-due'`).bind(now + HOUR).run();
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+
+    expect(data.attention.due).toBe(1);
+  });
+
+  it("excludes a deprecated entry from attention.due (Finding 3)", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "deprecated-due", content: "Old commitment", createdAt: now - HOUR, tags: ["status:deprecated"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'deprecated-due'`).bind(now + HOUR).run();
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+
+    expect(data.attention.due).toBe(0);
+  });
+
   it("keeps resurfacing something when there are fewer candidates than days", async () => {
     // OFFSET past the end returns no rows, so wrapping against a fixed
     // constant instead of the candidate count would show nothing on most days
@@ -265,5 +320,22 @@ describe("GET /brief", () => {
     expect(data.sources).toEqual([]);
     expect(data.patterns).toEqual([]);
     expect(data.resurface).toBeNull();
+    expect(data.loops).toEqual({ open: 0, items: [] });
+  });
+
+  it("reports open commitments, newest first, capped at three", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) {
+      sq.seed({ id: `t${i}`, content: `Task ${i}`, createdAt: now - i * HOUR, tags: ["task"] });
+    }
+    sq.seed({ id: "done", content: "Already finished", createdAt: now, tags: ["task", "task:done"] });
+    sq.seed({ id: "build", content: "Ran a migration", createdAt: now, tags: ["task", "build-log"] });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+    expect(data.loops.open).toBe(5);
+    expect(data.loops.items).toHaveLength(3);
+    expect(data.loops.items.map((i: any) => i.id)).toEqual(["t0", "t1", "t2"]);
+    expect(data.loops.items[0]).toMatchObject({ content: "Task 0", source: expect.any(String) });
   });
 });

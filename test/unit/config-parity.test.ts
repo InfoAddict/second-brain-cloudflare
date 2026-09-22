@@ -64,6 +64,12 @@ describe("DEFAULTS parity with shipped constants", () => {
   it("RECALL_WIDEN_THRESHOLD starts equal to DUPLICATE_FLAG_THRESHOLD", () => {
     expect(DEFAULTS.RECALL_WIDEN_THRESHOLD).toBe(constants.DUPLICATE_FLAG_THRESHOLD);
   });
+
+  // Brief v2's when-extraction pass defaults to the same model the weekly
+  // insight pass reasons with, independently overridable from then on.
+  it("WHEN_LLM_MODEL starts equal to INSIGHT_LLM_MODEL", () => {
+    expect(DEFAULTS.WHEN_LLM_MODEL).toBe(DEFAULTS.INSIGHT_LLM_MODEL);
+  });
 });
 
 describe("config rule coverage", () => {
@@ -82,6 +88,9 @@ describe("config rule coverage", () => {
     for (const [key, rule] of Object.entries(RULES)) {
       const v = (DEFAULTS as Record<string, unknown>)[key];
       if (rule.kind === "string") {
+        // PUSH_CONTACT is the one string setting whose default IS empty —
+        // see the config.ts comment on its DEFAULTS entry.
+        if (key === "PUSH_CONTACT") continue;
         if (typeof v !== "string" || !v.trim()) violations.push(`${key}: not a non-empty string`);
         continue;
       }

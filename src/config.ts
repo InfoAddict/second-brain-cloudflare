@@ -69,6 +69,13 @@ export const DEFAULTS = {
   // else above keeps using LLM_MODEL. See the cost comment on
   // constants.INSIGHT_LLM_MODEL for why this is a separate setting.
   INSIGHT_LLM_MODEL: "@cf/openai/gpt-oss-120b",
+  // Used only by src/when/pass.ts's nightly commitment-extraction call.
+  // Defaults to the same model as INSIGHT_LLM_MODEL — a smaller model's
+  // judgment on "is this a commitment, and when is it due" was not measured
+  // to be reliably worse, but nothing here has re-litigated it either, so
+  // this stays a separate, independently overridable setting rather than
+  // aliasing INSIGHT_LLM_MODEL outright.
+  WHEN_LLM_MODEL: "@cf/openai/gpt-oss-120b",
 
   // ── Team edition (src/lib/scope.ts) ──
   // Where a capture lands when neither the request nor the member's own
@@ -104,6 +111,28 @@ export const DEFAULTS = {
   // access to it stayed exactly where they were. "auto" is today's behaviour
   // spelled out, so upgrading changes nothing for anybody.
   TEAM_MODE: "auto",
+
+  // ── Time anchoring (src/when/timezone.ts) ──
+  // IANA zone name a date-only `when` (a bare "2026-06-15", the regex pass's
+  // extracted dates, the model pass's due_at) anchors midnight in — and an
+  // offsetless datetime anchors its wall-clock time in, superseding the
+  // earlier "always UTC" rule. "UTC" by construction: a brain that never sets
+  // this keeps today's behaviour exactly. Validated against Intl.DateTimeFormat
+  // when set (src/config.ts's coerce/validateStrict), not just any non-empty
+  // string — an unrecognized zone name would silently anchor every future due
+  // date at the wrong instant instead of failing the write that set it.
+  TIMEZONE: "UTC",
+
+  // ── Web Push (src/push/vapid.ts) ──
+  // VAPID JWT contact: a mailto:<address> or an https: URL, RFC 8292's own
+  // two accepted shapes. Empty by default — a brain that never sets this
+  // falls back to the origin recorded the first time POST /push/subscribe
+  // saw a real Request, which is enough for every push service tested
+  // (FCM, Apple) to accept the JWT. Set this to give subscribers a real
+  // contact, not to work around a rejection: an EMPTY default, not a fixed
+  // placeholder string, is what this key protects — see the comment on the
+  // .local placeholder this replaced in src/push/vapid.ts.
+  PUSH_CONTACT: "",
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -164,10 +193,34 @@ export const RULES: Record<ConfigKey, Rule> = {
   LLM_MODEL: { kind: "string" },
   EMBEDDING_MODEL: { kind: "string" },
   INSIGHT_LLM_MODEL: { kind: "string" },
+  WHEN_LLM_MODEL: { kind: "string" },
   TEAM_DEFAULT_WORKSPACE: { kind: "string" },
   TEAM_INSIGHTS: { kind: "string" },
   TEAM_MODE: { kind: "string" },
+  TIMEZONE: { kind: "string" },
+  PUSH_CONTACT: { kind: "string" },
 };
+
+/**
+ * The only cheap probe available — there is no static IANA zone list to check
+ * against, and Intl.DateTimeFormat throws RangeError for a name it does not
+ * recognize. Special-cased on the key rather than a new Rule kind: every
+ * other consumer of RULES/coerce/validateStrict treats "string" generically,
+ * and TIMEZONE is the one string setting where "non-empty" is not "valid".
+ */
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** RFC 8292 section 2's two accepted VAPID `sub` shapes. */
+function isValidPushContact(value: string): boolean {
+  return /^mailto:[^@\s]+@[^@\s]+$/.test(value) || /^https:\/\/\S+$/.test(value);
+}
 
 /**
  * Groups that must stay internally ordered. A violation is not clamped
@@ -198,8 +251,21 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
   const fallback = DEFAULTS[key] as Config[ConfigKey];
 
   if (rule.kind === "string") {
+    // PUSH_CONTACT is the one string setting where EMPTY is the valid,
+    // meaningful default (see src/push/vapid.ts) rather than "unsalvageable" —
+    // every other string key requires non-empty, checked below.
+    if (key === "PUSH_CONTACT") {
+      if (value === "") return { value: "" as Config[ConfigKey] };
+      if (typeof value !== "string" || !isValidPushContact(value)) {
+        return { value: fallback, note: `${key}: expected empty, a mailto:<address>, or an https:// URL, got ${JSON.stringify(value)}` };
+      }
+      return { value: value as Config[ConfigKey] };
+    }
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };
+    }
+    if (key === "TIMEZONE" && !isValidTimeZone(value)) {
+      return { value: fallback, note: `${key}: "${value}" is not a recognized IANA timezone` };
     }
     return { value: value as Config[ConfigKey] };
   }
@@ -299,9 +365,17 @@ function validateStrict(key: string, value: unknown): string | null {
   const rule = RULES[key as ConfigKey];
 
   if (rule.kind === "string") {
-    return typeof value === "string" && value.trim() !== ""
-      ? null
-      : `${key} must be a non-empty string`;
+    if (key === "PUSH_CONTACT") {
+      if (value === "") return null;
+      return typeof value === "string" && isValidPushContact(value)
+        ? null
+        : `${key} must be empty, a mailto:<address>, or an https:// URL`;
+    }
+    if (typeof value !== "string" || value.trim() === "") return `${key} must be a non-empty string`;
+    if (key === "TIMEZONE" && !isValidTimeZone(value)) {
+      return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;
+    }
+    return null;
   }
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return `${key} must be a finite number`;

@@ -12,6 +12,7 @@ import { appendToEntry, updateEntryContent } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
+import { parseExplicitWhen } from "../when/input";
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
@@ -51,7 +52,7 @@ export async function handleCaptureRoutes(
     if (auth instanceof Response) return auth;
     const identity = auth;
 
-    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown };
+    let body: { content?: string; tags?: string[]; source?: string; volatility?: unknown; workspace?: unknown; team?: unknown; project?: unknown; when?: unknown; when_kind?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (body.tags !== undefined && !validInputTags(body.tags)) return json({ ok: false, error: `tags must contain at most ${MAX_INPUT_TAGS} NUL-free strings of at most ${MAX_INPUT_TAG_CHARS} characters` }, 400);
     const badProjectTag = body.tags === undefined ? null : projectTagError(body.tags);
@@ -64,6 +65,16 @@ export async function handleCaptureRoutes(
 
     const captureVol = readVolatility(body.volatility);
     if (captureVol.error) return json({ ok: false, error: captureVol.error }, 400);
+
+    let when: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
+    if (body.when !== undefined && body.when !== null) {
+      if (typeof body.when !== "string") return json({ ok: false, error: "when must be a string" }, 400);
+      const parsed = parseExplicitWhen(body.when, body.when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
+      if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
+      when = parsed.value;
+    } else if (body.when_kind !== undefined) {
+      return json({ ok: false, error: "when_kind requires when" }, 400);
+    }
 
     // Empty means absent, like every other optional param. A bad slug is bad input, not an
     // unknown project, so it fails the capture before anything is written.
@@ -86,7 +97,7 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx);
+    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when);
 
     if (projectSlug && result.status !== "blocked") {
       await autoCreateProject(env, ctx, { workspaceId: writeCtx.workspaceId, actorId: identity.userId, slug: projectSlug });

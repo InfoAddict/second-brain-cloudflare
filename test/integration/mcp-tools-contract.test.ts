@@ -123,6 +123,84 @@ describe("MCP tools contract (InMemoryTransport)", () => {
       expect(text).toMatch(/project-alpha kickoff note/i);
     });
   });
+
+  it("remember stores an explicit when, defaulting when_kind to wake", async () => {
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "remember",
+        arguments: { content: "Renew the passport", when: "2026-06-15" },
+      });
+      expect(result.isError).toBeFalsy();
+    });
+    expect(db.entries).toHaveLength(1);
+    expect(db.entries[0].when_at).toBe(Date.parse("2026-06-15"));
+    expect(db.entries[0].when_kind).toBe("wake");
+    expect(db.entries[0].when_source).toBe("explicit");
+  });
+
+  it("remember rejects an unparseable when", async () => {
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "remember",
+        arguments: { content: "Test note", when: "not a date" },
+      });
+      expect(result.isError).toBeFalsy(); // tool errors are reported in text, not as a transport error
+      const text = (result.content as { type: string; text: string }[])[0]?.text ?? "";
+      expect(text).toMatch(/parseable/);
+    });
+    expect(db.entries).toHaveLength(0);
+  });
+
+  // Nit (a): silently dropping when_kind without when hides a caller's
+  // mistake; POST /capture already hard-errors on this, MCP should match.
+  it("remember hard-errors on when_kind without when", async () => {
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "remember",
+        arguments: { content: "Test note", when_kind: "due" },
+      });
+      const text = (result.content as { type: string; text: string }[])[0]?.text ?? "";
+      expect(text).toMatch(/when_kind requires when/);
+    });
+    expect(db.entries).toHaveLength(0);
+  });
+
+  it("append hard-errors on when_kind without when", async () => {
+    db.entries.push({
+      id: "e1", content: "Original note", tags: "[]", source: "api",
+      created_at: 1, updated_at: 1, vector_ids: "[]",
+    });
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "append",
+        arguments: { id: "e1", addition: "More detail", when_kind: "due" },
+      });
+      const text = (result.content as { type: string; text: string }[])[0]?.text ?? "";
+      expect(text).toMatch(/when_kind requires when/);
+    });
+    const row = db.entries.find((e: any) => e.id === "e1")!;
+    expect(row.content).toBe("Original note"); // unappended — the error fires before any write
+  });
+
+  it("append sets the time anchor on the existing row without touching content", async () => {
+    db.entries.push({
+      id: "e1", content: "Original note", tags: "[]", source: "api",
+      created_at: 1, updated_at: 1, vector_ids: "[]",
+    });
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "append",
+        arguments: { id: "e1", addition: "Follow-up detail", when: "2026-06-15", when_kind: "due" },
+      });
+      expect(result.isError).toBeFalsy();
+    });
+    const row = db.entries.find((e: any) => e.id === "e1")!;
+    expect(row.content).toContain("Original note");
+    expect(row.content).toContain("Follow-up detail");
+    expect(row.when_at).toBe(Date.parse("2026-06-15"));
+    expect(row.when_kind).toBe("due");
+    expect(row.when_source).toBe("explicit");
+  });
 });
 
 // The tool descriptions are the whole recall-quality mechanism on the client

@@ -120,6 +120,36 @@ describe("writeOverrides()", () => {
     expect(result.ok).toBe(true);
     expect(config.MMR_LAMBDA).toBe(0.42);
   });
+
+  describe("TIMEZONE", () => {
+    it("accepts a recognized IANA zone name", async () => {
+      const { env } = envWithKV();
+
+      const result = await writeOverrides(env, { TIMEZONE: "America/New_York" });
+      const config = await resolveConfig(env);
+
+      expect(result.ok).toBe(true);
+      expect(config.TIMEZONE).toBe("America/New_York");
+    });
+
+    it("rejects an unrecognized zone name rather than silently accepting any string", async () => {
+      const { env } = envWithKV();
+
+      const result = await writeOverrides(env, { TIMEZONE: "Mars/Olympus_Mons" });
+
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toMatch(/TIMEZONE/);
+    });
+
+    it("resolveConfig repairs an unrecognized zone stored in KV (e.g. by hand) to the default rather than failing", async () => {
+      const { env, kv } = envWithKV();
+      await kv.put(CONFIG_KEY, JSON.stringify({ TIMEZONE: "Not/AZone" }));
+
+      const config = await resolveConfig(env);
+
+      expect(config.TIMEZONE).toBe("UTC");
+    });
+  });
 });
 
 describe("resetOverride()", () => {

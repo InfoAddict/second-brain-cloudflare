@@ -2,6 +2,27 @@
 
 All notable changes to Second Brain are documented here. Version numbers match `SB_VERSION` in `src/env.ts` and the desktop app release.
 
+## [Unreleased]
+
+**Brief and open loops**
+
+- The resurface card is honest about what it picks now: it excludes memories that were only true in the moment (episodic) and commitments already marked done, prefers whatever shares one of today's top topics, and never repeats the same pick within 30 days. A Dismiss control retires a pick for good instead of only hiding it for the session.
+- A new open-loops queue tracks commitments (entries tagged "task") that have no completion signal yet, with Done and Not a task actions on each one. The home board shows up to three with a "See all" sheet for the rest, and the attention count already on the brief folds loops in alongside unindexed and stale memories.
+
+**Reminders and due dates**
+
+- Memories can now carry a time anchor. `remember`, `append`, and capture accept an optional `when` (a date or datetime); a free regex pass also catches unambiguous absolute dates written in the content itself ("Sep 30", "9/30/2026") at capture time, no explicit `when` required.
+- A nightly pass asks the model to judge open commitments and volatile memories that neither of the above anchored — phrases like "next Friday" or "end of month" — and only keeps a confident, near-term answer. A dry-run endpoint previews its verdicts without writing anything.
+- A new due feed lists what is overdue and what is coming up in the next two days, with Snooze (tomorrow or next week) and Not a commitment actions on each item.
+- Date-only reminders now anchor to midnight in the brain's own configured timezone rather than UTC, so "due Sep 30" lands on the calendar day it was meant to, DST included.
+
+**Push notifications**
+
+- Second Brain can now send a push notification when something becomes due. Turning it on takes two taps in the Notifications section of the menu — no server setup, no keys to paste — and a content-free option keeps the memory's text out of the notification itself, sending only that something is due.
+- Reminders are checked and sent hourly, encrypted end to end, and capped at three notifications per device per run so a backlog cannot flood a phone.
+- Tapping a reminder opens straight to that item in the due sheet, reliably, whether the app was closed or was already open in the background — a background-only tap used to just focus the app and do nothing.
+- A mobile browser that cannot receive push notifications at all until Second Brain is added to the Home Screen now says so and shows exactly how, instead of a dead-end "not supported" message. Chrome and Edge on Android offer a one-tap native install; everyone else gets the right two or three steps for their browser.
+
 ## [3.4.0] — Projects
 
 **Projects**

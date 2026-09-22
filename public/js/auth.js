@@ -171,15 +171,34 @@ function toggleInviteHelp() {
   if (tok) tok.focus()
 }
 
-function showApp() {
+async function showApp() {
   document.getElementById('auth-overlay').style.display = 'none'
   document.getElementById('app').style.display = 'flex'
   if (typeof renderHome === 'function') renderHome(null) // greeting before the network
-  refreshAll()
   checkVectorize()
   // Doubles as the admin check: the Team nav entries stay hidden unless this
   // probe answers 200. See js/team.js.
   if (typeof loadTeam === 'function') loadTeam()
+  // Awaited, unlike everything else here: a cold boot's very first
+  // authenticated request can race a session/Worker that is not fully ready
+  // yet, and nothing else on this screen surfaces that failure to the user —
+  // refreshAll's own panels just render a beat late. #due/<id> deep links hit
+  // this reliably, because loadDueQueue (unlike those) shows a permanent
+  // "could not load" note on a failed fetch. Waiting for refreshAll first
+  // gives whatever causes that race the time its own round trip already
+  // takes, before the one fetch whose failure is visible fires.
+  await refreshAll()
+  // A due deep link (public/sw.js's notificationclick, or a shared link).
+  // Needs WORKER_URL/AUTH_TOKEN, which is why these run here rather than in
+  // init() — both the auto-login and manual-login paths call showApp(), and
+  // neither has credentials before this point. Both are no-ops if nothing
+  // is actually pending on their own channel(s); see public/js/due.js.
+  if (typeof handleDueLink === 'function') handleDueLink()
+  if (typeof flushPendingDueLinkMessage === 'function') flushPendingDueLinkMessage()
+  if (typeof loadNotificationsState === 'function') loadNotificationsState()
+  // Gentle once-per-session nudge toward the install guide (mobile browsers
+  // only) — a no-op everywhere else, see install-guide.js's own guards.
+  if (typeof showInstallNudge === 'function') showInstallNudge()
 }
 
 function logout() {

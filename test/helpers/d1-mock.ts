@@ -38,20 +38,21 @@ const tagMatchesLike = (tags: string[], tag: string) =>
 const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../../db/schema.sql"), "utf8").matchAll(/CREATE TRIGGER IF NOT EXISTS (\w+)[\s\S]*?END;/g)].map(m => [m[1], m[0].slice(0, -1)]));
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
-    "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects"]
+    "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
+    "push_subscriptions"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
     "idx_workspaces_kind", "idx_users_token_hash", "idx_users_email", "idx_memberships_workspace",
     "idx_entry_events_entry", "idx_entry_events_created", "idx_admin_events_created",
-    "idx_projects_workspace", "idx_entries_project"]
+    "idx_projects_workspace", "idx_entries_project", "idx_push_subscriptions_workspace"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete"]
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
-    "staleness_checked_at"].map(name => ({ kind: "column", name })),
+    "staleness_checked_at", "when_at", "when_kind", "when_source", "when_label"].map(name => ({ kind: "column", name })),
   ...["workspace_id", "actor_id"].map(name => ({ kind: "column", name })),
   // edges.workspace_id arrives by ALTER on upgraded brains and lives in the base
   // CREATE on fresh ones — either way a migrated brain reports it.
@@ -255,6 +256,12 @@ export class D1Mock {
           const [staleness_checked_at, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) row.staleness_checked_at = staleness_checked_at;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id = ?")) {
+          const [when_at, when_kind, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { row.when_at = when_at; row.when_kind = when_kind; row.when_source = "explicit"; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET tags = ? WHERE id")) {

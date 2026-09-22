@@ -1730,6 +1730,9 @@
       #integrations-sheet,
       #patterns-sheet,
       #stale-sheet,
+      #loops-sheet,
+      #due-sheet,
+      #install-guide-sheet,
       #view-sheet {
         display: none;
         position: fixed;
@@ -1767,6 +1770,9 @@
       #integrations-sheet.open,
       #patterns-sheet.open,
       #stale-sheet.open,
+      #loops-sheet.open,
+      #due-sheet.open,
+      #install-guide-sheet.open,
       #view-sheet.open {
         display: flex;
         opacity: 1;
@@ -2484,6 +2490,38 @@
         flex-wrap: wrap;
       }
 
+      /* One due item, with up to four actions (Done, two snooze choices, Not
+         a commitment) — too many to sit beside the content in .task's
+         side-by-side layout without squeezing it into a sliver, which is
+         what reusing .task here did at ~1100px. Stacks instead, mirroring
+         .stale-row above: content full-width, then tags/date, then a
+         wrapping actions row. */
+      .due-row {
+        padding: 12px 2px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .due-row:last-child {
+        border-bottom: none;
+      }
+
+      .due-text {
+        margin: 0 0 6px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--text-primary);
+      }
+
+      .due-tags {
+        margin-bottom: 8px;
+      }
+
+      .due-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
       .pattern-row {
         display: flex;
         align-items: flex-start;
@@ -2569,6 +2607,92 @@
 
       .digest-more:hover {
         color: var(--accent-ink);
+      }
+
+      /* Install guide (T-0048): step cards inside #install-guide-sheet's
+         shared .menu-inner, the Android Chromium native-prompt button, and
+         the separate once-per-session nudge banner (not a sheet). */
+      .install-guide-steps {
+        list-style: none;
+        margin: 14px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .install-guide-steps li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        color: var(--text-primary);
+      }
+
+      .install-guide-cta {
+        display: block;
+        width: 100%;
+        margin-top: 14px;
+        padding: 12px 16px;
+        border: none;
+        border-radius: var(--r-chip-outline);
+        background: var(--accent);
+        color: #fff;
+        font-family: var(--font-sans);
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .install-guide-cta:hover {
+        background: var(--accent-press);
+      }
+
+      .install-nudge-banner {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        z-index: 45;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: var(--r-chip-outline);
+        box-shadow: var(--shadow-float);
+        padding: 10px 12px;
+        font-size: 13px;
+        color: var(--text-primary);
+      }
+
+      .install-nudge-banner[hidden] {
+        display: none;
+      }
+
+      .install-nudge-banner span {
+        flex: 1;
+      }
+
+      .install-nudge-action {
+        background: none;
+        border: none;
+        color: var(--accent-ink);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .install-nudge-dismiss {
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        padding: 4px;
       }
 
       .digest-candidate-row {
@@ -4041,6 +4165,9 @@
         #integrations-sheet,
         #patterns-sheet,
         #stale-sheet,
+        #loops-sheet,
+        #due-sheet,
+        #install-guide-sheet,
         #view-sheet {
           align-items: center;
           justify-content: center;

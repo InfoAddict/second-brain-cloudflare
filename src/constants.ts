@@ -100,6 +100,10 @@ export const INSIGHT_MAX_TOKENS = 300;
 // all — the pass would then silently return nothing. 1200 gives it enough
 // headroom to finish reasoning and still answer.
 export const INSIGHT_PASS_MAX_TOKENS = 1200;
+// Same reasoning-model headroom as INSIGHT_PASS_MAX_TOKENS above: WHEN_LLM_MODEL
+// defaults to the same gpt-oss-120b, which spends tokens on chain-of-thought
+// before it answers, and this pass's JSON answer is tiny either way.
+export const WHEN_PASS_MAX_TOKENS = 1200;
 export const DIGEST_MAX_TOKENS = 400;
 
 export const VECTORIZE_FIX_HINT =

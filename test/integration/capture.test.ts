@@ -44,6 +44,72 @@ describe("POST /capture", () => {
     expect(res.status).toBe(400);
   });
 
+  it("stores an explicit when, defaulting when_kind to wake", async () => {
+    const { ctx } = makeCtx();
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "Renew the passport", when: "2026-06-15" } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(db.entries).toHaveLength(1);
+    expect(db.entries[0].when_at).toBe(Date.parse("2026-06-15"));
+    expect(db.entries[0].when_kind).toBe("wake");
+    expect(db.entries[0].when_source).toBe("explicit");
+  });
+
+  it("stores an explicit when_kind alongside when", async () => {
+    const { ctx } = makeCtx();
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "Pay the invoice", when: "2026-06-15", when_kind: "due" } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(db.entries[0].when_kind).toBe("due");
+  });
+
+  it("rejects an unparseable when", async () => {
+    const { ctx } = makeCtx();
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "Test note", when: "not a date" } }), env, ctx);
+    expect(res.status).toBe(400);
+    expect(db.entries).toHaveLength(0);
+  });
+
+  it("rejects a when more than 5 years out", async () => {
+    const { ctx } = makeCtx();
+    const farFuture = new Date(Date.now() + 6 * 365 * 86400000).toISOString();
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "Test note", when: farFuture } }), env, ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects when_kind without when", async () => {
+    const { ctx } = makeCtx();
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "Test note", when_kind: "due" } }), env, ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("leaves when_at null when when is omitted and no date is in the content", async () => {
+    const { ctx } = makeCtx();
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "Test note" } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(db.entries[0].when_at ?? null).toBeNull();
+  });
+
+  it("falls back to the regex date pass when when is omitted", async () => {
+    const { ctx } = makeCtx();
+    const farFuture = new Date(Date.now() + 400 * 86400000);
+    const iso = farFuture.toISOString().slice(0, 10);
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: `Renew the passport by ${iso}` } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(db.entries[0].when_at).toBe(Date.parse(iso));
+    expect(db.entries[0].when_kind).toBe("due");
+    expect(db.entries[0].when_source).toBe("regex");
+  });
+
+  it("an explicit when wins over a date the regex pass would have found", async () => {
+    const { ctx } = makeCtx();
+    const farFuture = new Date(Date.now() + 400 * 86400000);
+    const iso = farFuture.toISOString().slice(0, 10);
+    const explicit = new Date(Date.now() + 500 * 86400000).toISOString().slice(0, 10);
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: `Renew the passport by ${iso}`, when: explicit } }), env, ctx);
+    expect(res.status).toBe(200);
+    expect(db.entries[0].when_at).toBe(Date.parse(explicit));
+    expect(db.entries[0].when_source).toBe("explicit");
+  });
+
   it("stores valid entry and returns id", async () => {
     const { ctx } = makeCtx();
     const res = await worker.fetch(req("POST", "/capture", { body: { content: "Test note" } }), env, ctx);

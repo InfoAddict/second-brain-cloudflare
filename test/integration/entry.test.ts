@@ -49,6 +49,9 @@ describe("GET /entry", () => {
       contradiction_wins: 0,
       contradiction_losses: 0,
       indexed: true,
+      when_at: null,
+      when_kind: null,
+      when_source: null,
       workspace: "personal",
       actor_name: "Owner",
       // Whether this caller may edit or forget it. True here and on every row of
@@ -81,5 +84,20 @@ describe("GET /entry", () => {
     const data = await res.json() as any;
     expect(data.ok).toBe(false);
     expect(data.error).toContain("ghost");
+  });
+
+  // Nit (d), found during live testing: the detail view could set a `when`
+  // via append but never see it reflected back without a page reload.
+  it("echoes when_at/when_kind/when_source (Nit d)", async () => {
+    db.entries.push({
+      id: "anchored", content: "Renew the passport", tags: "[]", source: "api", created_at: 1000,
+      when_at: 5000, when_kind: "due", when_source: "explicit",
+    });
+
+    const res = await worker.fetch(req("GET", "/entry?id=anchored"), env, ctx);
+    const data = await res.json() as any;
+    expect(data.entry.when_at).toBe(5000);
+    expect(data.entry.when_kind).toBe("due");
+    expect(data.entry.when_source).toBe("explicit");
   });
 });
