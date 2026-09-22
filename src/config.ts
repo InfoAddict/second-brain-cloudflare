@@ -69,6 +69,13 @@ export const DEFAULTS = {
   // else above keeps using LLM_MODEL. See the cost comment on
   // constants.INSIGHT_LLM_MODEL for why this is a separate setting.
   INSIGHT_LLM_MODEL: "@cf/openai/gpt-oss-120b",
+  // Used only by src/when/pass.ts's nightly commitment-extraction call.
+  // Defaults to the same model as INSIGHT_LLM_MODEL — a smaller model's
+  // judgment on "is this a commitment, and when is it due" was not measured
+  // to be reliably worse, but nothing here has re-litigated it either, so
+  // this stays a separate, independently overridable setting rather than
+  // aliasing INSIGHT_LLM_MODEL outright.
+  WHEN_LLM_MODEL: "@cf/openai/gpt-oss-120b",
 
   // ── Team edition (src/lib/scope.ts) ──
   // Where a capture lands when neither the request nor the member's own
@@ -164,6 +171,7 @@ export const RULES: Record<ConfigKey, Rule> = {
   LLM_MODEL: { kind: "string" },
   EMBEDDING_MODEL: { kind: "string" },
   INSIGHT_LLM_MODEL: { kind: "string" },
+  WHEN_LLM_MODEL: { kind: "string" },
   TEAM_DEFAULT_WORKSPACE: { kind: "string" },
   TEAM_INSIGHTS: { kind: "string" },
   TEAM_MODE: { kind: "string" },

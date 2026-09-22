@@ -64,6 +64,12 @@ describe("DEFAULTS parity with shipped constants", () => {
   it("RECALL_WIDEN_THRESHOLD starts equal to DUPLICATE_FLAG_THRESHOLD", () => {
     expect(DEFAULTS.RECALL_WIDEN_THRESHOLD).toBe(constants.DUPLICATE_FLAG_THRESHOLD);
   });
+
+  // Brief v2's when-extraction pass defaults to the same model the weekly
+  // insight pass reasons with, independently overridable from then on.
+  it("WHEN_LLM_MODEL starts equal to INSIGHT_LLM_MODEL", () => {
+    expect(DEFAULTS.WHEN_LLM_MODEL).toBe(DEFAULTS.INSIGHT_LLM_MODEL);
+  });
 });
 
 describe("config rule coverage", () => {

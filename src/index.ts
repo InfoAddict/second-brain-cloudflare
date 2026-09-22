@@ -9,6 +9,7 @@ import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integrations/mirror";
 import { runStalenessPass } from "./staleness/pass";
+import { runWhenExtractPass } from "./when/pass";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -146,6 +147,13 @@ export default {
     // always 0 here: the weekly insight pass runs on its own cron trigger
     // (INSIGHT_WEEKLY_CRON / INSIGHT_TEAM_WEEKLY_CRON above) and never inside
     // this invocation.
+    //
+    // The when-extraction pass runs AFTER these three, not alongside them: it
+    // is capped at WHEN_EXTRACT_PER_NIGHT model calls and its own ten-D1-
+    // statement budget, on top of what compression/graph/staleness already
+    // spend, and keeping it sequential and separately caught means a slow or
+    // failing model call cannot delay or hide the other three the way
+    // bundling it into the same Promise.allSettled would.
     job("nightly maintenance", (async () => {
       const [compression, graph, staleness] = await Promise.allSettled([
         runNightlyCompression(env, ctx, slice),
@@ -155,6 +163,16 @@ export default {
       if (compression.status === "rejected") console.error("nightly compression failed (non-fatal):", compression.reason);
       if (graph.status === "rejected") console.error("graph pass failed (non-fatal):", graph.reason);
       if (staleness.status === "rejected") console.error("staleness pass failed (non-fatal):", staleness.reason);
+
+      let whenExtracted = 0;
+      let whenJudged = 0;
+      try {
+        const whenResult = await runWhenExtractPass(env, ctx, slice);
+        whenExtracted = whenResult.whenExtracted;
+        whenJudged = whenResult.whenJudged;
+      } catch (e) {
+        console.error("when-extraction pass failed (non-fatal):", e);
+      }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing
       // ran) or a rotation read failure (the passes fell back to a whole-corpus
@@ -171,6 +189,8 @@ export default {
         linksInferred: graph.status === "fulfilled" ? graph.value.inserted : 0,
         claimsFlagged: staleness.status === "fulfilled" ? staleness.value.flagged : 0,
         insightsProposed: 0,
+        whenExtracted,
+        whenJudged,
       });
     })());
   },

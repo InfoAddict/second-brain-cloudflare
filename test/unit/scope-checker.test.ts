@@ -1164,8 +1164,11 @@ describe("the checker over the real source tree", () => {
     // /loops's row SELECT and its COUNT, plus GET /brief's loop-items preview
     // — and +2 more for Task B (resurface v2)'s new scoped statements in
     // src/routes/brief.ts: the same-day-stability fetch-by-id, and the
-    // topic-preferred-pool COUNT probe in pickResurface.
-    ).toEqual({ queries: 111, exempt: 53, checked: 6, outerJoin: 1 });
+    // topic-preferred-pool COUNT probe in pickResurface. Deliberate: +1 query
+    // and +1 scope-exempt for src/when/pass.ts's candidate prefilter (a
+    // per-workspace cron slice, same exemption shape as the other nightly
+    // passes).
+    ).toEqual({ queries: 112, exempt: 54, checked: 6, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

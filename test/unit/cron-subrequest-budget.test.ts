@@ -38,7 +38,13 @@ import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
 // 100k written per day) and the free plan's 10 ms CPU-per-invocation limit is
 // unaffected by any of this — a cheap D1 statement count is still the
 // cheapest proxy this suite has for "did a job get needlessly chatty."
-const NIGHTLY_D1_STATEMENT_BUDGET = 50;
+// MOVED 50 -> 53: src/when/pass.ts's nightly extraction pass runs after the
+// original three and adds a fixed baseline of three statements every night
+// regardless of whether it finds any candidates — resolveConfig's KV read
+// (config:overrides), its own cursor KV read (when:cursor), and the one
+// prefilter SELECT. Still nowhere near the platform's real 1,000-subrequest
+// ceiling.
+const NIGHTLY_D1_STATEMENT_BUDGET = 53;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -262,9 +268,11 @@ describe("nightly cron D1 subrequest cost", () => {
     expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
     // Exact pin, not just the ceiling: 11 D1 statements (unchanged from before
     // the night-summary recorder) plus the ONE OAUTH_KV.put it adds per
-    // maintenance invocation. If this number moves, say why in the same
-    // commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(12);
+    // maintenance invocation, plus when-extraction's fixed 3-statement
+    // baseline (see NIGHTLY_D1_STATEMENT_BUDGET's comment). If this number
+    // moves, say why in the same commit, see the scope-checker test's
+    // convention for this pattern.
+    expect(statements.length).toBe(15);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -282,10 +290,10 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
-    // Exact pin: the same 12 as an ordinary night, plus the ONE dangling-edge
+    // Exact pin: the same 15 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(13);
+    expect(statements.length).toBe(16);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {
