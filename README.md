@@ -33,6 +33,7 @@ The desktop app is the easiest way to start. It builds your Second Brain and con
 - **Keeps you in control.** Browse, edit, append, connect, share, export, or permanently remove any memory from the dashboard.
 - **Builds useful context.** Automatic classification, duplicate detection, relationships, time-aware ranking, and optional weekly insights help the brain stay useful as it grows.
 - **Captures from where you already work.** Use MCP clients, the CLI, browser extension, Obsidian, Notion, calendars, email, iOS Shortcuts, or the web dashboard.
+- **Acts on what matters next.** Add dates to memories, review overdue and upcoming commitments, and let the installed PWA proactively push a reminder when something becomes due. See the [Reminders and Push guide](https://github.com/rahilp/second-brain-cloudflare/wiki/Reminders-and-Push).
 - **Stays in your account.** Memories, vectors, credentials, and application resources live in your own Cloudflare account.
 
 ### See it in action
