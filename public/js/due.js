@@ -32,7 +32,11 @@ async function loadDueQueue(highlightId) {
 }
 
 function dueWhenLine(item) {
-  return t('due.due', { date: formatDateUI(item.when_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
+  // UTC, not formatDateUI: when_at's date-only case is always midnight UTC,
+  // and a due-by date has to read the same regardless of the viewer's
+  // timezone — formatDateUI (local time) reads that midnight as the
+  // previous day everywhere west of Greenwich.
+  return t('due.due', { date: formatDateUTC(item.when_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
 }
 
 /**
@@ -43,15 +47,19 @@ function dueWhenLine(item) {
 function dueRow(item, expanded) {
   const isTask = (item.tags || []).includes('task')
   const tagsLine = expanded && item.tags && item.tags.length
-    ? `<div class="due-tags">${item.tags.map((tag) => `<span class="tag-chip">${escHtml(tag)}</span>`).join('')}</div>`
+    ? `<div class="card-tags due-tags">${item.tags.map((tag) => `<span class="tag-chip">${escHtml(tag)}</span>`).join('')}</div>`
     : ''
   const body = expanded ? escHtml(item.content) : escHtml(titleLine(item.label, 120))
+  // Content full-width, then tags/date, then a wrapping actions row (up to
+  // four buttons) — .due-row stacks rather than sitting content and actions
+  // side by side the way loops.js's shared .task layout does, which left the
+  // content column a sliver once four buttons claimed the rest of the row.
   return `
-    <div class="task due-row${expanded ? ' due-row-expanded' : ''}" id="due-row-${escAttr(item.id)}">
-      <div class="task-t">${body}</div>
+    <div class="due-row${expanded ? ' due-row-expanded' : ''}" id="due-row-${escAttr(item.id)}">
+      <div class="due-text">${body}</div>
       ${tagsLine}
       <div class="digest-note">${escHtml(dueWhenLine(item))}</div>
-      <div class="task-actions">
+      <div class="due-actions">
         <button type="button" class="card-action-btn" onclick="resolveDue('${escAttr(item.id)}', 'done', ${isTask}, this)"><i class="ti ti-check"></i> ${escHtml(t('due.done'))}</button>
         <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'tomorrow', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeTomorrow'))}</button>
         <button type="button" class="card-action-btn" onclick="snoozeDue('${escAttr(item.id)}', 'next-week', this)"><i class="ti ti-clock"></i> ${escHtml(t('due.snoozeNextWeek'))}</button>

@@ -1970,6 +1970,21 @@ function formatDateUI(value, options) {
   return d.toLocaleDateString(localeTag(), options)
 }
 
+/**
+ * Same as formatDateUI, but reads the UTC calendar date rather than the
+ * viewer's local one. For values that ARE a calendar date rather than a
+ * moment — when_at's date-only case (always midnight UTC; we never store a
+ * meaningful time). formatDateUI would read a UTC midnight as the previous
+ * day everywhere west of Greenwich, which is exactly the bug this exists to
+ * avoid: a due-by date has to read the same regardless of the viewer's
+ * timezone, since nothing about "when" it is due is timezone-relative yet.
+ */
+function formatDateUTC(value, options) {
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat(localeTag(), { ...options, timeZone: 'UTC' }).format(d)
+}
+
 function formatNumberUI(n) {
   return Number(n).toLocaleString(localeTag())
 }

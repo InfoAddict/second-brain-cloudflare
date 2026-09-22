@@ -107,6 +107,36 @@ describe("pushDueItems", () => {
     expect(payload.entry_id).toBeUndefined();
   });
 
+  it("puts the UTC calendar date in the notification body, not the server's local date", async () => {
+    // scripts/brief-preview.mjs and the due sheet (public/js/due.js) both
+    // anchor a date-only when_at to its UTC calendar date rather than
+    // whatever timezone happens to be running the code; the sender has to
+    // agree, or "due Sep 21" could reach the phone for an item the due
+    // sheet — reading the same when_at — calls "due Sep 22".
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      sq = await migrated();
+      // Safely in the past regardless of when this test runs.
+      const midnightUtc = Date.UTC(2020, 8, 22); // 2020-09-22T00:00:00.000Z
+      seedDue(sq, "e1", "File the report", midnightUtc, "File the report");
+      seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+      const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+      const cryptoModule = await import("../../src/push/crypto");
+      const encryptSpy = vi.spyOn(cryptoModule, "encryptWebPush");
+
+      await pushDueItems(env, "");
+
+      const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
+      const payload = JSON.parse(plaintext);
+      expect(payload.body).toContain("2020-09-22");
+      expect(payload.body).not.toContain("2020-09-21");
+    } finally {
+      process.env.TZ = originalTz;
+    }
+  });
+
   it("does not re-notify for the same when_at once pushed", async () => {
     sq = await migrated();
     seedDue(sq, "e1", "File the report", Date.now() - DAY);

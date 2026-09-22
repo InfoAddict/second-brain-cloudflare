@@ -210,3 +210,28 @@ describe("#due-sheet's CSS", () => {
     expect((openBlock as RegExpMatchArray)[1]).toMatch(/#due-sheet\.open\s*[,{]/);
   });
 });
+
+/**
+ * A due-sheet row reused loops.js's .task (display: flex, content and
+ * actions side by side) — fine for loops' two short buttons, but due rows
+ * carry up to four (Done, two snooze choices, Not a commitment), and at
+ * ~1100px that squeezed the content column into a one-word-per-line sliver.
+ * .due-row now stacks (content, then tags/date, then a wrapping actions
+ * row) instead, mirroring .stale-row. Text-based, like the sheet-visibility
+ * pin above: no layout engine here to measure the actual column width.
+ */
+describe("the due row's layout", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/main.css"), "utf8");
+
+  it("stacks rather than sitting content and actions side by side", () => {
+    const rule = css.match(/\.due-row\s*\{([\s\S]*?)\}/);
+    expect(rule, ".due-row's own rule was not found").not.toBeNull();
+    expect((rule as RegExpMatchArray)[1]).not.toMatch(/display:\s*flex/);
+  });
+
+  it("wraps the actions row instead of forcing every button onto one line", () => {
+    const rule = css.match(/\.due-actions\s*\{([\s\S]*?)\}/);
+    expect(rule, ".due-actions's rule was not found").not.toBeNull();
+    expect((rule as RegExpMatchArray)[1]).toMatch(/flex-wrap:\s*wrap/);
+  });
+});

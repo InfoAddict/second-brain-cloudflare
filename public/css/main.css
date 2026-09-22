@@ -2488,6 +2488,38 @@
         flex-wrap: wrap;
       }
 
+      /* One due item, with up to four actions (Done, two snooze choices, Not
+         a commitment) — too many to sit beside the content in .task's
+         side-by-side layout without squeezing it into a sliver, which is
+         what reusing .task here did at ~1100px. Stacks instead, mirroring
+         .stale-row above: content full-width, then tags/date, then a
+         wrapping actions row. */
+      .due-row {
+        padding: 12px 2px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .due-row:last-child {
+        border-bottom: none;
+      }
+
+      .due-text {
+        margin: 0 0 6px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--text-primary);
+      }
+
+      .due-tags {
+        margin-bottom: 8px;
+      }
+
+      .due-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
       .pattern-row {
         display: flex;
         align-items: flex-start;

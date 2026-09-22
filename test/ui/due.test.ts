@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -72,6 +72,33 @@ const dueResponse = (overrides: any = {}) => ({
   upcoming: [],
   counts: { overdue: 1, upcoming: 0 },
   ...overrides,
+});
+
+describe("the due sheet's date display", () => {
+  const originalTz = process.env.TZ;
+  afterEach(() => { process.env.TZ = originalTz; });
+
+  it("shows the UTC calendar date for a midnight-UTC due date, not the viewer's local date", async () => {
+    // West of Greenwich, local midnight-UTC-minus-a-few-hours reads as the
+    // PREVIOUS day unless the UTC date is used explicitly — this is exactly
+    // the off-by-one a viewer west of Greenwich saw ("Due Sep 21" for a
+    // 2026-09-22T00:00Z when_at). Forcing TZ here makes the assertion
+    // meaningful regardless of the host machine/CI's own timezone.
+    process.env.TZ = "America/Los_Angeles";
+    const midnightUtc = Date.UTC(2026, 8, 22); // 2026-09-22T00:00:00.000Z
+    const ctx = load([{
+      ok: true,
+      overdue: [{ id: "e1", content: "File the report", label: "File the report", tags: [], when_at: midnightUtc }],
+      upcoming: [],
+      counts: { overdue: 1, upcoming: 0 },
+    }]);
+
+    await ctx.loadDueQueue();
+
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("Sep 22, 2026");
+    expect(html).not.toContain("Sep 21, 2026");
+  });
 });
 
 describe("the due sheet", () => {
