@@ -180,6 +180,12 @@ function showApp() {
   // Doubles as the admin check: the Team nav entries stay hidden unless this
   // probe answers 200. See js/team.js.
   if (typeof loadTeam === 'function') loadTeam()
+  // #due/<id> from a push notification's deep link (public/sw.js), or a
+  // shared link. Needs WORKER_URL/AUTH_TOKEN, which is why this runs here
+  // rather than in init() — both the auto-login and manual-login paths call
+  // showApp(), and neither has credentials before this point.
+  if (typeof handleDueHash === 'function') handleDueHash()
+  if (typeof loadNotificationsState === 'function') loadNotificationsState()
 }
 
 function logout() {

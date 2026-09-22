@@ -186,7 +186,7 @@ function buildInsightStop(p) {
 function renderDecisionPanel(board, brief) {
   const pending = (brief && brief.patterns) || []
   const attention = (brief && brief.attention) || {}
-  if (!pending.length && !(attention.stale > 0) && !(attention.unindexed > 0)) return
+  if (!pending.length && !(attention.stale > 0) && !(attention.unindexed > 0) && !(attention.due > 0)) return
 
   const stops = pending.slice(0, 2).map(buildInsightStop)
   if (pending.length > 2) {
@@ -205,6 +205,12 @@ function renderDecisionPanel(board, brief) {
   if (attention.unindexed > 0) {
     stops.push(`<article class="stop">
       <div class="stop-actions"><button class="attn" type="button" onclick="openMenu()"><i class="ti ti-eye-off"></i>${escHtml(t('brief.attentionUnindexed', { n: attention.unindexed }))}</button></div>
+    </article>`)
+  }
+  if (attention.due > 0) {
+    stops.push(`<article class="stop">
+      <div class="stop-label">${escHtml(t('due.title'))}</div>
+      <div class="stop-actions"><button class="attn" type="button" onclick="openDueSheet()"><i class="ti ti-bell"></i>${escHtml(t('brief.attentionDue', { n: attention.due }))}</button></div>
     </article>`)
   }
 

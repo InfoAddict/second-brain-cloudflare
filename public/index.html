@@ -747,6 +747,23 @@
           <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> <span data-i18n="menu.integrations">Integrations</span></button>
         </div>
 
+        <!-- Web Push (T-0046). renderNotificationsState() in js/notifications.js
+             sets the button label, the hint, and the content-free toggle's
+             disabled state on every load and after every enable/disable. -->
+        <div class="menu-group">
+          <div class="menu-group-label" data-i18n="notifications.title">Notifications</div>
+          <button class="menu-item" type="button" id="notifications-toggle-btn" onclick="toggleNotifications()"><i class="ti ti-bell"></i> <span data-i18n="notifications.enable">Enable notifications</span></button>
+          <div class="team-open-row">
+            <i class="ti ti-eye-off"></i>
+            <span data-i18n="notifications.contentFree">Hide memory content in notifications</span>
+            <label class="sb-switch">
+              <input type="checkbox" class="sb-switch-input" id="notifications-content-free-toggle" onchange="setNotificationsContentFree(this.checked)" />
+              <span class="sb-switch-track"><span class="sb-switch-knob"></span></span>
+            </label>
+          </div>
+          <p class="digest-note" id="notifications-hint"></p>
+        </div>
+
         <div class="menu-group" id="profile-group">
           <div class="menu-group-label" data-i18n="team.profileTitle">Your display name</div>
           <div style="display: flex; gap: 8px; padding: 0 4px 8px;">
@@ -843,6 +860,19 @@
         <button class="digest-more" id="loops-more" hidden onclick="loadMoreLoops(this)"></button>
       </div>
     </div>
+    <!-- Due items: overdue and upcoming time anchors (GET /due), opened from
+         the attention chip or a push notification's #due/<id> deep link
+         (js/due.js's handleDueHash, public/sw.js's notificationclick). -->
+    <div id="due-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="due.title">Due</h2>
+          <button class="btn-close-icon" onclick="closeDueSheet()"><i class="ti ti-x"></i></button>
+        </div>
+        <div id="due-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
+      </div>
+    </div>
+
     <!-- The growth chart's one shared hover/keyboard tooltip (js/chart.js). -->
     <div class="tip" id="board-tip" role="tooltip"></div>
 
@@ -864,6 +894,8 @@
     <script src="js/patterns.js"></script>
     <script src="js/stale.js"></script>
     <script src="js/loops.js"></script>
+    <script src="js/due.js"></script>
+    <script src="js/notifications.js"></script>
     <script src="js/integrations.js"></script>
     <script src="js/team.js"></script>
     <script src="js/activity.js"></script>
