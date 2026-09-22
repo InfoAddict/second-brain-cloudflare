@@ -252,6 +252,31 @@ describe("GET /brief", () => {
     expect(data.attention.due).toBe(1);
   });
 
+  // Finding 3: attention.due used to require OPEN_LOOP_SQL (a "task" tag),
+  // but GET /due never did — an untagged remember(when: ...) moved the feed
+  // but never this chip. Both now share DUE_SQL (src/when/input.ts).
+  it("counts an UNTAGGED entry with when_at in the window (Finding 3)", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "untagged-due", content: "Renew the passport", createdAt: now - HOUR, tags: [] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'untagged-due'`).bind(now + HOUR).run();
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+
+    expect(data.attention.due).toBe(1);
+  });
+
+  it("excludes a deprecated entry from attention.due (Finding 3)", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "deprecated-due", content: "Old commitment", createdAt: now - HOUR, tags: ["status:deprecated"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'deprecated-due'`).bind(now + HOUR).run();
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+
+    expect(data.attention.due).toBe(0);
+  });
+
   it("keeps resurfacing something when there are fewer candidates than days", async () => {
     // OFFSET past the end returns no rows, so wrapping against a fixed
     // constant instead of the candidate count would show nothing on most days

@@ -176,7 +176,7 @@ export async function fetchWhenCandidates(
 }
 
 export type CommitmentOutcome =
-  | { outcome: "commitment"; what: string; dueAt: number; confidence: number }
+  | { outcome: "commitment"; what: string; dueAt: number; confidence: number; kind: "due" | "event" }
   | { outcome: "declined" }
   | { outcome: "failed" };
 
@@ -195,7 +195,7 @@ function isReadableJsonObject(raw: string): boolean {
 }
 
 function parseCommitmentJson(raw: string): {
-  isCommitment: boolean; what: string; dueAt: number | null; confidence: number;
+  isCommitment: boolean; what: string; dueAt: number | null; confidence: number; kind: "due" | "event";
 } | null {
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) return null;
@@ -215,8 +215,12 @@ function parseCommitmentJson(raw: string): {
     const at = Date.parse(parsed.due_at.trim());
     if (!Number.isNaN(at)) dueAt = at;
   }
+  // Absent or unrecognised defaults to "due" — an appointment is an "event",
+  // but calling everything else a deadline is the safer failure than
+  // inventing an event that was never one.
+  const kind = parsed.kind === "event" ? "event" : "due";
 
-  return { isCommitment: parsed.is_commitment, what, dueAt, confidence };
+  return { isCommitment: parsed.is_commitment, what, dueAt, confidence, kind };
 }
 
 /**
@@ -242,8 +246,10 @@ Does this describe something the person needs to DO by a specific point in time 
 
 If it is a commitment, say what needs to be done in a few words, written as an instruction, at most 120 characters. Give the date it is due as an absolute date (YYYY-MM-DD), resolving any relative phrase ("next Friday", "in two weeks") against ${today} as today. If you cannot pin down a specific date, this is not a commitment for this purpose.
 
+Also say what KIND of moment this is: "event" when it is something happening AT that time — an appointment, a meeting, a trip — rather than a deadline to finish something BY that time, which is "due".
+
 Respond with JSON only. No text outside the JSON object.
-{"is_commitment": <true or false>, "what": "<short instruction, or empty string>", "due_at": "<YYYY-MM-DD, or null>", "confidence": <0 to 1>}`;
+{"is_commitment": <true or false>, "what": "<short instruction, or empty string>", "due_at": "<YYYY-MM-DD, or null>", "kind": "<due or event>", "confidence": <0 to 1>}`;
 
   let raw = "";
   try {
@@ -277,7 +283,7 @@ Respond with JSON only. No text outside the JSON object.
   // decades back is a bad extraction, not a genuinely ancient commitment.
   if (referenceDate - parsed.dueAt > WHEN_MAX_PAST_MS) return { outcome: "declined" };
 
-  return { outcome: "commitment", what: parsed.what, dueAt: parsed.dueAt, confidence: parsed.confidence };
+  return { outcome: "commitment", what: parsed.what, dueAt: parsed.dueAt, confidence: parsed.confidence, kind: parsed.kind };
 }
 
 export interface WhenPassSummary {
@@ -353,8 +359,8 @@ export async function runWhenExtractPass(
     whenJudged++;
     if (verdict.outcome === "commitment") {
       writes.push(
-        env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_source = 'model' WHERE id = ?`)
-          .bind(verdict.dueAt, candidate.id),
+        env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'model' WHERE id = ?`)
+          .bind(verdict.dueAt, verdict.kind, candidate.id),
       );
     }
   }

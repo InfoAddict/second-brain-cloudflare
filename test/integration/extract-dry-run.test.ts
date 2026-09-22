@@ -82,8 +82,21 @@ describe("GET /extract/dry-run", () => {
     const data = await (await worker.fetch(req("GET", "/extract/dry-run"), env, ctx)).json() as any;
 
     expect(data.candidates[0]).toEqual({
-      id: "loop-1", content: "Just checking in", outcome: "declined", what: null, due_at: null, confidence: null,
+      id: "loop-1", content: "Just checking in", outcome: "declined", what: null, due_at: null, kind: null, confidence: null,
     });
+  });
+
+  it("reports the model's due/event distinction (Nit b)", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "loop-1", "Dentist appointment", 1000);
+    const env = makeTestEnv(dbOf(sq) as any, {
+      OAUTH_KV: makeMemoryKV(),
+      AI: makeAI(`{"is_commitment": true, "what": "Dentist appointment", "due_at": "2027-01-30", "kind": "event", "confidence": 0.9}`),
+    });
+
+    const data = await (await worker.fetch(req("GET", "/extract/dry-run"), env, ctx)).json() as any;
+
+    expect(data.candidates[0].kind).toBe("event");
   });
 
   it("reports a failed verdict and keeps going to the rest of the window", async () => {

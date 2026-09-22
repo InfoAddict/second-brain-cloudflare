@@ -151,6 +151,37 @@ describe("MCP tools contract (InMemoryTransport)", () => {
     expect(db.entries).toHaveLength(0);
   });
 
+  // Nit (a): silently dropping when_kind without when hides a caller's
+  // mistake; POST /capture already hard-errors on this, MCP should match.
+  it("remember hard-errors on when_kind without when", async () => {
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "remember",
+        arguments: { content: "Test note", when_kind: "due" },
+      });
+      const text = (result.content as { type: string; text: string }[])[0]?.text ?? "";
+      expect(text).toMatch(/when_kind requires when/);
+    });
+    expect(db.entries).toHaveLength(0);
+  });
+
+  it("append hard-errors on when_kind without when", async () => {
+    db.entries.push({
+      id: "e1", content: "Original note", tags: "[]", source: "api",
+      created_at: 1, updated_at: 1, vector_ids: "[]",
+    });
+    await withMcpClient(env, async (client) => {
+      const result = await client.callTool({
+        name: "append",
+        arguments: { id: "e1", addition: "More detail", when_kind: "due" },
+      });
+      const text = (result.content as { type: string; text: string }[])[0]?.text ?? "";
+      expect(text).toMatch(/when_kind requires when/);
+    });
+    const row = db.entries.find((e: any) => e.id === "e1")!;
+    expect(row.content).toBe("Original note"); // unappended — the error fires before any write
+  });
+
   it("append sets the time anchor on the existing row without touching content", async () => {
     db.entries.push({
       id: "e1", content: "Original note", tags: "[]", source: "api",

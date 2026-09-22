@@ -211,7 +211,7 @@ export async function handleEntriesRoutes(
     const row = await env.DB.prepare(
       `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated,
               importance_score, recall_count, contradiction_wins, contradiction_losses, vector_ids,
-              workspace_id, actor_id
+              workspace_id, actor_id, when_at, when_kind, when_source
        FROM entries WHERE id = ? AND ${scope.clause}`
     ).bind(id, ...scope.bindings).first() as Record<string, any> | null;
     if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
@@ -256,6 +256,9 @@ export async function handleEntriesRoutes(
         // Whether recall can see it at all — the dashboard already surfaces
         // "not indexed" in lists, and the detail view should agree.
         indexed: Array.isArray(vectorIds) && vectorIds.length > 0,
+        when_at: row.when_at ?? null,
+        when_kind: row.when_kind ?? null,
+        when_source: row.when_source ?? null,
         workspace: layer,
         actor_name: actorName,
         // Whether this caller may edit or forget it, answered by the very

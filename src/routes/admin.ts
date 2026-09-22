@@ -30,7 +30,7 @@ import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
-import { DUE_WITHIN_MS } from "../when/input";
+import { DUE_WITHIN_MS, DUE_SQL } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -1292,19 +1292,19 @@ export async function handleAdminRoutes(
     const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source FROM entries
-         WHERE when_at IS NOT NULL AND when_at < ? AND ${scope.clause}
+         WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE when_at IS NOT NULL AND when_at < ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}`,
       ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
       env.DB.prepare(
         `SELECT id, content, tags, when_at, when_kind, when_source FROM entries
-         WHERE when_at IS NOT NULL AND when_at >= ? AND when_at <= ? AND ${scope.clause}
+         WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
       env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM entries WHERE when_at IS NOT NULL AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
+        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
       ).bind(now, upcomingBefore, ...scope.bindings).first() as Promise<Record<string, any> | null>,
     ]);
 
@@ -1346,6 +1346,7 @@ export async function handleAdminRoutes(
         outcome: outcome.outcome,
         what: outcome.outcome === "commitment" ? outcome.what : null,
         due_at: outcome.outcome === "commitment" ? outcome.dueAt : null,
+        kind: outcome.outcome === "commitment" ? outcome.kind : null,
         confidence: outcome.outcome === "commitment" ? outcome.confidence : null,
       });
       // A failed call means the batch stops here in production (the pass

@@ -25,13 +25,32 @@ const REFERENCE_DATE = Date.UTC(2026, 0, 15);
 describe("judgeCommitment()", () => {
   const content = "Need to file the annual report with the registrar by January 30th.";
 
-  it("persists a well-formed, confident commitment", async () => {
+  it("persists a well-formed, confident commitment, defaulting kind to due", async () => {
     const env = makeTestEnv(makeTestDb(), {
       AI: makeAI(`{"is_commitment": true, "what": "File the annual report", "due_at": "2026-01-30", "confidence": 0.9}`),
     });
     expect(await judgeCommitment(content, REFERENCE_DATE, env)).toEqual({
-      outcome: "commitment", what: "File the annual report", dueAt: Date.parse("2026-01-30"), confidence: 0.9,
+      outcome: "commitment", what: "File the annual report", dueAt: Date.parse("2026-01-30"), confidence: 0.9, kind: "due",
     });
+  });
+
+  it("distinguishes an event from a due deadline (Nit b)", async () => {
+    const env = makeTestEnv(makeTestDb(), {
+      AI: makeAI(`{"is_commitment": true, "what": "Dentist appointment", "due_at": "2026-01-30", "kind": "event", "confidence": 0.9}`),
+    });
+    const out = await judgeCommitment("Dentist appointment on the 30th", REFERENCE_DATE, env);
+    expect(out).toEqual({
+      outcome: "commitment", what: "Dentist appointment", dueAt: Date.parse("2026-01-30"), confidence: 0.9, kind: "event",
+    });
+  });
+
+  it("falls back to due for an invalid kind value", async () => {
+    const env = makeTestEnv(makeTestDb(), {
+      AI: makeAI(`{"is_commitment": true, "what": "Do it", "due_at": "2026-01-30", "kind": "someday", "confidence": 0.9}`),
+    });
+    const out = await judgeCommitment(content, REFERENCE_DATE, env);
+    expect(out.outcome).toBe("commitment");
+    if (out.outcome === "commitment") expect(out.kind).toBe("due");
   });
 
   it("declines an explicit non-commitment", async () => {

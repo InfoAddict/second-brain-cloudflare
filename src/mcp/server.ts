@@ -51,7 +51,9 @@ const volatilityParam = z
   .describe(VOLATILITY_DESCRIPTION);
 
 const WHEN_DESCRIPTION =
-  "Optional future date this memory should come back to you: a deadline, an event, or a reminder. ISO 8601 date or datetime.";
+  "Optional future date this memory should come back to you: a deadline, an event, or a reminder. "
+  + "Pass either a plain date (2026-06-15) or a full datetime with an explicit UTC/offset "
+  + "(2026-06-15T09:00:00Z or 2026-06-15T09:00:00-05:00) — a datetime with no offset is read as UTC.";
 const WHEN_KIND_DESCRIPTION =
   "What kind of moment `when` marks: due (a deadline), event (something happening then), or wake (a plain reminder, the default).";
 
@@ -357,6 +359,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         const parsed = parseExplicitWhen(when, when_kind);
         if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
         whenInput = parsed.value;
+      } else if (when_kind !== undefined) {
+        return { content: [{ type: "text", text: "when_kind requires when" }] };
       }
       const projectSlug = project?.trim() || undefined;
       const badSlug = projectSlug ? projectSlugError(projectSlug) : null;
@@ -455,6 +459,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         const parsed = parseExplicitWhen(when, when_kind);
         if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
         whenInput = parsed.value;
+      } else if (when_kind !== undefined) {
+        return { content: [{ type: "text", text: "when_kind requires when" }] };
       }
 
       const existingContent = row.content as string;

@@ -10,6 +10,20 @@
  * A bare month-day with no year assumes the CURRENT year and is discarded if
  * that has already passed, rather than rolled to next year — rolling forward
  * is a guess about which year was meant, and this pass does not guess.
+ *
+ * WHITESPACE-TOKEN GUARD (Finding 4). `\b` alone is not enough: it treats "/"
+ * and "=" as word boundaries too, so "2026-09-30" inside
+ * ".../reports/2026-09-30/summary.pdf" or "build_id=2026-09-30-04" matched
+ * and silently became a due date. A match only counts when the text
+ * immediately before it is whitespace or the start of the content, and the
+ * text immediately after it is whitespace, the end of the content, or a
+ * single terminal punctuation mark (.,;:!?)") followed by whitespace/end.
+ *
+ * SLASH-DATE AMBIGUITY (Finding 6). m/d/yyyy is rejected outright when BOTH
+ * fields are <= 12 and differ — "9/10/2026" could genuinely be read as
+ * September 10 or October 9, and this pass does not guess which. "9/30/2026"
+ * is not ambiguous this way: 30 cannot be a month, so only one reading
+ * parses at all.
  */
 
 const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -24,6 +38,22 @@ const ISO_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
 // half-matched, matching "unambiguous only".
 const MONTH_DAY = new RegExp(`\\b(${MONTH_PATTERN})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?!-\\d)(?:,\\s*|\\s+)?(\\d{4})?\\b`, "gi");
 const SLASH_DATE = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g;
+
+/** A single terminal mark a date is allowed to be followed by before end/whitespace. */
+const TERMINAL_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", ")", "\""]);
+const isSpace = (ch: string | undefined): boolean => ch === undefined || /\s/.test(ch);
+
+/**
+ * True when `content[start, end)` sits in its own whitespace-delimited token
+ * — nothing but whitespace/start before it, nothing but whitespace/end (or
+ * exactly one terminal punctuation mark, then whitespace/end) after it. See
+ * the WHITESPACE-TOKEN GUARD note above.
+ */
+function isIsolatedToken(content: string, start: number, end: number): boolean {
+  if (!isSpace(content[start - 1])) return false;
+  if (isSpace(content[end])) return true;
+  return TERMINAL_PUNCTUATION.has(content[end]) && isSpace(content[end + 1]);
+}
 
 /** Constructs a local-midnight timestamp, or null if the calendar date does not exist. */
 function localDate(year: number, month0: number, day: number): number | null {
@@ -45,11 +75,13 @@ function collectCandidates(content: string, now: number): number[] {
   const currentYear = new Date(now).getFullYear();
 
   for (const m of content.matchAll(ISO_DATE)) {
+    if (!isIsolatedToken(content, m.index, m.index + m[0].length)) continue;
     const at = utcDate(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (at !== null) found.push(at);
   }
 
   for (const m of content.matchAll(MONTH_DAY)) {
+    if (!isIsolatedToken(content, m.index, m.index + m[0].length)) continue;
     const month0 = monthIndex(m[1]);
     const day = Number(m[2]);
     const year = m[3] ? Number(m[3]) : currentYear;
@@ -58,7 +90,15 @@ function collectCandidates(content: string, now: number): number[] {
   }
 
   for (const m of content.matchAll(SLASH_DATE)) {
-    const at = localDate(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
+    if (!isIsolatedToken(content, m.index, m.index + m[0].length)) continue;
+    const first = Number(m[1]);
+    const second = Number(m[2]);
+    // Genuinely ambiguous: both readings (month/day and day/month) are
+    // structurally valid and disagree. Equal fields agree either way, and
+    // either field over 12 rules out the other reading, so neither is
+    // rejected here.
+    if (first <= 12 && second <= 12 && first !== second) continue;
+    const at = localDate(Number(m[3]), first - 1, second);
     if (at !== null) found.push(at);
   }
 

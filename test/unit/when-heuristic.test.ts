@@ -91,4 +91,48 @@ describe("extractUnambiguousDate", () => {
     const at = extractUnambiguousDate("Meet at 2026-06-02.", NOW);
     expect(at).toBe(Date.UTC(2026, 5, 2));
   });
+
+  describe("Finding 4 — whitespace-token guard", () => {
+    it("does not fire on an ISO-shaped date embedded in a URL path", () => {
+      expect(extractUnambiguousDate("See https://example.com/reports/2026-09-30/summary.pdf", NOW)).toBeNull();
+    });
+
+    it("does not fire on an ISO-shaped date embedded in a log/build id", () => {
+      expect(extractUnambiguousDate("Deploy failed: build_id=2026-09-30-04", NOW)).toBeNull();
+    });
+
+    it("still extracts a month-name date immediately followed by terminal punctuation", () => {
+      const at = extractUnambiguousDate("Renew by September 23 2026.", NOW);
+      expect(at).toBe(new Date(2026, 8, 23).getTime());
+    });
+
+    it("still extracts an ISO date immediately followed by a period", () => {
+      const at = extractUnambiguousDate("It's due 2026-09-30.", NOW);
+      expect(at).toBe(Date.UTC(2026, 8, 30));
+    });
+
+    it("does not fire when the date abuts a non-terminal character on the right", () => {
+      expect(extractUnambiguousDate("Ref 2026-09-30x for the archive", NOW)).toBeNull();
+    });
+
+    it("does not fire when the date abuts a non-whitespace character on the left", () => {
+      expect(extractUnambiguousDate("id=2026-09-30 in the log", NOW)).toBeNull();
+    });
+  });
+
+  describe("Finding 6 — ambiguous slash dates", () => {
+    it("rejects 9/10/2026 — both fields <= 12 and different, so either could be the month", () => {
+      expect(extractUnambiguousDate("Filed on 9/10/2026 in the old system.", NOW)).toBeNull();
+    });
+
+    it("still accepts 9/30/2026 — 30 cannot be a month, so only one reading is valid", () => {
+      const at = extractUnambiguousDate("Filing deadline: 9/30/2026", NOW);
+      expect(at).toBe(new Date(2026, 8, 30).getTime());
+    });
+
+    it("accepts a slash date where both fields are equal (both readings agree)", () => {
+      const at = extractUnambiguousDate("Anniversary is 12/12/2026", NOW);
+      expect(at).toBe(new Date(2026, 11, 12).getTime());
+    });
+  });
 });

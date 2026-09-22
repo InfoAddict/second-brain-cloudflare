@@ -173,6 +173,9 @@ beforeEach(async () => {
     "Bob private insight: considering leaving the company", ["auto-insight"]);
   seed("bob-loop", bob.member.personalWorkspaceId, bob.member.userId,
     "Bob private: follow up with the immigration lawyer", ["task"]);
+  seed("bob-due", bob.member.personalWorkspaceId, bob.member.userId,
+    "Bob private: renew visa documents", []);
+  sqlite.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'bob-due'`).bind(Date.now() - 1000).run();
 });
 
 afterEach(() => sqlite?.close());
@@ -189,9 +192,9 @@ describe("cross-user isolation, read surfaces", () => {
   });
 
   it("GET /count counts only the readable set", async () => {
-    // Bob: his four own rows (private, stale-flagged, pending insight, open
-    // loop) plus the company row. Not Alice's.
-    expect((await jsonOf(await call("GET", "/count", bobToken))).count).toBe(5);
+    // Bob: his five own rows (private, stale-flagged, pending insight, open
+    // loop, due) plus the company row. Not Alice's.
+    expect((await jsonOf(await call("GET", "/count", bobToken))).count).toBe(6);
   });
 
   it("GET /entry refuses a colleague's id outright", async () => {
@@ -267,7 +270,7 @@ describe("cross-user isolation, read surfaces", () => {
     // The repair counts stay corpus-wide: POST /vectorize-pending and
     // /classify-pending act on every workspace, so a scoped backlog would leave
     // rows unrepairable with nothing on screen to say so.
-    expect(stats.unclassified).toBe(6);
+    expect(stats.unclassified).toBe(7);
   });
 
   it("GET /stats/activity counts only the caller's own captures, per source", async () => {
@@ -277,7 +280,7 @@ describe("cross-user isolation, read surfaces", () => {
     const bobTotal = bobActivity.series
       .flatMap((s: any) => s.counts as number[])
       .reduce((a: number, b: number) => a + b, 0);
-    expect(bobTotal).toBe(5); // his four private rows plus the shared one, never Alice's
+    expect(bobTotal).toBe(6); // his five private rows plus the shared one, never Alice's
 
     const aliceActivity = await jsonOf(await call("GET", "/stats/activity", ALICE));
     const aliceTotal = aliceActivity.series
@@ -343,6 +346,14 @@ describe("cross-user isolation, read surfaces", () => {
     const loops = await jsonOf(await call("GET", "/loops", ALICE));
     expect(JSON.stringify(loops)).not.toContain("immigration lawyer");
     expect(loops.total).toBe(0);
+
+    const due = await jsonOf(await call("GET", "/due", ALICE));
+    expect(JSON.stringify(due)).not.toContain("visa");
+    expect(due.counts).toEqual({ overdue: 0, upcoming: 0 });
+
+    const dryRun = await jsonOf(await call("GET", "/extract/dry-run", ALICE));
+    expect(JSON.stringify(dryRun)).not.toContain("immigration lawyer");
+    expect(dryRun.candidates).toEqual([]);
   });
 
   it("GET /patterns never prints a source memory the caller cannot read", async () => {
@@ -399,6 +410,10 @@ describe("cross-user isolation, read surfaces", () => {
     const loops = await jsonOf(await call("GET", "/loops", bobToken));
     expect(loops.total).toBe(1);
     expect(JSON.stringify(loops)).toContain("immigration lawyer");
+
+    const due = await jsonOf(await call("GET", "/due", bobToken));
+    expect(due.counts.overdue).toBe(1);
+    expect(JSON.stringify(due)).toContain("visa");
   });
 
   it("POST /patterns/resolve cannot confirm or dismiss a member's insight", async () => {
@@ -512,8 +527,8 @@ describe("cross-user isolation, read surfaces", () => {
     // And the deployment-wide repair counter is deliberately NOT narrowed by this
     // change: /vectorize-pending acts on every workspace, so a scoped backlog
     // would leave Bob's rows unrepairable with nothing on screen to say so.
-    // Six seeded rows plus the eleven above, none of them indexed.
-    expect(stats.unvectorized).toBe(17);
+    // Seven seeded rows plus the eleven above, none of them indexed.
+    expect(stats.unvectorized).toBe(18);
   });
 });
 

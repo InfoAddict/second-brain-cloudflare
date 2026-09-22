@@ -9,7 +9,7 @@ import { STALE_REVIEW_SQL } from "../memory/stale";
 import { OPEN_LOOP_SQL } from "../memory/loops";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
-import { DUE_WITHIN_MS } from "../when/input";
+import { DUE_WITHIN_MS, DUE_SQL } from "../when/input";
 import { parseTags } from "../insight/candidates";
 import {
   excludedIds, readResurfaceState, withDismissed, withShown, writeResurfaceState,
@@ -210,15 +210,18 @@ export async function handleBriefRoutes(
     // open_loops and due both ride this same aggregate — one more CASE/SUM
     // each on a query already scanning every row, rather than a query of
     // their own — the same reasoning that put unindexed and stale here
-    // together. due is open-loop entries whose when_at falls within the same
-    // window GET /due calls "upcoming" (DUE_WITHIN_MS), so the two agree on
-    // what "coming up soon" means without sharing a query.
+    // together. due shares DUE_SQL with GET /due itself (src/when/input.ts),
+    // deliberately NOT OPEN_LOOP_SQL: a "when" reaches a row through three
+    // producers (explicit, regex, model) with no task-tag requirement, and
+    // gating the chip on one while the feed had none meant an untagged
+    // remember(when: ...) moved GET /due but never this count (review
+    // finding). The two share one predicate so they cannot disagree again.
     env.DB.prepare(
       `SELECT
          SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
          SUM(CASE WHEN ${STALE_REVIEW_SQL} THEN 1 ELSE 0 END) AS stale,
          SUM(CASE WHEN ${OPEN_LOOP_SQL} THEN 1 ELSE 0 END) AS open_loops,
-         SUM(CASE WHEN ${OPEN_LOOP_SQL} AND when_at IS NOT NULL AND when_at <= ? THEN 1 ELSE 0 END) AS due,
+         SUM(CASE WHEN ${DUE_SQL} AND when_at <= ? THEN 1 ELSE 0 END) AS due,
          COUNT(*) AS total
        FROM entries WHERE ${scope.clause}`,
     ).bind(now + DUE_WITHIN_MS, ...scope.bindings).first() as Promise<Record<string, any> | null>,

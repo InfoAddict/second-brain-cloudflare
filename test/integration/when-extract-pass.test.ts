@@ -105,6 +105,20 @@ describe("runWhenExtractPass — persistence and cursor", () => {
     expect(row.when_source).toBe("model");
   });
 
+  it("persists when_kind: event for an appointment, not the due default (Nit b)", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "loop-1", "Dentist appointment", 1000);
+    const env = makeTestEnv(dbOf(sq) as any, {
+      OAUTH_KV: makeMemoryKV(),
+      AI: makeAI(`{"is_commitment": true, "what": "Dentist appointment", "due_at": "2027-01-30", "kind": "event", "confidence": 0.9}`),
+    });
+
+    await runWhenExtractPass(env, ctx, null);
+
+    const row = (await sq.db.prepare(`SELECT when_kind FROM entries WHERE id = 'loop-1'`).first()) as any;
+    expect(row.when_kind).toBe("event");
+  });
+
   it("advances the cursor past a declined candidate", async () => {
     sq = await migrated();
     seedOpenLoop(sq, "loop-1", "Follow up with the accountant", 1000);

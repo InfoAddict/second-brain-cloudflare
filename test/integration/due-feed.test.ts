@@ -124,4 +124,31 @@ describe("GET /due", () => {
     expect(data.overdue).toHaveLength(20);
     expect(data.counts.overdue).toBe(25);
   });
+
+  // Finding 3: GET /due never required a "task" tag, but it also never
+  // explicitly excluded deprecated entries — add that, and share the
+  // predicate (DUE_SQL) with GET /brief's attention.due so they cannot
+  // disagree the way they used to.
+  it("does not include a deprecated entry", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "deprecated-due", content: "Old commitment", createdAt: 1000, tags: ["status:deprecated"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'deprecated-due'`).bind(now - DAY).run();
+
+    const data = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
+
+    expect(data.overdue).toEqual([]);
+    expect(data.counts.overdue).toBe(0);
+  });
+
+  it("includes an untagged entry", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "untagged", content: "Renew the passport", createdAt: 1000, tags: [] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'untagged'`).bind(now - DAY).run();
+
+    const data = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
+
+    expect(data.overdue.map((r: any) => r.id)).toEqual(["untagged"]);
+  });
 });

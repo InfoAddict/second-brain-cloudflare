@@ -66,4 +66,28 @@ describe("parseExplicitWhen", () => {
   it("exposes the three when_kind values", () => {
     expect(WHEN_KIND_VALUES).toEqual(["due", "event", "wake"]);
   });
+
+  describe("Finding 5 — deterministic UTC normalization", () => {
+    it("a bare date normalizes to UTC midnight", () => {
+      const result = parseExplicitWhen("2026-06-15", undefined, NOW);
+      expect(result.value?.at).toBe(Date.UTC(2026, 5, 15));
+    });
+
+    it("a bare datetime with no offset is treated as UTC, not runtime-local time", () => {
+      const result = parseExplicitWhen("2026-06-15T09:00:00", undefined, NOW);
+      expect(result.error).toBeUndefined();
+      expect(result.value?.at).toBe(Date.UTC(2026, 5, 15, 9, 0, 0));
+    });
+
+    it("an explicit Z is unaffected", () => {
+      const result = parseExplicitWhen("2026-06-15T09:00:00Z", undefined, NOW);
+      expect(result.value?.at).toBe(Date.UTC(2026, 5, 15, 9, 0, 0));
+    });
+
+    it("an explicit offset is honored rather than overridden", () => {
+      const result = parseExplicitWhen("2026-06-15T09:00:00+02:00", undefined, NOW);
+      expect(result.value?.at).toBe(Date.parse("2026-06-15T09:00:00+02:00"));
+      expect(result.value?.at).toBe(Date.UTC(2026, 5, 15, 7, 0, 0));
+    });
+  });
 });
