@@ -166,10 +166,16 @@ export default {
 
       let whenExtracted = 0;
       let whenJudged = 0;
+      let whenSkipped = 0;
       try {
         const whenResult = await runWhenExtractPass(env, ctx, slice);
         whenExtracted = whenResult.whenExtracted;
         whenJudged = whenResult.whenJudged;
+        whenSkipped = whenResult.whenSkipped;
+        // The pass has already rolled its own cursor back when this is
+        // false (Finding 1) — logged here only so a real outage is visible
+        // in the tail, not to retry: retrying is what next night already does.
+        if (!whenResult.ok) console.error("when-extraction pass: batch write failed, cursor not advanced (non-fatal)");
       } catch (e) {
         console.error("when-extraction pass failed (non-fatal):", e);
       }
@@ -191,6 +197,7 @@ export default {
         insightsProposed: 0,
         whenExtracted,
         whenJudged,
+        whenSkipped,
       });
     })());
   },

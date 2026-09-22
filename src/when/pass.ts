@@ -19,6 +19,34 @@
  * not, and the pass stops there rather than risk skipping it — the whole
  * point of a keyset cursor is that nothing between the old position and the
  * new one is silently missed.
+ *
+ * Two failure modes this contract has to survive, found in review:
+ *
+ *   - The persisted write itself can fail (env.DB.batch rejects). If the
+ *     cursor had already advanced past the judged candidates by then, a
+ *     correctly-judged commitment is lost forever — the row stays
+ *     when_at IS NULL, but the cursor says this entry was already handled,
+ *     so nothing ever asks about it again. So the cursor advance and the
+ *     batch write are one unit: nothing about this run's position is
+ *     persisted unless the write actually landed. A rolled-back run
+ *     re-judges the same window next time, declines included, which is a
+ *     fresh model call for at most WHEN_EXTRACT_PER_NIGHT candidates the
+ *     following night — inside the nightly budget it was already
+ *     accepting.
+ *
+ *   - A single entry can fail every night forever (a permanent model
+ *     refusal, or content the model can never parse). Because a "failed"
+ *     outcome never advances the cursor, that entry is always candidate #1
+ *     again the next night, the pass stops on it every time, and every
+ *     candidate behind it in the corpus is never reached — proven wedged
+ *     across five simulated nights in review. The cursor's KV value
+ *     therefore also tracks `failedId`/`failCount`: three consecutive
+ *     nights failing on the SAME id quarantines it — the cursor advances
+ *     past that one entry, the counter resets, and it is counted in
+ *     `whenSkipped` rather than retried forever. Two consecutive failures
+ *     still behave exactly as before (stop, no advance): the bar is three,
+ *     not one, so a single bad night for an otherwise-fine entry is not
+ *     mistaken for a permanent block.
  */
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
@@ -39,9 +67,22 @@ export const WHEN_MAX_PAST_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const WHEN_CURSOR_KEY = "when:cursor";
 
+/** Three consecutive nights failing on the SAME entry quarantines it. */
+export const WHEN_QUARANTINE_AFTER = 3;
+
+/**
+ * `createdAt`/`id` are the keyset position and are both absent until the
+ * pass has ever advanced past anything — a brand-new brain, or one where
+ * candidate #1 has failed every night so far, has a cursor carrying only
+ * failure tracking and no position at all. `failedId`/`failCount` name
+ * whichever id most recently failed and how many consecutive nights running
+ * it has failed; both are absent once nothing is currently failing.
+ */
 export interface WhenCursor {
-  createdAt: number;
-  id: string;
+  createdAt?: number;
+  id?: string;
+  failedId?: string;
+  failCount?: number;
 }
 
 export interface WhenCandidate {
@@ -55,13 +96,23 @@ export function parseWhenCursor(raw: string | null): WhenCursor | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed?.createdAt === "number" && typeof parsed?.id === "string") {
-      return { createdAt: parsed.createdAt, id: parsed.id };
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const cursor: WhenCursor = {};
+    if (typeof parsed.createdAt === "number" && typeof parsed.id === "string") {
+      cursor.createdAt = parsed.createdAt;
+      cursor.id = parsed.id;
     }
+    if (typeof parsed.failedId === "string" && typeof parsed.failCount === "number") {
+      cursor.failedId = parsed.failedId;
+      cursor.failCount = parsed.failCount;
+    }
+    // A cursor with neither a position nor an active failure streak carries
+    // nothing this pass can use — indistinguishable from absent.
+    if (cursor.createdAt === undefined && cursor.failedId === undefined) return null;
+    return cursor;
   } catch {
-    // fall through to null
+    return null;
   }
-  return null;
 }
 
 /** Read-only: GET /extract/dry-run uses this to preview from the same position the real pass would start at. */
@@ -74,9 +125,8 @@ export async function readWhenCursor(env: Env): Promise<WhenCursor | null> {
   }
 }
 
-async function writeWhenCursor(env: Env, row: { created_at: number; id: string }): Promise<void> {
+async function writeWhenCursor(env: Env, cursor: WhenCursor): Promise<void> {
   try {
-    const cursor: WhenCursor = { createdAt: row.created_at, id: row.id };
     await env.OAUTH_KV.put(WHEN_CURSOR_KEY, JSON.stringify(cursor));
   } catch (e) {
     console.error("When-extraction cursor write failed (non-fatal):", e);
@@ -113,11 +163,13 @@ export async function fetchWhenCandidates(
   scope: ScopeClause | null,
   limit: number = WHEN_EXTRACT_PER_NIGHT,
 ): Promise<WhenCandidate[]> {
-  const hasCursor = cursor != null;
+  // A cursor can carry ONLY failure tracking (no position yet) — see the
+  // WhenCursor doc comment — and that is not a position to query from.
+  const hasPosition = cursor?.createdAt !== undefined && cursor?.id !== undefined;
   const bindings: (string | number)[] = [];
-  if (cursor) bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  if (hasPosition) bindings.push(cursor!.createdAt!, cursor!.createdAt!, cursor!.id!);
   if (scope) bindings.push(...scope.bindings);
-  const { results } = await env.DB.prepare(candidateSql(hasCursor, scope?.clause ?? null)).bind(...bindings).all();
+  const { results } = await env.DB.prepare(candidateSql(hasPosition, scope?.clause ?? null)).bind(...bindings).all();
   // LIMIT is baked into candidateSql at WHEN_EXTRACT_PER_NIGHT; a caller
   // asking for fewer (GET /extract/dry-run) just reads fewer rows back.
   return (results as unknown as WhenCandidate[]).slice(0, limit);
@@ -231,6 +283,16 @@ Respond with JSON only. No text outside the JSON object.
 export interface WhenPassSummary {
   whenExtracted: number;
   whenJudged: number;
+  /** How many permanently-failing entries were quarantined this run (Finding 2). */
+  whenSkipped: number;
+  /**
+   * False only when this run judged at least one commitment but the batch
+   * that would have persisted it failed (Finding 1) — the run's whole cursor
+   * advance was rolled back, and every entry it looked at, judged or not,
+   * stays eligible to be asked about again. True otherwise, including the
+   * ordinary "found nothing to do" case.
+   */
+  ok: boolean;
 }
 
 /**
@@ -255,39 +317,78 @@ export async function runWhenExtractPass(
     candidates = await fetchWhenCandidates(env, cursor, slice, WHEN_EXTRACT_PER_NIGHT);
   } catch (e) {
     console.error("When-extraction candidate query failed (non-fatal):", e);
-    return { whenExtracted: 0, whenJudged: 0 };
+    return { whenExtracted: 0, whenJudged: 0, whenSkipped: 0, ok: true };
   }
 
   let whenJudged = 0;
-  let whenExtracted = 0;
+  let whenSkipped = 0;
   const writes: D1PreparedStatement[] = [];
-  let lastExamined: { created_at: number; id: string } | null = null;
+  // The position this run WOULD advance the cursor to, kept separate from
+  // the write until the batch below (if any) actually lands — Finding 1.
+  let nextPosition: { createdAt: number; id: string } | null = null;
+  // Failure tracking to persist alongside (or instead of) a position —
+  // Finding 2. Absent unless this run's loop stopped on a "failed" outcome.
+  let nextFailure: { failedId: string; failCount: number } | undefined;
 
   for (const candidate of candidates) {
     const verdict = await judgeCommitment(candidate.content, now, env, cfg);
-    if (verdict.outcome === "failed") break; // stop; do not advance the cursor past this one
-    lastExamined = candidate;
+    if (verdict.outcome === "failed") {
+      const priorCount = cursor?.failedId === candidate.id ? (cursor.failCount ?? 0) : 0;
+      const failCount = priorCount + 1;
+      if (failCount >= WHEN_QUARANTINE_AFTER) {
+        // Quarantined: advance PAST this one poisoned entry and reset the
+        // streak, rather than let it block the corpus behind it forever.
+        // What comes after it is not judged this same run — a fresh
+        // fetchWhenCandidates next time starts right there.
+        nextPosition = { createdAt: candidate.created_at, id: candidate.id };
+        nextFailure = undefined;
+        whenSkipped++;
+      } else {
+        nextFailure = { failedId: candidate.id, failCount };
+      }
+      break; // stop; do not advance the cursor's POSITION past this one, quarantine aside
+    }
+    nextPosition = { createdAt: candidate.created_at, id: candidate.id };
+    nextFailure = undefined; // a real verdict landed — any prior streak on an earlier id no longer applies
     whenJudged++;
     if (verdict.outcome === "commitment") {
       writes.push(
         env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_source = 'model' WHERE id = ?`)
           .bind(verdict.dueAt, candidate.id),
       );
-      whenExtracted++;
     }
   }
 
   // One batch however many writes it carries — the whole reason the loop
-  // above collects statements instead of running them as it goes.
+  // above collects statements instead of running them as it goes. Nothing
+  // about this run's cursor position is written unless this succeeds: a
+  // judged-but-unpersisted commitment must stay eligible to be asked about
+  // again, not be silently skipped because the cursor said it was handled.
+  let ok = true;
+  let whenExtracted = 0;
   if (writes.length) {
     try {
       await env.DB.batch(writes);
+      whenExtracted = writes.length;
     } catch (e) {
-      console.error("When-extraction batch write failed (non-fatal):", e);
+      console.error("When-extraction batch write failed; not advancing the cursor this run (non-fatal):", e);
+      ok = false;
     }
   }
 
-  if (lastExamined) await writeWhenCursor(env, lastExamined);
+  if (ok) {
+    // Quarantine's resulting position always wins over an in-progress
+    // failure streak on some OTHER, earlier id — nextFailure is already
+    // cleared in that branch above, so this just persists whichever of the
+    // two applies (or neither, on an empty candidate list).
+    const toWrite: WhenCursor = {
+      ...(nextPosition ? { createdAt: nextPosition.createdAt, id: nextPosition.id } : (cursor?.createdAt !== undefined ? { createdAt: cursor.createdAt, id: cursor.id! } : {})),
+      ...(nextFailure ? nextFailure : {}),
+    };
+    if (toWrite.createdAt !== undefined || toWrite.failedId !== undefined) {
+      await writeWhenCursor(env, toWrite);
+    }
+  }
 
-  return { whenExtracted, whenJudged };
+  return { whenExtracted, whenJudged, whenSkipped, ok };
 }

@@ -16,6 +16,8 @@ export interface NightSummary {
   whenJudged: number;
   /** Of those, how many were persisted as commitments. */
   whenExtracted: number;
+  /** How many permanently-failing entries the pass quarantined this run. */
+  whenSkipped: number;
 }
 
 export function nightSummaryKey(workspaceId: string): string {
@@ -62,6 +64,7 @@ export async function readNightSummary(env: Env, workspaceId: string): Promise<N
       // same as every other count here.
       whenJudged: parsed.whenJudged ?? 0,
       whenExtracted: parsed.whenExtracted ?? 0,
+      whenSkipped: parsed.whenSkipped ?? 0,
     };
   } catch (e) {
     console.error(`Night summary read failed for workspace ${workspaceId} (non-fatal):`, e);

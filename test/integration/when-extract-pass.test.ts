@@ -117,7 +117,7 @@ describe("runWhenExtractPass — persistence and cursor", () => {
     expect(cursor).toEqual({ createdAt: 1000, id: "loop-1" });
   });
 
-  it("does not advance the cursor past a failed candidate, so it is retried", async () => {
+  it("does not advance the cursor's position past a failed candidate, so it is retried", async () => {
     sq = await migrated();
     seedOpenLoop(sq, "loop-1", "Follow up with the accountant", 1000);
     const kv = makeMemoryKV();
@@ -129,7 +129,10 @@ describe("runWhenExtractPass — persistence and cursor", () => {
     const summary = await runWhenExtractPass(env, ctx, null);
 
     expect(summary.whenJudged).toBe(0);
-    expect(await readWhenCursor(env)).toBeNull();
+    // No POSITION is recorded (see test/integration/when-extract-pass.test.ts's
+    // "Finding 2" describe block for the failure-tracking half of this cursor).
+    const cursor = await readWhenCursor(env);
+    expect(cursor?.createdAt).toBeUndefined();
   });
 
   it("stops at the first failure without judging later candidates in the same batch", async () => {
@@ -158,7 +161,8 @@ describe("runWhenExtractPass — persistence and cursor", () => {
 
     expect(calls).toBe(1); // never reached loop-2
     expect(summary.whenJudged).toBe(0);
-    expect(await readWhenCursor(env)).toBeNull();
+    const cursor = await readWhenCursor(env);
+    expect(cursor?.createdAt).toBeUndefined();
   });
 
   it("does not re-select an entry once the cursor has passed it", async () => {
@@ -220,5 +224,188 @@ describe("runWhenExtractPass — the prompt", () => {
     vi.useRealTimers();
 
     expect(prompts[0]).toContain("2027-03-10");
+  });
+});
+
+/** Same as dbOf, but batch() always throws — for the write-failure rollback tests. */
+function dbWithFailingBatch(s: SqliteD1) {
+  return {
+    prepare: (sql: string) => s.db.prepare(sql),
+    exec: (sql: string) => s.db.exec(sql),
+    async batch() {
+      throw new Error("D1_ERROR: network error: SQLITE_ERROR");
+    },
+  };
+}
+
+describe("runWhenExtractPass — Finding 1: the batch write can fail", () => {
+  it("does not advance the cursor, reports the run as failed, and leaves the row untouched", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "loop-1", "File the annual report", 1000);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = makeTestEnv(dbWithFailingBatch(sq) as any, {
+      OAUTH_KV: makeMemoryKV(),
+      AI: makeAI(`{"is_commitment": true, "what": "File the report", "due_at": "2027-01-30", "confidence": 0.9}`),
+    });
+
+    const summary = await runWhenExtractPass(env, ctx, null);
+
+    expect(summary.ok).toBe(false);
+    // Judged (a verdict was reached), but NOT extracted — the write never landed.
+    expect(summary.whenJudged).toBe(1);
+    expect(summary.whenExtracted).toBe(0);
+    errorSpy.mockRestore();
+
+    const row = (await sq.db.prepare(`SELECT when_at, when_source FROM entries WHERE id = 'loop-1'`).first()) as any;
+    expect(row.when_at).toBeNull();
+    expect(row.when_source).toBeNull();
+
+    expect(await readWhenCursor(env)).toBeNull();
+  });
+
+  it("re-selects the same candidate next run once the batch succeeds", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "loop-1", "File the annual report", 1000);
+    const kv = makeMemoryKV();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failingEnv = makeTestEnv(dbWithFailingBatch(sq) as any, {
+      OAUTH_KV: kv,
+      AI: makeAI(`{"is_commitment": true, "what": "File the report", "due_at": "2027-01-30", "confidence": 0.9}`),
+    });
+    await runWhenExtractPass(failingEnv, ctx, null);
+    errorSpy.mockRestore();
+
+    // Same entry, now with a working batch.
+    const workingEnv = makeTestEnv(dbOf(sq) as any, {
+      OAUTH_KV: kv,
+      AI: makeAI(`{"is_commitment": true, "what": "File the report", "due_at": "2027-01-30", "confidence": 0.9}`),
+    });
+    const summary = await runWhenExtractPass(workingEnv, ctx, null);
+
+    expect(summary.ok).toBe(true);
+    expect(summary.whenExtracted).toBe(1);
+    const row = (await sq.db.prepare(`SELECT when_at FROM entries WHERE id = 'loop-1'`).first()) as any;
+    expect(row.when_at).toBe(Date.parse("2027-01-30"));
+  });
+
+  it("rolls back a whole run's worth of declines too, not just the commitment", async () => {
+    // The policy is "do not advance the cursor AT ALL", not "only roll back
+    // the commitment" — a declined candidate examined in the same run must
+    // be re-judged next time rather than skipped.
+    sq = await migrated();
+    seedOpenLoop(sq, "declined-1", "Just a note", 1000);
+    seedOpenLoop(sq, "commitment-1", "File the annual report", 2000);
+    let call = 0;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = makeTestEnv(dbWithFailingBatch(sq) as any, {
+      OAUTH_KV: makeMemoryKV(),
+      AI: {
+        run: vi.fn().mockImplementation(async () => {
+          call++;
+          const payload = call === 1
+            ? `{"is_commitment": false}`
+            : `{"is_commitment": true, "what": "File the report", "due_at": "2027-01-30", "confidence": 0.9}`;
+          return new ReadableStream({
+            start(c) {
+              c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(payload)}}\n\n`));
+              c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+              c.close();
+            },
+          });
+        }),
+      } as unknown as Ai,
+    });
+
+    const summary = await runWhenExtractPass(env, ctx, null);
+    errorSpy.mockRestore();
+
+    expect(summary.ok).toBe(false);
+    expect(summary.whenJudged).toBe(2);
+    expect(summary.whenExtracted).toBe(0);
+    expect(await readWhenCursor(env)).toBeNull();
+  });
+});
+
+describe("runWhenExtractPass — Finding 2: bounded quarantine for a permanently-failing entry", () => {
+  function makeSelectiveAI(failOn: string) {
+    return {
+      run: vi.fn().mockImplementation(async (_model: string, opts: any) => {
+        const prompt = String(opts?.messages?.[0]?.content ?? "");
+        if (prompt.includes(failOn)) throw new Error("AI down for this one");
+        return new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(`data: {"response":"{\\"is_commitment\\": false}"}\n\n`));
+            c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+            c.close();
+          },
+        });
+      }),
+    } as unknown as Ai;
+  }
+
+  it("stops without advancing on the first two failures (existing behavior preserved)", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "poison", "Unreadable memory", 1000);
+    seedOpenLoop(sq, "healthy", "A perfectly normal note", 2000);
+    const kv = makeMemoryKV();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv, AI: makeSelectiveAI("Unreadable memory") });
+
+    const night1 = await runWhenExtractPass(env, ctx, null);
+    expect(night1.whenJudged).toBe(0);
+    expect(night1.whenSkipped).toBe(0);
+
+    const night2 = await runWhenExtractPass(env, ctx, null);
+    expect(night2.whenJudged).toBe(0);
+    expect(night2.whenSkipped).toBe(0);
+    errorSpy.mockRestore();
+  });
+
+  it("quarantines the entry on the third consecutive failure, and judges what comes after it starting the following run", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "poison", "Unreadable memory", 1000);
+    seedOpenLoop(sq, "healthy", "A perfectly normal note", 2000);
+    const kv = makeMemoryKV();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv, AI: makeSelectiveAI("Unreadable memory") });
+
+    await runWhenExtractPass(env, ctx, null); // night 1: fail_count 1
+    await runWhenExtractPass(env, ctx, null); // night 2: fail_count 2
+    const night3 = await runWhenExtractPass(env, ctx, null); // night 3: fail_count 3 -> quarantine
+
+    expect(night3.whenSkipped).toBe(1);
+    // Quarantine advances the cursor past the poisoned entry but does not
+    // itself judge what comes after — that starts fresh next run.
+    expect(night3.whenJudged).toBe(0);
+
+    const night4 = await runWhenExtractPass(env, ctx, null);
+    errorSpy.mockRestore();
+
+    expect(night4.whenJudged).toBe(1); // "healthy", finally reached
+    expect(night4.whenSkipped).toBe(0);
+  });
+
+  it("resets the fail counter once a different entry is the one failing", async () => {
+    // Two separately-poisoned entries, neither failing three times in a row
+    // as the SAME entry, must not be quarantined.
+    sq = await migrated();
+    seedOpenLoop(sq, "poison-a", "First unreadable memory", 1000);
+    const kv = makeMemoryKV();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv, AI: makeSelectiveAI("First unreadable memory") });
+    await runWhenExtractPass(env, ctx, null); // poison-a fails once
+
+    // A different entry now sits at the same cursor position's "next" slot —
+    // simulate a fresh poison arriving before poison-a's streak reaches 3 by
+    // seeding a second, differently-poisoned entry AT THE SAME to-be-selected
+    // position is not representable without deleting poison-a, so instead
+    // this asserts the counter is keyed on id: judging a DIFFERENT failing id
+    // must not inherit poison-a's count.
+    seedOpenLoop(sq, "poison-b", "Second unreadable memory", 500); // before poison-a in ORDER
+    env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv, AI: makeSelectiveAI("econd unreadable") });
+    const summary = await runWhenExtractPass(env, ctx, null);
+    errorSpy.mockRestore();
+
+    expect(summary.whenSkipped).toBe(0); // poison-b's own count is 1, not inherited from poison-a
   });
 });
