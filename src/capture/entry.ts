@@ -16,6 +16,7 @@ import { rememberTags } from "../tags/vocabulary";
 import { isCapsuleTag } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { TRANSCRIPT_SOURCES } from "../constants";
+import type { WhenKind, WhenSource } from "../when/input";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -80,7 +81,11 @@ export async function captureEntry(
   env: Env,
   ctx: ExecutionContext,
   config?: Readonly<Config>,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
+  // The time-anchor primitive (src/when/input.ts). Only ever set on the plain
+  // "stored" INSERT below — a merged/replaced/protected write survives as an
+  // EXISTING row with its own timing, which this does not touch.
+  when?: { at: number; kind: WhenKind; source: WhenSource },
 ): Promise<CaptureResult> {
   // Resolved once per capture and threaded through duplicate detection and
   // every embed below. Recall and capture must agree on EMBEDDING_MODEL or the
@@ -202,8 +207,11 @@ export async function captureEntry(
     : duplicateTags;
 
   await env.DB.prepare(
-    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId).run();
+    `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
+    when?.at ?? null, when?.kind ?? null, when?.source ?? null,
+  ).run();
 
   ctx.waitUntil(
     storeEntry(env, id, c, finalTags, source, now, cfg, writeCtx)

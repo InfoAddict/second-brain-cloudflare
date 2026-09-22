@@ -51,7 +51,7 @@ const SCHEMA_PROBE_RESULTS = [
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
-    "staleness_checked_at"].map(name => ({ kind: "column", name })),
+    "staleness_checked_at", "when_at", "when_kind", "when_source"].map(name => ({ kind: "column", name })),
   ...["workspace_id", "actor_id"].map(name => ({ kind: "column", name })),
   // edges.workspace_id arrives by ALTER on upgraded brains and lives in the base
   // CREATE on fresh ones — either way a migrated brain reports it.
@@ -255,6 +255,12 @@ export class D1Mock {
           const [staleness_checked_at, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) row.staleness_checked_at = staleness_checked_at;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id = ?")) {
+          const [when_at, when_kind, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { row.when_at = when_at; row.when_kind = when_kind; row.when_source = "explicit"; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET tags = ? WHERE id")) {

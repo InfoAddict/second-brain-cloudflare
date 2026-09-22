@@ -163,6 +163,14 @@ const ENTRIES_COLUMNS: Record<string, string> = {
   // an explicit, memoised bootstrap rather than on the migration path.
   workspace_id: `ALTER TABLE entries ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`,
   actor_id: `ALTER TABLE entries ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''`,
+  // The time-anchor primitive. Same nullable, never-backfilled shape as updated_at
+  // above: most rows have no "when" at all, and NULL already reads that way to
+  // every consumer. when_at is epoch ms; when_kind is 'due' | 'event' | 'wake';
+  // when_source is 'explicit' | 'regex' | 'model', naming which of the three
+  // producers (MCP/API caller, src/when/heuristic.ts, src/when/pass.ts) set it.
+  when_at: `ALTER TABLE entries ADD COLUMN when_at INTEGER`,
+  when_kind: `ALTER TABLE entries ADD COLUMN when_kind TEXT`,
+  when_source: `ALTER TABLE entries ADD COLUMN when_source TEXT`,
 };
 
 /**
