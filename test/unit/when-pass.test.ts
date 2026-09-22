@@ -158,6 +158,20 @@ describe("judgeCommitment()", () => {
     const prompt = (ai.run as any).mock.calls[0][1].messages[0].content as string;
     expect(prompt).toContain("2026-01-15");
   });
+
+  it("anchors due_at at midnight in config.TIMEZONE, not UTC", async () => {
+    const env = makeTestEnv(makeTestDb(), {
+      AI: makeAI(`{"is_commitment": true, "what": "File the annual report", "due_at": "2026-01-30", "confidence": 0.9}`),
+    });
+    const config = { ...DEFAULTS, TIMEZONE: "America/New_York" };
+
+    const out = await judgeCommitment(content, REFERENCE_DATE, env, config);
+
+    // January is standard time (EST, UTC-5): midnight Eastern is 05:00 UTC.
+    expect(out).toEqual({
+      outcome: "commitment", what: "File the annual report", dueAt: Date.UTC(2026, 0, 30, 5), confidence: 0.9, kind: "due",
+    });
+  });
 });
 
 describe("parseWhenCursor()", () => {

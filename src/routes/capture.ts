@@ -69,7 +69,7 @@ export async function handleCaptureRoutes(
     let when: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
     if (body.when !== undefined && body.when !== null) {
       if (typeof body.when !== "string") return json({ ok: false, error: "when must be a string" }, 400);
-      const parsed = parseExplicitWhen(body.when, body.when_kind);
+      const parsed = parseExplicitWhen(body.when, body.when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
       if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
       when = parsed.value;
     } else if (body.when_kind !== undefined) {

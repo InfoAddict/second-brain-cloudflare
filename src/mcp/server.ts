@@ -53,7 +53,8 @@ const volatilityParam = z
 const WHEN_DESCRIPTION =
   "Optional future date this memory should come back to you: a deadline, an event, or a reminder. "
   + "Pass either a plain date (2026-06-15) or a full datetime with an explicit UTC/offset "
-  + "(2026-06-15T09:00:00Z or 2026-06-15T09:00:00-05:00) — a datetime with no offset is read as UTC.";
+  + "(2026-06-15T09:00:00Z or 2026-06-15T09:00:00-05:00). A plain date, or a datetime with no "
+  + "offset, is read as that calendar date/time in the brain's configured timezone (UTC by default).";
 const WHEN_KIND_DESCRIPTION =
   "What kind of moment `when` marks: due (a deadline), event (something happening then), or wake (a plain reminder, the default).";
 
@@ -356,7 +357,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
       let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
       if (when !== undefined) {
-        const parsed = parseExplicitWhen(when, when_kind);
+        const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
         if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
         whenInput = parsed.value;
       } else if (when_kind !== undefined) {
@@ -456,7 +457,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
 
       let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
       if (when !== undefined) {
-        const parsed = parseExplicitWhen(when, when_kind);
+        const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
         if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
         whenInput = parsed.value;
       } else if (when_kind !== undefined) {

@@ -1337,7 +1337,7 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
 
-    const parsed = parseExplicitWhen(body.until, undefined);
+    const parsed = parseExplicitWhen(body.until, undefined, undefined, (await resolveConfig(env)).TIMEZONE);
     if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
     const until = parsed.value!.at;
     if (until <= Date.now()) return json({ ok: false, error: "until must be in the future" }, 400);

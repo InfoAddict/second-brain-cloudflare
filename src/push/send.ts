@@ -5,6 +5,7 @@
  * cron (src/index.ts) and by the admin POST /push/run and /push/test routes.
  */
 import type { Env } from "../env";
+import { resolveConfig } from "../config";
 import { DUE_SQL } from "../when/input";
 import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
@@ -95,9 +96,20 @@ function toReportedOutcomes(outcomes: { hash: string; result: SendResult; httpSt
   }));
 }
 
-function notificationPayload(candidate: DueCandidate, contentFree: boolean): Record<string, unknown> {
+/**
+ * The Worker has no browser locale to render in, so the notification body's
+ * date is formatted directly in the brain's configured TIMEZONE via Intl —
+ * not toISOString (always UTC) and not the server runtime's own local time
+ * (Workers run in UTC anyway, and even if they did not, "the machine
+ * happened to run on" is not "the zone this brain is configured for").
+ */
+function notificationPayload(candidate: DueCandidate, contentFree: boolean, timezone: string): Record<string, unknown> {
   if (contentFree) return { title: "1 thing due - tap to view" };
-  const dueDate = new Date(candidate.when_at).toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(candidate.when_at);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+  const dueDate = `${get("year")}-${get("month")}-${get("day")}`;
   return { title: candidate.label, body: `due ${dueDate} - from your second brain`, entry_id: candidate.id };
 }
 
@@ -182,6 +194,7 @@ export interface PushDueItemsResult {
  */
 export async function pushDueItems(env: Env, workspaceId: string): Promise<PushDueItemsResult> {
   const now = Date.now();
+  const config = await resolveConfig(env);
   const dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label FROM entries
      WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
@@ -209,7 +222,7 @@ export async function pushDueItems(env: Env, workspaceId: string): Promise<PushD
   let sent = 0;
   const outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[] = [];
   for (const candidate of candidates) {
-    const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree);
+    const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree, config.TIMEZONE);
     for (const sub of subs) {
       const outcome = await sendOne(env, sub, payload(!!sub.content_free));
       if (outcome.result === "ok") sent++;

@@ -53,6 +53,7 @@ import { DEFAULTS, resolveConfig, type Config } from "../config";
 import { WHEN_PASS_MAX_TOKENS } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { initializeDatabase } from "../db/init";
+import { zonedMidnightMs } from "./timezone";
 import { OPEN_LOOP_SQL } from "../memory/loops";
 import type { ScopeClause } from "../lib/scope";
 
@@ -194,7 +195,7 @@ function isReadableJsonObject(raw: string): boolean {
   }
 }
 
-function parseCommitmentJson(raw: string): {
+function parseCommitmentJson(raw: string, timezone: string): {
   isCommitment: boolean; what: string; dueAt: number | null; confidence: number; kind: "due" | "event";
 } | null {
   const match = raw.match(/\{[\s\S]*\}/);
@@ -211,9 +212,12 @@ function parseCommitmentJson(raw: string): {
     ? parsed.confidence : 0;
   const what = typeof parsed.what === "string" ? parsed.what.trim().slice(0, MAX_WHAT_CHARS) : "";
   let dueAt: number | null = null;
-  if (typeof parsed.due_at === "string" && parsed.due_at.trim()) {
-    const at = Date.parse(parsed.due_at.trim());
-    if (!Number.isNaN(at)) dueAt = at;
+  const dueAtMatch = typeof parsed.due_at === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(parsed.due_at.trim()) : null;
+  // Anchored in the brain's configured TIMEZONE (src/when/timezone.ts), not
+  // UTC — the model answers with a bare YYYY-MM-DD, which is exactly the
+  // date-only case that anchor exists for.
+  if (dueAtMatch) {
+    dueAt = zonedMidnightMs(Number(dueAtMatch[1]), Number(dueAtMatch[2]) - 1, Number(dueAtMatch[3]), timezone);
   }
   // Absent or unrecognised defaults to "due" — an appointment is an "event",
   // but calling everything else a deadline is the safer failure than
@@ -272,7 +276,7 @@ Respond with JSON only. No text outside the JSON object.
   // a judgement to record, same reasoning as reason.ts's identical guard.
   if (!isReadableJsonObject(raw)) return { outcome: "failed" };
 
-  const parsed = parseCommitmentJson(raw);
+  const parsed = parseCommitmentJson(raw, config.TIMEZONE);
   if (!parsed) return { outcome: "declined" };
   if (!parsed.isCommitment) return { outcome: "declined" };
   if (parsed.confidence < WHEN_CONFIDENCE_THRESHOLD) return { outcome: "declined" };

@@ -78,17 +78,18 @@ describe("the due sheet's date display", () => {
   const originalTz = process.env.TZ;
   afterEach(() => { process.env.TZ = originalTz; });
 
-  it("shows the UTC calendar date for a midnight-UTC due date, not the viewer's local date", async () => {
-    // West of Greenwich, local midnight-UTC-minus-a-few-hours reads as the
-    // PREVIOUS day unless the UTC date is used explicitly — this is exactly
-    // the off-by-one a viewer west of Greenwich saw ("Due Sep 21" for a
-    // 2026-09-22T00:00Z when_at). Forcing TZ here makes the assertion
-    // meaningful regardless of the host machine/CI's own timezone.
-    process.env.TZ = "America/Los_Angeles";
-    const midnightUtc = Date.UTC(2026, 8, 22); // 2026-09-22T00:00:00.000Z
+  it("shows the calendar date a local-midnight when_at was anchored at, using the viewer's local render", async () => {
+    // when_at now anchors midnight in the brain's CONFIGURED timezone
+    // (src/when/timezone.ts), not UTC — so a viewer in that same real-world
+    // zone reading it with ordinary local-time formatting (formatDateUI)
+    // sees the intended calendar date directly. This fixture is what
+    // "2026-09-23" anchored in America/New_York actually produces: midnight
+    // Eastern (EDT, UTC-4) is 2026-09-23T04:00Z.
+    process.env.TZ = "America/New_York";
+    const localMidnight = Date.UTC(2026, 8, 23, 4); // 2026-09-23T04:00:00.000Z = Sep 23 00:00 EDT
     const ctx = load([{
       ok: true,
-      overdue: [{ id: "e1", content: "File the report", label: "File the report", tags: [], when_at: midnightUtc }],
+      overdue: [{ id: "e1", content: "File the report", label: "File the report", tags: [], when_at: localMidnight }],
       upcoming: [],
       counts: { overdue: 1, upcoming: 0 },
     }]);
@@ -96,8 +97,8 @@ describe("the due sheet's date display", () => {
     await ctx.loadDueQueue();
 
     const html = ctx.__els.get("due-list").innerHTML;
-    expect(html).toContain("Sep 22, 2026");
-    expect(html).not.toContain("Sep 21, 2026");
+    expect(html).toContain("Sep 23, 2026");
+    expect(html).not.toContain("Sep 22, 2026");
   });
 });
 

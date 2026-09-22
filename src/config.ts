@@ -111,6 +111,17 @@ export const DEFAULTS = {
   // access to it stayed exactly where they were. "auto" is today's behaviour
   // spelled out, so upgrading changes nothing for anybody.
   TEAM_MODE: "auto",
+
+  // ── Time anchoring (src/when/timezone.ts) ──
+  // IANA zone name a date-only `when` (a bare "2026-06-15", the regex pass's
+  // extracted dates, the model pass's due_at) anchors midnight in — and an
+  // offsetless datetime anchors its wall-clock time in, superseding the
+  // earlier "always UTC" rule. "UTC" by construction: a brain that never sets
+  // this keeps today's behaviour exactly. Validated against Intl.DateTimeFormat
+  // when set (src/config.ts's coerce/validateStrict), not just any non-empty
+  // string — an unrecognized zone name would silently anchor every future due
+  // date at the wrong instant instead of failing the write that set it.
+  TIMEZONE: "UTC",
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -175,7 +186,24 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_DEFAULT_WORKSPACE: { kind: "string" },
   TEAM_INSIGHTS: { kind: "string" },
   TEAM_MODE: { kind: "string" },
+  TIMEZONE: { kind: "string" },
 };
+
+/**
+ * The only cheap probe available — there is no static IANA zone list to check
+ * against, and Intl.DateTimeFormat throws RangeError for a name it does not
+ * recognize. Special-cased on the key rather than a new Rule kind: every
+ * other consumer of RULES/coerce/validateStrict treats "string" generically,
+ * and TIMEZONE is the one string setting where "non-empty" is not "valid".
+ */
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Groups that must stay internally ordered. A violation is not clamped
@@ -208,6 +236,9 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
   if (rule.kind === "string") {
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };
+    }
+    if (key === "TIMEZONE" && !isValidTimeZone(value)) {
+      return { value: fallback, note: `${key}: "${value}" is not a recognized IANA timezone` };
     }
     return { value: value as Config[ConfigKey] };
   }
@@ -307,9 +338,11 @@ function validateStrict(key: string, value: unknown): string | null {
   const rule = RULES[key as ConfigKey];
 
   if (rule.kind === "string") {
-    return typeof value === "string" && value.trim() !== ""
-      ? null
-      : `${key} must be a non-empty string`;
+    if (typeof value !== "string" || value.trim() === "") return `${key} must be a non-empty string`;
+    if (key === "TIMEZONE" && !isValidTimeZone(value)) {
+      return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;
+    }
+    return null;
   }
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return `${key} must be a finite number`;

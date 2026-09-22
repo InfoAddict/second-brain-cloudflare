@@ -5,16 +5,21 @@
  * distinguishes a caller-supplied date from src/when/heuristic.ts's regex
  * guess or src/when/pass.ts's model judgment.
  *
- * NORMALIZATION (Finding 5). `Date.parse` reads a bare date ("2026-06-15")
- * as UTC midnight but a bare datetime with no offset ("2026-06-15T09:00:00")
- * as the RUNNING PROCESS'S OWN LOCAL TIME — two different rules for two
- * inputs that look equally "plain" to a caller, and the second one is not
- * even deterministic across deployments. This module picks one rule for
- * both: a bare date stays UTC midnight, and a datetime with no explicit
- * offset is treated as UTC (a trailing "Z" is appended before parsing).
- * Pass a plain date or a full offset datetime — never a bare datetime and
- * expect it to mean anything but UTC.
+ * NORMALIZATION (Finding 5, revised). `Date.parse` reads a bare date
+ * ("2026-06-15") as UTC midnight but a bare datetime with no offset
+ * ("2026-06-15T09:00:00") as the RUNNING PROCESS'S OWN LOCAL TIME — two
+ * different rules for two inputs that look equally "plain" to a caller, and
+ * the second one is not even deterministic across deployments. This module
+ * picks one rule for both, and it is no longer "always UTC": a bare date or
+ * an offsetless datetime anchors midnight (or its wall-clock time) in the
+ * brain's configured TIMEZONE (src/config.ts, src/when/timezone.ts) —
+ * "UTC" for a brain that never sets it, which is exactly today's behaviour.
+ * Pass a plain date/datetime or a full offset datetime; an offset already on
+ * the string is honoured as given and never reinterpreted in the configured
+ * zone.
  */
+import { zonedMsFromBareIso } from "./timezone";
+
 export const WHEN_KIND_VALUES = ["due", "event", "wake"] as const;
 export type WhenKind = (typeof WHEN_KIND_VALUES)[number];
 
@@ -52,16 +57,8 @@ export interface ExplicitWhen {
   source: "explicit";
 }
 
-/** ISO 8601 date only, no time component — Date.parse already reads this as UTC midnight. */
-const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Carries an explicit UTC ("Z") or numeric offset already. */
 const HAS_TIMEZONE_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
-
-/** See the NORMALIZATION note above: a bare datetime is forced to UTC rather than left runtime-local. */
-function normalizeToUtc(raw: string): string {
-  if (BARE_DATE_RE.test(raw) || HAS_TIMEZONE_RE.test(raw)) return raw;
-  return `${raw}Z`;
-}
 
 /**
  * Validates a caller-supplied `when` (ISO 8601 date or datetime) and optional
@@ -69,14 +66,21 @@ function normalizeToUtc(raw: string): string {
  * this, absent a more specific label. No restriction on the past: a
  * retroactive "this was due on" is a legitimate use, only the future is
  * bounded, against fat-fingering a year.
+ *
+ * `timezone` anchors a bare date/datetime (no offset); an input that already
+ * carries one is parsed as given and `timezone` does not apply to it. See
+ * the NORMALIZATION note above.
  */
 export function parseExplicitWhen(
   rawWhen: string,
   rawKind: unknown,
   now: number = Date.now(),
+  timezone: string = "UTC",
 ): { value?: ExplicitWhen; error?: string } {
   const trimmed = rawWhen.trim();
-  const at = trimmed ? Date.parse(normalizeToUtc(trimmed)) : NaN;
+  const at = trimmed
+    ? (HAS_TIMEZONE_RE.test(trimmed) ? Date.parse(trimmed) : zonedMsFromBareIso(trimmed, timezone) ?? NaN)
+    : NaN;
   if (!trimmed || Number.isNaN(at)) {
     return { error: "when must be a parseable ISO 8601 date or datetime" };
   }

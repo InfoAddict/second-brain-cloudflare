@@ -212,7 +212,7 @@ export async function captureEntry(
   // model call — and only ever claims a date nobody could dispute; anything
   // fuzzier is src/when/pass.ts's job, on a budget, at night.
   const resolvedWhen = when ?? (() => {
-    const at = extractUnambiguousDate(c, now);
+    const at = extractUnambiguousDate(c, now, cfg.TIMEZONE);
     return at !== null ? { at, kind: "due" as WhenKind, source: "regex" as WhenSource } : undefined;
   })();
 

@@ -18,27 +18,27 @@ describe("extractUnambiguousDate", () => {
 
   it("finds a 'Month D, YYYY' date", () => {
     const at = extractUnambiguousDate("The lease ends September 30, 2026.", NOW);
-    expect(at).toBe(new Date(2026, 8, 30).getTime());
+    expect(at).toBe(Date.UTC(2026, 8, 30));
   });
 
   it("finds an abbreviated 'Mon D YYYY' date", () => {
     const at = extractUnambiguousDate("Renew by Sep 30 2026", NOW);
-    expect(at).toBe(new Date(2026, 8, 30).getTime());
+    expect(at).toBe(Date.UTC(2026, 8, 30));
   });
 
   it("finds a bare 'Month D' date and assumes the current year", () => {
     const at = extractUnambiguousDate("Party on September 30", NOW);
-    expect(at).toBe(new Date(2026, 8, 30).getTime());
+    expect(at).toBe(Date.UTC(2026, 8, 30));
   });
 
   it("finds an m/d/yyyy date", () => {
     const at = extractUnambiguousDate("Filing deadline: 9/30/2026", NOW);
-    expect(at).toBe(new Date(2026, 8, 30).getTime());
+    expect(at).toBe(Date.UTC(2026, 8, 30));
   });
 
   it("handles an ordinal suffix on the day", () => {
     const at = extractUnambiguousDate("Due September 30th, 2026", NOW);
-    expect(at).toBe(new Date(2026, 8, 30).getTime());
+    expect(at).toBe(Date.UTC(2026, 8, 30));
   });
 
   it("returns the soonest future date when several appear", () => {
@@ -103,7 +103,7 @@ describe("extractUnambiguousDate", () => {
 
     it("still extracts a month-name date immediately followed by terminal punctuation", () => {
       const at = extractUnambiguousDate("Renew by September 23 2026.", NOW);
-      expect(at).toBe(new Date(2026, 8, 23).getTime());
+      expect(at).toBe(Date.UTC(2026, 8, 23));
     });
 
     it("still extracts an ISO date immediately followed by a period", () => {
@@ -127,12 +127,33 @@ describe("extractUnambiguousDate", () => {
 
     it("still accepts 9/30/2026 — 30 cannot be a month, so only one reading is valid", () => {
       const at = extractUnambiguousDate("Filing deadline: 9/30/2026", NOW);
-      expect(at).toBe(new Date(2026, 8, 30).getTime());
+      expect(at).toBe(Date.UTC(2026, 8, 30));
     });
 
     it("accepts a slash date where both fields are equal (both readings agree)", () => {
       const at = extractUnambiguousDate("Anniversary is 12/12/2026", NOW);
-      expect(at).toBe(new Date(2026, 11, 12).getTime());
+      expect(at).toBe(Date.UTC(2026, 11, 12));
+    });
+  });
+
+  describe("timezone anchoring (src/when/timezone.ts)", () => {
+    it("anchors an ISO date at midnight in the configured timezone, not UTC", () => {
+      const at = extractUnambiguousDate("Renewal is due 2026-09-30.", NOW, "America/New_York");
+      expect(at).toBe(Date.UTC(2026, 8, 30, 4)); // EDT, UTC-4
+    });
+
+    it("anchors a month-name date at midnight in the configured timezone", () => {
+      const at = extractUnambiguousDate("The lease ends September 30, 2026.", NOW, "America/New_York");
+      expect(at).toBe(Date.UTC(2026, 8, 30, 4));
+    });
+
+    it("anchors a slash date at midnight in the configured timezone", () => {
+      const at = extractUnambiguousDate("Filing deadline: 9/30/2026", NOW, "America/New_York");
+      expect(at).toBe(Date.UTC(2026, 8, 30, 4));
+    });
+
+    it("still rejects an invalid calendar date (February 30) with a timezone configured", () => {
+      expect(extractUnambiguousDate("Due February 30, 2026.", NOW, "America/New_York")).toBeNull();
     });
   });
 });

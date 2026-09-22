@@ -32,11 +32,11 @@ async function loadDueQueue(highlightId) {
 }
 
 function dueWhenLine(item) {
-  // UTC, not formatDateUI: when_at's date-only case is always midnight UTC,
-  // and a due-by date has to read the same regardless of the viewer's
-  // timezone — formatDateUI (local time) reads that midnight as the
-  // previous day everywhere west of Greenwich.
-  return t('due.due', { date: formatDateUTC(item.when_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
+  // Local time (formatDateUI), not UTC: when_at now anchors midnight in the
+  // brain's configured TIMEZONE (src/config.ts, src/when/timezone.ts), not
+  // UTC midnight, so the browser's own local render already shows the
+  // intended calendar date for someone in that zone.
+  return t('due.due', { date: formatDateUI(item.when_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
 }
 
 /**

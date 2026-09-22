@@ -4,13 +4,14 @@
  * clause, and a mock that matches queries by substring cannot tell a correct
  * predicate from a broken one.
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { setDbReady } from "../../src/runtime/state";
+import { parseExplicitWhen } from "../../src/when/input";
 import type { Env } from "../../src/env";
 
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as any;
@@ -277,5 +278,35 @@ describe("POST /due/clear", () => {
 
     const data = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
     expect(data.overdue.map((r: any) => r.id)).not.toContain("e1");
+  });
+});
+
+/**
+ * The user-visible contract TIMEZONE anchoring exists for: a reminder
+ * captured as a bare date is overdue when the CONFIGURED zone's clock passes
+ * midnight on that date, not when UTC's does. Before this, "2026-09-23"
+ * turned overdue at 2026-09-22T20:00 Eastern (8pm the evening before) — a
+ * push notification would have fired a night early for anyone west of
+ * Greenwich.
+ */
+describe("GET /due — timezone-anchored overdue boundary", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("is NOT overdue just before midnight in the configured zone, and IS overdue just after", async () => {
+    sq = await migrated();
+    const parsed = parseExplicitWhen("2026-09-23", undefined, undefined, "America/New_York");
+    expect(parsed.error).toBeUndefined();
+    seedWhen(sq, "e1", "File the report", parsed.value!.at);
+
+    // 2026-09-23T01:00Z is 2026-09-22T21:00 Eastern (EDT, UTC-4) — 9pm the
+    // evening before, not yet due.
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 8, 23, 1, 0));
+    const notYet = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
+    expect(notYet.overdue.map((r: any) => r.id)).not.toContain("e1");
+
+    // 2026-09-23T05:01Z is 2026-09-23T01:01 Eastern — just past local midnight.
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 8, 23, 5, 1));
+    const overdue = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
+    expect(overdue.overdue.map((r: any) => r.id)).toContain("e1");
   });
 });

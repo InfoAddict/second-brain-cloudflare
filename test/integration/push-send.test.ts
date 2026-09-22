@@ -107,12 +107,13 @@ describe("pushDueItems", () => {
     expect(payload.entry_id).toBeUndefined();
   });
 
-  it("puts the UTC calendar date in the notification body, not the server's local date", async () => {
-    // scripts/brief-preview.mjs and the due sheet (public/js/due.js) both
-    // anchor a date-only when_at to its UTC calendar date rather than
-    // whatever timezone happens to be running the code; the sender has to
-    // agree, or "due Sep 21" could reach the phone for an item the due
-    // sheet — reading the same when_at — calls "due Sep 22".
+  it("puts the configured-timezone calendar date in the notification body (UTC default), not the server's local date", async () => {
+    // The Worker has no browser locale and no per-request local time worth
+    // trusting — it formats in config.TIMEZONE ("UTC" for a brain that never
+    // sets it) via Intl, never the server runtime's own local time. The due
+    // sheet (public/js/due.js) reads the same when_at with ordinary local
+    // formatting, which agrees once when_at is anchored in that same zone
+    // (src/when/timezone.ts) — this test's job is only the sender's half.
     const originalTz = process.env.TZ;
     process.env.TZ = "America/Los_Angeles";
     try {
@@ -135,6 +136,28 @@ describe("pushDueItems", () => {
     } finally {
       process.env.TZ = originalTz;
     }
+  });
+
+  it("formats the notification body's date in a configured non-UTC TIMEZONE", async () => {
+    sq = await migrated();
+    // Midnight Eastern (EDT, UTC-4) on 2020-09-23 is 2020-09-23T04:00:00Z —
+    // a UTC read of that instant would (wrongly) say "2020-09-23" too, so
+    // this uses a time where UTC and Eastern disagree on the calendar day.
+    const midnightEastern = Date.UTC(2020, 8, 23, 4);
+    seedDue(sq, "e1", "File the report", midnightEastern, "File the report");
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+    const kv = makeMemoryKV();
+    await kv.put("config:overrides", JSON.stringify({ TIMEZONE: "America/New_York" }));
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+    const cryptoModule = await import("../../src/push/crypto");
+    const encryptSpy = vi.spyOn(cryptoModule, "encryptWebPush");
+
+    await pushDueItems(env, "");
+
+    const plaintext = new TextDecoder().decode(encryptSpy.mock.calls[0][0].plaintext);
+    const payload = JSON.parse(plaintext);
+    expect(payload.body).toContain("2020-09-23");
   });
 
   it("does not re-notify for the same when_at once pushed", async () => {
