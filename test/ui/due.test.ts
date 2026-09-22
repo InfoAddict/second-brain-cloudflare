@@ -14,6 +14,9 @@ const ROOT = resolve(import.meta.dirname, "../..");
 
 function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }: { hash?: string; search?: string; authToken?: string } = {}) {
   const els = new Map<string, any>();
+  const windowListeners = new Map<string, ((ev: unknown) => void)[]>();
+  const docListeners = new Map<string, ((ev: unknown) => void)[]>();
+  const docState = { visibilityState: "visible" };
   const makeEl = (id?: string) => ({
     id,
     hidden: false,
@@ -40,7 +43,13 @@ function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }
     closeMenu: () => {},
     showToast: () => {},
     history: { replaceState: vi.fn() },
-    window: { location: { hash, pathname: "/", search } },
+    window: {
+      location: { hash, pathname: "/", search },
+      addEventListener: (type: string, fn: (ev: unknown) => void) => {
+        if (!windowListeners.has(type)) windowListeners.set(type, []);
+        windowListeners.get(type)!.push(fn);
+      },
+    },
     navigator: {
       serviceWorker: {
         addEventListener: (type: string, fn: (ev: unknown) => void) => {
@@ -62,8 +71,12 @@ function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }
         return els.get(id);
       },
       createElement: () => makeEl(),
-      addEventListener() {},
+      addEventListener: (type: string, fn: (ev: unknown) => void) => {
+        if (!docListeners.has(type)) docListeners.set(type, []);
+        docListeners.get(type)!.push(fn);
+      },
       querySelectorAll: () => [],
+      get visibilityState() { return docState.visibilityState; },
     },
   };
   ctx.globalThis = ctx;
@@ -75,6 +88,11 @@ function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }
   ctx.__els = els;
   ctx.__fetchCalls = fetchCalls;
   ctx.__fireSwMessage = (data: unknown) => { for (const fn of swMessageListeners) fn({ data }); };
+  ctx.__fireWindowEvent = (type: string) => { for (const fn of windowListeners.get(type) ?? []) fn({}); };
+  ctx.__fireVisibilityChange = (state: "visible" | "hidden") => {
+    docState.visibilityState = state;
+    for (const fn of docListeners.get("visibilitychange") ?? []) fn({});
+  };
   return ctx;
 }
 
@@ -432,6 +450,19 @@ describe("handleDueLink", () => {
 
       expect(opened).toBe(false);
     });
+
+    it("opens immediately AND clears any IndexedDB record the service worker also stashed, so a resume check right after does not reopen the same tap", async () => {
+      const ctx = load([dueResponse()]);
+      await ctx.stashPendingDueId("e1"); // sw.js now stashes unconditionally, even on this branch
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      ctx.__fireSwMessage({ type: "due-deep-link", entry_id: "e1" });
+
+      expect(openedWith).toBe("e1"); // still immediate — not delayed by the IndexedDB clear
+      await new Promise((r) => setTimeout(r, 0)); // let the fire-and-forget clear settle
+      expect(await ctx.readPendingDueRecord()).toBeNull();
+    });
   });
 
   describe("the IndexedDB pending-record fallback (2-minute TTL)", () => {
@@ -495,5 +526,111 @@ describe("handleDueLink", () => {
       // Untouched — the hash channel won, so IndexedDB was never even read.
       expect((await ctx.readPendingDueRecord())?.id).toBe("from-idb");
     });
+  });
+});
+
+/**
+ * iOS wakes a backgrounded PWA by RESUMING it, not by booting or navigating
+ * it — confirmed live: a notification tap with the app already open on any
+ * screen focused the app and did nothing at all. Neither postMessage (lost
+ * to a frozen page) nor a boot-time check ever ran. These three signals
+ * (visibilitychange to visible, pageshow, window focus) all route to the
+ * same handleDueLink used on boot, so the IndexedDB stash sw.js now writes
+ * unconditionally gets picked up here too.
+ */
+describe("resume triggers (visibilitychange, pageshow, focus)", () => {
+  it("opens the due sheet when a pending record exists and auth is ready, and clears the record", async () => {
+    const ctx = load([dueResponse()]);
+    await ctx.stashPendingDueId("e1");
+    let openedWith: string | undefined;
+    ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+    ctx.__fireVisibilityChange("visible");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(openedWith).toBe("e1");
+    expect(await ctx.readPendingDueRecord()).toBeNull();
+  });
+
+  it("visibilitychange to hidden does nothing", () => {
+    const ctx = load([]);
+    let opened = false;
+    ctx.openDueSheet = () => { opened = true; };
+
+    ctx.__fireVisibilityChange("hidden");
+
+    expect(opened).toBe(false);
+  });
+
+  it("pageshow and focus trigger the same pending-record check", async () => {
+    const ctx = load([dueResponse()]);
+    await ctx.stashPendingDueId("e1");
+    let openedWith: string | undefined;
+    ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+    ctx.__fireWindowEvent("pageshow");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(openedWith).toBe("e1");
+  });
+
+  it("does not open twice when several resume signals fire together", async () => {
+    const ctx = load([dueResponse()]);
+    await ctx.stashPendingDueId("e1");
+    let openCount = 0;
+    ctx.openDueSheet = () => { openCount++; };
+
+    // Dispatched back to back, the way a real resume fires them — the
+    // in-flight guard (set before the first await, inside handleDueLink)
+    // must absorb the second and third, not a timer.
+    ctx.__fireVisibilityChange("visible");
+    ctx.__fireWindowEvent("pageshow");
+    ctx.__fireWindowEvent("focus");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(openCount).toBe(1);
+    expect(await ctx.readPendingDueRecord()).toBeNull();
+  });
+
+  it("ignores and deletes a resume-time record older than the 2-minute TTL", async () => {
+    const ctx = load([]);
+    await ctx.stashPendingDueId("stale");
+    const db = await new Promise<any>((resolve) => {
+      const req = ctx.indexedDB.open("sb-push", 1);
+      req.onsuccess = () => resolve(req.result);
+    });
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction("pending", "readwrite");
+      tx.objectStore("pending").put({ id: "stale", at: Date.now() - 3 * 60 * 1000 }, "due");
+      tx.oncomplete = () => resolve();
+    });
+    let opened = false;
+    ctx.openDueSheet = () => { opened = true; };
+
+    ctx.__fireVisibilityChange("visible");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(opened).toBe(false);
+    expect(await ctx.readPendingDueRecord()).toBeNull();
+  });
+
+  it("defers to a later resume when auth is not ready yet at the moment of resume", async () => {
+    const ctx = load([dueResponse()], { authToken: "" });
+    await ctx.stashPendingDueId("e1");
+    let openedWith: string | undefined;
+    ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+    ctx.__fireVisibilityChange("visible");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(openedWith).toBeUndefined();
+    expect((await ctx.readPendingDueRecord())?.id).toBe("e1"); // untouched — no-op must not consume it
+
+    ctx.AUTH_TOKEN = "t"; // boot (or the app) finishes authenticating
+    ctx.__fireWindowEvent("focus"); // the next resume signal picks it up
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(openedWith).toBe("e1");
+    expect(await ctx.readPendingDueRecord()).toBeNull();
   });
 });

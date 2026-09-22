@@ -111,6 +111,25 @@ describe("sw.js — notificationclick", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("stashes to IndexedDB in the client-exists branch too, before postMessage or focus — iOS can resume a suspended client without ever delivering either", async () => {
+    const { ctx, matchAllResult } = load();
+    const callOrder: string[] = [];
+    const originalStash = ctx.stashPendingDueId;
+    ctx.stashPendingDueId = async (id: string) => {
+      callOrder.push("stash");
+      return originalStash(id);
+    };
+    const focus = vi.fn().mockImplementation(async () => { callOrder.push("focus"); });
+    const postMessage = vi.fn().mockImplementation(() => { callOrder.push("postMessage"); });
+    matchAllResult.push({ focus, postMessage });
+    const event = { notification: { close: () => {}, data: { entry_id: "e1" } }, waitUntil: (p: Promise<unknown>) => p };
+
+    await ctx.module.exports.handleNotificationClick(event);
+
+    expect(callOrder).toEqual(["stash", "postMessage", "focus"]);
+    expect((await ctx.readPendingDueRecord())?.id).toBe("e1");
+  });
+
   it("does not postMessage (or throw) when the client has no postMessage method", async () => {
     const { ctx, matchAllResult } = load();
     const focus = vi.fn().mockResolvedValue(undefined);

@@ -184,22 +184,34 @@ async function snoozeDue(id, choice, btn) {
  * as it found it for a later, properly-authenticated call to still see.
  */
 
-/** Set for the duration of one handleDueLink-driven load (channels 2-4); see the guard below. */
+/**
+ * Held for the ENTIRE duration of one handleDueLink call, from just after
+ * the auth-readiness check through every channel it tries — not just the
+ * final openDueSheet — because the IndexedDB fallback below awaits a read
+ * before it knows whether there is anything to open at all. Multiple resume
+ * signals (visibilitychange, pageshow, focus) fire together in practice, and
+ * without a guard held that early, two concurrent calls could both read the
+ * same still-unread record and both open the sheet. A flag, not a time
+ * window: whichever call is already running wins, and the next one that
+ * finds the guard clear starts a fresh, honest check.
+ */
 let dueLinkInFlight = false
-/** A channel that has passed its own auth-readiness check calls this; it owns the shared in-flight guard. */
-function openDueLinkGuarded(id) {
-  dueLinkInFlight = true
-  return Promise.resolve(openDueSheet(id)).finally(() => { dueLinkInFlight = false })
-}
 
 /** How long a stashed IndexedDB record is trusted — older is a previous tap already handled some other way, not a fresh one to resurrect. */
 const DUE_LINK_PENDING_TTL_MS = 2 * 60 * 1000
 
 /**
  * Checks the hash, then the search param, then the IndexedDB fallback, in
- * that order, and opens the first one found. Call on boot (showApp) and on
+ * that order, and opens the first one found. Call on boot (showApp), on
  * 'hashchange' (an already-loaded tab whose hash changes, e.g. via
- * client.navigate() on browsers that still honor it).
+ * client.navigate() on browsers that still honor it), and on RESUME
+ * (visibilitychange to visible, pageshow, window focus) — iOS wakes a
+ * backgrounded PWA by resuming it, not by navigating or booting, so nothing
+ * else would ever see a notification tap that landed while the app was
+ * merely suspended rather than closed. See public/sw.js's
+ * handleNotificationClick: the IndexedDB stash now happens unconditionally,
+ * before postMessage and before openWindow, precisely because either of
+ * those can be lost to a frozen/suspended page while the stash cannot.
  */
 async function handleDueLink() {
   if (dueLinkInFlight) return
@@ -214,32 +226,37 @@ async function handleDueLink() {
   // showApp's own later call arrives with real credentials.
   if (!WORKER_URL || !AUTH_TOKEN) return
 
-  const hash = window.location.hash || ''
-  const hashMatch = hash.match(/^#due\/(.+)$/)
-  if (hashMatch) {
-    const id = decodeURIComponent(hashMatch[1])
-    // Cleared BEFORE anything async runs, so a hashchange re-firing for the
-    // same tap finds nothing left to match.
-    history.replaceState(null, '', window.location.pathname + window.location.search)
-    openDueLinkGuarded(id)
-    return
-  }
+  dueLinkInFlight = true
+  try {
+    const hash = window.location.hash || ''
+    const hashMatch = hash.match(/^#due\/(.+)$/)
+    if (hashMatch) {
+      const id = decodeURIComponent(hashMatch[1])
+      // Cleared BEFORE anything async runs, so a hashchange re-firing for the
+      // same tap finds nothing left to match.
+      history.replaceState(null, '', window.location.pathname + window.location.search)
+      await openDueSheet(id)
+      return
+    }
 
-  const params = new URLSearchParams(window.location.search)
-  const searchId = params.get('due')
-  if (searchId) {
-    params.delete('due')
-    const query = params.toString()
-    history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
-    openDueLinkGuarded(searchId)
-    return
-  }
+    const params = new URLSearchParams(window.location.search)
+    const searchId = params.get('due')
+    if (searchId) {
+      params.delete('due')
+      const query = params.toString()
+      history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
+      await openDueSheet(searchId)
+      return
+    }
 
-  if (typeof readPendingDueRecord !== 'function') return
-  const record = await readPendingDueRecord()
-  if (!record) return
-  await clearPendingDueRecord()
-  if (Date.now() - record.at < DUE_LINK_PENDING_TTL_MS) openDueLinkGuarded(record.id)
+    if (typeof readPendingDueRecord !== 'function') return
+    const record = await readPendingDueRecord()
+    if (!record) return
+    await clearPendingDueRecord()
+    if (Date.now() - record.at < DUE_LINK_PENDING_TTL_MS) await openDueSheet(record.id)
+  } finally {
+    dueLinkInFlight = false
+  }
 }
 
 /** An id delivered via the service worker's postMessage before auth was ready; drained by flushPendingDueLinkMessage() once it is. */
@@ -261,10 +278,17 @@ function flushPendingDueLinkMessage() {
  * public/sw.js for why client.navigate() was dropped in favor of it. Queues
  * rather than drops when auth is not ready yet; flushPendingDueLinkMessage
  * (called from showApp) drains the queue once it is.
+ *
+ * The service worker now stashes to IndexedDB unconditionally, even on this
+ * same client-exists branch, so this path opens the sheet immediately AND
+ * clears that record (fire-and-forget — the open above already happened;
+ * this is just cleanup) so a resume listener firing moments later never
+ * finds a stale record and reopens the same tap a second time.
  */
 function handleDueLinkMessage(entryId) {
   if (!entryId) return
   pendingDueLinkFromMessage = entryId
+  if (typeof clearPendingDueRecord === 'function') clearPendingDueRecord()
   flushPendingDueLinkMessage()
 }
 
@@ -276,6 +300,18 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   // ignored and whatever sheet was left open (often the menu, from enabling
   // notifications there) stayed on screen.
   window.addEventListener('hashchange', handleDueLink)
+  // iOS resumes a backgrounded PWA rather than reloading or navigating it —
+  // no boot, no hashchange. pageshow and focus cover browsers/situations
+  // visibilitychange alone misses (e.g. a window regaining focus without a
+  // visibility transition); handleDueLink's own in-flight guard and its
+  // no-op-before-auth check make firing all of these together cheap and safe.
+  window.addEventListener('pageshow', handleDueLink)
+  window.addEventListener('focus', handleDueLink)
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') handleDueLink()
+  })
 }
 if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof navigator.serviceWorker.addEventListener === 'function') {
   navigator.serviceWorker.addEventListener('message', (event) => {
