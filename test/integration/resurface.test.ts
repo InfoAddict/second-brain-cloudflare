@@ -51,6 +51,11 @@ function envWithKv(s: SqliteD1): Env {
   return makeTestEnv(dbOf(s) as any, { OAUTH_KV: makeMemoryKV() });
 }
 
+/** Default (stateless) KV — every call reads as a first-ever request. */
+function envOf(s: SqliteD1): Env {
+  return makeTestEnv(dbOf(s) as any);
+}
+
 const DAY = 24 * 60 * 60 * 1000;
 const OLD = 200 * DAY;
 
@@ -79,10 +84,6 @@ describe("GET /brief — resurface v2 exclusions", () => {
     expect(data.resurface?.id).toBe("keep");
   });
 });
-
-function envOf(s: SqliteD1): Env {
-  return makeTestEnv(dbOf(s) as any);
-}
 
 describe("GET /brief — topic preference", () => {
   it("prefers a candidate sharing this week's top topic over an older, plain one", async () => {
@@ -206,5 +207,66 @@ describe("GET /brief?preview=1", () => {
 
     const data = await (await worker.fetch(req("GET", "/brief?preview=1"), env, ctx)).json() as any;
     expect(data.resurface?.id).toBe("pinned");
+  });
+});
+
+describe("GET /brief — a dismissed memory survives exclusion-list truncation", () => {
+  // Regression for the adversarial review's defect 2: excludedIds() used to put
+  // recently-shown ids AHEAD of dismissed ones, and the caller only binds so
+  // many of the list into the pick query. After enough distinct daily picks, an
+  // explicitly dismissed memory fell off the bound list entirely and could
+  // resurface again — contradicting the documented "never comes back".
+  it("stays excluded even with 25 more-recently-shown ids ahead of it in KV", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "dismissed-candidate", content: "Explicitly dismissed, must never return", createdAt: now - OLD, importanceScore: 5 });
+    sq.seed({ id: "other-candidate", content: "The only memory left once the dismissal holds", createdAt: now - OLD - 1, importanceScore: 5 });
+
+    const kv = makeMemoryKV();
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    const { ownerPersonalWorkspaceId } = await ensureTenantBootstrap(env);
+    const today = Math.floor(now / DAY);
+    // 25 days of prior picks (ids that are not real entries — only their
+    // presence in `recent` matters), plus one dismissal from long before any
+    // of them. Pre-fix ordering put these 25 ahead of the dismissal and this
+    // whole list would then be sliced to a fixed cap, dropping it.
+    const recent = Array.from({ length: 25 }, (_, i) => ({ id: `shown-${i}`, day: today - i }));
+    await kv.put(
+      resurfaceStateKey(ownerPersonalWorkspaceId),
+      JSON.stringify({ day: -1, shownId: null, recent, dismissed: ["dismissed-candidate"] }),
+    );
+
+    const data = await (await worker.fetch(req("GET", "/brief"), env, ctx)).json() as any;
+
+    expect(data.resurface?.id).toBe("other-candidate");
+  });
+});
+
+describe("GET /brief — resurface pick query cost", () => {
+  // Pins the 2-query branch (Task B's own budget note): a fresh pick with a
+  // non-empty topic-preferred pool costs the preferred-pool COUNT probe plus
+  // the pick itself, and nothing more. A third query sneaking into that
+  // branch would be invisible to any test that only checks the response body.
+  it("costs exactly one extra D1 query for the topic-preference probe, never a third", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "recent-1", content: "Signpath work", createdAt: now - 1000, importanceScore: 1, tags: ["signpath"] });
+    sq.seed({ id: "recent-2", content: "More signpath work", createdAt: now - 2000, importanceScore: 1, tags: ["signpath"] });
+    sq.seed({ id: "old-topic", content: "Old signpath decision", createdAt: now - OLD, importanceScore: 5, tags: ["signpath"] });
+
+    const env = envOf(sq);
+    await worker.fetch(req("GET", "/brief"), env, ctx); // warm identity/tenant-bootstrap cost
+    sq.issued.length = 0;
+
+    const res = await worker.fetch(req("GET", "/brief"), env, ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json() as any;
+    expect(data.resurface?.id).toBe("old-topic");
+
+    // 6 parallel-batch reads + 1 identity batch + 2 resurface queries (probe,
+    // pick) = 9. The default stateless KV mock means every call re-selects
+    // fresh rather than hitting same-day stability, so this is the topic-
+    // preferred branch on every request.
+    expect(sq.issued).toHaveLength(9);
   });
 });

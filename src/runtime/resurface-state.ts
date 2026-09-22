@@ -9,7 +9,12 @@ import type { Env } from "../env";
  * `day` and `shownId` give same-day stability: the pick does not change on a
  * second app open the same day. `recent` is the rolling memory of what was
  * shown, so tomorrow's pick does not repeat this week's; `dismissed` is what
- * the member explicitly said "not this one" to, and never comes back.
+ * the member explicitly said "not this one" to, and never comes back — except
+ * at the degenerate end of src/routes/brief.ts's dynamic bound-parameter
+ * budget (pickResurface), where a caller whose OWN scope is wide enough (many
+ * company workspaces) can leave zero room for exclusions at all. `dismissed`
+ * gets first claim on whatever room there is, ahead of `recent`, so that is
+ * the last guarantee to give way, not the first.
  */
 export interface ResurfaceState {
   day: number;
@@ -76,16 +81,22 @@ export function withDismissed(state: ResurfaceState, id: string): ResurfaceState
  * shown within `windowDays` of `today` (both day numbers, see brief.ts's
  * dayNumber). Deduplicated, because the same id can appear via both paths.
  *
- * Recently-shown ids come first, most recent first: the caller caps how many
- * of these get bound into a query (D1's parameter limit), and a truncation
- * should drop the oldest, least useful exclusions rather than the freshest —
- * repeating yesterday's pick is worse than repeating one from three weeks ago.
- * Dismissals fill whatever room is left.
+ * Dismissed ids come FIRST: they are an explicit "never show this again",
+ * which is a stronger promise than the same-month recency guard recent-shown
+ * ids provide, so they must be the last thing a bound-parameter truncation
+ * drops. The caller (src/routes/brief.ts's pickResurface) caps how many of
+ * this whole list actually get bound into a query — D1's parameter limit,
+ * against a scope clause whose own size is not fixed — and a fixed-size
+ * `recent` (capped at 30 in KV) means dismissed ids used to fall off that cap
+ * after roughly three weeks of distinct daily picks even though `dismissed`
+ * itself (capped at 60) had plenty of room left. Recently-shown ids fill
+ * whatever room is left, most recent first, because among THOSE repeating
+ * yesterday's pick is worse than repeating one from three weeks ago.
  */
 export function excludedIds(state: ResurfaceState, today: number, windowDays: number): string[] {
   const recentIds = state.recent
     .filter(r => today - r.day < windowDays)
     .sort((a, b) => b.day - a.day)
     .map(r => r.id);
-  return [...new Set([...recentIds, ...state.dismissed])];
+  return [...new Set([...state.dismissed, ...recentIds])];
 }

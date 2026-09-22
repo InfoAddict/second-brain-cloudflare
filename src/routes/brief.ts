@@ -8,6 +8,7 @@ import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL } from "../memory/stale";
 import { OPEN_LOOP_SQL } from "../memory/loops";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { parseTags } from "../insight/candidates";
 import {
   excludedIds, readResurfaceState, withDismissed, withShown, writeResurfaceState,
@@ -84,14 +85,17 @@ const RESURFACE_FILTER = `created_at < ? AND importance_score >= ?
 const RESURFACE_RECENT_WINDOW_DAYS = 30;
 
 /**
- * How many previously-shown/dismissed ids get bound into the resurface
- * exclusion clause. That clause is bound TWICE in the final pick query — once
- * in the row SELECT, once in the OFFSET subquery it wraps against — so at
- * this cap the query binds at most roughly 2 * (8 filter/topic placeholders +
- * 20 exclusion + 3 scope) + 1 day placeholder ≈ 63 parameters, well under
- * D1's 100-bound-parameter ceiling. `recent` can hold up to 30 ids in KV;
- * excludedIds() keeps the most recently shown of them first, so a truncation
- * here drops the oldest, least useful exclusions rather than the freshest.
+ * The DESIRED number of previously-shown/dismissed ids to bind into the
+ * resurface exclusion clause — not a safety ceiling. `recent` can hold up to
+ * 30 ids in KV and `dismissed` up to 60; this is the target when there is
+ * room. pickResurface's dynamic budget is the actual ceiling: scope.bindings
+ * is personal plus every company workspace the caller belongs to, unbounded
+ * in principle (admin.ts's /stats/graph comment names ~32 real teams for an
+ * admin today), and that clause is bound TWICE in the pick query — once for
+ * the row, once for the OFFSET subquery it wraps against — so a FIXED
+ * exclusion cap plus a wide-enough scope could still overflow D1's
+ * 100-bound-parameter ceiling. See pickResurface for the arithmetic that
+ * actually enforces the limit; this constant only sets what it aims for.
  */
 const RESURFACE_EXCLUDE_BOUND_CAP = 20;
 
@@ -252,8 +256,12 @@ export async function handleBriefRoutes(
   // cannot join a race it depends on the result of.
   const workspaceKey = auth.personalWorkspaceId;
   const priorState = await readResurfaceState(env, workspaceKey);
-  const excluded = excludedIds(priorState, today, RESURFACE_RECENT_WINDOW_DAYS)
-    .slice(0, RESURFACE_EXCLUDE_BOUND_CAP);
+  // Uncapped here — dismissed-first, most-recent-shown-next (excludedIds) —
+  // because how many of these can actually be bound depends on the caller's
+  // OWN scope size, which pickResurface does not know until it runs. Capping
+  // here to a fixed number and letting pickResurface double THAT plus scope
+  // is exactly the shape that overflowed D1's bound-parameter ceiling.
+  const excluded = excludedIds(priorState, today, RESURFACE_RECENT_WINDOW_DAYS);
 
   // "Not newly excluded" means not dismissed since being shown — checked
   // against `dismissed` alone, not the full `excluded` set: today's own pick
@@ -338,10 +346,39 @@ interface ResurfaceRow {
  * fallback pool) or two when there is: a COUNT probe to test whether the
  * preferred subset has anything at all, then the pick itself against
  * whichever pool the probe selected. The pick query keeps the OFFSET-wraps-
- * inside-SQL trick from v1 (see the comment that used to sit on this query
- * inline, now here): the filter clause is bound twice, once for the row and
- * once for the count it wraps against, so a brain with fewer candidates than
- * the rotation constant never silently shows nothing.
+ * inside-SQL trick from v1: the filter clause is bound twice, once for the
+ * row and once for the count it wraps against, so a brain with fewer
+ * candidates than the rotation constant never silently shows nothing.
+ *
+ * BOUND-PARAMETER BUDGET. That doubling is exactly what makes this query's
+ * size someone else's decision, not this function's: it binds
+ * RESURFACE_FILTER (2) + up to 6 topic patterns + up to
+ * RESURFACE_EXCLUDE_BOUND_CAP exclusion ids + scope.bindings — TWICE — plus
+ * one placeholder for `today`. scope.bindings is not a small constant, it is
+ * personal plus every company workspace the caller belongs to (readableWorkspaces,
+ * src/lib/scope.ts), unbounded in principle and ~32 real teams for an admin
+ * today (see the /stats/graph comment in admin.ts making the same point). A
+ * fixed exclusion cap plus that scope size overflowed D1's 100-bound-parameter
+ * ceiling — this function has no try/catch, so the overflow 500'd the WHOLE
+ * GET /brief response, every field, not just the pick.
+ *
+ * Solving `2 * (2 + topicN + excludedN + scopeN) + 1 <= D1_MAX_BOUND_PARAMS`
+ * for the combined topicN + excludedN slack once scopeN is known gives the
+ * budget below. Mirrors POST /patterns/resolve's per-request bulkLimit
+ * (admin.ts), generalized to a statement that binds its scope clause twice.
+ *
+ * Correctness outranks relevance when the two compete for that budget: the
+ * exclusion list (a dismissed or just-shown id must not come back) claims it
+ * first, up to RESURFACE_EXCLUDE_BOUND_CAP; topic preference (a nicety) only
+ * survives in whatever room is left, and is dropped OUTRIGHT rather than
+ * partially — a topic clause missing some of this week's tags would silently
+ * bias toward whichever happened to fit, which is worse than no preference at
+ * all. At zero budget (an admin in enough company workspaces on their own),
+ * both drop to nothing and this degrades to a v1-style unfiltered pick:
+ * RESURFACE_FILTER and scope alone, still safe because THAT doubled shape
+ * costs `2 * (2 + scopeN) + 1`, comfortably under the ceiling until scopeN
+ * itself exceeds roughly 47 — a pre-existing v1 shape this fix does not
+ * change, since scope.clause cannot be dropped without breaking isolation.
  */
 async function pickResurface(
   env: Env,
@@ -351,8 +388,16 @@ async function pickResurface(
   excluded: string[],
   today: number,
 ): Promise<ResurfaceRow | undefined> {
-  const exclusionClause = excluded.length ? `AND id NOT IN (${excluded.map(() => "?").join(", ")})` : "";
-  const topicTags = topics.map(t => t.tag);
+  const budget = Math.max(0, Math.floor((D1_MAX_BOUND_PARAMS - 1) / 2) - 2 - scope.bindings.length);
+
+  let topicTags = topics.map(t => t.tag);
+  let boundExcluded = excluded.slice(0, Math.min(RESURFACE_EXCLUDE_BOUND_CAP, excluded.length, budget));
+  if (topicTags.length + boundExcluded.length > budget) {
+    topicTags = [];
+    boundExcluded = excluded.slice(0, budget);
+  }
+
+  const exclusionClause = boundExcluded.length ? `AND id NOT IN (${boundExcluded.map(() => "?").join(", ")})` : "";
 
   let activeFilter = RESURFACE_FILTER;
   let extraFilterBindings: string[] = [];
@@ -363,7 +408,7 @@ async function pickResurface(
     const preferredCount = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM entries
        WHERE (${RESURFACE_FILTER}) AND ${topicClause} ${exclusionClause} AND ${scope.clause}`,
-    ).bind(resurfaceBefore, RESURFACE_MIN_IMPORTANCE, ...topicPatterns, ...excluded, ...scope.bindings)
+    ).bind(resurfaceBefore, RESURFACE_MIN_IMPORTANCE, ...topicPatterns, ...boundExcluded, ...scope.bindings)
       .first() as Record<string, any> | null;
     if (((preferredCount?.n as number) ?? 0) > 0) {
       activeFilter = `(${RESURFACE_FILTER}) AND ${topicClause}`;
@@ -379,9 +424,9 @@ async function pickResurface(
      LIMIT 1
      OFFSET (? % MAX((SELECT COUNT(*) FROM entries WHERE (${activeFilter}) ${exclusionClause} AND ${scope.clause}), 1))`,
   ).bind(
-    ...filterBindings, ...excluded, ...scope.bindings,
+    ...filterBindings, ...boundExcluded, ...scope.bindings,
     today,
-    ...filterBindings, ...excluded, ...scope.bindings,
+    ...filterBindings, ...boundExcluded, ...scope.bindings,
   ).all();
 
   return (results as unknown as ResurfaceRow[])[0];

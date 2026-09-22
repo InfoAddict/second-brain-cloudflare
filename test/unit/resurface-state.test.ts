@@ -128,13 +128,29 @@ describe("excludedIds", () => {
     expect(excludedIds(state, 10, 30)).toEqual(["fresh"]);
   });
 
-  it("orders recently-shown ids most-recent-first, ahead of dismissals", () => {
+  it("puts dismissed ids first, then recently-shown ids most-recent-first", () => {
+    // Dismissed ids must be the last thing a bound-parameter truncation drops
+    // (see the comment on this function): a fixed-size `recent` window means
+    // recency-based exclusions accumulate and eventually crowd out an explicit
+    // "never show this again" if it were not prioritized ahead of them.
     const state = {
       day: 10,
       shownId: null,
       recent: [{ id: "older", day: 5 }, { id: "newer", day: 9 }],
       dismissed: ["was-dismissed"],
     };
-    expect(excludedIds(state, 10, 30)).toEqual(["newer", "older", "was-dismissed"]);
+    expect(excludedIds(state, 10, 30)).toEqual(["was-dismissed", "newer", "older"]);
+  });
+
+  it("keeps a dismissed id ahead of 25 more-recently-shown ids", () => {
+    // The truncation-boundary case: brief.ts's caller only binds so many of
+    // these into a query, so ordering here is what decides which ids survive.
+    const recent = Array.from({ length: 25 }, (_, i) => ({ id: `recent-${i}`, day: i }));
+    const state = { day: 25, shownId: null, recent, dismissed: ["dismissed-1"] };
+
+    const ids = excludedIds(state, 25, 30);
+
+    expect(ids[0]).toBe("dismissed-1");
+    expect(ids.slice(0, 6)).toContain("dismissed-1");
   });
 });
