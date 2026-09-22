@@ -51,6 +51,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "admin_events", "idx_admin_events_created", "maintenance_cursor", "idx_entries_workspace_created", "idx_entries_capsule",
   // Projects registry; idx_entries_project is post-column like the capsule index.
   "projects", "idx_projects_workspace", "idx_entries_project",
+  // Web Push subscriptions.
+  "push_subscriptions", "idx_push_subscriptions_workspace",
   ...PROMPT_CAPSULE_TRIGGERS];
 // Columns in the base CREATE of entries since v3 — present on every brain init touches.
 const BASE_COLUMNS = ["id", "content", "tags", "source", "created_at", "vector_ids", "workspace_id", "actor_id"];
@@ -220,7 +222,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 43 -> 46 by the projects table, idx_projects_workspace and idx_entries_project.
       // MOVED 46 -> 49 by the time-anchor ALTERs: when_at, when_kind, when_source.
       // MOVED 49 -> 50 by when_label, the nightly pass's persisted label.
-      expect(migrated).toBe(50); // 24 base objects + 18 ALTERs + 6 post-column objects + the email-index CREATE
+      // MOVED 50 -> 52 by the push_subscriptions table and idx_push_subscriptions_workspace.
+      expect(migrated).toBe(52); // 26 base objects + 18 ALTERs + 6 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(7); // three probes plus four prepared trigger DDLs
       expect(touchesEntries(execd)).toEqual([]);
@@ -539,7 +542,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 44 -> 47 by the projects table and its two indexes.
     // MOVED 47 -> 50 by the time-anchor ALTERs: when_at, when_kind, when_source.
     // MOVED 50 -> 51 by when_label, the nightly pass's persisted label.
-    expect(cold).toBe(51); // one probe, then the 50 statements a new brain needs
+    // MOVED 51 -> 53 by the push_subscriptions table and idx_push_subscriptions_workspace.
+    expect(cold).toBe(53); // one probe, then the 52 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

@@ -8,6 +8,7 @@ import type { Env } from "./env";
 import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integrations/mirror";
+import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { nextWorkspace } from "./runtime/rotation";
@@ -70,7 +71,22 @@ export default {
     // real — without the branch both triggers would run everything and the split would
     // cost CPU and D1-cost budget instead of buying it.
     if (event.cron === INTEGRATION_SYNC_CRON) {
-      job("integration sync", runScheduledIntegrationSync(env));
+      job("integration sync", (async () => {
+        try {
+          await runScheduledIntegrationSync(env);
+        } catch (e) {
+          console.error("integration sync failed (non-fatal):", e);
+        }
+        // Own try/catch, run after the sync regardless of whether it
+        // succeeded: due items reaching a subscribed device must not depend
+        // on the mirror sync's health, and a slow or failing sync must not
+        // delay notifications past the hour they were due.
+        try {
+          await pushDueItemsAllWorkspaces(env);
+        } catch (e) {
+          console.error("push due items failed (non-fatal):", e);
+        }
+      })());
       return;
     }
 

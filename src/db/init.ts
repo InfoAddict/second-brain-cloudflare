@@ -132,6 +132,12 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // code ignores this table and rollback is a no-op. Never backfilled.
   projects: `CREATE TABLE IF NOT EXISTS projects (id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', aliases TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER, PRIMARY KEY (workspace_id, id))`,
   idx_projects_workspace: `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id, status)`,
+  // Web Push subscriptions. Additive, like projects above: old code never
+  // reads this table and rollback is a no-op. One row per subscribed
+  // browser/device; endpoint_hash is unique so re-subscribing the same
+  // device replaces rather than duplicates it.
+  push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
+  idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
 };
 
 /**

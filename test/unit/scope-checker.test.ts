@@ -1168,8 +1168,10 @@ describe("the checker over the real source tree", () => {
     // and +1 scope-exempt for src/when/pass.ts's candidate prefilter (a
     // per-workspace cron slice, same exemption shape as the other nightly
     // passes). Deliberate: +4 scoped queries for GET /due (overdue rows,
-    // overdue count, upcoming rows, upcoming count).
-    ).toEqual({ queries: 116, exempt: 54, checked: 6, outerJoin: 1 });
+    // overdue count, upcoming rows, upcoming count). Deliberate: +1 scoped
+    // query for src/push/send.ts's pushDueItems (the due-item SELECT, scoped
+    // to the one workspace it was called for).
+    ).toEqual({ queries: 117, exempt: 54, checked: 6, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
