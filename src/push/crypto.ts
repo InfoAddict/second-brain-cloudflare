@@ -48,6 +48,15 @@ async function importEcdhPrivateKey(publicRaw: Uint8Array, privateRaw: Uint8Arra
   );
 }
 
+/** A fresh P-256 ECDH key pair, raw-encoded, for one message's aes128gcm header (RFC 8291's "keyid"). */
+async function generateEphemeralEcdhKeyPair(): Promise<{ publicKeyRaw: Uint8Array; privateKey: CryptoKey }> {
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"],
+  ) as CryptoKeyPair;
+  const publicKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey) as ArrayBuffer);
+  return { publicKeyRaw, privateKey: pair.privateKey };
+}
+
 async function importEcdhPublicKey(publicRaw: Uint8Array): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", publicRaw, { name: "ECDH", namedCurve: "P-256" }, false, []);
 }
@@ -63,9 +72,14 @@ export interface EncryptWebPushOptions {
   subscriptionPublicKey: Uint8Array;
   /** Subscription's auth secret, 16 bytes. */
   subscriptionAuthSecret: Uint8Array;
-  /** This deployment's VAPID/application-server public key, same 65-byte point used as the aes128gcm header's keyid. */
-  serverPublicKeyRaw: Uint8Array;
-  serverPrivateKeyRaw: Uint8Array;
+  /**
+   * Fixes the ECDH key pair used as this message's aes128gcm header "keyid",
+   * instead of generating a fresh ephemeral one below. Only ever set by the
+   * RFC 8291 Appendix A vector test, which has to reproduce its fixed keys
+   * exactly — every real caller omits both and gets a fresh pair per call.
+   */
+  serverPublicKeyRaw?: Uint8Array;
+  serverPrivateKeyRaw?: Uint8Array;
   /** 16 random bytes. Injectable so the RFC 8291 test vector's fixed salt is reproducible; omit in production. */
   salt?: Uint8Array;
   recordSize?: number;
@@ -74,6 +88,8 @@ export interface EncryptWebPushOptions {
 export interface EncryptWebPushResult {
   /** aes128gcm header + ciphertext, exactly the push request body. */
   body: Uint8Array;
+  /** This message's ECDH public key — embedded in `body`'s header, returned for tests/logging. */
+  ephemeralPublicKeyRaw: Uint8Array;
   ecdhSecret: Uint8Array;
   prkKeyCombining: Uint8Array;
   ikm: Uint8Array;
@@ -85,19 +101,30 @@ export interface EncryptWebPushResult {
 /**
  * Encrypts `plaintext` for one subscription, per RFC 8291.
  *
- * The application server key pair is reused across every subscriber and every
- * message (it doubles as the VAPID signing key — see src/push/vapid.ts) rather
- * than generated fresh per message. RFC 8291 does not require freshness for
- * correctness, only that the recipient can derive the same shared secret;
- * reusing one static key is the standard simplification self-hosted senders
- * make, at the cost of the push service being able to link a sender's
- * messages to each other (it already can, via VAPID's `k` parameter).
+ * A fresh ephemeral P-256 ECDH key pair is generated per call (RFC 8291's own
+ * recommendation) and used only for this one message's "keyid" — it has
+ * nothing to do with the deployment's persistent VAPID identity key
+ * (src/push/vapid.ts), which signs the JWT but never touches the ECDH
+ * derivation. An earlier version of this function reused the static VAPID
+ * key pair for ECDH as well, which is architecturally the wrong shape (RFC
+ * 8291's message-encryption key and RFC 8292's identity key are unrelated by
+ * design) even though nothing in the math itself requires per-message keys.
  */
 export async function encryptWebPush(opts: EncryptWebPushOptions): Promise<EncryptWebPushResult> {
   const salt = opts.salt ?? crypto.getRandomValues(new Uint8Array(16));
   const recordSize = opts.recordSize ?? DEFAULT_RECORD_SIZE;
 
-  const serverPrivateKey = await importEcdhPrivateKey(opts.serverPublicKeyRaw, opts.serverPrivateKeyRaw);
+  let serverPublicKeyRaw: Uint8Array;
+  let serverPrivateKey: CryptoKey;
+  if (opts.serverPublicKeyRaw && opts.serverPrivateKeyRaw) {
+    serverPublicKeyRaw = opts.serverPublicKeyRaw;
+    serverPrivateKey = await importEcdhPrivateKey(opts.serverPublicKeyRaw, opts.serverPrivateKeyRaw);
+  } else {
+    const ephemeral = await generateEphemeralEcdhKeyPair();
+    serverPublicKeyRaw = ephemeral.publicKeyRaw;
+    serverPrivateKey = ephemeral.privateKey;
+  }
+
   const uaPublicKey = await importEcdhPublicKey(opts.subscriptionPublicKey);
   // `as any`: EcdhKeyDeriveParams isn't declared in this project's lib target.
   const ecdhSecret = new Uint8Array(
@@ -110,7 +137,7 @@ export async function encryptWebPush(opts: EncryptWebPushOptions): Promise<Encry
   const keyInfo = concatBytes(
     textEncoder.encode("WebPush: info\0"),
     opts.subscriptionPublicKey,
-    opts.serverPublicKeyRaw,
+    serverPublicKeyRaw,
   );
   const ikm = await hmacSha256(prkKeyCombining, concatBytes(keyInfo, Uint8Array.of(1)));
 
@@ -129,11 +156,12 @@ export async function encryptWebPush(opts: EncryptWebPushOptions): Promise<Encry
   const recordSizeBytes = new Uint8Array(4);
   new DataView(recordSizeBytes.buffer).setUint32(0, recordSize, false);
   const header = concatBytes(
-    salt, recordSizeBytes, Uint8Array.of(opts.serverPublicKeyRaw.length), opts.serverPublicKeyRaw,
+    salt, recordSizeBytes, Uint8Array.of(serverPublicKeyRaw.length), serverPublicKeyRaw,
   );
 
   return {
     body: concatBytes(header, ciphertext),
+    ephemeralPublicKeyRaw: serverPublicKeyRaw,
     ecdhSecret, prkKeyCombining, ikm, prkContentEncryption, cek, nonce,
   };
 }

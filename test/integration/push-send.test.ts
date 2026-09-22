@@ -213,6 +213,89 @@ describe("pushDueItems", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0][0]).toBe("https://push.example.com/a");
   });
+
+  it("prunes pushed ids older than 30 days from the KV map on write", async () => {
+    sq = await migrated();
+    seedDue(sq, "e1", "File the report", Date.now() - DAY);
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+    const kv = makeMemoryKV();
+    const OLD = 31 * DAY;
+    await kv.put("pushed:", JSON.stringify({ "forgotten-test-id": Date.now() - OLD, "recent-id": Date.now() - DAY }));
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    mockFetchAlways(201);
+
+    await pushDueItems(env, "");
+
+    const stored = JSON.parse((await kv.get("pushed:")) as string);
+    expect(stored).not.toHaveProperty("forgotten-test-id");
+    expect(stored).toHaveProperty("recent-id");
+    expect(stored).toHaveProperty("e1");
+  });
+
+  describe("per-subscription outcomes (results)", () => {
+    it("reports ok for a successful send", async () => {
+      sq = await migrated();
+      seedDue(sq, "e1", "File the report", Date.now() - DAY);
+      seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+      const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+      mockFetchAlways(201);
+
+      const result = await pushDueItems(env, "");
+
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].status).toBe("ok");
+      expect(result.results[0].endpoint_hash_prefix).toBe("hash-sub-1".slice(0, 12));
+    });
+
+    it("reports http_<code> for a non-ok response", async () => {
+      sq = await migrated();
+      seedDue(sq, "e1", "File the report", Date.now() - DAY);
+      seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+      const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+      mockFetchAlways(500);
+
+      const result = await pushDueItems(env, "");
+
+      expect(result.results[0].status).toBe("http_500");
+    });
+
+    it("reports http_410 for a gone subscription rather than a bare error", async () => {
+      sq = await migrated();
+      seedDue(sq, "e1", "File the report", Date.now() - DAY);
+      seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+      const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+      mockFetchAlways(410);
+
+      const result = await pushDueItems(env, "");
+
+      expect(result.results[0].status).toBe("http_410");
+    });
+
+    it("reports error when the request itself throws (network failure)", async () => {
+      sq = await migrated();
+      seedDue(sq, "e1", "File the report", Date.now() - DAY);
+      seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+      const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+
+      const result = await pushDueItems(env, "");
+
+      expect(result.results[0].status).toBe("error");
+    });
+
+    it("caps the results array at 10", async () => {
+      sq = await migrated();
+      for (let i = 0; i < 5; i++) seedDue(sq, `e${i}`, `Item ${i}`, Date.now() - (i + 1) * 1000);
+      for (let i = 0; i < 4; i++) seedSubscription(sq, `sub-${i}`, "", `https://push.example.com/s${i}`);
+      const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+      mockFetchAlways(201);
+
+      const result = await pushDueItems(env, "");
+
+      // Capped per-run at 3 candidates x 4 subs = 12 sends, results capped at 10.
+      expect(result.results.length).toBeLessThanOrEqual(10);
+    });
+  });
 });
 
 describe("pushDueItemsAllWorkspaces — D1 budget", () => {

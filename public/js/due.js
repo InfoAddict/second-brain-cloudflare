@@ -147,3 +147,13 @@ function handleDueHash() {
   history.replaceState(null, '', window.location.pathname + window.location.search)
   openDueSheet(id)
 }
+
+// showApp() covers a fresh load/login, but a push notification's tap more
+// often finds the PWA already open in a backgrounded tab: public/sw.js's
+// notificationclick focuses that client and calls client.navigate(url),
+// which changes the hash WITHOUT re-running init()/showApp(). Without this
+// listener the hash change was silently ignored and whatever sheet was left
+// open (often the menu, from enabling notifications there) stayed on screen.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('hashchange', handleDueHash)
+}

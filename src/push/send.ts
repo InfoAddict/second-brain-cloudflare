@@ -7,7 +7,7 @@
 import type { Env } from "../env";
 import { DUE_SQL } from "../when/input";
 import { encryptWebPush } from "./crypto";
-import { getOrCreateVapidKeys, vapidAuthHeader } from "./vapid";
+import { vapidAuthHeader } from "./vapid";
 import { fromBase64Url } from "./base64url";
 
 /** A feed, not a blast: at most this many due items get a notification per run. */
@@ -18,6 +18,10 @@ const MAX_FAIL_COUNT = 5;
 export const PUSHED_KV_PREFIX = "pushed:";
 /** Push services want a TTL on every request; a day is generous for a due-item nudge. */
 const PUSH_TTL_SECONDS = 86400;
+/** Forgotten test/stale ids age out of the pushed-map on write; see prunePushedMap. */
+const PUSHED_MAP_PRUNE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/** POST /push/run's per-subscription outcomes, capped so a large brain's response stays small. */
+const MAX_REPORTED_RESULTS = 10;
 
 interface PushSubscriptionRow {
   id: string;
@@ -35,6 +39,12 @@ interface DueCandidate {
 
 type SendResult = "ok" | "gone" | "failed";
 
+interface SendOutcome {
+  result: SendResult;
+  /** The push service's HTTP response status, or null when the request itself threw (network error). */
+  httpStatus: number | null;
+}
+
 function pushedKvKey(workspaceId: string): string {
   return `${PUSHED_KV_PREFIX}${workspaceId}`;
 }
@@ -49,21 +59,60 @@ async function readPushedMap(env: Env, workspaceId: string): Promise<Record<stri
   }
 }
 
+/**
+ * Drops ids whose recorded when_at is more than 30 days old. The map only
+ * ever grows (an entry is added the moment it is pushed, and a resolved/
+ * cleared entry stops appearing in the due query but its old id lingers
+ * forever otherwise) — cheap because it costs nothing beyond the write this
+ * function already does on every call, no extra D1 or KV round trip.
+ */
+function prunePushedMap(map: Record<string, number>, now: number): Record<string, number> {
+  const cutoff = now - PUSHED_MAP_PRUNE_AGE_MS;
+  const pruned: Record<string, number> = {};
+  for (const [id, whenAt] of Object.entries(map)) {
+    if (whenAt >= cutoff) pruned[id] = whenAt;
+  }
+  return pruned;
+}
+
+/** "ok" | "http_<code>" | "error", the shape POST /push/run reports per subscription. */
+function outcomeStatus(outcome: SendOutcome): string {
+  if (outcome.result === "ok") return "ok";
+  if (outcome.httpStatus != null) return `http_${outcome.httpStatus}`;
+  return "error";
+}
+
+export interface PushOutcome {
+  /** First 12 hex characters of the subscription's endpoint hash — enough to tell rows apart in a log, not enough to identify the device. */
+  endpoint_hash_prefix: string;
+  status: string;
+}
+
+function toReportedOutcomes(outcomes: { hash: string; result: SendResult; httpStatus: number | null }[]): PushOutcome[] {
+  return outcomes.slice(0, MAX_REPORTED_RESULTS).map(o => ({
+    endpoint_hash_prefix: o.hash.slice(0, 12),
+    status: outcomeStatus(o),
+  }));
+}
+
 function notificationPayload(candidate: DueCandidate, contentFree: boolean): Record<string, unknown> {
   if (contentFree) return { title: "1 thing due - tap to view" };
   const dueDate = new Date(candidate.when_at).toISOString().slice(0, 10);
   return { title: candidate.label, body: `due ${dueDate} - from your second brain`, entry_id: candidate.id };
 }
 
-async function sendOne(env: Env, sub: PushSubscriptionRow, payload: Record<string, unknown>): Promise<SendResult> {
+/**
+ * Encrypts and sends one message. encryptWebPush generates its own fresh
+ * ephemeral ECDH key pair per call (src/push/crypto.ts) — this function never
+ * touches the persistent VAPID keys except through vapidAuthHeader, which
+ * signs the JWT and is unrelated to the message's encryption key.
+ */
+async function sendOne(env: Env, sub: PushSubscriptionRow, payload: Record<string, unknown>): Promise<SendOutcome> {
   const subscription = JSON.parse(sub.subscription_json) as { endpoint: string; keys: { p256dh: string; auth: string } };
-  const vapidKeys = await getOrCreateVapidKeys(env);
   const encrypted = await encryptWebPush({
     plaintext: new TextEncoder().encode(JSON.stringify(payload)),
     subscriptionPublicKey: fromBase64Url(subscription.keys.p256dh),
     subscriptionAuthSecret: fromBase64Url(subscription.keys.auth),
-    serverPublicKeyRaw: vapidKeys.publicKeyRaw,
-    serverPrivateKeyRaw: vapidKeys.privateKeyRaw,
   });
 
   let res: Response;
@@ -79,10 +128,10 @@ async function sendOne(env: Env, sub: PushSubscriptionRow, payload: Record<strin
       body: encrypted.body,
     });
   } catch {
-    return "failed";
+    return { result: "failed", httpStatus: null };
   }
-  if (res.status === 404 || res.status === 410) return "gone";
-  return res.ok ? "ok" : "failed";
+  if (res.status === 404 || res.status === 410) return { result: "gone", httpStatus: res.status };
+  return { result: res.ok ? "ok" : "failed", httpStatus: res.status };
 }
 
 /** One batch, whatever it carries: the delete/bump/last_ok_at writes below never cost more than one D1 statement together. */
@@ -117,6 +166,8 @@ export interface PushDueItemsResult {
   sent: number;
   candidates: number;
   subscriptions: number;
+  /** Per-subscription send outcomes, capped at MAX_REPORTED_RESULTS — POST /push/run surfaces these for live diagnosis. */
+  results: PushOutcome[];
 }
 
 /**
@@ -147,30 +198,30 @@ export async function pushDueItems(env: Env, workspaceId: string): Promise<PushD
       label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
     }));
 
-  if (!candidates.length) return { sent: 0, candidates: 0, subscriptions: 0 };
+  if (!candidates.length) return { sent: 0, candidates: 0, subscriptions: 0, results: [] };
 
   const subs = ((await env.DB.prepare(
     `SELECT id, endpoint_hash, subscription_json, content_free, fail_count FROM push_subscriptions WHERE workspace_id = ?`,
   ).bind(workspaceId).all()).results ?? []) as unknown as PushSubscriptionRow[];
 
-  if (!subs.length) return { sent: 0, candidates: candidates.length, subscriptions: 0 };
+  if (!subs.length) return { sent: 0, candidates: candidates.length, subscriptions: 0, results: [] };
 
   let sent = 0;
-  const outcomes: { hash: string; result: SendResult; failCountBefore: number }[] = [];
+  const outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[] = [];
   for (const candidate of candidates) {
     const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree);
     for (const sub of subs) {
-      const result = await sendOne(env, sub, payload(!!sub.content_free));
-      if (result === "ok") sent++;
-      outcomes.push({ hash: sub.endpoint_hash, result, failCountBefore: sub.fail_count });
+      const outcome = await sendOne(env, sub, payload(!!sub.content_free));
+      if (outcome.result === "ok") sent++;
+      outcomes.push({ hash: sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: sub.fail_count });
     }
     pushed[candidate.id] = candidate.when_at;
   }
 
   await applySubscriptionOutcomes(env, outcomes);
-  await env.OAUTH_KV.put(pushedKvKey(workspaceId), JSON.stringify(pushed));
+  await env.OAUTH_KV.put(pushedKvKey(workspaceId), JSON.stringify(prunePushedMap(pushed, now)));
 
-  return { sent, candidates: candidates.length, subscriptions: subs.length };
+  return { sent, candidates: candidates.length, subscriptions: subs.length, results: toReportedOutcomes(outcomes) };
 }
 
 /**
@@ -204,9 +255,9 @@ export async function sendTestNotification(env: Env, workspaceId: string): Promi
   let sent = 0;
   const outcomes: { hash: string; result: SendResult; failCountBefore: number }[] = [];
   for (const sub of subs) {
-    const result = await sendOne(env, sub, payload);
-    if (result === "ok") sent++;
-    outcomes.push({ hash: sub.endpoint_hash, result, failCountBefore: sub.fail_count });
+    const outcome = await sendOne(env, sub, payload);
+    if (outcome.result === "ok") sent++;
+    outcomes.push({ hash: sub.endpoint_hash, result: outcome.result, failCountBefore: sub.fail_count });
   }
   await applySubscriptionOutcomes(env, outcomes);
 

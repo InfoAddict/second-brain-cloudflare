@@ -1731,6 +1731,7 @@
       #patterns-sheet,
       #stale-sheet,
       #loops-sheet,
+      #due-sheet,
       #view-sheet {
         display: none;
         position: fixed;
@@ -1769,6 +1770,7 @@
       #patterns-sheet.open,
       #stale-sheet.open,
       #loops-sheet.open,
+      #due-sheet.open,
       #view-sheet.open {
         display: flex;
         opacity: 1;
@@ -4044,6 +4046,7 @@
         #patterns-sheet,
         #stale-sheet,
         #loops-sheet,
+        #due-sheet,
         #view-sheet {
           align-items: center;
           justify-content: center;

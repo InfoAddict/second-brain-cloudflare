@@ -153,6 +153,22 @@ describe("POST /push/run", () => {
     const data = await res.json() as any;
     expect(data.sent).toBe(1);
   });
+
+  it("reports per-subscription outcomes for live diagnosis", async () => {
+    sq = await migrated();
+    sq.seed({ id: "e1", content: "File the report", createdAt: 1000 });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'e1'`).bind(Date.now() - 1000).run();
+    await worker.fetch(req("POST", "/push/subscribe", { body: { subscription: VALID_SUBSCRIPTION } }), envOf(sq), ctx);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    const res = await worker.fetch(req("POST", "/push/run"), envOf(sq), ctx);
+    const data = await res.json() as any;
+
+    expect(Array.isArray(data.results)).toBe(true);
+    expect(data.results.length).toBeLessThanOrEqual(10);
+    expect(data.results[0]).toMatchObject({ status: "ok" });
+    expect(typeof data.results[0].endpoint_hash_prefix).toBe("string");
+  });
 });
 
 describe("POST /push/test", () => {

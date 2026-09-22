@@ -1,0 +1,212 @@
+/**
+ * A push notification's tap lands on '/#due/<entryId>'. This boots the WHOLE
+ * dashboard (every script index.html loads, in its own order) with that hash
+ * already set and a saved session in localStorage — the same shape a real
+ * "tap notification -> browser opens/focuses the PWA" does — and checks that
+ * the due sheet ends up the visible surface with the row rendered, not the
+ * menu sheet left over from wherever the tab was before.
+ *
+ * Full boot rather than due.js in isolation: the bug this pins is an
+ * interaction between showApp()'s call order and which sheet ends up
+ * carrying the 'open' class, which a due.js-only harness cannot see.
+ */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import vm from "node:vm";
+import { describe, it, expect } from "vitest";
+
+const ROOT = resolve(import.meta.dirname, "../..");
+
+const DASHBOARD_SCRIPTS = [
+  ...readFileSync(resolve(ROOT, "public/index.html"), "utf8")
+    .matchAll(/<script\s+src="([^"]+)"/g),
+].map(m => `public/${m[1].replace(/^\//, "")}`);
+
+function loadDashboardSource(): string {
+  return DASHBOARD_SCRIPTS.map((rel) => readFileSync(resolve(ROOT, rel), "utf8")).join("\n");
+}
+
+function makeStatefulEl(id?: string) {
+  const classes = new Set<string>();
+  const children: unknown[] = [];
+  return {
+    id,
+    classList: {
+      add: (c: string) => { classes.add(c); },
+      remove: (c: string) => { classes.delete(c); },
+      contains: (c: string) => classes.has(c),
+      toggle: (c: string) => { classes.has(c) ? classes.delete(c) : classes.add(c); },
+    },
+    style: {} as Record<string, string>,
+    innerHTML: "",
+    textContent: "",
+    value: "",
+    hidden: false,
+    disabled: false,
+    checked: false,
+    children,
+    dataset: {} as Record<string, string>,
+    setAttribute() {},
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    appendChild: (child: unknown) => { children.push(child); },
+    querySelector: () => makeStatefulEl(),
+    querySelectorAll: () => [],
+    remove() {},
+    focus() {},
+    closest: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+    scrollIntoView() {},
+    scrollHeight: 0,
+    offsetHeight: 24,
+  };
+}
+
+function boot(hash: string, dueFixture: any) {
+  const els = new Map<string, ReturnType<typeof makeStatefulEl>>();
+  const getEl = (id?: string) => {
+    if (!id) return makeStatefulEl(id);
+    if (!els.has(id)) els.set(id, makeStatefulEl(id));
+    return els.get(id)!;
+  };
+
+  const store = new Map<string, string>();
+  store.set("sb_url", "https://example.test");
+  store.set("sb_token", "t");
+
+  const document_: any = {
+    documentElement: { lang: "en", setAttribute() {}, getAttribute: () => null },
+    getElementById: (id?: string) => getEl(id),
+    querySelector: () => makeStatefulEl(),
+    querySelectorAll: () => [],
+    createElement: () => makeStatefulEl(),
+    addEventListener() {},
+    removeEventListener() {},
+    body: { style: {}, appendChild() {} },
+  };
+
+  const replaceStateCalls: unknown[] = [];
+  const sandbox: any = {
+    console,
+    document: document_,
+    localStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+    },
+    navigator: { language: "en-US" },
+    history: { replaceState: (...args: unknown[]) => { replaceStateCalls.push(args); } },
+    fetch: async (url: string) => {
+      if (String(url).includes("/due")) return { ok: true, json: async () => dueFixture };
+      if (String(url).includes("/brief")) {
+        return { ok: true, json: async () => ({ ok: true, total: 0, patterns: [], attention: {}, sources: [] }) };
+      }
+      return { ok: true, json: async () => ({ ok: true }), text: async () => "" };
+    },
+  };
+  const windowListeners = new Map<string, Set<(ev: unknown) => void>>();
+  sandbox.window = {
+    location: { origin: "https://example.test", hash, pathname: "/", search: "" },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    addEventListener: (type: string, fn: (ev: unknown) => void) => {
+      if (!windowListeners.has(type)) windowListeners.set(type, new Set());
+      windowListeners.get(type)!.add(fn);
+    },
+    removeEventListener: (type: string, fn: (ev: unknown) => void) => {
+      windowListeners.get(type)?.delete(fn);
+    },
+  };
+  sandbox.globalThis = sandbox;
+
+  vm.createContext(sandbox);
+  vm.runInContext(loadDashboardSource(), sandbox);
+
+  const fireWindowEvent = (type: string) => {
+    for (const fn of windowListeners.get(type) ?? []) fn({ type });
+  };
+
+  return { sandbox, els, replaceStateCalls, fireWindowEvent };
+}
+
+const overdueFixture = (id: string) => ({
+  ok: true,
+  overdue: [{ id, content: "File the annual report in full", label: "File the report", tags: ["task"], when_at: Date.now() - 86400000, when_kind: "due", when_source: "model" }],
+  upcoming: [],
+  counts: { overdue: 1, upcoming: 0 },
+});
+
+describe("booting straight into a #due/<id> deep link", () => {
+  it("renders the due sheet as the visible surface with the row expanded, menu closed", async () => {
+    const { els } = boot("#due/e1", overdueFixture("e1"));
+    // showApp()'s handlers include unawaited fetches (loadDueQueue among them).
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(els.get("due-sheet")?.classList.contains("open")).toBe(true);
+    expect(els.get("menu-sheet")?.classList.contains("open")).toBe(false);
+    expect(els.get("due-list")?.innerHTML).toContain("due-row-e1");
+    expect(els.get("due-list")?.innerHTML).toContain("File the annual report in full");
+  });
+
+  it("clears the hash so a refresh does not reopen the same sheet", async () => {
+    const { replaceStateCalls } = boot("#due/e1", overdueFixture("e1"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(replaceStateCalls.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The real-world shape a notification tap usually takes: the PWA tab is
+   * already open (backgrounded, or left on the menu after enabling
+   * notifications there) and public/sw.js's notificationclick focuses it and
+   * calls client.navigate(targetUrl) rather than opening a fresh document.
+   * That changes window.location.hash WITHOUT re-running init()/showApp(),
+   * so handleDueHash — wired only into showApp() — never fires and the due
+   * sheet never opens, leaving whatever was on screen (here: the menu, left
+   * open from the Notifications card) in front.
+   */
+  it("also opens the due sheet when the hash changes after boot, not only during it", async () => {
+    const { sandbox, els, fireWindowEvent } = boot("", { ok: true, overdue: [], upcoming: [], counts: { overdue: 0, upcoming: 0 } });
+    await new Promise((r) => setTimeout(r, 0));
+    // The menu was left open from an earlier interaction (e.g. enabling
+    // notifications), same as the live report's "Your brain" screen.
+    els.get("menu-sheet")?.classList.add("open");
+
+    sandbox.window.location.hash = "#due/e1";
+    sandbox.fetch = async (url: string) => {
+      if (String(url).includes("/due")) return { ok: true, json: async () => overdueFixture("e1") };
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    fireWindowEvent("hashchange");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(els.get("due-sheet")?.classList.contains("open")).toBe(true);
+    expect(els.get("menu-sheet")?.classList.contains("open")).toBe(false);
+    expect(els.get("due-list")?.innerHTML).toContain("due-row-e1");
+  });
+});
+
+/**
+ * #due-sheet was added to index.html alongside the other bottom sheets
+ * (#loops-sheet, #stale-sheet, ...) but never added to their shared CSS
+ * rule, so it had no `display: none` default and no `.open` -> `display:
+ * flex` overlay behavior — it was always laid out in normal document flow
+ * rather than hidden until opened. Text-based, like test/ui/css-parses.test.ts:
+ * there is no layout engine here to compute real visibility.
+ */
+describe("#due-sheet's CSS", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/main.css"), "utf8");
+
+  it("is hidden by default alongside the other bottom sheets", () => {
+    const hiddenBlock = css.match(/\/\* ============ BOTTOM SHEETS ============ \*\/([\s\S]*?)\{/);
+    expect(hiddenBlock, "the bottom-sheets selector list was not found").not.toBeNull();
+    expect((hiddenBlock as RegExpMatchArray)[1]).toMatch(/#due-sheet\s*[,{]/);
+  });
+
+  it("switches to display: flex when .open, alongside the other bottom sheets", () => {
+    const openBlock = css.match(/#confirm-dialog\.open,([\s\S]*?)\{/);
+    expect(openBlock, "the .open selector list was not found").not.toBeNull();
+    expect((openBlock as RegExpMatchArray)[1]).toMatch(/#due-sheet\.open\s*[,{]/);
+  });
+});

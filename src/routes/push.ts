@@ -15,6 +15,9 @@ import { getOrCreateVapidKeys } from "../push/vapid";
 import { toBase64Url } from "../push/base64url";
 import { pushDueItems, sendTestNotification } from "../push/send";
 
+/** POST /push/run's results array cap — a diagnostic sample, not a full audit log. */
+const MAX_REPORTED_PUSH_RUN_RESULTS = 10;
+
 interface SubscriptionBody {
   subscription?: { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
   content_free?: boolean;
@@ -109,12 +112,15 @@ export async function handlePushRoutes(
     if (auth instanceof Response) return auth;
 
     const workspaces = [...new Set(readableWorkspaces(auth))];
-    const results = await Promise.all(workspaces.map(w => pushDueItems(env, w)));
-    const sent = results.reduce((n, r) => n + r.sent, 0);
-    const candidates = results.reduce((n, r) => n + r.candidates, 0);
-    const subscriptions = results.reduce((n, r) => n + r.subscriptions, 0);
+    const perWorkspace = await Promise.all(workspaces.map(w => pushDueItems(env, w)));
+    const sent = perWorkspace.reduce((n, r) => n + r.sent, 0);
+    const candidates = perWorkspace.reduce((n, r) => n + r.candidates, 0);
+    const subscriptions = perWorkspace.reduce((n, r) => n + r.subscriptions, 0);
+    // Capped again here: each workspace's own results are already capped, but
+    // several small workspaces together could still exceed the cap.
+    const results = perWorkspace.flatMap(r => r.results).slice(0, MAX_REPORTED_PUSH_RUN_RESULTS);
 
-    return json({ ok: true, sent, candidates, subscriptions });
+    return json({ ok: true, sent, candidates, subscriptions, results });
   }
 
   // POST /push/test (admin) — a fixed notification to the caller's own
