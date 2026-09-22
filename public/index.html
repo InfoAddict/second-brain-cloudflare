@@ -873,6 +873,30 @@
       </div>
     </div>
 
+    <!-- Browser-aware "Add to Home Screen" guide (T-0048): the answer to
+         "Enable notifications" on a browser that cannot receive Web Push
+         outside an installed PWA. js/install-guide.js decides the content;
+         opened from the Enable-notifications control, the nudge banner below,
+         or the menu's Notifications row. -->
+    <div id="install-guide-sheet">
+      <div class="menu-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="installGuide.title">Install Second Brain</h2>
+          <button class="btn-close-icon" onclick="closeInstallGuide()"><i class="ti ti-x"></i></button>
+        </div>
+        <div id="install-guide-body"></div>
+      </div>
+    </div>
+
+    <!-- Once-per-session nudge toward the install guide, mobile browsers
+         only. Deliberately NOT a sheet: a small dismissible banner, shown
+         after sign-in by js/install-guide.js's showInstallNudge(). -->
+    <div id="install-nudge-banner" class="install-nudge-banner" hidden>
+      <span data-i18n="installGuide.nudgeText">Install Second Brain to get reminders on this phone.</span>
+      <button type="button" class="install-nudge-action" onclick="openInstallGuideFromNudge()" data-i18n="installGuide.nudgeAction">Learn how</button>
+      <button type="button" class="install-nudge-dismiss" onclick="dismissInstallNudge()" aria-label="Dismiss" data-i18n="installGuide.dismissAria" data-i18n-attr="aria-label"><i class="ti ti-x"></i></button>
+    </div>
+
     <!-- The growth chart's one shared hover/keyboard tooltip (js/chart.js). -->
     <div class="tip" id="board-tip" role="tooltip"></div>
 
@@ -896,6 +920,7 @@
     <script src="js/loops.js"></script>
     <script src="js/pending-due.js"></script>
     <script src="js/due.js"></script>
+    <script src="js/install-guide.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/integrations.js"></script>
     <script src="js/team.js"></script>

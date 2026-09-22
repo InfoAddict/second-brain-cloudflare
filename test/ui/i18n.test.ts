@@ -575,6 +575,19 @@ describe("dashboard i18n", () => {
       by: "public/js/home.js renderCaptureHint(), which picks the key into `key` and calls t(key)",
     },
     {
+      // NOT a prefix: installGuideStepKeys(platform) in
+      // public/js/install-guide.js returns one of these four literals
+      // (branching on platform), read by installGuideStepsHtml via t(key).
+      keys: [
+        "installGuide.stepShareIcon",
+        "installGuide.stepAddToHomeScreen",
+        "installGuide.stepMenu",
+        "installGuide.stepInstallAndroid",
+        "installGuide.stepGeneric",
+      ],
+      by: "installGuideStepKeys() in public/js/install-guide.js, via installGuideStepsHtml",
+    },
+    {
       prefix: "integrations.connect.",
       by: "integrationConnectI18n() in public/js/integrations.js, keyed by provider id — covered by the registry-driven test above",
     },
@@ -756,6 +769,9 @@ describe("dashboard i18n", () => {
       "public/js/integrations.js tPlural(integrationNounKey(provider))",
       "public/js/integrations.js t(key)",
       "public/js/integrations.js t(fallbackKey)",
+      // installGuideStepKeys(platform) returns one of the five installGuide.step*
+      // literals; installGuideStepsHtml reads it through this t(key).
+      "public/js/install-guide.js t(key)",
       "public/js/memory-crud.js t(keys[event])",
       "public/js/patterns.js t(`patterns.shapes.${shape}`)",
       "public/utils.js t(key)",

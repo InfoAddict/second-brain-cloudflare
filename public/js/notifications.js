@@ -43,6 +43,17 @@ function renderNotificationsState() {
   const hint = document.getElementById('notifications-hint')
   const toggle = document.getElementById('notifications-content-free-toggle')
 
+  // A mobile browser tapping this used to just hear "not supported" — a dead
+  // end. The real answer is installing the PWA, so the row becomes that
+  // instead, before the unsupported check below ever runs.
+  if (typeof needsInstallGuide === 'function' && needsInstallGuide()) {
+    btn.disabled = false
+    btn.textContent = t('notifications.installToEnable')
+    if (hint) hint.textContent = t('notifications.installHint')
+    if (toggle) toggle.disabled = true
+    return
+  }
+
   if (!notificationsSupported()) {
     btn.disabled = true
     btn.textContent = t('notifications.unsupported')
@@ -58,6 +69,10 @@ function renderNotificationsState() {
 }
 
 async function toggleNotifications() {
+  if (typeof needsInstallGuide === 'function' && needsInstallGuide()) {
+    if (typeof openInstallGuide === 'function') openInstallGuide()
+    return
+  }
   const btn = document.getElementById('notifications-toggle-btn')
   const wasSubscribed = notificationsSubscribed
   if (btn) btn.disabled = true

@@ -205,6 +205,39 @@ describe("toggleNotifications", () => {
   });
 });
 
+describe("install guide routing (T-0048)", () => {
+  it("renderNotificationsState offers to install instead of the unsupported dead end, when needsInstallGuide is true", async () => {
+    const ctx = load({ supported: false });
+    ctx.needsInstallGuide = () => true;
+
+    await ctx.loadNotificationsState();
+
+    const btn = ctx.__els.get("notifications-toggle-btn");
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toBe("Install the app to enable notifications");
+    expect(ctx.__els.get("notifications-content-free-toggle").disabled).toBe(true);
+  });
+
+  it("toggleNotifications opens the install guide instead of requesting permission", async () => {
+    const ctx = load({ supported: false });
+    ctx.needsInstallGuide = () => true;
+    ctx.openInstallGuide = vi.fn();
+
+    await ctx.toggleNotifications();
+
+    expect(ctx.openInstallGuide).toHaveBeenCalled();
+    expect(ctx.Notification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("leaves the ordinary unsupported message alone when needsInstallGuide is absent (desktop)", async () => {
+    const ctx = load({ supported: false });
+
+    await ctx.loadNotificationsState();
+
+    expect(ctx.__els.get("notifications-toggle-btn").textContent).toBe("Push notifications are not supported in this browser.");
+  });
+});
+
 describe("setNotificationsContentFree", () => {
   it("re-subscribes the same endpoint with content_free flipped", async () => {
     const sub = makeSubscription();

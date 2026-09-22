@@ -196,6 +196,9 @@ async function showApp() {
   if (typeof handleDueLink === 'function') handleDueLink()
   if (typeof flushPendingDueLinkMessage === 'function') flushPendingDueLinkMessage()
   if (typeof loadNotificationsState === 'function') loadNotificationsState()
+  // Gentle once-per-session nudge toward the install guide (mobile browsers
+  // only) — a no-op everywhere else, see install-guide.js's own guards.
+  if (typeof showInstallNudge === 'function') showInstallNudge()
 }
 
 function logout() {
