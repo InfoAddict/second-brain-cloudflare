@@ -1,6 +1,7 @@
 // The due sheet: list from GET /due, with Done / Snooze / Not a commitment
 // actions on each row. Opened from the attention chip, or from a push
-// notification's deep link (#due/<id>, public/sw.js's notificationclick).
+// notification's deep link — public/sw.js's notificationclick, arriving
+// through any of four redundant channels; see handleDueLink below.
 // See GET /due, POST /due/snooze, POST /due/clear (src/routes/admin.ts).
 
 /** Whatever the sheet last loaded, kept so an action can drop a row without a refetch. */
@@ -8,7 +9,7 @@ let loadedDue = { overdue: [], upcoming: [] }
 /**
  * Monotonic. A cold boot can fire more than one loadDueQueue call for one
  * deep link (live-traced: an early, unauthenticated GET /due racing the
- * later, properly-awaited one — see handleDueHash below), and whichever
+ * later, properly-awaited one — see handleDueLink below), and whichever
  * call's response arrives LAST used to win regardless of which one actually
  * started last, so a slow, stale failure could clobber an already-rendered
  * success. Every invocation stamps its own id here at the top, before any
@@ -31,7 +32,7 @@ function closeDueSheet() {
 
 async function loadDueQueue(highlightId) {
   // Never fetch, never render, on a call that arrived before credentials
-  // exist — see handleDueHash's own guard for the boot-time case this
+  // exist — see handleDueLink's own guard for the boot-time case this
   // protects against; this one is belt-and-braces for any other caller.
   if (!WORKER_URL || !AUTH_TOKEN) return
   const seq = ++dueLoadSeq
@@ -162,48 +163,123 @@ async function snoozeDue(id, choice, btn) {
 }
 
 /**
- * `#due/<id>`, from a push notification's notificationclick (public/sw.js)
- * or a shared link. Read once on load, then cleared so a refresh does not
- * reopen the same sheet. Additive — the one hash this dashboard interprets,
- * no router.
+ * A due deep link can arrive through four redundant channels (public/sw.js's
+ * notificationclick, hardened against iOS's unreliable URL/navigation
+ * handling on notification tap):
+ *
+ *   1. navigator.serviceWorker's 'message' event ({type:'due-deep-link'}) —
+ *      an already-open client got focused and postMessage'd directly.
+ *   2. location.hash '#due/<id>' — a same-document hashchange, or present
+ *      on the very first load.
+ *   3. location.search '?due=<id>' — the URL openWindow was given; iOS has
+ *      been observed to preserve query/path more reliably than a fragment.
+ *   4. IndexedDB's stashed pending record (public/js/pending-due.js) — the
+ *      service worker's own fallback for when NEITHER a live client nor the
+ *      opened window's URL survived the OS's PWA-launch handling.
+ *
+ * All four no-op completely — no fetch, no failure note, no state consumed —
+ * before WORKER_URL/AUTH_TOKEN exist, so boot ordering never matters: due.js
+ * loads (and its listeners register) well before app.js runs init() and
+ * sets them, and a channel firing that early must leave everything exactly
+ * as it found it for a later, properly-authenticated call to still see.
  */
-/** Set for the duration of one handleDueHash-driven load; see the guard below. */
-let dueHashInFlight = false
 
-function handleDueHash() {
-  // A tap on the same notification has been observed to fire this twice in
-  // one boot with no second call site anywhere in this codebase — ignore
-  // re-entry while the first is still in flight rather than starting a
-  // second, redundant load.
-  if (dueHashInFlight) return
+/** Set for the duration of one handleDueLink-driven load (channels 2-4); see the guard below. */
+let dueLinkInFlight = false
+/** A channel that has passed its own auth-readiness check calls this; it owns the shared in-flight guard. */
+function openDueLinkGuarded(id) {
+  dueLinkInFlight = true
+  return Promise.resolve(openDueSheet(id)).finally(() => { dueLinkInFlight = false })
+}
+
+/** How long a stashed IndexedDB record is trusted — older is a previous tap already handled some other way, not a fresh one to resurrect. */
+const DUE_LINK_PENDING_TTL_MS = 2 * 60 * 1000
+
+/**
+ * Checks the hash, then the search param, then the IndexedDB fallback, in
+ * that order, and opens the first one found. Call on boot (showApp) and on
+ * 'hashchange' (an already-loaded tab whose hash changes, e.g. via
+ * client.navigate() on browsers that still honor it).
+ */
+async function handleDueLink() {
+  if (dueLinkInFlight) return
   // due.js loads and registers the hashchange listener below well before
   // app.js (loaded last of every script) runs init() and sets these — and
   // the browser itself dispatches 'hashchange' during the initial
-  // navigation into a URL with a fragment (observed via the service
-  // worker's client.navigate()/openWindow() path), catching this listener
-  // that early. A call this early must do nothing at all: no fetch (an
-  // empty AUTH_TOKEN still sends "Bearer " and the Worker 401s), no failure
-  // note, and critically no hash-clear and no in-flight flag — so the hash
-  // is still there, and this function still callable, once showApp's own
-  // later call arrives with real credentials.
+  // navigation into a URL with a fragment, catching this listener that
+  // early. A call this early must do nothing at all: no fetch (an empty
+  // AUTH_TOKEN still sends "Bearer " and the Worker 401s), no failure note,
+  // and critically no hash/search-clear and no IndexedDB read/clear — so
+  // every channel is still there, and this function still callable, once
+  // showApp's own later call arrives with real credentials.
   if (!WORKER_URL || !AUTH_TOKEN) return
+
   const hash = window.location.hash || ''
-  const match = hash.match(/^#due\/(.+)$/)
-  if (!match) return
-  const id = decodeURIComponent(match[1])
-  // Cleared BEFORE anything async runs, so a hashchange re-firing for the
-  // same tap finds nothing left to match.
-  history.replaceState(null, '', window.location.pathname + window.location.search)
-  dueHashInFlight = true
-  Promise.resolve(openDueSheet(id)).finally(() => { dueHashInFlight = false })
+  const hashMatch = hash.match(/^#due\/(.+)$/)
+  if (hashMatch) {
+    const id = decodeURIComponent(hashMatch[1])
+    // Cleared BEFORE anything async runs, so a hashchange re-firing for the
+    // same tap finds nothing left to match.
+    history.replaceState(null, '', window.location.pathname + window.location.search)
+    openDueLinkGuarded(id)
+    return
+  }
+
+  const params = new URLSearchParams(window.location.search)
+  const searchId = params.get('due')
+  if (searchId) {
+    params.delete('due')
+    const query = params.toString()
+    history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
+    openDueLinkGuarded(searchId)
+    return
+  }
+
+  if (typeof readPendingDueRecord !== 'function') return
+  const record = await readPendingDueRecord()
+  if (!record) return
+  await clearPendingDueRecord()
+  if (Date.now() - record.at < DUE_LINK_PENDING_TTL_MS) openDueLinkGuarded(record.id)
 }
 
-// showApp() covers a fresh load/login, but a push notification's tap more
-// often finds the PWA already open in a backgrounded tab: public/sw.js's
-// notificationclick focuses that client and calls client.navigate(url),
-// which changes the hash WITHOUT re-running init()/showApp(). Without this
-// listener the hash change was silently ignored and whatever sheet was left
-// open (often the menu, from enabling notifications there) stayed on screen.
+/** An id delivered via the service worker's postMessage before auth was ready; drained by flushPendingDueLinkMessage() once it is. */
+let pendingDueLinkFromMessage = null
+
+/** Called on boot (alongside handleDueLink) so a message that arrived pre-auth still gets opened once credentials exist. */
+function flushPendingDueLinkMessage() {
+  if (!pendingDueLinkFromMessage) return
+  if (!WORKER_URL || !AUTH_TOKEN) return
+  const id = pendingDueLinkFromMessage
+  pendingDueLinkFromMessage = null
+  openDueSheet(id)
+}
+
+/**
+ * navigator.serviceWorker's 'message' event, from public/sw.js's
+ * notificationclick: far more reliable than the URL-based channels above
+ * when a window is ALREADY open, since it needs no navigation at all — see
+ * public/sw.js for why client.navigate() was dropped in favor of it. Queues
+ * rather than drops when auth is not ready yet; flushPendingDueLinkMessage
+ * (called from showApp) drains the queue once it is.
+ */
+function handleDueLinkMessage(entryId) {
+  if (!entryId) return
+  pendingDueLinkFromMessage = entryId
+  flushPendingDueLinkMessage()
+}
+
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  window.addEventListener('hashchange', handleDueHash)
+  // showApp() covers a fresh load/login, but a push notification's tap more
+  // often finds the PWA already open in a backgrounded tab, whose hash can
+  // still change without re-running init()/showApp() on browsers that honor
+  // client.navigate(). Without this listener that change was silently
+  // ignored and whatever sheet was left open (often the menu, from enabling
+  // notifications there) stayed on screen.
+  window.addEventListener('hashchange', handleDueLink)
+}
+if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof navigator.serviceWorker.addEventListener === 'function') {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const data = event && event.data
+    if (data && data.type === 'due-deep-link') handleDueLinkMessage(data.entry_id)
+  })
 }

@@ -861,8 +861,8 @@
       </div>
     </div>
     <!-- Due items: overdue and upcoming time anchors (GET /due), opened from
-         the attention chip or a push notification's #due/<id> deep link
-         (js/due.js's handleDueHash, public/sw.js's notificationclick). -->
+         the attention chip or a push notification's deep link
+         (js/due.js's handleDueLink, public/sw.js's notificationclick). -->
     <div id="due-sheet">
       <div class="menu-inner patterns-inner">
         <div class="view-header">
@@ -894,6 +894,7 @@
     <script src="js/patterns.js"></script>
     <script src="js/stale.js"></script>
     <script src="js/loops.js"></script>
+    <script src="js/pending-due.js"></script>
     <script src="js/due.js"></script>
     <script src="js/notifications.js"></script>
     <script src="js/integrations.js"></script>

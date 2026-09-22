@@ -8,10 +8,11 @@ import { resolve } from "node:path";
 import vm from "node:vm";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { installI18n } from "./_i18n-harness";
+import { makeFakeIndexedDB } from "../helpers/fake-indexeddb";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
-function load(responses: any[] = [], { hash = "", authToken = "t" }: { hash?: string; authToken?: string } = {}) {
+function load(responses: any[] = [], { hash = "", search = "", authToken = "t" }: { hash?: string; search?: string; authToken?: string } = {}) {
   const els = new Map<string, any>();
   const makeEl = (id?: string) => ({
     id,
@@ -30,15 +31,25 @@ function load(responses: any[] = [], { hash = "", authToken = "t" }: { hash?: st
   });
   let callIndex = 0;
   const fetchCalls: { url: string; init?: any }[] = [];
+  const swMessageListeners: ((ev: unknown) => void)[] = [];
   const ctx: any = {
     console,
     WORKER_URL: "https://example.test",
     AUTH_TOKEN: authToken,
+    URLSearchParams,
     closeMenu: () => {},
     showToast: () => {},
     history: { replaceState: vi.fn() },
-    window: { location: { hash, pathname: "/", search: "" } },
+    window: { location: { hash, pathname: "/", search } },
+    navigator: {
+      serviceWorker: {
+        addEventListener: (type: string, fn: (ev: unknown) => void) => {
+          if (type === "message") swMessageListeners.push(fn);
+        },
+      },
+    },
     location: { hash },
+    indexedDB: makeFakeIndexedDB(),
     fetch: async (url: string, init?: any) => {
       fetchCalls.push({ url, init });
       const body = responses[Math.min(callIndex++, responses.length - 1)] ?? { ok: true };
@@ -58,11 +69,12 @@ function load(responses: any[] = [], { hash = "", authToken = "t" }: { hash?: st
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   installI18n(ctx, "en");
-  for (const f of ["public/utils.js", "public/js/due.js"]) {
+  for (const f of ["public/utils.js", "public/js/pending-due.js", "public/js/due.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;
   ctx.__fetchCalls = fetchCalls;
+  ctx.__fireSwMessage = (data: unknown) => { for (const fn of swMessageListeners) fn({ data }); };
   return ctx;
 }
 
@@ -213,13 +225,13 @@ describe("resolving a due item", () => {
   });
 });
 
-describe("handleDueHash", () => {
+describe("handleDueLink", () => {
   it("opens the due sheet at the id named in #due/<id>", async () => {
     const ctx = load([dueResponse()], { hash: "#due/e1" });
     let openedWith: string | undefined;
     ctx.openDueSheet = (id?: string) => { openedWith = id; };
 
-    ctx.handleDueHash();
+    ctx.handleDueLink();
 
     expect(openedWith).toBe("e1");
   });
@@ -228,7 +240,7 @@ describe("handleDueHash", () => {
     const ctx = load([dueResponse()], { hash: "#due/e1" });
     ctx.openDueSheet = () => {};
 
-    ctx.handleDueHash();
+    ctx.handleDueLink();
 
     expect(ctx.history.replaceState).toHaveBeenCalled();
   });
@@ -238,7 +250,7 @@ describe("handleDueHash", () => {
     let opened = false;
     ctx.openDueSheet = () => { opened = true; };
 
-    ctx.handleDueHash();
+    ctx.handleDueLink();
 
     expect(opened).toBe(false);
   });
@@ -248,7 +260,7 @@ describe("handleDueHash", () => {
     let opened = false;
     ctx.openDueSheet = () => { opened = true; };
 
-    ctx.handleDueHash();
+    ctx.handleDueLink();
 
     expect(opened).toBe(false);
   });
@@ -259,14 +271,14 @@ describe("handleDueHash", () => {
     let resolveFirst: (() => void) | undefined;
     ctx.openDueSheet = () => new Promise<void>((resolve) => { openCount++; resolveFirst = resolve; });
 
-    ctx.handleDueHash(); // starts the first (real) load
-    ctx.handleDueHash(); // fires again before the first has settled — must be a no-op
+    ctx.handleDueLink(); // starts the first (real) load
+    ctx.handleDueLink(); // fires again before the first has settled — must be a no-op
 
     expect(openCount).toBe(1);
 
     resolveFirst!();
     await new Promise((r) => setTimeout(r, 0)); // let the .finally() clear the in-flight guard
-    ctx.handleDueHash(); // a genuinely later call must still work
+    ctx.handleDueLink(); // a genuinely later call must still work
 
     expect(openCount).toBe(2);
   });
@@ -280,7 +292,7 @@ describe("handleDueHash", () => {
    * BEFORE app.js (loaded last of every script) has run init() and set
    * AUTH_TOKEN. That early call went on to fetch GET /due with
    * "Bearer " + "" and rendered the permanent loadFailed note; showApp's
-   * later, properly-authenticated handleDueHash call then found the
+   * later, properly-authenticated handleDueLink call then found the
    * in-flight guard armed (by the early, doomed call) and was swallowed as
    * re-entry — no authenticated fetch ever happened at all.
    */
@@ -289,7 +301,7 @@ describe("handleDueHash", () => {
 
     // The early, pre-auth firing — due.js's own listener, or a direct call;
     // either way this must be a complete no-op.
-    ctx.handleDueHash();
+    ctx.handleDueLink();
 
     expect(ctx.__fetchCalls).toHaveLength(0);
     expect(ctx.history.replaceState).not.toHaveBeenCalled();
@@ -297,10 +309,10 @@ describe("handleDueHash", () => {
     expect(ctx.__els.has("due-list")).toBe(false);
 
     // app.js's boot completes: AUTH_TOKEN is set, then showApp calls
-    // handleDueHash again — the hash is still there because the early call
+    // handleDueLink again — the hash is still there because the early call
     // never cleared it.
     ctx.AUTH_TOKEN = "t";
-    ctx.handleDueHash();
+    ctx.handleDueLink();
     await new Promise((r) => setTimeout(r, 0));
 
     expect(ctx.__fetchCalls).toHaveLength(1);
@@ -315,9 +327,173 @@ describe("handleDueHash", () => {
     const ctx = load([dueResponse()], { hash: "#due/e1", authToken: "t" });
     ctx.WORKER_URL = "";
 
-    ctx.handleDueHash();
+    ctx.handleDueLink();
 
     expect(ctx.__fetchCalls).toHaveLength(0);
     expect(ctx.history.replaceState).not.toHaveBeenCalled();
+  });
+
+  describe("the ?due=<id> query-param channel", () => {
+    it("opens the due sheet at the id named in ?due=<id> and strips it, keeping the rest of the query string", async () => {
+      const ctx = load([dueResponse()], { search: "?due=e1&foo=bar" });
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      await ctx.handleDueLink();
+
+      expect(openedWith).toBe("e1");
+      expect(ctx.history.replaceState).toHaveBeenCalledWith(null, "", "/?foo=bar");
+    });
+
+    it("strips the param down to a bare path when it was the only one", async () => {
+      const ctx = load([dueResponse()], { search: "?due=e1" });
+      ctx.openDueSheet = () => {};
+
+      await ctx.handleDueLink();
+
+      expect(ctx.history.replaceState).toHaveBeenCalledWith(null, "", "/");
+    });
+
+    it("hash still wins over the query param when both are present", async () => {
+      const ctx = load([dueResponse()], { hash: "#due/from-hash", search: "?due=from-search" });
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      await ctx.handleDueLink();
+
+      expect(openedWith).toBe("from-hash");
+    });
+
+    it("does nothing when there is no due param", async () => {
+      const ctx = load([], { search: "?foo=bar" });
+      let opened = false;
+      ctx.openDueSheet = () => { opened = true; };
+
+      await ctx.handleDueLink();
+
+      expect(opened).toBe(false);
+      expect(ctx.history.replaceState).not.toHaveBeenCalled();
+    });
+
+    it("no-ops entirely before AUTH_TOKEN is set", async () => {
+      const ctx = load([dueResponse()], { search: "?due=e1", authToken: "" });
+      let opened = false;
+      ctx.openDueSheet = () => { opened = true; };
+
+      await ctx.handleDueLink();
+
+      expect(opened).toBe(false);
+      expect(ctx.history.replaceState).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the service worker 'message' channel (due-deep-link)", () => {
+    it("opens the due sheet immediately when auth is already ready", () => {
+      const ctx = load([dueResponse()]); // authToken defaults to "t"
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      ctx.__fireSwMessage({ type: "due-deep-link", entry_id: "e1" });
+
+      expect(openedWith).toBe("e1");
+    });
+
+    it("ignores a message with a different or missing type", () => {
+      const ctx = load([]);
+      let opened = false;
+      ctx.openDueSheet = () => { opened = true; };
+
+      ctx.__fireSwMessage({ type: "something-else", entry_id: "e1" });
+      ctx.__fireSwMessage({ entry_id: "e1" });
+
+      expect(opened).toBe(false);
+    });
+
+    it("queues the id when auth is not ready yet, and delivers it once flushPendingDueLinkMessage runs after boot", () => {
+      const ctx = load([dueResponse()], { authToken: "" });
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      ctx.__fireSwMessage({ type: "due-deep-link", entry_id: "e1" });
+      expect(openedWith).toBeUndefined(); // queued, not dropped
+
+      ctx.AUTH_TOKEN = "t"; // app.js's boot completes
+      ctx.flushPendingDueLinkMessage();
+
+      expect(openedWith).toBe("e1");
+    });
+
+    it("flushPendingDueLinkMessage is a no-op when nothing is queued", () => {
+      const ctx = load([]);
+      let opened = false;
+      ctx.openDueSheet = () => { opened = true; };
+
+      ctx.flushPendingDueLinkMessage();
+
+      expect(opened).toBe(false);
+    });
+  });
+
+  describe("the IndexedDB pending-record fallback (2-minute TTL)", () => {
+    it("opens a fresh stashed record and clears it", async () => {
+      const ctx = load([dueResponse()]);
+      await ctx.stashPendingDueId("e1");
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      await ctx.handleDueLink();
+
+      expect(openedWith).toBe("e1");
+      expect(await ctx.readPendingDueRecord()).toBeNull();
+    });
+
+    it("ignores (but still clears) a stashed record older than 2 minutes", async () => {
+      const ctx = load([]);
+      // A real stash first, so the DB/store exist; then overwrite with an
+      // aged timestamp — stashPendingDueId itself always uses Date.now().
+      await ctx.stashPendingDueId("stale");
+      // Constants, not globals: pending-due.js declares these with `const`,
+      // which does not attach to the vm context the way its `function`
+      // declarations do — matching the literals it uses internally.
+      const db = await new Promise<any>((resolve) => {
+        const req = ctx.indexedDB.open("sb-push", 1);
+        req.onsuccess = () => resolve(req.result);
+      });
+      await new Promise<void>((resolve) => {
+        const tx = db.transaction("pending", "readwrite");
+        tx.objectStore("pending").put({ id: "stale", at: Date.now() - 3 * 60 * 1000 }, "due");
+        tx.oncomplete = () => resolve();
+      });
+      let opened = false;
+      ctx.openDueSheet = () => { opened = true; };
+
+      await ctx.handleDueLink();
+
+      expect(opened).toBe(false);
+      expect(await ctx.readPendingDueRecord()).toBeNull(); // cleared even though stale
+    });
+
+    it("does not touch IndexedDB before AUTH_TOKEN is set", async () => {
+      const ctx = load([], { authToken: "" });
+      await ctx.stashPendingDueId("e1");
+
+      await ctx.handleDueLink();
+
+      // Still there — a no-op call must not have read or cleared it.
+      expect((await ctx.readPendingDueRecord())?.id).toBe("e1");
+    });
+
+    it("hash and search both win over the IndexedDB fallback", async () => {
+      const ctx = load([dueResponse()], { hash: "#due/from-hash" });
+      await ctx.stashPendingDueId("from-idb");
+      let openedWith: string | undefined;
+      ctx.openDueSheet = (id?: string) => { openedWith = id; };
+
+      await ctx.handleDueLink();
+
+      expect(openedWith).toBe("from-hash");
+      // Untouched — the hash channel won, so IndexedDB was never even read.
+      expect((await ctx.readPendingDueRecord())?.id).toBe("from-idb");
+    });
   });
 });

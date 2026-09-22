@@ -7,6 +7,16 @@
 // Handlers are plain functions, exported at the bottom for
 // test/ui/sw.test.ts (the fake-DOM/vm harness has no ServiceWorkerGlobalScope,
 // so it calls these directly rather than dispatching real events).
+//
+// importScripts, not a bundler: this is a classic (non-module) service
+// worker, and pending-due.js's stash/read/clear helpers are plain globals
+// both this file and public/js/due.js load — due.js via a <script> tag,
+// this file via importScripts — so the IndexedDB schema behind the
+// notification-tap fallback (see handleNotificationClick) lives in one
+// place rather than two copies that could drift.
+if (typeof importScripts === "function") {
+  importScripts("/js/pending-due.js");
+}
 
 /** Best-effort JSON parse of the push payload; a malformed one still shows something. */
 function parsePushPayload(event) {
@@ -35,21 +45,41 @@ function handlePush(event) {
   return showing;
 }
 
-/** 'notificationclick' — focus an already-open tab, or open one, at the due item's deep link. */
+/**
+ * 'notificationclick' — three redundant channels, because iOS PWAs are
+ * notorious for dropping or ignoring a notification's target URL: openWindow
+ * can land on start_url with the URL discarded entirely, and a same-document
+ * client.navigate() has been observed silently ignored.
+ *
+ *   1. An existing window: focus it AND postMessage — far more reliably
+ *      delivered than client.navigate() (dropped, not used here at all).
+ *   2. No window: stash the id in IndexedDB (public/js/pending-due.js)
+ *      BEFORE opening one, since the opened window's own URL is a second
+ *      channel, not the only one.
+ *   3. The URL itself: a query param (iOS preserves query/path more
+ *      reliably than a fragment) with the hash appended too, for browsers
+ *      that do honor it.
+ *
+ * public/js/due.js's handleDueLink checks all of postMessage, the hash, the
+ * search param, and the IndexedDB fallback, in that shape, on boot.
+ */
 function handleNotificationClick(event) {
   const notification = event && event.notification;
   if (notification && typeof notification.close === "function") notification.close();
 
   const entryId = notification && notification.data && notification.data.entry_id;
-  const targetUrl = entryId ? `/#due/${entryId}` : "/";
 
-  const task = self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+  const task = self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clientList) => {
     for (const client of clientList) {
       if ("focus" in client) {
-        if ("navigate" in client) client.navigate(targetUrl).catch(() => {});
+        if (entryId && typeof client.postMessage === "function") {
+          client.postMessage({ type: "due-deep-link", entry_id: entryId });
+        }
         return client.focus();
       }
     }
+    if (entryId && typeof stashPendingDueId === "function") await stashPendingDueId(entryId);
+    const targetUrl = entryId ? `/?due=${encodeURIComponent(entryId)}#due/${encodeURIComponent(entryId)}` : "/";
     if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
     return undefined;
   });

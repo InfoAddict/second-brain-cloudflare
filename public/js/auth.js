@@ -188,11 +188,13 @@ async function showApp() {
   // gives whatever causes that race the time its own round trip already
   // takes, before the one fetch whose failure is visible fires.
   await refreshAll()
-  // #due/<id> from a push notification's deep link (public/sw.js), or a
-  // shared link. Needs WORKER_URL/AUTH_TOKEN, which is why this runs here
-  // rather than in init() — both the auto-login and manual-login paths call
-  // showApp(), and neither has credentials before this point.
-  if (typeof handleDueHash === 'function') handleDueHash()
+  // A due deep link (public/sw.js's notificationclick, or a shared link).
+  // Needs WORKER_URL/AUTH_TOKEN, which is why these run here rather than in
+  // init() — both the auto-login and manual-login paths call showApp(), and
+  // neither has credentials before this point. Both are no-ops if nothing
+  // is actually pending on their own channel(s); see public/js/due.js.
+  if (typeof handleDueLink === 'function') handleDueLink()
+  if (typeof flushPendingDueLinkMessage === 'function') flushPendingDueLinkMessage()
   if (typeof loadNotificationsState === 'function') loadNotificationsState()
 }
 

@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
+import { makeFakeIndexedDB } from "../helpers/fake-indexeddb";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -108,8 +109,10 @@ function boot(hash: string, dueFixture: any, opts: {
       setItem: (k: string, v: string) => store.set(k, v),
       removeItem: (k: string) => store.delete(k),
     },
-    navigator: { language: "en-US" },
+    navigator: { language: "en-US", serviceWorker: { addEventListener: () => {} } },
     history: { replaceState: (...args: unknown[]) => { replaceStateCalls.push(args); } },
+    URLSearchParams,
+    indexedDB: makeFakeIndexedDB(),
     fetch: async (url: string) => {
       const race = opts.raceAuth;
       if (String(url).includes("/due")) {
@@ -198,7 +201,7 @@ describe("booting straight into a #due/<id> deep link", () => {
    * worked. Not a localStorage timing issue (that read is synchronous) — the
    * fixture below models it as the first authenticated round trip after boot
    * being unreliable for a short window, which is what showApp() awaiting
-   * refreshAll() before handleDueHash() protects against: due's own fetch
+   * refreshAll() before handleDueLink() protects against: due's own fetch
    * no longer fires until the home screen's other panels have already made
    * (and this fixture resolves) a full round trip.
    */
@@ -217,7 +220,7 @@ describe("booting straight into a #due/<id> deep link", () => {
    * notifications there) and public/sw.js's notificationclick focuses it and
    * calls client.navigate(targetUrl) rather than opening a fresh document.
    * That changes window.location.hash WITHOUT re-running init()/showApp(),
-   * so handleDueHash — wired only into showApp() — never fires and the due
+   * so handleDueLink — wired only into showApp() — never fires and the due
    * sheet never opens, leaving whatever was on screen (here: the menu, left
    * open from the Notifications card) in front.
    */
@@ -243,10 +246,10 @@ describe("booting straight into a #due/<id> deep link", () => {
 
   /**
    * Live bug on top of the earlier ordering fix (6950fc0): even with
-   * handleDueHash awaiting refreshAll, the real page still showed
+   * handleDueLink awaiting refreshAll, the real page still showed
    * "Could not load what is due." on a cold boot. A network trace showed
    * TWO GET /due calls — a 401 and a 200 — for one boot. No second explicit
-   * call site exists anywhere in this codebase (verified: handleDueHash has
+   * call site exists anywhere in this codebase (verified: handleDueLink has
    * exactly one direct caller, showApp; there is no DOMContentLoaded
    * listener, no direct call at script load, and auth.js never re-invokes
    * showApp), so the early call is modeled here directly — standing in for
@@ -264,12 +267,12 @@ describe("booting straight into a #due/<id> deep link", () => {
 
     // The early call: invoked synchronously, in the same turn boot() itself
     // ran in — before showApp's own await refreshAll() has had a single
-    // microtask to resolve, let alone reach handleDueHash. This is what
+    // microtask to resolve, let alone reach handleDueLink. This is what
     // guarantees it is the FIRST of the two invocations (and the first GET
     // /due, per doubleInvoke's counter), exactly like the live trace.
     sandbox.loadDueQueue("e1");
 
-    // Let showApp's natural chain (refreshAll -> handleDueHash -> the SECOND,
+    // Let showApp's natural chain (refreshAll -> handleDueLink -> the SECOND,
     // successful loadDueQueue call) complete, and then let the early call's
     // delayed failure resolve after it.
     await new Promise((r) => setTimeout(r, 50));
