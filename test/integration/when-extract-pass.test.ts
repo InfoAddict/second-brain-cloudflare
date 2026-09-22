@@ -73,6 +73,17 @@ describe("runWhenExtractPass — the prefilter", () => {
     expect(summary.whenJudged).toBe(2); // loop-1 and volatile-1, not plain or already-anchored
   });
 
+  it("never re-selects a cleared entry (when_source = 'cleared' blocks re-stamping)", async () => {
+    sq = await migrated();
+    seedOpenLoop(sq, "cleared-1", "Follow up with the accountant", 1000);
+    sq.db.prepare(`UPDATE entries SET when_source = 'cleared' WHERE id = 'cleared-1'`).run();
+
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV(), AI: makeAI(`{"is_commitment": false}`) });
+    const summary = await runWhenExtractPass(env, ctx, null);
+
+    expect(summary.whenJudged).toBe(0);
+  });
+
   it("scopes to the given workspace slice", async () => {
     sq = await migrated();
     seedOpenLoop(sq, "in-slice", "Follow up on this", 1000);
@@ -88,7 +99,7 @@ describe("runWhenExtractPass — the prefilter", () => {
 });
 
 describe("runWhenExtractPass — persistence and cursor", () => {
-  it("persists when_at/when_kind/when_source only for confident commitments", async () => {
+  it("persists when_at/when_kind/when_source/when_label only for confident commitments", async () => {
     sq = await migrated();
     seedOpenLoop(sq, "loop-1", "File the annual report", 1000);
     const env = makeTestEnv(dbOf(sq) as any, {
@@ -99,10 +110,11 @@ describe("runWhenExtractPass — persistence and cursor", () => {
     const summary = await runWhenExtractPass(env, ctx, null);
     expect(summary.whenExtracted).toBe(1);
 
-    const row = (await sq.db.prepare(`SELECT when_at, when_kind, when_source FROM entries WHERE id = 'loop-1'`).first()) as any;
+    const row = (await sq.db.prepare(`SELECT when_at, when_kind, when_source, when_label FROM entries WHERE id = 'loop-1'`).first()) as any;
     expect(row.when_at).toBe(Date.parse("2027-01-30"));
     expect(row.when_kind).toBe("due");
     expect(row.when_source).toBe("model");
+    expect(row.when_label).toBe("File the report");
   });
 
   it("persists when_kind: event for an appointment, not the due default (Nit b)", async () => {

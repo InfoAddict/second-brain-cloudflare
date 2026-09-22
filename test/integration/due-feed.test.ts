@@ -76,7 +76,7 @@ describe("GET /due", () => {
     expect(data.upcoming.map((r: any) => r.id)).toEqual(["earlier-upcoming", "later-upcoming"]);
   });
 
-  it("carries content (truncated), what: null, tags, and the when fields", async () => {
+  it("carries content (truncated), a label, tags, and the when fields", async () => {
     sq = await migrated();
     const now = Date.now();
     const longContent = "x".repeat(300);
@@ -89,11 +89,24 @@ describe("GET /due", () => {
     const row = data.overdue[0];
     expect(row.content).toBe(longContent.slice(0, 200));
     expect(row.content.length).toBe(200);
-    expect(row.what).toBeNull();
+    // No when_label on the regex path — falls back to the first 80 characters of content.
+    expect(row.label).toBe(longContent.slice(0, 80));
     expect(row.tags).toEqual(expect.arrayContaining(["task", "work"]));
     expect(row.when_kind).toBe("due");
     expect(row.when_source).toBe("regex");
     expect(typeof row.when_at).toBe("number");
+  });
+
+  it("uses when_label as the label when the nightly pass set one", async () => {
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "e2", content: "A much longer note about filing something eventually", createdAt: 1000 });
+    sq.db.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_source = 'model', when_label = 'File the report' WHERE id = 'e2'`)
+      .bind(now - DAY).run();
+
+    const data = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
+
+    expect(data.overdue[0].label).toBe("File the report");
   });
 
   it("treats the exact 48-hour boundary as upcoming, not excluded", async () => {
@@ -150,5 +163,119 @@ describe("GET /due", () => {
     const data = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
 
     expect(data.overdue.map((r: any) => r.id)).toEqual(["untagged"]);
+  });
+});
+
+describe("POST /due/snooze", () => {
+  it("requires auth", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/due/snooze", { token: null, body: { id: "x", until: "2027-01-01" } }), envOf(sq), ctx);
+    expect(res.status).toBe(401);
+  });
+
+  it("requires id and until", async () => {
+    sq = await migrated();
+    const noId = await worker.fetch(req("POST", "/due/snooze", { body: { until: "2027-01-01" } }), envOf(sq), ctx);
+    expect(noId.status).toBe(400);
+    const noUntil = await worker.fetch(req("POST", "/due/snooze", { body: { id: "x" } }), envOf(sq), ctx);
+    expect(noUntil.status).toBe(400);
+  });
+
+  it("rejects an unparseable until", async () => {
+    sq = await migrated();
+    seedWhen(sq, "e1", "File the report", Date.now() - DAY);
+    const res = await worker.fetch(req("POST", "/due/snooze", { body: { id: "e1", until: "not-a-date" } }), envOf(sq), ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a past until", async () => {
+    sq = await migrated();
+    seedWhen(sq, "e1", "File the report", Date.now() - DAY);
+    const res = await worker.fetch(req("POST", "/due/snooze", { body: { id: "e1", until: "2020-01-01" } }), envOf(sq), ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an until more than 5 years out", async () => {
+    sq = await migrated();
+    seedWhen(sq, "e1", "File the report", Date.now() - DAY);
+    const farFuture = new Date(Date.now() + 6 * 365 * DAY).toISOString().slice(0, 10);
+    const res = await worker.fetch(req("POST", "/due/snooze", { body: { id: "e1", until: farFuture } }), envOf(sq), ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("404s for an id the caller cannot see", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/due/snooze", { body: { id: "missing", until: "2027-01-01" } }), envOf(sq), ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it("sets when_at to the new date and records an audit event", async () => {
+    sq = await migrated();
+    seedWhen(sq, "e1", "File the report", Date.now() - DAY);
+    const until = "2027-06-15";
+
+    const res = await worker.fetch(req("POST", "/due/snooze", { body: { id: "e1", until } }), envOf(sq), ctx);
+    const data = await res.json() as any;
+    expect(data.ok).toBe(true);
+    expect(data.when_at).toBe(Date.parse(until));
+
+    const row = (await sq.db.prepare(`SELECT when_at FROM entries WHERE id = 'e1'`).first()) as any;
+    expect(row.when_at).toBe(Date.parse(until));
+
+    const events = (await sq.db.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = 'e1'`).all()).results as any[];
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe("status_changed");
+    expect(JSON.parse(events[0].payload)).toEqual({ due_action: "snooze", until: Date.parse(until) });
+  });
+});
+
+describe("POST /due/clear", () => {
+  it("requires auth", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/due/clear", { token: null, body: { id: "x" } }), envOf(sq), ctx);
+    expect(res.status).toBe(401);
+  });
+
+  it("requires id", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/due/clear", { body: {} }), envOf(sq), ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("404s for an id the caller cannot see", async () => {
+    sq = await migrated();
+    const res = await worker.fetch(req("POST", "/due/clear", { body: { id: "missing" } }), envOf(sq), ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it("nulls when_at/when_kind/when_label and sets when_source to cleared", async () => {
+    sq = await migrated();
+    sq.seed({ id: "e1", content: "File the report", createdAt: 1000 });
+    sq.db.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_source = 'model', when_label = 'File the report' WHERE id = 'e1'`)
+      .bind(Date.now() - DAY).run();
+
+    const res = await worker.fetch(req("POST", "/due/clear", { body: { id: "e1" } }), envOf(sq), ctx);
+    const data = await res.json() as any;
+    expect(data.ok).toBe(true);
+
+    const row = (await sq.db.prepare(`SELECT when_at, when_kind, when_label, when_source FROM entries WHERE id = 'e1'`).first()) as any;
+    expect(row.when_at).toBeNull();
+    expect(row.when_kind).toBeNull();
+    expect(row.when_label).toBeNull();
+    expect(row.when_source).toBe("cleared");
+
+    const events = (await sq.db.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = 'e1'`).all()).results as any[];
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0].payload)).toEqual({ due_action: "clear" });
+  });
+
+  it("drops the entry from GET /due once cleared", async () => {
+    sq = await migrated();
+    seedWhen(sq, "e1", "File the report", Date.now() - DAY);
+
+    await worker.fetch(req("POST", "/due/clear", { body: { id: "e1" } }), envOf(sq), ctx);
+
+    const data = await (await worker.fetch(req("GET", "/due"), envOf(sq), ctx)).json() as any;
+    expect(data.overdue.map((r: any) => r.id)).not.toContain("e1");
   });
 });

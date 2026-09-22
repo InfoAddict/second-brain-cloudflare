@@ -15,6 +15,7 @@ const MIGRATION: [column: string, alter: string][] = [
   ["when_at", `ALTER TABLE entries ADD COLUMN when_at INTEGER`],
   ["when_kind", `ALTER TABLE entries ADD COLUMN when_kind TEXT`],
   ["when_source", `ALTER TABLE entries ADD COLUMN when_source TEXT`],
+  ["when_label", `ALTER TABLE entries ADD COLUMN when_label TEXT`],
 ];
 // Tenancy (v3) ALTERs exist for upgraded brains, but on fresh brains these columns
 // ship inside the base CREATE (see BASE_COLUMNS), so unlike MIGRATION they are not
@@ -218,7 +219,8 @@ describe("initializeDatabase updated_at migration", () => {
       // triggers, which make invalidation atomic with entry writes.
       // MOVED 43 -> 46 by the projects table, idx_projects_workspace and idx_entries_project.
       // MOVED 46 -> 49 by the time-anchor ALTERs: when_at, when_kind, when_source.
-      expect(migrated).toBe(49); // 24 base objects + 17 ALTERs + 6 post-column objects + the email-index CREATE
+      // MOVED 49 -> 50 by when_label, the nightly pass's persisted label.
+      expect(migrated).toBe(50); // 24 base objects + 18 ALTERs + 6 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(7); // three probes plus four prepared trigger DDLs
       expect(touchesEntries(execd)).toEqual([]);
@@ -536,15 +538,16 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 38 -> 43 by the Prompt Capsule revision table and its four triggers.
     // MOVED 44 -> 47 by the projects table and its two indexes.
     // MOVED 47 -> 50 by the time-anchor ALTERs: when_at, when_kind, when_source.
-    expect(cold).toBe(50); // one probe, then the 49 statements a new brain needs
+    // MOVED 50 -> 51 by when_label, the nightly pass's persisted label.
+    expect(cold).toBe(51); // one probe, then the 50 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
 
   it("adds only what a partially-migrated brain is missing", async () => {
     // db/schema.sql is a real intermediate state: it ships entries with four of the
-    // nine ALTER columns, so a brain installed from it is owed updated_at,
-    // staleness_checked_at, and the three time-anchor columns, and nothing else.
+    // ten ALTER columns, so a brain installed from it is owed updated_at,
+    // staleness_checked_at, and the four time-anchor columns, and nothing else.
     d1 = makeSqliteD1();
     expect(d1.columns()).not.toContain("updated_at");
 
@@ -556,6 +559,7 @@ describe("initializeDatabase against real SQLite", () => {
       `ALTER TABLE entries ADD COLUMN when_at INTEGER`,
       `ALTER TABLE entries ADD COLUMN when_kind TEXT`,
       `ALTER TABLE entries ADD COLUMN when_source TEXT`,
+      `ALTER TABLE entries ADD COLUMN when_label TEXT`,
     ]);
     // schema.sql ships the whole v3 tenancy set — users (with default_share,
     // removed_at and last_used_at), workspaces, memberships, entry_events,

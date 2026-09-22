@@ -30,7 +30,7 @@ import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
-import { DUE_WITHIN_MS, DUE_SQL } from "../when/input";
+import { DUE_WITHIN_MS, DUE_SQL, parseExplicitWhen } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -1280,9 +1280,10 @@ export async function handleAdminRoutes(
     const rowShape = (r: Record<string, any>) => ({
       id: r.id as string,
       content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
-      // Never populated: the model's short "what" (src/when/pass.ts) is used
-      // only to judge the extraction, not persisted anywhere on the row.
-      what: null,
+      // The nightly pass's short label when it set the when (src/when/pass.ts),
+      // else the first 80 characters of content as a fallback for the
+      // explicit/regex paths, which never generate one.
+      label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
       tags: parseTags(r.tags as string),
       when_at: r.when_at as number,
       when_kind: r.when_kind as string,
@@ -1291,7 +1292,7 @@ export async function handleAdminRoutes(
 
     const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
       env.DB.prepare(
-        `SELECT id, content, tags, when_at, when_kind, when_source FROM entries
+        `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
          WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
@@ -1299,7 +1300,7 @@ export async function handleAdminRoutes(
         `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}`,
       ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
       env.DB.prepare(
-        `SELECT id, content, tags, when_at, when_kind, when_source FROM entries
+        `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
          WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
          ORDER BY when_at ASC LIMIT ?`,
       ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
@@ -1317,6 +1318,87 @@ export async function handleAdminRoutes(
         upcoming: (upcomingCount?.n as number) ?? 0,
       },
     });
+  }
+
+  // POST /due/snooze, push a time anchor out to a new date without touching
+  // when_kind or when_label. Validated the same way an explicit when is
+  // (future, no more than 5 years out) plus a floor parseExplicitWhen does
+  // not itself enforce: a snooze into the past is not a snooze.
+  //
+  // CAS on tags AND content, three attempts — same guard shape as
+  // /loops/resolve above, so a concurrent edit or delete between the read and
+  // the write below is caught rather than clobbered.
+  if (url.pathname === "/due/snooze" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; until?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
+
+    const parsed = parseExplicitWhen(body.until, undefined);
+    if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
+    const until = parsed.value!.at;
+    if (until <= Date.now()) return json({ ok: false, error: "until must be in the future" }, 400);
+
+    const id = body.id.trim();
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanEditContent(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const result = await env.DB.prepare(
+        `UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ?`,
+      ).bind(until, id, row.tags, row.content).run();
+
+      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "snooze", until } });
+        return json({ ok: true, id, when_at: until });
+      }
+      // Lost the race — loop back and re-read rather than retrying stale tags/content.
+    }
+
+    return json({ ok: false, error: "Could not snooze — try again" }, 409);
+  }
+
+  // POST /due/clear, drop the time anchor entirely: not a commitment, or
+  // already handled outside the loop-resolve flow. when_source becomes
+  // 'cleared' rather than NULL so the nightly pass's prefilter (when_at IS
+  // NULL AND when_source IS NULL, src/when/pass.ts) never re-stamps it — a
+  // cleared entry stays cleared until a caller sets a when explicitly again.
+  //
+  // CAS on tags AND content, same shape as /loops/resolve and /due/snooze above.
+  if (url.pathname === "/due/clear" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+
+    const id = body.id.trim();
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanEditContent(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const result = await env.DB.prepare(
+        `UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ?`,
+      ).bind(id, row.tags, row.content).run();
+
+      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "clear" } });
+        return json({ ok: true, id });
+      }
+      // Lost the race — loop back and re-read rather than retrying stale tags/content.
+    }
+
+    return json({ ok: false, error: "Could not clear — try again" }, 409);
   }
 
   // GET /extract/dry-run, a preview of the nightly when-extraction pass

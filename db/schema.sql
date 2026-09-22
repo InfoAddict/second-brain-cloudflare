@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS entries (
   workspace_id     TEXT NOT NULL DEFAULT '',     -- owning workspace ('' = legacy owner-private rows pending backfill)
   actor_id         TEXT NOT NULL DEFAULT ''      -- user who wrote it ('' = the owner, pre-team writes)
   -- Runtime ALTER columns (see src/db/init.ts): updated_at, staleness_checked_at,
-  -- when_at, when_kind, when_source
+  -- when_at, when_kind, when_source, when_label
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC);

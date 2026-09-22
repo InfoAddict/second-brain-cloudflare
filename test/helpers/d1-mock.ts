@@ -51,7 +51,7 @@ const SCHEMA_PROBE_RESULTS = [
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
-    "staleness_checked_at", "when_at", "when_kind", "when_source"].map(name => ({ kind: "column", name })),
+    "staleness_checked_at", "when_at", "when_kind", "when_source", "when_label"].map(name => ({ kind: "column", name })),
   ...["workspace_id", "actor_id"].map(name => ({ kind: "column", name })),
   // edges.workspace_id arrives by ALTER on upgraded brains and lives in the base
   // CREATE on fresh ones — either way a migrated brain reports it.

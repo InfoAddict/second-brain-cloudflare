@@ -359,8 +359,8 @@ export async function runWhenExtractPass(
     whenJudged++;
     if (verdict.outcome === "commitment") {
       writes.push(
-        env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'model' WHERE id = ?`)
-          .bind(verdict.dueAt, verdict.kind, candidate.id),
+        env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'model', when_label = ? WHERE id = ?`)
+          .bind(verdict.dueAt, verdict.kind, verdict.what, candidate.id),
       );
     }
   }

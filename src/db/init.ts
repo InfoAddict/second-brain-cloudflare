@@ -171,6 +171,12 @@ const ENTRIES_COLUMNS: Record<string, string> = {
   when_at: `ALTER TABLE entries ADD COLUMN when_at INTEGER`,
   when_kind: `ALTER TABLE entries ADD COLUMN when_kind TEXT`,
   when_source: `ALTER TABLE entries ADD COLUMN when_source TEXT`,
+  // The nightly model pass already generates a short label ("File the annual
+  // report") to judge whether an entry is a real commitment; this is that
+  // same text, kept instead of discarded, so GET /due can show it instead of
+  // the first 80 characters of raw content. NULL on the explicit and regex
+  // paths, which never generate one.
+  when_label: `ALTER TABLE entries ADD COLUMN when_label TEXT`,
 };
 
 /**
