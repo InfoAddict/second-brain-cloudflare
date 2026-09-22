@@ -1167,8 +1167,9 @@ describe("the checker over the real source tree", () => {
     // topic-preferred-pool COUNT probe in pickResurface. Deliberate: +1 query
     // and +1 scope-exempt for src/when/pass.ts's candidate prefilter (a
     // per-workspace cron slice, same exemption shape as the other nightly
-    // passes).
-    ).toEqual({ queries: 112, exempt: 54, checked: 6, outerJoin: 1 });
+    // passes). Deliberate: +4 scoped queries for GET /due (overdue rows,
+    // overdue count, upcoming rows, upcoming count).
+    ).toEqual({ queries: 116, exempt: 54, checked: 6, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

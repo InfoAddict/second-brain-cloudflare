@@ -29,6 +29,8 @@ import { adminAuditEvent } from "../lib/admin-audit";
 import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
+import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
+import { DUE_WITHIN_MS } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -42,6 +44,11 @@ import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 
 /** How many nodes the degree ranking returns: a ranking, not a dump of the graph. */
 const GRAPH_STATS_TOP_DEGREE = 20;
+
+/** Rows per bucket on GET /due — a feed, not a full export. */
+const DUE_FEED_LIMIT = 20;
+/** How much of an entry's content GET /due and GET /extract/dry-run print. */
+const DUE_CONTENT_CHARS = 200;
 
 export async function handleAdminRoutes(
   request: Request,
@@ -1254,6 +1261,100 @@ export async function handleAdminRoutes(
     }
 
     return json({ ok: false, error: "Could not resolve — try again" }, 409);
+  }
+
+  // GET /due, the time-anchored feed: overdue commitments (when_at already
+  // passed) and upcoming ones (within the next 48 hours), each capped and
+  // counted. This is the only source scripts/brief-preview.mjs's --dry-run
+  // check and the future push sender both read from — a due date exists on
+  // an entry the moment when_at is set, by whichever of the three producers
+  // (explicit, src/when/heuristic.ts, src/when/pass.ts) set it.
+  if (url.pathname === "/due" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const scope = scopeWhere(auth);
+    const now = Date.now();
+    const upcomingBefore = now + DUE_WITHIN_MS;
+
+    const rowShape = (r: Record<string, any>) => ({
+      id: r.id as string,
+      content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
+      // Never populated: the model's short "what" (src/when/pass.ts) is used
+      // only to judge the extraction, not persisted anywhere on the row.
+      what: null,
+      tags: parseTags(r.tags as string),
+      when_at: r.when_at as number,
+      when_kind: r.when_kind as string,
+      when_source: r.when_source as string,
+    });
+
+    const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, tags, when_at, when_kind, when_source FROM entries
+         WHERE when_at IS NOT NULL AND when_at < ? AND ${scope.clause}
+         ORDER BY when_at ASC LIMIT ?`,
+      ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE when_at IS NOT NULL AND when_at < ? AND ${scope.clause}`,
+      ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+      env.DB.prepare(
+        `SELECT id, content, tags, when_at, when_kind, when_source FROM entries
+         WHERE when_at IS NOT NULL AND when_at >= ? AND when_at <= ? AND ${scope.clause}
+         ORDER BY when_at ASC LIMIT ?`,
+      ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE when_at IS NOT NULL AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
+      ).bind(now, upcomingBefore, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      overdue: (overdueRows.results as Record<string, any>[]).map(rowShape),
+      upcoming: (upcomingRows.results as Record<string, any>[]).map(rowShape),
+      counts: {
+        overdue: (overdueCount?.n as number) ?? 0,
+        upcoming: (upcomingCount?.n as number) ?? 0,
+      },
+    });
+  }
+
+  // GET /extract/dry-run, a preview of the nightly when-extraction pass
+  // (src/when/pass.ts) against the live brain: the exact prefilter and the
+  // exact model call, on the next N candidates past the pass's own cursor,
+  // reporting every verdict without persisting anything or moving the
+  // cursor. Mirrors GET /insights/dry-run's shape and purpose — testing
+  // extraction quality on real data is the whole reason this exists.
+  if (url.pathname === "/extract/dry-run" && request.method === "GET") {
+    const auth = await requireAdmin(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limit = intParam(url, "limit", { fallback: 5, min: 1, max: 10 });
+    if (limit instanceof Response) return limit;
+
+    const cursor = await readWhenCursor(env);
+    const scope = scopeWhere(auth);
+    const candidates = await fetchWhenCandidates(env, cursor, scope, limit);
+
+    const cfg = await resolveConfig(env);
+    const verdicts = [];
+    for (const candidate of candidates) {
+      const outcome = await judgeCommitment(candidate.content, Date.now(), env, cfg);
+      verdicts.push({
+        id: candidate.id,
+        content: candidate.content.slice(0, DUE_CONTENT_CHARS),
+        outcome: outcome.outcome,
+        what: outcome.outcome === "commitment" ? outcome.what : null,
+        due_at: outcome.outcome === "commitment" ? outcome.dueAt : null,
+        confidence: outcome.outcome === "commitment" ? outcome.confidence : null,
+      });
+      // A failed call means the batch stops here in production (the pass
+      // does not risk skipping it); the preview keeps going so a reviewer
+      // sees every candidate in the window, not just the ones before the
+      // first hiccup.
+    }
+
+    return json({ ok: true, candidates: verdicts });
   }
 
   // POST /patterns/resolve, confirm or dismiss a proposed insight.

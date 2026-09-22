@@ -26,6 +26,7 @@ import { WHEN_PASS_MAX_TOKENS } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { initializeDatabase } from "../db/init";
 import { OPEN_LOOP_SQL } from "../memory/loops";
+import type { ScopeClause } from "../lib/scope";
 
 /** Model calls spent per night, hard ceiling. */
 export const WHEN_EXTRACT_PER_NIGHT = 20;
@@ -82,10 +83,10 @@ async function writeWhenCursor(env: Env, row: { created_at: number; id: string }
   }
 }
 
-function candidateSql(hasCursor: boolean, hasSlice: boolean): string {
+function candidateSql(hasCursor: boolean, scopeClause: string | null): string {
   const cursorClause = hasCursor ? `AND (created_at > ? OR (created_at = ? AND id > ?))` : "";
-  const sliceClause = hasSlice ? `AND workspace_id = ?` : "";
-  // scope-exempt: cron: per-workspace slice supplied by the caller like the other nightly passes; a direct/manual caller with no slice walks the whole corpus, same as before v3
+  const sliceClause = scopeClause ? `AND ${scopeClause}` : "";
+  // scope-exempt: cron: the nightly pass's own single-workspace slice is folded into `scope` by the caller, same exemption shape as the other nightly passes; a direct/manual caller with no slice walks the whole corpus, same as before v3. GET /extract/dry-run instead passes a real scopeWhere(auth), so that path IS scoped.
   return `SELECT id, content, created_at FROM entries
           WHERE when_at IS NULL AND when_source IS NULL
             AND (${OPEN_LOOP_SQL} OR tags LIKE '%"volatility:volatile"%')
@@ -99,19 +100,24 @@ function candidateSql(hasCursor: boolean, hasSlice: boolean): string {
  * Candidates from just past `cursor`, capped at `limit` (WHEN_EXTRACT_PER_NIGHT
  * for the real pass; GET /extract/dry-run passes its own, smaller N). Exported
  * so the dry-run route reads the identical prefilter the pass itself uses.
+ *
+ * `scope` is a plain WHERE fragment, not a bare workspace id: the nightly
+ * pass folds its single rotation slice into one (`workspace_id = ?`),
+ * while GET /extract/dry-run passes a real scopeWhere(auth) — personal plus
+ * every company workspace the caller can read, an IN clause the pass itself
+ * never needs.
  */
 export async function fetchWhenCandidates(
   env: Env,
   cursor: WhenCursor | null,
-  workspaceId: string | null | undefined,
+  scope: ScopeClause | null,
   limit: number = WHEN_EXTRACT_PER_NIGHT,
 ): Promise<WhenCandidate[]> {
   const hasCursor = cursor != null;
-  const hasSlice = workspaceId != null;
   const bindings: (string | number)[] = [];
   if (cursor) bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
-  if (hasSlice) bindings.push(workspaceId as string);
-  const { results } = await env.DB.prepare(candidateSql(hasCursor, hasSlice)).bind(...bindings).all();
+  if (scope) bindings.push(...scope.bindings);
+  const { results } = await env.DB.prepare(candidateSql(hasCursor, scope?.clause ?? null)).bind(...bindings).all();
   // LIMIT is baked into candidateSql at WHEN_EXTRACT_PER_NIGHT; a caller
   // asking for fewer (GET /extract/dry-run) just reads fewer rows back.
   return (results as unknown as WhenCandidate[]).slice(0, limit);
@@ -245,7 +251,8 @@ export async function runWhenExtractPass(
 
   let candidates: WhenCandidate[] = [];
   try {
-    candidates = await fetchWhenCandidates(env, cursor, workspaceId, WHEN_EXTRACT_PER_NIGHT);
+    const slice: ScopeClause | null = workspaceId != null ? { clause: "workspace_id = ?", bindings: [workspaceId] } : null;
+    candidates = await fetchWhenCandidates(env, cursor, slice, WHEN_EXTRACT_PER_NIGHT);
   } catch (e) {
     console.error("When-extraction candidate query failed (non-fatal):", e);
     return { whenExtracted: 0, whenJudged: 0 };

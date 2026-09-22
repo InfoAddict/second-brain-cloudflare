@@ -14,6 +14,14 @@ export type WhenSource = (typeof WHEN_SOURCE_VALUES)[number];
 /** Past this far out, a "when" is more likely a typo than a real anchor. */
 export const WHEN_MAX_FUTURE_MS = 5 * 365 * 24 * 60 * 60 * 1000;
 
+/**
+ * How far into the future something counts as "upcoming" rather than just
+ * "has a when at all" — GET /due's own bucket boundary, and the window
+ * GET /brief's attention.due count uses so the two cannot disagree about
+ * what "coming up soon" means.
+ */
+export const DUE_WITHIN_MS = 48 * 60 * 60 * 1000;
+
 export interface ExplicitWhen {
   at: number;
   kind: WhenKind;

@@ -233,6 +233,25 @@ describe("GET /brief", () => {
     expect(data.total).toBe(3);
   });
 
+  it("counts open loops due within 48 hours, at zero extra queries", async () => {
+    // Zero extra queries is proven by the sibling "costs a fixed handful of
+    // D1 queries" tests above staying pinned at their same 10/7 after this
+    // field was added — `due` is a CASE/SUM folded into the query those tests
+    // already measure, not a query of its own. This test is only about the
+    // count being right.
+    sq = await migrated();
+    const now = Date.now();
+    sq.seed({ id: "due-soon", content: "File the report", createdAt: now - HOUR, tags: ["task"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'due-soon'`).bind(now + HOUR).run();
+    sq.seed({ id: "due-later", content: "Renew next quarter", createdAt: now - HOUR, tags: ["task"] });
+    sq.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'due-later'`).bind(now + 30 * DAY).run();
+    sq.seed({ id: "no-when", content: "Just a task", createdAt: now - HOUR, tags: ["task"] });
+
+    const data = await (await worker.fetch(req("GET", "/brief"), envOf(sq), ctx)).json() as any;
+
+    expect(data.attention.due).toBe(1);
+  });
+
   it("keeps resurfacing something when there are fewer candidates than days", async () => {
     // OFFSET past the end returns no rows, so wrapping against a fixed
     // constant instead of the candidate count would show nothing on most days

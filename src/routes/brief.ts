@@ -9,6 +9,7 @@ import { STALE_REVIEW_SQL } from "../memory/stale";
 import { OPEN_LOOP_SQL } from "../memory/loops";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
+import { DUE_WITHIN_MS } from "../when/input";
 import { parseTags } from "../insight/candidates";
 import {
   excludedIds, readResurfaceState, withDismissed, withShown, writeResurfaceState,
@@ -24,9 +25,10 @@ import {
  *
  * BUDGET. Six to eight D1 queries plus one KV read and at most one KV write,
  * no AI, no Vectorize, one HTTP round trip. Six queries run in parallel
- * (sources, patterns, activity, topics, the attention+loops aggregate, the
- * loops preview — Task A added the last of these, folding its count into the
- * aggregate for free and paying one query for its three preview rows). The
+ * (sources, patterns, activity, topics, the attention+loops+due aggregate,
+ * the loops preview — Task A added the loops preview, folding its count into
+ * the aggregate for free and paying one query for its three preview rows;
+ * Task H's `due` count is a second free CASE/SUM on that same aggregate). The
  * resurface pick runs AFTER that batch, as a separate 1-2 query step,
  * because Task B's topic preference needs the topics query's own result —
  * it cannot join the parallel batch it depends on. It costs one query when
@@ -205,17 +207,21 @@ export async function handleBriefRoutes(
     // chip opens. They are two readings of one fact: a chip that promises a
     // number the queue then fails to produce is the defect this replaced, and
     // one predicate is what stops it coming back.
-    // open_loops rides this same aggregate — one more CASE/SUM on a query
-    // already scanning every row, rather than a query of its own — the same
-    // reasoning that put unindexed and stale here together.
+    // open_loops and due both ride this same aggregate — one more CASE/SUM
+    // each on a query already scanning every row, rather than a query of
+    // their own — the same reasoning that put unindexed and stale here
+    // together. due is open-loop entries whose when_at falls within the same
+    // window GET /due calls "upcoming" (DUE_WITHIN_MS), so the two agree on
+    // what "coming up soon" means without sharing a query.
     env.DB.prepare(
       `SELECT
          SUM(CASE WHEN vector_ids = '[]' AND ${INDEXABLE_SQL} THEN 1 ELSE 0 END) AS unindexed,
          SUM(CASE WHEN ${STALE_REVIEW_SQL} THEN 1 ELSE 0 END) AS stale,
          SUM(CASE WHEN ${OPEN_LOOP_SQL} THEN 1 ELSE 0 END) AS open_loops,
+         SUM(CASE WHEN ${OPEN_LOOP_SQL} AND when_at IS NOT NULL AND when_at <= ? THEN 1 ELSE 0 END) AS due,
          COUNT(*) AS total
        FROM entries WHERE ${scope.clause}`,
-    ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ).bind(now + DUE_WITHIN_MS, ...scope.bindings).first() as Promise<Record<string, any> | null>,
 
     // The loop queue's own preview: up to three most recent open commitments,
     // same row shape GET /loops returns, so the panel and the sheet behind it
@@ -320,6 +326,7 @@ export async function handleBriefRoutes(
       unindexed: (attentionRow?.unindexed as number) ?? 0,
       stale: (attentionRow?.stale as number) ?? 0,
       patterns: patterns.length,
+      due: (attentionRow?.due as number) ?? 0,
     },
     loops: {
       open: (attentionRow?.open_loops as number) ?? 0,
