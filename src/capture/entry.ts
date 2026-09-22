@@ -17,6 +17,7 @@ import { isCapsuleTag } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { TRANSCRIPT_SOURCES } from "../constants";
 import type { WhenKind, WhenSource } from "../when/input";
+import { extractUnambiguousDate } from "../when/heuristic";
 
 export function buildEntryFilterQuery(params: {
   n: number;
@@ -206,11 +207,20 @@ export async function captureEntry(
     ? withStatus(duplicateTags.filter(tag => tag !== "contradiction-resolved"), "draft")
     : duplicateTags;
 
+  // The caller's own `when` always wins. Absent one, a cheap regex pass looks
+  // for an unambiguous future date already in the text — negligible CPU, no
+  // model call — and only ever claims a date nobody could dispute; anything
+  // fuzzier is src/when/pass.ts's job, on a budget, at night.
+  const resolvedWhen = when ?? (() => {
+    const at = extractUnambiguousDate(c, now);
+    return at !== null ? { at, kind: "due" as WhenKind, source: "regex" as WhenSource } : undefined;
+  })();
+
   await env.DB.prepare(
     `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, c, JSON.stringify(finalTags), source, now, now, "[]", writeCtx.workspaceId, writeCtx.actorId,
-    when?.at ?? null, when?.kind ?? null, when?.source ?? null,
+    resolvedWhen?.at ?? null, resolvedWhen?.kind ?? null, resolvedWhen?.source ?? null,
   ).run();
 
   ctx.waitUntil(
