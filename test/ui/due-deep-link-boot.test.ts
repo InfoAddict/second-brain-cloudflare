@@ -63,7 +63,7 @@ function makeStatefulEl(id?: string) {
   };
 }
 
-function boot(hash: string, dueFixture: any) {
+function boot(hash: string, dueFixture: any, opts: { raceAuth?: { readyAfterMs: number } } = {}) {
   const els = new Map<string, ReturnType<typeof makeStatefulEl>>();
   const getEl = (id?: string) => {
     if (!id) return makeStatefulEl(id);
@@ -86,6 +86,7 @@ function boot(hash: string, dueFixture: any) {
     body: { style: {}, appendChild() {} },
   };
 
+  const bootedAt = Date.now();
   const replaceStateCalls: unknown[] = [];
   const sandbox: any = {
     console,
@@ -98,10 +99,23 @@ function boot(hash: string, dueFixture: any) {
     navigator: { language: "en-US" },
     history: { replaceState: (...args: unknown[]) => { replaceStateCalls.push(args); } },
     fetch: async (url: string) => {
-      if (String(url).includes("/due")) return { ok: true, json: async () => dueFixture };
+      const race = opts.raceAuth;
+      if (String(url).includes("/due")) {
+        // Models a cold boot where the very first request can still race
+        // whatever makes auth/the Worker fully ready — the real bug this
+        // simulates, not a client-side localStorage timing issue: localStorage
+        // reads are synchronous, but the FIRST authenticated round trip after
+        // a fresh boot is not guaranteed to land clean.
+        if (race && Date.now() - bootedAt < race.readyAfterMs) {
+          return { ok: true, json: async () => ({ ok: false, error: "Unauthorized" }) };
+        }
+        return { ok: true, json: async () => dueFixture };
+      }
       if (String(url).includes("/brief")) {
+        if (race) await new Promise((r) => setTimeout(r, race.readyAfterMs));
         return { ok: true, json: async () => ({ ok: true, total: 0, patterns: [], attention: {}, sources: [] }) };
       }
+      if (race) await new Promise((r) => setTimeout(r, race.readyAfterMs));
       return { ok: true, json: async () => ({ ok: true }), text: async () => "" };
     },
   };
@@ -154,6 +168,27 @@ describe("booting straight into a #due/<id> deep link", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(replaceStateCalls.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Live bug: loading '/#due/<id>' cold reliably showed "Could not load what
+   * is due." — the sheet opened, but GET /due's very first request raced
+   * whatever makes the session fully ready and got a 401; calling
+   * openDueSheet(id) again a couple of seconds later on the same page always
+   * worked. Not a localStorage timing issue (that read is synchronous) — the
+   * fixture below models it as the first authenticated round trip after boot
+   * being unreliable for a short window, which is what showApp() awaiting
+   * refreshAll() before handleDueHash() protects against: due's own fetch
+   * no longer fires until the home screen's other panels have already made
+   * (and this fixture resolves) a full round trip.
+   */
+  it("still renders the due row when the very first request after boot would 401", async () => {
+    const { els } = boot("#due/e1", overdueFixture("e1"), { raceAuth: { readyAfterMs: 20 } });
+    await new Promise((r) => setTimeout(r, 100));
+
+    const html = els.get("due-list")?.innerHTML ?? "";
+    expect(html).toContain("due-row-e1");
+    expect(html).not.toContain("Could not load");
   });
 
   /**
