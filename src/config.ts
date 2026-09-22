@@ -122,6 +122,17 @@ export const DEFAULTS = {
   // string — an unrecognized zone name would silently anchor every future due
   // date at the wrong instant instead of failing the write that set it.
   TIMEZONE: "UTC",
+
+  // ── Web Push (src/push/vapid.ts) ──
+  // VAPID JWT contact: a mailto:<address> or an https: URL, RFC 8292's own
+  // two accepted shapes. Empty by default — a brain that never sets this
+  // falls back to the origin recorded the first time POST /push/subscribe
+  // saw a real Request, which is enough for every push service tested
+  // (FCM, Apple) to accept the JWT. Set this to give subscribers a real
+  // contact, not to work around a rejection: an EMPTY default, not a fixed
+  // placeholder string, is what this key protects — see the comment on the
+  // .local placeholder this replaced in src/push/vapid.ts.
+  PUSH_CONTACT: "",
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -187,6 +198,7 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_INSIGHTS: { kind: "string" },
   TEAM_MODE: { kind: "string" },
   TIMEZONE: { kind: "string" },
+  PUSH_CONTACT: { kind: "string" },
 };
 
 /**
@@ -203,6 +215,11 @@ function isValidTimeZone(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** RFC 8292 section 2's two accepted VAPID `sub` shapes. */
+function isValidPushContact(value: string): boolean {
+  return /^mailto:[^@\s]+@[^@\s]+$/.test(value) || /^https:\/\/\S+$/.test(value);
 }
 
 /**
@@ -234,6 +251,16 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
   const fallback = DEFAULTS[key] as Config[ConfigKey];
 
   if (rule.kind === "string") {
+    // PUSH_CONTACT is the one string setting where EMPTY is the valid,
+    // meaningful default (see src/push/vapid.ts) rather than "unsalvageable" —
+    // every other string key requires non-empty, checked below.
+    if (key === "PUSH_CONTACT") {
+      if (value === "") return { value: "" as Config[ConfigKey] };
+      if (typeof value !== "string" || !isValidPushContact(value)) {
+        return { value: fallback, note: `${key}: expected empty, a mailto:<address>, or an https:// URL, got ${JSON.stringify(value)}` };
+      }
+      return { value: value as Config[ConfigKey] };
+    }
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };
     }
@@ -338,6 +365,12 @@ function validateStrict(key: string, value: unknown): string | null {
   const rule = RULES[key as ConfigKey];
 
   if (rule.kind === "string") {
+    if (key === "PUSH_CONTACT") {
+      if (value === "") return null;
+      return typeof value === "string" && isValidPushContact(value)
+        ? null
+        : `${key} must be empty, a mailto:<address>, or an https:// URL`;
+    }
     if (typeof value !== "string" || value.trim() === "") return `${key} must be a non-empty string`;
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;

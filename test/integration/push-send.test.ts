@@ -85,6 +85,19 @@ describe("pushDueItems", () => {
     expect((init as RequestInit).headers).toMatchObject({ "Content-Encoding": "aes128gcm" });
   });
 
+  it("sends TTL and Urgency headers on every push POST — Apple's push service requires TTL", async () => {
+    sq = await migrated();
+    seedDue(sq, "e1", "File the report", Date.now() - DAY, "File the report");
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = mockFetchAlways(201);
+
+    await pushDueItems(env, "");
+
+    const [, init] = fetchSpy.mock.calls[0];
+    expect((init as RequestInit).headers).toMatchObject({ TTL: "3600", Urgency: "normal" });
+  });
+
   it("gives a content_free subscription a fixed title and no entry content", async () => {
     sq = await migrated();
     seedDue(sq, "e1", "Secret project details", Date.now() - DAY, "Secret project details");

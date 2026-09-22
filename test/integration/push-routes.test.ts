@@ -85,6 +85,16 @@ describe("POST /push/subscribe", () => {
     expect(row.content_free).toBe(1);
   });
 
+  it("records this deployment's own origin, later used as the VAPID JWT's default sub", async () => {
+    sq = await migrated();
+    const kv = makeMemoryKV();
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+
+    await worker.fetch(req("POST", "/push/subscribe", { body: { subscription: VALID_SUBSCRIPTION } }), env, ctx);
+
+    expect(await kv.get("push:origin")).toBe("http://localhost");
+  });
+
   it("re-subscribing the same endpoint replaces rather than duplicates", async () => {
     sq = await migrated();
     await worker.fetch(req("POST", "/push/subscribe", { body: { subscription: VALID_SUBSCRIPTION } }), envOf(sq), ctx);
@@ -187,5 +197,18 @@ describe("POST /push/test", () => {
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
     expect(data.sent).toBe(1);
+  });
+
+  it("reports per-subscription outcomes, same shape as POST /push/run — this bug hid behind a bare count", async () => {
+    sq = await migrated();
+    await worker.fetch(req("POST", "/push/subscribe", { body: { subscription: VALID_SUBSCRIPTION } }), envOf(sq), ctx);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
+
+    const res = await worker.fetch(req("POST", "/push/test"), envOf(sq), ctx);
+    const data = await res.json() as any;
+
+    expect(data.sent).toBe(0);
+    expect(Array.isArray(data.results)).toBe(true);
+    expect(data.results[0]).toMatchObject({ status: "http_403" });
   });
 });

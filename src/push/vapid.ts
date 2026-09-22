@@ -11,11 +11,13 @@
  * key across subscribers and messages is an accepted simplification.
  */
 import type { Env } from "../env";
+import { resolveConfig } from "../config";
 import { fromBase64Url, toBase64Url } from "./base64url";
 import { signVapidJwt } from "./crypto";
 
 const VAPID_KV_KEY = "push:vapid";
-const VAPID_SUBJECT = "mailto:push@second-brain.local";
+/** Recorded the first time a real Request proves this deployment's own origin — see recordPushOrigin below. */
+const PUSH_ORIGIN_KV_KEY = "push:origin";
 
 interface StoredVapidKeys {
   publicKey: string;
@@ -52,12 +54,40 @@ export async function getOrCreateVapidKeys(env: Env): Promise<VapidKeys> {
   return { publicKeyRaw: fromBase64Url(stored.publicKey), privateKeyRaw: fromBase64Url(stored.privateKey) };
 }
 
+/**
+ * Records the origin this Worker is reached at, the moment a real Request
+ * proves it — POST /push/subscribe is the one push route that has one.
+ * Nothing else in this codebase names its own deployment URL; a cron-driven
+ * send has no Request to ask, which is exactly why this is captured ahead of
+ * time rather than derived when a message actually goes out.
+ */
+export async function recordPushOrigin(env: Env, origin: string): Promise<void> {
+  await env.OAUTH_KV.put(PUSH_ORIGIN_KV_KEY, origin);
+}
+
+/**
+ * config.PUSH_CONTACT when the deployment has set one, else the origin
+ * recorded at subscribe time, else undefined — an omitted VAPID `sub` is
+ * valid (RFC 8292 section 2 makes it optional); there is nothing honest to
+ * invent once neither is known. Never a fixed placeholder: this used to
+ * default to `mailto:push@second-brain.local`, which Apple's push service
+ * (web.push.apple.com) rejects outright with 403 BadJwtToken, silently
+ * losing every Safari/iOS subscriber. The identical JWT with either a real
+ * mailto or an https origin as `sub` is accepted.
+ */
+async function resolveVapidSubject(env: Env): Promise<string | undefined> {
+  const config = await resolveConfig(env);
+  if (config.PUSH_CONTACT) return config.PUSH_CONTACT;
+  const origin = await env.OAUTH_KV.get(PUSH_ORIGIN_KV_KEY);
+  return origin ?? undefined;
+}
+
 /** `Authorization: vapid t=<jwt>, k=<public key>` (RFC 8292 section 4), audience derived from the endpoint being called. */
 export async function vapidAuthHeader(env: Env, endpoint: string): Promise<string> {
   const keys = await getOrCreateVapidKeys(env);
   const jwt = await signVapidJwt({
     audience: new URL(endpoint).origin,
-    subject: VAPID_SUBJECT,
+    subject: await resolveVapidSubject(env),
     publicKeyRaw: keys.publicKeyRaw,
     privateKeyRaw: keys.privateKeyRaw,
   });

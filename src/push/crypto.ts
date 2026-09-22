@@ -169,7 +169,15 @@ export async function encryptWebPush(opts: EncryptWebPushOptions): Promise<Encry
 export interface SignVapidJwtOptions {
   /** Origin (scheme + host) of the push endpoint being called. */
   audience: string;
-  subject: string;
+  /**
+   * Contact for the sender: a mailto: address or an https: origin (RFC 8292
+   * section 2). Optional in the RFC and omitted from the JWT entirely when
+   * not given — there is nothing honest to invent once neither a configured
+   * contact nor the deployment's own origin is known. See src/push/vapid.ts
+   * for why a fixed placeholder (`mailto:*@*.local`) is specifically wrong
+   * here: Apple's push service rejects it with 403 BadJwtToken.
+   */
+  subject?: string;
   publicKeyRaw: Uint8Array;
   privateKeyRaw: Uint8Array;
   now?: number;
@@ -186,7 +194,7 @@ export async function signVapidJwt(opts: SignVapidJwtOptions): Promise<string> {
   const now = opts.now ?? Date.now();
   const exp = Math.floor(now / 1000) + (opts.ttlSeconds ?? VAPID_JWT_TTL_SECONDS);
   const header = { typ: "JWT", alg: "ES256" };
-  const payload = { aud: opts.audience, exp, sub: opts.subject };
+  const payload = opts.subject ? { aud: opts.audience, exp, sub: opts.subject } : { aud: opts.audience, exp };
 
   const encodedHeader = toBase64Url(textEncoder.encode(JSON.stringify(header)));
   const encodedPayload = toBase64Url(textEncoder.encode(JSON.stringify(payload)));

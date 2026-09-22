@@ -129,4 +129,14 @@ describe("signVapidJwt — RFC 8292", () => {
     );
     expect(ok).toBe(true);
   });
+
+  it("omits sub entirely when no subject is given, rather than a fabricated placeholder", async () => {
+    const jwt = await signVapidJwt({
+      audience: "https://push.example.com",
+      publicKeyRaw: fromBase64Url(AS_PUBLIC),
+      privateKeyRaw: fromBase64Url(AS_PRIVATE),
+    });
+    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(jwt.split(".")[1])));
+    expect(payload).not.toHaveProperty("sub");
+  });
 });

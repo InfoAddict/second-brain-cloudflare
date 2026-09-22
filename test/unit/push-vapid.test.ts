@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { getOrCreateVapidKeys, vapidAuthHeader } from "../../src/push/vapid";
+import { getOrCreateVapidKeys, vapidAuthHeader, recordPushOrigin } from "../../src/push/vapid";
 import { makeMemoryKV } from "../helpers/make-env";
 import type { Env } from "../../src/env";
+
+async function jwtPayload(header: string): Promise<Record<string, unknown>> {
+  const jwt = header.match(/^vapid t=([^,]+),/)![1];
+  const { fromBase64Url } = await import("../../src/push/base64url");
+  return JSON.parse(new TextDecoder().decode(fromBase64Url(jwt.split(".")[1])));
+}
 
 const envWith = (kv: KVNamespace) => ({ OAUTH_KV: kv }) as unknown as Env;
 
@@ -55,5 +61,46 @@ describe("vapidAuthHeader", () => {
 
     const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(jwt.split(".")[1])));
     expect(payload.aud).toBe("https://push.example.com");
+  });
+
+  // Live-tested regression: Apple's push service (web.push.apple.com) returns
+  // 403 {"reason":"BadJwtToken"} for a `sub` shaped like `mailto:*@*.local`,
+  // silently losing every Safari/iOS subscriber, while FCM tolerated it. The
+  // identical JWT with a real mailto or an https origin is accepted by both.
+  describe("the JWT sub claim", () => {
+    it("is never a *.local placeholder", async () => {
+      const kv = makeMemoryKV();
+      const header = await vapidAuthHeader(envWith(kv), "https://push.example.com/s1");
+      const payload = await jwtPayload(header);
+      expect(String(payload.sub ?? "")).not.toMatch(/\.local/);
+    });
+
+    it("is omitted (not a fabricated placeholder) when neither PUSH_CONTACT nor a recorded origin exists", async () => {
+      const kv = makeMemoryKV();
+      const header = await vapidAuthHeader(envWith(kv), "https://push.example.com/s1");
+      const payload = await jwtPayload(header);
+      expect(payload.sub).toBeUndefined();
+    });
+
+    it("defaults to the origin recorded at subscribe time (recordPushOrigin)", async () => {
+      const kv = makeMemoryKV();
+      const env = envWith(kv);
+      await recordPushOrigin(env, "https://brain.example.com");
+
+      const header = await vapidAuthHeader(env, "https://push.example.com/s1");
+      const payload = await jwtPayload(header);
+      expect(payload.sub).toBe("https://brain.example.com");
+    });
+
+    it("prefers config.PUSH_CONTACT over the recorded origin when both are set", async () => {
+      const kv = makeMemoryKV();
+      const env = envWith(kv);
+      await recordPushOrigin(env, "https://brain.example.com");
+      await kv.put("config:overrides", JSON.stringify({ PUSH_CONTACT: "mailto:owner@example.com" }));
+
+      const header = await vapidAuthHeader(env, "https://push.example.com/s1");
+      const payload = await jwtPayload(header);
+      expect(payload.sub).toBe("mailto:owner@example.com");
+    });
   });
 });

@@ -88,6 +88,9 @@ describe("config rule coverage", () => {
     for (const [key, rule] of Object.entries(RULES)) {
       const v = (DEFAULTS as Record<string, unknown>)[key];
       if (rule.kind === "string") {
+        // PUSH_CONTACT is the one string setting whose default IS empty —
+        // see the config.ts comment on its DEFAULTS entry.
+        if (key === "PUSH_CONTACT") continue;
         if (typeof v !== "string" || !v.trim()) violations.push(`${key}: not a non-empty string`);
         continue;
       }

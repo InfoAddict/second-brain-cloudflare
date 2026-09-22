@@ -11,7 +11,7 @@ import type { Env } from "../env";
 import { json } from "../lib/http";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { readableWorkspaces, scopeWhere } from "../lib/scope";
-import { getOrCreateVapidKeys } from "../push/vapid";
+import { getOrCreateVapidKeys, recordPushOrigin } from "../push/vapid";
 import { toBase64Url } from "../push/base64url";
 import { pushDueItems, sendTestNotification } from "../push/send";
 
@@ -66,6 +66,10 @@ export async function handlePushRoutes(
 
     const endpointHash = await sha256Hex(body.subscription.endpoint);
     const workspaceId = auth.personalWorkspaceId;
+
+    // The one place a real Request proves this deployment's own origin — a
+    // cron-driven send has none to ask. See src/push/vapid.ts.
+    await recordPushOrigin(env, new URL(request.url).origin);
 
     await env.DB.prepare(
       `INSERT INTO push_subscriptions (id, workspace_id, endpoint_hash, subscription_json, content_free, created_at, fail_count)
@@ -126,16 +130,22 @@ export async function handlePushRoutes(
   // POST /push/test (admin) — a fixed notification to the caller's own
   // subscriptions, bypassing the due query entirely: proves the
   // subscribe -> encrypt -> deliver path works even with no due items.
+  // results[] mirrors POST /push/run's, sharing sendTestNotification's own
+  // aggregation rather than reporting only counts — a sent:0 with no way to
+  // see WHY (wrong VAPID subject, a stale endpoint, a network error) is
+  // exactly what hid the Apple/Safari VAPID-subject rejection this exists
+  // to make visible.
   if (url.pathname === "/push/test" && request.method === "POST") {
     const auth = await requireAdmin(request, env);
     if (auth instanceof Response) return auth;
 
     const workspaces = [...new Set(readableWorkspaces(auth))];
-    const results = await Promise.all(workspaces.map(w => sendTestNotification(env, w)));
-    const sent = results.reduce((n, r) => n + r.sent, 0);
-    const subscriptions = results.reduce((n, r) => n + r.subscriptions, 0);
+    const perWorkspace = await Promise.all(workspaces.map(w => sendTestNotification(env, w)));
+    const sent = perWorkspace.reduce((n, r) => n + r.sent, 0);
+    const subscriptions = perWorkspace.reduce((n, r) => n + r.subscriptions, 0);
+    const results = perWorkspace.flatMap(r => r.results).slice(0, MAX_REPORTED_PUSH_RUN_RESULTS);
 
-    return json({ ok: true, sent, subscriptions });
+    return json({ ok: true, sent, subscriptions, results });
   }
 
   return null;

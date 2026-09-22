@@ -17,8 +17,15 @@ const MAX_NOTIFICATIONS_PER_RUN = 3;
 const MAX_FAIL_COUNT = 5;
 /** {entryId: when_at at the time it was last pushed}, one map per workspace. */
 export const PUSHED_KV_PREFIX = "pushed:";
-/** Push services want a TTL on every request; a day is generous for a due-item nudge. */
-const PUSH_TTL_SECONDS = 86400;
+/**
+ * Push services require a TTL on every request (RFC 8030 section 5.2); Apple
+ * in particular rejects a request missing one. An hour is enough life for a
+ * due-item nudge to reach an offline device without the push service
+ * holding onto (and eventually redelivering) something stale.
+ */
+const PUSH_TTL_SECONDS = 3600;
+/** RFC 8030 section 5.3. "normal" is the one push services expect absent a real priority signal — this sender has none. */
+const PUSH_URGENCY = "normal";
 /** Forgotten test/stale ids age out of the pushed-map on write; see prunePushedMap. */
 const PUSHED_MAP_PRUNE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 /** POST /push/run's per-subscription outcomes, capped so a large brain's response stays small. */
@@ -135,6 +142,7 @@ async function sendOne(env: Env, sub: PushSubscriptionRow, payload: Record<strin
         "Content-Type": "application/octet-stream",
         "Content-Encoding": "aes128gcm",
         TTL: String(PUSH_TTL_SECONDS),
+        Urgency: PUSH_URGENCY,
         Authorization: await vapidAuthHeader(env, subscription.endpoint),
       },
       body: encrypted.body,
@@ -258,21 +266,28 @@ export async function pushDueItemsAllWorkspaces(env: Env): Promise<{ sent: numbe
 }
 
 /** POST /push/test's fixed notification, bypassing the due query entirely. */
-export async function sendTestNotification(env: Env, workspaceId: string): Promise<{ sent: number; subscriptions: number }> {
+export interface SendTestNotificationResult {
+  sent: number;
+  subscriptions: number;
+  /** Same shape POST /push/run reports — shared code path, not a duplicate. */
+  results: PushOutcome[];
+}
+
+export async function sendTestNotification(env: Env, workspaceId: string): Promise<SendTestNotificationResult> {
   const subs = ((await env.DB.prepare(
     `SELECT id, endpoint_hash, subscription_json, content_free, fail_count FROM push_subscriptions WHERE workspace_id = ?`,
   ).bind(workspaceId).all()).results ?? []) as unknown as PushSubscriptionRow[];
-  if (!subs.length) return { sent: 0, subscriptions: 0 };
+  if (!subs.length) return { sent: 0, subscriptions: 0, results: [] };
 
   const payload = { title: "Second Brain", body: "Test notification. Push is working." };
   let sent = 0;
-  const outcomes: { hash: string; result: SendResult; failCountBefore: number }[] = [];
+  const outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[] = [];
   for (const sub of subs) {
     const outcome = await sendOne(env, sub, payload);
     if (outcome.result === "ok") sent++;
-    outcomes.push({ hash: sub.endpoint_hash, result: outcome.result, failCountBefore: sub.fail_count });
+    outcomes.push({ hash: sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: sub.fail_count });
   }
   await applySubscriptionOutcomes(env, outcomes);
 
-  return { sent, subscriptions: subs.length };
+  return { sent, subscriptions: subs.length, results: toReportedOutcomes(outcomes) };
 }
