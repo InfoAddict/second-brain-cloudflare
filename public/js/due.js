@@ -30,6 +30,10 @@ function closeDueSheet() {
 }
 
 async function loadDueQueue(highlightId) {
+  // Never fetch, never render, on a call that arrived before credentials
+  // exist — see handleDueHash's own guard for the boot-time case this
+  // protects against; this one is belt-and-braces for any other caller.
+  if (!WORKER_URL || !AUTH_TOKEN) return
   const seq = ++dueLoadSeq
   const list = document.getElementById('due-list')
   list.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loading'))}</p>`
@@ -172,6 +176,17 @@ function handleDueHash() {
   // re-entry while the first is still in flight rather than starting a
   // second, redundant load.
   if (dueHashInFlight) return
+  // due.js loads and registers the hashchange listener below well before
+  // app.js (loaded last of every script) runs init() and sets these — and
+  // the browser itself dispatches 'hashchange' during the initial
+  // navigation into a URL with a fragment (observed via the service
+  // worker's client.navigate()/openWindow() path), catching this listener
+  // that early. A call this early must do nothing at all: no fetch (an
+  // empty AUTH_TOKEN still sends "Bearer " and the Worker 401s), no failure
+  // note, and critically no hash-clear and no in-flight flag — so the hash
+  // is still there, and this function still callable, once showApp's own
+  // later call arrives with real credentials.
+  if (!WORKER_URL || !AUTH_TOKEN) return
   const hash = window.location.hash || ''
   const match = hash.match(/^#due\/(.+)$/)
   if (!match) return

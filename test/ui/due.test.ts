@@ -11,7 +11,7 @@ import { installI18n } from "./_i18n-harness";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
-function load(responses: any[] = [], { hash = "" }: { hash?: string } = {}) {
+function load(responses: any[] = [], { hash = "", authToken = "t" }: { hash?: string; authToken?: string } = {}) {
   const els = new Map<string, any>();
   const makeEl = (id?: string) => ({
     id,
@@ -33,7 +33,7 @@ function load(responses: any[] = [], { hash = "" }: { hash?: string } = {}) {
   const ctx: any = {
     console,
     WORKER_URL: "https://example.test",
-    AUTH_TOKEN: "t",
+    AUTH_TOKEN: authToken,
     closeMenu: () => {},
     showToast: () => {},
     history: { replaceState: vi.fn() },
@@ -269,5 +269,55 @@ describe("handleDueHash", () => {
     ctx.handleDueHash(); // a genuinely later call must still work
 
     expect(openCount).toBe(2);
+  });
+
+  /**
+   * The REAL live sequence, per request-header capture: due.js's script-load
+   * time registers the hashchange listener, and the browser's own
+   * 'hashchange' (dispatched during the initial navigation into a URL with a
+   * fragment — observed via the service worker's client.navigate()/
+   * openWindow() path, not any call in our own JS) fires it immediately —
+   * BEFORE app.js (loaded last of every script) has run init() and set
+   * AUTH_TOKEN. That early call went on to fetch GET /due with
+   * "Bearer " + "" and rendered the permanent loadFailed note; showApp's
+   * later, properly-authenticated handleDueHash call then found the
+   * in-flight guard armed (by the early, doomed call) and was swallowed as
+   * re-entry — no authenticated fetch ever happened at all.
+   */
+  it("no-ops when AUTH_TOKEN is not yet set, leaving the hash for a later authenticated call to find", async () => {
+    const ctx = load([dueResponse()], { hash: "#due/e1", authToken: "" });
+
+    // The early, pre-auth firing — due.js's own listener, or a direct call;
+    // either way this must be a complete no-op.
+    ctx.handleDueHash();
+
+    expect(ctx.__fetchCalls).toHaveLength(0);
+    expect(ctx.history.replaceState).not.toHaveBeenCalled();
+    // Nothing touched #due-list at all — it was never even looked up.
+    expect(ctx.__els.has("due-list")).toBe(false);
+
+    // app.js's boot completes: AUTH_TOKEN is set, then showApp calls
+    // handleDueHash again — the hash is still there because the early call
+    // never cleared it.
+    ctx.AUTH_TOKEN = "t";
+    ctx.handleDueHash();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ctx.__fetchCalls).toHaveLength(1);
+    expect(ctx.__fetchCalls[0].init.headers.Authorization).toBe("Bearer t");
+    expect(ctx.history.replaceState).toHaveBeenCalledTimes(1);
+    const html = ctx.__els.get("due-list").innerHTML;
+    expect(html).toContain("due-row-e1");
+    expect(html).not.toContain("Could not load");
+  });
+
+  it("no-ops when WORKER_URL is not yet set", async () => {
+    const ctx = load([dueResponse()], { hash: "#due/e1", authToken: "t" });
+    ctx.WORKER_URL = "";
+
+    ctx.handleDueHash();
+
+    expect(ctx.__fetchCalls).toHaveLength(0);
+    expect(ctx.history.replaceState).not.toHaveBeenCalled();
   });
 });
