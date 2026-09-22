@@ -252,4 +252,22 @@ describe("handleDueHash", () => {
 
     expect(opened).toBe(false);
   });
+
+  it("ignores re-entry while its own load is still in flight — a tap has been observed to fire this twice in one boot", async () => {
+    const ctx = load([dueResponse()], { hash: "#due/e1" });
+    let openCount = 0;
+    let resolveFirst: (() => void) | undefined;
+    ctx.openDueSheet = () => new Promise<void>((resolve) => { openCount++; resolveFirst = resolve; });
+
+    ctx.handleDueHash(); // starts the first (real) load
+    ctx.handleDueHash(); // fires again before the first has settled — must be a no-op
+
+    expect(openCount).toBe(1);
+
+    resolveFirst!();
+    await new Promise((r) => setTimeout(r, 0)); // let the .finally() clear the in-flight guard
+    ctx.handleDueHash(); // a genuinely later call must still work
+
+    expect(openCount).toBe(2);
+  });
 });

@@ -63,7 +63,18 @@ function makeStatefulEl(id?: string) {
   };
 }
 
-function boot(hash: string, dueFixture: any, opts: { raceAuth?: { readyAfterMs: number } } = {}) {
+function boot(hash: string, dueFixture: any, opts: {
+  raceAuth?: { readyAfterMs: number };
+  /**
+   * Models the real double-invocation live-traced on a cold boot: an early
+   * loadDueQueue call (from some second, still-unidentified trigger — the
+   * hashchange listener firing again, most plausibly, since no second
+   * explicit call site exists anywhere in this codebase) whose FAILURE
+   * resolves after the later, showApp-driven call's SUCCESS already
+   * rendered the row — "it lands last, clobbering the successful render".
+   */
+  doubleInvoke?: { earlyFailureDelayMs: number };
+} = {}) {
   const els = new Map<string, ReturnType<typeof makeStatefulEl>>();
   const getEl = (id?: string) => {
     if (!id) return makeStatefulEl(id);
@@ -87,6 +98,7 @@ function boot(hash: string, dueFixture: any, opts: { raceAuth?: { readyAfterMs: 
   };
 
   const bootedAt = Date.now();
+  let dueCallCount = 0;
   const replaceStateCalls: unknown[] = [];
   const sandbox: any = {
     console,
@@ -101,6 +113,14 @@ function boot(hash: string, dueFixture: any, opts: { raceAuth?: { readyAfterMs: 
     fetch: async (url: string) => {
       const race = opts.raceAuth;
       if (String(url).includes("/due")) {
+        if (opts.doubleInvoke) {
+          dueCallCount++;
+          if (dueCallCount === 1) {
+            await new Promise((r) => setTimeout(r, opts.doubleInvoke!.earlyFailureDelayMs));
+            return { ok: true, json: async () => ({ ok: false, error: "Unauthorized" }) };
+          }
+          return { ok: true, json: async () => dueFixture };
+        }
         // Models a cold boot where the very first request can still race
         // whatever makes auth/the Worker fully ready — the real bug this
         // simulates, not a client-side localStorage timing issue: localStorage
@@ -219,6 +239,44 @@ describe("booting straight into a #due/<id> deep link", () => {
     expect(els.get("due-sheet")?.classList.contains("open")).toBe(true);
     expect(els.get("menu-sheet")?.classList.contains("open")).toBe(false);
     expect(els.get("due-list")?.innerHTML).toContain("due-row-e1");
+  });
+
+  /**
+   * Live bug on top of the earlier ordering fix (6950fc0): even with
+   * handleDueHash awaiting refreshAll, the real page still showed
+   * "Could not load what is due." on a cold boot. A network trace showed
+   * TWO GET /due calls — a 401 and a 200 — for one boot. No second explicit
+   * call site exists anywhere in this codebase (verified: handleDueHash has
+   * exactly one direct caller, showApp; there is no DOMContentLoaded
+   * listener, no direct call at script load, and auth.js never re-invokes
+   * showApp), so the early call is modeled here directly — standing in for
+   * whichever real trigger it turns out to be (most plausibly the
+   * hashchange listener firing a second time for the same tap) — rather
+   * than invented as a specific fake call site that might not match reality.
+   * What matters, and what pins the actual fix, is the OUTCOME: a stale
+   * call's result — success or failure — must never overwrite a newer
+   * call's render.
+   */
+  it("does not let an early, slow-to-fail call clobber the later successful render", async () => {
+    const { sandbox, els } = boot("#due/e1", overdueFixture("e1"), {
+      doubleInvoke: { earlyFailureDelayMs: 20 },
+    });
+
+    // The early call: invoked synchronously, in the same turn boot() itself
+    // ran in — before showApp's own await refreshAll() has had a single
+    // microtask to resolve, let alone reach handleDueHash. This is what
+    // guarantees it is the FIRST of the two invocations (and the first GET
+    // /due, per doubleInvoke's counter), exactly like the live trace.
+    sandbox.loadDueQueue("e1");
+
+    // Let showApp's natural chain (refreshAll -> handleDueHash -> the SECOND,
+    // successful loadDueQueue call) complete, and then let the early call's
+    // delayed failure resolve after it.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const html = els.get("due-list")?.innerHTML ?? "";
+    expect(html).toContain("due-row-e1");
+    expect(html).not.toContain("Could not load");
   });
 });
 

@@ -5,11 +5,24 @@
 
 /** Whatever the sheet last loaded, kept so an action can drop a row without a refetch. */
 let loadedDue = { overdue: [], upcoming: [] }
+/**
+ * Monotonic. A cold boot can fire more than one loadDueQueue call for one
+ * deep link (live-traced: an early, unauthenticated GET /due racing the
+ * later, properly-awaited one — see handleDueHash below), and whichever
+ * call's response arrives LAST used to win regardless of which one actually
+ * started last, so a slow, stale failure could clobber an already-rendered
+ * success. Every invocation stamps its own id here at the top, before any
+ * await, and checks it again after — only the invocation matching the
+ * CURRENT value (i.e. the most recently STARTED one) is allowed to write
+ * #due-list, on success or failure alike. Protects every caller, not just
+ * the boot path.
+ */
+let dueLoadSeq = 0
 
 function openDueSheet(highlightId) {
   closeMenu()
   document.getElementById('due-sheet').classList.add('open')
-  loadDueQueue(highlightId)
+  return loadDueQueue(highlightId)
 }
 
 function closeDueSheet() {
@@ -17,15 +30,18 @@ function closeDueSheet() {
 }
 
 async function loadDueQueue(highlightId) {
+  const seq = ++dueLoadSeq
   const list = document.getElementById('due-list')
   list.innerHTML = `<p class="digest-note">${escHtml(t('integrations.loading'))}</p>`
   try {
     const res = await fetch(`${WORKER_URL}/due`, { headers: { Authorization: `Bearer ${AUTH_TOKEN}` } })
     const data = await res.json()
     if (!data.ok) throw new Error(data.error || 'failed')
+    if (seq !== dueLoadSeq) return // a newer call has since started; never clobber its render
     loadedDue = { overdue: data.overdue, upcoming: data.upcoming }
     renderDueQueue(highlightId)
   } catch {
+    if (seq !== dueLoadSeq) return // stale failure — a newer call is in flight or already rendered
     // Deliberately not the empty state: see loops.js's loadLoopsQueue for why.
     list.innerHTML = `<p class="digest-note"><i class="ti ti-wifi-off"></i> ${escHtml(t('due.loadFailed'))}</p>`
   }
@@ -147,13 +163,24 @@ async function snoozeDue(id, choice, btn) {
  * reopen the same sheet. Additive — the one hash this dashboard interprets,
  * no router.
  */
+/** Set for the duration of one handleDueHash-driven load; see the guard below. */
+let dueHashInFlight = false
+
 function handleDueHash() {
+  // A tap on the same notification has been observed to fire this twice in
+  // one boot with no second call site anywhere in this codebase — ignore
+  // re-entry while the first is still in flight rather than starting a
+  // second, redundant load.
+  if (dueHashInFlight) return
   const hash = window.location.hash || ''
   const match = hash.match(/^#due\/(.+)$/)
   if (!match) return
   const id = decodeURIComponent(match[1])
+  // Cleared BEFORE anything async runs, so a hashchange re-firing for the
+  // same tap finds nothing left to match.
   history.replaceState(null, '', window.location.pathname + window.location.search)
-  openDueSheet(id)
+  dueHashInFlight = true
+  Promise.resolve(openDueSheet(id)).finally(() => { dueHashInFlight = false })
 }
 
 // showApp() covers a fresh load/login, but a push notification's tap more
