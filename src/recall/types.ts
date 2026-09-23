@@ -96,6 +96,13 @@ export interface RecallInternalOptions {
   workspaceFilter?: "personal" | "company";
   /** Narrows reads to one company team workspace (validated at the route edge). */
   teamId?: string;
+  /**
+   * Test-only escape hatch: forces fuseDenseAndKeyword's keywordPreRanked
+   * argument regardless of whether FTS served the rows. No route may set this;
+   * it exists so benchmarks can isolate Task 6's fusion-order change from
+   * Task 3's candidate-selection change (FTS-ready but bm25 order disabled).
+   */
+  keywordPreRankedOverride?: boolean;
 }
 
 export interface KeywordRow {
