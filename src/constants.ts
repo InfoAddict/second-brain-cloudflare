@@ -173,6 +173,9 @@ export const FTS_INTEGRITY_SPOT_CHECK = 5;
 // Rotating content check: rowid window compared nightly (both directions)
 // behind its own cursor, covering every row within ceil(N / window) nights.
 export const FTS_CONTENT_CHECK_WINDOW = 200;
+// Above this many estimated matches, bm25 must score them all while LIKE
+// stops at KEYWORD_CANDIDATE_LIMIT recency-ordered hits, so LIKE is cheaper.
+export const FTS_MATCH_BUDGET = 2000;
 export const FTS_CONTENT_CHECK_CURSOR_KV_KEY = "fts:content-check-cursor";
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",

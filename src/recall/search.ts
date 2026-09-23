@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
+  FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
   VECTORIZE_GET_BY_IDS_BATCH,
   VECTORIZE_TOP_K_MULTIPLIER,
@@ -26,7 +27,7 @@ import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
 import { selectGraphRoots, type RootCandidate } from "./root-selector";
-import type { KeywordRow, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
+import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
@@ -133,21 +134,40 @@ async function keywordSearch(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
-): Promise<{ rows: KeywordRow[]; fts: boolean }> {
-  if (!tokens.length) return { rows: [], fts: false };
+  // The corpus document frequencies distillToRareTerms already computed.
+  // Absent (or null) on every path that skipped or lost that scan, in which
+  // case the cost estimate below cannot run and routing keeps today's rules.
+  corpus?: Pick<DistilledQuery, "df" | "total">,
+): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"] }> {
+  if (!tokens.length) return { rows: [], fts: false, route: "like-ineligible-token" };
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
   // ftsEligibleToken is the single source of truth: any token ftsMatchQuery
   // would drop means the match silently searches only the survivors and hides
   // entries matching just that one, so the whole query goes to LIKE.
   const match = ftsMatchQuery(terms);
-  if (match && terms.every(ftsEligibleToken) && await ftsReady(env)) {
-    try {
-      return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true };
-    } catch (e) {
-      console.error("FTS keyword search failed (degrading to LIKE):", e);
+  if (match && terms.every(ftsEligibleToken)) {
+    // Cost-aware routing (T-0058): when distillation's frequency scan covers
+    // every term, its df sum estimates exactly how many rows bm25 would have
+    // to score. Past the budget, LIKE wins — it stops after KEYWORD_CANDIDATE_LIMIT
+    // recency-ordered hits while bm25 scores every match.
+    const df = corpus?.df;
+    if (df && terms.every(t => df.has(t))) {
+      const dfSum = terms.reduce((s, t) => s + (df.get(t) ?? 0), 0);
+      if (dfSum > FTS_MATCH_BUDGET) {
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
+      }
     }
+    if (await ftsReady(env)) {
+      try {
+        return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true, route: "fts" };
+      } catch (e) {
+        console.error("FTS keyword search failed (degrading to LIKE):", e);
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-error" };
+      }
+    }
+    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-not-ready" };
   }
-  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false };
+  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-ineligible-token" };
 }
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -377,11 +397,12 @@ export async function recallEntries(
     };
     const [denseResults, kw] = await Promise.all([
       denseQuery(),
-      keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId),
+      keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
     ]);
     results = denseResults;
     keywordRows = kw.rows;
     ftsServedKeywords = kw.fts;
+    if (internal.diagnostics) internal.diagnostics.ftsRoute = kw.route;
 
     // Governed by its own threshold, not the write-path duplicate flag: the two
     // shared a constant until #245, so retuning duplicate detection silently

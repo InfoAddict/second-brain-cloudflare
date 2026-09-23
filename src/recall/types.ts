@@ -62,6 +62,8 @@ export interface RecallDiagnostics {
   corpusIdfUsed?: boolean;
   /** Whether the FTS5 path served the keyword rows (false = LIKE, including any degrade-on-error). */
   ftsUsed?: boolean;
+  /** Why keywordSearch chose FTS or LIKE on the last routing decision. */
+  ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error";
 }
 
 export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"

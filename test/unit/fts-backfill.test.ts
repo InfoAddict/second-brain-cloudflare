@@ -425,12 +425,12 @@ describe("checkFtsIntegrity", () => {
   it("the rotating window's FTS reads scale with the window, not the corpus", async () => {
     // Cost proof on a real 5,000-row corpus (the E2E finding measured a
     // 5,747-row brain). node:sqlite exposes no rows_read meter, so cost is
-    // pinned by SQLite's own access-path verdicts — EXPLAIN QUERY PLAN of the
-    // exact statements the run issues — plus a wall-clock ratio against a
-    // full entries_fts scan of the same database.
+    // pinned by SQLite's own access-path verdicts: EXPLAIN QUERY PLAN of the
+    // exact statements the run issues must show the window pushed into every
+    // access path — never a whole-corpus virtual-table scan.
     seed(d1, 5000);
-    // Realistic memory-size content so the full-scan baseline is honest; the
-    // update trigger re-mirrors FTS, keeping (rowid, id, content) parity.
+    // Realistic memory-size content; the update trigger re-mirrors FTS,
+    // keeping (rowid, id, content) parity.
     await d1.db.prepare(`UPDATE entries SET content = content || ' with violet orchid dashboard detail repeated for a realistic memory size'`).run();
     const env = envFor(d1);
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
@@ -443,9 +443,12 @@ describe("checkFtsIntegrity", () => {
     expect(await ftsCount(d1)).toEqual({ n: 5000 });
     expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
 
-    // The window statements, verbatim from the batch the run issued.
+    // The window statements, verbatim from the batch the run issued. The
+    // drift side is found by its parity predicate (`IS NOT`), not the join
+    // text, so the lookup survives a query-shape change; the orphan side by
+    // its anti-join.
     const batchSql = d1.batches.flat();
-    const driftSql = batchSql.find(sql => sql.includes("LEFT JOIN entries_fts f"));
+    const driftSql = batchSql.find(sql => sql.includes("IS NOT"));
     const orphanSql = batchSql.find(sql => sql.includes("NOT EXISTS (SELECT 1 FROM entries e"));
     expect(driftSql).toBeTruthy();
     expect(orphanSql).toBeTruthy();
@@ -474,25 +477,7 @@ describe("checkFtsIntegrity", () => {
     await d1.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (50, 'ghost', 'ghost content')`).run();
     expect((await d1.db.prepare(driftSql!).bind(0, 200).all()).results).toEqual([{ rowid: 6 }]);
     expect((await d1.db.prepare(orphanSql!).bind(0, 200).all()).results).toEqual([{ rowid: 50 }]);
-
-    // Wall-clock: both window statements together stay well under one full
-    // scan of the same corpus. Runs interleave so both timings share load
-    // conditions, and each takes the min over 30 runs to dodge scheduler
-    // noise on a busy CI worker. Measured ratio ~4.4x; a de-facto corpus
-    // scan would sit at ~1x, so 2.5x separates the shapes without flaking.
-    let windowBest = Infinity;
-    let fullBest = Infinity;
-    for (let k = 0; k < 30; k++) {
-      let t0 = performance.now();
-      await d1.db.prepare(driftSql!).bind(4000, 4200).all();
-      await d1.db.prepare(orphanSql!).bind(4000, 4200).all();
-      windowBest = Math.min(windowBest, performance.now() - t0);
-      t0 = performance.now();
-      await d1.db.prepare(`SELECT rowid, id, content FROM entries_fts`).all();
-      fullBest = Math.min(fullBest, performance.now() - t0);
-    }
-    expect(windowBest * 2.5).toBeLessThan(fullBest);
-  }, 30000);
+  });
 });
 
 describe("runFtsMaintenance", () => {

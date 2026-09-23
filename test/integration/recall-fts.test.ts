@@ -543,4 +543,69 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(diagnostics.fusedIds).toEqual(["a-tie", "z-tie"]);
     expect(result.matches.map(match => match.id)).toEqual(["a-tie", "z-tie"]);
   });
+
+  // T-0058 cost-aware routing: distillation's df scan estimates exactly how
+  // many rows bm25 would have to score. Past FTS_MATCH_BUDGET, LIKE wins —
+  // it stops after KEYWORD_CANDIDATE_LIMIT recency-ordered hits while bm25
+  // scores every match.
+  it("routes a query whose df sum exceeds the budget to LIKE with ftsRoute like-match-budget", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "widget gadget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    // df = 2100 + 2100 = 4200, well over the 2,000 budget.
+    expect(diagnostics.ftsRoute).toBe("like-match-budget");
+    expect(diagnostics.ftsUsed).toBe(false);
+  });
+
+  it("keeps a rare-token query on FTS with ftsRoute fts", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    sqlite.seed({ id: "hit", content: "violet orchid ledger", createdAt: 1 });
+    sqlite.seed({ id: "filler", content: "unrelated remark", createdAt: 2 });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "violet orchid", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsRoute).toBe("fts");
+    expect(diagnostics.ftsUsed).toBe(true);
+  });
+
+  it("keeps routing on FTS when df is unknown for the query", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    // A 2,100-row corpus of the query's own token: had the scan run, the sum
+    // would sit far over the budget — but a single-token query skips it
+    // (distillToRareTerms early-exits with df null), so today's FTS rule holds.
+    for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "widget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsRoute).toBe("fts");
+    expect(diagnostics.ftsUsed).toBe(true);
+  });
+
+  it("sits exactly on the budget: sum == budget stays on FTS, sum == budget+1 routes to LIKE", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    // Two tokens at df 1,000 each: the sum is exactly FTS_MATCH_BUDGET.
+    for (let i = 0; i < 1000; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
+
+    const atBudget: RecallDiagnostics = {};
+    await recallEntries({ query: "widget gadget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics: atBudget });
+    expect(atBudget.ftsRoute).toBe("fts");
+    expect(atBudget.ftsUsed).toBe(true);
+
+    // One more widget-only row pushes the sum to 2,001 — the first value
+    // over the budget — so the same query flips to LIKE.
+    sqlite.seed({ id: "extra", content: "widget only", createdAt: 0 });
+    const oneOver: RecallDiagnostics = {};
+    await recallEntries({ query: "widget gadget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics: oneOver });
+    expect(oneOver.ftsRoute).toBe("like-match-budget");
+    expect(oneOver.ftsUsed).toBe(false);
+  });
 });
