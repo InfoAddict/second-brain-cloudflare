@@ -3,17 +3,17 @@
   "persona": "Avery Lindqvist (fictional)",
   "authoredBy": "Claude Sonnet 5 (claude-sonnet-5), 2026-09-23",
   "files": {
-    "needles.jsonl": "6f6ef8e1b947e1eae4d96f3d40ca2dd58f4b63792cc3ec0db9e888da1b0cbd5e",
+    "needles.jsonl": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af",
     "edges.jsonl": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
-    "queries.jsonl": "494456aba206fc95e692059c81029bc1db99bed1f823d08d37ade5728e857a28"
+    "queries.jsonl": "43d3a54de12b4db3771fe03326f02c00cb928fac642b8aa58b78423009670be5"
   },
   "counts": {
-    "needles": 334,
-    "queries": 328,
+    "needles": 344,
+    "queries": 338,
     "needlesByPurpose": {
       "identifier": 55,
       "rare-word": 44,
-      "common-word": 37,
+      "common-word": 47,
       "short-word": 30,
       "paraphrase": 48,
       "cjk": 36,
@@ -23,7 +23,7 @@
     "byCategory": {
       "identifier": 58,
       "rare-word": 61,
-      "common-word": 37,
+      "common-word": 47,
       "short-word": 30,
       "paraphrase": 48,
       "cjk": 40,
@@ -33,7 +33,7 @@
     "clustersByCategory": {
       "identifier": 46,
       "rare-word": 38,
-      "common-word": 37,
+      "common-word": 47,
       "short-word": 30,
       "paraphrase": 48,
       "cjk": 36,

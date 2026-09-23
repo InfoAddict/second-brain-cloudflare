@@ -1,8 +1,8 @@
-import { CHUNK_MAX_CHARS, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../../src/constants";
+import { CHUNK_MAX_CHARS, FTS_MATCH_BUDGET, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../../src/constants";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
 import { tokenizeQuery } from "../../../src/text/tokenize";
 import type { GoldenQuery } from "../types";
-import { DENSE_TOKENS, generateHaystack } from "./haystack";
+import { COMMON_TOKENS, DENSE_TOKENS, generateHaystack } from "./haystack";
 import { ACTORS, EVAL_NOW, IDENTITIES, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
 
 export interface AuditFinding { queryId: string; rule: string; detail: string }
@@ -89,6 +89,9 @@ export function auditQueries(spec: {
     const gapRefs = (query.tags ?? []).filter(tag => GAP_REF.test(tag));
     const knownGap = query.tags?.includes("known-gap") ?? false;
     if (knownGap && !gapRefs.length) add(query.id, "known-gap-no-ref", "tag gap:T-NNNN is required");
+    const routerBudget = query.tags?.includes("router-budget") ?? false;
+    if (routerBudget && !knownGap) add(query.id, "router-budget-needs-gap", "router-budget queries are a known gap");
+    if (routerBudget && query.category !== "common-word") add(query.id, "router-budget-not-common-word", query.category);
     if (!knownGap && gapRefs.length) add(query.id, "gap-ref-without-known-gap", gapRefs.join(","));
     // The outsider reads no haystack rows, so it only serves tenancy (decoy) queries.
     if (query.viewer === "outsider" && !query.tags?.includes("tenancy")) add(query.id, "outsider-not-tenancy", "outsider reads no haystack rows");
@@ -117,7 +120,8 @@ export function auditQueries(spec: {
         if (query.layer || query.viewer === "outsider") add(query.id, "common-word-layer-scoped", `${query.viewer}/${query.layer ?? "default"}`);
         if (tokens.length < 2) add(query.id, "common-word-too-short", query.text);
         // Only the dense tier is guaranteed to overflow the keyword window at 5k+ while unique per triple.
-        const sparse = tokens.find(token => !(DENSE_TOKENS as readonly string[]).includes(token));
+        // A router-budget query adds ordinary common tokens on purpose, to push the df sum past the router's FTS budget.
+        const sparse = tokens.find(token => !(DENSE_TOKENS as readonly string[]).includes(token) && !(routerBudget && (COMMON_TOKENS as readonly string[]).includes(token)));
         if (sparse) add(query.id, "common-word-not-dense", sparse);
         const rare = tokens.find(token => df(token) < common);
         if (rare) add(query.id, "common-word-rare-token", `${rare} df=${df(rare)}`);
@@ -133,6 +137,11 @@ export function auditQueries(spec: {
         } else {
           const newer = union.filter(row => row.entry.createdAt > primary.createdAt).length;
           if (newer < KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-gold-in-window", `${newer} newer union rows of ${union.length}`);
+          // The router sends a query to LIKE once its df sum passes FTS_MATCH_BUDGET: ordinary common-word queries
+          // must stay on FTS, router-budget ones must cross it (the measured production gap).
+          const dfSum = tokens.reduce((sum, token) => sum + df(token), 0);
+          if (routerBudget && dfSum <= FTS_MATCH_BUDGET) add(query.id, "router-budget-under-budget", `dfSum=${dfSum}`);
+          if (!routerBudget && dfSum > FTS_MATCH_BUDGET) add(query.id, "common-word-over-fts-budget", `dfSum=${dfSum}`);
         }
         break;
       }

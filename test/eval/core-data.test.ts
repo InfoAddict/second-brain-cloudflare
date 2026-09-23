@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
+import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
+import { tokenizeQuery } from "../../src/text/tokenize";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
 import { auditQueries, haystackVocabulary } from "./corpus/audit";
-import { buildCorpus, loadCoreData } from "./corpus/build";
-import { COMMON_TOKENS, DENSE_TOKENS } from "./corpus/haystack";
+import { CORPUS_PARAMS, buildCorpus, loadCoreData } from "./corpus/build";
+import { COMMON_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS } from "./corpus/haystack";
 import { IDENTITIES, WORKSPACES } from "./corpus/types";
 import { QUERY_CATEGORIES } from "./types";
 
@@ -15,7 +16,7 @@ const DATA = resolve(import.meta.dirname, "data/core");
 const MINIMUMS = { identifier: 36, "rare-word": 40, "common-word": 36, "short-word": 30, paraphrase: 48, cjk: 36, "multi-hop": 30, "long-context": 24 } as const;
 const CLUSTER_MINIMUM = 30;
 // 0.8 x the shipped per-category cluster counts, so a ~35% power cut in any category fails
-const CLUSTER_FLOORS = { identifier: 37, "rare-word": 31, "common-word": 30, "short-word": 24, paraphrase: 39, cjk: 29, "multi-hop": 24, "long-context": 20 } as const;
+const CLUSTER_FLOORS = { identifier: 37, "rare-word": 31, "common-word": 38, "short-word": 24, paraphrase: 39, cjk: 29, "multi-hop": 24, "long-context": 20 } as const;
 
 describe("core golden data", () => {
   const { needles, edges, queries } = loadCoreData();
@@ -95,7 +96,7 @@ describe("core golden data", () => {
   });
 
   it("pins the known-gap queries, so fixing T-0072 must consciously remove the tags", () => {
-    const gaps = queries.filter(q => q.tags?.includes("known-gap"));
+    const gaps = queries.filter(q => q.tags?.includes("gap:T-0072"));
     expect(gaps.map(q => q.id)).toEqual([
       "q-id-037", "q-id-038", "q-id-038-c", "q-id-039", "q-id-040", "q-id-040-c", "q-id-041", "q-id-042", "q-id-043", "q-id-044", "q-id-045", "q-id-046",
     ]);
@@ -112,6 +113,8 @@ describe("core golden data", () => {
       expect(df, `${q.id} ${key}`).toBeLessThanOrEqual(2);
     }
     expect(gaps.filter(q => q.id.endsWith("-c")).length, "common-token-prefixed variants").toBeGreaterThanOrEqual(2);
+    // every known-gap query names exactly one of the two boarded gaps
+    for (const q of queries.filter(q => q.tags?.includes("known-gap"))) expect(q.tags!.filter(tag => tag.startsWith("gap:")).length, q.id).toBe(1);
     // an underscore identifier anywhere else must be tagged, so none slips into the set unmeasured
     const untagged = queries.filter(q => q.category === "identifier" && q.text.includes("_") && !q.tags?.includes("known-gap"));
     expect(untagged.map(q => q.id)).toEqual([]);
@@ -123,21 +126,45 @@ describe("core golden data", () => {
   });
 
   it("gives each common-word query its own triple of dense words, found in its gold needle and no other", () => {
+    const isDense = (word: string) => (DENSE_TOKENS as readonly string[]).includes(word);
     const dense = (text: string) => DENSE_TOKENS.filter(word => text.toLowerCase().includes(word));
     const common = queries.filter(q => q.category === "common-word");
     const triples = new Set<string>();
     for (const q of common) {
-      const triple = q.text.split(" ").sort();
+      const words = q.text.split(" ");
+      const triple = words.filter(isDense).sort();
       expect(triple.length, q.id).toBe(3);
-      expect(triple.every(word => (DENSE_TOKENS as readonly string[]).includes(word)), q.id).toBe(true);
+      // only router-budget queries carry extra tokens, and those are the ordinary common ones
+      const extra = words.filter(word => !isDense(word));
+      if (q.tags?.includes("router-budget")) {
+        expect(extra.length, q.id).toBeGreaterThanOrEqual(1);
+        expect(extra.every(word => (COMMON_TOKENS as readonly string[]).includes(word)), q.id).toBe(true);
+      } else expect(extra, q.id).toEqual([]);
       triples.add(triple.join(","));
       const gold = needles.find(n => n.id === q.gold[0].id)!;
       expect(dense(gold.content).sort(), q.id).toEqual(triple);
+      expect(gold.ageDays, `${q.id} gold must be old enough to fall outside the LIKE window`).toBeGreaterThanOrEqual(300);
     }
     expect(triples.size, "distinct triples").toBe(common.length);
     const goldIds = new Set(common.map(q => q.gold[0].id));
     // as substrings, so "timetable" or "newsletter" count
     for (const n of needles.filter(n => !goldIds.has(n.id))) expect(dense(n.content).length, n.id).toBeLessThanOrEqual(2);
+  });
+
+  it("pins the router-budget queries and shows each crosses the FTS budget at 5k and 20k, but not necessarily at 1k", () => {
+    const gaps = queries.filter(q => q.tags?.includes("router-budget"));
+    expect(gaps.map(q => q.id)).toEqual(Array.from({ length: 10 }, (_, i) => `q-budget-${String(i + 1).padStart(3, "0")}`));
+    for (const q of gaps) expect(q.tags, q.id).toEqual(["router-budget", "known-gap", "gap:T-0073"]);
+    expect(new Set(gaps.map(q => q.gold[0].id)).size, "one cluster per needle").toBe(10);
+    for (const id of ["scale-5k", "scale-20k"] as const) {
+      const spec = buildCorpus(id);
+      for (const q of gaps) {
+        const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
+        const rows = spec.entries.filter(e => readable.has(e.workspaceId)).map(e => e.content.toLowerCase());
+        const dfSum = tokenizeQuery(q.text).reduce((sum, token) => sum + rows.filter(row => row.includes(token)).length, 0);
+        expect(dfSum, `${id} ${q.id} ${q.text}`).toBeGreaterThan(FTS_MATCH_BUDGET);
+      }
+    }
   });
 
   it("keeps every rare and identifier key out of the haystack vocabulary", () => {
@@ -163,6 +190,16 @@ describe("core golden data", () => {
       expect(new Set(spec.entries.map(e => e.id)).size).toBe(total);
       expect(spec.queries).toEqual(buildCorpus("core-1k").queries);
     }
+  });
+
+  it("uses the tuned haystack rates: the pinned dense rates and a 0.08 common rate at 20k", () => {
+    expect(CORPUS_PARAMS["core-1k"].denseRate).toBe(DENSE_RATE_BY_SCALE["1k"]);
+    expect(CORPUS_PARAMS["scale-5k"].denseRate).toBe(DENSE_RATE_BY_SCALE["5k"]);
+    expect(CORPUS_PARAMS["scale-20k"].denseRate).toBe(DENSE_RATE_BY_SCALE["20k"]);
+    expect(CORPUS_PARAMS["scale-20k"].commonRate).toBe(0.08);
+    // the haystack is the total minus the needles, which is what the rates were solved for
+    const haystack = buildCorpus("scale-5k").entries.filter(e => e.id.startsWith("f-")).length;
+    expect(haystack).toBe(5000 - needles.length);
   });
 
   it("draws the haystack at 45/45/10 across avery, company and blake, with nothing in the outsider tenant", () => {

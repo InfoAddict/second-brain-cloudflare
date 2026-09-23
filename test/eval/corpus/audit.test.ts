@@ -257,6 +257,34 @@ describe("auditQueries fidelity and scale", () => {
     });
   });
 
+  describe("router budget (dfSum over FTS_MATCH_BUDGET routes to LIKE)", () => {
+    const gap = ["router-budget", "known-gap", "gap:T-0073"];
+    const corpus = (pairRows: number, roadmapRows: number) => [
+      dated("g", "garden window coffee roadmap reunion", 300),
+      ...Array.from({ length: pairRows }, (_, i) => dated(`m${i}`, `${pairText(i)} note ${i}`, 1 + (i % 100))),
+      ...Array.from({ length: roadmapRows }, (_, i) => dated(`r${i}`, `roadmap note ${i}`, 1 + (i % 100))),
+      ...Array.from({ length: 3000 - 1 - pairRows - roadmapRows }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+    ];
+    const budget = (over: Partial<GoldenQuery> = {}) => query({ id: "b", category: "common-word", text: "garden window coffee roadmap", tags: gap, ...over });
+
+    it("needs a router-budget query to cross the budget at scale, and an ordinary one to stay under it", () => {
+      expect(rules(corpus(800, 600), [budget()])).toEqual([]);
+      expect(rules(corpus(800, 100), [budget()])).toContain("b:router-budget-under-budget");
+      expect(rules(corpus(1500, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toContain("o:common-word-over-fts-budget");
+      expect(rules(corpus(800, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toEqual([]);
+    });
+
+    it("waives common-word-not-dense only for the three common tokens, and only when tagged", () => {
+      expect(rules(corpus(800, 600), [budget({ tags: ["known-gap", "gap:T-0073"] })])).toContain("b:common-word-not-dense");
+      expect(rules(corpus(800, 600), [budget({ text: "garden window coffee budget" })])).toContain("b:common-word-not-dense");
+    });
+
+    it("keeps the tag paired with known-gap and confined to common-word queries", () => {
+      expect(rules(corpus(800, 600), [budget({ tags: ["router-budget"] })])).toContain("b:router-budget-needs-gap");
+      expect(rules(corpus(800, 600), [budget({ category: "paraphrase" })])).toContain("b:router-budget-not-common-word");
+    });
+  });
+
   it("accepts the router-budget tag and flags a Latin token that answers a CJK query", () => {
     expect(rules([gold("hello world")], [query({ id: "t", category: "paraphrase", text: "greeting", tags: ["router-budget"] })])).not.toContain("t:unknown-tag");
     const mixed = gold("来月の予算について話した budget review");

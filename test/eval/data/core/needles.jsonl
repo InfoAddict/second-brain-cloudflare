@@ -97,43 +97,53 @@
 {"id":"n-rare-036-decoy","content":"Saltmarsh survey volunteers needed next month, maybe sign up.","tags":[],"workspace":"blake","ageDays":15,"keys":["saltmarsh"],"purpose":"rare-word"}
 {"id":"n-rare-037","content":"Chasing zero latency is quixotic; the better goal is a predictable p99 under two hundred milliseconds.","tags":["engineering"],"workspace":"company","actor":"avery","ageDays":610,"keys":["quixotic"],"purpose":"rare-word"}
 {"id":"n-rare-038","content":"Boreas is the storm the forecasters named; ferries are cancelled until the wind drops below gale force.","tags":["weather","travel"],"workspace":"avery","ageDays":25,"keys":["boreas"],"purpose":"rare-word"}
-{"id":"n-common-001","content":"Carried my coffee out to the garden and left the breakfast dishes in the kitchen.","tags":["home"],"workspace":"avery","ageDays":20,"purpose":"common-word"}
-{"id":"n-common-002","content":"Wrote back at the small table by the window; the letter is finally in the post.","tags":["home"],"workspace":"company","ageDays":35,"purpose":"common-word","actor":"avery"}
-{"id":"n-common-003","content":"Baked bread and grated cheese for the party, and the kitchen smelled wonderful all afternoon.","tags":["home"],"workspace":"blake","ageDays":50,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-004","content":"We ate at the long table in the garden, tearing bread by hand.","tags":["home"],"workspace":"company","ageDays":65,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-005","content":"Read the letter from the landlord twice over coffee at the window.","tags":["home"],"workspace":"avery","ageDays":80,"purpose":"common-word"}
-{"id":"n-common-006","content":"Put the cheese board on the table and carried the folding chairs into the garden.","tags":["home"],"workspace":"company","ageDays":95,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-007","content":"The kitchen window sticks again, so I drafted a letter to the landlord about it.","tags":["home"],"workspace":"blake","ageDays":110,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-008","content":"Bought bread and coffee at the corner shop, then watched the rain from the window.","tags":["home"],"workspace":"company","ageDays":125,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-009","content":"Found a letter from Gran behind the cheese grater in the kitchen drawer.","tags":["home"],"workspace":"avery","ageDays":140,"purpose":"common-word"}
-{"id":"n-common-010","content":"Cleared the table, refilled the coffee, and wiped down the kitchen before guests arrived.","tags":["home"],"workspace":"company","ageDays":155,"purpose":"common-word","actor":"avery"}
-{"id":"n-common-011","content":"The cheese shop's back window looks straight onto our garden.","tags":["home"],"workspace":"blake","ageDays":170,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-012","content":"Left a thank-you letter on the table beside the fresh bread.","tags":["home"],"workspace":"company","ageDays":185,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-013","content":"Drafted the letter to the council with a coffee in the garden.","tags":["home"],"workspace":"avery","ageDays":200,"purpose":"common-word"}
-{"id":"n-common-014","content":"Filled the shop window with bread and cheese for the weekend market.","tags":["home"],"workspace":"company","ageDays":215,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-015","content":"Sorted the letter pile on the kitchen table into bills and keepers.","tags":["home"],"workspace":"blake","ageDays":230,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-016","content":"Painted the kitchen window frame green to match the garden gate.","tags":["home"],"workspace":"company","ageDays":245,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-017","content":"Breakfast was coffee, toasted bread and a slice of cheese, nothing fancy.","tags":["home"],"workspace":"avery","ageDays":260,"purpose":"common-word"}
-{"id":"n-common-018","content":"Moved the table under the window so my coffee stays warm in the sun.","tags":["home"],"workspace":"company","ageDays":275,"purpose":"common-word","actor":"avery"}
-{"id":"n-common-019","content":"Wrote a letter to the neighbor asking about the old bread oven in her garden.","tags":["home"],"workspace":"blake","ageDays":290,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-020","content":"The kitchen was quiet, just coffee brewing and bread rising.","tags":["home"],"workspace":"company","ageDays":305,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-021","content":"Tasted goat cheese at the market, then had coffee in the garden.","tags":["home"],"workspace":"avery","ageDays":320,"purpose":"common-word"}
-{"id":"n-common-022","content":"Copied the sourdough recipe from Mira's letter and baked bread in the kitchen.","tags":["home"],"workspace":"company","ageDays":335,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-023","content":"Sat by the window with coffee and a wedge of cheese, watching the rain.","tags":["home"],"workspace":"blake","ageDays":350,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-024","content":"Tossed stale bread to the birds from the window overlooking the garden.","tags":["home"],"workspace":"company","ageDays":365,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-025","content":"Wrote a letter of thanks at the table while the cheese aged in the fridge.","tags":["home"],"workspace":"avery","ageDays":380,"purpose":"common-word"}
-{"id":"n-common-026","content":"Ran out of bread, so I dashed from the garden into the kitchen for the last loaf.","tags":["home"],"workspace":"company","ageDays":395,"purpose":"common-word","actor":"avery"}
-{"id":"n-common-027","content":"Finished the letter at the corner table over a second coffee.","tags":["home"],"workspace":"blake","ageDays":410,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-028","content":"Steam fogged the kitchen window while the cheese sauce thickened.","tags":["home"],"workspace":"company","ageDays":425,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-029","content":"Carried the coffee and a small table into the garden for the morning.","tags":["home"],"workspace":"avery","ageDays":440,"purpose":"common-word"}
-{"id":"n-common-030","content":"Left the bread on the table by the window to cool.","tags":["home"],"workspace":"company","ageDays":455,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-031","content":"Her letter asks whether I can bring cheese, and I need coffee to finish the reply.","tags":["home"],"workspace":"blake","ageDays":470,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-032","content":"The cheese cooperative's letter suggests planting herbs in our garden.","tags":["home"],"workspace":"company","ageDays":485,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-033","content":"Left the coffee on in the kitchen and the letter unopened by the door.","tags":["home"],"workspace":"avery","ageDays":500,"purpose":"common-word"}
-{"id":"n-common-034","content":"Wiped the kitchen table and put away the cheese.","tags":["home"],"workspace":"company","ageDays":515,"purpose":"common-word","actor":"avery"}
-{"id":"n-common-035","content":"Watched the garden from the window, coffee going cold in my hand.","tags":["home"],"workspace":"blake","ageDays":530,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-036","content":"Picnic plan: bread, cheese, and a blanket in the garden.","tags":["home"],"workspace":"company","ageDays":545,"purpose":"common-word","actor":"blake"}
-{"id":"n-common-037","content":"The kitchen table wobbles, and yesterday's bread crumbs are still on it.","tags":["home"],"workspace":"avery","ageDays":560,"purpose":"common-word"}
+{"id":"n-common-001","content":"Carried my coffee out to the garden and left the breakfast dishes in the kitchen.","tags":["home"],"workspace":"avery","ageDays":450,"purpose":"common-word"}
+{"id":"n-common-002","content":"Wrote back at the small table by the window; the letter is finally in the post.","tags":["home"],"workspace":"company","ageDays":451,"purpose":"common-word","actor":"avery"}
+{"id":"n-common-003","content":"Baked bread and grated cheese for the party, and the kitchen smelled wonderful all afternoon.","tags":["home"],"workspace":"blake","ageDays":452,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-004","content":"We ate at the long table in the garden, tearing bread by hand.","tags":["home"],"workspace":"company","ageDays":453,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-005","content":"Read the letter from the landlord twice over coffee at the window.","tags":["home"],"workspace":"avery","ageDays":454,"purpose":"common-word"}
+{"id":"n-common-006","content":"Put the cheese board on the table and carried the folding chairs into the garden.","tags":["home"],"workspace":"company","ageDays":455,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-007","content":"The kitchen window sticks again, so I drafted a letter to the landlord about it.","tags":["home"],"workspace":"blake","ageDays":456,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-008","content":"Bought bread and coffee at the corner shop, then watched the rain from the window.","tags":["home"],"workspace":"company","ageDays":457,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-009","content":"Found a letter from Gran behind the cheese grater in the kitchen drawer.","tags":["home"],"workspace":"avery","ageDays":458,"purpose":"common-word"}
+{"id":"n-common-010","content":"Cleared the table, refilled the coffee, and wiped down the kitchen before guests arrived.","tags":["home"],"workspace":"company","ageDays":459,"purpose":"common-word","actor":"avery"}
+{"id":"n-common-011","content":"The cheese shop's back window looks straight onto our garden.","tags":["home"],"workspace":"blake","ageDays":460,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-012","content":"Left a thank-you letter on the table beside the fresh bread.","tags":["home"],"workspace":"company","ageDays":461,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-013","content":"Drafted the letter to the council with a coffee in the garden.","tags":["home"],"workspace":"avery","ageDays":462,"purpose":"common-word"}
+{"id":"n-common-014","content":"Filled the shop window with bread and cheese for the weekend market.","tags":["home"],"workspace":"company","ageDays":463,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-015","content":"Sorted the letter pile on the kitchen table into bills and keepers.","tags":["home"],"workspace":"blake","ageDays":464,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-016","content":"Painted the kitchen window frame green to match the garden gate.","tags":["home"],"workspace":"company","ageDays":465,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-017","content":"Breakfast was coffee, toasted bread and a slice of cheese, nothing fancy.","tags":["home"],"workspace":"avery","ageDays":466,"purpose":"common-word"}
+{"id":"n-common-018","content":"Moved the table under the window so my coffee stays warm in the sun.","tags":["home"],"workspace":"company","ageDays":467,"purpose":"common-word","actor":"avery"}
+{"id":"n-common-019","content":"Wrote a letter to the neighbor asking about the old bread oven in her garden.","tags":["home"],"workspace":"blake","ageDays":468,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-020","content":"The kitchen was quiet, just coffee brewing and bread rising.","tags":["home"],"workspace":"company","ageDays":469,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-021","content":"Tasted goat cheese at the market, then had coffee in the garden.","tags":["home"],"workspace":"avery","ageDays":470,"purpose":"common-word"}
+{"id":"n-common-022","content":"Copied the sourdough recipe from Mira's letter and baked bread in the kitchen.","tags":["home"],"workspace":"company","ageDays":471,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-023","content":"Sat by the window with coffee and a wedge of cheese, watching the rain.","tags":["home"],"workspace":"blake","ageDays":472,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-024","content":"Tossed stale bread to the birds from the window overlooking the garden.","tags":["home"],"workspace":"company","ageDays":473,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-025","content":"Wrote a letter of thanks at the table while the cheese aged in the fridge.","tags":["home"],"workspace":"avery","ageDays":474,"purpose":"common-word"}
+{"id":"n-common-026","content":"Ran out of bread, so I dashed from the garden into the kitchen for the last loaf.","tags":["home"],"workspace":"company","ageDays":475,"purpose":"common-word","actor":"avery"}
+{"id":"n-common-027","content":"Finished the letter at the corner table over a second coffee.","tags":["home"],"workspace":"blake","ageDays":476,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-028","content":"Steam fogged the kitchen window while the cheese sauce thickened.","tags":["home"],"workspace":"company","ageDays":477,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-029","content":"Carried the coffee and a small table into the garden for the morning.","tags":["home"],"workspace":"avery","ageDays":478,"purpose":"common-word"}
+{"id":"n-common-030","content":"Left the bread on the table by the window to cool.","tags":["home"],"workspace":"company","ageDays":479,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-031","content":"Her letter asks whether I can bring cheese, and I need coffee to finish the reply.","tags":["home"],"workspace":"blake","ageDays":480,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-032","content":"The cheese cooperative's letter suggests planting herbs in our garden.","tags":["home"],"workspace":"company","ageDays":481,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-033","content":"Left the coffee on in the kitchen and the letter unopened by the door.","tags":["home"],"workspace":"avery","ageDays":482,"purpose":"common-word"}
+{"id":"n-common-034","content":"Wiped the kitchen table and put away the cheese.","tags":["home"],"workspace":"company","ageDays":483,"purpose":"common-word","actor":"avery"}
+{"id":"n-common-035","content":"Watched the garden from the window, coffee going cold in my hand.","tags":["home"],"workspace":"blake","ageDays":484,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-036","content":"Picnic plan: bread, cheese, and a blanket in the garden.","tags":["home"],"workspace":"company","ageDays":485,"purpose":"common-word","actor":"blake"}
+{"id":"n-common-037","content":"The kitchen table wobbles, and yesterday's bread crumbs are still on it.","tags":["home"],"workspace":"avery","ageDays":486,"purpose":"common-word"}
+{"id":"n-budget-001","content":"Wrote the garden club a letter about the roadmap while watching the rain at the window.","tags":["work"],"workspace":"avery","ageDays":480,"purpose":"common-word"}
+{"id":"n-budget-002","content":"Moved the standup outside: a folding table in the garden, away from the window glare.","tags":["work"],"workspace":"company","ageDays":487,"purpose":"common-word","actor":"avery"}
+{"id":"n-budget-003","content":"Paid the bakery invoice, then took the bread and coffee out to the garden.","tags":["work"],"workspace":"blake","ageDays":494,"purpose":"common-word","actor":"blake"}
+{"id":"n-budget-004","content":"Found the landscaper's invoice folded inside a letter on the kitchen counter, next to the garden shears.","tags":["work"],"workspace":"company","ageDays":501,"purpose":"common-word","actor":"blake"}
+{"id":"n-budget-005","content":"Sketched the roadmap on the kitchen table and carried the drafts out to the garden.","tags":["work"],"workspace":"avery","ageDays":508,"purpose":"common-word"}
+{"id":"n-budget-006","content":"Skipped standup to test a goat cheese tart in the kitchen; the herbs came from the garden.","tags":["work"],"workspace":"company","ageDays":515,"purpose":"common-word","actor":"blake"}
+{"id":"n-budget-007","content":"Roadmap tweaks before standup: coffee in the kitchen, laptop propped in the window.","tags":["work"],"workspace":"blake","ageDays":522,"purpose":"common-word","actor":"blake"}
+{"id":"n-budget-008","content":"Spread the invoice and the roadmap notes over the kitchen table by the window.","tags":["work"],"workspace":"company","ageDays":529,"purpose":"common-word","actor":"blake"}
+{"id":"n-budget-009","content":"After standup I left the bread to rise on the kitchen windowsill.","tags":["work"],"workspace":"avery","ageDays":536,"purpose":"common-word"}
+{"id":"n-budget-010","content":"The cheese shop's invoice was on the table by the window, still unpaid.","tags":["work"],"workspace":"company","ageDays":543,"purpose":"common-word","actor":"avery"}
 {"id":"n-short-001","content":"The ox pen door latch broke again; ordered a new one and a spare bolt.","tags":["home"],"workspace":"avery","ageDays":150,"purpose":"short-word"}
 {"id":"n-short-002","content":"Scheduled the k8 upgrade for Sunday night; drain the old nodes one at a time.","tags":["infra"],"workspace":"company","ageDays":40,"purpose":"short-word","actor":"avery"}
 {"id":"n-short-003","content":"Draft ai policy for the team is two pages; legal wants the data retention paragraph rewritten.","tags":["policy"],"workspace":"company","ageDays":75,"purpose":"short-word","actor":"avery"}

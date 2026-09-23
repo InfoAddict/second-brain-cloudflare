@@ -154,6 +154,16 @@
 {"id":"q-common-035","category":"common-word","text":"garden window coffee","gold":[{"id":"n-common-035","grade":2}],"viewer":"blake"}
 {"id":"q-common-036","category":"common-word","text":"bread cheese garden","gold":[{"id":"n-common-036","grade":2}],"viewer":"blake"}
 {"id":"q-common-037","category":"common-word","text":"kitchen table bread","gold":[{"id":"n-common-037","grade":2}],"viewer":"avery"}
+{"id":"q-budget-001","category":"common-word","text":"garden window letter roadmap","gold":[{"id":"n-budget-001","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-002","category":"common-word","text":"garden window table standup","gold":[{"id":"n-budget-002","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-003","category":"common-word","text":"garden coffee bread invoice","gold":[{"id":"n-budget-003","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-004","category":"common-word","text":"garden kitchen letter invoice","gold":[{"id":"n-budget-004","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-005","category":"common-word","text":"garden kitchen table roadmap","gold":[{"id":"n-budget-005","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-006","category":"common-word","text":"garden kitchen cheese standup","gold":[{"id":"n-budget-006","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-007","category":"common-word","text":"window coffee kitchen roadmap standup","gold":[{"id":"n-budget-007","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-008","category":"common-word","text":"window kitchen table roadmap invoice","gold":[{"id":"n-budget-008","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-009","category":"common-word","text":"window kitchen bread standup","gold":[{"id":"n-budget-009","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-010","category":"common-word","text":"window table cheese invoice","gold":[{"id":"n-budget-010","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
 {"id":"q-short-001","category":"short-word","text":"ox latch","gold":[{"id":"n-short-001","grade":2}],"viewer":"avery"}
 {"id":"q-short-002","category":"short-word","text":"k8 upgrade","gold":[{"id":"n-short-002","grade":2}],"viewer":"avery"}
 {"id":"q-short-003","category":"short-word","text":"ai policy","gold":[{"id":"n-short-003","grade":2}],"viewer":"avery"}
