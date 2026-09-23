@@ -60,8 +60,12 @@ function createFtsTableAndTriggers(env: Env): D1PreparedStatement[] {
   ];
 }
 
-/** Whether the durable disabled marker is currently present. One read, only ever issued on the repair path (never on a successful write). */
-async function entriesFtsDisabledExists(env: Env): Promise<boolean> {
+/**
+ * Whether the durable disabled marker is currently present. One read.
+ * Exported so other FTS-adjacent code (the nightly backfill) can skip
+ * cleanly instead of throwing into entries_fts while it is disabled.
+ */
+export async function entriesFtsDisabledExists(env: Env): Promise<boolean> {
   const row = await env.DB.prepare(
     `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = '${ENTRIES_FTS_DISABLED_TABLE}'`,
   ).first<{ present: number }>();

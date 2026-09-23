@@ -999,20 +999,25 @@ describe("initializeDatabase against real SQLite", () => {
     });
 
     // Fresh-brain exemption: `entries` did not exist before this pass, so
-    // there is no prior state to invalidate and no KV round trip is owed.
-    it("fresh brain: creates entries_fts without touching KV", async () => {
+    // rule 4's populated-brain gate owes no KV round trip of its own — it
+    // returns true immediately. The one KV call this test now measures is
+    // Task 4's separate fresh-brain ready latch (src/db/init.ts, the very
+    // end of applySchema), not rule 4: that latch fires on exactly the same
+    // "entries did not exist before this pass" condition rule 4 exempts, and
+    // the two compose by design rather than by coincidence.
+    it("fresh brain: creates entries_fts with no KV call from rule 4 (only Task 4's own ready latch)", async () => {
       d1 = makeSqliteD1({ schema: false });
-      let kvCalls = 0;
+      const calls: string[] = [];
       const kv = {
-        get: async () => { kvCalls++; return null; },
-        put: async () => { kvCalls++; },
-        delete: async () => { kvCalls++; },
+        get: async () => { calls.push("get"); return null; },
+        put: async (key: string) => { calls.push(`put:${key}`); },
+        delete: async (key: string) => { calls.push(`delete:${key}`); },
       } as unknown as KVNamespace;
 
       await initializeDatabase(envWithKv(d1, kv));
 
       expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
-      expect(kvCalls).toBe(0);
+      expect(calls).toEqual([`put:${FTS_READY_KV_KEY}`]);
     });
   });
 

@@ -360,6 +360,40 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
     expect(((await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first()) as { n: number }).n)
       .toBe(((await d1.db.prepare(`SELECT count(*) AS n FROM entries`).first()) as { n: number }).n);
   });
+
+  // v2.1 composition: when the SAME nightly write instead hits the
+  // corruption-shaped (not missing-table) branch, repair renames entries_fts
+  // to entries_fts_disabled rather than recreating it. runFtsMaintenance
+  // then runs in the SAME scheduled() invocation (Task 4) and must skip
+  // cleanly instead of throwing into a table that no longer exists under its
+  // own name — and it must NOT recover ready to "1", since nothing was
+  // actually indexed. The index stays down until Task 5's nightly rebuild.
+  it("a nightly write that disables the index leaves the backfill to skip cleanly, not recover ready", async () => {
+    d1 = makeSqliteD1();
+    const rawEnv = makeTestEnv(undefined, {
+      DB: d1.db as unknown as D1Database,
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock(),
+      AI: makeAIMock(),
+    });
+    resetDatabaseInit();
+    await initializeDatabase(rawEnv);
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    d1.seed({ id: "stale-1", content: "an old memory nobody revisited", createdAt: old });
+    await breakByReshaping(d1);
+    const { ctx, drain } = makeCtx();
+
+    await worker.scheduled({ cron: MAINTENANCE_CRON } as ScheduledEvent, rawEnv, ctx);
+    await drain();
+
+    const row = d1.rows().find(r => r.id === "stale-1");
+    expect(row).toBeDefined();
+    expect(row!.staleness_checked_at).not.toBeNull(); // the staleness write itself still succeeded
+    await expectTriggersDroppedTableRenamedDisabled(d1, rawEnv);
+    // The backfill saw entries_fts_disabled and skipped: it never recovered
+    // ready, unlike the missing-table night above.
+    expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+  });
 });
 
 // B1 (v2 adversarial review of b4bb804): with KV down, a corrupt write's

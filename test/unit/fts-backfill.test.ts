@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { runFtsBackfill, runFtsMaintenance } from "../../src/db/fts-backfill";
 import { FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
@@ -97,6 +97,44 @@ describe("runFtsBackfill", () => {
     expect(await ftsCount(d1)).toEqual({ n: 5 });
     expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
     expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
+  });
+
+  // Write-path isolation v2.1: a corrupt-write repair renames entries_fts to
+  // entries_fts_disabled rather than dropping it. Without a guard, the
+  // backfill's DELETE+INSERT batch below would throw "no such table:
+  // entries_fts" into this every night (or, with no backlog, wrongly latch
+  // ready="1" over a table that does not exist). Only Task 5's nightly
+  // rebuild may recreate entries_fts; the backfill must leave it alone.
+  it("skips cleanly without throwing while entries_fts is disabled, even with a backlog", async () => {
+    seed(d1, 5);
+    await emptyFts(d1); // a genuine backlog: these rows predate the index
+    await d1.db.prepare(`ALTER TABLE entries_fts RENAME TO entries_fts_disabled`).run();
+    const env = envFor(d1);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await runFtsBackfill(env);
+
+    expect(result).toEqual({ indexed: 0, done: false });
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    const disabledCount = await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts_disabled`).first() as { n: number };
+    expect(disabledCount).toEqual({ n: 0 }); // untouched — the backlog never got written
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    logSpy.mockRestore();
+  });
+
+  it("skips cleanly without throwing while entries_fts is disabled, even with no backlog", async () => {
+    // No pre-FTS rows to index: the old code's early "no backlog -> ready=1"
+    // path did not check entries_fts's existence at all, so this shape would
+    // have wrongly latched ready over a table that does not exist.
+    await d1.db.prepare(`ALTER TABLE entries_fts RENAME TO entries_fts_disabled`).run();
+    const env = envFor(d1);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await runFtsBackfill(env);
+
+    expect(result).toEqual({ indexed: 0, done: false });
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    logSpy.mockRestore();
   });
 });
 

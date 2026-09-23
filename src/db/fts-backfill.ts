@@ -1,5 +1,6 @@
 import { FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../constants";
 import type { Env } from "../env";
+import { entriesFtsDisabledExists } from "./fts-repair";
 
 // Resumable nightly backfill for rows that predate entries_fts. Trigger-covered
 // rows are handled too: each batch deletes its rowid range before inserting, so
@@ -8,6 +9,17 @@ import type { Env } from "../env";
 // Batch size bounds FTS shadow-row writes against the 100k/day cap.
 export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done: boolean }> {
   if ((await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1") return { indexed: 0, done: true };
+  // entries_fts is disabled (write-path isolation v2.1): a write-path repair
+  // renamed it out of the way, and nothing here may create or touch it —
+  // that is rebuildFtsIndex's job (Task 5), nightly, not yet built. Without
+  // this the DELETE+INSERT batch below would throw "no such table:
+  // entries_fts" into src/index.ts's catch every night (or, on a night with
+  // no backlog rows, worse: latch ready="1" over a table that does not
+  // exist). Skip cleanly and log once instead.
+  if (await entriesFtsDisabledExists(env)) {
+    console.error("FTS backfill skipped: entries_fts is disabled, waiting for the nightly rebuild");
+    return { indexed: 0, done: false };
+  }
   const cursor = Number(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY) ?? "0");
   // scope-exempt: cron: nightly backfill keyed on rowid — rowids are unravelled
   // throughout (schema comment on similar.) so there is no workspace scope to
