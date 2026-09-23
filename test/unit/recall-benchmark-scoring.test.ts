@@ -59,4 +59,16 @@ describe("frozenPrePlanFused keyword pool", () => {
     expect(flat[0]).toBe("a");
     expect(popular[0]).toBe("b");
   });
+
+  it("'like' folds ASCII only, as SQLite LIKE does", () => {
+    const c: RootQualityCase = { ...probe, candidates: [{ id: "x", content: "Nebula \u00c9COLE", createdAt: 1 }] };
+    expect(frozenPrePlanFused(c, ["nebula"], "like").map(m => m.id)).toEqual(["x"]);
+    // "\u00e9" must not match "\u00c9": SQLite does not fold non-ASCII, and non-ASCII tokens are rejected below.
+    expect(() => frozenPrePlanFused(c, ["\u00e9cole"], "like")).toThrow(/non-ASCII/);
+  });
+
+  it("'like' throws on a non-ASCII token rather than guess at SQLite's folding", () => {
+    expect(() => frozenPrePlanFused(probe, ["\u6771\u4eac"], "like")).toThrow(/non-ASCII/);
+    expect(() => frozenPrePlanFused(probe, ["\u6771\u4eac"], "labels")).not.toThrow();
+  });
 });

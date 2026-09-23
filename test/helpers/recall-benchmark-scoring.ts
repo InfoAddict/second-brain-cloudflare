@@ -38,11 +38,25 @@ export function frozenBaselineCorpus(c: RootQualityCase, tokens: string[]) {
     : { df: new Map(tokens.map(token => [token, 2])), total: 100 };
 }
 
+// SQLite LIKE folds ASCII case only; JS toLowerCase folds Unicode too.
+const asciiLower = (value: string) => value.replace(/[A-Z]/g, ch => ch.toLowerCase());
+
+function assertAsciiTokens(tokens: string[]): void {
+  const bad = tokens.find(token => /[^\x00-\x7f]/.test(token));
+  if (bad !== undefined) throw new Error(`like pool: non-ASCII token ${JSON.stringify(bad)}; SQLite LIKE folds ASCII only, so this baseline cannot mirror it`);
+}
+
 /**
  * "labels" (default): the keyword pool is the rows the fixture labeled
  * keywordCandidate, which is what the mock D1 serves. "like": the pool a real
- * LIKE builds (rows containing any of the first KEYWORD_MAX_TOKENS tokens,
- * newest first, capped), so a real-SQL run and its baseline fuse the same inputs.
+ * LIKE builds over the tokens the caller passes (the first KEYWORD_MAX_TOKENS,
+ * newest first, capped).
+ *
+ * Callers pass profile.lexicalTokens (recall's queryTokens), the convention of
+ * the frozen pre-plan system (3da4f7a). Production's current LIKE binds the
+ * wider profile.retrievalTokens (evidence, identifier and stem variants), so
+ * the baseline does NOT see exactly what today's pipeline sees. See the note
+ * in test/eval/legacy/gates.ts for the measured sensitivity.
  */
 export type KeywordPool = "labels" | "like";
 
@@ -52,11 +66,12 @@ export function frozenPrePlanFused(c: RootQualityCase, tokens: string[], pool: K
     .slice()
     .sort((a, b) => b.denseScore - a.denseScore);
   const denseById = new Map(dense.map(candidate => [candidate.id, candidate]));
-  const likeTerms = tokens.slice(0, KEYWORD_MAX_TOKENS).map(token => token.toLowerCase());
+  if (pool === "like") assertAsciiTokens(tokens);
+  const likeTerms = tokens.slice(0, KEYWORD_MAX_TOKENS).map(asciiLower);
   const keyword = pool === "labels"
     ? c.candidates.filter(candidate => candidate.keywordCandidate)
     : c.candidates
-        .filter(candidate => likeTerms.some(term => candidate.content.toLowerCase().includes(term)))
+        .filter(candidate => likeTerms.some(term => asciiLower(candidate.content).includes(term)))
         .sort((a, b) => (b.createdAt ?? 1) - (a.createdAt ?? 1))
         .slice(0, KEYWORD_CANDIDATE_LIMIT);
   const corpus = frozenBaselineCorpus(c, tokens);

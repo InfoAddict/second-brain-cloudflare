@@ -39,9 +39,12 @@ export interface LegacyObservation {
   expanded: boolean;
   selectedRelatedIds: string[];
   outputIds: string[];
+  /** Tokens the baseline pool was built from (recall's queryTokens = profile.lexicalTokens). */
+  baselineTokens: string[];
   authoritative: boolean;
   baselineAuthoritative: boolean;
   directTopFourRegression: boolean;
+  authorityRankRegression: boolean;
   extraAiCalls: number;
   extraVectorizeQueries: number;
   ftsUsed?: boolean;
@@ -56,10 +59,24 @@ export interface LegacyMetrics {
   authoritativeAnswers: number;
   baselineAuthoritativeAnswers: number;
   improvement: number;
-  usefulGraphPrecision: number;
+  /** null when no related id was selected (no denominator); gates must treat that as a failure. */
+  usefulGraphPrecision: number | null;
+  /** Cases whose authoritative answer ranks strictly lower than in the baseline output (absent counts as lowest). */
+  authorityRankRegressions: number;
+  /** Reported only: order-identity of the top four, which scores improvements as regressions. */
   directTopFourRegressions: number;
   extraAiCalls: number;
   extraVectorizeQueries: number;
+}
+
+/** Zero-based rank of the first authoritative id, Infinity when absent. */
+export function authorityRank(ids: readonly string[], authoritative: ReadonlySet<string>): number {
+  const at = ids.findIndex(id => authoritative.has(id));
+  return at < 0 ? Infinity : at;
+}
+
+export function authorityRankRegressed(outputIds: readonly string[], baselineIds: readonly string[], authoritative: ReadonlySet<string>): boolean {
+  return authorityRank(outputIds, authoritative) > authorityRank(baselineIds, authoritative);
 }
 
 interface LegacyOptions {
@@ -150,9 +167,11 @@ async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyO
       expanded: (diagnostics.expandedIds ?? []).some(id => authoritative.has(id)),
       selectedRelatedIds: diagnostics.selectedRelatedIds ?? [],
       outputIds,
+      baselineTokens: result.queryTokens ?? [],
       authoritative: outputIds.some(id => authoritative.has(id)),
       baselineAuthoritative: baseline.outputIds.some(id => authoritative.has(id)),
       directTopFourRegression: directTopFourRegressed(outputIds, baseline.directIds),
+      authorityRankRegression: authorityRankRegressed(outputIds, baseline.outputIds, authoritative),
       extraAiCalls: Math.max(0, aiCalls - 1),
       extraVectorizeQueries: Math.max(0, fixture.query.mock.calls.length - 1),
       ftsUsed: diagnostics.ftsUsed,
@@ -181,7 +200,8 @@ export function summarizeLegacy(
     authoritativeAnswers,
     baselineAuthoritativeAnswers,
     improvement: authoritativeAnswers - baselineAuthoritativeAnswers,
-    usefulGraphPrecision: related.length ? useful / related.length : 1,
+    usefulGraphPrecision: related.length ? useful / related.length : null,
+    authorityRankRegressions: observations.filter(o => o.authorityRankRegression).length,
     directTopFourRegressions: observations.filter(o => o.directTopFourRegression).length,
     extraAiCalls: observations.reduce((sum, o) => sum + o.extraAiCalls, 0),
     extraVectorizeQueries: observations.reduce((sum, o) => sum + o.extraVectorizeQueries, 0),
