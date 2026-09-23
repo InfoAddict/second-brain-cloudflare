@@ -78,6 +78,38 @@ export const ENTRIES_FTS_DELETE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entr
       DELETE FROM entries_fts WHERE rowid = OLD.rowid;
     END`;
 
+// entry_counts (T-0065): exact per-workspace row counts, replacing distillation's
+// scoped COUNT(*)/cache. Same ownership rule as entries_fts above: table and its
+// three triggers created together, in ONE batch, never independently repaired on
+// an existing table. Shared with src/db/entry-counts-repair.ts (the hot-path
+// repair for a manually dropped table), so each string is a named export.
+//
+// A row reaching n = 0 is KEPT, not deleted: SUM(n) is correct either way, and
+// keeping it needs no extra statement in the triggers.
+export const ENTRY_COUNTS_TABLE_DDL =
+  `CREATE TABLE entry_counts (workspace_id TEXT PRIMARY KEY, n INTEGER NOT NULL)`;
+export const ENTRY_COUNTS_INSERT_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entry_counts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END`;
+export const ENTRY_COUNTS_UPDATE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entry_counts_update
+    AFTER UPDATE OF workspace_id ON entries
+    WHEN OLD.workspace_id IS NOT NEW.workspace_id
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END`;
+export const ENTRY_COUNTS_DELETE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entry_counts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+    END`;
+
 /**
  * Tables, indexes, and triggers, keyed by the name each occupies in sqlite_master.
  * Declaration order is apply order: a table has to exist before its indexes and triggers.
@@ -186,6 +218,8 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // rule): they are created together, in one dedicated batch, below in
   // applySchema — never as independent SCHEMA_OBJECTS/POST_COLUMN_OBJECTS
   // entries, which would let one be created or repaired without the other.
+  // entry_counts and its three triggers (T-0065) follow the same rule, in
+  // their own dedicated batch below.
 };
 
 /**
@@ -502,6 +536,15 @@ function isTableAlreadyExists(e: unknown): boolean {
 }
 
 /**
+ * The entry_counts analogue of isTableAlreadyExists above: a racing isolate's
+ * own gated creation batch already won. ENTRY_COUNTS_TABLE_DDL also has no
+ * IF NOT EXISTS, for the same atomic-collision reason.
+ */
+function isEntryCountsTableAlreadyExists(e: unknown): boolean {
+  return /table entry_counts already exists/i.test(String((e as { message?: string })?.message ?? e));
+}
+
+/**
  * Applies the schema. Returns whether FTS creation was deferred — see
  * initializeDatabase, which uses that to decide whether this pass may be
  * memoized as fully done.
@@ -582,6 +625,36 @@ async function applySchema(env: Env): Promise<boolean> {
       if (!isDuplicateColumn(e)) throw e; // column already exists — anything else is real
     }
   }
+
+  // entry_counts (T-0065): same ownership rule as entries_fts above, but no
+  // KV gate — there is no separate backfill, so the seed rides in the SAME
+  // atomic batch as the triggers. Both the seed and the triggers reference
+  // entries.workspace_id, so this must run AFTER the ENTRIES_COLUMNS loop
+  // above, which ALTERs it in on a legacy pre-tenancy brain — placed any
+  // earlier, the seed's GROUP BY throws "no such column: workspace_id" on
+  // exactly that brain shape. Atomicity is what makes a concurrent entries
+  // write safe to interleave: a write that commits before this batch is
+  // counted by the seed; one that commits after is counted by the trigger
+  // (created in the same batch); D1 batch() is one transaction, so there is
+  // no window where neither counts it.
+  if (existing?.objects.get("entry_counts") !== "table") {
+    try {
+      await env.DB.batch([
+        env.DB.prepare(ENTRY_COUNTS_TABLE_DDL),
+        env.DB.prepare(ENTRY_COUNTS_INSERT_TRIGGER_DDL),
+        env.DB.prepare(ENTRY_COUNTS_UPDATE_TRIGGER_DDL),
+        env.DB.prepare(ENTRY_COUNTS_DELETE_TRIGGER_DDL),
+        // scope-exempt: the one-time seed deliberately covers every workspace
+        // (that is the point of a GROUP BY over the whole table) — the read
+        // never reaches a response, it only populates the exact counter each
+        // scoped read later sums from.
+        env.DB.prepare(`INSERT INTO entry_counts SELECT workspace_id, count(*) FROM entries GROUP BY workspace_id`),
+      ]);
+    } catch (e) {
+      if (!isEntryCountsTableAlreadyExists(e)) throw e;
+    }
+  }
+
   for (const [column, ddl] of Object.entries(EDGES_COLUMNS)) {
     if (existing?.edgeColumns.has(column)) continue;
     try {

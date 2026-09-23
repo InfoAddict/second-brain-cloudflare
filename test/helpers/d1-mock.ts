@@ -39,7 +39,7 @@ const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../..
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
-    "push_subscriptions", "entries_fts"]
+    "push_subscriptions", "entries_fts", "entry_counts"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
@@ -49,7 +49,8 @@ const SCHEMA_PROBE_RESULTS = [
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
-    "entries_fts_insert", "entries_fts_update", "entries_fts_delete"]
+    "entries_fts_insert", "entries_fts_update", "entries_fts_delete",
+    "entry_counts_insert", "entry_counts_update", "entry_counts_delete"]
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",
@@ -428,12 +429,13 @@ export class D1Mock {
         if (s.includes("(SELECT count(*) FROM entries) AS e")) {
           // src/db/fts-backfill.ts's nightly count parity (Task 5), which
           // also reads max rowid for the rotating content check's wrap
-          // (combined review FIX 2). This double stands in for a healthy,
-          // migrated brain — same stance as the liveness branch in all() —
-          // so equal counts and a max rowid of the entries count is the
-          // honest answer; drift is covered against real SQLite in
-          // test/unit/fts-backfill.test.ts, which the mock cannot simulate.
-          return { e: db.entries.length, f: db.entries.length, mx: db.entries.length };
+          // (combined review FIX 2) and entry_counts' SUM (T-0065). This
+          // double stands in for a healthy, migrated brain — same stance as
+          // the liveness branch in all() — so equal counts and a max rowid
+          // of the entries count is the honest answer; drift is covered
+          // against real SQLite in test/unit/fts-backfill.test.ts, which the
+          // mock cannot simulate.
+          return { e: db.entries.length, f: db.entries.length, mx: db.entries.length, ec: db.entries.length };
         }
         if (s.includes("u.role = 'admin'")) {
           // findOwner: oldest admin plus their personal workspace.

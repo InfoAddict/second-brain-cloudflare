@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveRows, resetFtsReadyMemo } from "../../src/recall/fts";
-import { resetDistillTotalCache } from "../../src/recall/distill";
 import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
 import { tokenizeQuery } from "../../src/text/tokenize";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -88,13 +87,11 @@ describe("ftsReady", () => {
   // never cached — the next call retries.
   beforeEach(() => {
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   });
   const envWith = (value: string | null, fail = false) => ({
     OAUTH_KV: { get: fail ? vi.fn().mockRejectedValue(new Error("kv down")) : vi.fn().mockResolvedValue(value) },

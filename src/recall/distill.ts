@@ -2,7 +2,6 @@ import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import {
   FTS_MATCH_BUDGET,
-  FTS_READY_CACHE_MS,
   KEYWORD_MAX_TOKENS,
   MAX_QUERY_TERMS,
   QUERY_SATURATION_FRACTION,
@@ -88,21 +87,6 @@ export interface TimeBounds {
   before?: number;
 }
 
-// T-0059: the corpus-wide row count is the same number regardless of which
-// query asked for it, so it is cached per readable scope (identity, layer,
-// team) rather than re-scanned on every multi-word recall. Time-bounded
-// queries never read or write this map — their total is specific to the
-// bounds and would poison every other query sharing the scope key.
-interface ScopedTotalCacheEntry { total: number; at: number }
-const totalCache = new Map<string, ScopedTotalCacheEntry>();
-
-/** Test seam — the cache is module-scoped, same convention as fts.ts's readyCache. */
-export function resetDistillTotalCache(): void { totalCache.clear(); }
-
-function totalCacheKey(identity: Identity | undefined, only: "personal" | "company" | undefined, teamId: string | undefined): string {
-  return `${identity?.userId ?? ""}::${only ?? ""}::${teamId ?? ""}`;
-}
-
 /** Shared by both the FTS and LIKE df sources so their ranking can never drift apart. */
 function rankAndRebuild(
   uniq: string[],
@@ -144,7 +128,7 @@ function ftsTermCountStmt(
   ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), cap);
 }
 
-/** Scoped, time-bounded COUNT(*), batched with the liveness check (one subrequest). */
+/** Scoped, time-bounded COUNT(*), batched with the liveness check (one subrequest). Time-bounded callers only — entry_counts has no time dimension. */
 async function ftsScopedTotal(
   env: Env,
   bounds: Readonly<TimeBounds>,
@@ -185,44 +169,82 @@ function saturationCap(total: number): number {
 }
 
 /**
- * T-0059: df/total via the FTS index instead of a full LIKE scan. One batch
- * when the scoped total is warm in cache (liveness + one MATCH count per
- * term); two batches on a cold or time-bounded call (liveness + total, then
- * the counts, since the counts' LIMIT cap needs total first). Returns null on
- * any disqualifier (index not live, empty corpus) so the caller falls back to
- * the existing LIKE statement.
+ * T-0065: entry_counts' exact, O(1) total for the SAME scope, embedded as a
+ * scalar subquery rather than passed as a JS-computed cap — the cap needs
+ * total first, and embedding it lets total, every per-term count, AND the
+ * liveness check ride in ONE batch (see distillViaFts) instead of a second
+ * round trip. CAST(...AS INTEGER) truncates like Math.floor for the
+ * non-negative totals here, and multi-arg max() is SQLite's scalar (not
+ * aggregate) max, matching saturationCap's formula exactly.
+ */
+function saturationCapSql(scope: ScopeClause | null): { sql: string; bindings: string[] } {
+  const scopeSql = scope ? ` WHERE ${scope.clause}` : "";
+  return {
+    sql: `(SELECT max(CAST(${QUERY_SATURATION_FRACTION} * COALESCE(SUM(n), 0) AS INTEGER) + 1, ${FTS_MATCH_BUDGET + 1}) FROM entry_counts${scopeSql})`,
+    bindings: scope?.bindings ?? [],
+  };
+}
+
+/** entry_counts' exact, unbounded, scoped total — no time dimension, no cache needed: it costs the same cold or warm. */
+function entryCountsTotalStmt(env: Env, scope: ScopeClause | null) {
+  const scopeSql = scope ? ` WHERE ${scope.clause}` : "";
+  return env.DB.prepare(`SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts${scopeSql}`).bind(...(scope?.bindings ?? []));
+}
+
+/** One term's scoped FTS MATCH count, capped via a SQL subquery on entry_counts (see saturationCapSql) rather than a JS-bound number. No time bounds: those callers use ftsTermCountStmt/ftsScopedTotal instead. */
+function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | null) {
+  const match = ftsMatchQuery([term])!; // pre-filtered eligible by the caller
+  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const cap = saturationCapSql(scope);
+  // scope-checked: the caller's clause IS applied, twice — once in scopeSql
+  // (the row filter) and once inside cap.sql (entry_counts' own scope); the
+  // lexer sees only the fragment names, both are `scope.clause`.
+  return env.DB.prepare(
+    `SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${scopeSql}
+       LIMIT ${cap.sql}
+     )`
+  ).bind(match, ...(scope?.bindings ?? []), ...cap.bindings);
+}
+
+/**
+ * T-0059/T-0065: df/total via the FTS index instead of a full LIKE scan.
+ * No time bounds (the common case): entry_counts' total is exact and O(1),
+ * so total, every per-term count, and the liveness check ride in ONE batch
+ * always — cold costs the same as warm, and there is no cache to go stale.
+ * Time-bounded calls keep the two-batch shape (liveness+total, then counts
+ * with a JS-computed cap): entry_counts has no time dimension, so their
+ * total still comes from a scoped, bounded COUNT(*) on entries. Returns null
+ * on any disqualifier (index not live, empty corpus) so the caller falls
+ * back to the existing LIKE statement.
  */
 async function distillViaFts(
   dfTerms: string[],
   env: Env,
   bounds: Readonly<TimeBounds>,
   scope: ScopeClause | null,
-  identity: Identity | undefined,
-  only: "personal" | "company" | undefined,
-  teamId: string | undefined,
 ): Promise<{ df: Map<string, number>; total: number } | null> {
   const hasBounds = bounds.after !== undefined || bounds.before !== undefined;
-  const key = hasBounds ? null : totalCacheKey(identity, only, teamId);
-  const cached = key ? totalCache.get(key) : undefined;
 
   let total: number;
   let liveness: { name: string; sql: string | null }[] | undefined;
   let countResults: { results?: unknown[] }[];
 
-  if (cached && Date.now() - cached.at < FTS_READY_CACHE_MS) {
-    total = cached.total;
-    const cap = saturationCap(total);
+  if (!hasBounds) {
     const results = await env.DB.batch([
       env.DB.prepare(FTS_LIVENESS_SQL),
-      ...dfTerms.map(t => ftsTermCountStmt(env, t, bounds, scope, cap)),
+      entryCountsTotalStmt(env, scope),
+      ...dfTerms.map(t => ftsTermCountStmtSqlCap(env, t, scope)),
     ]);
     liveness = results[0].results as { name: string; sql: string | null }[] | undefined;
-    countResults = results.slice(1);
+    const totalRow = results[1].results?.[0] as Record<string, number> | undefined;
+    total = (totalRow?.total as number) ?? 0;
+    countResults = results.slice(2);
   } else {
     const scoped = await ftsScopedTotal(env, bounds, scope);
     liveness = scoped.liveness;
     total = scoped.total;
-    if (key) totalCache.set(key, { total, at: Date.now() });
     if (!isFtsLiveRows(liveness) || !total) return null;
     const cap = saturationCap(total);
     countResults = await env.DB.batch(dfTerms.map(t => ftsTermCountStmt(env, t, bounds, scope, cap)));
@@ -285,7 +307,7 @@ export async function distillToRareTerms(
   // through to the existing LIKE statement below, unchanged.
   if (dfTerms.every(t => ftsEligibleToken(t) && ftsCountSafeToken(t)) && await ftsReady(env)) {
     try {
-      const viaFts = await distillViaFts(dfTerms, env, bounds, scope, identity, only, teamId);
+      const viaFts = await distillViaFts(dfTerms, env, bounds, scope);
       // Every original term saturated and at least one count hit its LIMIT
       // cap: the capped counts can no longer order the terms against each
       // other, so the FTS ranking could differ from LIKE's. Discard them and

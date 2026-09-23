@@ -4,7 +4,6 @@ import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 import { ftsReady, resetFtsReadyMemo } from "../../src/recall/fts";
-import { resetDistillTotalCache } from "../../src/recall/distill";
 import type { Env } from "../../src/env";
 
 const err = (message: string) => new Error(message);
@@ -209,7 +208,6 @@ describe("repairFtsIndex — write-path isolation v2.2 (never destroys the index
       await kv.put(FTS_READY_KV_KEY, "1");
       const env = envFor(s, kv);
       resetFtsReadyMemo();
-      resetDistillTotalCache();
       expect(await ftsReady(env)).toBe(true); // memoizes true
 
       await repairFtsIndex(env, CORRUPT_ERROR);

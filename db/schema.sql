@@ -293,3 +293,33 @@ CREATE TRIGGER IF NOT EXISTS entries_fts_delete
     BEGIN
       DELETE FROM entries_fts WHERE rowid = OLD.rowid;
     END;
+
+-- Exact per-workspace entry counters (T-0065), replacing distillation's scoped
+-- COUNT(*)/cache. Same ownership as entries_fts above: table and its three
+-- triggers created together. Must stay in step with src/db/init.ts.
+-- A row reaching n = 0 is kept, not deleted: SUM(n) is correct either way.
+CREATE TABLE IF NOT EXISTS entry_counts (workspace_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
+
+CREATE TRIGGER IF NOT EXISTS entry_counts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS entry_counts_update
+    AFTER UPDATE OF workspace_id ON entries
+    WHEN OLD.workspace_id IS NOT NEW.workspace_id
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS entry_counts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+    END;

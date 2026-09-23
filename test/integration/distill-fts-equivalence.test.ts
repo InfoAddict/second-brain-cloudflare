@@ -11,7 +11,7 @@
  * the string-matching D1 mock.
  */
 import { describe, it, expect } from "vitest";
-import { distillToRareTerms, resetDistillTotalCache } from "../../src/recall/distill";
+import { distillToRareTerms } from "../../src/recall/distill";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
@@ -92,12 +92,10 @@ async function distillBoth(trial: Trial) {
   trial.rows.forEach((content, i) => sqlite.seed({ id: `row-${i}`, content, createdAt: i + 1 }));
 
   resetFtsReadyMemo();
-  resetDistillTotalCache();
   const likeOut = await distillToRareTerms(trial.query, env);
 
   await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
   resetFtsReadyMemo();
-  resetDistillTotalCache();
   const ftsOut = await distillToRareTerms(trial.query, env);
 
   sqlite.close();
@@ -162,7 +160,6 @@ describe("T-0059 cost: the FTS count path never scans entries or entries_fts in 
   it("EXPLAIN QUERY PLAN shows entries_fts searched by MATCH and entries joined by rowid", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -173,13 +170,19 @@ describe("T-0059 cost: the FTS count path never scans entries or entries_fts in 
     const out = await distillToRareTerms("atlas ledger widget", env);
     expect(out.distillSource).toBe("fts");
 
-    // The cold path issues two batches: [liveness, total] then the per-term
-    // counts. Find the count batch (every statement mentions entries_fts).
-    const countBatch = sqlite.batches.find(b => b.every(sql => sql.includes("entries_fts")) && b.some(sql => sql.includes("MATCH")));
-    expect(countBatch, JSON.stringify(sqlite.batches, null, 2)).toBeTruthy();
+    // T-0065: no time bounds, so distillation issues ONE batch — liveness,
+    // entry_counts' total, and every per-term count together. Pick out the
+    // per-term count statements (they mention both entries_fts and MATCH;
+    // the liveness and total statements mention neither or only one).
+    const batch = sqlite.batches.find(b => b.some(sql => sql.includes("entries_fts") && sql.includes("MATCH")));
+    expect(batch, JSON.stringify(sqlite.batches, null, 2)).toBeTruthy();
+    const countStatements = batch!.filter(sql => sql.includes("entries_fts") && sql.includes("MATCH"));
 
-    for (const sql of countBatch!) {
-      const { results } = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(`"atlas"`, 100).all();
+    for (const sql of countStatements) {
+      // Only `match` is JS-bound now: the saturation cap is a SQL subquery on
+      // entry_counts embedded in the statement text itself (see
+      // ftsTermCountStmtSqlCap in src/recall/distill.ts), not a second param.
+      const { results } = await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(`"atlas"`).all();
       const detail = (results as { detail: string }[]).map(r => r.detail).join(" | ");
       // SQLite always labels virtual-table access "SCAN <table> VIRTUAL TABLE
       // INDEX n:xx" in EXPLAIN QUERY PLAN, even when it is using an index —
@@ -215,7 +218,6 @@ describe("T-0059 scope: the FTS count path never counts another workspace's rows
   it("a foreign workspace's matching rows do not inflate df or total", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -239,11 +241,83 @@ describe("T-0059 scope: the FTS count path never counts another workspace's rows
   });
 });
 
+describe("T-0065: entry_counts' total equals the scoped COUNT(*) for every caller shape", () => {
+  async function setupWorkspaces() {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    const sqlite = makeSqliteD1();
+    const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
+    await initializeDatabase(env);
+    seedIn(sqlite, "p1", "ws-personal", "atlas ledger quartz", 1);
+    seedIn(sqlite, "p2", "ws-personal", "atlas filler text", 2);
+    seedIn(sqlite, "c1", "ws-team-a", "atlas ledger quartz", 3);
+    seedIn(sqlite, "c2", "ws-team-b", "atlas filler text", 4);
+    seedIn(sqlite, "c3", "ws-team-b", "atlas quartz", 5);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    return { sqlite, env };
+  }
+
+  const trueScopedTotal = async (sqlite: SqliteD1, workspaceIds: string[]) => {
+    const markers = workspaceIds.map(() => "?").join(",");
+    const row = await sqlite.db.prepare(`SELECT count(*) AS n FROM entries WHERE workspace_id IN (${markers})`)
+      .bind(...workspaceIds).first() as { n: number };
+    return row.n;
+  };
+
+  it("personal-only caller", async () => {
+    const { sqlite, env } = await setupWorkspaces();
+    const identity: Identity = { userId: "u1", role: "member", personalWorkspaceId: "ws-personal", companyWorkspaceIds: ["ws-team-a", "ws-team-b"], defaultShare: "" };
+
+    const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity, "personal");
+
+    expect(out.distillSource).toBe("fts");
+    expect(out.total).toBe(await trueScopedTotal(sqlite, ["ws-personal"]));
+    expect(out.total).toBe(2);
+    sqlite.close();
+  });
+
+  it("company-layer caller sums every company workspace it belongs to", async () => {
+    const { sqlite, env } = await setupWorkspaces();
+    const identity: Identity = { userId: "u1", role: "member", personalWorkspaceId: "ws-personal", companyWorkspaceIds: ["ws-team-a", "ws-team-b"], defaultShare: "" };
+
+    const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity, "company");
+
+    expect(out.distillSource).toBe("fts");
+    expect(out.total).toBe(await trueScopedTotal(sqlite, ["ws-team-a", "ws-team-b"]));
+    expect(out.total).toBe(3);
+    sqlite.close();
+  });
+
+  it("teamId-narrowed caller sees only that one team, even though it belongs to more", async () => {
+    const { sqlite, env } = await setupWorkspaces();
+    const identity: Identity = { userId: "u1", role: "member", personalWorkspaceId: "ws-personal", companyWorkspaceIds: ["ws-team-a", "ws-team-b"], defaultShare: "" };
+
+    const out = await distillToRareTerms("atlas ledger quartz", env, undefined, {}, identity, "company", "ws-team-b");
+
+    expect(out.distillSource).toBe("fts");
+    expect(out.total).toBe(await trueScopedTotal(sqlite, ["ws-team-b"]));
+    expect(out.total).toBe(2);
+    sqlite.close();
+  });
+
+  it("identity-less caller (no scope clause) sums every workspace", async () => {
+    const { sqlite, env } = await setupWorkspaces();
+
+    const out = await distillToRareTerms("atlas ledger quartz", env);
+
+    expect(out.distillSource).toBe("fts");
+    const row = await sqlite.db.prepare(`SELECT count(*) AS n FROM entries`).first() as { n: number };
+    expect(out.total).toBe(row.n);
+    expect(out.total).toBe(5);
+    sqlite.close();
+  });
+});
+
 describe("T-0059 liveness: a stale index (ready flag set, triggers gone) falls back to LIKE", () => {
   it("falls back to the LIKE scan when a sync trigger is missing despite fts:ready", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -262,11 +336,10 @@ describe("T-0059 liveness: a stale index (ready flag set, triggers gone) falls b
   });
 });
 
-describe("T-0059 total cache: a time-bounded call never poisons the unbounded scoped total", () => {
+describe("T-0065: a time-bounded call never affects the unbounded scoped total", () => {
   it("an unbounded call after a bounded one still sees the whole corpus", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -291,7 +364,6 @@ describe("T-0059 ranking effect: a saturated (capped) term still gets dropped, s
   it("caps a near-universal term's df but keeps the same keep/drop outcome as LIKE", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -306,12 +378,10 @@ describe("T-0059 ranking effect: a saturated (capped) term still gets dropped, s
     }
 
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const likeOut = await distillToRareTerms("common rare", env);
 
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const ftsOut = await distillToRareTerms("common rare", env);
 
     expect(ftsOut.distillSource).toBe("fts");
@@ -337,7 +407,6 @@ describe("T-0059 all-saturated fallback: capped counts that cannot rank fall bac
   it("an all-saturated query keeps exactly what LIKE keeps, via the LIKE path", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -358,7 +427,6 @@ describe("T-0059 all-saturated fallback: capped counts that cannot rank fall bac
 
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const out = await distillToRareTerms("terma termb termc termd", env);
 
     // Without the fallback, all four df values read 2401 and rankAndRebuild
@@ -376,7 +444,6 @@ describe("T-0059 all-saturated fallback: capped counts that cannot rank fall bac
   it("one unsaturated original term keeps the query on the FTS path", async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const sqlite = makeSqliteD1();
     const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
     await initializeDatabase(env);
@@ -392,7 +459,6 @@ describe("T-0059 all-saturated fallback: capped counts that cannot rank fall bac
 
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const out = await distillToRareTerms("term1 term2 rare", env);
 
     expect(out.distillSource).toBe("fts");

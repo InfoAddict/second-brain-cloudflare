@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { isFtsFailure, repairFtsIndex } from "./fts-repair";
+import { isEntryCountsFailure, repairEntryCounts } from "./entry-counts-repair";
 
 // One choke point for every write to `entries`, instead of touching each of
 // the several dozen call sites individually (see the fix's report). Patches
@@ -168,12 +169,18 @@ function isEntriesWriteSql(sql: string): boolean {
 
 function retryOnce<T>(ref: GuardRef, attempt: () => Promise<T>): Promise<T> {
   return attempt().catch(async (e) => {
-    if (!isFtsFailure(e)) throw e;
     // Repair through ref.rawDB (the captured pre-patch prepare/batch), not
     // ref.current.DB — that binding is the one being patched, and calling it
     // here would recurse into this same guard.
-    await repairFtsIndex({ ...ref.current, DB: ref.rawDB as D1Database }, e);
-    return attempt();
+    if (isFtsFailure(e)) {
+      await repairFtsIndex({ ...ref.current, DB: ref.rawDB as D1Database }, e);
+      return attempt();
+    }
+    if (isEntryCountsFailure(e)) {
+      await repairEntryCounts({ ...ref.current, DB: ref.rawDB as D1Database });
+      return attempt();
+    }
+    throw e;
   });
 }
 

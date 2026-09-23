@@ -494,6 +494,83 @@ describe("checkFtsIntegrity", () => {
   });
 });
 
+// T-0065: entry_counts' nightly self-heal. Independent of the entries_fts
+// checks above — a mismatch here does not touch the ready flag or the FTS
+// backfill cursor, and vice versa.
+describe("checkFtsIntegrity: entry_counts drift", () => {
+  beforeEach(() => {
+    d1 = makeSqliteD1();
+  });
+
+  const totalN = async (sqlite: SqliteD1) =>
+    (await sqlite.db.prepare(`SELECT COALESCE(SUM(n), 0) AS n FROM entry_counts`).first() as { n: number }).n;
+  const entryCount = async (sqlite: SqliteD1) =>
+    (await sqlite.db.prepare(`SELECT count(*) AS n FROM entries`).first() as { n: number }).n;
+
+  it("healthy: reports healthy and touches entry_counts with no extra scan", async () => {
+    seed(d1, 5); // triggers populate entry_counts
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    d1.issued.length = 0;
+    d1.batches.length = 0;
+
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: true });
+    expect(await totalN(d1)).toBe(5);
+    // No DELETE/rebuild batch: the healthy path pays for the extra SUM(n)
+    // column on the existing count-parity SELECT and nothing more.
+    expect(d1.batches.some(b => b.some(sql => sql.startsWith("DELETE FROM entry_counts")))).toBe(false);
+  });
+
+  it("count mismatch: rebuilds entry_counts from a fresh GROUP BY in one batch", async () => {
+    seed(d1, 5);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    // Tamper with the counter directly — the shape a dropped/mis-tracked
+    // write would leave behind, without touching entries or entries_fts.
+    await d1.db.prepare(`UPDATE entry_counts SET n = n + 3`).run();
+    expect(await totalN(d1)).toBe(8);
+
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: true }); // entries/entries_fts parity is unaffected
+    expect(await totalN(d1)).toBe(await entryCount(d1)); // exact again
+    expect(await totalN(d1)).toBe(5);
+    // DELETE + INSERT...SELECT rode in ONE batch.
+    const rebuild = d1.batches.find(b => b.some(sql => sql.startsWith("DELETE FROM entry_counts")));
+    expect(rebuild).toBeTruthy();
+    expect(rebuild!.some(sql => sql.includes("INSERT INTO entry_counts SELECT workspace_id, count(*) FROM entries GROUP BY workspace_id"))).toBe(true);
+  });
+
+  it("an orphaned workspace row (no matching entries) is removed by the rebuild", async () => {
+    seed(d1, 3);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    await d1.db.prepare(`INSERT INTO entry_counts (workspace_id, n) VALUES ('ghost-ws', 4)`).run();
+    expect(await totalN(d1)).toBe(7);
+
+    await checkFtsIntegrity(env);
+
+    const ghost = await d1.db.prepare(`SELECT n FROM entry_counts WHERE workspace_id = 'ghost-ws'`).first();
+    expect(ghost).toBeNull(); // DELETE-then-reseed drops rows for workspaces with no entries left
+    expect(await totalN(d1)).toBe(3);
+  });
+
+  it("stays independent of an entries_fts count mismatch in the same run", async () => {
+    seed(d1, 5);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    await d1.db.prepare(`DELETE FROM entries_fts WHERE rowid = (SELECT rowid FROM entries ORDER BY rowid LIMIT 1)`).run();
+    await d1.db.prepare(`UPDATE entry_counts SET n = n + 1`).run();
+
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: false }); // the FTS side is unhealthy...
+    expect(await totalN(d1)).toBe(5); // ...but entry_counts still self-healed
+  });
+});
+
 describe("runFtsMaintenance", () => {
   beforeEach(() => {
     d1 = makeSqliteD1();

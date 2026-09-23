@@ -2,6 +2,9 @@ import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import {
+  ENTRY_COUNTS_TABLE_DDL, ENTRY_COUNTS_INSERT_TRIGGER_DDL, ENTRY_COUNTS_UPDATE_TRIGGER_DDL, ENTRY_COUNTS_DELETE_TRIGGER_DDL,
+} from "../../src/db/init";
 import { hashToken, resolveIdentityFromToken } from "../../src/lib/identity";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -48,6 +51,10 @@ const PROMPT_CAPSULE_TRIGGERS = [
 // Lexical recall index (FTS5, trigram). entries_fts is a virtual table (SCHEMA_OBJECTS);
 // its sync triggers are post-column like the capsule triggers above.
 const FTS_TRIGGERS = ["entries_fts_insert", "entries_fts_update", "entries_fts_delete"];
+// Exact per-workspace entry counters (T-0065). Same shape as entries_fts above:
+// entry_counts is a plain table, its three triggers are post-column (they
+// reference entries.workspace_id, which arrives by ALTER on a legacy brain).
+const ENTRY_COUNTS_TRIGGERS = ["entry_counts_insert", "entry_counts_update", "entry_counts_delete"];
 const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", "edges", "idx_edges_source", "idx_edges_target", "idx_edges_weight", "insight_candidates", "idx_insight_candidates_queue",
   // Team edition (v3). idx_entries_workspace_created is deliberately last-applied
   // (POST_COLUMN_OBJECTS): it indexes a column that arrives via ALTER.
@@ -59,8 +66,10 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   "entries_fts",
+  "entry_counts",
   ...PROMPT_CAPSULE_TRIGGERS,
-  ...FTS_TRIGGERS];
+  ...FTS_TRIGGERS,
+  ...ENTRY_COUNTS_TRIGGERS];
 // Columns in the base CREATE of entries since v3 — present on every brain init touches.
 const BASE_COLUMNS = ["id", "content", "tags", "source", "created_at", "vector_ids", "workspace_id", "actor_id"];
 /** Every object + column a fully-migrated brain reports through the probe. */
@@ -135,7 +144,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
               ...[...objects].map(name => ({
                 kind: name.startsWith("idx_")
                   ? "index"
-                  : PROMPT_CAPSULE_TRIGGERS.includes(name) || FTS_TRIGGERS.includes(name) ? "trigger" : "table",
+                  : PROMPT_CAPSULE_TRIGGERS.includes(name) || FTS_TRIGGERS.includes(name) || ENTRY_COUNTS_TRIGGERS.includes(name) ? "trigger" : "table",
                 name,
                 definition: name === "idx_entries_capsule" ? `CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '"capsule:') > 0` : TRIGGER_DDL.get(name),
               })),
@@ -184,7 +193,8 @@ describe("initializeDatabase updated_at migration", () => {
 
     await initializeDatabase(env);
 
-    expect(prepared.filter(s => !PROBE.test(s) && !s.startsWith("CREATE TRIGGER") && !s.startsWith("CREATE VIRTUAL TABLE"))).toEqual([]);
+    expect(prepared.filter(s => !PROBE.test(s) && !s.startsWith("CREATE TRIGGER") && !s.startsWith("CREATE VIRTUAL TABLE")
+      && !s.startsWith("CREATE TABLE entry_counts") && !s.startsWith("INSERT INTO entry_counts"))).toEqual([]);
     expect(touchesEntries(execd)).toEqual([]);
     // The rows are left NULL on purpose — readers coalesce updated_at to created_at.
     expect(rows.every(r => r.updated_at === null)).toBe(true);
@@ -243,9 +253,12 @@ describe("initializeDatabase updated_at migration", () => {
       // a SCHEMA_OBJECTS entry (execd) plus three POST_COLUMN_OBJECTS
       // entries (prepared) — all four now go through prepare(), moving one
       // statement from execd to prepared without changing the combined total.
-      expect(migrated).toBe(56); // 27 base objects + 18 ALTERs + 10 post-column objects + the email-index CREATE
+      // MOVED 56 -> 61 (T-0065) by entry_counts, its three triggers, and the
+      // GROUP BY seed — five statements, all through prepare(), in their own
+      // dedicated batch mirroring entries_fts's ownership rule.
+      expect(migrated).toBe(61); // 27 base objects + 18 ALTERs + 10 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
-      expect(prepared).toHaveLength(11); // three probes plus eight prepared DDLs (four capsule triggers, entries_fts + its three triggers)
+      expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
     });
 
@@ -278,7 +291,8 @@ describe("initializeDatabase updated_at migration", () => {
       await Promise.all([initializeDatabase(env), initializeDatabase(env), initializeDatabase(env)]);
 
       expect(execd).toHaveLength(once);
-      expect(prepared).toHaveLength(9); // one probe + eight prepared DDLs (four capsule triggers, entries_fts + its three triggers); no repeat work
+      // MOVED 9 -> 14 (T-0065): entry_counts + its three triggers + its seed.
+      expect(prepared).toHaveLength(14); // one probe + thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed); no repeat work
     });
 
     it("shares one in-flight promise across concurrent callers", async () => {
@@ -298,7 +312,8 @@ describe("initializeDatabase updated_at migration", () => {
       resetDatabaseInit();
       await initializeDatabase(env);
 
-      expect(prepared).toHaveLength(10); // first probe + eight prepared DDLs (four capsule triggers, entries_fts + its three triggers) + second probe
+      // MOVED 10 -> 15 (T-0065): entry_counts + its three triggers + its seed.
+      expect(prepared).toHaveLength(15); // first probe + thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed) + second probe
     });
   });
 
@@ -572,7 +587,9 @@ describe("initializeDatabase against real SQLite", () => {
     // separate D1 calls — this real-SQLite double collapses a batch() to a
     // single "BATCH" entry in `issued`, the same convention production D1
     // bills by, so the net cost here is +1 (the batch), not +4.
-    expect(cold).toBe(54); // one probe, then the 53 statements a new brain needs
+    // MOVED 54 -> 55 (T-0065) by entry_counts, its three triggers, and its
+    // GROUP BY seed, created together in ONE batch — same +1, not +5.
+    expect(cold).toBe(55); // one probe, then the 54 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -1122,6 +1139,23 @@ describe("initializeDatabase against real SQLite", () => {
       expect(await kv.get(FTS_READY_KV_KEY)).toBeNull();
       expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
     });
+  });
+
+  // T-0065, same convention as the FTS liveness check (src/recall/fts.ts's
+  // EXPECTED_FTS_DEFINITIONS): db/schema.sql and src/db/init.ts must define
+  // entry_counts identically, or a brain bootstrapped from schema.sql and one
+  // migrated by applySchema would carry different trigger bodies.
+  it("entry_counts DDL in db/schema.sql matches src/db/init.ts exactly", async () => {
+    d1 = makeSqliteD1(); // schema.sql applied
+    const { results } = await d1.db.prepare(
+      `SELECT name, sql FROM sqlite_master WHERE name IN ('entry_counts','entry_counts_insert','entry_counts_update','entry_counts_delete')`,
+    ).all() as { results: { name: string; sql: string }[] };
+    const stored = Object.fromEntries(results.map(r => [r.name, r.sql]));
+    const strip = (ddl: string) => ddl.replace(/\bIF NOT EXISTS\s+/i, "");
+    expect(stored.entry_counts).toBe(strip(ENTRY_COUNTS_TABLE_DDL));
+    expect(stored.entry_counts_insert).toBe(strip(ENTRY_COUNTS_INSERT_TRIGGER_DDL));
+    expect(stored.entry_counts_update).toBe(strip(ENTRY_COUNTS_UPDATE_TRIGGER_DDL));
+    expect(stored.entry_counts_delete).toBe(strip(ENTRY_COUNTS_DELETE_TRIGGER_DDL));
   });
 
   it("survives two isolates migrating the same brain at once", async () => {

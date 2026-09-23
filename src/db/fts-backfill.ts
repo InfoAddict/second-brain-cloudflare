@@ -114,11 +114,27 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
 // nightly reads for a near-impossible case, so that delay is accepted.
 export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
   // scope-exempt: cron: deployment-wide parity check, like the backfill above —
-  // the index has no per-workspace shape, so there is no workspace scope to apply.
-  // max(rowid) rides along to bound the rotating window's wrap.
+  // no per-workspace shape. max(rowid) bounds the rotating window's wrap;
+  // entry_counts' SUM (T-0065) rides along at no extra scan on the healthy path.
   const counts = await env.DB.prepare(
-    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx`,
-  ).first<{ e: number; f: number; mx: number | null }>();
+    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx, (SELECT COALESCE(SUM(n), 0) FROM entry_counts) AS ec`,
+  ).first<{ e: number; f: number; mx: number | null; ec: number }>();
+
+  // T-0065: entry_counts parity, independent of the entries_fts branch below
+  // — a missed trigger or partial batch failure can drift one without the
+  // other. Repair is a reset, not a patch: DELETE + a fresh GROUP BY seed, in
+  // ONE atomic batch, the same shape applySchema uses to build it the first
+  // time.
+  if (counts !== null && counts.e !== counts.ec) {
+    console.error("entry_counts drift detected; rebuilding");
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM entry_counts`),
+      // scope-exempt: cron: deployment-wide rebuild, like the backfill above —
+      // entry_counts itself carries every workspace's row by design.
+      env.DB.prepare(`INSERT INTO entry_counts SELECT workspace_id, count(*) FROM entries GROUP BY workspace_id`),
+    ]);
+  }
+
   let healthy = counts !== null && counts.e === counts.f;
   if (healthy) {
     // scope-exempt: cron: same rowid-keyed, deployment-wide check as the count above.

@@ -15,7 +15,6 @@ import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { setDbReady } from "../../src/runtime/state";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
-import { resetDistillTotalCache } from "../../src/recall/distill";
 import { recallEntries } from "../../src/recall/search";
 import { STALENESS_AGE_MS } from "../../src/staleness/pass";
 import { FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
@@ -150,7 +149,6 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
     // suite exists to reproduce and fix through the write-path guard instead.
     setDbReady(true);
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -306,6 +304,65 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
   });
 });
 
+// T-0065: entry_counts' triggers fire inside the SAME guarded entries
+// statement as entries_fts's. A manually dropped table is the smallest
+// realistic failure — mirrors the entries_fts "missing table" shape above,
+// through the same guard/retry (src/db/fts-write-guard.ts,
+// src/db/entry-counts-repair.ts).
+describe("a write to entries repairs a manually dropped entry_counts and retries once", () => {
+  let d1: SqliteD1;
+
+  beforeEach(() => {
+    setDbReady(true);
+    resetFtsReadyMemo();
+  });
+  afterEach(() => { d1?.close(); setDbReady(false); });
+
+  it("capture (POST /capture) persists exactly once and entry_counts is recreated with an exact reseed", async () => {
+    d1 = makeSqliteD1();
+    d1.seed({ id: "e1", content: "already there", createdAt: 1000 });
+    const env = await makeEnv(d1);
+    // Dropping ONLY the table (not its triggers, which are defined ON
+    // entries and survive) is what reproduces "the trigger body references a
+    // table that is now gone" — the same shape as entries_fts's own
+    // breakByDroppingTable above.
+    await d1.db.exec(`DROP TABLE entry_counts`);
+    const { ctx, drain } = makeCtx();
+
+    const res = await worker.fetch(req("POST", "/capture", { body: { content: "hello dashboard world" } }), env, ctx);
+    await drain();
+
+    expect(res.status).toBe(200);
+    expect(d1.rows()).toHaveLength(2);
+    const { results } = await d1.db.prepare(`SELECT name FROM sqlite_master WHERE name LIKE 'entry_counts%'`).all() as { results: { name: string }[] };
+    expect(results.map(r => r.name).sort()).toEqual(["entry_counts", "entry_counts_delete", "entry_counts_insert", "entry_counts_update"]);
+    // Reseeded from a fresh GROUP BY — e1 (which predates the drop) is
+    // counted too, not just the entry that triggered the repair.
+    const total = await d1.db.prepare(`SELECT COALESCE(SUM(n), 0) AS n FROM entry_counts`).first() as { n: number };
+    expect(total.n).toBe(2);
+  });
+
+  it("forget (POST /forget) deletes exactly once through the same repair", async () => {
+    d1 = makeSqliteD1();
+    d1.seed({ id: "e1", content: "to be forgotten", createdAt: 1000 });
+    const env = await makeEnv(d1);
+    // Dropping ONLY the table (not its triggers, which are defined ON
+    // entries and survive) is what reproduces "the trigger body references a
+    // table that is now gone" — the same shape as entries_fts's own
+    // breakByDroppingTable above.
+    await d1.db.exec(`DROP TABLE entry_counts`);
+    const { ctx, drain } = makeCtx();
+
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "e1" } }), env, ctx);
+    await drain();
+
+    expect(res.status).toBe(200);
+    expect(d1.rows()).toHaveLength(0);
+    const total = await d1.db.prepare(`SELECT COALESCE(SUM(n), 0) AS n FROM entry_counts`).first() as { n: number };
+    expect(total.n).toBe(0); // repaired before the delete's trigger could run against it
+  });
+});
+
 // S3 (adversarial review of e32a2b0): the guard was wired into fetch() but
 // never proven to run from scheduled() — the whole suite passed even with
 // it removed there. This drives a real nightly job (staleness, the simplest
@@ -318,7 +375,6 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -408,7 +464,6 @@ describe("a corrupted index heals across nights (Task 5 end to end)", () => {
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -477,7 +532,6 @@ describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale in
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -538,7 +592,6 @@ describe("same-row content drift heals within ceil(N/window) nights (FIX 2 end t
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 

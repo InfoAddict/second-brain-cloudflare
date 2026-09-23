@@ -16,7 +16,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { ftsEligibleToken, resetFtsReadyMemo } from "../../src/recall/fts";
-import { resetDistillTotalCache } from "../../src/recall/distill";
 import { FTS_READY_KV_KEY } from "../../src/constants";
 import { recallEntries } from "../../src/recall/search";
 import { tokenizeQuery } from "../../src/text/tokenize";
@@ -81,7 +80,6 @@ function hasSubThreeToken(query: string): boolean {
 async function buildFixture(c: RootQualityCase, mode: Mode) {
   resetDatabaseInit();
   resetFtsReadyMemo();
-  resetDistillTotalCache();
   const sqlite = makeSqliteD1();
   const query = vi.fn().mockResolvedValue({
     matches: c.candidates
@@ -126,7 +124,6 @@ async function buildFixture(c: RootQualityCase, mode: Mode) {
   if (mode !== "like") {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
-    resetDistillTotalCache();
   }
 
   const pendingWaits: Promise<unknown>[] = [];

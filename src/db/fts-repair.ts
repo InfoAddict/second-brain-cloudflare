@@ -27,7 +27,7 @@ const FTS_FAILURE_PATTERNS: RegExp[] = [
   /fts5:\s*corrupt/i,
 ];
 
-function ftsErrorMessage(e: unknown): string {
+export function ftsErrorMessage(e: unknown): string {
   return String((e as { message?: string } | null | undefined)?.message ?? e ?? "");
 }
 

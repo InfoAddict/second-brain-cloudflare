@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (129 queries, 63 exceptions, 9 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (133 queries, 66 exceptions, 10 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1204,7 +1204,15 @@ describe("the checker over the real source tree", () => {
     // Deliberate: +2 queries and +2 scope-checked for T-0059 (src/recall/distill.ts):
     // the FTS per-term MATCH count and the scoped total, both built the same
     // JS-assembled way as the existing LIKE df scan's `where` above them.
-    ).toEqual({ queries: 129, exempt: 63, checked: 9, outerJoin: 1 });
+    // Deliberate: +4 queries, +3 scope-exempt, +1 scope-checked for T-0065
+    // (exact per-workspace entry counters, replacing distillation's total
+    // cache). Three GROUP BY seed/reseed/rebuild statements — the creation
+    // batch (src/db/init.ts), the hot-path repair (src/db/entry-counts-repair.ts),
+    // and the nightly drift rebuild (src/db/fts-backfill.ts) — are all
+    // deployment-wide by construction, same exemption shape as the FTS
+    // backfill's own seed reads. distill.ts's new SQL-capped per-term FTS
+    // count carries the same JS-assembled scope clause as its sibling above it.
+    ).toEqual({ queries: 133, exempt: 66, checked: 10, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

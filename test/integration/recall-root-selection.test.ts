@@ -3,7 +3,6 @@ import { DEFAULTS } from "../../src/config";
 import { DEFAULT_EMBEDDING_QUERY_MODE } from "../../src/recall/query-profile";
 import { recallEntries } from "../../src/recall/search";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
-import { resetDistillTotalCache } from "../../src/recall/distill";
 import type { RecallDiagnostics } from "../../src/recall/types";
 import { D1Mock } from "../helpers/d1-mock";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
@@ -49,14 +48,12 @@ describe("recall root selection", () => {
     // The readiness answer is cached per isolate for FTS_READY_CACHE_MS; reset
     // it so both recalls start cold and the get counts stay comparable.
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const ordinaryResult = await recallEntries(
       { query: "why atlas ledger changed", topK: 5, hops: 1, synthesize: false },
       ordinary.env,
       ctx,
     );
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const observedResult = await recallEntries(
       { query: "why atlas ledger changed", topK: 5, hops: 1, synthesize: false },
       observed.env,

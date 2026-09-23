@@ -9,7 +9,6 @@ import { makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-en
 import { snapshotRecallBudget } from "../helpers/recall-budget";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
-import { resetDistillTotalCache } from "../../src/recall/distill";
 
 describe("recall stays within the Cloudflare Free operation envelope", () => {
   const open: SqliteD1[] = [];
@@ -49,7 +48,6 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     // isolate for FTS_READY_CACHE_MS, so a cold start must be simulated or the
     // second case would inherit the first case's cached answer and undercount.
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const state = await setup(hops);
     const result = await recallEntries(
       { query: "why atlas ledger changed", topK: 5, hops, synthesize: false },
@@ -119,7 +117,6 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     // recall within the TTL: otherwise every recall on a stable warm isolate
     // pays the flag read the arm was meant to cut.
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const state = await setup(0);
     const cold = await recallEntries(
       { query: "why atlas ledger changed", topK: 5, hops: 0, synthesize: false },
@@ -148,9 +145,13 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
   // statement but zero extra subrequests — a batch counts as one D1 call
   // (src/recall/diagnostics.ts's observeD1) regardless of how many
   // statements it carries, the same convention production D1 bills by.
-  it("a live FTS index costs one extra D1 call on a cold scoped-total cache — the keyword query's liveness check still rides free", async () => {
+  // MOVED 6 -> 5 (T-0065): entry_counts replaced distillation's scoped
+  // COUNT(*)/cache with an exact, O(1) per-workspace counter, so total, every
+  // per-term count, and the liveness check now ride in ONE batch always — the
+  // same one D1 call the LIKE df scan cost, not two. Cold and warm are now
+  // identical: there is no cache left to be cold against.
+  it("a live FTS index costs no extra D1 call over the LIKE-path baseline — distillation's total is exact, not scanned", async () => {
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const state = await setup(0);
     await state.env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
 
@@ -166,30 +167,25 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     expect(state.diagnostics.ftsUsed).toBe(true); // the live index actually served this
     expect(state.diagnostics.distillSource).toBe("fts"); // T-0059: distillation counted through the index too
     const budget = snapshotRecallBudget(state.diagnostics, result);
-    // T-0059 (distill.ts): the LIKE df scan (1 D1 call) is replaced by the FTS
-    // count path. This isolate's scope has no cached total yet, so it costs
-    // TWO batches — [liveness, total] then the per-term counts — instead of
-    // one, +1 over the 5-call LIKE-path baseline above. keywordSearch's own
-    // FTS query (liveness + MATCH rows) is unchanged at one batch.
-    expect(budget.d1Statements).toBe(6);
+    // T-0059/T-0065 (distill.ts): the LIKE df scan (1 D1 call) is replaced by
+    // ONE batch — liveness, entry_counts' total, and every per-term count
+    // together — the same one call, so the 5-call LIKE-path baseline above
+    // does not move. keywordSearch's own FTS query (liveness + MATCH rows) is
+    // unchanged at one batch.
+    expect(budget.d1Statements).toBe(5);
   });
 
-  it("a warm scoped-total cache brings the FTS distillation path back to the LIKE-path D1 call count", async () => {
+  it("a second recall costs the same as the first — entry_counts is exact, not cached, so there is no cold/warm split", async () => {
     resetFtsReadyMemo();
-    resetDistillTotalCache();
     const state = await setup(0);
     await state.env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
 
-    // First call pays the cold cost and warms the scoped-total cache.
     await recallEntries(
       { query: "why atlas ledger changed", topK: 5, hops: 0, synthesize: false },
       state.env, state.ctx, DEFAULTS, { diagnostics: state.diagnostics },
     );
     await Promise.all(state.deferred);
 
-    // Second call within FTS_READY_CACHE_MS reuses the cached total: one
-    // batch (liveness + per-term counts) instead of two, matching the
-    // original LIKE-path baseline.
     const warmDiagnostics: RecallDiagnostics = {};
     const warm = await recallEntries(
       { query: "why atlas ledger changed", topK: 5, hops: 0, synthesize: false },
@@ -199,6 +195,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
 
     expect(warmDiagnostics.ftsUsed).toBe(true);
     expect(warmDiagnostics.distillSource).toBe("fts");
+    // Matches the first call above exactly (T-0065): entry_counts has no
+    // warm/cold distinction left to be cheaper than the first call.
     expect(snapshotRecallBudget(warmDiagnostics, warm).d1Statements).toBe(5);
   });
 });
