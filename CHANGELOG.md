@@ -26,7 +26,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 **Search**
 
 - Search now finds the hard things: exact names, ticket numbers, versions, and phrases in any language, even when they sit in old memories. A rare match buried under years of newer memories used to be cut from the candidate window before ranking ever saw it; matches now rank by relevance.
-- Searches are dramatically faster and cheaper, and they stay that way as the brain grows, so the free plan's daily limits stay comfortable. Saving a memory costs one extra small row; the savings come on every search.
+- Finding those exact matches is dramatically faster and cheaper, and stays that way as the brain grows, so the free plan's daily limits stay comfortable. Saving a memory costs one extra small row; the savings come on every search.
 - Upgrading is automatic and needs no action. New installs use the index immediately; existing brains build it over nightly runs and keep the previous search until theirs is complete and verified. No API or MCP tool changed, so no client needs updating.
 - Semantic (vector) search is unchanged.
 

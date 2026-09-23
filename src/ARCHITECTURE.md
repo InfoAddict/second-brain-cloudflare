@@ -58,8 +58,11 @@ specific words reads about 66-193 rows whether the brain holds 5,700 or 20,700
 memories, while the scan it replaced read the whole brain (20,766-41,541 rows
 at 20.7k), roughly 200-300x cheaper at 20k, and the gap widens as the brain
 grows. A query mixing a specific word with a very common one is still cheaper
-(about 60% of the scan's cost at 20k), though that cost grows with the brain.
-Saving a memory writes one extra small row (7 rows instead of 6), flat.
+(about 60% of the scan's cost at 20k), though unlike a specific-word search
+that cost grows with the brain (1.83x from 5.7k to 20.7k). Saving a memory
+writes one extra small row (7 rows instead of 6), flat — that row is the
+per-workspace counter below, not the index itself, which was already
+counted before.
 
 `keywordSearch` (`recall/search.ts`) routes every query and reports the outcome
 in `internal.diagnostics.ftsUsed` and `ftsRoute`:
@@ -121,13 +124,18 @@ missing trigger on an existing table reads as not live.
 
 The write guard (`db/fts-write-guard.ts`, installed at the Worker entry for
 every request and the nightly job) patches each statement that writes to
-`entries`: a D1 error naming `entries_fts` triggers `repairFtsIndex`
-(`db/fts-repair.ts`), which deletes the ready flag, resets the backfill cursor,
-recreates the table and triggers when the table is missing, and otherwise
-drops only the three sync triggers, a non-destructive disabled state every
-reader already sees as not live. The failed statement or batch is then
-retried exactly once; a failed D1 statement or batch has no effect, so the
-retry is safe, and saves never fail because of the index.
+`entries`. It guards two dependencies, `entries_fts` and `entry_counts`: a D1
+error naming one of them is checked, and the other (which threw nothing) is
+probed live, so a single write that finds both missing repairs both.
+`repairFtsIndex` (`db/fts-repair.ts`) deletes the ready flag, resets the
+backfill cursor, recreates the table and triggers when the table is missing,
+and otherwise drops only the three sync triggers, a non-destructive disabled
+state every reader already sees as not live. `repairEntryCounts`
+(`db/entry-counts-repair.ts`) recreates the counter table and its three
+triggers and reseeds it from a `GROUP BY`, the same shape `applySchema` uses
+the first time. The failed statement or batch is then retried exactly once;
+a failed D1 statement or batch has no effect, so the retry is safe, and
+saves never fail because of either dependency.
 
 Nightly maintenance (`runFtsMaintenance` in `db/fts-backfill.ts`):
 
@@ -138,17 +146,25 @@ Nightly maintenance (`runFtsMaintenance` in `db/fts-backfill.ts`):
   id, and content) passes together with liveness; a single mismatching row
   restarts the backfill instead.
 - **Ready:** FTS5's own `integrity-check` statement runs first; a throw there
-  rebuilds. Count parity (including `entry_counts`), a spot check of the newest
-  rows' rowid-to-id mapping, and a rotating 200-row content check
+  rebuilds. Count parity (`entries` vs `entries_fts`), a spot check of the
+  newest rows' rowid-to-id mapping, and a rotating 200-row content check
   (`FTS_CONTENT_CHECK_WINDOW`) that compares (rowid, id, content) both ways and
-  re-indexes exactly the mismatched rowids in place. Drift that count parity
-  catches resets the backfill; the destructive rebuild (`rebuildFtsIndex`:
-  drop triggers and table, recreate, restart) runs only in this nightly job,
-  never from a request path.
+  re-indexes exactly the mismatched rowids in place. `entry_counts` is checked
+  separately and per workspace, not as one global total — a global sum can
+  stay correct even while one workspace's count has drifted against
+  another's — plus its three trigger bodies; either kind of drift drops and
+  reseeds it from a fresh `GROUP BY`. Drift that FTS count parity catches
+  resets the backfill; the destructive rebuild (`rebuildFtsIndex`: drop
+  triggers and table, recreate, restart) runs only in this nightly job, never
+  from a request path.
 
 Upgrade is automatic. A brand-new brain latches ready at init (its triggers
 cover every row from row one); an existing brain backfills over about N/2,000
-nights while recall stays on LIKE, then switches. No API or MCP change.
+nights while recall stays on LIKE until the backfill is complete and
+verified, then switches — every server instance notices and starts using it
+within `FTS_READY_CACHE_MS` (5 minutes) of the flag going live, since each
+instance only checks periodically rather than on every request. No API or
+MCP change.
 
 ## Tests
 
