@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { COMMON_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
+import { COMMON_TOKENS, DENSE_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
 import { ACTORS, DAY_MS, EVAL_NOW, IDENTITIES, WORKSPACES, needleToEntry } from "./types";
 
@@ -44,8 +44,8 @@ describe("generateHaystack", () => {
     const first = generateHaystack(base);
     const second = generateHaystack(base);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(digest(first)).toBe("a9e40e0e7ac4aa43ec6faaf054ba3fe8b64aabc52ac6cee2d95969eb87d8da6f");
-    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("d5ab9f9074b787403bbc6fdd18854d0095abff20fd67d112bc8c4bf8794ac8fc");
+    expect(digest(first)).toBe("f2608e792912355c14ba9649627b97890ffd16e65e09b05b8d222e8600dfe07c");
+    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("ffe6fa575e1b5d410956b75182ff645e0b67d6367307d0c26d166e27be97d4d5");
     expect(first).not.toEqual(generateHaystack({ ...base, seed: 8 }));
   });
 
@@ -95,8 +95,8 @@ describe("generateHaystack", () => {
     const rows = generateHaystack({ ...base, count: 20_000 });
     const pinned = {
       1000: { roadmap: { avery: 159, blake: 134, company: 119 }, standup: { avery: 174, blake: 131, company: 120 }, invoice: { avery: 173, blake: 142, company: 130 } },
-      5000: { roadmap: { avery: 833, blake: 626, company: 576 }, standup: { avery: 843, blake: 620, company: 569 }, invoice: { avery: 814, blake: 608, company: 562 } },
-      20000: { roadmap: { avery: 3459, blake: 2620, company: 2415 }, standup: { avery: 3434, blake: 2589, company: 2390 }, invoice: { avery: 3363, blake: 2508, company: 2326 } },
+      5000: { roadmap: { avery: 834, blake: 626, company: 576 }, standup: { avery: 844, blake: 620, company: 570 }, invoice: { avery: 814, blake: 607, company: 561 } },
+      20000: { roadmap: { avery: 3459, blake: 2620, company: 2415 }, standup: { avery: 3435, blake: 2589, company: 2391 }, invoice: { avery: 3362, blake: 2507, company: 2325 } },
     } as const;
     const scopes = {
       avery: readScopeWorkspaces(IDENTITIES.avery, {}),
@@ -144,6 +144,46 @@ describe("generateHaystack", () => {
           else expect(actual[viewer], `${token} ${viewer} at ${count}`).toBeGreaterThan(500);
         }
         expect(actual).toEqual(pinned[count][token]);
+      }
+    }
+  });
+
+  it("carries at most two dense-tier words per row and no other word contains one", () => {
+    for (const rows of [generateHaystack({ ...base, count: 20_000 }), ...REAL.map(([count, commonRate, seed]) => generateHaystack({ ...base, count, commonRate, seed }))]) {
+      const words = new Set<string>();
+      for (const row of rows) {
+        const text = row.content.toLowerCase();
+        expect(DENSE_TOKENS.filter(token => text.includes(token)).length).toBeLessThanOrEqual(2);
+        for (const word of text.match(/\p{L}+/gu) ?? []) words.add(word);
+      }
+      for (const token of DENSE_TOKENS) {
+        expect(words.has(token), token).toBe(true);
+        expect([...words].filter(word => word !== token && word.includes(token)), token).toEqual([]);
+        for (const other of DENSE_TOKENS) if (other !== token) expect(other.includes(token)).toBe(false);
+      }
+    }
+  });
+
+  it("keeps each dense word under the keyword window at 1k and over it at 5k and 20k, per viewer and layer", () => {
+    const scopes = [
+      readScopeWorkspaces(IDENTITIES.avery, {}),
+      readScopeWorkspaces(IDENTITIES.blake, {}),
+      readScopeWorkspaces(IDENTITIES.blake, { layer: "company" }),
+    ];
+    const configs = [
+      ...REAL.map(([count, commonRate, seed]) => ({ rows: generateHaystack({ ...base, count, commonRate, seed }), sizes: [count] })),
+      { rows: generateHaystack({ ...base, count: 20_000 }), sizes: [1000, 5000, 20_000] },
+    ];
+    for (const { rows, sizes } of configs) {
+      for (const size of sizes) {
+        for (const workspaces of scopes) {
+          const visible = rows.slice(0, size).filter(row => workspaces.includes(row.workspaceId));
+          for (const token of DENSE_TOKENS) {
+            const count = df(visible, token);
+            if (size === 1000) expect(count, `${token} at 1k`).toBeLessThan(500);
+            else expect(count, `${token} at ${size}`).toBeGreaterThan(500);
+          }
+        }
       }
     }
   });
