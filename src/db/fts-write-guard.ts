@@ -26,36 +26,141 @@ interface GuardRef {
 const patched = new WeakSet<object>();
 const envRefs = new WeakMap<object, GuardRef>();
 
-// Case-insensitive. Strips leading comments, then matches an optional CTE
-// prefix, the write verb (with its OR-clause and INTO/FROM variants), an
-// optional `main.` schema qualifier, and the table name bare or quoted with
-// `"`, `` ` ``, or `[]`. The name must then be followed by whitespace, `(`,
-// or end of string.
+// Case-insensitive. Strips leading comments/whitespace, then (if what
+// remains starts with WITH) scans PAST the leading CTE clause with a small
+// lexer that respects quoted strings, comments, and balanced parentheses —
+// not a lazy regex scan, which is fooled by write-shaped text sitting inside
+// a string literal or a read-only CTE body (v2 review, S4). What is left
+// after that scan is matched against the write verb (with its OR-clause and
+// INTO/FROM variants), an optional `main.` schema qualifier, and the table
+// name bare or quoted with `"`, `` ` ``, or `[]`, followed by whitespace,
+// `(`, `;`, or end of string (the `;` addition is S4's sibling finding, S3:
+// a valid semicolon-terminated statement was falling through unclassified).
 //
-// The trailing lookahead (whitespace, `(`, or end of string) is what keeps
-// the bare form from matching `entries_fts`, `entries_x`, or `entriesé`: `_`
-// and non-ASCII letters are none of those three, so the boundary holds
-// without a separate `\b` check (which JS treats as ASCII-only and would
-// wrongly see a boundary before "é"). Quoted forms need no extra check
-// either: matching the literal `"entries"` (etc.) already excludes
-// `"entries_fts"`, whose quoted content is a different string.
+// The trailing lookahead is what keeps the bare form from matching
+// `entries_fts`, `entries_x`, or `entriesé`: `_` and non-ASCII letters are
+// none of whitespace/`(`/`;`/end, so the boundary holds without a separate
+// `\b` check (which JS treats as ASCII-only and would wrongly see a boundary
+// before "é"). Quoted forms need no extra check either: matching the literal
+// `"entries"` (etc.) already excludes `"entries_fts"`, whose quoted content
+// is a different string.
 const LEADING_COMMENT_OR_WS = /^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/;
 const ENTRIES_NAME = `(?:entries|"entries"|\`entries\`|\\[entries\\])`;
-const ENTRIES_WRITE_SQL = new RegExp(
-  `^(?:WITH\\b[\\s\\S]*?)?\\s*` +
-  `(?:INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|REPLACE\\s+INTO|UPDATE(?:\\s+OR\\s+\\w+)?|DELETE\\s+FROM)` +
-  `\\s+(?:main\\.)?${ENTRIES_NAME}(?=\\s|\\(|$)`,
+const ENTRIES_WRITE_STATEMENT = new RegExp(
+  `^(?:INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|REPLACE\\s+INTO|UPDATE(?:\\s+OR\\s+\\w+)?|DELETE\\s+FROM)` +
+  `\\s+(?:main\\.)?${ENTRIES_NAME}(?=\\s|\\(|;|$)`,
   "iu",
 );
 
-function isEntriesWriteSql(sql: string): boolean {
+function stripLeadingCommentsAndWs(sql: string): string {
   let stripped = sql;
   let prev: string;
   do {
     prev = stripped;
     stripped = stripped.replace(LEADING_COMMENT_OR_WS, "");
   } while (stripped !== prev);
-  return ENTRIES_WRITE_SQL.test(stripped);
+  return stripped;
+}
+
+/** Advances past whitespace and comments starting at `i`. */
+function skipWsAndComments(sql: string, i: number): number {
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    if (ch === "-" && sql[i + 1] === "-") {
+      while (i < n && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && sql[i + 1] === "*") {
+      i += 2;
+      while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+/**
+ * `sql[i]` must be `(`. Returns the index just past its matching `)`,
+ * skipping over quoted strings and comments along the way so a paren (or a
+ * write verb, per S4) inside a string literal is never mistaken for real
+ * SQL structure.
+ */
+function skipBalancedParens(sql: string, i: number): number {
+  const n = sql.length;
+  let depth = 0;
+  for (; i < n; i++) {
+    const ch = sql[i];
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = ch;
+      i++;
+      while (i < n) {
+        if (sql[i] === quote) {
+          if (sql[i + 1] === quote) { i += 2; continue; } // doubled-quote escape
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === "-" && sql[i + 1] === "-") {
+      while (i < n && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && sql[i + 1] === "*") {
+      i += 2;
+      while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * Walks past a leading `WITH` clause — one or more `name [(cols)] AS (
+ * body )` CTEs, comma-separated — to the outer statement that follows.
+ * `sql` must already start with `WITH` (case-insensitive). Malformed input
+ * (a shape this scanner does not recognize) bails out at the point it gets
+ * confused, which only ever makes the remainder MORE likely to fail the
+ * write-verb match, never less — the write classification stays conservative.
+ */
+function skipLeadingWith(sql: string): string {
+  const n = sql.length;
+  let i = /^WITH\s*/i.exec(sql)![0].length;
+  for (;;) {
+    i = skipWsAndComments(sql, i);
+    const nameStart = i;
+    while (i < n && /[\p{L}\p{N}_"`]/u.test(sql[i])) i++;
+    if (i === nameStart) return sql.slice(i); // no CTE name — malformed, bail
+    i = skipWsAndComments(sql, i);
+    if (sql[i] === "(") i = skipBalancedParens(sql, i); // optional column list
+    i = skipWsAndComments(sql, i);
+    const asMatch = /^AS\b/i.exec(sql.slice(i));
+    if (!asMatch) return sql.slice(i); // malformed — bail conservatively
+    i = skipWsAndComments(sql, i + asMatch[0].length);
+    if (sql[i] !== "(") return sql.slice(i); // malformed — bail conservatively
+    i = skipBalancedParens(sql, i);
+    i = skipWsAndComments(sql, i);
+    if (sql[i] === ",") { i++; continue; }
+    return sql.slice(i);
+  }
+}
+
+function isEntriesWriteSql(sql: string): boolean {
+  let stripped = stripLeadingCommentsAndWs(sql);
+  if (/^WITH\b/i.test(stripped)) {
+    stripped = stripLeadingCommentsAndWs(skipLeadingWith(stripped));
+  }
+  return ENTRIES_WRITE_STATEMENT.test(stripped);
 }
 
 function retryOnce<T>(ref: GuardRef, attempt: () => Promise<T>): Promise<T> {

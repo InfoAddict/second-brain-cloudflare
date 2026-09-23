@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { FTS_READY_KV_KEY } from "../../src/constants";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
-import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
+import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 
 const MIGRATION: [column: string, alter: string][] = [
   ["recall_count", `ALTER TABLE entries ADD COLUMN recall_count INTEGER DEFAULT 0`],
@@ -925,6 +925,94 @@ describe("initializeDatabase against real SQLite", () => {
       await initializeDatabase(envFor(d1));
       expect(d1.issued.filter(s => /^(CREATE|DROP|ALTER)\b/.test(s))).toEqual([]);
       expect(d1.batches).toHaveLength(batchesBefore);
+    });
+  });
+
+  // Write-path isolation v2.1: a durable disabled marker in the schema.
+  describe("entries_fts_disabled (v2.1)", () => {
+    const envWithKv = (sqlite: SqliteD1, kv: KVNamespace) =>
+      makeTestEnv(undefined, { DB: sqlite.db as unknown as D1Database, OAUTH_KV: kv });
+
+    async function ftsObjectNames(sqlite: SqliteD1): Promise<string[]> {
+      const { results } = await sqlite.db.prepare(
+        `SELECT name FROM sqlite_master WHERE name IN ('entries_fts','entries_fts_insert','entries_fts_update','entries_fts_delete')`,
+      ).all() as { results: { name: string }[] };
+      return results.map(r => r.name).sort();
+    }
+
+    // Rule 2: applySchema must never create entries_fts or its triggers
+    // while the disabled marker exists — that would re-arm a deliberately
+    // disabled index (v2 review, B2: a racing cold start's applySchema
+    // recreated missing FTS triggers unconditionally).
+    it("does not create entries_fts or its triggers while entries_fts_disabled exists", async () => {
+      d1 = makeSqliteD1();
+      await initializeDatabase(envFor(d1));
+      await d1.db.exec(
+        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
+        `DROP TRIGGER IF EXISTS entries_fts_delete; ALTER TABLE entries_fts RENAME TO entries_fts_disabled;`,
+      );
+      resetDatabaseInit();
+
+      await initializeDatabase(envFor(d1));
+
+      expect(await ftsObjectNames(d1)).toEqual([]);
+      const disabled = await d1.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`).all() as { results: unknown[] };
+      expect(disabled.results).toHaveLength(1); // the marker itself is untouched
+    });
+
+    // Rule 4: creating entries_fts on a brain whose `entries` table already
+    // existed must first invalidate ready and reset the cursor. If either KV
+    // op fails, skip creating it this pass rather than serve an unbackfilled
+    // index as ready.
+    it("populated brain, KV working: creates entries_fts, deletes ready, resets cursor to 0", async () => {
+      d1 = makeSqliteD1(); // schema.sql applied: `entries` already exists
+      await d1.db.exec(
+        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
+        `DROP TRIGGER IF EXISTS entries_fts_delete; DROP TABLE IF EXISTS entries_fts;`,
+      );
+      const kv = makeMemoryKV();
+      await kv.put(FTS_READY_KV_KEY, "1");
+      await kv.put(FTS_BACKFILL_CURSOR_KV_KEY, "500");
+
+      await initializeDatabase(envWithKv(d1, kv));
+
+      expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
+      expect(await kv.get(FTS_READY_KV_KEY)).toBeNull();
+      expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+    });
+
+    it("populated brain, KV failing: does not create entries_fts this pass", async () => {
+      d1 = makeSqliteD1(); // schema.sql applied: `entries` already exists
+      await d1.db.exec(
+        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
+        `DROP TRIGGER IF EXISTS entries_fts_delete; DROP TABLE IF EXISTS entries_fts;`,
+      );
+      const kv = {
+        get: async () => null,
+        put: async () => { throw new Error("KV unavailable"); },
+        delete: async () => { throw new Error("KV unavailable"); },
+      } as unknown as KVNamespace;
+
+      await initializeDatabase(envWithKv(d1, kv));
+
+      expect(await ftsObjectNames(d1)).toEqual([]);
+    });
+
+    // Fresh-brain exemption: `entries` did not exist before this pass, so
+    // there is no prior state to invalidate and no KV round trip is owed.
+    it("fresh brain: creates entries_fts without touching KV", async () => {
+      d1 = makeSqliteD1({ schema: false });
+      let kvCalls = 0;
+      const kv = {
+        get: async () => { kvCalls++; return null; },
+        put: async () => { kvCalls++; },
+        delete: async () => { kvCalls++; },
+      } as unknown as KVNamespace;
+
+      await initializeDatabase(envWithKv(d1, kv));
+
+      expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
+      expect(kvCalls).toBe(0);
     });
   });
 

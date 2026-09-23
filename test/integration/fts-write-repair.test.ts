@@ -6,7 +6,7 @@
  * triggers) so a dropped or reshaped entries_fts genuinely fails the way it
  * does against D1.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../src/index";
 import { makeMirrorStore } from "../../src/integrations/mirror";
 import { importExportPayload } from "../../src/entries/import";
@@ -15,6 +15,7 @@ import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { setDbReady } from "../../src/runtime/state";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { recallEntries } from "../../src/recall/search";
 import { STALENESS_AGE_MS } from "../../src/staleness/pass";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 import { OWNER_WRITE_CONTEXT } from "../../src/lib/scope";
@@ -22,6 +23,7 @@ import { makeAIMock, makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../hel
 import { req } from "../helpers/make-request";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import type { Env } from "../../src/env";
+import type { RecallDiagnostics } from "../../src/recall/types";
 
 /** A cron string that is not one of the special schedules — routes to the nightly maintenance branch. */
 const MAINTENANCE_CRON = "0 1 * * *";
@@ -84,13 +86,17 @@ async function expectTableAndTriggersCreated(d1: SqliteD1, env: Env): Promise<vo
 }
 
 /**
- * Corrupt/wrong-shape outcome (v2 branch 3): only the triggers are dropped.
- * No DDL touches the table itself, so its prior (even wrong-shaped) rows
- * survive — proof that nothing here is destructive.
+ * Corrupt/wrong-shape outcome (v2.1 branch 4): triggers are dropped and the
+ * table is renamed to entries_fts_disabled in the same batch — a durable,
+ * non-destructive marker. No DDL ever drops the table itself, so its prior
+ * (even wrong-shaped) rows survive under the new name — proof that nothing
+ * here is destructive.
  */
-async function expectTriggersDroppedTableIntact(d1: SqliteD1, env: Env): Promise<void> {
+async function expectTriggersDroppedTableRenamedDisabled(d1: SqliteD1, env: Env): Promise<void> {
   expect(await triggerNames(d1)).toEqual([]);
-  const leftover = await d1.db.prepare(`SELECT wrong_col FROM entries_fts`).all() as { results: { wrong_col: string }[] };
+  const original = await d1.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
+  expect(original.results).toEqual([]);
+  const leftover = await d1.db.prepare(`SELECT wrong_col FROM entries_fts_disabled`).all() as { results: { wrong_col: string }[] };
   expect(leftover.results).toEqual([{ wrong_col: "leftover" }]);
   expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
 }
@@ -274,7 +280,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
 
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
-      await expectTriggersDroppedTableIntact(d1, env);
+      await expectTriggersDroppedTableRenamedDisabled(d1, env);
     });
 
     // forget's DELETE trigger body only references `rowid` (valid on any
@@ -295,7 +301,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("fresh content");
-      await expectTriggersDroppedTableIntact(d1, env);
+      await expectTriggersDroppedTableRenamedDisabled(d1, env);
     });
   });
 });
@@ -353,5 +359,64 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
     expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
     expect(((await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first()) as { n: number }).n)
       .toBe(((await d1.db.prepare(`SELECT count(*) AS n FROM entries`).first()) as { n: number }).n);
+  });
+});
+
+// B1 (v2 adversarial review of b4bb804): with KV down, a corrupt write's
+// repair only dropped triggers — the table (still named entries_fts) stayed
+// queryable and, since KV could not clear ready, kept being served as ready
+// indefinitely, silently losing every write from then on. v2.1's durable
+// rename fixes this with no KV dependence: the renamed table fails MATCH
+// with "no such table", which keywordSearch's existing fallback already
+// catches, so recall falls back to LIKE regardless of what KV says.
+describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale index served", () => {
+  let d1: SqliteD1;
+
+  beforeEach(() => {
+    setDbReady(true);
+    resetFtsReadyMemo();
+  });
+  afterEach(() => { d1?.close(); setDbReady(false); });
+
+  it("after the corrupt write, recall finds the new row via LIKE and the disabled table keeps the old rows", async () => {
+    d1 = makeSqliteD1();
+    const kv = makeMemoryKV();
+    await kv.put(FTS_READY_KV_KEY, "1");
+    await kv.put(FTS_BACKFILL_CURSOR_KV_KEY, "500");
+    const env = makeTestEnv(undefined, {
+      DB: d1.db as unknown as D1Database,
+      OAUTH_KV: kv,
+      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockRejectedValue(new Error("dense down")) }),
+      AI: makeAIMock(),
+    });
+    resetDatabaseInit();
+    await initializeDatabase(env);
+    d1.seed({ id: "old", content: "old searchable", createdAt: 1 });
+
+    // A real SQLite write failure with the corruption shape (not missing-table).
+    await d1.db.exec("DROP TRIGGER entries_fts_insert");
+    await d1.db.exec("CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN SELECT RAISE(ABORT, 'fts5: corrupt'); END");
+    // KV goes down only AFTER the schema migration above (which itself uses KV).
+    const brokenKv = {
+      get: kv.get.bind(kv),
+      put: async () => { throw new Error("KV down"); },
+      delete: async () => { throw new Error("KV down"); },
+    } as unknown as KVNamespace;
+    env.OAUTH_KV = brokenKv;
+
+    await withFtsWriteGuard(env).DB.prepare(
+      "INSERT INTO entries (id,content,tags,source,created_at) VALUES ('new','new searchable','[]','api',1)",
+    ).run();
+
+    const diagnostics: RecallDiagnostics = {};
+    const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
+    const result = await recallEntries({ query: "searchable", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(result.matches.map(m => m.id)).toContain("new");
+    expect(d1.rows().map(r => r.id).sort()).toEqual(["new", "old"]);
+    // The disabled marker keeps the pre-corruption rows — nothing destroyed.
+    const disabledRows = (await d1.db.prepare("SELECT id FROM entries_fts_disabled").all() as { results: { id: string }[] }).results;
+    expect(disabledRows.map(r => r.id)).toEqual(["old"]);
   });
 });

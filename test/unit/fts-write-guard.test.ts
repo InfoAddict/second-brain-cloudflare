@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { makeSqliteD1 } from "../helpers/sqlite-d1";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
+import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 import type { Env } from "../../src/env";
 
@@ -239,6 +240,60 @@ describe("withFtsWriteGuard", () => {
       expect(triggers.results).toEqual([]); // dropped
     } finally { s.close(); }
   });
+
+  // B2 (v2 adversarial review of b4bb804): a racing cold start's applySchema
+  // interleaved between the write guard's trigger-drop and its retry, and
+  // (pre-v2.1) applySchema recreated the missing FTS triggers unconditionally
+  // — re-arming the very triggers the repair had just dropped, so the retry
+  // failed the same way all over again. v2.1's fix is structural: the drop
+  // and the durable rename land in ONE atomic batch, and applySchema (rule 2)
+  // refuses to recreate anything while entries_fts_disabled exists, so a
+  // racing cold start can no longer undo the repair no matter when it runs.
+  it("a racing cold start interleaved right after the repair batch does not re-arm the triggers or fail the retry", async () => {
+    const actual = await vi.importActual<typeof import("../../src/db/fts-repair")>("../../src/db/fts-repair");
+    vi.mocked(repairFtsIndex).mockImplementation(actual.repairFtsIndex);
+    const s = makeSqliteD1();
+    try {
+      const kv = makeMemoryKV();
+      const coldEnv = makeTestEnv(undefined, { DB: s.db as unknown as D1Database, OAUTH_KV: kv });
+      resetDatabaseInit();
+      await initializeDatabase(coldEnv);
+      await s.db.exec("DROP TABLE entries_fts");
+      await s.db.exec("CREATE TABLE entries_fts (wrong_col TEXT)"); // triggers remain, now wrong-shaped
+
+      let coldStarts = 0;
+      const db = {
+        prepare: s.db.prepare.bind(s.db),
+        batch: async (statements: { sourceSql?: () => string }[]) => {
+          const result = await s.db.batch(statements as never);
+          if (statements.some(st => st.sourceSql?.().includes("RENAME TO entries_fts_disabled"))) {
+            // A different isolate's applySchema is allowed to interleave here.
+            resetDatabaseInit();
+            await initializeDatabase(coldEnv);
+            coldStarts++;
+          }
+          return result;
+        },
+      } as unknown as D1Database;
+      const env = withFtsWriteGuard(makeTestEnv(undefined, { DB: db, OAUTH_KV: kv }));
+
+      const result = await env.DB.prepare(
+        "INSERT INTO entries (id,content,tags,source,created_at) VALUES ('recovered','recovered searchable','[]','api',1)",
+      ).run();
+
+      const triggers = (await s.db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'entries_fts_%'`,
+      ).all() as { results: unknown[] }).results;
+      const disabled = (await s.db.prepare(
+        `SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`,
+      ).all() as { results: unknown[] }).results;
+      expect(coldStarts).toBe(1);
+      expect(result.success).toBe(true);
+      expect(s.rows().map(r => r.id)).toEqual(["recovered"]);
+      expect(triggers).toEqual([]); // the racing cold start did not re-arm them
+      expect(disabled).toHaveLength(1); // the rename stuck
+    } finally { s.close(); }
+  });
 });
 
 describe("ENTRIES_WRITE_SQL classifier (table-driven)", () => {
@@ -270,6 +325,14 @@ describe("ENTRIES_WRITE_SQL classifier (table-driven)", () => {
     ["UPDATE with alias", `UPDATE entries AS e SET content = 'x' WHERE e.id = 'seed'`],
     ["DELETE FROM", `DELETE FROM entries WHERE id = 'x'`],
     ["UPDATE OR REPLACE", `UPDATE OR REPLACE entries SET content = 'x' WHERE id = 'y'`],
+    // v2 review (S3/S4 + adjacent evasions), fts5-guard-v2 round 2.
+    ["S3: trailing semicolon", `DELETE FROM entries;`],
+    ["UPSERT (ON CONFLICT DO UPDATE)", `INSERT INTO entries(id) VALUES('x') ON CONFLICT(id) DO UPDATE SET content='x'`],
+    ["uppercase schema qualifier", `INSERT INTO MAIN.ENTRIES(id) VALUES('x')`],
+    ["nested CTE write (subquery references entries, outer statement writes entries)",
+      `WITH c AS (SELECT id FROM entries) INSERT INTO entries (id) SELECT id FROM c`],
+    ["CTE body containing a doubled-quote-escaped string, outer statement writes entries",
+      `WITH c AS (SELECT 'it''s (fake) INSERT INTO entries' AS text) INSERT INTO entries (id) SELECT id FROM c`],
   ];
 
   const NEGATIVES: [string, string][] = [
@@ -277,6 +340,12 @@ describe("ENTRIES_WRITE_SQL classifier (table-driven)", () => {
     ["entry_events", `INSERT INTO entry_events (id) VALUES ('x')`],
     ["entries_x", `INSERT INTO entries_x (id) VALUES ('x')`],
     ["entriesé (non-ASCII identifier continuation)", `INSERT INTO entriesé (id) VALUES ('x')`],
+    // S4: a CTE whose write-shaped text is only a STRING LITERAL inside a read.
+    ["S4: CTE read with a write-shaped string literal", `WITH c AS (SELECT 'INSERT INTO entries (id) VALUES (1)' AS text) SELECT * FROM c`],
+    ["comment containing write-shaped text, real statement is a read", `/* INSERT INTO entries (id) VALUES (1) */ SELECT id FROM entries`],
+    ["plain read", `SELECT id FROM entries`],
+    ["CTE body with a doubled-quote-escaped write-shaped literal, outer statement is a read",
+      `WITH c AS (SELECT 'it''s (fake) INSERT INTO entries' AS text) SELECT * FROM c`],
   ];
 
   it.each(POSITIVES)("classifies as an entries write: %s", (_name, sql) => {
