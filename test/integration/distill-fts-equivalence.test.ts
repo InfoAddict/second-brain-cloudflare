@@ -400,7 +400,7 @@ describe("T-0059 ranking effect: a saturated (capped) term still gets dropped, s
     expect(ftsOut.query).toBe(likeOut.query);
 
     sqlite.close();
-  });
+  }, 30000); // 8,000-row real-SQLite corpus; timed out at the 5s default under parallel-suite load.
 });
 
 describe("T-0059 all-saturated fallback: capped counts that cannot rank fall back to LIKE", () => {
