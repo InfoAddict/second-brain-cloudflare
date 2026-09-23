@@ -1,0 +1,316 @@
+{"id":"q-id-001","text":"INV-88213","category":"identifier","gold":[{"id":"n-id-001","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-002","text":"RFC-87791","category":"identifier","gold":[{"id":"n-id-002","grade":2}],"viewer":"avery"}
+{"id":"q-id-002-c","text":"roadmap RFC-87791","category":"identifier","gold":[{"id":"n-id-002","grade":2}],"viewer":"avery"}
+{"id":"q-id-003","text":"v3.14.2-rc1","category":"identifier","gold":[{"id":"n-id-003","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-004","text":"9f3c1ab","category":"identifier","gold":[{"id":"n-id-004","grade":2}],"viewer":"avery"}
+{"id":"q-id-004-c","text":"roadmap 9f3c1ab","category":"identifier","gold":[{"id":"n-id-004","grade":2}],"viewer":"avery"}
+{"id":"q-id-005","text":"E-84172","category":"identifier","gold":[{"id":"n-id-005","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-006","text":"10.20.4.17","category":"identifier","gold":[{"id":"n-id-006","grade":2}],"viewer":"avery"}
+{"id":"q-id-007","text":"SO-778120","category":"identifier","gold":[{"id":"n-id-007","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-007-c","text":"roadmap SO-778120","category":"identifier","gold":[{"id":"n-id-007","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-008","text":"#90417","category":"identifier","gold":[{"id":"n-id-008","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-id-009","text":"PLAT-81234","category":"identifier","gold":[{"id":"n-id-009","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-010","text":"TRK-88420917","category":"identifier","gold":[{"id":"n-id-010","grade":2}],"viewer":"avery"}
+{"id":"q-id-011","text":"LH88412","category":"identifier","gold":[{"id":"n-id-011","grade":2}],"viewer":"avery"}
+{"id":"q-id-011-c","text":"roadmap LH88412","category":"identifier","gold":[{"id":"n-id-011","grade":2}],"viewer":"avery"}
+{"id":"q-id-012","text":"registry.example.com/tools/etl:2.81.0","category":"identifier","gold":[{"id":"n-id-012","grade":2}],"viewer":"avery"}
+{"id":"q-id-013","text":"SN-AX-880415","category":"identifier","gold":[{"id":"n-id-013","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-id-014","text":"PNR-QX88421","category":"identifier","gold":[{"id":"n-id-014","grade":2}],"viewer":"avery"}
+{"id":"q-id-015","text":"ERR_TLS_90412","category":"identifier","gold":[{"id":"n-id-015","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-016","text":"20260714_add_ledger_idx","category":"identifier","gold":[{"id":"n-id-016","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-id-017","text":"SPRING-88OFF","category":"identifier","gold":[{"id":"n-id-017","grade":2}],"viewer":"avery"}
+{"id":"q-id-017-c","text":"roadmap SPRING-88OFF","category":"identifier","gold":[{"id":"n-id-017","grade":2}],"viewer":"avery"}
+{"id":"q-id-018","text":"GR-2026-88014","category":"identifier","gold":[{"id":"n-id-018","grade":2}],"viewer":"avery"}
+{"id":"q-id-019","text":"CASE-880231","category":"identifier","gold":[{"id":"n-id-019","grade":2}],"viewer":"avery"}
+{"id":"q-id-020","text":"kb-88213-alpha","category":"identifier","gold":[{"id":"n-id-020","grade":2}],"viewer":"avery"}
+{"id":"q-id-021","text":"nightly-88","category":"identifier","gold":[{"id":"n-id-021","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-022","text":"release-2026.09.88","category":"identifier","gold":[{"id":"n-id-022","grade":2}],"viewer":"avery"}
+{"id":"q-id-023","text":"MSA-2026-88031","category":"identifier","gold":[{"id":"n-id-023","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-023-c","text":"roadmap MSA-2026-88031","category":"identifier","gold":[{"id":"n-id-023","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-024","text":"LK-88104","category":"identifier","gold":[{"id":"n-id-024","grade":2}],"viewer":"avery"}
+{"id":"q-id-024-c","text":"roadmap LK-88104","category":"identifier","gold":[{"id":"n-id-024","grade":2}],"viewer":"avery"}
+{"id":"q-id-025","text":"acme-lab-5g-88","category":"identifier","gold":[{"id":"n-id-025","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-026","text":"BUG-88451","category":"identifier","gold":[{"id":"n-id-026","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-id-027","text":"1.88.4-beta.3","category":"identifier","gold":[{"id":"n-id-027","grade":2}],"viewer":"avery"}
+{"id":"q-id-028","text":"SPRINT-88","category":"identifier","gold":[{"id":"n-id-028","grade":2}],"viewer":"avery"}
+{"id":"q-id-029","text":"ctr-88a7f2","category":"identifier","gold":[{"id":"n-id-029","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-030","text":"ORD-2026-880412","category":"identifier","gold":[{"id":"n-id-030","grade":2}],"viewer":"avery"}
+{"id":"q-id-030-c","text":"roadmap ORD-2026-880412","category":"identifier","gold":[{"id":"n-id-030","grade":2}],"viewer":"avery"}
+{"id":"q-id-031","text":"CERT-88A41F","category":"identifier","gold":[{"id":"n-id-031","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-032","text":"HELP-88817","category":"identifier","gold":[{"id":"n-id-032","grade":2}],"viewer":"avery"}
+{"id":"q-id-033","text":"billing-88.example.com","category":"identifier","gold":[{"id":"n-id-033","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-033-c","text":"roadmap billing-88.example.com","category":"identifier","gold":[{"id":"n-id-033","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-034","text":"88-KLM-41","category":"identifier","gold":[{"id":"n-id-034","grade":2}],"viewer":"avery"}
+{"id":"q-id-035","text":"PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-035-c","text":"roadmap PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-036","text":"ticket-88902","category":"identifier","gold":[{"id":"n-id-036","grade":2}],"viewer":"avery"}
+{"id":"q-rare-001","text":"zylophantine","category":"rare-word","gold":[{"id":"n-rare-001","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-001-c","text":"roadmap zylophantine","category":"rare-word","gold":[{"id":"n-rare-001","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-002","text":"quorbex","category":"rare-word","gold":[{"id":"n-rare-002","grade":2}],"viewer":"avery"}
+{"id":"q-rare-002-c","text":"roadmap quorbex","category":"rare-word","gold":[{"id":"n-rare-002","grade":2}],"viewer":"avery"}
+{"id":"q-rare-003","text":"flimbrook","category":"rare-word","gold":[{"id":"n-rare-003","grade":2}],"viewer":"avery"}
+{"id":"q-rare-003-c","text":"roadmap flimbrook","category":"rare-word","gold":[{"id":"n-rare-003","grade":2}],"viewer":"avery"}
+{"id":"q-rare-004","text":"petrichor","category":"rare-word","gold":[{"id":"n-rare-004","grade":2}],"viewer":"avery"}
+{"id":"q-rare-005","text":"gallimaufry","category":"rare-word","gold":[{"id":"n-rare-005","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-005-c","text":"roadmap gallimaufry","category":"rare-word","gold":[{"id":"n-rare-005","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-006","text":"crepuscular","category":"rare-word","gold":[{"id":"n-rare-006","grade":2}],"viewer":"avery"}
+{"id":"q-rare-006-c","text":"roadmap crepuscular","category":"rare-word","gold":[{"id":"n-rare-006","grade":2}],"viewer":"avery"}
+{"id":"q-rare-007","text":"susurrus","category":"rare-word","gold":[{"id":"n-rare-007","grade":2}],"viewer":"avery"}
+{"id":"q-rare-008","text":"apophenia","category":"rare-word","gold":[{"id":"n-rare-008","grade":2}],"viewer":"avery"}
+{"id":"q-rare-008-c","text":"roadmap apophenia","category":"rare-word","gold":[{"id":"n-rare-008","grade":2}],"viewer":"avery"}
+{"id":"q-rare-009","text":"thrumbold","category":"rare-word","gold":[{"id":"n-rare-009","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-009-c","text":"roadmap thrumbold","category":"rare-word","gold":[{"id":"n-rare-009","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-010","text":"quillfeather","category":"rare-word","gold":[{"id":"n-rare-010","grade":2}],"viewer":"avery"}
+{"id":"q-rare-011","text":"marnavik","category":"rare-word","gold":[{"id":"n-rare-011","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-011-c","text":"roadmap marnavik","category":"rare-word","gold":[{"id":"n-rare-011","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-012","text":"zephyrine","category":"rare-word","gold":[{"id":"n-rare-012","grade":2}],"viewer":"avery"}
+{"id":"q-rare-012-c","text":"roadmap zephyrine","category":"rare-word","gold":[{"id":"n-rare-012","grade":2}],"viewer":"avery"}
+{"id":"q-rare-013","text":"brindlewick","category":"rare-word","gold":[{"id":"n-rare-013","grade":2}],"viewer":"avery"}
+{"id":"q-rare-014","text":"tolvarian","category":"rare-word","gold":[{"id":"n-rare-014","grade":2}],"viewer":"avery"}
+{"id":"q-rare-014-c","text":"roadmap tolvarian","category":"rare-word","gold":[{"id":"n-rare-014","grade":2}],"viewer":"avery"}
+{"id":"q-rare-015","text":"ossuary","category":"rare-word","gold":[{"id":"n-rare-015","grade":2}],"viewer":"avery"}
+{"id":"q-rare-015-c","text":"roadmap ossuary","category":"rare-word","gold":[{"id":"n-rare-015","grade":2}],"viewer":"avery"}
+{"id":"q-rare-016","text":"mondegreen","category":"rare-word","gold":[{"id":"n-rare-016","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-017","text":"palimpsest","category":"rare-word","gold":[{"id":"n-rare-017","grade":2}],"viewer":"avery"}
+{"id":"q-rare-017-c","text":"roadmap palimpsest","category":"rare-word","gold":[{"id":"n-rare-017","grade":2}],"viewer":"avery"}
+{"id":"q-rare-018","text":"syzygy","category":"rare-word","gold":[{"id":"n-rare-018","grade":2}],"viewer":"avery"}
+{"id":"q-rare-019","text":"xanthorp","category":"rare-word","gold":[{"id":"n-rare-019","grade":2}],"viewer":"avery"}
+{"id":"q-rare-019-c","text":"roadmap xanthorp","category":"rare-word","gold":[{"id":"n-rare-019","grade":2}],"viewer":"avery"}
+{"id":"q-rare-020","text":"skarnhelm","category":"rare-word","gold":[{"id":"n-rare-020","grade":2}],"viewer":"avery"}
+{"id":"q-rare-020-c","text":"roadmap skarnhelm","category":"rare-word","gold":[{"id":"n-rare-020","grade":2}],"viewer":"avery"}
+{"id":"q-rare-021","text":"dunmorrow","category":"rare-word","gold":[{"id":"n-rare-021","grade":2}],"viewer":"avery"}
+{"id":"q-rare-022","text":"fenwrick","category":"rare-word","gold":[{"id":"n-rare-022","grade":2}],"viewer":"avery"}
+{"id":"q-rare-023","text":"yarrowmere","category":"rare-word","gold":[{"id":"n-rare-023","grade":2}],"viewer":"avery"}
+{"id":"q-rare-023-c","text":"roadmap yarrowmere","category":"rare-word","gold":[{"id":"n-rare-023","grade":2}],"viewer":"avery"}
+{"id":"q-rare-024","text":"kestrelane","category":"rare-word","gold":[{"id":"n-rare-024","grade":2}],"viewer":"avery"}
+{"id":"q-rare-025","text":"pellucida","category":"rare-word","gold":[{"id":"n-rare-025","grade":2}],"viewer":"avery"}
+{"id":"q-rare-025-c","text":"roadmap pellucida","category":"rare-word","gold":[{"id":"n-rare-025","grade":2}],"viewer":"avery"}
+{"id":"q-rare-026","text":"orrinvale","category":"rare-word","gold":[{"id":"n-rare-026","grade":2}],"viewer":"avery"}
+{"id":"q-rare-026-c","text":"roadmap orrinvale","category":"rare-word","gold":[{"id":"n-rare-026","grade":2}],"viewer":"avery"}
+{"id":"q-rare-027","text":"wibblewood","category":"rare-word","gold":[{"id":"n-rare-027","grade":2}],"viewer":"avery"}
+{"id":"q-rare-028","text":"tamarisk","category":"rare-word","gold":[{"id":"n-rare-028","grade":2}],"viewer":"avery"}
+{"id":"q-rare-028-c","text":"roadmap tamarisk","category":"rare-word","gold":[{"id":"n-rare-028","grade":2}],"viewer":"avery"}
+{"id":"q-rare-029","text":"lumbrecht","category":"rare-word","gold":[{"id":"n-rare-029","grade":2}],"viewer":"avery"}
+{"id":"q-rare-029-c","text":"roadmap lumbrecht","category":"rare-word","gold":[{"id":"n-rare-029","grade":2}],"viewer":"avery"}
+{"id":"q-rare-030","text":"vantablack","category":"rare-word","gold":[{"id":"n-rare-030","grade":2}],"viewer":"avery"}
+{"id":"q-rare-031","text":"ostrander","category":"rare-word","gold":[{"id":"n-rare-031","grade":2}],"viewer":"avery"}
+{"id":"q-rare-031-c","text":"roadmap ostrander","category":"rare-word","gold":[{"id":"n-rare-031","grade":2}],"viewer":"avery"}
+{"id":"q-rare-032","text":"glisteria","category":"rare-word","gold":[{"id":"n-rare-032","grade":2}],"viewer":"avery"}
+{"id":"q-rare-033","text":"nimbleroot","category":"rare-word","gold":[{"id":"n-rare-033","grade":2}],"viewer":"avery"}
+{"id":"q-rare-033-c","text":"roadmap nimbleroot","category":"rare-word","gold":[{"id":"n-rare-033","grade":2}],"viewer":"avery"}
+{"id":"q-rare-034","text":"cobbleston","category":"rare-word","gold":[{"id":"n-rare-034","grade":2}],"viewer":"avery"}
+{"id":"q-rare-035","text":"ethereal","category":"rare-word","gold":[{"id":"n-rare-035","grade":2}],"viewer":"avery"}
+{"id":"q-rare-036","text":"saltmarsh","category":"rare-word","gold":[{"id":"n-rare-036","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-036-c","text":"roadmap saltmarsh","category":"rare-word","gold":[{"id":"n-rare-036","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-rare-037","text":"quixotic","category":"rare-word","gold":[{"id":"n-rare-037","grade":2}],"viewer":"avery"}
+{"id":"q-rare-037-c","text":"roadmap quixotic","category":"rare-word","gold":[{"id":"n-rare-037","grade":2}],"viewer":"avery"}
+{"id":"q-rare-038","text":"boreas","category":"rare-word","gold":[{"id":"n-rare-038","grade":2}],"viewer":"avery"}
+{"id":"q-common-001","category":"common-word","text":"budget vendor sleep","gold":[{"id":"n-common-001","grade":2}],"viewer":"avery"}
+{"id":"q-common-002","category":"common-word","text":"login swimming family","gold":[{"id":"n-common-002","grade":2}],"viewer":"avery"}
+{"id":"q-common-003","category":"common-word","text":"paprika train queue","gold":[{"id":"n-common-003","grade":2}],"viewer":"avery"}
+{"id":"q-common-004","category":"common-word","text":"export mornings ferry","gold":[{"id":"n-common-004","grade":2}],"viewer":"avery"}
+{"id":"q-common-005","category":"common-word","text":"workout billing kite","gold":[{"id":"n-common-005","grade":2}],"viewer":"avery"}
+{"id":"q-common-006","category":"common-word","text":"author trip search","gold":[{"id":"n-common-006","grade":2}],"viewer":"avery"}
+{"id":"q-common-007","category":"common-word","text":"decision ferns image","gold":[{"id":"n-common-007","grade":2}],"viewer":"avery"}
+{"id":"q-common-008","category":"common-word","text":"status flights tired","gold":[{"id":"n-common-008","grade":2}],"viewer":"avery"}
+{"id":"q-common-009","category":"common-word","text":"meeting rental sync","gold":[{"id":"n-common-009","grade":2}],"viewer":"avery"}
+{"id":"q-common-010","category":"common-word","text":"agreed mornings uploader","gold":[{"id":"n-common-010","grade":2}],"viewer":"avery"}
+{"id":"q-common-011","category":"common-word","text":"habits swimming paper","gold":[{"id":"n-common-011","grade":2}],"viewer":"avery"}
+{"id":"q-common-012","category":"common-word","text":"framing studies notification","gold":[{"id":"n-common-012","grade":2}],"viewer":"avery"}
+{"id":"q-common-013","category":"common-word","text":"hour budget paprika","gold":[{"id":"n-common-013","grade":2}],"viewer":"avery"}
+{"id":"q-common-014","category":"common-word","text":"vendor trip family","gold":[{"id":"n-common-014","grade":2}],"viewer":"avery"}
+{"id":"q-common-015","category":"common-word","text":"kite pause deep","gold":[{"id":"n-common-015","grade":2}],"viewer":"avery"}
+{"id":"q-common-016","category":"common-word","text":"train sleep billing","gold":[{"id":"n-common-016","grade":2}],"viewer":"avery"}
+{"id":"q-common-017","category":"common-word","text":"uploader ferns swimming","gold":[{"id":"n-common-017","grade":2}],"viewer":"avery"}
+{"id":"q-common-018","category":"common-word","text":"form meeting family","gold":[{"id":"n-common-018","grade":2}],"viewer":"avery"}
+{"id":"q-common-019","category":"common-word","text":"decision search rental","gold":[{"id":"n-common-019","grade":2}],"viewer":"avery"}
+{"id":"q-common-020","category":"common-word","text":"image workout author","gold":[{"id":"n-common-020","grade":2}],"viewer":"avery"}
+{"id":"q-common-021","category":"common-word","text":"reading tired car","gold":[{"id":"n-common-021","grade":2}],"viewer":"avery"}
+{"id":"q-common-022","category":"common-word","text":"export ferry family","gold":[{"id":"n-common-022","grade":2}],"viewer":"avery"}
+{"id":"q-common-023","category":"common-word","text":"queue vendor mornings","gold":[{"id":"n-common-023","grade":2}],"viewer":"avery"}
+{"id":"q-common-024","category":"common-word","text":"plan swimming invoice","gold":[{"id":"n-common-024","grade":2}],"viewer":"avery"}
+{"id":"q-common-025","category":"common-word","text":"sleep smoked friday","gold":[{"id":"n-common-025","grade":2}],"viewer":"avery"}
+{"id":"q-common-026","category":"common-word","text":"idea billing family","gold":[{"id":"n-common-026","grade":2}],"viewer":"avery"}
+{"id":"q-common-027","category":"common-word","text":"review ferns notes","gold":[{"id":"n-common-027","grade":2}],"viewer":"avery"}
+{"id":"q-common-028","category":"common-word","text":"tighten budget flights","gold":[{"id":"n-common-028","grade":2}],"viewer":"avery"}
+{"id":"q-common-029","category":"common-word","text":"notification rental kite","gold":[{"id":"n-common-029","grade":2}],"viewer":"avery"}
+{"id":"q-common-030","category":"common-word","text":"habits export keep","gold":[{"id":"n-common-030","grade":2}],"viewer":"avery"}
+{"id":"q-common-031","category":"common-word","text":"minutes swimming vendor","gold":[{"id":"n-common-031","grade":2}],"viewer":"avery"}
+{"id":"q-common-032","category":"common-word","text":"case studies before","gold":[{"id":"n-common-032","grade":2}],"viewer":"avery"}
+{"id":"q-common-033","category":"common-word","text":"ship decision train","gold":[{"id":"n-common-033","grade":2}],"viewer":"avery"}
+{"id":"q-common-034","category":"common-word","text":"mention paper family","gold":[{"id":"n-common-034","grade":2}],"viewer":"avery"}
+{"id":"q-common-035","category":"common-word","text":"another form export","gold":[{"id":"n-common-035","grade":2}],"viewer":"avery"}
+{"id":"q-common-036","category":"common-word","text":"reading budget kite","gold":[{"id":"n-common-036","grade":2}],"viewer":"avery"}
+{"id":"q-common-037","category":"common-word","text":"search page tired","gold":[{"id":"n-common-037","grade":2}],"viewer":"avery"}
+{"id":"q-short-001","category":"short-word","text":"ox latch","gold":[{"id":"n-short-001","grade":2}],"viewer":"avery"}
+{"id":"q-short-002","category":"short-word","text":"k8 upgrade","gold":[{"id":"n-short-002","grade":2}],"viewer":"avery"}
+{"id":"q-short-003","category":"short-word","text":"ai policy","gold":[{"id":"n-short-003","grade":2}],"viewer":"avery"}
+{"id":"q-short-004","category":"short-word","text":"go linter","gold":[{"id":"n-short-004","grade":2}],"viewer":"avery"}
+{"id":"q-short-005","category":"short-word","text":"pi cluster","gold":[{"id":"n-short-005","grade":2}],"viewer":"avery"}
+{"id":"q-short-006","category":"short-word","text":"vr headset","gold":[{"id":"n-short-006","grade":2}],"viewer":"avery"}
+{"id":"q-short-007","category":"short-word","text":"ci flake","gold":[{"id":"n-short-007","grade":2}],"viewer":"avery"}
+{"id":"q-short-008","category":"short-word","text":"cd pipeline","gold":[{"id":"n-short-008","grade":2}],"viewer":"avery"}
+{"id":"q-short-009","category":"short-word","text":"db failover","gold":[{"id":"n-short-009","grade":2}],"viewer":"avery"}
+{"id":"q-short-010","category":"short-word","text":"ui polish","gold":[{"id":"n-short-010","grade":2}],"viewer":"avery"}
+{"id":"q-short-011","category":"short-word","text":"ux interviews","gold":[{"id":"n-short-011","grade":2}],"viewer":"avery"}
+{"id":"q-short-012","category":"short-word","text":"qa checklist","gold":[{"id":"n-short-012","grade":2}],"viewer":"avery"}
+{"id":"q-short-013","category":"short-word","text":"hr onboarding","gold":[{"id":"n-short-013","grade":2}],"viewer":"avery"}
+{"id":"q-short-014","category":"short-word","text":"3d printer","gold":[{"id":"n-short-014","grade":2}],"viewer":"avery"}
+{"id":"q-short-015","category":"short-word","text":"5g hotspot","gold":[{"id":"n-short-015","grade":2}],"viewer":"avery"}
+{"id":"q-short-016","category":"short-word","text":"s3 bucket","gold":[{"id":"n-short-016","grade":2}],"viewer":"avery"}
+{"id":"q-short-017","category":"short-word","text":"vm snapshot","gold":[{"id":"n-short-017","grade":2}],"viewer":"avery"}
+{"id":"q-short-018","category":"short-word","text":"ev charger","gold":[{"id":"n-short-018","grade":2}],"viewer":"avery"}
+{"id":"q-short-019","category":"short-word","text":"dj party","gold":[{"id":"n-short-019","grade":2}],"viewer":"avery"}
+{"id":"q-short-020","category":"short-word","text":"pc build","gold":[{"id":"n-short-020","grade":2}],"viewer":"avery"}
+{"id":"q-short-021","category":"short-word","text":"ml reading","gold":[{"id":"n-short-021","grade":2}],"viewer":"avery"}
+{"id":"q-short-022","category":"short-word","text":"uk visa","gold":[{"id":"n-short-022","grade":2}],"viewer":"avery"}
+{"id":"q-short-023","category":"short-word","text":"eu vat","gold":[{"id":"n-short-023","grade":2}],"viewer":"avery"}
+{"id":"q-short-024","category":"short-word","text":"tv mount","gold":[{"id":"n-short-024","grade":2}],"viewer":"avery"}
+{"id":"q-short-025","category":"short-word","text":"os patch","gold":[{"id":"n-short-025","grade":2}],"viewer":"avery"}
+{"id":"q-short-026","category":"short-word","text":"ip allowlist","gold":[{"id":"n-short-026","grade":2}],"viewer":"avery"}
+{"id":"q-short-027","category":"short-word","text":"io scheduler","gold":[{"id":"n-short-027","grade":2}],"viewer":"avery"}
+{"id":"q-short-028","category":"short-word","text":"xl shirts","gold":[{"id":"n-short-028","grade":2}],"viewer":"avery"}
+{"id":"q-short-029","category":"short-word","text":"uv exposure","gold":[{"id":"n-short-029","grade":2}],"viewer":"avery"}
+{"id":"q-short-030","category":"short-word","text":"id badge","gold":[{"id":"n-short-030","grade":2}],"viewer":"avery"}
+{"id":"q-para-001","category":"paraphrase","text":"why don't I answer work phone conversations at night","gold":[{"id":"n-para-001","grade":2}],"viewer":"avery"}
+{"id":"q-para-002","category":"paraphrase","text":"did I cut back on caffeine","gold":[{"id":"n-para-002","grade":2}],"viewer":"avery"}
+{"id":"q-para-003","category":"paraphrase","text":"how long should the newcomer watch customer service first","gold":[{"id":"n-para-003","grade":2}],"viewer":"avery"}
+{"id":"q-para-004","category":"paraphrase","text":"what did the property owner promise about heating repairs","gold":[{"id":"n-para-004","grade":2}],"viewer":"avery"}
+{"id":"q-para-005","category":"paraphrase","text":"when does my travel document run out","gold":[{"id":"n-para-005","grade":2}],"viewer":"avery"}
+{"id":"q-para-006","category":"paraphrase","text":"how do I avoid dreading the start of the work week","gold":[{"id":"n-para-006","grade":2}],"viewer":"avery"}
+{"id":"q-para-007","category":"paraphrase","text":"did exercising with the pet help my joint problem","gold":[{"id":"n-para-007","grade":2}],"viewer":"avery"}
+{"id":"q-para-008","category":"paraphrase","text":"how does my colleague like to receive progress reports","gold":[{"id":"n-para-008","grade":2}],"viewer":"avery"}
+{"id":"q-para-009","category":"paraphrase","text":"how should I clean my heavy skillet","gold":[{"id":"n-para-009","grade":2}],"viewer":"avery"}
+{"id":"q-para-010","category":"paraphrase","text":"what did the physician recommend after the blood test","gold":[{"id":"n-para-010","grade":2}],"viewer":"avery"}
+{"id":"q-para-011","category":"paraphrase","text":"how much money is available for the team retreat","gold":[{"id":"n-para-011","grade":2}],"viewer":"avery"}
+{"id":"q-para-012","category":"paraphrase","text":"who suggested reading about bargaining","gold":[{"id":"n-para-012","grade":2}],"viewer":"avery"}
+{"id":"q-para-013","category":"paraphrase","text":"what mistake did I make arranging conferences with Portugal","gold":[{"id":"n-para-013","grade":2}],"viewer":"avery"}
+{"id":"q-para-014","category":"paraphrase","text":"where is my safe copy of important files stored","gold":[{"id":"n-para-014","grade":2}],"viewer":"avery"}
+{"id":"q-para-015","category":"paraphrase","text":"why did I stop paying for the fitness club","gold":[{"id":"n-para-015","grade":2}],"viewer":"avery"}
+{"id":"q-para-016","category":"paraphrase","text":"where should I buy bread for my friend","gold":[{"id":"n-para-016","grade":2}],"viewer":"avery"}
+{"id":"q-para-017","category":"paraphrase","text":"what are my personal ambitions for 2026","gold":[{"id":"n-para-017","grade":2}],"viewer":"avery"}
+{"id":"q-para-018","category":"paraphrase","text":"who am I collecting late in the week","gold":[{"id":"n-para-018","grade":2}],"viewer":"avery"}
+{"id":"q-para-019","category":"paraphrase","text":"what makes rain get inside the house","gold":[{"id":"n-para-019","grade":2}],"viewer":"avery"}
+{"id":"q-para-020","category":"paraphrase","text":"what routine helps me feel settled at the start of the day","gold":[{"id":"n-para-020","grade":2}],"viewer":"avery"}
+{"id":"q-para-021","category":"paraphrase","text":"did I save money on auto coverage","gold":[{"id":"n-para-021","grade":2}],"viewer":"avery"}
+{"id":"q-para-022","category":"paraphrase","text":"when do I need to leave to collect the child midweek","gold":[{"id":"n-para-022","grade":2}],"viewer":"avery"}
+{"id":"q-para-023","category":"paraphrase","text":"who should I contact about buying things from vendors","gold":[{"id":"n-para-023","grade":2}],"viewer":"avery"}
+{"id":"q-para-024","category":"paraphrase","text":"how often should the fermenting bread culture be nourished","gold":[{"id":"n-para-024","grade":2}],"viewer":"avery"}
+{"id":"q-para-025","category":"paraphrase","text":"what is the policy for the final work hours of the week","gold":[{"id":"n-para-025","grade":2}],"viewer":"avery"}
+{"id":"q-para-026","category":"paraphrase","text":"what food restrictions must I warn the restaurant about","gold":[{"id":"n-para-026","grade":2}],"viewer":"avery"}
+{"id":"q-para-027","category":"paraphrase","text":"how do I avoid clogs with the office copier","gold":[{"id":"n-para-027","grade":2}],"viewer":"avery"}
+{"id":"q-para-028","category":"paraphrase","text":"how am I building funds for buying a house","gold":[{"id":"n-para-028","grade":2}],"viewer":"avery"}
+{"id":"q-para-029","category":"paraphrase","text":"what should I bring up with my teammate about his child","gold":[{"id":"n-para-029","grade":2}],"viewer":"avery"}
+{"id":"q-para-030","category":"paraphrase","text":"how often should I see the tooth doctor","gold":[{"id":"n-para-030","grade":2}],"viewer":"avery"}
+{"id":"q-para-031","category":"paraphrase","text":"when am I most creative","gold":[{"id":"n-para-031","grade":2}],"viewer":"avery"}
+{"id":"q-para-032","category":"paraphrase","text":"did changing my workstation help with posture problems","gold":[{"id":"n-para-032","grade":2}],"viewer":"avery"}
+{"id":"q-para-033","category":"paraphrase","text":"when are the visual drafts due and who owes them","gold":[{"id":"n-para-033","grade":2}],"viewer":"avery"}
+{"id":"q-para-034","category":"paraphrase","text":"what am I studying ahead of my journey abroad","gold":[{"id":"n-para-034","grade":2}],"viewer":"avery"}
+{"id":"q-para-035","category":"paraphrase","text":"where are the replacement power cells for the alarm","gold":[{"id":"n-para-035","grade":2}],"viewer":"avery"}
+{"id":"q-para-036","category":"paraphrase","text":"what gift does my mother desire","gold":[{"id":"n-para-036","grade":2}],"viewer":"avery"}
+{"id":"q-para-037","category":"paraphrase","text":"what is my rule for job proposals from headhunters","gold":[{"id":"n-para-037","grade":2}],"viewer":"avery"}
+{"id":"q-para-038","category":"paraphrase","text":"when do I reflect on the past seven days","gold":[{"id":"n-para-038","grade":2}],"viewer":"avery"}
+{"id":"q-para-039","category":"paraphrase","text":"what should I use if my cycle gets a flat","gold":[{"id":"n-para-039","grade":2}],"viewer":"avery"}
+{"id":"q-para-040","category":"paraphrase","text":"how can I get disagreeing colleagues to open up","gold":[{"id":"n-para-040","grade":2}],"viewer":"avery"}
+{"id":"q-para-041","category":"paraphrase","text":"by when must my paperwork reach the bookkeeper for the government","gold":[{"id":"n-para-041","grade":2}],"viewer":"avery"}
+{"id":"q-para-042","category":"paraphrase","text":"how should I portion my pet's meals now","gold":[{"id":"n-para-042","grade":2}],"viewer":"avery"}
+{"id":"q-para-043","category":"paraphrase","text":"what charity commitment do I have","gold":[{"id":"n-para-043","grade":2}],"viewer":"avery"}
+{"id":"q-para-044","category":"paraphrase","text":"what should I do if my work computer is stolen","gold":[{"id":"n-para-044","grade":2}],"viewer":"avery"}
+{"id":"q-para-045","category":"paraphrase","text":"how do I avoid feeling nauseous when crossing the water","gold":[{"id":"n-para-045","grade":2}],"viewer":"avery"}
+{"id":"q-para-046","category":"paraphrase","text":"what is the correct sequence when production breaks","gold":[{"id":"n-para-046","grade":2}],"viewer":"avery"}
+{"id":"q-para-047","category":"paraphrase","text":"what furniture can be claimed as a business expense","gold":[{"id":"n-para-047","grade":2}],"viewer":"avery"}
+{"id":"q-para-048","category":"paraphrase","text":"how do I organize midday food ahead of time","gold":[{"id":"n-para-048","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-001","category":"cjk","text":"東京 水曜日","gold":[{"id":"n-cjk-001","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-001-x","category":"cjk","text":"Tokyo client meeting on Wednesday","gold":[{"id":"n-cjk-001","grade":2}],"viewer":"avery","tags":["cross-lingual"]}
+{"id":"q-cjk-002","category":"cjk","text":"京都 旅館","gold":[{"id":"n-cjk-002","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-002-x","category":"cjk","text":"old inn booked in Kyoto","gold":[{"id":"n-cjk-002","grade":2}],"viewer":"avery","tags":["cross-lingual"]}
+{"id":"q-cjk-003","category":"cjk","text":"冷蔵庫 修理","gold":[{"id":"n-cjk-003","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-004","category":"cjk","text":"財布 交番","gold":[{"id":"n-cjk-004","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-005","category":"cjk","text":"ノートパソコン 返品","gold":[{"id":"n-cjk-005","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-006","category":"cjk","text":"血圧 塩分","gold":[{"id":"n-cjk-006","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-007","category":"cjk","text":"誕生日 ケーキ","gold":[{"id":"n-cjk-007","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-008","category":"cjk","text":"図書館 小説","gold":[{"id":"n-cjk-008","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-009","category":"cjk","text":"パン屋 駅前","gold":[{"id":"n-cjk-009","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-010","category":"cjk","text":"歯医者 麻酔","gold":[{"id":"n-cjk-010","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-011","category":"cjk","text":"オイル交換 整備工場","gold":[{"id":"n-cjk-011","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-012","category":"cjk","text":"トマト ベランダ","gold":[{"id":"n-cjk-012","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-013","category":"cjk","text":"忘れ物 傘","gold":[{"id":"n-cjk-013","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-014","category":"cjk","text":"大掃除 台所","gold":[{"id":"n-cjk-014","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-015","category":"cjk","text":"菜市场 鱼汤","gold":[{"id":"n-cjk-015","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-016","category":"cjk","text":"手机 维修店","gold":[{"id":"n-cjk-016","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-016-x","category":"cjk","text":"phone screen cracked repair shop","gold":[{"id":"n-cjk-016","grade":2}],"viewer":"avery","tags":["cross-lingual"]}
+{"id":"q-cjk-017","category":"cjk","text":"牙医 医保卡","gold":[{"id":"n-cjk-017","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-018","category":"cjk","text":"年会 酒店","gold":[{"id":"n-cjk-018","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-019","category":"cjk","text":"失眠 散文","gold":[{"id":"n-cjk-019","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-020","category":"cjk","text":"茉莉花 阳台","gold":[{"id":"n-cjk-020","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-021","category":"cjk","text":"运动会 运动鞋","gold":[{"id":"n-cjk-021","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-022","category":"cjk","text":"房东 水电费","gold":[{"id":"n-cjk-022","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-023","category":"cjk","text":"自行车 湖边","gold":[{"id":"n-cjk-023","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-024","category":"cjk","text":"咖啡机 除垢","gold":[{"id":"n-cjk-024","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-025","category":"cjk","text":"电话会议 推迟发布","gold":[{"id":"n-cjk-025","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-026","category":"cjk","text":"护照 换发","gold":[{"id":"n-cjk-026","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-027","category":"cjk","text":"결혼식 세탁소","gold":[{"id":"n-cjk-027","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-028","category":"cjk","text":"냉장고 서비스","gold":[{"id":"n-cjk-028","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-029","category":"cjk","text":"제주도 항공권","gold":[{"id":"n-cjk-029","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-029-x","category":"cjk","text":"Jeju flight tickets and rental car","gold":[{"id":"n-cjk-029","grade":2}],"viewer":"avery","tags":["cross-lingual"]}
+{"id":"q-cjk-030","category":"cjk","text":"러닝화 교환","gold":[{"id":"n-cjk-030","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-031","category":"cjk","text":"김치 어머니","gold":[{"id":"n-cjk-031","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-032","category":"cjk","text":"치과 스케일링","gold":[{"id":"n-cjk-032","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-033","category":"cjk","text":"국수집 점심시간","gold":[{"id":"n-cjk-033","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-034","category":"cjk","text":"도서관 반납","gold":[{"id":"n-cjk-034","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-035","category":"cjk","text":"자전거 정비소","gold":[{"id":"n-cjk-035","grade":2}],"viewer":"avery"}
+{"id":"q-cjk-036","category":"cjk","text":"요가 아침","gold":[{"id":"n-cjk-036","grade":2}],"viewer":"avery"}
+{"id":"q-hop-001","category":"multi-hop","text":"why did we pick the second Meridian supplier","gold":[{"id":"n-hop-001-answer","grade":2},{"id":"n-hop-001-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-002","category":"multi-hop","text":"why did the planning session move","gold":[{"id":"n-hop-002-answer","grade":2},{"id":"n-hop-002-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-003","category":"multi-hop","text":"why was the autumn offsite in Bergen cancelled","gold":[{"id":"n-hop-003-answer","grade":2},{"id":"n-hop-003-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-004","category":"multi-hop","text":"why was dark mode removed from the spring release","gold":[{"id":"n-hop-004-answer","grade":2},{"id":"n-hop-004-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-005","category":"multi-hop","text":"why did invoice storage move to a new database","gold":[{"id":"n-hop-005-answer","grade":2},{"id":"n-hop-005-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-006","category":"multi-hop","text":"why is there a hiring freeze for the platform group","gold":[{"id":"n-hop-006-answer","grade":2},{"id":"n-hop-006-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-007","category":"multi-hop","text":"why did project Copperline get a new name","gold":[{"id":"n-hop-007-answer","grade":2},{"id":"n-hop-007-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-008","category":"multi-hop","text":"why did we stop sending the weekly newsletter","gold":[{"id":"n-hop-008-answer","grade":2},{"id":"n-hop-008-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-009","category":"multi-hop","text":"why did the on-call rota change to follow-the-sun","gold":[{"id":"n-hop-009-answer","grade":2},{"id":"n-hop-009-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-010","category":"multi-hop","text":"why did the team pick the grey laptop","gold":[{"id":"n-hop-010-answer","grade":2},{"id":"n-hop-010-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-011","category":"multi-hop","text":"why was the pricing change pushed to January","gold":[{"id":"n-hop-011-answer","grade":2},{"id":"n-hop-011-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-012","category":"multi-hop","text":"why did we adopt TypeScript for the mobile client","gold":[{"id":"n-hop-012-answer","grade":2},{"id":"n-hop-012-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-013","category":"multi-hop","text":"why did we end the Tallinn coworking membership","gold":[{"id":"n-hop-013-answer","grade":2},{"id":"n-hop-013-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-014","category":"multi-hop","text":"why is the quarterly demo on Friday","gold":[{"id":"n-hop-014-answer","grade":2},{"id":"n-hop-014-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-015","category":"multi-hop","text":"why did I buy the refurbished espresso machine","gold":[{"id":"n-hop-015-answer","grade":2},{"id":"n-hop-015-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-016","category":"multi-hop","text":"why did I apply for the Lisbon conference talk","gold":[{"id":"n-hop-016-answer","grade":2},{"id":"n-hop-016-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-017","category":"multi-hop","text":"why was the garden renovation paused","gold":[{"id":"n-hop-017-answer","grade":2},{"id":"n-hop-017-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-018","category":"multi-hop","text":"why did the standup become asynchronous","gold":[{"id":"n-hop-018-answer","grade":2},{"id":"n-hop-018-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-019","category":"multi-hop","text":"why did I skip the industry summit","gold":[{"id":"n-hop-019-answer","grade":2},{"id":"n-hop-019-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-020","category":"multi-hop","text":"why was the old wiki retired","gold":[{"id":"n-hop-020-answer","grade":2},{"id":"n-hop-020-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-021","category":"multi-hop","text":"why did I move my savings to the credit union","gold":[{"id":"n-hop-021-answer","grade":2},{"id":"n-hop-021-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-022","category":"multi-hop","text":"why did I pick the early train to the Hobart workshop","gold":[{"id":"n-hop-022-answer","grade":2},{"id":"n-hop-022-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-023","category":"multi-hop","text":"why did I enroll in the evening woodworking course","gold":[{"id":"n-hop-023-answer","grade":2},{"id":"n-hop-023-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-024","category":"multi-hop","text":"why did I turn down the Ravenhall consulting contract","gold":[{"id":"n-hop-024-answer","grade":2},{"id":"n-hop-024-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-025","category":"multi-hop","text":"why is the release freeze on the twentieth","gold":[{"id":"n-hop-025-answer","grade":2},{"id":"n-hop-025-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-026","category":"multi-hop","text":"why did we replace the chairs in the small meeting room","gold":[{"id":"n-hop-026-answer","grade":2},{"id":"n-hop-026-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-027","category":"multi-hop","text":"why are personal phones banned in the lab","gold":[{"id":"n-hop-027-answer","grade":2},{"id":"n-hop-027-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-028","category":"multi-hop","text":"why was the beta launch delayed","gold":[{"id":"n-hop-028-answer","grade":2},{"id":"n-hop-028-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-029","category":"multi-hop","text":"why did we choose the coastal route for the road trip","gold":[{"id":"n-hop-029-answer","grade":2},{"id":"n-hop-029-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-030","category":"multi-hop","text":"why did we stop tracking leads in the shared spreadsheet","gold":[{"id":"n-hop-030-answer","grade":2},{"id":"n-hop-030-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-long-001","category":"long-context","text":"how much would the electrician charge for the service upgrade","gold":[{"id":"n-long-001","grade":2}],"viewer":"avery","answerSpan":"quoted forty-two hundred"}
+{"id":"q-long-002","category":"long-context","text":"where on the plane did we decide to sit","gold":[{"id":"n-long-002","grade":2}],"viewer":"avery","answerSpan":"row 34"}
+{"id":"q-long-003","category":"long-context","text":"what did we learn about how quickly newcomers become productive","gold":[{"id":"n-long-003","grade":2}],"viewer":"avery","answerSpan":"fell from nine days to four"}
+{"id":"q-long-004","category":"long-context","text":"what is the waiting period until the fresh tiles are safe for washing","gold":[{"id":"n-long-004","grade":2}],"viewer":"avery","answerSpan":"a full week to cure"}
+{"id":"q-long-005","category":"long-context","text":"where is the heirloom once owned by my elder relative kept","gold":[{"id":"n-long-005","grade":2}],"viewer":"avery","answerSpan":"safe deposit box"}
+{"id":"q-long-006","category":"long-context","text":"what is the advice for suspicious requests demanding quick payment","gold":[{"id":"n-long-006","grade":2}],"viewer":"avery","answerSpan":"asks for gift cards"}
+{"id":"q-long-007","category":"long-context","text":"when can young plants go into the open ground","gold":[{"id":"n-long-007","grade":2}],"viewer":"avery","answerSpan":"second week of May"}
+{"id":"q-long-008","category":"long-context","text":"how many users did the trial reach","gold":[{"id":"n-long-008","grade":2}],"viewer":"avery","answerSpan":"eleven thousand active accounts"}
+{"id":"q-long-009","category":"long-context","text":"what mileage is the sponsored pedal outing","gold":[{"id":"n-long-009","grade":2}],"viewer":"avery","answerSpan":"ninety kilometers"}
+{"id":"q-long-010","category":"long-context","text":"what compensation was requested by the applicant","gold":[{"id":"n-long-010","grade":2}],"viewer":"avery","answerSpan":"ninety-five thousand"}
+{"id":"q-long-011","category":"long-context","text":"what maintenance is coming up soon for the vehicle","gold":[{"id":"n-long-011","grade":2}],"viewer":"avery","answerSpan":"timing belt is due"}
+{"id":"q-long-012","category":"long-context","text":"how can I improve my accent","gold":[{"id":"n-long-012","grade":2}],"viewer":"avery","answerSpan":"record myself reading"}
+{"id":"q-long-013","category":"long-context","text":"were the seating renewals endorsed by the tenants","gold":[{"id":"n-long-013","grade":2}],"viewer":"avery","answerSpan":"passed nine to three"}
+{"id":"q-long-014","category":"long-context","text":"how will the final title for the new offering be chosen","gold":[{"id":"n-long-014","grade":2}],"viewer":"avery","answerSpan":"customer vote among the top three"}
+{"id":"q-long-015","category":"long-context","text":"what exercises were prescribed for my upper arm pain","gold":[{"id":"n-long-015","grade":2}],"viewer":"avery","answerSpan":"three stretches for the shoulder"}
+{"id":"q-long-016","category":"long-context","text":"what is the deadline for confirming attendee numbers","gold":[{"id":"n-long-016","grade":2}],"viewer":"avery","answerSpan":"final headcount by the first of August"}
+{"id":"q-long-017","category":"long-context","text":"when will the switch to the new system happen","gold":[{"id":"n-long-017","grade":2}],"viewer":"avery","answerSpan":"Cutover is scheduled for Saturday at 02:00"}
+{"id":"q-long-018","category":"long-context","text":"what is the chosen literature for our upcoming meetup","gold":[{"id":"n-long-018","grade":2}],"viewer":"avery","answerSpan":"short story collection set in a fishing village"}
+{"id":"q-long-019","category":"long-context","text":"where can the sitter find entry access","gold":[{"id":"n-long-019","grade":2}],"viewer":"avery","answerSpan":"under the blue flowerpot"}
+{"id":"q-long-020","category":"long-context","text":"which expense blew past its allowance and by how much","gold":[{"id":"n-long-020","grade":2}],"viewer":"avery","answerSpan":"forty percent over plan"}
+{"id":"q-long-021","category":"long-context","text":"how do we get to the charity site on the day","gold":[{"id":"n-long-021","grade":2}],"viewer":"avery","answerSpan":"shuttle from the station leaves every twenty minutes"}
+{"id":"q-long-022","category":"long-context","text":"what workload should we pledge for the iteration","gold":[{"id":"n-long-022","grade":2}],"viewer":"avery","answerSpan":"Capacity for the sprint is thirty-one points"}
+{"id":"q-long-023","category":"long-context","text":"what would we pay to occupy the sunnier home","gold":[{"id":"n-long-023","grade":2}],"viewer":"avery","answerSpan":"monthly rent was fourteen hundred"}
+{"id":"q-long-024","category":"long-context","text":"what is the policy on recovering costs after journeys","gold":[{"id":"n-long-024","grade":2}],"viewer":"avery","answerSpan":"original receipts within thirty days"}
