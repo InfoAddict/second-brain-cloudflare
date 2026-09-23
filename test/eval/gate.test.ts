@@ -231,14 +231,14 @@ describe("evaluateGate pairing and cluster validation", () => {
 
   describe("targeted-category cluster power", () => {
     // 210 queries in 30 clusters overall; the first 14 are paraphrase queries, all in one cluster unless spread.
-    const targeted = (spread: boolean) => {
+    const targeted = (spread: boolean, gain = 0.0625) => {
       const others = QUERY_CATEGORIES.filter(c => c !== "paraphrase");
       const shape = (i: number, r: QueryResult) => {
         r.category = i < 14 ? "paraphrase" : others[i % others.length];
         r.clusterKey = i < 14 ? (spread ? `p${i}` : "p") : `c${i % 29}`;
       };
       const b = report("b", shape, 210);
-      const c = report("v", (i, r) => { shape(i, r); if (i < 14) r.metrics.recall10 += 0.0625; }, 210);
+      const c = report("v", (i, r) => { shape(i, r); if (i < 14) r.metrics.recall10 += gain; }, 210);
       return evaluateGate(b, c, { targetCategories: ["paraphrase"] });
     };
 
@@ -249,6 +249,13 @@ describe("evaluateGate pairing and cluster validation", () => {
       expect(result.verdict).toBe("INCONCLUSIVE");
       expect(rule(result, "improvement")?.status).toBe("inconclusive");
       expect(rule(result, "improvement")?.detail).toMatch(/paraphrase.*1 cluster/);
+    });
+
+    it("FAILs as a no-op, not INCONCLUSIVE, when an underpowered target has no qualifying gain", () => {
+      const result = targeted(false, 0);
+      expect(rule(result, "improvement")?.status).toBe("fail");
+      expect(result.verdict).toBe("FAIL");
+      expect(targeted(false, 0.03125).verdict).toBe("FAIL"); // gain below the 0.05 target margin
     });
 
     it("still PASSes when the targeted gain spans enough clusters", () => {

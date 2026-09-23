@@ -166,10 +166,11 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     if (subset.length < t.minCategoryQueries) continue;
     const clusters = new Set(subset.map(p => p.c.clusterKey)).size;
     const powered = clusters >= t.minCategoryClusters;
-    if (!powered) underpowered.push(`${category} has ${clusters} cluster${clusters === 1 ? "" : "s"}, below the ${t.minCategoryClusters}-cluster floor`);
     for (const metric of ["recall10", "mrr10"] as const) {
       const row = delta(`${category} (target)`, subset, metric);
-      if (powered && row.ci.mean >= t.targetMargin && row.ci.lo > 0) wins.push(`${category} ${metric} +${row.ci.mean.toFixed(4)}`);
+      if (!(row.ci.mean >= t.targetMargin && row.ci.lo > 0)) continue;
+      if (powered) wins.push(`${category} ${metric} +${row.ci.mean.toFixed(4)}`);
+      else underpowered.push(`${category} ${metric} +${row.ci.mean.toFixed(4)} has ${clusters} cluster${clusters === 1 ? "" : "s"}, below the ${t.minCategoryClusters}-cluster floor`);
     }
   }
   if (wins.length) add("improvement", "pass", wins.join("; "));
