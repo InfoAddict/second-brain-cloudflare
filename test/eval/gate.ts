@@ -10,6 +10,7 @@ export interface GateThresholds {
   targetMargin: number;
   minQueries: number;
   minClusters: number;
+  minCategoryClusters: number;
   maxAddedD1Statements: number;
   d1StatementCeiling: number;
   rowsReadRatio: number;
@@ -28,6 +29,8 @@ export const DEFAULT_GATE: Readonly<GateThresholds> = Object.freeze({
   minQueries: 200,
   // Provisional: 4 clusters x 50 queries covered only 78.5% of a nominal 95% interval; Task 11 calibrates this.
   minClusters: 30,
+  // Provisional: distinct clusters a category needs before its interval can prove a targeted gain; Task 11 calibrates.
+  minCategoryClusters: 10,
   maxAddedD1Statements: 2,
   d1StatementCeiling: 50,
   rowsReadRatio: 1.25,
@@ -96,6 +99,13 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   const deltas: MetricDelta[] = [];
   const add = (rule: string, status: RuleStatus, detail: string) => rules.push({ rule, status, detail });
 
+  // Hard invariants come first: a violation is a FAIL however small or incomparable the sample.
+  const leaks = cand.results.reduce((s, r) => s + r.leaked.length, 0);
+  add("isolation", leaks === 0 ? "pass" : "fail", `${leaks} cross-workspace result(s)`);
+  const baseErrors = base.results.filter(r => r.error).length;
+  const candErrors = cand.results.filter(r => r.error).length;
+  add("errors", candErrors <= baseErrors ? "pass" : "fail", `${candErrors} query error(s) vs ${baseErrors} in the baseline`);
+
   const problems = comparabilityProblems(base, cand);
   if (problems.length) {
     add("comparable", "inconclusive", problems.join("; "));
@@ -113,13 +123,6 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     add("power", "inconclusive", `${clusters} distinct clusters is below the ${t.minClusters}-cluster floor`);
     return finish(rules, deltas);
   }
-
-  // Hard invariants.
-  const leaks = cand.results.reduce((s, r) => s + r.leaked.length, 0);
-  add("isolation", leaks === 0 ? "pass" : "fail", `${leaks} cross-workspace result(s)`);
-  const baseErrors = base.results.filter(r => r.error).length;
-  const candErrors = cand.results.filter(r => r.error).length;
-  add("errors", candErrors <= baseErrors ? "pass" : "fail", `${candErrors} query error(s) vs ${baseErrors} in the baseline`);
 
   const delta = (scope: string, subset: Pair[], metric: MetricName): MetricDelta => {
     const d = subset.map(p => p.c.metrics[metric] - p.b.metrics[metric]);
@@ -157,16 +160,21 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     const row = deltas.find(d => d.scope === "overall" && d.metric === metric)!;
     if (row.ci.mean >= t.improvementMargin && row.ci.lo > 0) wins.push(`overall ${metric} +${row.ci.mean.toFixed(4)}`);
   }
+  const underpowered: string[] = [];
   for (const category of opts.targetCategories ?? []) {
     const subset = pairs.filter(p => p.c.category === category);
     if (subset.length < t.minCategoryQueries) continue;
+    const clusters = new Set(subset.map(p => p.c.clusterKey)).size;
+    const powered = clusters >= t.minCategoryClusters;
+    if (!powered) underpowered.push(`${category} has ${clusters} cluster${clusters === 1 ? "" : "s"}, below the ${t.minCategoryClusters}-cluster floor`);
     for (const metric of ["recall10", "mrr10"] as const) {
       const row = delta(`${category} (target)`, subset, metric);
-      if (row.ci.mean >= t.targetMargin && row.ci.lo > 0) wins.push(`${category} ${metric} +${row.ci.mean.toFixed(4)}`);
+      if (powered && row.ci.mean >= t.targetMargin && row.ci.lo > 0) wins.push(`${category} ${metric} +${row.ci.mean.toFixed(4)}`);
     }
   }
-  add("improvement", wins.length ? "pass" : "fail",
-    wins.length ? wins.join("; ") : `no metric improved by ${t.improvementMargin} (or ${t.targetMargin} in a target category) with a bootstrap lower bound above zero`);
+  if (wins.length) add("improvement", "pass", wins.join("; "));
+  else if (underpowered.length) add("improvement", "inconclusive", `targeted gain cannot be proven: ${underpowered.join("; ")}`);
+  else add("improvement", "fail", `no metric improved by ${t.improvementMargin} (or ${t.targetMargin} in a target category) with a bootstrap lower bound above zero`);
 
   // Cost budget.
   const costs = (r: VariantReport) => r.results.map(x => x.cost);

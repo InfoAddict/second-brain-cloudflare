@@ -215,6 +215,49 @@ describe("evaluateGate pairing and cluster validation", () => {
     }
   });
 
+  it("FAILs a leak or an error row even when the sample is too small to judge", () => {
+    const fewBase = report("b", clustered(4), 200);
+    const leaky = report("v", (i, r) => { clustered(4)(i, r); if (i === 5) r.leaked = ["stranger-1"]; }, 200);
+    const leakResult = evaluateGate(fewBase, leaky);
+    expect(leakResult.verdict).toBe("FAIL");
+    expect(status(leakResult, "isolation")).toBe("fail");
+    const broken = report("v", (i, r) => { clustered(4)(i, r); if (i === 9) r.error = "boom"; }, 200);
+    const errResult = evaluateGate(fewBase, broken);
+    expect(errResult.verdict).toBe("FAIL");
+    expect(status(errResult, "errors")).toBe("fail");
+    const tiny = evaluateGate(report("b", () => {}, 100), report("v", (i, r) => { if (i === 5) r.leaked = ["stranger-1"]; }, 100));
+    expect(tiny.verdict).toBe("FAIL");
+  });
+
+  describe("targeted-category cluster power", () => {
+    // 210 queries in 30 clusters overall; the first 14 are paraphrase queries, all in one cluster unless spread.
+    const targeted = (spread: boolean) => {
+      const others = QUERY_CATEGORIES.filter(c => c !== "paraphrase");
+      const shape = (i: number, r: QueryResult) => {
+        r.category = i < 14 ? "paraphrase" : others[i % others.length];
+        r.clusterKey = i < 14 ? (spread ? `p${i}` : "p") : `c${i % 29}`;
+      };
+      const b = report("b", shape, 210);
+      const c = report("v", (i, r) => { shape(i, r); if (i < 14) r.metrics.recall10 += 0.0625; }, 210);
+      return evaluateGate(b, c, { targetCategories: ["paraphrase"] });
+    };
+
+    it("cannot PASS on a targeted gain from one cluster; INCONCLUSIVE names the category and cluster count", () => {
+      const result = targeted(false);
+      const target = result.deltas.find(d => d.scope === "paraphrase (target)" && d.metric === "recall10")!;
+      expect(target.ci.mean).toBe(0.0625);
+      expect(result.verdict).toBe("INCONCLUSIVE");
+      expect(rule(result, "improvement")?.status).toBe("inconclusive");
+      expect(rule(result, "improvement")?.detail).toMatch(/paraphrase.*1 cluster/);
+    });
+
+    it("still PASSes when the targeted gain spans enough clusters", () => {
+      const result = targeted(true);
+      expect(result.verdict).toBe("PASS");
+      expect(rule(result, "improvement")?.detail).toMatch(/paraphrase recall10/);
+    });
+  });
+
   it("is INCONCLUSIVE when the queries fall into too few clusters, even above the query floor", () => {
     const few = (n: number) => report("v", (i, r) => { clustered(n)(i, r); shift(0.5, 60)(i, r); }, 200);
     const fewBase = report("b", clustered(4), 200);
