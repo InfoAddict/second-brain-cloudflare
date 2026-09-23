@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mean, mrrAtK, ndcgAtK, percentile, recallAtK, scoreQuery, summarize } from "./metrics";
+import { gapKey, mean, mrrAtK, ndcgAtK, percentile, recallAtK, scoreQuery, summarize } from "./metrics";
 import type { GoldRef, QueryResult } from "./types";
 
 const gold: GoldRef[] = [{ id: "a", grade: 2 }, { id: "b", grade: 1 }];
@@ -60,5 +60,45 @@ describe("metrics", () => {
     expect(s.overall.degraded).toBe(2);
     expect(s.byCategory["rare-word"]?.degraded).toBe(1);
     expect(s.byCategory.cjk?.degraded).toBe(1);
+  });
+});
+
+describe("known-gap split", () => {
+  const res = (queryId: string, category: QueryResult["category"], recall5: number, tags?: string[]): QueryResult => ({
+    queryId, category, clusterKey: queryId, rankedIds: [], leaked: [], ...(tags && { tags }),
+    metrics: { recall5, recall10: recall5, mrr10: recall5, ndcg10: recall5 },
+    cost: { d1Statements: 1, d1RowsRead: null, aiCalls: 0, embeddingCalls: 0, vectorizeQueries: 0, kvReads: 0, neurons: 0, neuronsEstimated: false, wallMs: 1 },
+  });
+
+  it("keys on the known-gap tag and the gap: prefix only", () => {
+    expect(gapKey(undefined)).toBeNull();
+    expect(gapKey(["tenancy"])).toBeNull();
+    expect(gapKey(["known-gap"])).toBe("known-gap");
+    expect(gapKey(["known-gap", "gap:T-0072"])).toBe("gap:T-0072");
+    expect(gapKey(["router-budget", "gap:T-0073"])).toBe("gap:T-0073");
+    expect(gapKey(["router-budget"])).toBeNull(); // the gap: value is what keys it
+  });
+
+  it("keeps known-gap queries out of each category headline and reports them on their own lines", () => {
+    const s = summarize([
+      res("a", "identifier", 1), res("b", "identifier", 1),
+      res("c", "identifier", 0, ["known-gap", "gap:T-0072"]),
+      res("d", "common-word", 0, ["gap:T-0073", "router-budget"]),
+      res("e", "common-word", 1),
+    ]);
+    expect(s.byCategory.identifier?.n).toBe(2);
+    expect(s.byCategory.identifier?.metrics.recall5).toBe(1);
+    expect(s.byCategory["common-word"]?.n).toBe(1);
+    expect(s.overall.n).toBe(3);
+    expect(s.knownGaps.overall?.n).toBe(2);
+    expect(s.knownGaps.byGap["gap:T-0072"]?.n).toBe(1);
+    expect(s.knownGaps.byGap["gap:T-0073"]?.metrics.recall5).toBe(0);
+  });
+
+  it("has no known-gap block when nothing is tagged, and drops a category holding only gap queries from the headline", () => {
+    expect(summarize([res("a", "cjk", 1)]).knownGaps).toEqual({ overall: null, byGap: {} });
+    const only = summarize([res("a", "cjk", 0, ["known-gap"])]);
+    expect(only.byCategory.cjk).toBeUndefined();
+    expect(only.knownGaps.byGap["known-gap"]?.n).toBe(1);
   });
 });

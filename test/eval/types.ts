@@ -46,6 +46,8 @@ export interface QueryResult {
   queryId: string;
   category: QueryCategory;
   clusterKey: string;
+  /** The query's tags, so reports can split known-gap queries from the headline without the corpus. */
+  tags?: string[];
   rankedIds: string[];
   metrics: QueryMetrics;
   cost: CostSample;

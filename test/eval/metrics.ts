@@ -61,6 +61,9 @@ export interface Summary {
   degraded: number;
 }
 
+/** Every result in one group, known-gap queries included (cost and hard invariants span the whole run). */
+export const summarizeAll = (results: readonly QueryResult[]): Summary => summarizeGroup(results);
+
 function summarizeGroup(results: readonly QueryResult[]): Summary {
   const rows = results.map(r => r.cost.d1RowsRead);
   return {
@@ -83,15 +86,30 @@ function summarizeGroup(results: readonly QueryResult[]): Summary {
   };
 }
 
+/** The gap a query is filed under, or null for a headline query: `gap:<id>` wins over a bare `known-gap` tag. */
+export function gapKey(tags: readonly string[] | undefined): string | null {
+  const gap = tags?.find(t => t.startsWith("gap:"));
+  if (gap) return gap;
+  return tags?.includes("known-gap") ? "known-gap" : null;
+}
+
 export interface ReportSummary {
+  /** Headline queries only: known-gap queries are reported in knownGaps, not here. */
   overall: Summary;
   byCategory: Partial<Record<QueryCategory, Summary>>;
+  knownGaps: { overall: Summary | null; byGap: Record<string, Summary> };
 }
 
 export function summarize(results: readonly QueryResult[]): ReportSummary {
+  const headline = results.filter(r => gapKey(r.tags) === null);
+  const gaps = results.filter(r => gapKey(r.tags) !== null);
   const byCategory: Partial<Record<QueryCategory, Summary>> = {};
-  for (const category of new Set(results.map(r => r.category))) {
-    byCategory[category] = summarizeGroup(results.filter(r => r.category === category));
+  for (const category of new Set(headline.map(r => r.category))) {
+    byCategory[category] = summarizeGroup(headline.filter(r => r.category === category));
   }
-  return { overall: summarizeGroup(results), byCategory };
+  const byGap: Record<string, Summary> = {};
+  for (const key of [...new Set(gaps.map(r => gapKey(r.tags)!))].sort()) {
+    byGap[key] = summarizeGroup(gaps.filter(r => gapKey(r.tags) === key));
+  }
+  return { overall: summarizeGroup(headline), byCategory, knownGaps: { overall: gaps.length ? summarizeGroup(gaps) : null, byGap } };
 }

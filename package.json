@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "eval:recall": "node scripts/eval-run-ts.mjs test/eval/cli.ts",
     "cf-typegen": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit"
   },

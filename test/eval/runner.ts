@@ -113,7 +113,7 @@ export async function runVariant(o: {
     for (const q of o.queries) {
       if (o.isolate === "cold") { resetFtsReadyMemo(); resetVectorizeFilterState(); }
       const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
-      const base = { queryId: q.id, category: q.category, clusterKey: q.clusterKey ?? q.id };
+      const base = { queryId: q.id, category: q.category, clusterKey: q.clusterKey ?? q.id, ...(q.tags && { tags: q.tags }) };
       try {
         const { result, diagnostics, wallMs, calls, filterDegraded } = await recallOnce(q);
         const rankedIds = result.matches.map(m => m.id);
