@@ -1,5 +1,6 @@
 import { mulberry32 } from "../stats";
-import { DAY_MS, type CorpusEntry } from "./types";
+import { CHUNK_MAX_CHARS } from "../../../src/constants";
+import { DAY_MS, WORKSPACES, type CorpusEntry } from "./types";
 
 export const COMMON_TOKENS = ["roadmap", "standup", "invoice"] as const;
 
@@ -25,7 +26,7 @@ const DECISIONS = ["ship a smaller first version", "pause the rollout until Mond
 const MOODS = ["calm", "restless", "tired but glad", "focused", "a bit scattered", "upbeat"];
 const ACTIVITIES = ["Long walk by the river", "Cooked a big batch of soup", "Cleaned the garage", "Finished the crossword", "Repotted the ferns", "Cycled to the market"];
 const REFLECTIONS = ["I should protect mornings for deep work", "small habits keep compounding", "less scrolling and more reading tonight", "sleep matters more than another hour of work"];
-const BOOKS = ["The Long Now", "Small Habits at Scale", "A Field Guide to Ferns", "Notes on Slow Software", "Cities and Rivers"];
+const BOOKS = ["The Orchard Ledger", "Small Habits at Scale", "A Field Guide to Ferns", "Notes on Slow Software", "Cities and Rivers"];
 const INSIGHTS = ["the second chapter reframes how to plan a week", "the author argues for fewer, larger bets", "the appendix has a useful checklist", "the case studies felt dated but the framing holds"];
 const DISHES = ["lentil soup", "roasted cauliflower", "shakshuka", "miso noodles", "a simple tomato tart"];
 const INGREDIENTS = ["smoked paprika", "preserved lemon", "fresh dill", "toasted sesame", "brown butter"];
@@ -48,7 +49,7 @@ const ZH = [["小王", "下个季度的计划", "先做一个小版本"], ["李�
 const KO = [["민수", "다음 분기 예산", "자료를 공유하기로 했다"], ["지은", "채용 계획", "후보자에게 연락하기로 했다"], ["도윤", "이사 준비", "견적을 비교하기로 했다"], ["서연", "고객 인터뷰", "질문 목록을 고치기로 했다"]];
 
 const TEMPLATES: Template[] = [
-  p => `Standup ${p(WEEKDAYS)}: ${p(PEOPLE)} is ${p(STATUSES)} on ${p(PROJECTS)}; next up is to ${p(VERBS)} the ${p(COMPONENTS)}.`,
+  p => `Team check-in ${p(WEEKDAYS)}: ${p(PEOPLE)} is ${p(STATUSES)} on ${p(PROJECTS)}; next up is to ${p(VERBS)} the ${p(COMPONENTS)}.`,
   p => `Meeting with ${p(PEOPLE)} about ${p(TOPICS)}. We agreed to ${p(DECISIONS)}. Follow up on ${p(WEEKDAYS)}.`,
   (p, r) => `${p(PREFIXES)}-${1000 + Math.floor(r() * 7000)}: ${p(VERBS)} the ${p(COMPONENTS)} (${p(ISSUES)}). Status: ${p(STATUSES)}.`,
   p => `Felt ${p(MOODS)} today. ${p(ACTIVITIES)} with ${p(PEOPLE)}; ${p(REFLECTIONS)}.`,
@@ -71,6 +72,9 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
   const rand = mulberry32(options.seed);
   const pick: Pick = xs => xs[Math.floor(rand() * xs.length)];
   const totalWeight = options.workspaces.reduce((sum, workspace) => sum + workspace.weight, 0);
+  const companyWeight = options.workspaces.filter(workspace => workspace.workspaceId === WORKSPACES.company).reduce((sum, workspace) => sum + workspace.weight, 0);
+  const companyFactor = companyWeight > 0 && companyWeight < totalWeight ? Math.min(1.9, totalWeight / companyWeight) : 1;
+  const otherFactor = companyWeight < totalWeight ? (totalWeight - companyFactor * companyWeight) / (totalWeight - companyWeight) : 1;
   const pickWorkspace = () => {
     let remaining = rand() * totalWeight;
     for (const workspace of options.workspaces) if ((remaining -= workspace.weight) < 0) return workspace;
@@ -86,18 +90,20 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
   const sentence = () => TEMPLATES[Math.floor(rand() * TEMPLATES.length)](pick, rand);
 
   return Array.from({ length: options.count }, (_, index) => {
+    const workspace = pickWorkspace();
     const long = rand() < options.longRate;
     let content = long ? Array.from({ length: 22 }, sentence).join(" ") : rand() < options.cjkRate ? cjkNote() : sentence();
-    if (rand() < options.commonRate) content += ` ${pick(TAILS.roadmap)}`;
-    if (rand() < options.commonRate / 2) content += ` ${pick(TAILS.standup)}`;
-    if (rand() < options.commonRate / 3) content += ` ${pick(TAILS.invoice)}`;
-    const workspace = pickWorkspace();
+    if (long) while (content.length <= CHUNK_MAX_CHARS) content += ` ${sentence()}`;
+    const rate = options.commonRate * (workspace.workspaceId === WORKSPACES.company ? companyFactor : otherFactor);
+    for (const token of COMMON_TOKENS) if (rand() < rate) content += ` ${pick(TAILS[token])}`;
+    const createdAt = options.now - Math.floor(rand() * options.spanDays * DAY_MS);
+    content += ` Logged ${new Date(createdAt).toISOString().slice(0, 16).replace("T", " at ")} UTC.`;
     return {
       id: `${options.idPrefix}-${String(index + 1).padStart(6, "0")}`,
       content,
       tags: [],
       source: "api",
-      createdAt: options.now - Math.floor(rand() * options.spanDays * DAY_MS),
+      createdAt,
       workspaceId: workspace.workspaceId,
       actorId: workspace.actorId,
     };

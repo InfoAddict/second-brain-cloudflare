@@ -23,6 +23,10 @@ describe("auditQueries", () => {
     expect(rules([...filler, gold], [query({ id: "absent", category: "identifier", text: "invoice dispute" })])).toContain("absent:identifier-no-token");
     const repeats = Array.from({ length: 6 }, (_, i) => entry(`repeat-${i}`, `Another invoice INV-88213, copy ${i}`));
     expect(rules([...filler, gold, ...repeats], [query({ id: "flooded", category: "identifier", text: "INV-88213" })])).toContain("flooded:identifier-too-common");
+    expect(rules([entry("g", "Invoice dispute INV-88213. settled")], [query({ id: "dot", category: "identifier", text: "INV-88213." })])).toEqual([]);
+    for (const text of ["well-known", "decide.", "2027"]) {
+      expect(rules([entry("g", text)], [query({ id: "ordinary", category: "identifier", text })])).toContain("ordinary:identifier-no-token");
+    }
   });
 
   it("catches lexical leakage in paraphrases while accepting low-overlap wording", () => {
@@ -35,6 +39,41 @@ describe("auditQueries", () => {
     expect(findings).not.toContain("clean:paraphrase-lexical-leak");
   });
 
+  it("rejects one rare shared word in a paraphrase", () => {
+    expect(rules([entry("g", "Quokka sighting on the harbor walk")], [
+      query({ id: "quokka", category: "paraphrase", text: "quokka origin story" }),
+    ])).toContain("quokka:paraphrase-lexical-leak");
+  });
+
+  it("rejects a paraphrase whose term occurs inside a gold word", () => {
+    expect(rules([entry("g", "The electrician upgraded the panel")], [
+      query({ id: "electric", category: "paraphrase", text: "electric fix cost" }),
+    ])).toContain("electric:paraphrase-lexical-leak");
+  });
+
+  it("counts substrings when deciding whether a rare word floods the corpus", () => {
+    const copies = Array.from({ length: 30 }, (_, i) => entry(`copy-${i}`, `Start the party smart cart ${i}`));
+    expect(rules([entry("g", "art gallery visit"), ...copies], [
+      query({ id: "art", category: "rare-word", text: "art" }),
+    ])).toContain("art:rare-word-no-rare-token");
+  });
+
+  it("counts identifier prefixes in other rows for flooding, but requires a bounded identifier in gold", () => {
+    const copies = Array.from({ length: 30 }, (_, i) => entry(`copy-${i}`, `Invoice INV-88213-${i} archived`));
+    expect(rules([entry("g", "Invoice INV-88213 settled"), ...copies], [
+      query({ id: "invoice", category: "identifier", text: "INV-88213" }),
+    ])).toContain("invoice:identifier-too-common");
+    expect(rules([entry("g", "Invoice INV-88213X settled")], [
+      query({ id: "partial", category: "identifier", text: "INV-88213" }),
+    ])).toContain("partial:identifier-not-in-gold");
+  });
+
+  it("matches Korean short words and detects Korean paraphrase leakage within a longer form", () => {
+    const gold = entry("g", "민수와 예산에 대해 이야기했다");
+    expect(rules([gold], [query({ id: "short-ko", category: "short-word", text: "민수" })])).toEqual([]);
+    expect(rules([gold], [query({ id: "para-ko", category: "paraphrase", text: "민수 새 계획" })])).toContain("para-ko:paraphrase-lexical-leak");
+  });
+
   it("checks rare, common, and short word category definitions", () => {
     const gold = entry("g", "budget review planning session zylophantine project v2");
     expect(rules([...filler, gold], [query({ id: "rare", category: "rare-word", text: "zylophantine" })])).toEqual([]);
@@ -43,6 +82,7 @@ describe("auditQueries", () => {
     expect(rules([...filler, gold], [query({ id: "mixed", category: "common-word", text: "budget zylophantine" })])).toContain("mixed:common-word-rare-token");
     expect(rules([...filler, gold], [query({ id: "missing", category: "common-word", text: "budget review notes" })])).toContain("missing:common-word-gold-missing-token");
     expect(rules([...filler, gold], [query({ id: "short", category: "short-word", text: "v2" })])).toEqual([]);
+    expect(rules([...filler, entry("g", "released v2. today")], [query({ id: "short-dot", category: "short-word", text: "v2." })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "long", category: "short-word", text: "project" })])).toContain("long:short-word-no-short-token");
   });
 
@@ -64,16 +104,28 @@ describe("auditQueries", () => {
     const multi = query({ id: "multi", category: "multi-hop", text: "Meridian vendor decision reason", hops: 1 });
     expect(rules([...filler, root, gold], [multi], [edge])).toEqual([]);
     expect(rules([...filler, root, gold], [multi])).toContain("multi:multi-hop-unreachable");
+    expect(rules([...filler, root, gold], [{ ...multi, text: "Meridian vendor decision procurement supplier" }], [edge])).toContain("multi:multi-hop-lexical-leak");
+    expect(rules([...filler, root, gold], [{ ...multi, hops: 2 }], [edge])).toContain("multi:multi-hop-needs-hops");
+    expect(rules([...filler, entry("root", root.content, "blake"), gold], [multi], [edge])).toContain("multi:multi-hop-unreachable");
     expect(rules([...filler, gold], [query({ id: "cjk", category: "cjk", text: "来月の予算" })])).toContain("cjk:cjk-gold-not-cjk");
     expect(rules([entry("g", "来月の予算について話した")], [query({ id: "cjk-valid", category: "cjk", text: "来月の予算" })])).toEqual([]);
+    expect(rules([entry("g", "来月の予算について話した")], [query({ id: "cjk-unlinked", category: "cjk", text: "採用計画" })])).toContain("cjk-unlinked:cjk-no-shared-substring");
+    expect(rules([entry("g", "来月の予算について話した")], [query({ id: "cjk-one", category: "cjk", text: "budget 夢" })])).toContain("cjk-one:cjk-no-shared-substring");
+    expect(rules([entry("g", "来月の予算について話した")], [query({ id: "xl", category: "cjk", text: "next month budget", tags: ["cross-lingual"] })])).toEqual([]);
+    expect(rules([entry("g", "𠮷野家で食べた")], [query({ id: "cjk-ext", category: "cjk", text: "𠮷野家" })])).toEqual([]);
+    expect(rules([entry("g", "﨑山で食べた")], [query({ id: "cjk-compat", category: "cjk", text: "﨑山" })])).toEqual([]);
     const long = entry("g", `${"Filler passage. ".repeat(120)}The answer is cobalt.`);
     expect(rules([long], [query({ id: "long", category: "long-context", text: "which color", answerSpan: "cobalt" })])).toEqual([]);
     expect(rules([entry("g", "The answer is cobalt.")], [query({ id: "short", category: "long-context", text: "which color", answerSpan: "cobalt" })])).toContain("short:long-context-single-chunk");
+    expect(rules([entry("g", `The answer is cobalt. ${"Filler passage. ".repeat(120)}`)], [query({ id: "early", category: "long-context", text: "which color", answerSpan: "cobalt" })])).toContain("early:long-context-answer-in-first-chunk");
   });
 
   it("exposes deterministic haystack vocabulary for needle-key checks", () => {
     const vocabulary = haystackVocabulary();
     expect(vocabulary.has("roadmap")).toBe(true);
     expect(vocabulary.has("zylophantine")).toBe(false);
+    for (const prefix of ["ops", "web", "app"]) {
+      for (let number = 1000; number < 8000; number++) expect(vocabulary.has(`${prefix}-${number}`)).toBe(true);
+    }
   });
 });
