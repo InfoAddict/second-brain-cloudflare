@@ -44,10 +44,20 @@ const connectionQueues = new WeakMap<DatabaseSync, Promise<unknown>>();
 // inline, or they would queue behind their own still-running batch and
 // deadlock) apart from a genuinely unrelated call that merely happens to
 // execute during the same window (which must still queue and wait its turn).
-const activeBatchConnection = new AsyncLocalStorage<DatabaseSync>();
+//
+// The store is a token, not just the DatabaseSync, because a batch's own
+// statement.run() can spawn async work it does not await (a fire-and-forget
+// `.then()`). That work still closes over this ALS context, so it can resume
+// AFTER the batch has closed — by then the context is stale, and comparing
+// only the connection would let it run inline as if still part of that
+// batch, even inside a DIFFERENT, later batch's open SAVEPOINT. Comparing
+// the token catches that: it changes every time a batch starts, so a stale
+// context's token no longer matches whatever batch (if any) is active now.
+const activeBatchConnection = new AsyncLocalStorage<{ db: DatabaseSync; token: object }>();
 
 function enqueue<T>(db: DatabaseSync, fn: () => T | Promise<T>): Promise<T> {
-  if (activeBatchConnection.getStore() === db) {
+  const store = activeBatchConnection.getStore();
+  if (store && store.db === db && store.token === currentBatchToken.get(db)) {
     return Promise.resolve().then(fn);
   }
   const prior = connectionQueues.get(db) ?? Promise.resolve();
@@ -55,6 +65,9 @@ function enqueue<T>(db: DatabaseSync, fn: () => T | Promise<T>): Promise<T> {
   connectionQueues.set(db, settled.then(() => undefined, () => undefined));
   return settled;
 }
+
+/** The token of the batch CURRENTLY holding connection X's queue slot, if any. */
+const currentBatchToken = new WeakMap<DatabaseSync, object>();
 
 class SqliteStatement {
   constructor(
@@ -279,27 +292,38 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
         // standalone statement on this connection, see above) so two
         // SAVEPOINTs never nest out of LIFO order, and no unrelated
         // standalone statement can run while this one is open.
-        return enqueue(raw, () => activeBatchConnection.run(raw, async () => {
-          const sp = `sqlite_d1_batch_${savepointCounter++}`;
-          raw.exec(`SAVEPOINT ${sp}`);
-          try {
-            const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
-            // Every statement.run() here — a real SqliteStatement directly,
-            // or one reached indirectly through a test double's own run() —
-            // is still inside the activeBatchConnection context this batch
-            // just entered, so enqueue() runs it inline instead of queuing
-            // it behind this same still-running batch.
-            for (const statement of statements as unknown as { run(): unknown }[]) {
-              out.push(await statement.run() as { results?: unknown[]; success: true; meta: { rows_written: number } });
+        return enqueue(raw, () => {
+          const token = {};
+          currentBatchToken.set(raw, token);
+          return activeBatchConnection.run({ db: raw, token }, async () => {
+            const sp = `sqlite_d1_batch_${savepointCounter++}`;
+            raw.exec(`SAVEPOINT ${sp}`);
+            try {
+              const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
+              // Every statement.run() here — a real SqliteStatement directly,
+              // or one reached indirectly through a test double's own run() —
+              // is still inside the activeBatchConnection context this batch
+              // just entered, so enqueue() runs it inline instead of queuing
+              // it behind this same still-running batch.
+              for (const statement of statements as unknown as { run(): unknown }[]) {
+                out.push(await statement.run() as { results?: unknown[]; success: true; meta: { rows_written: number } });
+              }
+              raw.exec(`RELEASE ${sp}`);
+              return out;
+            } catch (e) {
+              raw.exec(`ROLLBACK TO ${sp}`);
+              raw.exec(`RELEASE ${sp}`);
+              throw e;
+            } finally {
+              // Ends this batch's queue slot. Any async work spawned inside
+              // it that resumes after this point no longer matches the
+              // token, so enqueue() routes it back through the FIFO queue
+              // instead of letting it run inline against whatever batch (if
+              // any) is active on this connection by the time it resumes.
+              if (currentBatchToken.get(raw) === token) currentBatchToken.delete(raw);
             }
-            raw.exec(`RELEASE ${sp}`);
-            return out;
-          } catch (e) {
-            raw.exec(`ROLLBACK TO ${sp}`);
-            raw.exec(`RELEASE ${sp}`);
-            throw e;
-          }
-        }));
+          });
+        });
       },
     },
     columns() {

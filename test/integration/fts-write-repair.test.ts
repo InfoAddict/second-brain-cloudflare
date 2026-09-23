@@ -52,9 +52,12 @@ async function breakByDroppingTable(d1: SqliteD1): Promise<void> {
  * `INSERT INTO entries_fts (rowid, id, content) ...` then fails with
  * "table entries_fts has no column named id".
  */
+// Seeds one leftover row so a repair that (wrongly) dropped and recreated
+// the table would be caught: v2 must never destroy it.
 async function breakByReshaping(d1: SqliteD1): Promise<void> {
   await d1.db.exec(`DROP TABLE entries_fts`);
   await d1.db.exec(`CREATE TABLE entries_fts (wrong_col TEXT)`);
+  await d1.db.exec(`INSERT INTO entries_fts (wrong_col) VALUES ('leftover')`);
 }
 
 async function ftsObjectNames(d1: SqliteD1): Promise<string[]> {
@@ -64,12 +67,32 @@ async function ftsObjectNames(d1: SqliteD1): Promise<string[]> {
   return results.map(r => r.name).sort();
 }
 
+async function triggerNames(d1: SqliteD1): Promise<string[]> {
+  const { results } = await d1.db.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete')`,
+  ).all() as { results: { name: string }[] };
+  return results.map(r => r.name).sort();
+}
+
 const ALL_FTS_OBJECTS = ["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"];
 
-async function expectRepaired(d1: SqliteD1, env: Env): Promise<void> {
+/** Missing-table outcome (v2 branch 2): table and triggers created fresh. */
+async function expectTableAndTriggersCreated(d1: SqliteD1, env: Env): Promise<void> {
   expect(await ftsObjectNames(d1)).toEqual(ALL_FTS_OBJECTS);
   expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
   expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+}
+
+/**
+ * Corrupt/wrong-shape outcome (v2 branch 3): only the triggers are dropped.
+ * No DDL touches the table itself, so its prior (even wrong-shaped) rows
+ * survive — proof that nothing here is destructive.
+ */
+async function expectTriggersDroppedTableIntact(d1: SqliteD1, env: Env): Promise<void> {
+  expect(await triggerNames(d1)).toEqual([]);
+  const leftover = await d1.db.prepare(`SELECT wrong_col FROM entries_fts`).all() as { results: { wrong_col: string }[] };
+  expect(leftover.results).toEqual([{ wrong_col: "leftover" }]);
+  expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
 }
 
 /**
@@ -138,7 +161,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("hello dashboard world");
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
 
     it("append (POST /append) persists exactly once", async () => {
@@ -154,7 +177,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toContain("more detail");
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
 
     it("update (POST /update) persists exactly once", async () => {
@@ -170,7 +193,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("fresh content");
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
 
     it("forget (POST /forget) deletes exactly once", async () => {
@@ -185,7 +208,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
 
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(0);
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
 
     // makeMirrorStore/importExportPayload are called directly rather than
@@ -203,7 +226,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
 
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].id).toBe(id);
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
 
     it("integration mirror update persists exactly once", async () => {
@@ -217,7 +240,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(ok).toBe(true);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("mirrored updated");
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
 
     it("import persists exactly once per entry", async () => {
@@ -232,7 +255,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(summary.imported).toBe(1);
       expect(summary.failed).toBe(0);
       expect(d1.rows()).toHaveLength(1);
-      await expectRepaired(d1, env);
+      await expectTableAndTriggersCreated(d1, env);
     });
   });
 
@@ -251,7 +274,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
 
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
-      await expectRepaired(d1, env);
+      await expectTriggersDroppedTableIntact(d1, env);
     });
 
     // forget's DELETE trigger body only references `rowid` (valid on any
@@ -272,7 +295,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("fresh content");
-      await expectRepaired(d1, env);
+      await expectTriggersDroppedTableIntact(d1, env);
     });
   });
 });
@@ -321,9 +344,11 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
     const row = d1.rows().find(r => r.id === "stale-1");
     expect(row).toBeDefined();
     expect(row!.staleness_checked_at).not.toBeNull();
-    // Repair rebuilt the index (guard applied in scheduled()), then the
-    // nightly's own backfill pass recovered from the cursor reset: every
-    // entry indexed exactly once and the ready flag latched.
+    // Repair rebuilt the index (guard applied in scheduled()) — the missing
+    // table branch, not the disabled-marker one, so the table and triggers
+    // come back under their own names — then the nightly's own backfill
+    // pass recovered from the cursor reset: every entry indexed exactly
+    // once and the ready flag latched.
     expect(await ftsObjectNames(d1)).toEqual(ALL_FTS_OBJECTS);
     expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
     expect(((await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first()) as { n: number }).n)

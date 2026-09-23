@@ -16,8 +16,10 @@ import {
 // fix's report); "vtable constructor failed" is SQLite's documented text for
 // a virtual-table module construction failure, kept for the same corruption
 // family even though it was not independently reproduced.
+const MISSING_TABLE_PATTERN = /no such table:\s*(?:main\.)?entries_fts\b/i;
+
 const FTS_FAILURE_PATTERNS: RegExp[] = [
-  /no such table:\s*(?:main\.)?entries_fts\b/i,
+  MISSING_TABLE_PATTERN,
   /table entries_fts has no column named/i,
   /database disk image is malformed/i,
   /vtable constructor failed/i,
@@ -25,102 +27,96 @@ const FTS_FAILURE_PATTERNS: RegExp[] = [
   /fts5:\s*corrupt/i,
 ];
 
+function ftsErrorMessage(e: unknown): string {
+  return String((e as { message?: string } | null | undefined)?.message ?? e ?? "");
+}
+
 export function isFtsFailure(e: unknown): boolean {
-  const message = String((e as { message?: string } | null | undefined)?.message ?? e ?? "");
+  const message = ftsErrorMessage(e);
   return FTS_FAILURE_PATTERNS.some(pattern => pattern.test(message));
 }
 
-/** True if entries_fts exists, has the right shape, and passes FTS5's own integrity check. */
-async function isEntriesFtsHealthy(env: Env): Promise<boolean> {
-  try {
-    await env.DB.prepare(`SELECT id, content FROM entries_fts LIMIT 0`).all();
-    // FTS5's own corruption check — catches internal btree damage that a
-    // plain shape probe cannot see (same command named in the plan's Task 5
-    // nightly-integrity note).
-    await env.DB.prepare(`INSERT INTO entries_fts(entries_fts, rank) VALUES('integrity-check', 1)`).run();
-    return true;
-  } catch {
-    return false;
-  }
+/** True only for the specific "entries_fts does not exist" error, never for the other allowlisted (corruption/shape) errors. */
+export function isMissingFtsTable(e: unknown): boolean {
+  return MISSING_TABLE_PATTERN.test(ftsErrorMessage(e));
 }
 
-async function entriesFtsTableExists(env: Env): Promise<boolean> {
-  try {
-    const row = await env.DB.prepare(
-      `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'entries_fts'`,
-    ).first<{ present: number }>();
-    return row !== null;
-  } catch {
-    return false;
-  }
+const FTS_TRIGGER_NAMES = ["entries_fts_insert", "entries_fts_update", "entries_fts_delete"];
+
+function dropFtsTriggers(env: Env): D1PreparedStatement[] {
+  return FTS_TRIGGER_NAMES.map(name => env.DB.prepare(`DROP TRIGGER IF EXISTS ${name}`));
 }
 
-// Coalesces concurrent repairs within this isolate: a second caller that
-// arrives while a repair is already running awaits the SAME promise instead
-// of starting its own, which is what let one repair's DROP TABLE erase a row
-// a concurrent repair's retry had just inserted. A caller that arrives AFTER
-// a repair has finished gets a fresh call, which re-runs the health check
-// below and finds the index already healthy — so it never repeats the drop.
-// The same health check is what protects against a cross-isolate race (a
-// different isolate's repair already fixed the table by the time this one
-// gets to run): it asks the database, not any isolate-local state.
-let inFlightRepair: Promise<boolean> | null = null;
-
-/**
- * Repairs entries_fts after a write against `entries` failed with an error
- * naming it. Returns whether a repair actually ran: false means the index
- * was already healthy, in which case the caller must treat the original
- * write failure as real and not retry.
- *
- * KV state is fixed BEFORE the table is touched, and only if both KV calls
- * succeed: a save that fails outright beats one that "succeeds" against a
- * freshly emptied index the ready flag still calls trustworthy. If either
- * KV call throws, this rethrows without issuing any DDL, so a missing or
- * broken table is left exactly as it was for the next attempt.
- *
- * Must run against the UNWRAPPED `env` (never the write-guarded one from
- * src/db/fts-write-guard.ts) — otherwise the DDL batch below would recurse
- * into this same guard.
- */
-export async function repairFtsIndex(env: Env): Promise<boolean> {
-  if (inFlightRepair) return inFlightRepair;
-  const promise = doRepair(env);
-  inFlightRepair = promise;
-  try {
-    return await promise;
-  } finally {
-    if (inFlightRepair === promise) inFlightRepair = null;
-  }
-}
-
-async function doRepair(env: Env): Promise<boolean> {
-  const exists = await entriesFtsTableExists(env);
-  if (exists && (await isEntriesFtsHealthy(env))) return false;
-
-  resetFtsReadyMemo();
-  await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
-  await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
-
-  const rebuild = [
+function createFtsTableAndTriggers(env: Env): D1PreparedStatement[] {
+  return [
     env.DB.prepare(ENTRIES_FTS_TABLE_DDL),
     env.DB.prepare(ENTRIES_FTS_INSERT_TRIGGER_DDL),
     env.DB.prepare(ENTRIES_FTS_UPDATE_TRIGGER_DDL),
     env.DB.prepare(ENTRIES_FTS_DELETE_TRIGGER_DDL),
   ];
-  // A missing table is created without a drop. An existing-but-broken one is
-  // dropped first — every DDL string is already IF (NOT) EXISTS, so this
-  // still converges cleanly even if the drop turns out to be redundant.
-  const statements = exists
-    ? [
-        env.DB.prepare(`DROP TRIGGER IF EXISTS entries_fts_insert`),
-        env.DB.prepare(`DROP TRIGGER IF EXISTS entries_fts_update`),
-        env.DB.prepare(`DROP TRIGGER IF EXISTS entries_fts_delete`),
-        env.DB.prepare(`DROP TABLE IF EXISTS entries_fts`),
-        ...rebuild,
-      ]
-    : rebuild;
+}
 
-  await env.DB.batch(statements);
-  console.error(`Repaired entries_fts (${exists ? "broken" : "missing"}): recreated the table and its sync triggers`);
-  return true;
+/**
+ * Repairs entries_fts after a write against `entries` failed with an
+ * allowlisted error (isFtsFailure). Write-path isolation v2: a live request
+ * never destroys the index; only rebuildFtsIndex (nightly, Task 5) does.
+ *
+ * 1. Clears the isolate's readiness cache, then best-effort deletes the
+ *    ready flag and resets the backfill cursor — failures are swallowed,
+ *    not rethrown, and just steer step 2 below.
+ * 2. Missing table AND both KV ops succeeded: CREATE VIRTUAL TABLE IF NOT
+ *    EXISTS plus CREATE TRIGGER IF NOT EXISTS for all three triggers.
+ *    Idempotent and safe under any concurrency — nothing is ever dropped.
+ * 3. Every other case (corruption, wrong shape, or a missing table while KV
+ *    failed): DROP TRIGGER IF EXISTS for the three FTS triggers only. No
+ *    table drop, no data loss — entries writes stop failing because the
+ *    trigger that failed is gone, and recall falls back to LIKE because
+ *    either ready was cleared or the FTS query now throws.
+ *
+ * No health probe or integrity check: every action here is idempotent and
+ * non-destructive, so nothing needs to be verified before it runs.
+ *
+ * Must run against the UNWRAPPED `env` (never the write-guarded one from
+ * src/db/fts-write-guard.ts) — otherwise the DDL batch below would recurse
+ * into this same guard.
+ */
+export async function repairFtsIndex(env: Env, error: unknown): Promise<void> {
+  resetFtsReadyMemo();
+
+  let kvOk = true;
+  try {
+    await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+  } catch {
+    kvOk = false;
+  }
+  try {
+    await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+  } catch {
+    kvOk = false;
+  }
+
+  if (isMissingFtsTable(error) && kvOk) {
+    await env.DB.batch(createFtsTableAndTriggers(env));
+    return;
+  }
+
+  await env.DB.batch(dropFtsTriggers(env));
+}
+
+/**
+ * Nightly destructive rebuild (Task 5): drops and recreates entries_fts and
+ * its triggers unconditionally, deletes ready, and resets the backfill
+ * cursor to "0" so the backfill repopulates it from scratch. The ONLY
+ * destructive path in the write-isolation design — never call this from a
+ * request path.
+ */
+export async function rebuildFtsIndex(env: Env): Promise<void> {
+  resetFtsReadyMemo();
+  await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+  await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+  await env.DB.batch([
+    ...dropFtsTriggers(env),
+    env.DB.prepare(`DROP TABLE IF EXISTS entries_fts`),
+    ...createFtsTableAndTriggers(env),
+  ]);
 }

@@ -26,10 +26,37 @@ interface GuardRef {
 const patched = new WeakSet<object>();
 const envRefs = new WeakMap<object, GuardRef>();
 
-// Case-insensitive, whitespace-tolerant. `entries\b` does not match
-// `entries_fts` (`_` is a word character, so there is no boundary there) or
-// `entry_events` (a different word), so both are excluded by construction.
-const ENTRIES_WRITE_SQL = /^\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+entries\b/i;
+// Case-insensitive. Strips leading comments, then matches an optional CTE
+// prefix, the write verb (with its OR-clause and INTO/FROM variants), an
+// optional `main.` schema qualifier, and the table name bare or quoted with
+// `"`, `` ` ``, or `[]`. The name must then be followed by whitespace, `(`,
+// or end of string.
+//
+// The trailing lookahead (whitespace, `(`, or end of string) is what keeps
+// the bare form from matching `entries_fts`, `entries_x`, or `entriesé`: `_`
+// and non-ASCII letters are none of those three, so the boundary holds
+// without a separate `\b` check (which JS treats as ASCII-only and would
+// wrongly see a boundary before "é"). Quoted forms need no extra check
+// either: matching the literal `"entries"` (etc.) already excludes
+// `"entries_fts"`, whose quoted content is a different string.
+const LEADING_COMMENT_OR_WS = /^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/;
+const ENTRIES_NAME = `(?:entries|"entries"|\`entries\`|\\[entries\\])`;
+const ENTRIES_WRITE_SQL = new RegExp(
+  `^(?:WITH\\b[\\s\\S]*?)?\\s*` +
+  `(?:INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|REPLACE\\s+INTO|UPDATE(?:\\s+OR\\s+\\w+)?|DELETE\\s+FROM)` +
+  `\\s+(?:main\\.)?${ENTRIES_NAME}(?=\\s|\\(|$)`,
+  "iu",
+);
+
+function isEntriesWriteSql(sql: string): boolean {
+  let stripped = sql;
+  let prev: string;
+  do {
+    prev = stripped;
+    stripped = stripped.replace(LEADING_COMMENT_OR_WS, "");
+  } while (stripped !== prev);
+  return ENTRIES_WRITE_SQL.test(stripped);
+}
 
 function retryOnce<T>(ref: GuardRef, attempt: () => Promise<T>): Promise<T> {
   return attempt().catch(async (e) => {
@@ -37,11 +64,7 @@ function retryOnce<T>(ref: GuardRef, attempt: () => Promise<T>): Promise<T> {
     // Repair through ref.rawDB (the captured pre-patch prepare/batch), not
     // ref.current.DB — that binding is the one being patched, and calling it
     // here would recurse into this same guard.
-    const repaired = await repairFtsIndex({ ...ref.current, DB: ref.rawDB as D1Database });
-    // The index was already healthy: this write's failure was real, not an
-    // artifact of a broken index, so retrying it would just fail again (or
-    // worse, succeed against a read error that was never about entries_fts).
-    if (!repaired) throw e;
+    await repairFtsIndex({ ...ref.current, DB: ref.rawDB as D1Database }, e);
     return attempt();
   });
 }
@@ -90,7 +113,7 @@ export function withFtsWriteGuard(env: Env): Env {
     // through retryOnce regardless of what error it throws.
     db.prepare = (sql: string) => {
       const statement = originalPrepare(sql);
-      return ENTRIES_WRITE_SQL.test(sql) ? wrapStatement(statement, guardRef) : statement;
+      return isEntriesWriteSql(sql) ? wrapStatement(statement, guardRef) : statement;
     };
 
     // A batch retries as ONE unit if ANY statement in it writes to entries;
