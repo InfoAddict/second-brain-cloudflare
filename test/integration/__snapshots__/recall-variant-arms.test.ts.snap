@@ -1,0 +1,232 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stable diagnostics for absent phrase 1`] = `
+{
+  "batches": [
+    [
+      "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
+      "SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts",
+      "SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
+     )",
+      "SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
+     )",
+    ],
+    [
+      "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
+      "SELECT e.id, e.content, e.tags, e.source, e.created_at
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       ORDER BY bm25(entries_fts) LIMIT ?",
+    ],
+  ],
+  "diagnostics": {
+    "candidateIds": [
+      "dense-doc",
+    ],
+    "corpusIdfUsed": true,
+    "denseIds": [
+      "dense-doc",
+    ],
+    "distillSource": "fts",
+    "eligibleRelatedIds": [],
+    "embeddingMode": "distilled",
+    "finalIds": [
+      "dense-doc",
+    ],
+    "ftsRoute": "fts",
+    "ftsUsed": true,
+    "fusedIds": [
+      "dense-doc",
+    ],
+    "keywordIds": [],
+    "lexicalArmSkipped": false,
+    "operations": {
+      "aiCalls": 1,
+      "d1RowsRead": null,
+      "d1RowsWritten": 0,
+      "d1Statements": 6,
+      "embeddingCalls": 1,
+      "kvReads": 3,
+      "kvWrites": 1,
+      "vectorizeGets": 0,
+      "vectorizeQueries": 1,
+    },
+    "retrievalTokenCount": 2,
+    "selectedRelatedIds": [],
+  },
+  "ids": [
+    "dense-doc",
+  ],
+  "sql": [
+    "BATCH",
+    "SELECT DISTINCT value FROM entries, json_each(entries.tags)",
+    "BATCH",
+    "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
+    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+  ],
+}
+`;
+
+exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stable diagnostics for semantic neighbor 1`] = `
+{
+  "batches": [
+    [
+      "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
+      "SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts",
+      "SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
+     )",
+      "SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
+     )",
+    ],
+    [
+      "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
+      "SELECT e.id, e.content, e.tags, e.source, e.created_at
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       ORDER BY bm25(entries_fts) LIMIT ?",
+    ],
+  ],
+  "diagnostics": {
+    "candidateIds": [
+      "dense-doc",
+    ],
+    "corpusIdfUsed": true,
+    "denseIds": [
+      "dense-doc",
+    ],
+    "distillSource": "fts",
+    "eligibleRelatedIds": [],
+    "embeddingMode": "distilled",
+    "finalIds": [
+      "dense-doc",
+    ],
+    "ftsRoute": "fts",
+    "ftsUsed": true,
+    "fusedIds": [
+      "dense-doc",
+    ],
+    "keywordIds": [
+      "dense-doc",
+    ],
+    "lexicalArmSkipped": false,
+    "operations": {
+      "aiCalls": 1,
+      "d1RowsRead": null,
+      "d1RowsWritten": 0,
+      "d1Statements": 6,
+      "embeddingCalls": 1,
+      "kvReads": 3,
+      "kvWrites": 1,
+      "vectorizeGets": 0,
+      "vectorizeQueries": 1,
+    },
+    "retrievalTokenCount": 2,
+    "selectedRelatedIds": [],
+  },
+  "ids": [
+    "dense-doc",
+  ],
+  "sql": [
+    "BATCH",
+    "SELECT DISTINCT value FROM entries, json_each(entries.tags)",
+    "BATCH",
+    "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
+    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+  ],
+}
+`;
+
+exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stable diagnostics for zylophantine rollout 1`] = `
+{
+  "batches": [
+    [
+      "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
+      "SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts",
+      "SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
+     )",
+      "SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       LIMIT (SELECT max(CAST(0.3 * COALESCE(SUM(n), 0) AS INTEGER) + 1, 2001) FROM entry_counts)
+     )",
+    ],
+    [
+      "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
+      "SELECT e.id, e.content, e.tags, e.source, e.created_at
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?
+       ORDER BY bm25(entries_fts) LIMIT ?",
+    ],
+  ],
+  "diagnostics": {
+    "candidateIds": [
+      "kw-doc",
+      "dense-doc",
+    ],
+    "corpusIdfUsed": true,
+    "denseIds": [
+      "dense-doc",
+    ],
+    "distillSource": "fts",
+    "eligibleRelatedIds": [],
+    "embeddingMode": "distilled",
+    "finalIds": [
+      "kw-doc",
+      "dense-doc",
+    ],
+    "ftsRoute": "fts",
+    "ftsUsed": true,
+    "fusedIds": [
+      "dense-doc",
+      "kw-doc",
+    ],
+    "keywordIds": [
+      "kw-doc",
+    ],
+    "lexicalArmSkipped": false,
+    "operations": {
+      "aiCalls": 1,
+      "d1RowsRead": null,
+      "d1RowsWritten": 0,
+      "d1Statements": 7,
+      "embeddingCalls": 1,
+      "kvReads": 3,
+      "kvWrites": 1,
+      "vectorizeGets": 0,
+      "vectorizeQueries": 1,
+    },
+    "retrievalTokenCount": 2,
+    "selectedRelatedIds": [],
+  },
+  "ids": [
+    "kw-doc",
+    "dense-doc",
+  ],
+  "sql": [
+    "BATCH",
+    "SELECT DISTINCT value FROM entries, json_each(entries.tags)",
+    "BATCH",
+    "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?, ?)",
+    "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?, ?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+  ],
+}
+`;

@@ -63,7 +63,7 @@ export interface RecallDiagnostics {
   /** Whether the FTS5 path served the keyword rows (false = LIKE, including any degrade-on-error). */
   ftsUsed?: boolean;
   /** Why the keyword arm served FTS or LIKE on the last recall; memberFirst recalls never reach keywordSearch. */
-  ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first";
+  ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first" | "skipped-by-variant";
   /** T-0059: how df/total were obtained on the last recall's term distillation. */
   distillSource?: "fts" | "like" | "shortcut";
 }
@@ -81,6 +81,12 @@ export interface RecallOperationDiagnostics {
   d1RowsWritten: number | null;
   kvReads: number;
   kvWrites: number;
+}
+
+/** Eval-only switches. Future variants add optional fields here; absent means default recall. */
+export interface RecallVariantFlags {
+  /** Tag and project recalls use both arms regardless of this ablation. */
+  arms?: "both" | "dense-only" | "keyword-only";
 }
 
 export interface RecallInternalOptions {
@@ -107,6 +113,8 @@ export interface RecallInternalOptions {
    * Task 3's candidate-selection change (FTS-ready but bm25 order disabled).
    */
   keywordPreRankedOverride?: boolean;
+  /** Eval-only experiment switches; no route or MCP tool sets these. */
+  variant?: RecallVariantFlags;
 }
 
 export interface KeywordRow {

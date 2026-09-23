@@ -295,6 +295,7 @@ export async function recallEntries(
     : undefined;
   const scope = readScope ? scopeWhereForRead(internal.identity!, readScope) : null;
   const identity = internal.identity;
+  const arms = memberFirst ? "both" : internal.variant?.arms ?? "both";
 
   let semanticQuery = query;
   if (after === undefined && before === undefined) {
@@ -323,7 +324,7 @@ export async function recallEntries(
 
   const tokens = profile.lexicalTokens;
   const [values, queryTags] = await Promise.all([
-    embed(embedQuery, env, cfg),
+    arms === "keyword-only" ? Promise.resolve([] as number[]) : embed(embedQuery, env, cfg),
     inferQueryTags(lexicalQuery, env, cfg, ctx, identity, internal.workspaceFilter, internal.teamId),
   ]);
   markStage("querySignals");
@@ -405,6 +406,7 @@ export async function recallEntries(
         .catch((e: unknown) => console.error("Vectorize filter-degradation marker write failed (non-fatal):", e)),
     );
     const denseQuery = async (): Promise<{ matches: VectorizeMatch[] }> => {
+      if (arms === "keyword-only") return { matches: [] as VectorizeMatch[] };
       try {
         if (wsFilter) {
           const { matches } = await queryVectorizeScoped<VectorizeMatch>(
@@ -421,7 +423,9 @@ export async function recallEntries(
     };
     const [denseResults, kw] = await Promise.all([
       denseQuery(),
-      keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
+      arms === "dense-only"
+        ? Promise.resolve({ rows: [] as KeywordRow[], fts: false, route: "skipped-by-variant" as const })
+        : keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
     ]);
     results = denseResults;
     keywordRows = kw.rows;
