@@ -7,8 +7,8 @@ export const COMMON_TOKENS = ["roadmap", "standup", "invoice"] as const;
  * Dense tier: everyday words that no other haystack word contains. Every row carries at most two of them,
  * so a query of three dense words matches only its gold (8 words give 56 distinct triples), while each word
  * alone exceeds the 500-row keyword window at 5k+ for the default scope of avery and of blake. The
- * company-only layer is not covered: common-word queries must use the default scope. Eight is the ceiling
- * at 55/35/10 weights: blake reads 45% of rows, and 500 rows per word needs 500 x words <= 2 x rows read.
+ * company-only layer is not covered: common-word queries must use the default scope. Sizing: blake reads 55% of rows
+ * at 45/45/10 weights, and each word needs 500 x words <= 2 x rows read, with margin (about 650 at 5k).
  */
 export const DENSE_TOKENS = ["garden", "window", "coffee", "kitchen", "letter", "table", "bread", "cheese"] as const;
 

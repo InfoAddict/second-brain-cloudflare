@@ -14,8 +14,8 @@ const base: HaystackOptions = {
   cjkRate: 0.08,
   longRate: 0.02,
   workspaces: [
-    { workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 55 },
-    { workspaceId: WORKSPACES.company, actorId: ACTORS.blake, weight: 35 },
+    { workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 45 },
+    { workspaceId: WORKSPACES.company, actorId: ACTORS.blake, weight: 45 },
     { workspaceId: WORKSPACES.blake, actorId: ACTORS.blake, weight: 10 },
   ],
 };
@@ -44,8 +44,8 @@ describe("generateHaystack", () => {
     const first = generateHaystack(base);
     const second = generateHaystack(base);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(digest(first)).toBe("0b0f5787b6a6ed3a2b1091902533ae2edfb5b0a70202acdc67c8ba3b1419d937");
-    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("3a8608f71336fd9d1a1133ee7f7d7e8d9a3848a339330e18c07a2de0f225c6cc");
+    expect(digest(first)).toBe("360d4bd6a5901acc8b6913da71400ce6c2c1d33fdb8376d2383b00127d0aabba");
+    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("71d8bd946872ee03203eac027f51d00c199f9cab5969d23c88a982d63bcdcda4");
     expect(first).not.toEqual(generateHaystack({ ...base, seed: 8 }));
   });
 
@@ -72,8 +72,8 @@ describe("generateHaystack", () => {
     expect(rows.filter(row => /[぀-ヿ㐀-鿿가-힯]/u.test(row.content)).length).toBeGreaterThan(150);
     expect(rows.filter(row => row.content.length > 1600).length).toBeGreaterThan(30);
     expect(rows.filter(row => row.content.length > 1000).every(row => row.content.length > 1600)).toBe(true);
-    expect(rows.filter(row => row.workspaceId === WORKSPACES.avery).length).toBeGreaterThan(1500);
-    expect(rows.filter(row => row.workspaceId === WORKSPACES.company).length).toBeGreaterThan(900);
+    expect(rows.filter(row => row.workspaceId === WORKSPACES.avery).length).toBeGreaterThan(1200);
+    expect(rows.filter(row => row.workspaceId === WORKSPACES.company).length).toBeGreaterThan(1200);
   });
 
   it("has no exact-duplicate rows at any scale, for the test and the real corpus parameters", () => {
@@ -94,9 +94,9 @@ describe("generateHaystack", () => {
   it("realizes the requested common rate and exceeds the keyword window in each readable scope", () => {
     const rows = generateHaystack({ ...base, count: 20_000 });
     const pinned = {
-      1000: { roadmap: { avery: 159, blake: 134, company: 119 }, standup: { avery: 174, blake: 131, company: 120 }, invoice: { avery: 173, blake: 142, company: 130 } },
-      5000: { roadmap: { avery: 834, blake: 626, company: 576 }, standup: { avery: 844, blake: 620, company: 570 }, invoice: { avery: 814, blake: 607, company: 561 } },
-      20000: { roadmap: { avery: 3459, blake: 2620, company: 2415 }, standup: { avery: 3435, blake: 2589, company: 2391 }, invoice: { avery: 3362, blake: 2507, company: 2325 } },
+      1000: { roadmap: { avery: 168, blake: 154, company: 149 }, standup: { avery: 169, blake: 144, company: 140 }, invoice: { avery: 184, blake: 174, company: 169 } },
+      5000: { roadmap: { avery: 862, blake: 783, company: 766 }, standup: { avery: 871, blake: 783, company: 757 }, invoice: { avery: 839, blake: 769, company: 744 } },
+      20000: { roadmap: { avery: 3530, blake: 3206, company: 3121 }, standup: { avery: 3452, blake: 3111, company: 3012 }, invoice: { avery: 3376, blake: 3066, company: 2966 } },
     } as const;
     const scopes = {
       avery: readScopeWorkspaces(IDENTITIES.avery, {}),
@@ -122,12 +122,12 @@ describe("generateHaystack", () => {
     }
   });
 
-  it("keeps every viewer and the company layer past the keyword window at the real corpus parameters (55/35/10 weights)", () => {
+  it("keeps every viewer and the company layer past the keyword window at the real corpus parameters (45/45/10 weights)", () => {
     // The 1.9x company boost is what lifts the company layer over 500 at 5k; the real weights and rates are pinned here.
     const pinned = {
-      1000: { roadmap: { avery: 243, blake: 186, company: 173 }, standup: { avery: 240, blake: 173, company: 163 }, invoice: { avery: 233, blake: 185, company: 170 } },
-      5000: { roadmap: { avery: 1157, blake: 878, company: 817 }, standup: { avery: 1179, blake: 861, company: 797 }, invoice: { avery: 1168, blake: 890, company: 817 } },
-      20000: { roadmap: { avery: 1959, blake: 1463, company: 1374 }, standup: { avery: 1895, blake: 1431, company: 1326 }, invoice: { avery: 1907, blake: 1457, company: 1343 } },
+      1000: { roadmap: { avery: 237, blake: 211, company: 205 }, standup: { avery: 245, blake: 229, company: 219 }, invoice: { avery: 238, blake: 219, company: 212 } },
+      5000: { roadmap: { avery: 1223, blake: 1111, company: 1076 }, standup: { avery: 1186, blake: 1079, company: 1049 }, invoice: { avery: 1206, blake: 1109, company: 1071 } },
+      20000: { roadmap: { avery: 1961, blake: 1806, company: 1749 }, standup: { avery: 1965, blake: 1795, company: 1724 }, invoice: { avery: 1916, blake: 1714, company: 1668 } },
     } as const;
     const scopes = {
       avery: readScopeWorkspaces(IDENTITIES.avery, {}),
@@ -183,7 +183,7 @@ describe("generateHaystack", () => {
           for (const token of DENSE_TOKENS) {
             const count = df(visible, token);
             if (size === 1000) expect(count, `${token} at 1k`).toBeLessThan(500);
-            else expect(count, `${token} at ${size}`).toBeGreaterThan(500);
+            else expect(count, `${token} at ${size}`).toBeGreaterThanOrEqual(550);
           }
         }
       }
