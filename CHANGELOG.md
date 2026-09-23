@@ -23,13 +23,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Tapping a reminder opens straight to that item in the due sheet, reliably, whether the app was closed or was already open in the background — a background-only tap used to just focus the app and do nothing.
 - A mobile browser that cannot receive push notifications at all until Second Brain is added to the Home Screen now says so and shows exactly how, instead of a dead-end "not supported" message. Chrome and Edge on Android offer a one-tap native install; everyone else gets the right two or three steps for their browser.
 
-**Keyword recall**
+**Search**
 
-- Recall's keyword side now uses a full-text index (SQLite FTS5 with a trigram tokenizer) ranked by relevance instead of scanning every memory and keeping the newest 500 matches. Exact words, names, and identifiers such as `#149` or `v1.9`, and Chinese, Japanese, and Korean text, are found reliably even in older memories. Before, an old memory holding a rare word could be cut from the candidate window by newer matches of other words.
-- Keyword search no longer reads every memory on every recall, so its cost stays roughly flat as a brain grows, protecting D1's daily read limit on the free plan. New memories are indexed as they are written.
-- Queries containing any word shorter than three characters use the previous keyword search, so nothing is lost for them.
-- Upgrading is automatic and needs no action. New installs use the index immediately. Existing brains index their current memories in a nightly job, 2,000 per night; until that finishes, recall uses the previous search and then switches over. A nightly check detects index drift and rebuilds automatically.
-- Semantic (vector) search, the graph, and every API and MCP tool and response shape are unchanged; no client needs updating.
+- Search now finds the hard things: exact names, ticket numbers, versions, and phrases in any language, even when they sit in old memories. A rare match buried under years of newer memories used to be cut from the candidate window before ranking ever saw it; matches now rank by relevance.
+- Searches are dramatically faster and cheaper, and they stay that way as the brain grows, so the free plan's daily limits stay comfortable. Saving a memory costs one extra small row; the savings come on every search.
+- Upgrading is automatic and needs no action. New installs use the index immediately; existing brains build it over nightly runs and keep the previous search until theirs is complete and verified. No API or MCP tool changed, so no client needs updating.
+- Semantic (vector) search is unchanged.
 
 ## [3.4.0] — Projects
 
