@@ -9,7 +9,8 @@ export interface AuditFinding { queryId: string; rule: string; detail: string }
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const IDENTIFIER_DF = 5;
-const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual"]);
+const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap"]);
+const GAP_REF = /^gap:T-\d+$/;
 const WORD_CHAR = /[\p{L}\p{N}_-]/u;
 // Thresholds scale with the rows the viewer can read: a token in 0.4% of 5k rows is not "common".
 const commonDf = (rows: number) => Math.min(KEYWORD_CANDIDATE_LIMIT, Math.max(20, Math.ceil(rows * 0.02)));
@@ -80,7 +81,12 @@ export function auditQueries(spec: {
     const tokens = tokenizeQuery(query.text);
     const shared = tokens.filter(token => content.includes(token));
     const cross = query.tags?.includes("cross-lingual") ?? false;
-    for (const tag of query.tags ?? []) if (!KNOWN_TAGS.has(tag)) add(query.id, "unknown-tag", tag);
+    for (const tag of query.tags ?? []) if (!KNOWN_TAGS.has(tag) && !GAP_REF.test(tag)) add(query.id, "unknown-tag", tag);
+    // A known gap must name its board item; only identifier-not-in-gold is waived for it.
+    const gapRefs = (query.tags ?? []).filter(tag => GAP_REF.test(tag));
+    const knownGap = query.tags?.includes("known-gap") ?? false;
+    if (knownGap && !gapRefs.length) add(query.id, "known-gap-no-ref", "tag gap:T-NNNN is required");
+    if (!knownGap && gapRefs.length) add(query.id, "gap-ref-without-known-gap", gapRefs.join(","));
     // The outsider reads no haystack rows, so it only serves tenancy (decoy) queries.
     if (query.viewer === "outsider" && !query.tags?.includes("tenancy")) add(query.id, "outsider-not-tenancy", "outsider reads no haystack rows");
     let keyToken: string | undefined;
@@ -89,7 +95,11 @@ export function auditQueries(spec: {
       case "identifier": {
         keyToken = tokens.find(token => isIdentifier(token) && [...token].length >= 3);
         if (!keyToken) add(query.id, "identifier-no-token", query.text);
-        else if (!containsBounded(content, keyToken)) add(query.id, "identifier-not-in-gold", keyToken);
+        else if (!containsBounded(content, keyToken)) {
+          // Waived only when the gold holds the key as written: stripping "_" is then the sole reason it cannot match.
+          const written = query.text.split(/\s+/).map(chunk => chunk.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "")).find(chunk => chunk.includes("_") && chunk.replaceAll("_", "") === keyToken);
+          if (!(knownGap && written && containsBounded(content, written))) add(query.id, "identifier-not-in-gold", keyToken);
+        }
         else if (df(keyToken) > IDENTIFIER_DF) add(query.id, "identifier-too-common", `${keyToken} df=${df(keyToken)}`);
         break;
       }

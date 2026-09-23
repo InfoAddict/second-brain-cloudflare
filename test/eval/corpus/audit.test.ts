@@ -209,4 +209,26 @@ describe("auditQueries fidelity and scale", () => {
     expect(rules([...split, g], [{ ...q, layer: "company" }])).toContain("c:common-word-layer-scoped");
     expect(rules([...split, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
   });
+
+  it("waives only identifier-not-in-gold for a known-gap underscore query, and demands a gap reference", () => {
+    const gold = entry("g", "Uploads failed with ERR_QUOTA_77120 after the bucket filled up");
+    const q = (over: Partial<GoldenQuery> = {}) => query({ id: "u", category: "identifier", text: "ERR_QUOTA_77120", ...over });
+    const gap = ["known-gap", "gap:T-0072"];
+    expect(rules([...filler, gold], [q()])).toContain("u:identifier-not-in-gold");
+    expect(rules([...filler, gold], [q({ tags: gap })])).toEqual([]);
+    expect(rules([...filler, gold], [q({ tags: ["known-gap", "gap:T-15"] })])).toEqual([]);
+    // still applies: a key the gold lacks, an unreadable gold, a digitless key
+    expect(rules([...filler, gold], [q({ text: "ERR_QUOTA_99999", tags: gap })])).toContain("u:identifier-not-in-gold");
+    expect(rules([...filler, entry("g", gold.content, "blake")], [q({ tags: gap })])).toContain("u:gold-unreadable");
+    expect(rules([...filler, gold], [q({ text: "err_quota", tags: gap })])).toContain("u:identifier-no-token");
+    // no underscore, so stripping is not the cause: the waiver does not apply
+    expect(rules([...filler, gold], [q({ text: "ERR-QUOTA-99999", tags: gap })])).toContain("u:identifier-not-in-gold");
+    const flood = Array.from({ length: 6 }, (_, i) => entry(`x${i}`, `copy ERRQUOTA77120 ${i}`));
+    expect(rules([...filler, entry("g", "ERRQUOTA77120 seen"), ...flood], [q({ text: "ERRQUOTA77120", tags: gap })])).toContain("u:identifier-too-common");
+    // gap tags must be well-formed and paired
+    expect(rules([...filler, gold], [q({ tags: ["known-gap"] })])).toContain("u:known-gap-no-ref");
+    expect(rules([...filler, gold], [q({ tags: ["known-gap", "gap:T-0072", "gap:oops"] })])).toContain("u:unknown-tag");
+    expect(rules([...filler, gold], [q({ tags: ["gap:T-0072"] })])).toContain("u:gap-ref-without-known-gap");
+    expect(rules([...filler, gold], [q({ tags: ["gap"] })])).toContain("u:unknown-tag");
+  });
 });

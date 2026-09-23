@@ -5,6 +5,8 @@ import type { NeedleRow } from "./types";
 
 /** Needles at least this old get a second, common-token-prefixed query: the shape that exposes LIKE's newest-500 window. */
 export const OLD_NEEDLE_DAYS = 450;
+/** Board item for underscore identifiers that the keyword arm cannot match. */
+export const UNDERSCORE_GAP = "gap:T-0072";
 
 /**
  * Identifier and rare-word queries, built only from a needle's declared keys.
@@ -21,13 +23,15 @@ export function mechanicalQueries(needles: readonly NeedleRow[]): GoldenQuery[] 
     const n = ++counters[needle.purpose];
     const id = `${needle.purpose === "identifier" ? "q-id" : "q-rare"}-${String(n).padStart(3, "0")}`;
     const key = needle.keys[0];
+    // Production strips "_" from query tokens (a LIKE wildcard), so these keys are a measured gap, not an audit error.
+    const tags = [...(decoyed.has(needle.id) ? ["tenancy"] : []), ...(key.includes("_") ? ["known-gap", UNDERSCORE_GAP] : [])];
     const byBlake = needle.purpose === "identifier" && needle.workspace === "company" && n % 2 === 1;
     const shared = {
       category: needle.purpose,
       gold: [{ id: needle.id, grade: 2 as const }],
       viewer: byBlake ? ("blake" as const) : ("avery" as const),
       ...(byBlake ? { layer: "company" as const } : {}),
-      ...(decoyed.has(needle.id) ? { tags: ["tenancy"] } : {}),
+      ...(tags.length ? { tags } : {}),
     };
     out.push({ id, text: key, ...shared });
     if (needle.ageDays >= OLD_NEEDLE_DAYS) {
