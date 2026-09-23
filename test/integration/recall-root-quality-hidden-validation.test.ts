@@ -233,6 +233,11 @@ function geometry(c: RootQualityCase) {
   };
 }
 
+// Scope: these run against test/helpers/d1-mock.ts, whose canned keyword rows make them a
+// test of fusion, root selection, and the graph with a controlled candidate pool. They say
+// nothing about the keyword arm. Real-SQL coverage of the same 30 cases (with a baseline
+// that sees the same keyword pool) is test/eval/legacy-parity.test.ts; retrieval quality on
+// corpora large enough to discriminate keyword strategies is `npm run eval:recall` (T-0043).
 describe("hidden recall validation structure", () => {
   it("preserves the sealed manifest digest and recursive freeze", () => {
     expect(HIDDEN_VALIDATION_SERIALIZATION).toBe("UTF-8 JSON.stringify insertion-order v1");
