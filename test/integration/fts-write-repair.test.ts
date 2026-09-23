@@ -15,12 +15,16 @@ import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { setDbReady } from "../../src/runtime/state";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { STALENESS_AGE_MS } from "../../src/staleness/pass";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 import { OWNER_WRITE_CONTEXT } from "../../src/lib/scope";
 import { makeAIMock, makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import type { Env } from "../../src/env";
+
+/** A cron string that is not one of the special schedules — routes to the nightly maintenance branch. */
+const MAINTENANCE_CRON = "0 1 * * *";
 
 function makeCtx() {
   const pending: Promise<unknown>[] = [];
@@ -270,5 +274,53 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(d1.rows()[0].content).toBe("fresh content");
       await expectRepaired(d1, env);
     });
+  });
+});
+
+// S3 (adversarial review of e32a2b0): the guard was wired into fetch() but
+// never proven to run from scheduled() — the whole suite passed even with
+// it removed there. This drives a real nightly job (staleness, the simplest
+// pass to seed) through the actual scheduled() entry point, with the
+// UNWRAPPED env, so the assertion only holds if scheduled() applies the
+// guard itself.
+describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
+  let d1: SqliteD1;
+
+  beforeEach(() => {
+    setDbReady(true);
+    resetFtsReadyMemo();
+  });
+  afterEach(() => { d1?.close(); setDbReady(false); });
+
+  it("a nightly write persists exactly once and the index is repaired", async () => {
+    d1 = makeSqliteD1();
+    const rawEnv = makeTestEnv(undefined, {
+      DB: d1.db as unknown as D1Database,
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock(),
+      AI: makeAIMock(),
+    });
+    // Deliberately NOT bootstrapSchema(): that helper calls withFtsWriteGuard
+    // itself to warm tenancy's memo, which would patch rawEnv.DB before
+    // scheduled() ever runs (the guard patches in place, so the patch would
+    // already be there regardless of what scheduled() does) — defeating the
+    // point of this test, which is to prove scheduled() applies the guard
+    // ITSELF. Only the schema migration is needed for staleness to have the
+    // columns it writes; nextWorkspace tolerates an un-bootstrapped brain
+    // (a null slice, whole-corpus scan).
+    resetDatabaseInit();
+    await initializeDatabase(rawEnv);
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    d1.seed({ id: "stale-1", content: "an old memory nobody revisited", createdAt: old });
+    await breakByDroppingTable(d1);
+    const { ctx, drain } = makeCtx();
+
+    await worker.scheduled({ cron: MAINTENANCE_CRON } as ScheduledEvent, rawEnv, ctx);
+    await drain();
+
+    const row = d1.rows().find(r => r.id === "stale-1");
+    expect(row).toBeDefined();
+    expect(row!.staleness_checked_at).not.toBeNull();
+    await expectRepaired(d1, rawEnv);
   });
 });

@@ -24,10 +24,37 @@
  * `all`, `first`, `run`, `exec`. Reach for `d1-mock` for everything else.
  */
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const SCHEMA = resolve(import.meta.dirname, "../../db/schema.sql");
+
+// One FIFO queue per connection, shared by every standalone statement AND
+// every batch on that connection. A batch opens a SAVEPOINT for its whole
+// body; without this, a standalone statement issued while that SAVEPOINT is
+// open runs inside it on the same connection and gets rolled back with it if
+// the batch later fails, even though it has nothing to do with the batch.
+const connectionQueues = new WeakMap<DatabaseSync, Promise<unknown>>();
+
+// Marks "this async call chain is executing as part of a batch already
+// holding connection X's queue slot" — set only around db.batch()'s own
+// body (see below). AsyncLocalStorage, not a plain flag, because a flag
+// cannot tell a batch's OWN nested statement.run() calls (which must run
+// inline, or they would queue behind their own still-running batch and
+// deadlock) apart from a genuinely unrelated call that merely happens to
+// execute during the same window (which must still queue and wait its turn).
+const activeBatchConnection = new AsyncLocalStorage<DatabaseSync>();
+
+function enqueue<T>(db: DatabaseSync, fn: () => T | Promise<T>): Promise<T> {
+  if (activeBatchConnection.getStore() === db) {
+    return Promise.resolve().then(fn);
+  }
+  const prior = connectionQueues.get(db) ?? Promise.resolve();
+  const settled = prior.then(fn, fn);
+  connectionQueues.set(db, settled.then(() => undefined, () => undefined));
+  return settled;
+}
 
 class SqliteStatement {
   constructor(
@@ -45,7 +72,7 @@ class SqliteStatement {
     return this.sql;
   }
 
-  async all(): Promise<{ results: unknown[]; success: true; meta: { rows_written: 0 } }> {
+  private allOnce(): { results: unknown[]; success: true; meta: { rows_written: 0 } } {
     const rows = this.db.prepare(this.sql).all(...(this.args as never[]));
     // SQLite can prove that this SELECT wrote no rows, but it cannot reproduce
     // Cloudflare D1's billed rows_read (which includes index/table work rather
@@ -53,7 +80,7 @@ class SqliteStatement {
     return { results: rows, success: true, meta: { rows_written: 0 } };
   }
 
-  async first(): Promise<unknown | null> {
+  private firstOnce(): unknown | null {
     const row = this.db.prepare(this.sql).get(...(this.args as never[]));
     return row ?? null;
   }
@@ -69,7 +96,7 @@ class SqliteStatement {
    * Additive for writes: `meta.rows_written` is unchanged, and `results` is
    * simply absent where there are no rows to report.
    */
-  async run(): Promise<{ results?: unknown[]; success: true; meta: { rows_written: number } }> {
+  private runOnce(): { results?: unknown[]; success: true; meta: { rows_written: number } } {
     const statement = this.db.prepare(this.sql);
     if (/^\s*(SELECT|WITH)\b/i.test(this.sql)) {
       return { results: statement.all(...(this.args as never[])), success: true, meta: { rows_written: 0 } };
@@ -77,6 +104,10 @@ class SqliteStatement {
     const result = statement.run(...(this.args as never[]));
     return { success: true, meta: { rows_written: Number(result.changes) } };
   }
+
+  async all() { return enqueue(this.db, () => this.allOnce()); }
+  async first() { return enqueue(this.db, () => this.firstOnce()); }
+  async run() { return enqueue(this.db, () => this.runOnce()); }
 }
 
 export interface SqliteD1 {
@@ -197,13 +228,6 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
   const issued: string[] = [];
   const batches: string[][] = [];
   let savepointCounter = 0;
-  // Serializes batch() bodies on this one synchronous connection. Two batches
-  // started concurrently (Promise.all of two request handlers) would otherwise
-  // interleave their SAVEPOINTs out of the strict LIFO order SQLite requires —
-  // releasing an outer one implicitly releases an inner one still in flight,
-  // and the inner caller's own RELEASE then fails with "no such savepoint".
-  // Chained through .then(f, f) so a rejected batch still lets the next one run.
-  let batchQueue: Promise<void> = Promise.resolve();
 
   return {
     issued,
@@ -251,14 +275,23 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
         // synchronous connection, and some callers run two logical requests
         // concurrently (Promise.all of two handlers, each batching); BEGIN
         // would fail the second with "cannot start a transaction within a
-        // transaction". Serialized via batchQueue (above) so two SAVEPOINTs
-        // never nest out of LIFO order in the first place.
-        const runBatch = async () => {
+        // transaction". Queued through enqueue() (shared with every
+        // standalone statement on this connection, see above) so two
+        // SAVEPOINTs never nest out of LIFO order, and no unrelated
+        // standalone statement can run while this one is open.
+        return enqueue(raw, () => activeBatchConnection.run(raw, async () => {
           const sp = `sqlite_d1_batch_${savepointCounter++}`;
           raw.exec(`SAVEPOINT ${sp}`);
           try {
             const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
-            for (const statement of statements) out.push(await statement.run());
+            // Every statement.run() here — a real SqliteStatement directly,
+            // or one reached indirectly through a test double's own run() —
+            // is still inside the activeBatchConnection context this batch
+            // just entered, so enqueue() runs it inline instead of queuing
+            // it behind this same still-running batch.
+            for (const statement of statements as unknown as { run(): unknown }[]) {
+              out.push(await statement.run() as { results?: unknown[]; success: true; meta: { rows_written: number } });
+            }
             raw.exec(`RELEASE ${sp}`);
             return out;
           } catch (e) {
@@ -266,10 +299,7 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
             raw.exec(`RELEASE ${sp}`);
             throw e;
           }
-        };
-        const result = batchQueue.then(runBatch, runBatch);
-        batchQueue = result.then(() => undefined, () => undefined);
-        return result;
+        }));
       },
     },
     columns() {
