@@ -1,6 +1,10 @@
-import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  appendFileSync, closeSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync,
+  renameSync, statSync, truncateSync, unlinkSync, writeFileSync, writeSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { hashVector } from "./vectors";
 
@@ -12,13 +16,26 @@ export class ReplayMissError extends Error {
   }
 }
 
+/** Replay inputs must be plain JSON: anything else (Date, Map, ...) has a wire form JSON.stringify would silently collapse. */
 export function stableStringify(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  if (v && typeof v === "object") {
-    const o = v as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${stableStringify(o[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(v);
+  return stringify(v, "$", []);
+}
+
+function stringify(v: unknown, path: string, ancestors: object[]): string {
+  const bad = (what: string): never => {
+    throw new TypeError(`replay inputs must be plain JSON values: ${what} at ${path}`);
+  };
+  if (v === null || typeof v === "string" || typeof v === "boolean") return JSON.stringify(v);
+  if (typeof v === "number") return Number.isFinite(v) ? JSON.stringify(v) : bad(`non-finite number ${v}`);
+  if (typeof v !== "object") return bad(typeof v);
+  if (ancestors.includes(v)) throw new TypeError(`replay inputs must be plain JSON values: cycle at ${path}`);
+  const next = [...ancestors, v];
+  if (Array.isArray(v)) return `[${v.map((x, i) => stringify(x, `${path}[${i}]`, next)).join(",")}]`;
+  const proto = Object.getPrototypeOf(v);
+  if (proto !== Object.prototype && proto !== null) return bad(`${v.constructor?.name ?? "non-plain object"}`);
+  const o = v as Record<string, unknown>;
+  // JSON.stringify drops undefined properties, so the wire body (and key) match the object without them.
+  return `{${Object.keys(o).filter(k => o[k] !== undefined).sort().map(k => `${JSON.stringify(k)}:${stringify(o[k], `${path}.${k}`, next)}`).join(",")}}`;
 }
 
 export const replayKey = (model: string, input: unknown): string =>
@@ -43,14 +60,13 @@ export const EMBEDDING_DIMS: Record<string, number> = {
   "@cf/baai/bge-m3": 1024,
 };
 
-const CJK = /[぀-ヿ㐀-鿿가-힯]/u;
-
-/** Rough token estimate: about 4 characters per token for Latin text, 1 per CJK character. */
-export function estimateTokens(text: string): number {
-  let cjk = 0;
-  for (const ch of text) if (CJK.test(ch)) cjk++;
-  return Math.ceil((text.length - cjk) / 4 + cjk);
-}
+/**
+ * Conservative upper bound on tokens, for budget enforcement: one token per UTF-8 byte.
+ * Every token consumes at least one input byte (byte-level BPE) or code point (WordPiece, [UNK]
+ * included), so bytes can never under-count, whatever the script. Emoji (4 bytes) and CJK (3 bytes)
+ * are covered, at the price of overstating plain Latin text by about 4x.
+ */
+export const estimateTokens = (text: string): number => Buffer.byteLength(text, "utf8");
 
 export function estimateNeurons(model: string, inputText: string, outputText = ""): number {
   const rate = NEURON_RATES[model];
@@ -68,23 +84,143 @@ function fromBase64(b64: string): number[] {
   return Array.from(new Float32Array(copy));
 }
 
-/** Append-only JSONL, optionally gzipped for committed read-only layers. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+/** Working caches live here (gitignored); nothing under it is ever committed. */
+const CACHE_DIR = ".eval-cache";
+/** The only committed location an export may target: the synthetic core cache (`replay.<model>.jsonl.gz`). */
+const COMMITTED_DIR = "test/eval/data/core";
+const COMMITTED_FILE = /^replay\..+\.jsonl\.gz$/;
+const DEFAULT_LOCK_STALE_MS = 120_000;
+const LOCK_POLL_MS = 25;
+
+const sleep = (ms: number) => new Promise(done => setTimeout(done, ms));
+const errCode = (e: unknown) => (e as NodeJS.ErrnoException).code;
+
+/** Symlink-resolved location of a path that may not exist yet: realpath of the deepest existing ancestor plus the rest. */
+function realTarget(path: string): string {
+  const rest: string[] = [];
+  for (let cur = resolve(path); ; cur = dirname(cur)) {
+    try {
+      return join(realpathSync(cur), ...rest.reverse());
+    } catch (e) {
+      if (errCode(e) !== "ENOENT") throw e;
+    }
+    try {
+      lstatSync(cur);
+      throw new Error(`${cur} is a dangling symlink`);
+    } catch (e) {
+      if (errCode(e) !== "ENOENT") throw e;
+    }
+    rest.push(basename(cur));
+  }
+}
+
+const isInside = (child: string, parent: string) => {
+  const rel = relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+};
+
+export interface ReplayStoreOptions {
+  /** Repo root that .eval-cache/ and the committed data directory hang off; tests point this at a temp dir. */
+  root?: string;
+  /** A lockfile older than this is treated as abandoned by a dead process. */
+  lockStaleMs?: number;
+}
+
+/**
+ * Append-only JSONL, optionally gzipped for committed read-only layers. Working files must resolve
+ * (symlinks included) inside <root>/.eval-cache; read layers may also come from the committed core directory.
+ */
 export class ReplayStore {
   private readonly map = new Map<string, Stored>();
-  constructor(readPaths: readonly string[], private readonly writePath?: string) {
-    for (const p of readPaths) this.load(p);
-    if (writePath) this.load(writePath);
+  private readonly cacheDir: string;
+  private readonly committedDir: string;
+  private readonly lockStaleMs: number;
+  private readonly inflight = new Map<string, Promise<{ stored: Stored; live: boolean }>>();
+  private readonly writeFile?: string;
+  /** Bytes of the write file already read into the map (complete lines only). */
+  private offset = 0;
+
+  constructor(readPaths: readonly string[], writePath?: string, opts: ReplayStoreOptions = {}) {
+    const realRoot = realpathSync(opts.root ?? REPO_ROOT);
+    this.cacheDir = join(realRoot, CACHE_DIR);
+    this.committedDir = join(realRoot, COMMITTED_DIR);
+    this.lockStaleMs = opts.lockStaleMs ?? DEFAULT_LOCK_STALE_MS;
+    const inside = (path: string, dirs: string[]) => {
+      const abs = resolve(path);
+      if (!dirs.some(d => isInside(realTarget(abs), d))) {
+        throw new Error(`replay cache path ${path} must resolve inside ${dirs.join(" or ")}`);
+      }
+      return abs;
+    };
+    const reads = readPaths.map(p => inside(p, [this.cacheDir, this.committedDir]));
+    if (writePath) this.writeFile = inside(writePath, [this.cacheDir]);
+    for (const p of reads) this.load(p, false);
+    if (this.writeFile) this.load(this.writeFile, true);
   }
-  private load(path: string) {
-    if (!existsSync(path)) return;
-    const raw = readFileSync(path);
-    const text = (path.endsWith(".gz") ? gunzipSync(raw) : raw).toString("utf8");
-    for (const line of text.split("\n")) {
-      if (!line) continue;
-      const { k, v } = JSON.parse(line) as { k: string; v: Stored };
-      this.map.set(k, v);
+
+  private apply(path: string, lineNo: number, line: string) {
+    try {
+      const rec = JSON.parse(line) as { k?: unknown; v?: unknown };
+      if (typeof rec.k !== "string" || !rec.v || typeof rec.v !== "object") throw new Error("expected {k: string, v: object}");
+      this.map.set(rec.k, rec.v as Stored);
+    } catch (e) {
+      throw new Error(`${path}:${lineNo}: corrupt replay record (${(e as Error).message})`);
     }
   }
+
+  /** Reads every complete line; returns the bytes consumed. A torn final line is skipped, anything else corrupt throws. */
+  private ingest(path: string, buf: Buffer): number {
+    const complete = buf.lastIndexOf(10) + 1;
+    let pos = 0;
+    let lineNo = 0;
+    while (pos < complete) {
+      const nl = buf.indexOf(10, pos);
+      lineNo++;
+      const line = buf.toString("utf8", pos, nl);
+      if (line) this.apply(path, lineNo, line);
+      pos = nl + 1;
+    }
+    if (complete === buf.length) return complete;
+    try {
+      this.apply(path, lineNo + 1, buf.toString("utf8", complete));
+      return buf.length; // intact record that only lacks its newline
+    } catch {
+      console.warn(`${path}: ignoring incomplete final record (${buf.length - complete} bytes, likely a torn write)`);
+      return complete;
+    }
+  }
+
+  private load(path: string, writable: boolean) {
+    if (!existsSync(path)) return;
+    const raw = readFileSync(path);
+    const buf = path.endsWith(".gz") ? gunzipSync(raw) : raw;
+    const consumed = this.ingest(path, buf);
+    if (!writable) return;
+    // Repair now so the next append cannot concatenate onto the torn tail.
+    if (consumed < buf.length) truncateSync(path, consumed);
+    else if (buf.length > 0 && buf[buf.length - 1] !== 10) appendFileSync(path, "\n");
+    this.offset = statSync(path).size;
+  }
+
+  /** Picks up rows other processes appended to the write file since we last looked. */
+  private refresh() {
+    const path = this.writeFile;
+    if (!path || !existsSync(path)) return;
+    const size = statSync(path).size;
+    if (size <= this.offset) return;
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(size - this.offset);
+      readSync(fd, buf, 0, buf.length, this.offset);
+      const complete = buf.subarray(0, buf.lastIndexOf(10) + 1);
+      this.ingest(path, complete);
+      this.offset += complete.length;
+    } finally {
+      closeSync(fd);
+    }
+  }
+
   /** Keys served since construction; lets a run export exactly the slice it needed. */
   readonly used = new Set<string>();
   get(key: string): Stored | undefined {
@@ -92,18 +228,116 @@ export class ReplayStore {
     if (value) this.used.add(key);
     return value;
   }
-  /** Writes only the keys this run used to a gzipped JSONL file (the committed core cache). */
+
+  /**
+   * Writes only the keys this run used to a gzipped JSONL file, via a temp file and rename so a crash
+   * never leaves a half-written cache. Allowed targets: inside .eval-cache, or `replay.*.jsonl.gz`
+   * in the committed core data directory (the synthetic core cache).
+   */
   exportUsed(path: string): number {
+    const abs = resolve(path);
+    const real = realTarget(abs);
+    const allowed = isInside(real, this.cacheDir) || (isInside(real, this.committedDir) && COMMITTED_FILE.test(basename(real)));
+    if (!allowed) {
+      throw new Error(`exportUsed may write only inside ${this.cacheDir} or ${join(this.committedDir, "replay.<model>.jsonl.gz")}, not ${path}`);
+    }
     const lines = [...this.used].sort().map(k => JSON.stringify({ k, v: this.map.get(k) }));
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, gzipSync(`${lines.join("\n")}\n`));
+    mkdirSync(dirname(abs), { recursive: true });
+    const tmp = `${abs}.${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      writeFileSync(tmp, gzipSync(`${lines.join("\n")}\n`));
+      renameSync(tmp, abs);
+    } catch (e) {
+      try { unlinkSync(tmp); } catch { /* temp may not exist */ }
+      throw e;
+    }
     return lines.length;
   }
+
   put(key: string, value: Stored): void {
-    if (!this.writePath) throw new Error("replay store is read-only");
-    mkdirSync(dirname(this.writePath), { recursive: true });
-    appendFileSync(this.writePath, `${JSON.stringify({ k: key, v: value })}\n`);
+    const path = this.writeFile;
+    if (!path) throw new Error("replay store is read-only");
+    mkdirSync(dirname(path), { recursive: true });
+    if (existsSync(path)) {
+      const buf = readFileSync(path);
+      if (buf.length > 0 && buf[buf.length - 1] !== 10) truncateSync(path, buf.lastIndexOf(10) + 1); // a crashed writer's torn tail
+    }
+    appendFileSync(path, `${JSON.stringify({ k: key, v: value })}\n`);
     this.map.set(key, value);
+  }
+
+  /** Stale-lock takeover: move the lock aside atomically, so only one contender wins, then confirm it really was stale. */
+  private breakIfStale(lock: string): boolean {
+    let t: number;
+    try {
+      t = (JSON.parse(readFileSync(lock, "utf8")) as { t: number }).t;
+    } catch (e) {
+      if (errCode(e) === "ENOENT") return true;
+      t = statSync(lock).mtimeMs; // unreadable or half-written lock: fall back to its age on disk
+    }
+    if (Date.now() - t <= this.lockStaleMs) return false;
+    const aside = `${lock}.${randomBytes(4).toString("hex")}.stale`;
+    try {
+      renameSync(lock, aside);
+    } catch (e) {
+      if (errCode(e) === "ENOENT") return true;
+      throw e;
+    }
+    try {
+      const moved = (JSON.parse(readFileSync(aside, "utf8")) as { t: number }).t;
+      if (Date.now() - moved > this.lockStaleMs) return true;
+      try { linkSync(aside, lock); } catch { /* another contender already took the slot */ } // we moved a fresh lock: put it back
+      return false;
+    } finally {
+      try { unlinkSync(aside); } catch { /* already gone */ }
+    }
+  }
+
+  /** Cross-process advisory lock: exclusive-create lockfile next to the write file, one per key. */
+  private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const lock = `${this.writeFile}.${key}.lock`;
+    const token = randomBytes(8).toString("hex");
+    for (;;) {
+      try {
+        const fd = openSync(lock, "wx");
+        try { writeSync(fd, JSON.stringify({ pid: process.pid, t: Date.now(), token })); } finally { closeSync(fd); }
+        break;
+      } catch (e) {
+        if (errCode(e) !== "EEXIST") throw e;
+        if (!this.breakIfStale(lock)) await sleep(LOCK_POLL_MS);
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      try {
+        if ((JSON.parse(readFileSync(lock, "utf8")) as { token: string }).token === token) unlinkSync(lock); // not one a stale takeover replaced
+      } catch { /* already gone */ }
+    }
+  }
+
+  /**
+   * Makes `produce` run at most once per key: concurrent callers in this process share the one call, and
+   * across processes the lockfile serializes contenders, with a cache recheck after acquiring it.
+   * `live` is true only for the caller whose `produce` ran.
+   */
+  async fill(key: string, produce: () => Promise<Stored>): Promise<{ stored: Stored; live: boolean }> {
+    const running = this.inflight.get(key);
+    if (running) return { stored: (await running).stored, live: false };
+    const flight = this.withLock(key, async () => {
+      this.refresh();
+      const cached = this.get(key);
+      if (cached) return { stored: cached, live: false };
+      const stored = await produce();
+      this.put(key, stored);
+      return { stored, live: true };
+    });
+    this.inflight.set(key, flight);
+    try {
+      return await flight;
+    } finally {
+      this.inflight.delete(key);
+    }
   }
   get size() { return this.map.size; }
 }
@@ -142,6 +376,20 @@ export class NeuronBudget {
     if (this.spent + n > this.limit) throw new Error(`neuron budget exceeded: ${(this.spent + n).toFixed(1)} > ${this.limit}. Raise --max-neurons deliberately.`);
     this.spent += n;
   }
+  /** Returns a reservation that was never spent (the live call failed). */
+  refund(n: number) { this.spent = Math.max(0, this.spent - n); }
+  /** Replaces a reservation with the actual spend; may end above the limit, since the money is already gone. */
+  settle(reserved: number, actual: number) { this.spent = Math.max(0, this.spent - reserved + actual); }
+}
+
+/** Output tokens reserved against the budget before a live LLM call, unless the caller sets max_tokens or maxOutputTokens. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
+
+/** Worst-case cost to reserve before a live call: the input plus a full-length output. */
+function reserveNeurons(model: string, inputText: string, outputTokens: number): number {
+  const rate = NEURON_RATES[model];
+  if (!rate) return estimateNeurons(model, inputText); // throws the standard unknown-model error
+  return (estimateTokens(inputText) * rate.inputPerMillionTokens + outputTokens * (rate.outputPerMillionTokens ?? 0)) / 1_000_000;
 }
 
 export interface AiCall { model: string; kind: "embedding" | "llm" | "other"; neurons: number; source: "replay" | "live" | "stub" | "dry" }
@@ -188,6 +436,8 @@ export function makeReplayAi(opts: {
   budget?: NeuronBudget;
   /** Record LLM calls too (query-tag inference); off by default because it spends neurons on non-embedding work. */
   recordLlm?: boolean;
+  /** Output tokens to reserve against the budget before a live LLM call (reporting always prices the actual output). */
+  maxOutputTokens?: number;
   /** Dry-mode answer for non-embedding, non-LLM calls (a rerank variant supplies its own). */
   dryOther?: (model: string, input: unknown) => unknown;
 }): ReplayAi {
@@ -197,10 +447,11 @@ export function makeReplayAi(opts: {
     const kind = kindOf(input);
     const key = replayKey(model, input);
     const text = inputText(kind, input);
+    // Reporting always prices the actual cached or returned output, so record and replay agree.
+    const price = (stored?: Stored) => estimateNeurons(model, text, stored && "text" in stored ? stored.text : "");
     const hit = opts.store.get(key);
     if (hit) {
-      const out = "text" in hit ? hit.text : "";
-      calls.push({ model, kind, neurons: estimateNeurons(model, text, out), source: "replay" });
+      calls.push({ model, kind, neurons: price(hit), source: "replay" });
       return respond(input, hit);
     }
     const preview = text.slice(0, 60).replace(/\s+/g, " ");
@@ -218,12 +469,23 @@ export function makeReplayAi(opts: {
       throw new ReplayMissError(model, key, preview);
     }
     if (opts.mode === "replay" || !opts.live) throw new ReplayMissError(model, key, preview);
-    const neurons = estimateNeurons(model, text, kind === "llm" ? "x".repeat(160) : "");
-    opts.budget?.charge(neurons);
-    const result = await opts.live.run(model, kind === "llm" ? { ...input, stream: false } : input);
-    const stored = encode(kind, result);
-    opts.store.put(key, stored);
-    calls.push({ model, kind, neurons, source: "live" });
+    const live = opts.live;
+    const { stored, live: ranLive } = await opts.store.fill(key, async () => {
+      const maxOut = typeof (input as { max_tokens?: unknown }).max_tokens === "number"
+        ? (input as { max_tokens: number }).max_tokens : opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+      const reserved = reserveNeurons(model, text, kind === "llm" ? maxOut : 0);
+      opts.budget?.charge(reserved);
+      let fresh: Stored;
+      try {
+        fresh = encode(kind, await live.run(model, kind === "llm" ? { ...input, stream: false } : input));
+      } catch (e) {
+        opts.budget?.refund(reserved);
+        throw e;
+      }
+      opts.budget?.settle(reserved, price(fresh));
+      return fresh;
+    });
+    calls.push({ model, kind, neurons: price(stored), source: ranLive ? "live" : "replay" });
     return respond(input, stored);
   };
   return {

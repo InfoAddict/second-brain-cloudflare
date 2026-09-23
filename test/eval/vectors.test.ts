@@ -20,4 +20,31 @@ describe("vectors", () => {
     expect(controlledVector(q, 0.5, "x")).toEqual(controlledVector(q, 0.5, "x"));
     expect(controlledVector(q, 0.5, "x")).not.toEqual(controlledVector(q, 0.5, "y"));
   });
+
+  it("cosine throws on zero vectors, mismatched dimensions, empty and non-finite input", () => {
+    expect(() => cosine([0, 0], [1, 0])).toThrow(/zero/);
+    expect(() => cosine([1, 0], [0, 0])).toThrow(/zero/);
+    expect(() => cosine([1, 0], [1])).toThrow(/dimension/);
+    expect(() => cosine([], [])).toThrow(/empty/);
+    expect(() => cosine([1, Number.NaN], [1, 0])).toThrow(/finite/);
+    expect(() => cosine([1, Infinity], [1, 0])).toThrow(/finite/);
+  });
+
+  it("cosine does not overflow or underflow on extreme finite magnitudes", () => {
+    expect(cosine([1e200, 1e200], [1e200, 1e200])).toBeCloseTo(1, 12);
+    expect(cosine([1e200, 0], [0, 1e-200])).toBeCloseTo(0, 12);
+    expect(cosine([1e-200, 1e-200], [2e-200, 2e-200])).toBeCloseTo(1, 12);
+    expect(cosine([3, 4], [4, 3])).toBeCloseTo(24 / 25, 12);
+    expect(cosine([1, 2, 3], [-1, -2, -3])).toBe(-1); // clamped, never below -1
+  });
+
+  it("controlledVector rejects degenerate inputs instead of returning NaN", () => {
+    const q = hashVector("q", 8);
+    expect(() => controlledVector([1], 0.5, "one")).toThrow(/dimension/);
+    expect(() => controlledVector([0, 0, 0], 0.5, "zero")).toThrow(/zero/);
+    expect(() => controlledVector([1, Number.NaN], 0.5, "nan")).toThrow(/finite/);
+    expect(() => controlledVector(q, 1.5, "big")).toThrow(/targetCosine/);
+    expect(() => controlledVector(q, Number.NaN, "nan")).toThrow(/targetCosine/);
+    expect(controlledVector(q, 1, "one").every(Number.isFinite)).toBe(true);
+  });
 });
