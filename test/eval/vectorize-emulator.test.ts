@@ -109,7 +109,13 @@ describe("ExactVectorize", () => {
       { id: "update-1", values: [1, 0], metadata: { workspace_id: "w1" } },
     ]);
     expect(await index.describe()).toMatchObject({ dimensions: 2, vectorCount: 1 });
-    await expect(index.insert([{ id: "update-1", values: [0, 1] }])).rejects.toThrow(/already exists/);
+    await index.insert([{ id: "update-1", values: [0, 1] }, { id: "update-2", values: [0, 1] }]);
+    expect(await index.getByIds(["update-1", "update-2"])).toEqual([
+      { id: "update-1", values: [1, 0], metadata: { workspace_id: "w1" } },
+      { id: "update-2", values: [0, 1] },
+    ]);
+    await index.insert([{ id: "same-batch", values: [1, 0] }, { id: "same-batch", values: [0, 1] }]);
+    expect((await index.getByIds(["same-batch"]))[0].values).toEqual([1, 0]);
   });
 
   it("returns the whole smaller index and breaks score ties by ascending ID", async () => {
@@ -118,7 +124,11 @@ describe("ExactVectorize", () => {
     const result = await index.query([1, 0], { topK: 50 });
     expect(result.count).toBe(2);
     expect(result.matches.map(m => m.id)).toEqual(["m", "z"]);
-    await expect(index.query([1, 0], { topK: 51 })).rejects.toThrow(/topK/);
+    expect((await index.query([1, 0], { topK: 100 })).count).toBe(2);
+    expect((await index.query([1, 0], { topK: 100, returnMetadata: "indexed" })).count).toBe(2);
+    await expect(index.query([1, 0], { topK: 101 })).rejects.toThrow(/topK/);
+    await expect(index.query([1, 0], { topK: 51, returnValues: true })).rejects.toThrow(/topK/);
+    await expect(index.query([1, 0], { topK: 51, returnMetadata: "all" })).rejects.toThrow(/topK/);
     await expect(index.upsert([{ id: "bad", values: [1, 0, 0] }])).rejects.toThrow(/dimension/);
     await expect(index.query([1, 0, 0], { topK: 1 })).rejects.toThrow(/dimension/);
   });
@@ -144,5 +154,78 @@ describe("ExactVectorize", () => {
     } finally {
       errorLog.mockRestore();
     }
+  });
+
+  it("rejects malformed filter keys and an empty filter with filter-matching errors", async () => {
+    const index = await seeded();
+    for (const filter of [{}, { $bad: 1 }, { "a.b": 1 }, { 'a"b': 1 }, { "": 1 }, { ["x".repeat(513)]: 1 }]) {
+      await expect(index.query(query, { filter })).rejects.toThrow(/filter/i);
+    }
+  });
+
+  it("requires configured metadata indexes and returns only indexed metadata", async () => {
+    const index = new ExactVectorize({ dimensions: 2, indexedProperties: ["workspace_id"] });
+    await index.upsert([{ id: "a", values: [1, 0], metadata: { workspace_id: "w1", note: "private" } }]);
+    expect((await index.query([1, 0], { filter: { workspace_id: "w1" }, returnMetadata: "indexed" })).matches[0].metadata)
+      .toEqual({ workspace_id: "w1" });
+    expect((await index.query([1, 0], { returnMetadata: "all" })).matches[0].metadata)
+      .toEqual({ workspace_id: "w1", note: "private" });
+    await expect(index.query([1, 0], { filter: { note: "private" } })).rejects.toThrow(/filter/i);
+  });
+
+  it("degrades a scoped query when workspace_id is not indexed", async () => {
+    const index = new ExactVectorize({ dimensions: DIMS, indexedProperties: [] });
+    await index.upsert([{ id: "a", values: query, metadata: { workspace_id: "w1" } }]);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await queryVectorizeScoped<{ id: string }>(
+        index as never, query, { topK: 1, filter: { workspace_id: { $in: ["w1"] } } },
+      );
+      expect(result.degraded).toBe(true);
+      expect(result.matches.map(m => m.id)).toEqual(["a"]);
+      expect(errorLog).toHaveBeenCalledOnce();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it("rejects namespaces rather than silently querying or storing outside scope", async () => {
+    const index = new ExactVectorize({ dimensions: 2 });
+    await expect(index.upsert([{ id: "a", values: [1, 0], namespace: "other" }])).rejects.toThrow(/namespace/i);
+    await expect(index.insert([{ id: "a", values: [1, 0], namespace: "other" }])).rejects.toThrow(/namespace/i);
+    await expect(index.query([1, 0], { namespace: "other" })).rejects.toThrow(/namespace/i);
+  });
+
+  it("enforces UTF-8 ID length at 64 bytes for insert and upsert", async () => {
+    const index = new ExactVectorize({ dimensions: 2 });
+    await index.upsert([{ id: "é".repeat(32), values: [1, 0] }]);
+    await index.insert([{ id: "x".repeat(64), values: [1, 0] }]);
+    await expect(index.upsert([{ id: "é".repeat(33), values: [1, 0] }])).rejects.toThrow(/id/i);
+    await expect(index.insert([{ id: "x".repeat(65), values: [1, 0] }])).rejects.toThrow(/id/i);
+  });
+
+  it("enforces the 1000-vector Workers batch limit without partial writes", async () => {
+    const index = new ExactVectorize({ dimensions: 2 });
+    const batch = Array.from({ length: 1001 }, (_, i) => ({ id: `v${i}`, values: [1, 0] }));
+    await index.upsert(batch.slice(0, 1000));
+    expect(index.size).toBe(1000);
+    await expect(index.insert(batch)).rejects.toThrow(/batch/i);
+    await expect(index.upsert(batch)).rejects.toThrow(/batch/i);
+    expect(index.size).toBe(1000);
+  });
+
+  it("enforces 10 KiB of JSON metadata per vector", async () => {
+    const index = new ExactVectorize({ dimensions: 2 });
+    await index.upsert([{ id: "a", values: [1, 0], metadata: { c: "x".repeat(10232) } }]);
+    expect(index.size).toBe(1);
+    await expect(index.insert([{ id: "b", values: [1, 0], metadata: { c: "x".repeat(10233) } }]))
+      .rejects.toThrow(/metadata/i);
+    expect(index.size).toBe(1);
+  });
+
+  it("requires compact filter JSON to be smaller than 2048 bytes", async () => {
+    const index = await seeded();
+    expect((await index.query(query, { filter: { note: "x".repeat(2036) } })).count).toBe(0);
+    await expect(index.query(query, { filter: { note: "x".repeat(2037) } })).rejects.toThrow(/filter/i);
   });
 });
