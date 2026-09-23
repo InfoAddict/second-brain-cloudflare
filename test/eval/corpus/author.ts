@@ -7,6 +7,18 @@ import type { NeedleRow } from "./types";
 export const OLD_NEEDLE_DAYS = 450;
 /** Board item for underscore identifiers that the keyword arm cannot match. */
 export const UNDERSCORE_GAP = "gap:T-0072";
+/**
+ * Mechanical queries the production router fails at the discriminating scales (5k, 20k), keyed by query id.
+ * T-0073: the "roadmap" prefix pushes the df sum past FTS_MATCH_BUDGET, so keyword search runs as LIKE.
+ * T-0074: the key holds a token under 3 characters, and one FTS-ineligible token sends the whole query to LIKE.
+ * Both pass at core-1k, where every match fits the LIKE window; the audit checks the ids against the real router model.
+ */
+export const ROUTE_GAP_QUERIES: Readonly<Record<string, string>> = {
+  "q-id-007": "gap:T-0074", "q-id-007-c": "gap:T-0074",
+  "q-id-024": "gap:T-0074", "q-id-024-c": "gap:T-0074",
+  "q-id-035": "gap:T-0074", "q-id-035-c": "gap:T-0074",
+  "q-id-023-c": "gap:T-0073", "q-id-030-c": "gap:T-0073",
+};
 
 /**
  * Identifier and rare-word queries, built only from a needle's declared keys.
@@ -24,18 +36,21 @@ export function mechanicalQueries(needles: readonly NeedleRow[]): GoldenQuery[] 
     const id = `${needle.purpose === "identifier" ? "q-id" : "q-rare"}-${String(n).padStart(3, "0")}`;
     const key = needle.keys[0];
     // Production strips "_" from query tokens (a LIKE wildcard), so these keys are a measured gap, not an audit error.
-    const tags = [...(decoyed.has(needle.id) ? ["tenancy"] : []), ...(key.includes("_") ? ["known-gap", UNDERSCORE_GAP] : [])];
+    const tagsFor = (queryId: string) => {
+      const gaps = [...(key.includes("_") ? [UNDERSCORE_GAP] : []), ...(ROUTE_GAP_QUERIES[queryId] ? [ROUTE_GAP_QUERIES[queryId]] : [])];
+      return [...(decoyed.has(needle.id) ? ["tenancy"] : []), ...(gaps.length ? ["known-gap", ...gaps] : [])];
+    };
     const byBlake = needle.purpose === "identifier" && needle.workspace === "company" && n % 2 === 1;
     const shared = {
       category: needle.purpose,
       gold: [{ id: needle.id, grade: 2 as const }],
       viewer: byBlake ? ("blake" as const) : ("avery" as const),
       ...(byBlake ? { layer: "company" as const } : {}),
-      ...(tags.length ? { tags } : {}),
     };
-    out.push({ id, text: key, ...shared });
+    const tagged = (queryId: string) => (tagsFor(queryId).length ? { tags: tagsFor(queryId) } : {});
+    out.push({ id, text: key, ...shared, ...tagged(id) });
     if (needle.ageDays >= OLD_NEEDLE_DAYS) {
-      out.push({ id: `${id}-c`, text: `${COMMON_TOKENS[0]} ${key}`, ...shared });
+      out.push({ id: `${id}-c`, text: `${COMMON_TOKENS[0]} ${key}`, ...shared, ...tagged(`${id}-c`) });
     }
   }
   return out;

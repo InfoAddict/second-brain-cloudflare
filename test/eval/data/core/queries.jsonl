@@ -6,8 +6,8 @@
 {"id":"q-id-004-c","text":"roadmap 9f3c1ab","category":"identifier","gold":[{"id":"n-id-004","grade":2}],"viewer":"avery"}
 {"id":"q-id-005","text":"E-84172","category":"identifier","gold":[{"id":"n-id-005","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
 {"id":"q-id-006","text":"10.20.4.17","category":"identifier","gold":[{"id":"n-id-006","grade":2}],"viewer":"avery"}
-{"id":"q-id-007","text":"SO-778120","category":"identifier","gold":[{"id":"n-id-007","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
-{"id":"q-id-007-c","text":"roadmap SO-778120","category":"identifier","gold":[{"id":"n-id-007","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
+{"id":"q-id-007","text":"SO-778120","category":"identifier","gold":[{"id":"n-id-007","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy","known-gap","gap:T-0074"]}
+{"id":"q-id-007-c","text":"roadmap SO-778120","category":"identifier","gold":[{"id":"n-id-007","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy","known-gap","gap:T-0074"]}
 {"id":"q-id-008","text":"#90417","category":"identifier","gold":[{"id":"n-id-008","grade":2}],"viewer":"avery","tags":["tenancy"]}
 {"id":"q-id-009","text":"PLAT-81234","category":"identifier","gold":[{"id":"n-id-009","grade":2}],"viewer":"blake","layer":"company"}
 {"id":"q-id-010","text":"TRK-88420917","category":"identifier","gold":[{"id":"n-id-010","grade":2}],"viewer":"avery"}
@@ -26,23 +26,23 @@
 {"id":"q-id-021","text":"nightly-88","category":"identifier","gold":[{"id":"n-id-021","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
 {"id":"q-id-022","text":"release-2026.09.88","category":"identifier","gold":[{"id":"n-id-022","grade":2}],"viewer":"avery"}
 {"id":"q-id-023","text":"MSA-2026-88031","category":"identifier","gold":[{"id":"n-id-023","grade":2}],"viewer":"blake","layer":"company"}
-{"id":"q-id-023-c","text":"roadmap MSA-2026-88031","category":"identifier","gold":[{"id":"n-id-023","grade":2}],"viewer":"blake","layer":"company"}
-{"id":"q-id-024","text":"LK-88104","category":"identifier","gold":[{"id":"n-id-024","grade":2}],"viewer":"avery"}
-{"id":"q-id-024-c","text":"roadmap LK-88104","category":"identifier","gold":[{"id":"n-id-024","grade":2}],"viewer":"avery"}
+{"id":"q-id-023-c","text":"roadmap MSA-2026-88031","category":"identifier","gold":[{"id":"n-id-023","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0073"]}
+{"id":"q-id-024","text":"LK-88104","category":"identifier","gold":[{"id":"n-id-024","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0074"]}
+{"id":"q-id-024-c","text":"roadmap LK-88104","category":"identifier","gold":[{"id":"n-id-024","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0074"]}
 {"id":"q-id-025","text":"acme-lab-5g-88","category":"identifier","gold":[{"id":"n-id-025","grade":2}],"viewer":"blake","layer":"company"}
 {"id":"q-id-026","text":"BUG-88451","category":"identifier","gold":[{"id":"n-id-026","grade":2}],"viewer":"avery","tags":["tenancy"]}
 {"id":"q-id-027","text":"1.88.4-beta.3","category":"identifier","gold":[{"id":"n-id-027","grade":2}],"viewer":"avery"}
 {"id":"q-id-028","text":"SPRINT-88","category":"identifier","gold":[{"id":"n-id-028","grade":2}],"viewer":"avery"}
 {"id":"q-id-029","text":"ctr-88a7f2","category":"identifier","gold":[{"id":"n-id-029","grade":2}],"viewer":"blake","layer":"company"}
 {"id":"q-id-030","text":"ORD-2026-880412","category":"identifier","gold":[{"id":"n-id-030","grade":2}],"viewer":"avery"}
-{"id":"q-id-030-c","text":"roadmap ORD-2026-880412","category":"identifier","gold":[{"id":"n-id-030","grade":2}],"viewer":"avery"}
+{"id":"q-id-030-c","text":"roadmap ORD-2026-880412","category":"identifier","gold":[{"id":"n-id-030","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
 {"id":"q-id-031","text":"CERT-88A41F","category":"identifier","gold":[{"id":"n-id-031","grade":2}],"viewer":"blake","layer":"company","tags":["tenancy"]}
 {"id":"q-id-032","text":"HELP-88817","category":"identifier","gold":[{"id":"n-id-032","grade":2}],"viewer":"avery"}
 {"id":"q-id-033","text":"billing-88.example.com","category":"identifier","gold":[{"id":"n-id-033","grade":2}],"viewer":"blake","layer":"company"}
 {"id":"q-id-033-c","text":"roadmap billing-88.example.com","category":"identifier","gold":[{"id":"n-id-033","grade":2}],"viewer":"blake","layer":"company"}
 {"id":"q-id-034","text":"88-KLM-41","category":"identifier","gold":[{"id":"n-id-034","grade":2}],"viewer":"avery"}
-{"id":"q-id-035","text":"PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company"}
-{"id":"q-id-035-c","text":"roadmap PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-035","text":"PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0074"]}
+{"id":"q-id-035-c","text":"roadmap PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0074"]}
 {"id":"q-id-036","text":"ticket-88902","category":"identifier","gold":[{"id":"n-id-036","grade":2}],"viewer":"avery"}
 {"id":"q-id-037","text":"ERR_QUOTA_77120","category":"identifier","gold":[{"id":"n-id-046","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0072"]}
 {"id":"q-id-038","text":"BILLING_WEBHOOK_SECRET_V2","category":"identifier","gold":[{"id":"n-id-047","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
@@ -154,16 +154,16 @@
 {"id":"q-common-035","category":"common-word","text":"garden window coffee","gold":[{"id":"n-common-035","grade":2}],"viewer":"blake"}
 {"id":"q-common-036","category":"common-word","text":"bread cheese garden","gold":[{"id":"n-common-036","grade":2}],"viewer":"blake"}
 {"id":"q-common-037","category":"common-word","text":"kitchen table bread","gold":[{"id":"n-common-037","grade":2}],"viewer":"avery"}
-{"id":"q-budget-001","category":"common-word","text":"garden window letter roadmap","gold":[{"id":"n-budget-001","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-002","category":"common-word","text":"garden window table standup","gold":[{"id":"n-budget-002","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-003","category":"common-word","text":"garden coffee bread invoice","gold":[{"id":"n-budget-003","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-004","category":"common-word","text":"garden kitchen letter invoice","gold":[{"id":"n-budget-004","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-005","category":"common-word","text":"garden kitchen table roadmap","gold":[{"id":"n-budget-005","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-006","category":"common-word","text":"garden kitchen cheese standup","gold":[{"id":"n-budget-006","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-007","category":"common-word","text":"window coffee kitchen roadmap standup","gold":[{"id":"n-budget-007","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-008","category":"common-word","text":"window kitchen table roadmap invoice","gold":[{"id":"n-budget-008","grade":2}],"viewer":"blake","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-009","category":"common-word","text":"window kitchen bread standup","gold":[{"id":"n-budget-009","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
-{"id":"q-budget-010","category":"common-word","text":"window table cheese invoice","gold":[{"id":"n-budget-010","grade":2}],"viewer":"avery","tags":["router-budget","known-gap","gap:T-0073"]}
+{"id":"q-budget-001","category":"common-word","text":"garden window letter roadmap","gold":[{"id":"n-budget-001","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-002","category":"common-word","text":"garden window table standup","gold":[{"id":"n-budget-002","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-003","category":"common-word","text":"garden coffee bread invoice","gold":[{"id":"n-budget-003","grade":2}],"viewer":"blake","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-004","category":"common-word","text":"garden kitchen letter invoice","gold":[{"id":"n-budget-004","grade":2}],"viewer":"blake","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-005","category":"common-word","text":"garden kitchen table roadmap","gold":[{"id":"n-budget-005","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-006","category":"common-word","text":"garden kitchen cheese standup","gold":[{"id":"n-budget-006","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-007","category":"common-word","text":"window coffee kitchen roadmap standup","gold":[{"id":"n-budget-007","grade":2}],"viewer":"blake","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-008","category":"common-word","text":"window kitchen table roadmap invoice","gold":[{"id":"n-budget-008","grade":2}],"viewer":"blake","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-009","category":"common-word","text":"window kitchen bread standup","gold":[{"id":"n-budget-009","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
+{"id":"q-budget-010","category":"common-word","text":"window table cheese invoice","gold":[{"id":"n-budget-010","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0073"]}
 {"id":"q-short-001","category":"short-word","text":"ox latch","gold":[{"id":"n-short-001","grade":2}],"viewer":"avery"}
 {"id":"q-short-002","category":"short-word","text":"k8 upgrade","gold":[{"id":"n-short-002","grade":2}],"viewer":"avery"}
 {"id":"q-short-003","category":"short-word","text":"ai policy","gold":[{"id":"n-short-003","grade":2}],"viewer":"avery"}
@@ -190,10 +190,10 @@
 {"id":"q-short-024","category":"short-word","text":"tv mount","gold":[{"id":"n-short-024","grade":2}],"viewer":"avery"}
 {"id":"q-short-025","category":"short-word","text":"os patch","gold":[{"id":"n-short-025","grade":2}],"viewer":"avery"}
 {"id":"q-short-026","category":"short-word","text":"ip allowlist","gold":[{"id":"n-short-026","grade":2}],"viewer":"avery"}
-{"id":"q-short-027","category":"short-word","text":"io scheduler","gold":[{"id":"n-short-027","grade":2}],"viewer":"avery"}
+{"id":"q-short-027","category":"short-word","text":"io scheduler","gold":[{"id":"n-short-027","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0074"]}
 {"id":"q-short-028","category":"short-word","text":"xl shirts","gold":[{"id":"n-short-028","grade":2}],"viewer":"avery"}
 {"id":"q-short-029","category":"short-word","text":"uv exposure","gold":[{"id":"n-short-029","grade":2}],"viewer":"avery"}
-{"id":"q-short-030","category":"short-word","text":"id badge","gold":[{"id":"n-short-030","grade":2}],"viewer":"avery"}
+{"id":"q-short-030","category":"short-word","text":"id badge","gold":[{"id":"n-short-030","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0074"]}
 {"id":"q-para-001","category":"paraphrase","text":"why don't I answer work phone conversations at night","gold":[{"id":"n-para-001","grade":2}],"viewer":"avery"}
 {"id":"q-para-002","category":"paraphrase","text":"did I cut back on caffeine","gold":[{"id":"n-para-002","grade":2}],"viewer":"avery"}
 {"id":"q-para-003","category":"paraphrase","text":"how long should the newcomer watch customer service first","gold":[{"id":"n-para-003","grade":2}],"viewer":"avery"}

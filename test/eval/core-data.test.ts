@@ -4,9 +4,8 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
-import { tokenizeQuery } from "../../src/text/tokenize";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
-import { auditQueries, haystackVocabulary } from "./corpus/audit";
+import { auditQueries, haystackVocabulary, keywordRouteModel, staleRouteGaps } from "./corpus/audit";
 import { CORPUS_PARAMS, buildCorpus, loadCoreData } from "./corpus/build";
 import { COMMON_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS } from "./corpus/haystack";
 import { IDENTITIES, WORKSPACES } from "./corpus/types";
@@ -113,8 +112,12 @@ describe("core golden data", () => {
       expect(df, `${q.id} ${key}`).toBeLessThanOrEqual(2);
     }
     expect(gaps.filter(q => q.id.endsWith("-c")).length, "common-token-prefixed variants").toBeGreaterThanOrEqual(2);
-    // every known-gap query names exactly one of the two boarded gaps
-    for (const q of queries.filter(q => q.tags?.includes("known-gap"))) expect(q.tags!.filter(tag => tag.startsWith("gap:")).length, q.id).toBe(1);
+    // every known-gap query names at least one boarded gap, and only the boarded ones
+    for (const q of queries.filter(q => q.tags?.includes("known-gap"))) {
+      const refs = q.tags!.filter(tag => tag.startsWith("gap:"));
+      expect(refs.length, q.id).toBeGreaterThanOrEqual(1);
+      for (const ref of refs) expect(["gap:T-0072", "gap:T-0073", "gap:T-0074"], q.id).toContain(ref);
+    }
     // an underscore identifier anywhere else must be tagged, so none slips into the set unmeasured
     const untagged = queries.filter(q => q.category === "identifier" && q.text.includes("_") && !q.tags?.includes("known-gap"));
     expect(untagged.map(q => q.id)).toEqual([]);
@@ -134,9 +137,9 @@ describe("core golden data", () => {
       const words = q.text.split(" ");
       const triple = words.filter(isDense).sort();
       expect(triple.length, q.id).toBe(3);
-      // only router-budget queries carry extra tokens, and those are the ordinary common ones
+      // only T-0073 queries carry extra tokens, and those are the ordinary common ones
       const extra = words.filter(word => !isDense(word));
-      if (q.tags?.includes("router-budget")) {
+      if (q.tags?.includes("gap:T-0073")) {
         expect(extra.length, q.id).toBeGreaterThanOrEqual(1);
         expect(extra.every(word => (COMMON_TOKENS as readonly string[]).includes(word)), q.id).toBe(true);
       } else expect(extra, q.id).toEqual([]);
@@ -151,20 +154,60 @@ describe("core golden data", () => {
     for (const n of needles.filter(n => !goldIds.has(n.id))) expect(dense(n.content).length, n.id).toBeLessThanOrEqual(2);
   });
 
-  it("pins the router-budget queries and shows each crosses the FTS budget at 5k and 20k, but not necessarily at 1k", () => {
-    const gaps = queries.filter(q => q.tags?.includes("router-budget"));
-    expect(gaps.map(q => q.id)).toEqual(Array.from({ length: 10 }, (_, i) => `q-budget-${String(i + 1).padStart(3, "0")}`));
-    for (const q of gaps) expect(q.tags, q.id).toEqual(["router-budget", "known-gap", "gap:T-0073"]);
-    expect(new Set(gaps.map(q => q.gold[0].id)).size, "one cluster per needle").toBe(10);
+  // T-0073 and T-0074 are scale-dependent: the LIKE window (newest 500 matches) holds every match at core-1k, so
+  // these queries are still answerable there. They lose the gold only at scale-5k and scale-20k, which is where a
+  // router fix is evaluated.
+  it("pins the T-0073 queries (router sends keyword search to LIKE past FTS_MATCH_BUDGET)", () => {
+    const gaps = queries.filter(q => q.tags?.includes("gap:T-0073"));
+    expect(gaps.map(q => q.id)).toEqual(["q-id-023-c", "q-id-030-c", ...Array.from({ length: 10 }, (_, i) => `q-budget-${String(i + 1).padStart(3, "0")}`)]);
+    for (const q of gaps) expect(q.tags, q.id).toContain("known-gap");
+    const budget = gaps.filter(q => q.id.startsWith("q-budget-"));
+    expect(new Set(budget.map(q => q.gold[0].id)).size, "one cluster per deliberate needle").toBe(10);
+    // the deliberate tier crosses the budget at both scales; the identifier ones only at 20k, where the "roadmap" prefix and the key's variants are dense enough
     for (const id of ["scale-5k", "scale-20k"] as const) {
       const spec = buildCorpus(id);
-      for (const q of gaps) {
+      for (const q of id === "scale-5k" ? budget : gaps) {
         const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
-        const rows = spec.entries.filter(e => readable.has(e.workspaceId)).map(e => e.content.toLowerCase());
-        const dfSum = tokenizeQuery(q.text).reduce((sum, token) => sum + rows.filter(row => row.includes(token)).length, 0);
-        expect(dfSum, `${id} ${q.id} ${q.text}`).toBeGreaterThan(FTS_MATCH_BUDGET);
+        const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
+        // the real retrieval tokens, variants included ("MSA-2026-88031" also counts "2026")
+        const model = keywordRouteModel(q.text, visible, spec.entries.find(e => e.id === q.gold[0].id)!.createdAt);
+        expect(model.dfSum, `${id} ${q.id} ${q.text}`).toBeGreaterThan(FTS_MATCH_BUDGET);
+        expect(model.route, `${id} ${q.id}`).toBe("like-match-budget");
       }
     }
+  });
+
+  it("pins the T-0074 queries (one FTS-ineligible token forces the whole query to LIKE)", () => {
+    const gaps = queries.filter(q => q.tags?.includes("gap:T-0074"));
+    expect(gaps.map(q => q.id)).toEqual(["q-id-007", "q-id-007-c", "q-id-024", "q-id-024-c", "q-id-035", "q-id-035-c", "q-short-027", "q-short-030"]);
+    for (const q of gaps) expect(q.tags, q.id).toContain("known-gap");
+    const spec = buildCorpus("scale-20k");
+    for (const q of gaps) {
+      const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
+      const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
+      const gold = spec.entries.find(e => e.id === q.gold[0].id)!;
+      expect(keywordRouteModel(q.text, visible, gold.createdAt).route, q.id).toBe("like-ineligible-token");
+    }
+  });
+
+  it("keeps every T-0073 and T-0074 query answerable at core-1k under the route model, and lost at scale", () => {
+    const gaps = queries.filter(q => q.tags?.some(tag => tag === "gap:T-0073" || tag === "gap:T-0074"));
+    expect(gaps.length).toBe(20);
+    const modelAt = (id: "core-1k" | "scale-5k" | "scale-20k", q: (typeof gaps)[number]) => {
+      const spec = buildCorpus(id);
+      const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
+      const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
+      return keywordRouteModel(q.text, visible, spec.entries.find(e => e.id === q.gold[0].id)!.createdAt);
+    };
+    for (const q of gaps) {
+      const tie = modelAt("core-1k", q);
+      // LIKE may be the route, but its window still holds the gold: the gap does not show at the tie scale
+      expect(tie.lost, `${q.id} at core-1k: ${tie.route}, ${tie.newer} newer`).toBe(false);
+      expect(tie.newer, q.id).toBeLessThan(KEYWORD_CANDIDATE_LIMIT);
+    }
+    // and each is really lost at some discriminating scale, on the route it names
+    const stale = staleRouteGaps(["scale-5k", "scale-20k"].map(id => buildCorpus(id as "scale-5k")));
+    expect(stale).toEqual([]);
   });
 
   it("keeps every rare and identifier key out of the haystack vocabulary", () => {
@@ -175,12 +218,14 @@ describe("core golden data", () => {
   });
 
   it("passes the query audit on the whole core set, on every corpus size", () => {
-    for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) {
-      const spec = buildCorpus(id);
+    const specs = (["core-1k", "scale-5k", "scale-20k"] as const).map(id => buildCorpus(id));
+    for (const spec of specs) {
       const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries, intent: spec.intent });
-      expect(findings, `${id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
+      expect(findings, `${spec.id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
     }
-  });
+    // a route gap tag must be earned at some discriminating scale
+    expect(staleRouteGaps(specs)).toEqual([]);
+  }, 60_000);
 
   it("builds three corpora of the requested sizes with the needles unchanged", () => {
     const sizes = { "core-1k": 1000, "scale-5k": 5000, "scale-20k": 20000 } as const;

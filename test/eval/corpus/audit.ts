@@ -1,5 +1,7 @@
-import { CHUNK_MAX_CHARS, FTS_MATCH_BUDGET, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../../src/constants";
+import { CHUNK_MAX_CHARS, FTS_MATCH_BUDGET, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT, KEYWORD_MAX_TOKENS } from "../../../src/constants";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
+import { ftsEligibleToken, ftsMatchQuery } from "../../../src/recall/fts";
+import { buildRetrievalTokens } from "../../../src/recall/query-profile";
 import { tokenizeQuery } from "../../../src/text/tokenize";
 import type { GoldenQuery } from "../types";
 import { COMMON_TOKENS, DENSE_TOKENS, generateHaystack } from "./haystack";
@@ -14,8 +16,20 @@ const IDENTIFIER_DF = 5;
  * same rows. "discriminate": each union overflows the window and the gold sits outside it, so LIKE loses it.
  */
 export type CorpusIntent = "tie" | "discriminate";
-const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap", "router-budget"]);
+/**
+ * Tags: tenancy, cross-lingual, and known-gap (with a gap:T-NNNN board reference). Three gaps are measured:
+ *  - gap:T-0072  underscore identifiers: production strips "_" from query tokens (a LIKE wildcard).
+ *  - gap:T-0073  the router sends keyword search to LIKE once the df sum passes FTS_MATCH_BUDGET.
+ *  - gap:T-0074  one FTS-ineligible token (under 3 characters) forces the whole query to LIKE.
+ * T-0073 and T-0074 only bite at scale: the LIKE window (newest KEYWORD_CANDIDATE_LIMIT matches) holds every
+ * match at core-1k, so the query is still answerable there. They are audited at the discriminating scales.
+ */
+const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap"]);
 const GAP_REF = /^gap:T-\d+$/;
+const KEYWORD_SOLVED: ReadonlySet<string> = new Set(["identifier", "rare-word", "common-word", "short-word", "cjk"]);
+export type KeywordRoute = "fts" | "like-match-budget" | "like-ineligible-token";
+/** The board reference a query must carry when its keyword arm loses the gold on this route. */
+export const ROUTE_GAP: Readonly<Record<Exclude<KeywordRoute, "fts">, string>> = { "like-match-budget": "gap:T-0073", "like-ineligible-token": "gap:T-0074" };
 const WORD_CHAR = /[\p{L}\p{N}_-]/u;
 // Thresholds scale with the rows the viewer can read: a token in 0.4% of 5k rows is not "common".
 const commonDf = (rows: number) => Math.max(20, Math.ceil(rows * 0.02));
@@ -31,6 +45,43 @@ const containsBounded = (content: string, token: string) => {
   }
   return false;
 };
+
+export interface RouteModel { route: KeywordRoute; terms: string[]; dfSum: number | null; union: number; newer: number; lost: boolean }
+
+/**
+ * The keyword arm's route and what it can return, mirroring search.ts keywordSearch with the real tokenizer:
+ * retrieval tokens (buildRetrievalTokens), FTS eligibility of every term, then dfSum against FTS_MATCH_BUDGET
+ * (skipped for the one-term distill shortcut, which computes no df). On a LIKE route the arm returns the
+ * KEYWORD_CANDIDATE_LIMIT newest rows in the viewer's scope matching any term, so the gold is lost when that
+ * many matching rows are newer than it. Every term's df counts substrings in the viewer's rows, as LIKE does.
+ */
+export function keywordRouteModel(
+  text: string,
+  visible: readonly { entry: CorpusEntry; content: string }[],
+  goldCreatedAt: number,
+  countRows: (term: string) => number = term => visible.filter(row => row.content.includes(term)).length,
+): RouteModel {
+  const query = text.trim();
+  const words = query.split(/\s+/).filter(Boolean);
+  const content = words.filter(word => tokenizeQuery(word).length > 0);
+  const uniq = [...new Set(content.flatMap(word => tokenizeQuery(word)))].slice(0, KEYWORD_MAX_TOKENS);
+  const distilled = { query: content.length ? content.join(" ") : query, df: null, total: null, distillSource: "shortcut" as const };
+  const terms = buildRetrievalTokens(query, distilled).slice(0, KEYWORD_MAX_TOKENS);
+  const shortcut = content.length <= 1 && uniq.length <= 1;
+  let route: KeywordRoute = "fts";
+  let dfSum: number | null = null;
+  if (!ftsMatchQuery(terms) || !terms.every(ftsEligibleToken)) route = "like-ineligible-token";
+  else if (!shortcut) {
+    dfSum = terms.reduce((sum, term) => sum + countRows(term.toLowerCase()), 0);
+    if (dfSum > FTS_MATCH_BUDGET) route = "like-match-budget";
+  }
+  // On FTS the LIKE window is irrelevant: nothing is lost to it, so skip the scan.
+  if (route === "fts") return { route, terms, dfSum, union: 0, newer: 0, lost: false };
+  const lowered = terms.map(term => term.toLowerCase());
+  const matching = visible.filter(row => lowered.some(term => row.content.includes(term)));
+  const newer = matching.filter(row => row.entry.createdAt > goldCreatedAt).length;
+  return { route, terms, dfSum, union: matching.length, newer, lost: newer >= KEYWORD_CANDIDATE_LIMIT };
+}
 
 export function auditQueries(spec: {
   entries: readonly CorpusEntry[];
@@ -93,9 +144,8 @@ export function auditQueries(spec: {
     const gapRefs = (query.tags ?? []).filter(tag => GAP_REF.test(tag));
     const knownGap = query.tags?.includes("known-gap") ?? false;
     if (knownGap && !gapRefs.length) add(query.id, "known-gap-no-ref", "tag gap:T-NNNN is required");
-    const routerBudget = query.tags?.includes("router-budget") ?? false;
-    if (routerBudget && !knownGap) add(query.id, "router-budget-needs-gap", "router-budget queries are a known gap");
-    if (routerBudget && query.category !== "common-word") add(query.id, "router-budget-not-common-word", query.category);
+    // T-0073 queries add ordinary common tokens on purpose, to push the df sum past the router's FTS budget.
+    const overBudgetGap = knownGap && gapRefs.includes(ROUTE_GAP["like-match-budget"]);
     if (!knownGap && gapRefs.length) add(query.id, "gap-ref-without-known-gap", gapRefs.join(","));
     // The outsider reads no haystack rows, so it only serves tenancy (decoy) queries.
     if (query.viewer === "outsider" && !query.tags?.includes("tenancy")) add(query.id, "outsider-not-tenancy", "outsider reads no haystack rows");
@@ -124,8 +174,7 @@ export function auditQueries(spec: {
         if (query.layer || query.viewer === "outsider") add(query.id, "common-word-layer-scoped", `${query.viewer}/${query.layer ?? "default"}`);
         if (tokens.length < 2) add(query.id, "common-word-too-short", query.text);
         // Only the dense tier is guaranteed to overflow the keyword window at 5k+ while unique per triple.
-        // A router-budget query adds ordinary common tokens on purpose, to push the df sum past the router's FTS budget.
-        const sparse = tokens.find(token => !(DENSE_TOKENS as readonly string[]).includes(token) && !(routerBudget && (COMMON_TOKENS as readonly string[]).includes(token)));
+        const sparse = tokens.find(token => !(DENSE_TOKENS as readonly string[]).includes(token) && !(overBudgetGap && (COMMON_TOKENS as readonly string[]).includes(token)));
         if (sparse) add(query.id, "common-word-not-dense", sparse);
         const rare = tokens.find(token => df(token) < common);
         if (rare) add(query.id, "common-word-rare-token", `${rare} df=${df(rare)}`);
@@ -144,11 +193,9 @@ export function auditQueries(spec: {
             const newer = union.filter(row => row.entry.createdAt > primary.createdAt).length;
             if (newer < KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-gold-in-window", `${newer} newer union rows of ${union.length}`);
           }
-          // The router sends a query to LIKE once its df sum passes FTS_MATCH_BUDGET: ordinary common-word queries
-          // must stay on FTS, router-budget ones must cross it (the measured production gap).
+          // An ordinary common-word query must stay on FTS; only a query that names T-0073 may cross the budget.
           const dfSum = tokens.reduce((sum, token) => sum + df(token), 0);
-          if (routerBudget && dfSum <= FTS_MATCH_BUDGET) add(query.id, "router-budget-under-budget", `dfSum=${dfSum}`);
-          if (!routerBudget && dfSum > FTS_MATCH_BUDGET) add(query.id, "common-word-over-fts-budget", `dfSum=${dfSum}`);
+          if (!overBudgetGap && dfSum > FTS_MATCH_BUDGET) add(query.id, "common-word-over-fts-budget", `dfSum=${dfSum}`);
         }
         break;
       }
@@ -195,6 +242,18 @@ export function auditQueries(spec: {
       }
     }
 
+    // If the keyword arm routes to LIKE and loses the gold, the query is a measured production gap. The tie scale
+    // must not lose anything; at the discriminating scales the gap must be named where the keyword arm is the
+    // intended solver. Paraphrase, multi-hop, long-context and cross-lingual queries are non-lexical by
+    // construction (their dense or graph arm answers them), so a keyword loss there is not a gap to board.
+    const model = keywordRouteModel(query.text, visible, primary.createdAt, df);
+    if (spec.intent === "tie") {
+      if (model.lost) add(query.id, "route-gap-unanswerable-at-tie", `${model.route}: ${model.newer} newer of ${model.union}`);
+    } else if (model.lost && model.route !== "fts" && KEYWORD_SOLVED.has(query.category) && !cross) {
+      const needed = ROUTE_GAP[model.route];
+      if (!(knownGap && gapRefs.includes(needed))) add(query.id, "keyword-route-unflagged-gap", `${model.route} loses the gold (${model.newer} newer of ${model.union}, dfSum=${model.dfSum}): needs known-gap + ${needed}`);
+    }
+
     if (query.tags?.includes("tenancy")) {
       if (!keyToken) add(query.id, "tenancy-no-key-token", query.category);
       else if (!lower.some(row => !readable.has(row.entry.workspaceId) && row.content.includes(keyToken!))) add(query.id, "tenancy-no-decoy", keyToken);
@@ -213,4 +272,30 @@ export function haystackVocabulary(): Set<string> {
     for (let number = 1000; number < 8000; number++) vocabulary.add(`${prefix}-${number}`);
   }
   return vocabulary;
+}
+
+/**
+ * A route gap tag (T-0073, T-0074) must be earned: the query has to lose its gold on that very route at one
+ * of the discriminating corpora at least, or the tag is stale. Gaps are scale-dependent, so this looks across scales.
+ */
+export function staleRouteGaps(corpora: readonly { entries: readonly CorpusEntry[]; queries: readonly GoldenQuery[]; intent: CorpusIntent }[]): AuditFinding[] {
+  const findings: AuditFinding[] = [];
+  const routeOf = new Map(Object.entries(ROUTE_GAP).map(([route, ref]) => [ref, route] as const));
+  const tagged = new Map<string, GoldenQuery>();
+  for (const corpus of corpora) for (const query of corpus.queries) if (query.tags?.some(tag => routeOf.has(tag))) tagged.set(query.id, query);
+  for (const query of tagged.values()) {
+    for (const ref of query.tags!.filter(tag => routeOf.has(tag))) {
+      const reached = corpora.some(corpus => {
+        if (corpus.intent !== "discriminate") return false;
+        const primary = corpus.entries.find(entry => entry.id === (query.gold.find(gold => gold.grade === 2) ?? query.gold[0]).id);
+        if (!primary) return false;
+        const readable = new Set(readScopeWorkspaces(IDENTITIES[query.viewer], { layer: query.layer }));
+        const visible = corpus.entries.filter(entry => readable.has(entry.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
+        const model = keywordRouteModel(query.text, visible, primary.createdAt);
+        return model.lost && model.route === routeOf.get(ref);
+      });
+      if (!reached) findings.push({ queryId: query.id, rule: "gap-not-reached", detail: `${ref} is never lost on ${routeOf.get(ref)} at a discriminating scale` });
+    }
+  }
+  return findings;
 }

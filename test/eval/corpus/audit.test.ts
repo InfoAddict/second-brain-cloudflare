@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditQueries, haystackVocabulary, type CorpusIntent } from "./audit";
+import { auditQueries, haystackVocabulary, staleRouteGaps, type CorpusIntent } from "./audit";
 import { ACTORS, DAY_MS, EVAL_NOW, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
 import type { GoldenQuery } from "../types";
 
@@ -274,22 +274,69 @@ describe("auditQueries fidelity and scale", () => {
     });
   });
 
-  describe("router budget (dfSum over FTS_MATCH_BUDGET routes to LIKE)", () => {
-    const gap = ["router-budget", "known-gap", "gap:T-0073"];
+  describe("keyword route gaps (LIKE routes lose an old gold at scale)", () => {
+    const gap73 = ["known-gap", "gap:T-0073"];
+    const gap74 = ["known-gap", "gap:T-0074"];
+    const scale = (entries: CorpusEntry[], queries: GoldenQuery[]) => rules(entries, queries, [], "discriminate");
+    // pair rows put each dense word in ~2/3 of pairRows, roadmap rows add the common token
     const corpus = (pairRows: number, roadmapRows: number) => [
       dated("g", "garden window coffee roadmap reunion", 300),
       ...Array.from({ length: pairRows }, (_, i) => dated(`m${i}`, `${pairText(i)} note ${i}`, 1 + (i % 100))),
       ...Array.from({ length: roadmapRows }, (_, i) => dated(`r${i}`, `roadmap note ${i}`, 1 + (i % 100))),
       ...Array.from({ length: 3000 - 1 - pairRows - roadmapRows }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
     ];
-    const rules3 = (entries: CorpusEntry[], queries: GoldenQuery[]) => rules(entries, queries, [], "discriminate");
-    const budget = (over: Partial<GoldenQuery> = {}) => query({ id: "b", category: "common-word", text: "garden window coffee roadmap", tags: gap, ...over });
+    const budget = (over: Partial<GoldenQuery> = {}) => query({ id: "b", category: "common-word", text: "garden window coffee roadmap", tags: gap73, ...over });
+    const ineligible = (entries = 800) => [
+      dated("g", "io scheduler notes", 300),
+      ...Array.from({ length: entries }, (_, i) => dated(`i${i}`, `ratio note ${i}`, 1 + (i % 100))),
+      ...Array.from({ length: 3000 - 1 - entries }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+    ];
+    const short = (over: Partial<GoldenQuery> = {}) => query({ id: "s", category: "short-word", text: "io scheduler", ...over });
 
-    it("needs a router-budget query to cross the budget at scale, and an ordinary one to stay under it", () => {
-      expect(rules3(corpus(800, 600), [budget()])).toEqual([]);
-      expect(rules3(corpus(800, 100), [budget()])).toContain("b:router-budget-under-budget");
-      expect(rules3(corpus(1500, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toContain("o:common-word-over-fts-budget");
-      expect(rules3(corpus(800, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toEqual([]);
+    it("requires T-0073 on a keyword-solved query the match budget sends to LIKE, and names it in the finding", () => {
+      expect(scale(corpus(800, 600), [budget()])).toEqual([]);
+      expect(scale(corpus(800, 600), [budget({ tags: [] })])).toContain("b:keyword-route-unflagged-gap");
+      expect(scale(corpus(800, 600), [budget({ tags: ["known-gap", "gap:T-0074"] })])).toContain("b:keyword-route-unflagged-gap");
+      // under budget the route is FTS, so nothing is owed
+      expect(scale(corpus(800, 100), [budget({ tags: [] })])).not.toContain("b:keyword-route-unflagged-gap");
+    });
+
+    it("requires T-0074 on a query with an FTS-ineligible token that LIKE loses", () => {
+      expect(scale(ineligible(), [short()])).toContain("s:keyword-route-unflagged-gap");
+      expect(scale(ineligible(), [short({ tags: gap74 })])).toEqual([]);
+      expect(scale(ineligible(), [short({ tags: gap73 })])).toContain("s:keyword-route-unflagged-gap");
+      // a gold inside the LIKE window is not lost, so no tag is owed
+      expect(scale(ineligible(300), [short()])).not.toContain("s:keyword-route-unflagged-gap");
+    });
+
+    it("leaves non-lexical categories alone: a keyword loss there is by design", () => {
+      const para = query({ id: "p", category: "paraphrase", text: "io scheduler" });
+      expect(scale(ineligible(), [para])).not.toContain("p:keyword-route-unflagged-gap");
+    });
+
+    it("demands the tie scale lose nothing", () => {
+      expect(rules(ineligible(), [short({ tags: gap74 })])).toContain("s:route-gap-unanswerable-at-tie");
+      expect(rules(ineligible(300), [short()])).toEqual([]);
+    });
+
+    it("flags a route gap tag that no discriminating scale earns, across scales", () => {
+      const corpora = (rows: CorpusEntry[]) => [{ entries: rows, queries: [budget()], intent: "discriminate" as const }, { entries: rows, queries: [budget()], intent: "tie" as const }];
+      expect(staleRouteGaps(corpora(corpus(800, 600)))).toEqual([]);
+      expect(staleRouteGaps(corpora(corpus(800, 100))).map(f => f.rule)).toEqual(["gap-not-reached"]);
+      // T-0074 on a query whose route is the match budget is not reached either
+      const wrong = [{ entries: corpus(800, 600), queries: [budget({ tags: gap74 })], intent: "discriminate" as const }];
+      expect(staleRouteGaps(wrong).map(f => f.rule)).toEqual(["gap-not-reached"]);
+      // reached at a larger scale is enough: the small corpus alone would not earn it
+      const both = [{ entries: corpus(800, 100), queries: [budget()], intent: "discriminate" as const }, { entries: corpus(800, 600), queries: [budget()], intent: "discriminate" as const }];
+      expect(staleRouteGaps(both)).toEqual([]);
+    });
+
+    it("keeps an ordinary common-word query on FTS, and waives common-word-not-dense only for T-0073 and the three common tokens", () => {
+      const ordinary = query({ id: "o", category: "common-word", text: "garden window coffee" });
+      expect(scale(corpus(1500, 0), [ordinary])).toContain("o:common-word-over-fts-budget");
+      expect(scale(corpus(800, 0), [ordinary])).toEqual([]);
+      expect(scale(corpus(800, 600), [budget({ tags: [] })])).toContain("b:common-word-not-dense");
+      expect(scale(corpus(800, 600), [budget({ text: "garden window coffee budget" })])).toContain("b:common-word-not-dense");
     });
 
     it("flags the review probe: three words at df 901 each (dfSum 2703) on an ordinary query", () => {
@@ -300,21 +347,15 @@ describe("auditQueries fidelity and scale", () => {
       ];
       const found = auditQueries({ entries: rows, edges: [], queries: [query({ id: "probe", category: "common-word", text: "garden window coffee" })], intent: "discriminate" });
       expect(found.filter(f => f.rule === "common-word-over-fts-budget").map(f => f.detail)).toEqual(["dfSum=2703"]);
+      expect(found.map(f => f.rule)).toContain("keyword-route-unflagged-gap");
     });
 
-    it("waives common-word-not-dense only for the three common tokens, and only when tagged", () => {
-      expect(rules3(corpus(800, 600), [budget({ tags: ["known-gap", "gap:T-0073"] })])).toContain("b:common-word-not-dense");
-      expect(rules3(corpus(800, 600), [budget({ text: "garden window coffee budget" })])).toContain("b:common-word-not-dense");
-    });
-
-    it("keeps the tag paired with known-gap and confined to common-word queries", () => {
-      expect(rules3(corpus(800, 600), [budget({ tags: ["router-budget"] })])).toContain("b:router-budget-needs-gap");
-      expect(rules3(corpus(800, 600), [budget({ category: "paraphrase" })])).toContain("b:router-budget-not-common-word");
+    it("no longer accepts the retired router-budget tag", () => {
+      expect(scale(corpus(800, 600), [budget({ tags: ["router-budget", ...gap73] })])).toContain("b:unknown-tag");
     });
   });
 
-  it("accepts the router-budget tag and flags a Latin token that answers a CJK query", () => {
-    expect(rules([gold("hello world")], [query({ id: "t", category: "paraphrase", text: "greeting", tags: ["router-budget"] })])).not.toContain("t:unknown-tag");
+  it("flags a Latin token that answers a CJK query", () => {
     const mixed = gold("来月の予算について話した budget review");
     expect(rules([mixed], [query({ id: "latin", category: "cjk", text: "budget 採用計画" })])).toContain("latin:cjk-no-shared-substring");
   });
