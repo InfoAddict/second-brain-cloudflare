@@ -426,16 +426,18 @@ export class D1Mock {
             .sort((a: any, b: any) => a.created_at - b.created_at)[0];
           return row ? { id: row.id } : null;
         }
-        if (s.includes("(SELECT count(*) FROM entries) AS e")) {
+        if (s.includes("(SELECT count(*) FROM entries_fts) AS f")) {
           // src/db/fts-backfill.ts's nightly count parity (Task 5), which
           // also reads max rowid for the rotating content check's wrap
-          // (combined review FIX 2) and entry_counts' SUM (T-0065). This
-          // double stands in for a healthy, migrated brain — same stance as
-          // the liveness branch in all() — so equal counts and a max rowid
-          // of the entries count is the honest answer; drift is covered
-          // against real SQLite in test/unit/fts-backfill.test.ts, which the
-          // mock cannot simulate.
-          return { e: db.entries.length, f: db.entries.length, mx: db.entries.length, ec: db.entries.length };
+          // (combined review FIX 2). The global entries total is summed in
+          // JS from the per-workspace GROUP BY (T-0065), answered by the
+          // branch above — no separate count(*) over entries exists
+          // anymore. This double stands in for a healthy, migrated brain —
+          // same stance as the liveness branch in all() — so an fts count
+          // equal to the entries count and a max rowid of the entries count
+          // is the honest answer; drift is covered against real SQLite in
+          // test/unit/fts-backfill.test.ts, which the mock cannot simulate.
+          return { f: db.entries.length, mx: db.entries.length };
         }
         if (s.includes("u.role = 'admin'")) {
           // findOwner: oldest admin plus their personal workspace.

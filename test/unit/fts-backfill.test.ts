@@ -336,6 +336,38 @@ describe("checkFtsIntegrity", () => {
     expect(d1.issued.some(sql => /^(DROP|DELETE|CREATE)\b/i.test(sql))).toBe(false);
   });
 
+  it("a healthy night full-scans entries exactly once: the GROUP BY is the scan, the total is summed in JS", async () => {
+    // T-0065 regression: the spec replaced the global count(*) with the
+    // per-workspace GROUP BY, keeping one full scan of entries per night.
+    // Keeping both means two full scans every night, so the plan of every
+    // statement the healthy path issues must show exactly one `SCAN entries`.
+    seed(d1, 5);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    d1.issued.length = 0;
+    d1.batches.length = 0;
+
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: true });
+    // Snapshot the night's statements before the EXPLAIN probes below land
+    // in `issued`. Standalone calls record verbatim; batch members live in
+    // `batches` (issued collapses each batch to a single "BATCH" entry).
+    const allSql = [...d1.issued.filter(s => s !== "BATCH"), ...d1.batches.flat()];
+
+    const planDetails = async (sql: string): Promise<string[]> =>
+      ((await d1.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all()).results as { detail: string }[]).map(r => r.detail);
+    const entriesScans: string[] = [];
+    for (const sql of allSql) {
+      if (!/\bFROM\s+entries\b/i.test(sql)) continue;
+      entriesScans.push(...(await planDetails(sql)).filter(d => /^SCAN entries\b/.test(d)));
+    }
+    expect(entriesScans).toHaveLength(1);
+    // Belt and suspenders: no bare count(*) over entries (a full scan in its
+    // own right) survives anywhere in the night's statements.
+    expect(allSql.some(sql => /count\(\*\)\s+FROM\s+entries\b(?!\s+GROUP)/i.test(sql.replace(/GROUP\s+BY[^)]*count\(\*\)/gi, "")))).toBe(false);
+  });
+
   it("count drift: deletes FTS orphans, clears ready, resets the cursor, never drops the table", async () => {
     seed(d1, 5);
     const env = envFor(d1);

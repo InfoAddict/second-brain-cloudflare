@@ -133,21 +133,23 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
 // ceil(N / FTS_CONTENT_CHECK_WINDOW) + 1 nights; a global probe would double
 // nightly reads for a near-impossible case, so that delay is accepted.
 export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
+  // Nightly drift detector's totals. max(rowid) bounds the rotating window's
+  // wrap; the global entries total is summed in JS from the GROUP BY in the
+  // batch below, so no count(*) over entries is needed here.
   // scope-exempt: cron: deployment-wide parity check, like the backfill above —
-  // no per-workspace shape. max(rowid) bounds the rotating window's wrap.
+  // no per-workspace shape.
   const counts = await env.DB.prepare(
-    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx`,
-  ).first<{ e: number; f: number; mx: number | null }>();
+    `SELECT (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx`,
+  ).first<{ f: number; mx: number | null }>();
 
   // T-0065 (FIX 1, final review): per-workspace parity, not a global SUM —
   // a global total can equal count(*) even when one workspace's counter
   // drifted from another's (a missing entry_counts_update trigger plus a
   // cross-workspace move nets to zero globally, which the old global check
-  // read as healthy forever). The GROUP BY below is the SAME one full scan
-  // of entries the count(*) above already pays for; nothing here re-scans
-  // it a second time for the per-workspace shape. Batched with the
-  // entry_counts read and the trigger-definition check so this whole
-  // probe still costs one D1 call.
+  // read as healthy forever). The GROUP BY is the ONLY full scan of entries
+  // this night pays: the entries-vs-fts count parity consumes its summed
+  // total. Batched with the entry_counts read and the trigger-definition
+  // check so this whole probe still costs one D1 call.
   const [entriesByWorkspace, cachedByWorkspace, triggerRows] = await env.DB.batch([
     // scope-exempt: cron: deployment-wide parity read, like the backfill and
     // the count(*) above — every workspace's own row, by design, not a
@@ -158,6 +160,9 @@ export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }>
   ]);
   const actualByWorkspace = new Map((entriesByWorkspace.results as { workspace_id: string; n: number }[]).map(r => [r.workspace_id, r.n]));
   const cachedByWorkspaceMap = new Map((cachedByWorkspace.results as { workspace_id: string; n: number }[]).map(r => [r.workspace_id, r.n]));
+  // The global entries total, summed from the GROUP BY — the parity check
+  // below consumes it, so no second full scan of entries happens tonight.
+  const totalEntries = (entriesByWorkspace.results as { n: number }[]).reduce((sum, r) => sum + r.n, 0);
   // Bidirectional: a workspace present on only one side (moved away entirely,
   // or a stale counter row for a workspace with zero live entries) is a
   // mismatch too — treat the missing side as 0.
@@ -191,7 +196,7 @@ export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }>
     ]);
   }
 
-  let healthy = counts !== null && counts.e === counts.f;
+  let healthy = counts !== null && totalEntries === counts.f;
   if (healthy) {
     // scope-exempt: cron: same rowid-keyed, deployment-wide check as the count above.
     const { results } = await env.DB.prepare(
