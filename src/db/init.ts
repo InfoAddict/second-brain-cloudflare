@@ -295,7 +295,8 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
       INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
     END`,
   entries_fts_update: `CREATE TRIGGER IF NOT EXISTS entries_fts_update
-    AFTER UPDATE OF content ON entries
+    AFTER UPDATE ON entries
+    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
     BEGIN
       DELETE FROM entries_fts WHERE rowid = OLD.rowid;
       INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
@@ -539,12 +540,16 @@ async function applySchema(env: Env): Promise<void> {
         // SQL文字列の空白は意味を持つため、その内部は正規化しない。
         .match(/'(?:''|[^'])*'|"(?:""|[^"])*"|[a-zA-Z_]\w*|\d+|[^\s]/g)?.join(" ") ?? "";
       if (normalize(existing?.definitions.get(name) ?? "") !== normalize(ddl)) {
-        await env.DB.batch([
+        const repair = [
           env.DB.prepare(`DROP TRIGGER IF EXISTS ${name}`),
           env.DB.prepare(ddl),
-          // A repaired invalidator must not reuse payloads from its old body.
-          env.DB.prepare(`UPDATE prompt_capsule_revisions SET revision = lower(hex(randomblob(16)))`),
-        ]);
+        ];
+        // A repaired capsule invalidator must not reuse payloads from its old body;
+        // FTS and other sync triggers change nothing the capsule cache reads.
+        if (name.startsWith("prompt_capsule_")) {
+          repair.push(env.DB.prepare(`UPDATE prompt_capsule_revisions SET revision = lower(hex(randomblob(16)))`));
+        }
+        await env.DB.batch(repair);
       }
       continue;
     }

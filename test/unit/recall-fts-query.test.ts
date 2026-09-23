@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import { ftsMatchQuery, ftsReady, resetFtsReadyMemo } from "../../src/recall/fts";
 import { FTS_READY_KV_KEY } from "../../src/constants";
+import { tokenizeQuery } from "../../src/text/tokenize";
 
 describe("ftsMatchQuery", () => {
   it("quotes each token and joins with OR", () => {
@@ -16,6 +18,27 @@ describe("ftsMatchQuery", () => {
   });
   it("counts codepoints, not UTF-16 units", () => {
     expect(ftsMatchQuery(["日本語"])).toBe(`"日本語"`); // 3 codepoints: eligible
+  });
+  it("drops tokens carrying NUL, which aborts MATCH with an unterminated string", () => {
+    expect(ftsMatchQuery(["ab\0xyz", "dashboard"])).toBe(`"dashboard"`);
+    expect(ftsMatchQuery(["abc\0xyz"])).toBeNull();
+    expect(ftsMatchQuery(["\0\0\0"])).toBeNull();
+  });
+  it("keeps other C0 controls eligible, since real MATCH runs and matches them", () => {
+    expect(ftsMatchQuery(["abc\tdef"])).toBe(`"abc\tdef"`);
+    expect(ftsMatchQuery(["abc\u007fdef"])).toBe(`"abc\u007fdef"`);
+  });
+  it("runs a NUL-containing query through real FTS5 MATCH without throwing", () => {
+    // The tokenizer can emit one: abc\0xyz is a plain ASCII chunk whose NUL
+    // never touches its edges, so it survives asciiToken's trim.
+    expect(tokenizeQuery("abc\0xyz")).toContain("abc\0xyz");
+    const db = new DatabaseSync(":memory:");
+    db.exec(`CREATE VIRTUAL TABLE probe USING fts5(content, tokenize='trigram')`);
+    db.prepare(`INSERT INTO probe(content) VALUES(?)`).run("the dashboard redesign shipped");
+    const q = ftsMatchQuery(["dashboard\0xyz", "dashboard"]);
+    expect(q).toBe(`"dashboard"`);
+    expect(db.prepare(`SELECT rowid FROM probe WHERE probe MATCH ?`).get(q!)).toEqual({ rowid: 1 });
+    db.close();
   });
 });
 

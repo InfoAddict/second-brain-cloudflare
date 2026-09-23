@@ -1,13 +1,17 @@
 import { FTS_MIN_TOKEN_LENGTH, FTS_READY_KV_KEY } from "../constants";
 import type { Env } from "../env";
 
+const NUL_TOKEN = /\u0000/;
+
 // FTS5 has its own query grammar; a bare token like #149 or won't is a syntax
 // error. Double-quoting makes every token a string literal (internal quotes
 // doubled), and trigram matches it as a substring — the LIKE semantics recall
 // has always had. Tokens under the trigram floor can never match and are
-// dropped; null tells the caller nothing survived, so LIKE must serve.
+// dropped; null tells the caller nothing survived, so LIKE must serve. A token
+// carrying NUL joins them: SQLite truncates its query at \0 and MATCH throws
+// instead of matching.
 export function ftsMatchQuery(tokens: string[]): string | null {
-  const eligible = tokens.filter(t => [...t].length >= FTS_MIN_TOKEN_LENGTH);
+  const eligible = tokens.filter(t => !NUL_TOKEN.test(t) && [...t].length >= FTS_MIN_TOKEN_LENGTH);
   if (!eligible.length) return null;
   return eligible.map(t => `"${t.replaceAll(`"`, `""`)}"`).join(" OR ");
 }

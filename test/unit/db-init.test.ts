@@ -835,6 +835,76 @@ describe("initializeDatabase against real SQLite", () => {
       await d1.db.prepare(`DELETE FROM entries WHERE id = 'e1'`).run();
       expect(await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first()).toEqual({ n: 0 });
     });
+
+    /** FTS shadow of entries, the shape an id or rowid change has to preserve. */
+    const ftsOf = async (sqlite: SqliteD1) =>
+      ((await sqlite.db.prepare(`SELECT rowid, id, content FROM entries_fts ORDER BY rowid`).all()).results);
+    const entriesOf = async (sqlite: SqliteD1) =>
+      ((await sqlite.db.prepare(`SELECT rowid, id, content FROM entries ORDER BY rowid`).all()).results);
+
+    it("syncs FTS through an id-only UPDATE", async () => {
+      d1 = makeSqliteD1();
+      await initializeDatabase(envFor(d1));
+      await d1.db.prepare(`INSERT INTO entries (id, content, created_at) VALUES ('old-id', 'unique drift marker', 1)`).run();
+
+      await d1.db.prepare(`UPDATE entries SET id = 'new-id' WHERE id = 'old-id'`).run();
+
+      expect(await ftsOf(d1)).toEqual(await entriesOf(d1));
+    });
+
+    it("syncs FTS through a rowid-only UPDATE", async () => {
+      d1 = makeSqliteD1();
+      await initializeDatabase(envFor(d1));
+      await d1.db.prepare(`INSERT INTO entries (id, content, created_at) VALUES ('e1', 'unique drift marker', 1)`).run();
+      const row = await d1.db.prepare(`SELECT rowid FROM entries WHERE id = 'e1'`).first() as { rowid: number };
+
+      await d1.db.prepare(`UPDATE entries SET rowid = ? WHERE id = 'e1'`).bind(row.rowid + 100).run();
+
+      expect(await ftsOf(d1)).toEqual(await entriesOf(d1));
+    });
+
+    it("writes nothing to FTS for a recall_count-only UPDATE", async () => {
+      d1 = makeSqliteD1();
+      await initializeDatabase(envFor(d1));
+      await d1.db.prepare(`INSERT INTO entries (id, content, created_at) VALUES ('e1', 'the dashboard redesign shipped', 1)`).run();
+      const before = await ftsOf(d1);
+
+      await d1.db.prepare(`UPDATE entries SET recall_count = recall_count + 1 WHERE id = 'e1'`).run();
+
+      expect(await ftsOf(d1)).toEqual(before);
+      expect(await ftsOf(d1)).toEqual(await entriesOf(d1));
+    });
+
+    it("repairs missing triggers on a populated pre-FTS brain without invalidating capsules", async () => {
+      d1 = makeSqliteD1(); // schema.sql applied, then rewound to its pre-FTS shape below
+      await d1.db.exec(
+        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
+        `DROP TRIGGER IF EXISTS entries_fts_delete; DROP TABLE IF EXISTS entries_fts;` +
+        `INSERT INTO workspaces (id, kind, name, created_at) VALUES ('w1', 'personal', 'One', 1), ('w2', 'personal', 'Two', 1);` +
+        `INSERT INTO prompt_capsule_revisions (workspace_id, revision) VALUES ('w1', 'rev-w1'), ('w2', 'rev-w2');`,
+      );
+
+      await initializeDatabase(envFor(d1));
+
+      // The seeded revisions are untouched: a missing FTS trigger is a schema
+      // repair, not an entry edit, and capsule payloads stay valid through it.
+      expect((await d1.db.prepare(
+        `SELECT workspace_id, revision FROM prompt_capsule_revisions ORDER BY workspace_id`,
+      ).all()).results).toEqual([
+        { workspace_id: "w1", revision: "rev-w1" },
+        { workspace_id: "w2", revision: "rev-w2" },
+      ]);
+      expect((await d1.db.prepare(
+        `SELECT name FROM sqlite_master WHERE name IN ('entries_fts','entries_fts_insert','entries_fts_update','entries_fts_delete')`,
+      ).all()).results).toHaveLength(4);
+
+      resetDatabaseInit();
+      d1.issued.length = 0;
+      const batchesBefore = d1.batches.length;
+      await initializeDatabase(envFor(d1));
+      expect(d1.issued.filter(s => /^(CREATE|DROP|ALTER)\b/.test(s))).toEqual([]);
+      expect(d1.batches).toHaveLength(batchesBefore);
+    });
   });
 
   it("survives two isolates migrating the same brain at once", async () => {

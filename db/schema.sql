@@ -272,8 +272,11 @@ BEGIN
   INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
 END;
 
+-- The update trigger fires on every UPDATE; its WHEN guard covers exactly the
+-- columns FTS mirrors, so recall's recall_count bumps write nothing here.
 CREATE TRIGGER IF NOT EXISTS entries_fts_update
-AFTER UPDATE OF content ON entries
+AFTER UPDATE ON entries
+WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
 BEGIN
   DELETE FROM entries_fts WHERE rowid = OLD.rowid;
   INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
