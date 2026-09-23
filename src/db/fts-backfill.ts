@@ -1,16 +1,46 @@
 import {
-  FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_INTEGRITY_SPOT_CHECK, FTS_READY_KV_KEY,
+  FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_CONTENT_CHECK_CURSOR_KV_KEY,
+  FTS_CONTENT_CHECK_WINDOW, FTS_INTEGRITY_SPOT_CHECK, FTS_READY_KV_KEY,
 } from "../constants";
 import type { Env } from "../env";
-import { isFtsLive } from "../recall/fts";
+import { FTS_LIVENESS_SQL, isFtsLive, isFtsLiveRows } from "../recall/fts";
 import { rebuildFtsIndex } from "./fts-repair";
 
-// Resumable nightly backfill for rows that predate entries_fts. Trigger-covered
-// rows are handled too: each batch deletes its rowid range before inserting, so
-// re-running over them is a no-op rather than a duplicate (FTS5 has no ON
-// CONFLICT). Keyed on entries.rowid — the same rowid the triggers mirror.
-// Batch size bounds FTS shadow-row writes against the 100k/day cap.
-export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done: boolean }> {
+// D1 caps bound parameters per statement at 100. A badly drifted window can
+// flag every rowid in it (FTS_CONTENT_CHECK_WINDOW), so in-place re-index
+// pairs are chunked to the cap — still one batch.
+const FTS_REINDEX_CHUNK = 100;
+
+// Ready-latch guard (combined review of Tasks 4-6): the old latch fired on
+// "the cursor found no rows" alone, so a cursor past max rowid — or a sync
+// trigger dropped mid-batch — latched ready="1" over an incomplete index.
+// Before any latch, ONE batch re-checks liveness together with exact parity
+// in both directions; a single mismatching row anywhere restarts the
+// backfill instead of marking it done.
+// scope-exempt: cron: the latch guard's deployment-wide parity read, keyed on
+// rowid like the backfill itself — the index has no per-workspace shape.
+const FTS_LATCH_PARITY_FORWARD_SQL =
+  `SELECT 1 FROM (SELECT rowid, id, content FROM entries EXCEPT SELECT rowid, id, content FROM entries_fts) LIMIT 1`;
+// scope-exempt: cron: the reverse direction of the same parity pair.
+const FTS_LATCH_PARITY_REVERSE_SQL =
+  `SELECT 1 FROM (SELECT rowid, id, content FROM entries_fts EXCEPT SELECT rowid, id, content FROM entries) LIMIT 1`;
+
+async function readyLatchAllowed(env: Env): Promise<boolean> {
+  const [liveness, forward, reverse] = await env.DB.batch([
+    // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue) — nothing here to scope by workspace.
+    env.DB.prepare(FTS_LIVENESS_SQL),
+    // scope-exempt: cron: deployment-wide parity keyed on rowid, like the backfill itself — the index has no per-workspace shape.
+    env.DB.prepare(FTS_LATCH_PARITY_FORWARD_SQL),
+    env.DB.prepare(FTS_LATCH_PARITY_REVERSE_SQL),
+  ]);
+  return isFtsLiveRows(liveness.results as { name: string; sql: string | null }[] | undefined)
+    && !forward.results.length && !reverse.results.length;
+}
+
+// One backfill night. The caller may already know liveness and readiness
+// (runFtsMaintenance checks both itself) — threading them through avoids
+// paying for the same liveness query and ready read twice per night.
+async function backfillStep(env: Env, known: { live: boolean; ready: boolean }): Promise<{ indexed: number; done: boolean }> {
   // Write-path isolation v2.2 INVARIANT: FTS is live only if entries_fts
   // exists AND all three sync triggers exist, with their exact bodies.
   // Checked FIRST (M1, v2.2 re-review) — a hot-path repair can leave the
@@ -21,11 +51,11 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
   // below would throw "no such table: entries_fts" into src/index.ts's
   // catch every night (or, on a night with no backlog rows, worse: latch
   // ready="1" over an index that is not live). Skip cleanly and log once.
-  if (!(await isFtsLive(env))) {
+  if (!known.live) {
     console.error("FTS backfill skipped: entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body), waiting for the nightly rebuild");
     return { indexed: 0, done: false };
   }
-  if ((await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1") return { indexed: 0, done: true };
+  if (known.ready) return { indexed: 0, done: true };
   const cursor = Number(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY) ?? "0");
   // scope-exempt: cron: nightly backfill keyed on rowid — rowids are unravelled
   // throughout (schema comment on similar.) so there is no workspace scope to
@@ -35,27 +65,44 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
     `SELECT rowid AS rid FROM entries WHERE rowid > ? ORDER BY rowid LIMIT ?`,
   ).bind(cursor, FTS_BACKFILL_BATCH).all<{ rid: number }>();
   if (!results.length) {
-    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
-    return { indexed: 0, done: true };
+    if (await readyLatchAllowed(env)) {
+      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+      return { indexed: 0, done: true };
+    }
+    await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+    return { indexed: 0, done: false };
   }
   const last = results[results.length - 1].rid;
   await env.DB.batch([
     // scope-exempt: cron: the same nightly backfill as the SELECT above — the
     // FTS shadow is mirrored per rowid across every workspace, and writing a
     // rowid-keyed range leaves no row's content unsynced or cross-read.
-    env.DB.prepare(
-      `DELETE FROM entries_fts WHERE rowid IN (SELECT rowid FROM entries WHERE rowid > ? AND rowid <= ?)`,
-    ).bind(cursor, last),
-    // scope-exempt: cron: INSERT..SELECT of the same rowid range as the DELETE
-    // above; the source rows' content moves into the index, it is not returned.
-    env.DB.prepare(
-      `INSERT INTO entries_fts (rowid, id, content) SELECT rowid, id, content FROM entries WHERE rowid > ? AND rowid <= ?`,
-    ).bind(cursor, last),
+    env.DB.prepare(`DELETE FROM entries_fts WHERE rowid > ? AND rowid <= ?`).bind(cursor, last),
+    env.DB.prepare(`INSERT INTO entries_fts (rowid, id, content) SELECT rowid, id, content FROM entries WHERE rowid > ? AND rowid <= ?`).bind(cursor, last),
   ]);
   await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, String(last));
-  const done = results.length < FTS_BACKFILL_BATCH;
-  if (done) await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
-  return { indexed: results.length, done };
+  if (results.length < FTS_BACKFILL_BATCH) {
+    if (await readyLatchAllowed(env)) {
+      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+      return { indexed: results.length, done: true };
+    }
+    // The latch guard refused: restart from the top next night rather than
+    // serve an index that just failed exact parity as complete.
+    await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+    return { indexed: results.length, done: false };
+  }
+  return { indexed: results.length, done: false };
+}
+
+// Resumable nightly backfill for rows that predate entries_fts. Trigger-covered
+// rows are handled too: each batch deletes its rowid range before inserting, so
+// re-running over them is a no-op rather than a duplicate (FTS5 has no ON
+// CONFLICT). Keyed on entries.rowid — the same rowid the triggers mirror.
+// Batch size bounds FTS shadow-row writes against the 100k/day cap.
+export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done: boolean }> {
+  const live = await isFtsLive(env);
+  const ready = live && (await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1";
+  return backfillStep(env, { live, ready });
 }
 
 // Nightly drift detector, run only once the backfill has latched ready. Count
@@ -68,9 +115,10 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
 export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
   // scope-exempt: cron: deployment-wide parity check, like the backfill above —
   // the index has no per-workspace shape, so there is no workspace scope to apply.
+  // max(rowid) rides along to bound the rotating window's wrap.
   const counts = await env.DB.prepare(
-    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f`,
-  ).first<{ e: number; f: number }>();
+    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx`,
+  ).first<{ e: number; f: number; mx: number | null }>();
   let healthy = counts !== null && counts.e === counts.f;
   if (healthy) {
     // scope-exempt: cron: same rowid-keyed, deployment-wide check as the count above.
@@ -86,8 +134,52 @@ export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }>
     await env.DB.prepare(`DELETE FROM entries_fts WHERE rowid NOT IN (SELECT rowid FROM entries)`).run();
     await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
     await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+    return { healthy };
   }
+  await rotateContentCheck(env, counts!.mx);
   return { healthy };
+}
+
+// Rotating content check (combined review of Tasks 4-6): count parity and the
+// newest-few spot check cannot see same-row content drift — equal counts,
+// identical ids. Each night reads the next FTS_CONTENT_CHECK_WINDOW rowids
+// behind FTS_CONTENT_CHECK_CURSOR_KV_KEY, compares (rowid, id, content) both
+// ways, and re-indexes exactly the mismatched rowids IN PLACE — no backfill
+// reset, ready stays set. The cursor advances one window per night and wraps
+// to 0 once it passes the corpus's max rowid, so every row is re-checked
+// within ceil(N / FTS_CONTENT_CHECK_WINDOW) nights.
+async function rotateContentCheck(env: Env, maxRowid: number | null): Promise<void> {
+  const cursor = Number(await env.OAUTH_KV.get(FTS_CONTENT_CHECK_CURSOR_KV_KEY) ?? "0");
+  const hi = cursor + FTS_CONTENT_CHECK_WINDOW;
+  const [entriesWindow, ftsWindow] = await env.DB.batch([
+    // scope-exempt: cron: same rowid-keyed, deployment-wide parity read as the checks above — the window carries no workspace shape.
+    env.DB.prepare(`SELECT rowid, id, content FROM entries WHERE rowid > ? AND rowid <= ?`).bind(cursor, hi),
+    env.DB.prepare(`SELECT rowid, id, content FROM entries_fts WHERE rowid > ? AND rowid <= ?`).bind(cursor, hi),
+  ]);
+  const source = new Map((entriesWindow.results as { rowid: number; id: string; content: string }[]).map(r => [r.rowid, r]));
+  const shadow = new Map((ftsWindow.results as { rowid: number; id: string; content: string }[]).map(r => [r.rowid, r]));
+  const mismatched = new Set<number>();
+  for (const [rid, row] of source) {
+    const s = shadow.get(rid);
+    if (!s || s.id !== row.id || s.content !== row.content) mismatched.add(rid);
+  }
+  for (const rid of shadow.keys()) if (!source.has(rid)) mismatched.add(rid);
+  if (mismatched.size) {
+    const rowids = [...mismatched].sort((a, b) => a - b);
+    const statements: D1PreparedStatement[] = [];
+    for (let i = 0; i < rowids.length; i += FTS_REINDEX_CHUNK) {
+      const chunk = rowids.slice(i, i + FTS_REINDEX_CHUNK);
+      const markers = chunk.map(() => "?").join(",");
+      statements.push(env.DB.prepare(`DELETE FROM entries_fts WHERE rowid IN (${markers})`).bind(...chunk));
+      // scope-exempt: cron: in-place re-index for exactly the rowids the
+      // window probe flagged, deployment-wide like the backfill itself.
+      statements.push(env.DB.prepare(
+        `INSERT INTO entries_fts (rowid, id, content) SELECT rowid, id, content FROM entries WHERE rowid IN (${markers})`,
+      ).bind(...chunk));
+    }
+    await env.DB.batch(statements);
+  }
+  await env.OAUTH_KV.put(FTS_CONTENT_CHECK_CURSOR_KV_KEY, String(maxRowid === null || hi >= maxRowid ? 0 : hi));
 }
 
 // Single nightly entry point. Write-path isolation v2.2: a live request never
@@ -102,18 +194,20 @@ export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }>
 export async function runFtsMaintenance(env: Env): Promise<{ indexed: number; done: boolean }> {
   if (!(await isFtsLive(env))) {
     await rebuildFtsIndex(env);
-    return runFtsBackfill(env);
+    // The rebuild's own batch either recreated the table and triggers or
+    // threw, so the index is live here, and its KV invalidation already
+    // cleared ready and reset the cursor.
+    return backfillStep(env, { live: true, ready: false });
   }
   try {
     await env.DB.prepare(`INSERT INTO entries_fts(entries_fts, rank) VALUES('integrity-check', 1)`).run();
   } catch (e) {
     console.error("FTS integrity-check statement failed; rebuilding:", e);
     await rebuildFtsIndex(env);
-    return runFtsBackfill(env);
+    return backfillStep(env, { live: true, ready: false });
   }
-  if ((await env.OAUTH_KV.get(FTS_READY_KV_KEY)) !== "1") {
-    return runFtsBackfill(env);
-  }
+  const ready = (await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1";
+  if (!ready) return backfillStep(env, { live: true, ready });
   const { healthy } = await checkFtsIntegrity(env);
   return { indexed: 0, done: healthy };
 }

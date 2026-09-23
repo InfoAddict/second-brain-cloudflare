@@ -462,4 +462,85 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(ftsDiagnostics.ftsUsed).toBe(true);
     expect(fts.matches[0]?.id).toBe("kw-b");
   });
+
+  // Combined review of Tasks 4-6 (FIX 3): the reviewer's FUSION_E2E probe.
+  // Pure bm25 rank position buried the exact two-token match — fusion rank 32
+  // out of 121, out of the final top 5 — because 120 one-token notes all sit
+  // above it in bm25's length-normalized order. The JS boundary/coverage
+  // weight is the PRIMARY sort key again; bm25 order only breaks ties within
+  // an equal-weight tier.
+  it("keeps the exact multi-token match ahead of the one-token crowd when FTS serves rows", async () => {
+    const now = Date.now();
+    for (let i = 0; i < 60; i++) sqlite.seed({ id: `alpha-${i}`, content: "alpha", createdAt: now });
+    for (let i = 0; i < 60; i++) sqlite.seed({ id: `beta-${i}`, content: "beta", createdAt: now });
+    sqlite.seed({ id: "strong-exact", content: `alpha beta ${"filler ".repeat(1000)}`, createdAt: now });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+
+    const diagnostics: RecallDiagnostics = {};
+    const result = await recallEntries(
+      { query: "alpha beta", topK: 5, hops: 0, synthesize: false },
+      env,
+      ctx,
+      undefined,
+      { diagnostics },
+    );
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(diagnostics.keywordIds).toContain("strong-exact");
+    expect(result.matches.map(match => match.id).slice(0, 5)).toContain("strong-exact");
+  });
+
+  // The reviewer's LIKE_WEIGHT_ORDER probe, as a permanent mutation guard:
+  // the LIKE path must keep its full weight/created_at/id sort. Forcing
+  // keywordPreRanked=true onto the LIKE call site is the mutation the
+  // combined review found still live; its signature is a fused list ordered
+  // by recency (the incoming LIKE order) instead of by weight, which the
+  // final RRF score alone can mask.
+  it("keeps the LIKE path's weight-first order under a forced pre-ranked flag", async () => {
+    // old-strong matches both query tokens (higher JS weight); new-weak is
+    // newer but matches only one.
+    sqlite.seed({ id: "new-weak", content: "alpha", createdAt: 2000 });
+    sqlite.seed({ id: "old-strong", content: "alpha beta", createdAt: 1000 });
+
+    const readOrder = async (internal?: RecallInternalOptions) => {
+      const diagnostics: RecallDiagnostics = {};
+      const result = await recallEntries(
+        { query: "alpha beta", topK: 2, hops: 0, synthesize: false },
+        env,
+        ctx,
+        undefined,
+        { diagnostics, ...internal },
+      );
+      expect(diagnostics.ftsUsed).toBe(false);
+      return { ids: result.matches.map(match => match.id), fused: diagnostics.fusedIds ?? [] };
+    };
+
+    const strong = await readOrder();
+    expect(strong.ids).toEqual(["old-strong", "new-weak"]);
+    expect(strong.fused).toEqual(["old-strong", "new-weak"]);
+    // Forcing the flag must not change what the fusion produces either.
+    expect((await readOrder({ keywordPreRankedOverride: true })).ids).toEqual(["old-strong", "new-weak"]);
+  });
+
+  // The mutation's second signature: an equal-weight, equal-created_at tie
+  // seeded in reverse id order. Only the id tiebreak can order it, so a
+  // pre-ranked passthrough (which keeps the incoming LIKE order) flips the
+  // result — this shape is what fails under the mutation even when RRF's
+  // weight dominance hides the first one.
+  it("orders an equal-weight tie by id, not by the incoming LIKE order", async () => {
+    sqlite.seed({ id: "z-tie", content: "violet marker note", createdAt: 1000 });
+    sqlite.seed({ id: "a-tie", content: "violet marker note", createdAt: 1000 });
+
+    const diagnostics: RecallDiagnostics = {};
+    const result = await recallEntries(
+      { query: "violet", topK: 2, hops: 0, synthesize: false },
+      env,
+      ctx,
+      undefined,
+      { diagnostics },
+    );
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(diagnostics.fusedIds).toEqual(["a-tie", "z-tie"]);
+    expect(result.matches.map(match => match.id)).toEqual(["a-tie", "z-tie"]);
+  });
 });

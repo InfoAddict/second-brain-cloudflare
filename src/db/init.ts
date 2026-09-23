@@ -543,7 +543,11 @@ async function applySchema(env: Env): Promise<boolean> {
   // row one (see the fresh-brain ready latch below).
   let ftsDeferred = false;
   if (existing?.objects.get("entries_fts") !== "table") {
-    const entriesPreexisted = existing !== null && existing.objects.get("entries") === "table";
+    // A failed probe (existing === null) is populated/unknown, never fresh
+    // (combined review of Tasks 4-6): an unknown corpus must go through the
+    // same KV invalidation as a populated brain, and the fresh-brain ready
+    // latch at the end skips it for the same reason.
+    const entriesPreexisted = existing === null || existing.objects.get("entries") === "table";
     let kvOk = true;
     if (entriesPreexisted) {
       try {

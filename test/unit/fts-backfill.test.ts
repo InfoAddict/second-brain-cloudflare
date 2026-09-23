@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { runFtsBackfill, runFtsMaintenance, checkFtsIntegrity } from "../../src/db/fts-backfill";
 import {
-  FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY, FTS_INTEGRITY_SPOT_CHECK,
+  FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_CONTENT_CHECK_CURSOR_KV_KEY, FTS_READY_KV_KEY, FTS_INTEGRITY_SPOT_CHECK,
 } from "../../src/constants";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -192,6 +192,70 @@ describe("runFtsBackfill", () => {
     expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
     logSpy.mockRestore();
   });
+
+  it("does not latch ready over an incomplete index when the cursor is past max rowid", async () => {
+    // The reviewer's PAST_CURSOR probe: a cursor beyond every rowid reads an
+    // empty page, and the old latch took that as "backfill complete" without
+    // ever comparing the shadow to entries — ready=1 over an empty index.
+    seed(d1, 3);
+    await emptyFts(d1);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "999");
+
+    const result = await runFtsBackfill(env);
+
+    expect(result).toEqual({ indexed: 0, done: false });
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0"); // restart, not latch
+    expect(await shadowOf(d1)).toEqual([]);
+    expect(await sourceOf(d1)).toHaveLength(3);
+  });
+
+  it("does not latch ready when a trigger is dropped during the final batch", async () => {
+    // The reviewer's LATCH_RACE probe: a hot-path repair drops a sync trigger
+    // while the final batch runs; the old code latched ready over the now
+    // dead-but-queryable table in the same breath.
+    d1.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at) VALUES ('e1', 'first violet', '[]', 'api', 1)`).run();
+    d1.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at) VALUES ('e2', 'second violet', '[]', 'api', 2)`).run();
+    await emptyFts(d1);
+    const raw = d1.db;
+    let injected = false;
+    const DB = {
+      prepare(sql: string) {
+        const stmt = raw.prepare(sql);
+        if (!sql.includes("SELECT rowid AS rid FROM entries")) return stmt;
+        return {
+          bind(...args: unknown[]) {
+            const bound = stmt.bind(...args);
+            return {
+              all: async () => {
+                const selected = await bound.all();
+                if (!injected) {
+                  injected = true;
+                  await raw.exec("DROP TRIGGER entries_fts_insert");
+                  await raw.prepare(
+                    "INSERT INTO entries (id,content,tags,source,created_at) VALUES ('raced','raced violet','[]','api',3)",
+                  ).run();
+                }
+                return selected;
+              },
+            };
+          },
+        };
+      },
+      exec: raw.exec.bind(raw),
+      batch: raw.batch.bind(raw),
+    } as unknown as D1Database;
+    const env = makeTestEnv(undefined, { DB, OAUTH_KV: makeMemoryKV() });
+
+    const result = await runFtsBackfill(env);
+
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+    expect(result).toEqual({ indexed: 2, done: false });
+    expect(await sourceOf(d1)).toHaveLength(3);
+    expect(await shadowOf(d1)).toHaveLength(2);
+  });
 });
 
 describe("checkFtsIntegrity", () => {
@@ -247,6 +311,56 @@ describe("checkFtsIntegrity", () => {
     expect(await ftsCount(d1)).toEqual({ n: 5 }); // still not an orphan by rowid — the reset lets the backfill fix it
     expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
     expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+  });
+
+  it("content drift inside the window heals in place: ready and the backfill cursor are untouched", async () => {
+    // The reviewer's DRIFT_SURVIVES probe, at unit scale: a same-row content
+    // drift keeps counts equal and misses the newest-5 spot check, so the old
+    // checks never saw it. The rotating window reads (rowid,id,content) both
+    // ways and re-indexes exactly the mismatched rowids.
+    seed(d1, 7);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    const staleRowid = (await d1.db.prepare(`SELECT rowid FROM entries WHERE id = 'e1'`).first() as { rowid: number }).rowid;
+    await d1.db.prepare(`UPDATE entries_fts SET content = 'stale orchid payload' WHERE rowid = ?`).bind(staleRowid).run();
+
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: true });
+    expect(await shadowOf(d1)).toEqual(await sourceOf(d1)); // e1 healed in place
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1"); // no reset: the backfill is not restarted
+    expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBeNull();
+  });
+
+  it("the content window advances past the corpus and wraps to 0", async () => {
+    seed(d1, 3);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+
+    await checkFtsIntegrity(env); // window 1..200 covers all three; past max rowid, so it wraps
+
+    expect(await env.OAUTH_KV.get(FTS_CONTENT_CHECK_CURSOR_KV_KEY)).toBe("0");
+  });
+
+  it("content drift outside the current window survives until its window night", async () => {
+    // Rotation, not a full scan: a drift beyond the window stays until the
+    // cursor reaches it, so a drift at a far rowid is not healed by the
+    // first check. With a window of 200 and rowids 1..2, both are inside the
+    // first window — seed past it instead by resetting the cursor mid-way.
+    seed(d1, 2);
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    // Start the rotation past both rows, as the previous night left it.
+    await env.OAUTH_KV.put(FTS_CONTENT_CHECK_CURSOR_KV_KEY, "200");
+
+    await d1.db.prepare(`UPDATE entries_fts SET content = 'stale' WHERE rowid = (SELECT rowid FROM entries WHERE id = 'e1')`).run();
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: true }); // window (200, 400] saw neither row
+    expect(await shadowOf(d1)).not.toEqual(await sourceOf(d1));
+    // ...and the next night's window wraps to 0 and heals it.
+    await checkFtsIntegrity(env);
+    expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
   });
 });
 

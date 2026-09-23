@@ -1089,6 +1089,39 @@ describe("initializeDatabase against real SQLite", () => {
       expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
       expect(calls).toEqual([`put:${FTS_READY_KV_KEY}`]);
     });
+
+    // Probe failure (combined review of Tasks 4-6): `existing === null` must
+    // read as populated/unknown, never fresh. The reviewer's PROBE_FAILURE
+    // probe: a legacy brain with ready=1 and a stale cursor loses its
+    // entries_fts; a transient schema-probe failure used to skip the KV
+    // invalidation entirely, so the recreated empty table was still served
+    // as ready over nothing.
+    it("probe failure: a brain of unknown shape invalidates KV before FTS creation and never fresh-latches", async () => {
+      d1 = makeSqliteD1(); // schema.sql applied, then rewound to its pre-FTS shape below
+      await d1.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at) VALUES ('legacy', 'legacy violet', '[]', 'api', 1)`).run();
+      await d1.db.exec(
+        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
+        `DROP TRIGGER IF EXISTS entries_fts_delete; DROP TABLE IF EXISTS entries_fts;`,
+      );
+      const kv = makeMemoryKV();
+      await kv.put(FTS_READY_KV_KEY, "1");
+      await kv.put(FTS_BACKFILL_CURSOR_KV_KEY, "500");
+      const raw = d1.db;
+      const DB = {
+        prepare(sql: string) {
+          if (!sql.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) return raw.prepare(sql);
+          return { all: async () => { throw new Error("transient schema probe failure"); } };
+        },
+        exec: raw.exec.bind(raw),
+        batch: raw.batch.bind(raw),
+      } as unknown as D1Database;
+
+      await initializeDatabase(makeTestEnv(undefined, { DB: DB as unknown as D1Database, OAUTH_KV: kv }));
+
+      expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
+      expect(await kv.get(FTS_READY_KV_KEY)).toBeNull();
+      expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+    });
   });
 
   it("survives two isolates migrating the same brain at once", async () => {

@@ -425,6 +425,16 @@ export class D1Mock {
             .sort((a: any, b: any) => a.created_at - b.created_at)[0];
           return row ? { id: row.id } : null;
         }
+        if (s.includes("(SELECT count(*) FROM entries) AS e")) {
+          // src/db/fts-backfill.ts's nightly count parity (Task 5), which
+          // also reads max rowid for the rotating content check's wrap
+          // (combined review FIX 2). This double stands in for a healthy,
+          // migrated brain — same stance as the liveness branch in all() —
+          // so equal counts and a max rowid of the entries count is the
+          // honest answer; drift is covered against real SQLite in
+          // test/unit/fts-backfill.test.ts, which the mock cannot simulate.
+          return { e: db.entries.length, f: db.entries.length, mx: db.entries.length };
+        }
         if (s.includes("u.role = 'admin'")) {
           // findOwner: oldest admin plus their personal workspace.
           const admin = db.users

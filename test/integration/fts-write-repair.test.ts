@@ -519,3 +519,49 @@ describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale in
     expect(ftsRows.map(r => r.id)).toEqual(["old"]);
   });
 });
+
+// Combined review of Tasks 4-6 (FIX 2): same-row content drift keeps count
+// parity true and can hide from the newest-5 spot check forever — the
+// reviewer's DRIFT_SURVIVES probe showed two scheduled() nights leaving a
+// tampered FTS row untouched. The rotating content check is what closes it:
+// every night compares a window of FTS_CONTENT_CHECK_WINDOW rowids both ways
+// and re-indexes mismatches in place, so every row is covered within
+// ceil(N/window) nights.
+describe("same-row content drift heals within ceil(N/window) nights (FIX 2 end to end)", () => {
+  let d1: SqliteD1;
+
+  beforeEach(() => {
+    setDbReady(true);
+    resetFtsReadyMemo();
+  });
+  afterEach(() => { d1?.close(); setDbReady(false); });
+
+  it("a tampered same-row content heals on its window night through worker.scheduled()", async () => {
+    d1 = makeSqliteD1();
+    const rawEnv = makeTestEnv(undefined, {
+      DB: d1.db as unknown as D1Database,
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockRejectedValue(new Error("dense down")) }),
+      AI: makeAIMock(),
+    });
+    resetDatabaseInit();
+    await initializeDatabase(rawEnv);
+    // Seven entries: one window covers all of them, so ceil(7/200) = 1 night.
+    for (let i = 1; i <= 7; i++) d1.seed({ id: `e${i}`, content: `fresh violet ${i}`, createdAt: Date.now() + i });
+    await rawEnv.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    await d1.db.prepare(
+      `UPDATE entries_fts SET content = 'stale orchid payload' WHERE rowid = (SELECT rowid FROM entries WHERE id = 'e1')`,
+    ).run();
+
+    const { ctx, drain } = makeCtx();
+    await worker.scheduled({ cron: MAINTENANCE_CRON } as ScheduledEvent, rawEnv, ctx);
+    await drain();
+
+    const shadowOf = (id: string) => (d1.db.prepare(
+      `SELECT content FROM entries_fts WHERE rowid = (SELECT rowid FROM entries WHERE id = ?)`,
+    ).bind(id).first() as Promise<{ content: string } | null>);
+    expect((await shadowOf("e1"))?.content).toBe("fresh violet 1"); // healed the same night
+    expect((await shadowOf("e2"))?.content).toBe("fresh violet 2"); // neighbors untouched
+    expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1"); // healed in place, no backfill reset
+  });
+});

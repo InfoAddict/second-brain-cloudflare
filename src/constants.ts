@@ -170,6 +170,10 @@ export const FTS_MIN_TOKEN_LENGTH = 3;
 export const FTS_READY_CACHE_MS = 5 * 60 * 1000;
 // Rows spot-checked nightly for rowid-mapping drift; newest rows move first.
 export const FTS_INTEGRITY_SPOT_CHECK = 5;
+// Rotating content check: rowid window compared nightly (both directions)
+// behind its own cursor, covering every row within ceil(N / window) nights.
+export const FTS_CONTENT_CHECK_WINDOW = 200;
+export const FTS_CONTENT_CHECK_CURSOR_KV_KEY = "fts:content-check-cursor";
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",
   "i", "me", "my", "we", "you", "it", "this", "that", "these", "those", "with", "about", "from", "at", "as", "by",

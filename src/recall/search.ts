@@ -203,12 +203,15 @@ function fuseDenseAndKeyword(
   const keywordScored = kwLower
     .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + tokenWeight(x.lc, t), 0) }))
     .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)));
-  // FTS rows arrive bm25-ordered: rank position already carries TF and length
-  // normalization, so re-sorting by the JS weight would discard it. The JS
-  // weight still rides along as the RRF contribution weight — boundary and
+  // Combined review of Tasks 4-6 (FIX 3): the JS boundary/coverage weight is
+  // the PRIMARY sort key in both paths. In the pre-ranked (FTS) path the
+  // sort is weight-only and stable, so bm25's order survives WITHIN an
+  // equal-weight tier — replacing the old recency tiebreak, which ranked a
+  // long exact multi-token match behind every one-token note. The JS weight
+  // still rides along as the RRF contribution weight — boundary and
   // coverage quality, which trigram bm25 cannot see.
   const keywordRanked = keywordPreRanked
-    ? keywordScored
+    ? keywordScored.sort((a, b) => b.weight - a.weight)
     : keywordScored.sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
 
   const fused = rrfFuse(denseRanked, keywordRanked.map(x => ({ id: x.row.id, weight: x.weight })));

@@ -1145,7 +1145,14 @@ describe("the checker over the real source tree", () => {
   //   ✔ scope check: 106 queries, 53 documented exceptions, 6 scope-checked
   //     (clause assembled in JS), 1 scope-outer-join (clause governs a column,
   //     not the row set)
-  it("reports exactly 106 queries, 53 exceptions, 6 scope-checked and 1 outer-join", () => {
+  //
+  // MOVED queries 124 -> 127 and exempt 60 -> 63 by the combined T4-T6 review
+  // fixes (src/db/fts-backfill.ts): the ready-latch guard's two EXCEPT parity
+  // probes (liveness rides in the same batch as a bare variable the lexer
+  // never sees) and the rotating content check's in-place re-index
+  // INSERT...SELECT, each a rowid-keyed deployment-wide cron read carrying a
+  // scope-exempt licence. scope-checked and outer-join UNCHANGED.
+  it("reports the checker's pinned totals (127 queries, 63 exceptions, 7 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1184,7 +1191,7 @@ describe("the checker over the real source tree", () => {
     // count-parity SELECT, the rowid spot-check JOIN, and the orphan-cleanup
     // DELETE — all deployment-wide and keyed on entries.rowid, same exemption
     // shape as Task 4's backfill statements above.
-    ).toEqual({ queries: 124, exempt: 60, checked: 7, outerJoin: 1 });
+    ).toEqual({ queries: 127, exempt: 63, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
