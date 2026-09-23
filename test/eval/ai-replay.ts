@@ -115,7 +115,8 @@ function fromBase64(b64: string): number[] {
   return Array.from(new Float32Array(copy));
 }
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+// SB_EVAL_ROOT moves the whole eval (data, corpora, caches) together; corpora.ts and build.ts read it too.
+const REPO_ROOT = process.env.SB_EVAL_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** Working caches live here (gitignored); nothing under it is ever committed. */
 const CACHE_DIR = ".eval-cache";
 /** The only committed location an export may target: the synthetic core cache (`replay.<model>.jsonl.gz`). */

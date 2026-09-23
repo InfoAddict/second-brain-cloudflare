@@ -68,7 +68,11 @@ export interface VariantReport {
   isolate: "warm" | "cold";
   /** Result depth every query ran at; reports at different depths are not comparable. */
   topK: number;
-  /** Bumped when the runner's measurement semantics change. */
+  /** Bumped when the runner's measurement semantics change or the report schema gains fields. */
   runnerVersion: number;
+  /** sha256 of each golden-data file the corpus was built from; reports over different data are not comparable. */
+  dataFingerprint?: Record<string, string>;
+  /** Set when the run covered only the first N queries; such a report is never gate-eligible. */
+  limit?: number;
   results: QueryResult[];
 }

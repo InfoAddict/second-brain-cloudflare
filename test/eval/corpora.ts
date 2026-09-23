@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { CORE_DATA_DIR, CORPUS_IDS, buildCorpus, type CoreCorpusId } from "./corpus/build";
 import type { CorpusSpec } from "./corpus/types";
+import { hashDataDir } from "./lock";
 
 interface Provider { name: string; match: (id: string) => boolean; build: (id: string) => CorpusSpec | Promise<CorpusSpec> }
 const providers: Provider[] = [];
@@ -28,4 +29,9 @@ export function replayPaths(model: string): { read: string[]; write: string } {
   const local = resolve(root, `.eval-cache/replay/${slug(model)}.jsonl`);
   // Read layers: the committed core cache, then the local one (recorded but uncommitted, e.g. 5k/20k).
   return { read: [...(existsSync(committed) ? [committed] : []), local], write: local };
+}
+
+/** Hashes of the golden-data files a core corpus is built from; other corpora carry none. */
+export function corpusFingerprint(id: string): Record<string, string> | undefined {
+  return (CORPUS_IDS as readonly string[]).includes(id) ? hashDataDir(CORE_DATA_DIR) : undefined;
 }

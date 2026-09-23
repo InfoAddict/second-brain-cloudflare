@@ -40,5 +40,25 @@
       "multi-hop": 30,
       "long-context": 24
     }
-  }
+  },
+  "history": [
+    {
+      "date": "2026-09-23T22:45:26.349Z",
+      "reason": "genesis",
+      "files": {
+        "needles.jsonl": {
+          "old": "",
+          "new": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af"
+        },
+        "edges.jsonl": {
+          "old": "",
+          "new": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec"
+        },
+        "queries.jsonl": {
+          "old": "",
+          "new": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193"
+        }
+      }
+    }
+  ]
 }

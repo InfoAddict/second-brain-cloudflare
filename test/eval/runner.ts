@@ -9,14 +9,14 @@ import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vecto
 import type { LoadedCorpus } from "./corpus/loader";
 import { EVAL_NOW, IDENTITIES } from "./corpus/types";
 import { scoreQuery } from "./metrics";
-import type { CostSample, GoldenQuery, QueryResult, VariantReport } from "./types";
+import { QUERY_CATEGORIES, type CostSample, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
 import type { VariantSpec } from "./variants";
 
 /** Metrics need the top 10; recall@5 is read from its first five (Decision 9). */
 export const EVAL_TOP_K = 10;
 
 /** Bump when what a report means changes (measurement, guards, degradation flags). */
-export const RUNNER_VERSION = 1;
+export const RUNNER_VERSION = 2; // 2: reports carry limit and dataFingerprint
 
 export function freezeClock(fixed: number): () => void {
   const real = Date.now;
@@ -152,8 +152,45 @@ export function writeReport(path: string, report: VariantReport): void {
   writeFileSync(path, `${JSON.stringify(report, null, 1)}\n`);
 }
 
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isStrArray = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
+
+/** Throws naming the first field a report gets wrong; the gate reads all of these without checking. */
+function validateReport(raw: unknown, path: string): VariantReport {
+  const fail = (field: string, want: string): never => { throw new Error(`${path}: report field ${field} must be ${want}`); };
+  if (!raw || typeof raw !== "object") return fail("(root)", "an object");
+  const r = raw as Record<string, unknown>;
+  if (r.schema !== 1) throw new Error(`${path}: unsupported report schema ${String(r.schema)}`);
+  for (const f of ["variant", "corpus", "embeddingModel"]) if (!isStr(r[f])) fail(f, "a string");
+  if (r.d1Backend !== "sqlite" && r.d1Backend !== "workerd") fail("d1Backend", "sqlite or workerd");
+  if (r.isolate !== "warm" && r.isolate !== "cold") fail("isolate", "warm or cold");
+  if (!isNum(r.topK)) fail("topK", "a number");
+  if (!isNum(r.runnerVersion)) fail("runnerVersion", "a number");
+  if (r.limit !== undefined && !(Number.isInteger(r.limit) && (r.limit as number) > 0)) fail("limit", "a positive integer");
+  if (r.dataFingerprint !== undefined && !(r.dataFingerprint && typeof r.dataFingerprint === "object" && !Array.isArray(r.dataFingerprint) && Object.values(r.dataFingerprint).every(isStr))) fail("dataFingerprint", "an object of hashes");
+  if (!Array.isArray(r.results)) return fail("results", "an array");
+  (r.results as unknown[]).forEach((x, i) => {
+    const q = (x ?? {}) as Record<string, unknown>;
+    const at = (f: string) => `results[${i}].${f}`;
+    if (!isStr(q.queryId)) fail(at("queryId"), "a string");
+    if (!(QUERY_CATEGORIES as readonly string[]).includes(q.category as string)) fail(at("category"), "a known category");
+    if (!isStr(q.clusterKey)) fail(at("clusterKey"), "a string");
+    if (!isStrArray(q.rankedIds)) fail(at("rankedIds"), "a string array");
+    if (!isStrArray(q.leaked)) fail(at("leaked"), "a string array");
+    if (q.tags !== undefined && !isStrArray(q.tags)) fail(at("tags"), "a string array");
+    if (q.degraded !== undefined && !isStrArray(q.degraded)) fail(at("degraded"), "a string array");
+    const m = q.metrics as Record<string, unknown> | undefined;
+    if (!m || !["recall5", "recall10", "mrr10", "ndcg10"].every(k => isNum(m[k]))) fail(at("metrics"), "four numbers");
+    const c = q.cost as Record<string, unknown> | undefined;
+    if (!c || !["d1Statements", "aiCalls", "embeddingCalls", "vectorizeQueries", "kvReads", "neurons", "wallMs"].every(k => isNum(c[k]))
+      || !(c.d1RowsRead === null || isNum(c.d1RowsRead)) || typeof c.neuronsEstimated !== "boolean") fail(at("cost"), "a full cost sample");
+  });
+  return raw as VariantReport;
+}
+
 export function readReport(path: string): VariantReport {
-  const report = JSON.parse(readFileSync(path, "utf8")) as VariantReport;
-  if (report.schema !== 1) throw new Error(`${path}: unsupported report schema ${report.schema}`);
-  return report;
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (e) { throw new Error(`${path}: not valid JSON (${(e as Error).message})`); }
+  return validateReport(raw, path);
 }

@@ -1,8 +1,12 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { UsageError, describeVerdict, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli } from "./cli";
+import { UsageError, assertJsonPathAllowed, describeVerdict, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli, runProblems } from "./cli";
+import { CORE_DATA_DIR } from "./corpus/build";
+import { corpusFingerprint } from "./corpora";
+import { resolve } from "node:path";
+import { registerVariant, unregisterVariant } from "./variants";
 import { registerCorpusProvider } from "./corpora";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry } from "./corpus/types";
 import type { CostSample, GoldenQuery, QueryResult, VariantReport } from "./types";
@@ -27,6 +31,7 @@ describe("parseCli", () => {
     expect(parseCli(["lock"])).toMatchObject({ kind: "lock", corpus: "core-1k" });
     expect(parseCli(["lock", "--accept-data-change", "new queries"])).toMatchObject({ kind: "lock", acceptDataChange: "new queries" });
     expect(parseCli(["--list"])).toEqual({ kind: "list" });
+    expect(parseCli(["--compare", "a,b", "--target-gaps", "T-0072,T-0073"])).toMatchObject({ targetGaps: ["T-0072", "T-0073"] });
   });
 
   it("rejects bad input with a UsageError", () => {
@@ -38,6 +43,12 @@ describe("parseCli", () => {
     expect(() => parseCli(["--variant", "x", "--limit", "abc"])).toThrow(/limit/);
     expect(() => parseCli(["prepare", "--variant", "x", "--max-neurons", "-1"])).toThrow(/max-neurons/);
     expect(() => parseCli(["--bogus"])).toThrow(UsageError);
+    expect(() => parseCli(["--variant", "x", "--limit", "3.7"])).toThrow(/limit/);
+    expect(() => parseCli(["--variant", "x", "--limit", "0"])).toThrow(/limit/);
+    expect(() => parseCli(["prepare", "--variant", "x", "--limit", "5"])).toThrow(/limit/);
+    expect(() => parseCli(["prepare", "--variant", "x", "--json", "/tmp/x.json"])).toThrow(/json/);
+    expect(() => parseCli(["lock", "--json", "/tmp/x.json"])).toThrow(/json/);
+    expect(() => parseCli(["lock", "--limit", "5"])).toThrow(/limit/);
     expect(() => parseCli(["lock", "--accept-data-change", " "])).toThrow(/reason/);
     expect(() => parseCli(["--variant", "x", "--accept-data-change", "why"])).toThrow(/only applies to lock/);
   });
@@ -57,22 +68,19 @@ describe("exit codes and formatting", () => {
     expect(text).toMatch(/degraded 1/);
   });
 
-  it("scores every query in the headline, then shows the excluding-known-gaps view and the gap breakdown", () => {
+  it("excludes known gaps from the headline, gives them their own block, and adds an all-queries line", () => {
     const text = formatReport(report([
       result({ queryId: "ok", category: "identifier", metrics: { recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 } }),
       result({ queryId: "gap", category: "identifier", tags: ["known-gap", "gap:T-0072"], metrics: { recall5: 0, recall10: 0, mrr10: 0, ndcg10: 0 } }),
     ]));
     const lines = text.split("\n");
-    const split = lines.findIndex(l => /excluding known gaps/.test(l));
-    expect(split).toBeGreaterThan(0);
-    const headline = lines.slice(0, split).find(l => /^\s+identifier\s/.test(l))!;
-    expect(headline).toMatch(/n=2\s/);
-    expect(headline).toMatch(/recall@5 0\.500/);
-    const excluding = lines.slice(split).find(l => /^\s+identifier\s/.test(l))!;
-    expect(excluding).toMatch(/n=1\s/);
-    expect(excluding).toMatch(/recall@5 1\.000/);
-    expect(lines.slice(split).find(l => /^\s+overall\s/.test(l))).toMatch(/n=1\s/);
+    const identifier = lines.find(l => /^\s+identifier\s/.test(l))!;
+    expect(identifier).toMatch(/n=1\s/);
+    expect(identifier).toMatch(/recall@5 1\.000/);
+    expect(text).toMatch(/known-gap queries are excluded from the headline/i);
+    expect(text).toMatch(/known gaps:/i);
     expect(text).toMatch(/gap:T-0072\s+n=1\s.*recall@5 0\.000/);
+    expect(lines.find(l => /all queries\s/.test(l))).toMatch(/n=2\s.*recall@5 0\.500/);
   });
 
   it("names the rule behind a verdict", () => {
@@ -83,8 +91,10 @@ describe("exit codes and formatting", () => {
     expect(describeVerdict({ verdict: "PASS", deltas: [], rules: [] })).toBe("PASS");
   });
 
-  it("prints no known-gap block when no query is tagged", () => {
-    expect(formatReport(report([result({ queryId: "a" })]))).not.toMatch(/known gap/i);
+  it("prints no known-gap block or all-queries line when no query is tagged", () => {
+    const text = formatReport(report([result({ queryId: "a" })]));
+    expect(text).not.toMatch(/known gap/i);
+    expect(text).not.toMatch(/all queries\s+n=/);
   });
 
   it("compares known-gap groups between two reports", () => {
@@ -92,6 +102,8 @@ describe("exit codes and formatting", () => {
     const text = formatKnownGapDelta(report([gap(0)]), report([gap(1)], { variant: "rerank" }));
     expect(text).toMatch(/gap:T-0073/);
     expect(text).toMatch(/0\.000 -> 1\.000/);
+    expect(text).toMatch(/excluded from the headline/);
+    expect(text).not.toMatch(/outside the headline/);
     expect(formatKnownGapDelta(report([result({ queryId: "a" })]), report([result({ queryId: "a" })]))).toBe("");
   });
 });
@@ -142,10 +154,6 @@ describe("main (end to end on a tiny registered corpus)", () => {
     expect(await main(["--compare", `${join(dir, "b.json")},${join(dir, "c.json")}`, "--allow-unmeasured-rows"])).toBe(3);
   });
 
-  it("lock refuses hash embeddings and never writes", async () => {
-    expect(await main(["lock", "--corpus", "tiny-cli", "--hash-embeddings"])).toBe(2);
-  });
-
   it("prepare without credentials exits 2 before any live call", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
@@ -168,6 +176,92 @@ describe("main (end to end on a tiny registered corpus)", () => {
       expect(out).toMatch(/core-1k/);
     } finally {
       log.mockRestore();
+    }
+  });
+
+  describe("a broken run is never a success", () => {
+    it("runProblems names errors, leaks, and degraded queries across ALL queries, gaps included", () => {
+      expect(runProblems(report([result({ queryId: "a" })]))).toEqual([]);
+      expect(runProblems(report([result({ queryId: "a", error: "replay cache miss" })])).join()).toMatch(/1 query error/);
+      expect(runProblems(report([result({ queryId: "a", leaked: ["x"] })])).join()).toMatch(/1 cross-workspace leak/);
+      expect(runProblems(report([result({ queryId: "a", degraded: ["semantic-unavailable"] })])).join()).toMatch(/1 degraded/);
+      expect(runProblems(report([result({ queryId: "a", tags: ["known-gap"], error: "boom" })])).join()).toMatch(/1 query error/);
+    });
+
+    it("run exits 1 on a degraded run and still writes --json for inspection", async () => {
+      // an unknown embedding model has no neuron rate, so every query's dense arm fails and recall reports it
+      registerVariant({ name: "broken-embed", description: "test only", config: { EMBEDDING_MODEL: "@cf/none/absent" } });
+      try {
+        const out = outPath();
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          expect(await main(["--variant", "broken-embed", "--corpus", "tiny-cli", "--hash-embeddings", "--json", out])).toBe(1);
+        } finally { log.mockRestore(); }
+        const r = JSON.parse(readFileSync(out, "utf8")) as VariantReport;
+        expect(r.results.some(x => x.degraded?.length || x.error)).toBe(true);
+      } finally { unregisterVariant("broken-embed"); }
+    });
+  });
+
+  describe("--json cannot overwrite committed data", () => {
+    const data = resolve(CORE_DATA_DIR, "..");
+    it("refuses paths under test/eval/data, including baselines that do not exist yet", () => {
+      expect(() => assertJsonPathAllowed(resolve(data, "baselines/core-1k.bge-small-en-v1.5.json"))).toThrow(UsageError);
+      expect(() => assertJsonPathAllowed(resolve(data, "core/queries.jsonl"))).toThrow(/test\/eval\/data/);
+      expect(() => assertJsonPathAllowed(resolve(data, "core/../baselines/x.json"))).toThrow(UsageError);
+      expect(() => assertJsonPathAllowed(join(tmpdir(), "ok.json"))).not.toThrow();
+    });
+
+    it("resolves symlinks: a link into the data dir, and a dangling link to a new baseline, are refused", () => {
+      const dir = mkdtempSync(join(tmpdir(), "eval-link-"));
+      symlinkSync(resolve(data, "core"), join(dir, "dirlink"));
+      expect(() => assertJsonPathAllowed(join(dir, "dirlink/out.json"))).toThrow(UsageError);
+      symlinkSync(resolve(data, "baselines/never-written.json"), join(dir, "filelink.json"));
+      expect(() => assertJsonPathAllowed(join(dir, "filelink.json"))).toThrow(UsageError);
+    });
+
+    it("main refuses and writes nothing", async () => {
+      const target = resolve(data, "baselines/should-not-exist.json");
+      expect(await main(["--variant", "baseline", "--corpus", "tiny-cli", "--hash-embeddings", "--json", target])).toBe(2);
+      expect(existsSync(target)).toBe(false);
+    });
+  });
+
+  describe("report provenance", () => {
+    it("core corpora fingerprint their golden-data files; other corpora have none", () => {
+      const fp = corpusFingerprint("core-1k")!;
+      const manifest = JSON.parse(readFileSync(resolve(CORE_DATA_DIR, "manifest.json"), "utf8")) as { files: Record<string, string> };
+      expect(fp).toEqual(manifest.files);
+      expect(corpusFingerprint("tiny-cli")).toBeUndefined();
+    });
+
+    it("run records limit and the golden-data fingerprint in the report", async () => {
+      const out = outPath();
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect(await main(["--variant", "baseline", "--corpus", "core-1k", "--hash-embeddings", "--limit", "3", "--json", out])).toBe(0);
+      } finally { log.mockRestore(); }
+      const r = JSON.parse(readFileSync(out, "utf8")) as VariantReport;
+      expect(r.limit).toBe(3);
+      expect(r.dataFingerprint).toEqual(corpusFingerprint("core-1k"));
+      expect(r.runnerVersion).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("lock on a core corpus refuses hash embeddings for that reason and writes no file", async () => {
+    const baselines = resolve(CORE_DATA_DIR, "../baselines/core-1k.bge-small-en-v1.5.json");
+    const manifest = resolve(CORE_DATA_DIR, "manifest.json");
+    const before = readFileSync(manifest, "utf8");
+    const existed = existsSync(baselines);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await main(["lock", "--corpus", "core-1k", "--hash-embeddings"])).toBe(2);
+      expect(err.mock.calls.map(c => String(c[0])).join("\n")).toMatch(/hash-embeddings/);
+      expect(existsSync(baselines)).toBe(existed);
+      expect(readFileSync(manifest, "utf8")).toBe(before);
+    } finally {
+      err.mockRestore();
+      if (!existed) rmSync(baselines, { force: true }); // a mutant that skips the guard must not leave a bogus lock behind
     }
   });
 });

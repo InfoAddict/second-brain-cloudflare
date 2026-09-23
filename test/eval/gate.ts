@@ -1,4 +1,4 @@
-import { mean, percentile } from "./metrics";
+import { gapKey, mean, percentile } from "./metrics";
 import { pairedBootstrap, type BootstrapCI } from "./stats";
 import { METRIC_NAMES, QUERY_CATEGORIES, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
@@ -49,6 +49,8 @@ export interface GateOptions {
   /** Categories the variant claims to help; enables the targeted-gain path. */
   targetCategories?: readonly QueryCategory[];
   allowUnmeasuredRowsRead?: boolean;
+  /** Known gaps (ids like "T-0072") the variant claims to fix. Their queries rejoin the rules and get their own improvement path. */
+  targetGaps?: readonly string[];
 }
 
 interface Pair { b: QueryResult; c: QueryResult }
@@ -67,6 +69,9 @@ function duplicateIds(r: VariantReport): string[] {
   return [...dups];
 }
 
+const stableFingerprint = (f: Record<string, string> | undefined): string =>
+  f ? JSON.stringify(Object.entries(f).sort(([a], [b]) => a.localeCompare(b))) : "none";
+
 function comparabilityProblems(base: VariantReport, cand: VariantReport): string[] {
   const problems: string[] = [];
   if (base.corpus !== cand.corpus) problems.push(`corpus differs (${base.corpus} vs ${cand.corpus})`);
@@ -75,6 +80,8 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   if (base.isolate !== cand.isolate) problems.push("isolate mode differs");
   if (base.topK !== cand.topK) problems.push(`top-k differs (${base.topK} vs ${cand.topK})`);
   if (base.runnerVersion !== cand.runnerVersion) problems.push(`runner version differs (${base.runnerVersion} vs ${cand.runnerVersion})`);
+  if (base.limit !== undefined || cand.limit !== undefined) problems.push(`a report was limited to the first N queries (baseline ${base.limit ?? "full"}, candidate ${cand.limit ?? "full"}); rerun without --limit`);
+  if (stableFingerprint(base.dataFingerprint) !== stableFingerprint(cand.dataFingerprint)) problems.push("golden data differs (fingerprint mismatch or missing on one side)");
   const baseDups = duplicateIds(base), candDups = duplicateIds(cand);
   if (baseDups.length) problems.push(`duplicate query IDs in baseline: ${listIds(baseDups)}`);
   if (candDups.length) problems.push(`duplicate query IDs in candidate: ${listIds(candDups)}`);
@@ -90,6 +97,8 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   }
   const badCategory = [...baseById].filter(([id, b]) => b.category !== candById.get(id)!.category).map(([id]) => id);
   const badCluster = [...baseById].filter(([id, b]) => b.clusterKey !== candById.get(id)!.clusterKey).map(([id]) => id);
+  const badTags = [...baseById].filter(([id, b]) => gapKey(b.tags) !== gapKey(candById.get(id)!.tags)).map(([id]) => id);
+  if (badTags.length) problems.push(`known-gap tags differ between reports for: ${listIds(badTags)}`);
   if (badCategory.length) problems.push(`category differs between reports for: ${listIds(badCategory)}`);
   if (badCluster.length) problems.push(`clusterKey differs between reports for: ${listIds(badCluster)}`);
   return problems;
@@ -106,7 +115,8 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   add("isolation", leaks === 0 ? "pass" : "fail", `${leaks} cross-workspace result(s)`);
   const baseErrors = base.results.filter(r => r.error).length;
   const candErrors = cand.results.filter(r => r.error).length;
-  add("errors", candErrors <= baseErrors ? "pass" : "fail", `${candErrors} query error(s) vs ${baseErrors} in the baseline`);
+  // Either side: an errored baseline scores zeros and would flatter any candidate.
+  add("errors", candErrors + baseErrors === 0 ? "pass" : "fail", `${candErrors} query error(s) in the candidate, ${baseErrors} in the baseline`);
 
   // A degraded run measures a broken pipeline: fail closed on either side, so a degraded baseline cannot flatter a candidate.
   const degradedBase = base.results.filter(r => r.degraded?.length).length;
@@ -120,7 +130,12 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   }
   const baseById = new Map(base.results.map(r => [r.queryId, r] as const));
   // IDs are unique and labels identical (validated above), so the shared keys are safe to resample on.
-  const pairs: Pair[] = cand.results.map(c => ({ b: baseById.get(c.queryId)!, c }));
+  const allPairs: Pair[] = cand.results.map(c => ({ b: baseById.get(c.queryId)!, c }));
+  // Known-gap queries sit at a constant zero and would dilute every headline delta, so the rules skip them
+  // unless the variant declares that gap as a target. Invariants and cost above and below span everything.
+  const declared = new Set(opts.targetGaps ?? []);
+  const gapIds = (tags?: string[]) => (tags ?? []).filter(t => t.startsWith("gap:")).map(t => t.slice(4));
+  const pairs = allPairs.filter(p => gapKey(p.c.tags) === null || gapIds(p.c.tags).some(id => declared.has(id)));
   if (pairs.length < t.minQueries) {
     add("power", "inconclusive", `${pairs.length} queries is below the ${t.minQueries}-query floor`);
     return finish(rules, deltas);
@@ -178,6 +193,20 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
       if (!(row.ci.mean >= t.targetMargin && row.ci.lo > 0)) continue;
       if (powered) wins.push(`${category} ${metric} +${row.ci.mean.toFixed(4)}`);
       else underpowered.push(`${category} ${metric} +${row.ci.mean.toFixed(4)} has ${clusters} cluster${clusters === 1 ? "" : "s"}, below the ${t.minCategoryClusters}-cluster floor`);
+    }
+  }
+  // Declared target gaps: an improvement path over exactly those queries. Their cluster count is whatever the
+  // gap has, so the standard floors are relaxed and the power is stated instead.
+  for (const id of opts.targetGaps ?? []) {
+    const subset = allPairs.filter(p => gapIds(p.c.tags).includes(id));
+    if (!subset.length) { add("target-gaps", "inconclusive", `declared target gap ${id} matches no query`); continue; }
+    const clusters = new Set(subset.map(p => p.c.clusterKey)).size;
+    const relaxed = subset.length < t.minCategoryQueries || clusters < t.minCategoryClusters;
+    for (const metric of ["recall10", "mrr10"] as const) {
+      const row = delta(`gap:${id} (target)`, subset, metric);
+      if (row.ci.mean >= t.targetMargin && row.ci.lo > 0) {
+        wins.push(`gap:${id} ${metric} +${row.ci.mean.toFixed(4)} (n=${subset.length} queries, ${clusters} clusters${relaxed ? ", below the standard floors; power is limited" : ""})`);
+      }
     }
   }
   if (wins.length) add("improvement", "pass", wins.join("; "));

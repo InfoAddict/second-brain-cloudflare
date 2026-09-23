@@ -61,9 +61,6 @@ export interface Summary {
   degraded: number;
 }
 
-/** Every result in one group, known-gap queries included (cost and hard invariants span the whole run). */
-export const summarizeAll = (results: readonly QueryResult[]): Summary => summarizeGroup(results);
-
 function summarizeGroup(results: readonly QueryResult[]): Summary {
   const rows = results.map(r => r.cost.d1RowsRead);
   return {
@@ -94,35 +91,29 @@ export function gapKey(tags: readonly string[] | undefined): string | null {
 }
 
 export interface ReportSummary {
-  /** Every query, the same population the gate scores. */
+  /** The gate's population: known-gap queries are excluded and reported in knownGaps. */
   overall: Summary;
   byCategory: Partial<Record<QueryCategory, Summary>>;
-  /** Breakdown of the known-gap queries by gap id (they are also counted in overall and byCategory). */
   knownGaps: { overall: Summary | null; byGap: Record<string, Summary> };
-  /** The same view without known-gap queries; null when the report has none. Categories without gap queries are omitted. */
-  excludingGaps: { overall: Summary; byCategory: Partial<Record<QueryCategory, Summary>> } | null;
+  /** Every query, gaps included: what cost and the hard invariants cover. */
+  allQueries: Summary;
 }
 
 export function summarize(results: readonly QueryResult[]): ReportSummary {
+  const headline = results.filter(r => gapKey(r.tags) === null);
   const gaps = results.filter(r => gapKey(r.tags) !== null);
-  const rest = results.filter(r => gapKey(r.tags) === null);
   const byCategory: Partial<Record<QueryCategory, Summary>> = {};
-  for (const category of new Set(results.map(r => r.category))) {
-    byCategory[category] = summarizeGroup(results.filter(r => r.category === category));
+  for (const category of new Set(headline.map(r => r.category))) {
+    byCategory[category] = summarizeGroup(headline.filter(r => r.category === category));
   }
   const byGap: Record<string, Summary> = {};
   for (const key of [...new Set(gaps.map(r => gapKey(r.tags)!))].sort()) {
     byGap[key] = summarizeGroup(gaps.filter(r => gapKey(r.tags) === key));
   }
-  const excluded: Partial<Record<QueryCategory, Summary>> = {};
-  for (const category of new Set(gaps.map(r => r.category))) {
-    const inCategory = rest.filter(r => r.category === category);
-    if (inCategory.length) excluded[category] = summarizeGroup(inCategory);
-  }
   return {
-    overall: summarizeGroup(results),
+    overall: summarizeGroup(headline),
     byCategory,
     knownGaps: { overall: gaps.length ? summarizeGroup(gaps) : null, byGap },
-    excludingGaps: gaps.length ? { overall: summarizeGroup(rest), byCategory: excluded } : null,
+    allQueries: summarizeGroup(results),
   };
 }

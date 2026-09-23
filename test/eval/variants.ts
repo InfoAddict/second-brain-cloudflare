@@ -18,6 +18,8 @@ export interface VariantSpec {
   index?: IndexVariant;
   /** Categories this variant claims to help; enables the gate's targeted-gain path. */
   targetCategories?: readonly QueryCategory[];
+  /** Known gaps (ids like "T-0072") this variant claims to fix: their queries rejoin the gate and get an improvement path. */
+  targetGaps?: readonly string[];
 }
 
 /*
