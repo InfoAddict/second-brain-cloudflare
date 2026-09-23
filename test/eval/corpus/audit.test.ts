@@ -76,13 +76,27 @@ describe("auditQueries", () => {
 
   it("checks rare, common, and short word category definitions", () => {
     const gold = entry("g", "budget review planning session zylophantine project v2");
+    // budget and planning never co-occur outside the gold, so the trio is unique to it
+    const split = Array.from({ length: 40 }, (_, i) => entry(`s${i}`, i % 2 ? `weekly review notes about budget ${i}` : `planning notes about review ${i}`));
     expect(rules([...filler, gold], [query({ id: "rare", category: "rare-word", text: "zylophantine" })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "no-rare", category: "rare-word", text: "budget review" })])).toContain("no-rare:rare-word-no-rare-token");
-    expect(rules([...filler, gold], [query({ id: "common", category: "common-word", text: "budget review planning" })])).toEqual([]);
+    expect(rules([...split, gold], [query({ id: "common", category: "common-word", text: "budget review planning" })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "mixed", category: "common-word", text: "budget zylophantine" })])).toContain("mixed:common-word-rare-token");
     expect(rules([...filler, gold], [query({ id: "missing", category: "common-word", text: "budget review notes" })])).toContain("missing:common-word-gold-missing-token");
     expect(rules([...filler, gold], [query({ id: "short", category: "short-word", text: "v2" })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "long", category: "short-word", text: "project" })])).toContain("long:short-word-no-short-token");
+  });
+
+  it("rejects a common-word query that another readable entry also fully matches", () => {
+    const gold = entry("g", "budget review planning session");
+    const split = Array.from({ length: 40 }, (_, i) => entry(`s${i}`, i % 2 ? `weekly review notes about budget ${i}` : `planning notes about review ${i}`));
+    const text = "budget review planning";
+    const ask = (entries: CorpusEntry[], viewer: GoldenQuery["viewer"] = "avery") => rules(entries, [query({ id: "amb", category: "common-word", text, viewer })]);
+    expect(ask([...split, gold])).toEqual([]);
+    expect(ask([...split, gold, entry("rival", "Notes on the planning review and budget")])).toContain("amb:common-word-ambiguous");
+    expect(ask([...split, gold, entry("rival", "BUDGETS, reviews and planning")])).toContain("amb:common-word-ambiguous");
+    // an unreadable rival does not make the query ambiguous
+    expect(ask([...split, gold, entry("hidden", "budget review planning", "blake")])).toEqual([]);
   });
 
   it("rejects missing, unreadable, or duplicated gold queries and missing tenancy decoys", () => {

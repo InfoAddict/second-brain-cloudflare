@@ -106,6 +106,9 @@ export function auditQueries(spec: {
         const rare = tokens.find(token => df(token) < common);
         if (rare) add(query.id, "common-word-rare-token", `${rare} df=${df(rare)}`);
         if (shared.length < tokens.length) add(query.id, "common-word-gold-missing-token", query.text);
+        const goldIds = new Set(query.gold.map(gold => gold.id));
+        const rivals = lower.filter(row => !goldIds.has(row.entry.id) && readable.has(row.entry.workspaceId) && tokens.every(token => row.content.includes(token.toLowerCase())));
+        if (tokens.length && rivals.length) add(query.id, "common-word-ambiguous", `${rivals.length} non-gold readable entries contain every token, e.g. ${rivals[0].entry.id}`);
         break;
       }
       case "short-word": {
