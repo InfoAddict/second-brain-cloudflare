@@ -27,6 +27,7 @@ const entry = (id: string, content: string, ws: keyof typeof WORKSPACES = "avery
 const long = `${"Opening paragraph about the renovation plan. ".repeat(50)}${"Later paragraph about the panel upgrade cost. ".repeat(50)}`;
 const spec: CorpusSpec = {
   id: "tiny",
+  intent: "tie",
   entries: [entry("a", "alpha widget plan"), entry("b", "東京の会議メモ"), entry("c", "shared note", "company"), entry("d", long)],
   edges: [{ id: "e1", sourceId: "a", targetId: "c", type: "relates_to", weight: 0.9, provenance: "explicit", workspaceId: WORKSPACES.avery }],
   queries: [],
@@ -94,7 +95,7 @@ const load = (s: CorpusSpec, extra: Partial<Parameters<typeof loadCorpus>[0]> = 
   loadCorpus({ spec: s, backend: "sqlite", replay: dry(), embeddingModel: MODEL, ...extra });
 const rowsOf = async (corpus: Awaited<ReturnType<typeof load>>, sql: string) =>
   (await corpus.env.DB.prepare(sql).all()).results as Record<string, unknown>[];
-const withEntries = (...entries: CorpusEntry[]): CorpusSpec => ({ id: "t", entries, edges: [], queries: [] });
+const withEntries = (...entries: CorpusEntry[]): CorpusSpec => ({ id: "t", intent: "tie", entries, edges: [], queries: [] });
 
 describe("loadCorpus importance_score", () => {
   it("defaults to 3 (the classifier fallback), never 0, and binds an explicit value", async () => {

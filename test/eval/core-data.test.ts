@@ -177,7 +177,7 @@ describe("core golden data", () => {
   it("passes the query audit on the whole core set, on every corpus size", () => {
     for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) {
       const spec = buildCorpus(id);
-      const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries });
+      const findings = auditQueries({ entries: spec.entries, edges: spec.edges, queries: spec.queries, intent: spec.intent });
       expect(findings, `${id}: ${JSON.stringify(findings.slice(0, 10), null, 1)}`).toEqual([]);
     }
   });

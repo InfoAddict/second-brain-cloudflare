@@ -9,13 +9,16 @@ export interface AuditFinding { queryId: string; rule: string; detail: string }
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const IDENTIFIER_DF = 5;
-// Below this many entries the corpus is the 1k tie scale: LIKE and FTS must both see every union row.
-const TIE_SCALE_MAX_ENTRIES = 2500;
+/**
+ * What a corpus is for. "tie": every common-word union fits inside the LIKE window, so LIKE and FTS see the
+ * same rows. "discriminate": each union overflows the window and the gold sits outside it, so LIKE loses it.
+ */
+export type CorpusIntent = "tie" | "discriminate";
 const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap", "router-budget"]);
 const GAP_REF = /^gap:T-\d+$/;
 const WORD_CHAR = /[\p{L}\p{N}_-]/u;
 // Thresholds scale with the rows the viewer can read: a token in 0.4% of 5k rows is not "common".
-const commonDf = (rows: number) => Math.min(KEYWORD_CANDIDATE_LIMIT, Math.max(20, Math.ceil(rows * 0.02)));
+const commonDf = (rows: number) => Math.max(20, Math.ceil(rows * 0.02));
 const rareDf = (rows: number) => Math.max(10, Math.ceil(rows * 0.001));
 // Queries are tokenized exactly as production does (NFKC folding, raw-surface probes, trailing "." and "#" kept).
 const isIdentifier = (token: string) => /\p{N}/u.test(token) && (/\p{L}/u.test(token) || /[#._-]/u.test(token));
@@ -33,6 +36,7 @@ export function auditQueries(spec: {
   entries: readonly CorpusEntry[];
   edges: readonly CorpusEdge[];
   queries: readonly GoldenQuery[];
+  intent: CorpusIntent;
 }): AuditFinding[] {
   const findings: AuditFinding[] = [];
   const add = (queryId: string, rule: string, detail: string) => findings.push({ queryId, rule, detail });
@@ -129,14 +133,17 @@ export function auditQueries(spec: {
         const goldIds = new Set(query.gold.map(gold => gold.id));
         const rivals = lower.filter(row => !goldIds.has(row.entry.id) && readable.has(row.entry.workspaceId) && tokens.every(token => row.content.includes(token.toLowerCase())));
         if (tokens.length && rivals.length) add(query.id, "common-word-ambiguous", `${rivals.length} non-gold readable entries contain every token, e.g. ${rivals[0].entry.id}`);
-        // LIKE keeps the KEYWORD_CANDIDATE_LIMIT newest rows matching any term: the gold must fall outside
-        // that window at scale (so LIKE loses it) and every union row must fit inside it at the 1k tie scale.
+        // LIKE keeps the KEYWORD_CANDIDATE_LIMIT newest rows matching any term. A union that fits in the window
+        // cannot be truncated, so recency only matters once the union overflows it.
         const union = visible.filter(row => tokens.some(token => row.content.includes(token)));
-        if (spec.entries.length < TIE_SCALE_MAX_ENTRIES) {
+        if (spec.intent === "tie") {
           if (union.length > KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-union-truncates", `union=${union.length}`);
         } else {
-          const newer = union.filter(row => row.entry.createdAt > primary.createdAt).length;
-          if (newer < KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-gold-in-window", `${newer} newer union rows of ${union.length}`);
+          if (union.length <= KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-union-under-window", `union=${union.length}`);
+          else {
+            const newer = union.filter(row => row.entry.createdAt > primary.createdAt).length;
+            if (newer < KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-gold-in-window", `${newer} newer union rows of ${union.length}`);
+          }
           // The router sends a query to LIKE once its df sum passes FTS_MATCH_BUDGET: ordinary common-word queries
           // must stay on FTS, router-budget ones must cross it (the measured production gap).
           const dfSum = tokens.reduce((sum, token) => sum + df(token), 0);

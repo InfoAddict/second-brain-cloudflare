@@ -52,7 +52,7 @@ afterEach(async () => {
 
 async function corpus(): Promise<LoadedCorpus> {
   const c = await loadCorpus({
-    spec: { id: "tiny", entries, edges: [], queries },
+    spec: { id: "tiny", intent: "tie", entries, edges: [], queries },
     backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry" }), embeddingModel: MODEL,
   });
   open.push(c);
@@ -206,7 +206,7 @@ describe("runner determinism rules", () => {
 
   it.skipIf(!process.env.EVAL_WORKERD)("workerd reports real rows_read", async () => {
     const c = await loadCorpus({
-      spec: { id: "tiny", entries, edges: [], queries },
+      spec: { id: "tiny", intent: "tie", entries, edges: [], queries },
       backend: "workerd", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry" }), embeddingModel: MODEL,
     });
     open.push(c);

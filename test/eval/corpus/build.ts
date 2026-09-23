@@ -11,11 +11,11 @@ import {
 export const CORPUS_IDS = ["core-1k", "scale-5k", "scale-20k"] as const;
 export type CoreCorpusId = (typeof CORPUS_IDS)[number];
 
-export const CORPUS_PARAMS: Record<CoreCorpusId, { total: number; commonRate: number; seed: number; denseRate: (typeof DENSE_RATE_BY_SCALE)[keyof typeof DENSE_RATE_BY_SCALE] }> = {
-  "core-1k": { total: 1000, commonRate: 0.25, seed: 1001, denseRate: DENSE_RATE_BY_SCALE["1k"] },
-  "scale-5k": { total: 5000, commonRate: 0.25, seed: 5001, denseRate: DENSE_RATE_BY_SCALE["5k"] },
+export const CORPUS_PARAMS: Record<CoreCorpusId, { intent: CorpusSpec["intent"]; total: number; commonRate: number; seed: number; denseRate: (typeof DENSE_RATE_BY_SCALE)[keyof typeof DENSE_RATE_BY_SCALE] }> = {
+  "core-1k": { intent: "tie", total: 1000, commonRate: 0.25, seed: 1001, denseRate: DENSE_RATE_BY_SCALE["1k"] },
+  "scale-5k": { intent: "discriminate", total: 5000, commonRate: 0.25, seed: 5001, denseRate: DENSE_RATE_BY_SCALE["5k"] },
   // 0.08 keeps a rare+common query under the router's FTS budget at 20k
-  "scale-20k": { total: 20000, commonRate: 0.08, seed: 20001, denseRate: DENSE_RATE_BY_SCALE["20k"] },
+  "scale-20k": { intent: "discriminate", total: 20000, commonRate: 0.08, seed: 20001, denseRate: DENSE_RATE_BY_SCALE["20k"] },
 };
 
 export interface EdgeRow { source: string; target: string; type: EdgeType; weight: number; provenance: "explicit" | "inferred" | "system" }
@@ -63,6 +63,7 @@ export function buildCorpus(id: CoreCorpusId): CorpusSpec {
   }));
   return {
     id,
+    intent: params.intent,
     entries,
     edges: corpusEdges,
     queries: queries.map(q => ({ ...q, clusterKey: q.clusterKey ?? q.gold.find(g => g.grade === 2)?.id ?? q.gold[0].id })),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditQueries, haystackVocabulary } from "./audit";
+import { auditQueries, haystackVocabulary, type CorpusIntent } from "./audit";
 import { ACTORS, DAY_MS, EVAL_NOW, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
 import type { GoldenQuery } from "../types";
 
@@ -10,8 +10,9 @@ const entry = (id: string, content: string, workspace: keyof typeof WORKSPACES =
 const query = (over: Partial<GoldenQuery> & Pick<GoldenQuery, "id" | "category" | "text">): GoldenQuery => ({
   gold: [{ id: "g", grade: 2 }], viewer: "avery", ...over,
 });
-const rules = (entries: CorpusEntry[], queries: GoldenQuery[], edges: CorpusEdge[] = []) =>
-  auditQueries({ entries, edges, queries }).map(finding => `${finding.queryId}:${finding.rule}`);
+// Small fixtures default to the tie intent (every union fits the LIKE window); scale fixtures pass "discriminate".
+const rules = (entries: CorpusEntry[], queries: GoldenQuery[], edges: CorpusEdge[] = [], intent: CorpusIntent = "tie") =>
+  auditQueries({ entries, edges, queries, intent }).map(finding => `${finding.queryId}:${finding.rule}`);
 // Pairs only: no filler row holds the whole triple, so the gold stays the sole full match.
 const pairText = (i: number) => ["garden window", "window coffee", "garden coffee"][i % 3];
 const denseFiller = Array.from({ length: 40 }, (_, i) => entry(`d${i}`, `${pairText(i)} note ${i}`));
@@ -240,20 +241,36 @@ describe("auditQueries fidelity and scale", () => {
       ...Array.from({ length: total - matching - 1 }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
     ];
 
-    it("needs the gold outside the newest 500 matching rows at scale", () => {
-      expect(rules(corpus(800, 300, 3000), [q])).toEqual([]);
-      expect(rules(corpus(800, 0.5, 3000), [q])).toContain("r:common-word-gold-in-window");
-      expect(rules(corpus(400, 300, 3000), [q])).toContain("r:common-word-gold-in-window");
+    const disc = (entries: CorpusEntry[]) => rules(entries, [q], [], "discriminate");
+
+    it("needs the gold outside the newest 500 matching rows once the union overflows the window", () => {
+      expect(disc(corpus(800, 300, 3000))).toEqual([]);
+      expect(disc(corpus(800, 0.5, 3000))).toContain("r:common-word-gold-in-window");
     });
 
-    it("needs the whole union inside the window at the 1k tie scale", () => {
+    it("never asks for recency when the union fits the window, since LIKE cannot truncate it", () => {
+      // 3,000 entries with a 270-row union: the old size-keyed rule demanded an unsatisfiable gold-in-window
+      const small = corpus(269, 300, 3000);
+      expect(disc(small)).not.toContain("r:common-word-gold-in-window");
+      expect(disc(small)).toContain("r:common-word-union-under-window");
+      expect(rules(small, [q])).toEqual([]);
+      expect(disc(corpus(400, 300, 3000))).toEqual(["r:common-word-union-under-window"]);
+    });
+
+    it("keys the intent off the corpus, not its size", () => {
+      // tie: the union must stay inside the window, however many entries there are
       expect(rules(corpus(300, 300, 1000), [q])).toEqual([]);
       expect(rules(corpus(600, 300, 1000), [q])).toContain("r:common-word-union-truncates");
+      expect(rules(corpus(600, 300, 3000), [q])).toContain("r:common-word-union-truncates");
+      // discriminate: an overflowing union is required even in a 1,000-entry corpus
+      expect(rules(corpus(600, 300, 1000), [q], [], "discriminate")).toEqual([]);
+      expect(rules(corpus(300, 300, 1000), [q], [], "discriminate")).toContain("r:common-word-union-under-window");
     });
 
     it("counts the union within the viewer's scope only", () => {
-      const rows = [...corpus(800, 300, 3000).filter(row => !row.id.startsWith("m")), ...Array.from({ length: 800 }, (_, i) => dated(`b${i}`, `${pairText(i)} note ${i}`, 1 + (i % 100), "blake"))];
-      expect(rules(rows, [q])).toContain("r:common-word-gold-in-window");
+      // avery reads 400 matching rows; the 800 in blake's workspace do not count toward her union
+      const rows = [...corpus(400, 300, 3000), ...Array.from({ length: 800 }, (_, i) => dated(`b${i}`, `${pairText(i)} note ${i}`, 1 + (i % 100), "blake"))];
+      expect(disc(rows)).toContain("r:common-word-union-under-window");
     });
   });
 
@@ -265,23 +282,34 @@ describe("auditQueries fidelity and scale", () => {
       ...Array.from({ length: roadmapRows }, (_, i) => dated(`r${i}`, `roadmap note ${i}`, 1 + (i % 100))),
       ...Array.from({ length: 3000 - 1 - pairRows - roadmapRows }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
     ];
+    const rules3 = (entries: CorpusEntry[], queries: GoldenQuery[]) => rules(entries, queries, [], "discriminate");
     const budget = (over: Partial<GoldenQuery> = {}) => query({ id: "b", category: "common-word", text: "garden window coffee roadmap", tags: gap, ...over });
 
     it("needs a router-budget query to cross the budget at scale, and an ordinary one to stay under it", () => {
-      expect(rules(corpus(800, 600), [budget()])).toEqual([]);
-      expect(rules(corpus(800, 100), [budget()])).toContain("b:router-budget-under-budget");
-      expect(rules(corpus(1500, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toContain("o:common-word-over-fts-budget");
-      expect(rules(corpus(800, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toEqual([]);
+      expect(rules3(corpus(800, 600), [budget()])).toEqual([]);
+      expect(rules3(corpus(800, 100), [budget()])).toContain("b:router-budget-under-budget");
+      expect(rules3(corpus(1500, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toContain("o:common-word-over-fts-budget");
+      expect(rules3(corpus(800, 0), [query({ id: "o", category: "common-word", text: "garden window coffee" })])).toEqual([]);
+    });
+
+    it("flags the review probe: three words at df 901 each (dfSum 2703) on an ordinary query", () => {
+      const rows = [
+        dated("g", "garden window coffee reunion", 300),
+        ...["garden", "window", "coffee"].flatMap(word => Array.from({ length: 900 }, (_, i) => dated(`${word}${i}`, `${word} note ${i}`, 1 + (i % 100)))),
+        ...Array.from({ length: 299 }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+      ];
+      const found = auditQueries({ entries: rows, edges: [], queries: [query({ id: "probe", category: "common-word", text: "garden window coffee" })], intent: "discriminate" });
+      expect(found.filter(f => f.rule === "common-word-over-fts-budget").map(f => f.detail)).toEqual(["dfSum=2703"]);
     });
 
     it("waives common-word-not-dense only for the three common tokens, and only when tagged", () => {
-      expect(rules(corpus(800, 600), [budget({ tags: ["known-gap", "gap:T-0073"] })])).toContain("b:common-word-not-dense");
-      expect(rules(corpus(800, 600), [budget({ text: "garden window coffee budget" })])).toContain("b:common-word-not-dense");
+      expect(rules3(corpus(800, 600), [budget({ tags: ["known-gap", "gap:T-0073"] })])).toContain("b:common-word-not-dense");
+      expect(rules3(corpus(800, 600), [budget({ text: "garden window coffee budget" })])).toContain("b:common-word-not-dense");
     });
 
     it("keeps the tag paired with known-gap and confined to common-word queries", () => {
-      expect(rules(corpus(800, 600), [budget({ tags: ["router-budget"] })])).toContain("b:router-budget-needs-gap");
-      expect(rules(corpus(800, 600), [budget({ category: "paraphrase" })])).toContain("b:router-budget-not-common-word");
+      expect(rules3(corpus(800, 600), [budget({ tags: ["router-budget"] })])).toContain("b:router-budget-needs-gap");
+      expect(rules3(corpus(800, 600), [budget({ category: "paraphrase" })])).toContain("b:router-budget-not-common-word");
     });
   });
 

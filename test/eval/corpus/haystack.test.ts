@@ -230,7 +230,7 @@ describe("generateHaystack", () => {
             // Room for the needles merged in later: the union of any three must stay well under the window.
             expect(union, `${a} ${b} ${c} ${label} union`).toBeLessThanOrEqual(KEYWORD_CANDIDATE_LIMIT * 0.7);
           } else {
-            expect(dfSum, `${a} ${b} ${c} ${label} dfSum`).toBeLessThan(FTS_MATCH_BUDGET * (loose ? 1 : 0.975));
+            expect(dfSum, `${a} ${b} ${c} ${label} dfSum`).toBeLessThan(FTS_MATCH_BUDGET * (loose ? 0.95 : 0.975));
           }
         }
       }

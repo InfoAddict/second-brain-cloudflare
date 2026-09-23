@@ -50,6 +50,8 @@ export interface NeedleRow {
 
 export interface CorpusSpec {
   id: string;
+  /** "tie": common-word unions fit the LIKE window (core-1k). "discriminate": they overflow it (5k, 20k). */
+  intent: "tie" | "discriminate";
   entries: CorpusEntry[];
   edges: CorpusEdge[];
   queries: GoldenQuery[];
