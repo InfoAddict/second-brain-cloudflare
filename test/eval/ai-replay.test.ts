@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
-  NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, makeRestAi, replayKey, stableStringify,
+  NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, makeRestAi, replayKey, stableStringify,
 } from "./ai-replay";
 
 const MODEL = "@cf/baai/bge-small-en-v1.5";
@@ -224,6 +224,77 @@ describe("single flight", () => {
     const failing = makeReplayAi({ store: store(root, "c.jsonl"), mode: "record", live: { run: async () => { throw new Error("boom"); } } });
     await expect(failing.ai.run(MODEL as never, embedInput("y") as never)).rejects.toThrow(/boom/);
     expect(readdirSync(cacheOf(root)).filter(f => f.endsWith(".lock"))).toEqual([]);
+  });
+});
+
+describe("lock lease and fence", () => {
+  const lockOf = (root: string, model: string, input: unknown, file: string) => `${join(cacheOf(root), file)}.${replayKey(model, input)}.lock`;
+
+  it("renews the lease during a slow live call, so a short stale time still gives one live call and one row", async () => {
+    const root = tmp();
+    const live = { run: vi.fn(async () => { await sleep(400); return { data: [[1]] }; }) };
+    const a = makeReplayAi({ store: store(root, "s.jsonl", { lockStaleMs: 90 }), mode: "record", live });
+    const b = makeReplayAi({ store: store(root, "s.jsonl", { lockStaleMs: 90 }), mode: "record", live });
+    const first = a.ai.run(MODEL as never, embedInput("x") as never);
+    await sleep(40);
+    const second = b.ai.run(MODEL as never, embedInput("x") as never);
+    const [ra, rb] = await Promise.all([first, second]);
+    expect(rb).toEqual(ra);
+    expect(live.run).toHaveBeenCalledTimes(1);
+    expect(rows(join(cacheOf(root), "s.jsonl"))).toHaveLength(1);
+  });
+
+  it("does not append after losing the lock, and returns the winner's row", async () => {
+    const root = tmp();
+    const file = join(cacheOf(root), "f.jsonl");
+    const lock = lockOf(root, MODEL, embedInput("x"), "f.jsonl");
+    const f32 = Buffer.from(new Float32Array([7]).buffer).toString("base64");
+    const live = { run: vi.fn(async () => {
+      // Another process took over the lock and finished first.
+      writeFileSync(lock, JSON.stringify({ pid: 2, t: Date.now(), token: "someone-else" }));
+      appendFileSync(file, `${JSON.stringify({ k: replayKey(MODEL, embedInput("x")), v: { f32: [f32] } })}\n`);
+      return { data: [[1]] };
+    }) };
+    const r = makeReplayAi({ store: store(root, "f.jsonl"), mode: "record", live });
+    expect(await r.ai.run(MODEL as never, embedInput("x") as never)).toEqual({ data: [[7]] });
+    expect(rows(file)).toHaveLength(1);
+    expect(r.drainCalls()).toMatchObject([{ source: "replay" }]);
+    expect(JSON.parse(readFileSync(lock, "utf8")).token).toBe("someone-else"); // the winner's lock is left alone
+  });
+
+  it("creates .eval-cache on a clean checkout before taking the lock", async () => {
+    const root = mkdtempSync(join(tmpdir(), "eval-clean-"));
+    const s = new ReplayStore([], join(root, ".eval-cache", "fresh.jsonl"), { root });
+    const r = makeReplayAi({ store: s, mode: "record", live: fakeLive() });
+    await r.ai.run(MODEL as never, embedInput("x") as never);
+    expect(rows(join(root, ".eval-cache", "fresh.jsonl"))).toHaveLength(1);
+  });
+
+  it("expires a lock whose JSON has no numeric t by its file mtime", async () => {
+    for (const body of ['{"pid":1}', '{"t":"soon"}', '{"t":null}']) {
+      const root = tmp();
+      const lock = lockOf(root, MODEL, embedInput("x"), "n.jsonl");
+      writeFileSync(lock, body);
+      utimesSync(lock, new Date(0), new Date(0));
+      const live = fakeLive();
+      const r = makeReplayAi({ store: store(root, "n.jsonl", { lockStaleMs: 1000 }), mode: "record", live });
+      await r.ai.run(MODEL as never, embedInput("x") as never); // hangs forever if the lock never expires
+      expect(live.run).toHaveBeenCalledTimes(1);
+    }
+  });
+});
+
+describe("NEURON_RATES", () => {
+  // Cloudflare Workers AI neurons per million tokens, https://developers.cloudflare.com/workers-ai/platform/pricing/
+  it("pins every rate exactly so any drift or swap fails", () => {
+    expect(NEURON_RATES).toEqual({
+      "@cf/baai/bge-small-en-v1.5": { inputPerMillionTokens: 1841 },
+      "@cf/baai/bge-base-en-v1.5": { inputPerMillionTokens: 6058 },
+      "@cf/baai/bge-large-en-v1.5": { inputPerMillionTokens: 18582 },
+      "@cf/baai/bge-m3": { inputPerMillionTokens: 1075 },
+      "@cf/baai/bge-reranker-base": { inputPerMillionTokens: 283 },
+      "@cf/meta/llama-4-scout-17b-16e-instruct": { inputPerMillionTokens: 24545, outputPerMillionTokens: 77273 },
+    });
   });
 });
 

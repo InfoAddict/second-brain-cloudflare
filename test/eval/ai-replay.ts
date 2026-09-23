@@ -297,16 +297,25 @@ export class ReplayStore {
     this.map.set(key, value);
   }
 
+  /** When the lock was last renewed: its `t`, or the file's mtime if `t` is missing or not a number. */
+  private lockTime(lock: string): number {
+    try {
+      const t = (JSON.parse(readFileSync(lock, "utf8")) as { t?: unknown }).t;
+      if (typeof t === "number" && Number.isFinite(t)) return t;
+    } catch (e) {
+      if (errCode(e) === "ENOENT") throw e;
+    }
+    return statSync(lock).mtimeMs; // unreadable, half-written, or malformed lock: age on disk
+  }
+
   /** Stale-lock takeover: move the lock aside atomically, so only one contender wins, then confirm it really was stale. */
   private breakIfStale(lock: string): boolean {
-    let t: number;
     try {
-      t = (JSON.parse(readFileSync(lock, "utf8")) as { t: number }).t;
+      if (Date.now() - this.lockTime(lock) <= this.lockStaleMs) return false;
     } catch (e) {
       if (errCode(e) === "ENOENT") return true;
-      t = statSync(lock).mtimeMs; // unreadable or half-written lock: fall back to its age on disk
+      throw e;
     }
-    if (Date.now() - t <= this.lockStaleMs) return false;
     const aside = `${lock}.${randomBytes(4).toString("hex")}.stale`;
     try {
       renameSync(lock, aside);
@@ -315,8 +324,7 @@ export class ReplayStore {
       throw e;
     }
     try {
-      const moved = (JSON.parse(readFileSync(aside, "utf8")) as { t: number }).t;
-      if (Date.now() - moved > this.lockStaleMs) return true;
+      if (Date.now() - this.lockTime(aside) > this.lockStaleMs) return true;
       try { linkSync(aside, lock); } catch { /* another contender already took the slot */ } // we moved a fresh lock: put it back
       return false;
     } finally {
@@ -324,42 +332,62 @@ export class ReplayStore {
     }
   }
 
-  /** Cross-process advisory lock: exclusive-create lockfile next to the write file, one per key. */
-  private async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  /**
+   * Cross-process advisory lock: exclusive-create lockfile next to the write file, one per key. It is a
+   * lease: the holder renews the timestamp every third of the stale window while `fn` runs, so a slow
+   * live call is never mistaken for a dead process. `fn` gets a fence that re-reads the lock and says
+   * whether this holder's token is still on it; check it right before writing.
+   */
+  private async withLock<T>(key: string, fn: (stillOwner: () => boolean) => Promise<T>): Promise<T> {
     const lock = `${this.writeFile}.${key}.lock`;
     const token = randomBytes(8).toString("hex");
+    const body = () => JSON.stringify({ pid: process.pid, t: Date.now(), token });
+    const stillOwner = () => {
+      try { return (JSON.parse(readFileSync(lock, "utf8")) as { token?: string }).token === token; } catch { return false; }
+    };
+    mkdirSync(dirname(lock), { recursive: true }); // clean checkout: the contained .eval-cache/ may not exist yet
     for (;;) {
       try {
         const fd = openSync(lock, "wx");
-        try { writeSync(fd, JSON.stringify({ pid: process.pid, t: Date.now(), token })); } finally { closeSync(fd); }
+        try { writeSync(fd, body()); } finally { closeSync(fd); }
         break;
       } catch (e) {
         if (errCode(e) !== "EEXIST") throw e;
         if (!this.breakIfStale(lock)) await sleep(LOCK_POLL_MS);
       }
     }
+    const renew = setInterval(() => {
+      try { if (stillOwner()) writeFileSync(lock, body()); } catch { /* the fence catches a lost lock */ }
+    }, Math.max(5, this.lockStaleMs / 3));
+    renew.unref();
     try {
-      return await fn();
+      return await fn(stillOwner);
     } finally {
-      try {
-        if ((JSON.parse(readFileSync(lock, "utf8")) as { token: string }).token === token) unlinkSync(lock); // not one a stale takeover replaced
-      } catch { /* already gone */ }
+      clearInterval(renew);
+      if (stillOwner()) try { unlinkSync(lock); } catch { /* already gone */ } // never remove a lock a takeover replaced
     }
   }
 
   /**
    * Makes `produce` run at most once per key: concurrent callers in this process share the one call, and
-   * across processes the lockfile serializes contenders, with a cache recheck after acquiring it.
-   * `live` is true only for the caller whose `produce` ran.
+   * across processes the lockfile lease serializes contenders, with a cache recheck after acquiring it.
+   * `live` is true only for the caller whose `produce` ran. If the lease was lost during `produce`, nothing
+   * is appended: the winner's row is returned, or this throws if the winner has not written yet.
    */
   async fill(key: string, produce: () => Promise<Stored>): Promise<{ stored: Stored; live: boolean }> {
     const running = this.inflight.get(key);
     if (running) return { stored: (await running).stored, live: false };
-    const flight = this.withLock(key, async () => {
+    const flight = this.withLock(key, async stillOwner => {
       this.refresh();
       const cached = this.get(key);
       if (cached) return { stored: cached, live: false };
       const stored = await produce();
+      if (!stillOwner()) {
+        this.refresh();
+        const winner = this.get(key);
+        if (winner) return { stored: winner, live: false };
+        throw new Error(`replay lock for ${key} was taken over during a live call and no result was recorded; rerun to retry`);
+      }
       this.put(key, stored);
       return { stored, live: true };
     });
