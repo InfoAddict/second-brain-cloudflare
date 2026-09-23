@@ -608,4 +608,41 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(oneOver.ftsRoute).toBe("like-match-budget");
     expect(oneOver.ftsUsed).toBe(false);
   });
+
+  // Final fix round: distillation's df scan counts the deterministic variants
+  // retrieval appends, so a plural query estimates like its singular — the
+  // same over-budget corpus routes both spellings to LIKE, not just one.
+  it("routes the plural form like its singular once variants are counted", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widgets gadgets ledger", createdAt: i + 1 });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "widgets gadgets", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    // widgets 2100 + gadgets 2100, plus the folded widget/gadget variants.
+    expect(diagnostics.ftsRoute).toBe("like-match-budget");
+    expect(diagnostics.ftsUsed).toBe(false);
+  });
+
+  // Final fix round (review item 5): memberFirst recalls never reach
+  // keywordSearch, so the route is named at the branch — ftsRoute is set on
+  // every recall path.
+  it("records ftsRoute like-member-first on a tag-scoped recall", async () => {
+    const scopedEnv = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as Env["DB"],
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockRejectedValue(new Error("index unavailable")),
+        getByIds: vi.fn().mockResolvedValue([{ id: "v1", values: new Array(384).fill(0.1), metadata: { parentId: "tagged-1" } }]),
+      }),
+    });
+    sqlite.seed({ id: "tagged-1", content: "widget gadget", createdAt: 1, tags: ["project:x"], vectorIds: ["v1"] });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "widget", topK: 5, tag: "project:x", synthesize: false }, scopedEnv, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(diagnostics.ftsRoute).toBe("like-member-first");
+  });
 });

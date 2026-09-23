@@ -422,6 +422,28 @@ describe("checkFtsIntegrity", () => {
     expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
   });
 
+  // A missing mirror paired with an orphan cancels in the count (12 == 12), so
+  // night 1's parity passes and the drift half heals the missing row in place.
+  // The counts then differ (13 vs 12), and night 2's count parity sends the
+  // run down the unhealthy branch, whose DELETE removes the orphan.
+  it("heals a canceled missing-plus-orphan pair over two nights: window then count parity", async () => {
+    seed(d1, 12); // e1..e12; the newest-5 spot check never reaches e1's rowid
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    const rid1 = (await d1.db.prepare(`SELECT rowid FROM entries WHERE id = 'e1'`).first() as { rowid: number }).rowid;
+    await d1.db.prepare(`DELETE FROM entries_fts WHERE rowid = ?`).bind(rid1).run();
+    await d1.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (999, 'ghost', 'ghost content')`).run();
+
+    expect(await checkFtsIntegrity(env)).toEqual({ healthy: true });
+    expect((await d1.db.prepare(`SELECT 1 FROM entries_fts WHERE rowid = ?`).bind(rid1).all()).results).toHaveLength(1); // missing row re-indexed
+    expect((await d1.db.prepare(`SELECT 1 FROM entries_fts WHERE rowid = 999`).all()).results).toHaveLength(1); // orphan survives the window
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1"); // healed in place, no reset
+
+    expect(await checkFtsIntegrity(env)).toEqual({ healthy: false }); // 12 entries vs 13 fts rows
+    expect(await ftsCount(d1)).toEqual({ n: 12 });
+    expect(await shadowOf(d1)).toEqual(await sourceOf(d1)); // orphan gone, mirror complete
+  });
+
   it("the rotating window's FTS reads scale with the window, not the corpus", async () => {
     // Cost proof on a real 5,000-row corpus (the E2E finding measured a
     // 5,747-row brain). node:sqlite exposes no rows_read meter, so cost is
@@ -443,15 +465,17 @@ describe("checkFtsIntegrity", () => {
     expect(await ftsCount(d1)).toEqual({ n: 5000 });
     expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
 
-    // The window statements, verbatim from the batch the run issued. The
-    // drift side is found by its parity predicate (`IS NOT`), not the join
-    // text, so the lookup survives a query-shape change; the orphan side by
-    // its anti-join.
+    // The drift statement, verbatim from the batch the run issued — found by
+    // its parity predicate (`IS NOT`), not the join text, so the lookup
+    // survives a query-shape change. The plan asserts ONLY this statement:
+    // the window no longer carries an orphan half. FTS5's range constraints
+    // on rowid are not honored as seeks on real D1 (measured: INDEX 0:>< in
+    // the plan, a whole-table 20,961 rows_read at 20.8k entries), so orphans
+    // rely on checkFtsIntegrity's nightly count parity instead of a window
+    // scan.
     const batchSql = d1.batches.flat();
     const driftSql = batchSql.find(sql => sql.includes("IS NOT"));
-    const orphanSql = batchSql.find(sql => sql.includes("NOT EXISTS (SELECT 1 FROM entries e"));
     expect(driftSql).toBeTruthy();
-    expect(orphanSql).toBeTruthy();
 
     // FTS5 serves the drift side by exact-rowid lookups (INDEX 0:=) driven by
     // entries' pk range — never a scan of the virtual table.
@@ -462,21 +486,11 @@ describe("checkFtsIntegrity", () => {
     expect(driftPlan).toContain("SEARCH e USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)");
     expect(driftPlan).toContain("SCAN f VIRTUAL TABLE INDEX 0:= LEFT-JOIN");
     expect(driftPlan.some(d => d.startsWith("SCAN entries_fts"))).toBe(false);
-    // The orphan side keeps the range on entries_fts, pushed into xBestIndex
-    // (INDEX 0:><), and anti-joins entries by pk.
-    const orphanPlan = await planDetails(orphanSql!);
-    expect(orphanPlan).toContain("SCAN f VIRTUAL TABLE INDEX 0:><");
-    expect(orphanPlan).toContain("SEARCH e USING INTEGER PRIMARY KEY (rowid=?)");
 
-    // Count probes: the window statements return exactly the window's worth
-    // of rows. The run healed rowid 7, so re-inject faults first: one drifted
-    // row at rowid 6 and one orphan inside the window (entries rowid 50 is
-    // deleted — its trigger removes the FTS row — then re-inserted by hand).
+    // Count probe: the window statement returns exactly the window's worth
+    // of rows. The run healed rowid 7, so re-inject one drifted row first.
     await d1.db.prepare(`UPDATE entries_fts SET content = 'stale again' WHERE rowid = 6`).run();
-    await d1.db.prepare(`DELETE FROM entries WHERE rowid = 50`).run();
-    await d1.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (50, 'ghost', 'ghost content')`).run();
     expect((await d1.db.prepare(driftSql!).bind(0, 200).all()).results).toEqual([{ rowid: 6 }]);
-    expect((await d1.db.prepare(orphanSql!).bind(0, 200).all()).results).toEqual([{ rowid: 50 }]);
   });
 });
 

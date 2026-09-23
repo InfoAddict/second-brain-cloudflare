@@ -107,6 +107,8 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
 // delete-range-then-insert batches cover rowids present in entries, so
 // orphans would survive them otherwise), then clear the cursor and ready flag
 // so the ordinary backfill re-covers the corpus over the following nights.
+// This is where orphans are found now: with the window's orphan half gone
+// (see rotateContentCheck), an orphan surfaces only as fts > entries here.
 export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
   // scope-exempt: cron: deployment-wide parity check, like the backfill above —
   // the index has no per-workspace shape, so there is no workspace scope to apply.
@@ -143,24 +145,29 @@ export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }>
 // reset, ready stays set. The cursor advances one window per night and wraps
 // to 0 once it passes the corpus's max rowid, so every row is re-checked
 // within ceil(N / FTS_CONTENT_CHECK_WINDOW) nights.
+//
+// Orphans (fts rowids absent from entries) are NOT scanned here. The window
+// used to carry an orphan half anti-joined to entries, but on real D1 FTS5
+// does not honor rowid range constraints as seeks — the plan shows
+// INDEX 0:>< while the run meters a whole-virtual-table read (measured
+// 20,961 rows_read at 20.8k entries) — so orphans ride on count parity
+// instead: checkFtsIntegrity's DELETE fires on the next night the counts
+// differ (fts > entries). A missing mirror paired with an orphan cancels in
+// the count for one night; the drift half re-indexes the missing row, and
+// the next night's parity cleans the orphan.
 async function rotateContentCheck(env: Env, maxRowid: number | null): Promise<void> {
   const cursor = Number(await env.OAUTH_KV.get(FTS_CONTENT_CHECK_CURSOR_KV_KEY) ?? "0");
   const hi = cursor + FTS_CONTENT_CHECK_WINDOW;
-  // Both sides must touch only the window. A bare
+  // The window must never meter a bare
   // `SELECT rowid, id, content FROM entries_fts WHERE rowid > ? AND rowid <= ?`
-  // meters a full virtual-table scan on D1 (rows_read = corpus size), so the
-  // mismatch side drives from entries' rowid range and reads FTS by exact
-  // rowid (FTS5 pushes `rowid = ?` through as VIRTUAL TABLE INDEX 0:=), and
-  // the orphan side keeps the range on entries_fts (INDEX 0:><) and
-  // anti-joins entries by rowid. The two result sets are disjoint: a drifted
-  // rowid has an entries row, an orphan does not.
-  const [drifted, orphans] = await env.DB.batch([
+  // — a full virtual-table scan on D1 (rows_read = corpus size). The drift
+  // half drives from entries' rowid range and reads FTS by exact rowid (FTS5
+  // pushes `rowid = ?` through as VIRTUAL TABLE INDEX 0:=).
+  const [drifted] = await env.DB.batch([
     // scope-exempt: cron: same rowid-keyed, deployment-wide parity read as the checks above — the window carries no workspace shape.
     env.DB.prepare(`SELECT e.rowid AS rowid FROM entries e LEFT JOIN entries_fts f ON f.rowid = e.rowid WHERE e.rowid > ? AND e.rowid <= ? AND (f.rowid IS NULL OR f.id IS NOT e.id OR f.content IS NOT e.content)`).bind(cursor, hi),
-    // scope-exempt: cron: the orphan half of the same windowed parity read — anti-joins entries by rowid existence only, deployment-wide like the backfill.
-    env.DB.prepare(`SELECT f.rowid AS rowid FROM entries_fts f WHERE f.rowid > ? AND f.rowid <= ? AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.rowid = f.rowid)`).bind(cursor, hi),
   ]);
-  const rowids = [...drifted.results as { rowid: number }[], ...orphans.results as { rowid: number }[]]
+  const rowids = (drifted.results as { rowid: number }[])
     .map(r => r.rowid).sort((a, b) => a - b);
   if (rowids.length) {
     const statements: D1PreparedStatement[] = [];

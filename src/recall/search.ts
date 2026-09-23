@@ -149,7 +149,12 @@ async function keywordSearch(
     // Cost-aware routing (T-0058): when distillation's frequency scan covers
     // every term, its df sum estimates exactly how many rows bm25 would have
     // to score. Past the budget, LIKE wins — it stops after KEYWORD_CANDIDATE_LIMIT
-    // recency-ordered hits while bm25 scores every match.
+    // recency-ordered hits while bm25 scores every match. The scan counts the
+    // deterministic variants retrieval appends too, so a plural query
+    // ("widgets gadgets") estimates like its singular. Any term the scan still
+    // lacks (cap-bound) keeps FTS, as does every single-word query: the distill
+    // shortcut computes no df for one-word inputs, so single-word recall stays
+    // on FTS by design.
     const df = corpus?.df;
     if (df && terms.every(t => df.has(t))) {
       const dfSum = terms.reduce((s, t) => s + (df.get(t) ?? 0), 0);
@@ -326,6 +331,9 @@ export async function recallEntries(
   let ftsServedKeywords = false; // memberFirst never sets this: tag rows are not bm25-ordered
   let results: { matches: VectorizeMatch[] };
   if (memberFirst) {
+    // Tag/project recalls never run keywordSearch (tag rows are not bm25-
+    // ordered), so name the route here: ftsRoute is set on every recall path.
+    if (internal.diagnostics) internal.diagnostics.ftsRoute = "like-member-first";
     // Escaped: a tag is user data and LIKE reads _ and % as wildcards. This is a read, so
     // the failure is over-broad results rather than the permanent rollup the same bug
     // caused in compressTag — but `?tag=%` silently defeats the filter entirely and

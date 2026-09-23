@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { distillToRareTerms } from "../../src/recall/distill";
+import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
+import type { Env } from "../../src/env";
 
 // A minimal env whose D1 aggregation returns crafted document-frequencies. The columns
 // d0..dN map to the query's unique content tokens in order (as distillToRareTerms builds
@@ -139,5 +143,42 @@ describe("distillToRareTerms", () => {
     expect(out.df?.get("方式")).toBe(4);
     expect(out.total).toBe(100);
     expect(out.query).toBe("認証方式を変更した理由");
+  });
+
+  // ── Final fix round: variant folding must not move keep/rebuilt ────────────
+  //
+  // The df scan now also counts deterministicVariants (plural/stemmed forms)
+  // so keywordSearch's budget check has full coverage. keep/rebuilt still
+  // select from the original content terms alone — the values below are the
+  // rebuilt strings the pre-fix code produced, captured verbatim at 59ee98b.
+  it("keeps rebuilt queries identical once variants join the df scan", async () => {
+    resetDatabaseInit();
+    const sqlite = makeSqliteD1();
+    const env = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as Env["DB"],
+      OAUTH_KV: makeMemoryKV(),
+    });
+    await initializeDatabase(env);
+    for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
+    for (let i = 0; i < 100; i++) sqlite.seed({ id: `mix-${i}`, content: "widgets gadgets trackers notes", createdAt: 10000 + i });
+    for (let i = 0; i < 50; i++) sqlite.seed({ id: `sota-${i}`, content: "Redwood Grove Terrace dashboard", createdAt: 20000 + i });
+    for (let i = 0; i < 30; i++) sqlite.seed({ id: `hyph-${i}`, content: "foo-bar baz qux", createdAt: 30000 + i });
+    for (let i = 0; i < 40; i++) sqlite.seed({ id: `misc-${i}`, content: "January 15 2024 ledger processing status finished tasks", createdAt: 40000 + i });
+
+    const expected: Record<string, string> = {
+      "widgets gadgets trackers notes": "widgets gadgets trackers",
+      "widgets gadgets": "widgets gadgets",
+      "State of the Art dashboard": "State Art dashboard",
+      "Redwood Grove Terrace ledger": "Redwood Grove Terrace",
+      "foo-bar baz qux": "foo-bar baz qux",
+      "January 15 2024 ledger": "January 15 2024",
+      "processing status finished tasks": "processing status finished",
+      "widget gadget": "widget gadget",
+    };
+    for (const query of Object.keys(expected)) {
+      const out = await distillToRareTerms(query, env);
+      expect(out.query, query).toBe(expected[query]);
+    }
+    sqlite.close();
   });
 });

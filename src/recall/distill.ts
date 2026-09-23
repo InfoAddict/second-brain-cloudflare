@@ -12,6 +12,7 @@ import { tokenizeQuery } from "../text/tokenize";
 import { extractHashtags } from "../text/hashtags";
 import { isTopicTag } from "../compression/eligibility";
 import { getTagVocabulary } from "../tags/vocabulary";
+import { deterministicVariants } from "./query-profile";
 
 /**
  * `ctx` is optional only so this stays callable from tests and any future internal
@@ -99,6 +100,16 @@ export async function distillToRareTerms(
   for (const w of words) if (!tokensOf.has(w)) tokensOf.set(w, tokenizeQuery(w));
   const content = words.filter(w => tokensOf.get(w)!.length > 0);
   const uniq = [...new Set(content.flatMap(w => tokensOf.get(w)!))].slice(0, KEYWORD_MAX_TOKENS);
+  // keywordSearch's budget check needs df for every retrieval token, and
+  // retrieval appends deterministicVariants — plural/stemmed forms this scan
+  // would otherwise never count ("widgets gadgets" would route to FTS on a
+  // corpus the singular routes to LIKE). They join a separate list for the df
+  // statement only: `uniq` stays exactly as it is, so keep/rebuilt still rank
+  // original content terms alone. Originals win the KEYWORD_MAX_TOKENS cap
+  // and variants only fill the slots they leave; a variant left without a df
+  // entry (cap bound) keeps the router's FTS default.
+  const evidence = tokenizeQuery(query).slice(0, KEYWORD_MAX_TOKENS);
+  const dfTerms = [...new Set([...uniq, ...deterministicVariants(query, evidence)])].slice(0, KEYWORD_MAX_TOKENS);
   // Nothing to rank with at most one distinct term. A single whitespace word can
   // carry several terms once it is CJK; that case goes on to the scan.
   if (content.length <= 1 && uniq.length <= 1) {
@@ -114,7 +125,7 @@ export async function distillToRareTerms(
   // inflate a term's rarity within) this caller's query.
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   try {
-    const sums = uniq.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
+    const sums = dfTerms.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
     let where = "";
     const timeBindings: number[] = [];
     if (bounds.after !== undefined) {
@@ -130,10 +141,10 @@ export async function distillToRareTerms(
     }
     // scope-checked: the caller's clause IS applied when an identity is present — it is appended into `where` above; the lexer cannot see into a JS-assembled fragment
     const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries${where ? ` WHERE${where}` : ""}`)
-      .bind(...uniq.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? [])).first() as Record<string, number> | null;
+      .bind(...dfTerms.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? [])).first() as Record<string, number> | null;
     if (!row || !row.total) return { query: content.join(" "), df: null, total: null };
     const total = row.total;
-    const df = new Map(uniq.map((t, i) => [t, (row[`d${i}`] as number) ?? 0]));
+    const df = new Map(dfTerms.map((t, i) => [t, (row[`d${i}`] as number) ?? 0]));
     let candidates = uniq.filter(t => (df.get(t) ?? 0) / total <= QUERY_SATURATION_FRACTION);
     if (!candidates.length) candidates = uniq;
     const keep = new Set(

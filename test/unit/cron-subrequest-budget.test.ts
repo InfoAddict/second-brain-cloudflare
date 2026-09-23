@@ -378,7 +378,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // maintenance's 8: liveness (1), integrity-check (1), ready GET (1),
     // then checkFtsIntegrity's count+max-rowid SELECT (1), spot-check SELECT
     // (1), and the rotating window's content-cursor KV GET (1), one
-    // window-read batch (1; two SELECT statements in one env.DB.batch), and
+    // window-read batch (1; one SELECT — the orphan half moved to count
+    // parity, so the batch shrank by a statement while the count held), and
     // the cursor-advance KV PUT (1). No re-index batch: the mock is a
     // healthy brain, so the window finds no drifted rows. If this number
     // moves, say why in the same commit.
