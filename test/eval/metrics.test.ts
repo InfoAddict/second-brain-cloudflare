@@ -79,26 +79,36 @@ describe("known-gap split", () => {
     expect(gapKey(["router-budget"])).toBeNull(); // the gap: value is what keys it
   });
 
-  it("keeps known-gap queries out of each category headline and reports them on their own lines", () => {
+  it("scores every query in the headline and breaks known gaps out on the side", () => {
     const s = summarize([
       res("a", "identifier", 1), res("b", "identifier", 1),
       res("c", "identifier", 0, ["known-gap", "gap:T-0072"]),
       res("d", "common-word", 0, ["gap:T-0073", "router-budget"]),
       res("e", "common-word", 1),
     ]);
-    expect(s.byCategory.identifier?.n).toBe(2);
-    expect(s.byCategory.identifier?.metrics.recall5).toBe(1);
-    expect(s.byCategory["common-word"]?.n).toBe(1);
-    expect(s.overall.n).toBe(3);
+    expect(s.overall.n).toBe(5);
+    expect(s.byCategory.identifier?.n).toBe(3);
+    expect(s.byCategory.identifier?.metrics.recall5).toBeCloseTo(2 / 3);
     expect(s.knownGaps.overall?.n).toBe(2);
     expect(s.knownGaps.byGap["gap:T-0072"]?.n).toBe(1);
     expect(s.knownGaps.byGap["gap:T-0073"]?.metrics.recall5).toBe(0);
+    expect(s.excludingGaps?.overall.n).toBe(3);
+    expect(s.excludingGaps?.overall.metrics.recall5).toBe(1);
+    expect(s.excludingGaps?.byCategory.identifier?.metrics.recall5).toBe(1);
+    expect(s.excludingGaps?.byCategory["common-word"]?.n).toBe(1);
   });
 
-  it("has no known-gap block when nothing is tagged, and drops a category holding only gap queries from the headline", () => {
-    expect(summarize([res("a", "cjk", 1)]).knownGaps).toEqual({ overall: null, byGap: {} });
-    const only = summarize([res("a", "cjk", 0, ["known-gap"])]);
-    expect(only.byCategory.cjk).toBeUndefined();
-    expect(only.knownGaps.byGap["known-gap"]?.n).toBe(1);
+  it("omits categories without gap queries from the excluding view", () => {
+    const s = summarize([res("a", "cjk", 1), res("b", "identifier", 0, ["known-gap"])]);
+    expect(s.excludingGaps?.byCategory.cjk).toBeUndefined();
+    expect(s.excludingGaps?.byCategory.identifier).toBeUndefined(); // only gap queries in it
+    expect(s.excludingGaps?.overall.n).toBe(1);
+  });
+
+  it("has no known-gap or excluding view when nothing is tagged", () => {
+    const s = summarize([res("a", "cjk", 1)]);
+    expect(s.knownGaps).toEqual({ overall: null, byGap: {} });
+    expect(s.excludingGaps).toBeNull();
+    expect(summarize([res("a", "cjk", 0, ["known-gap"])]).byCategory.cjk?.n).toBe(1);
   });
 });

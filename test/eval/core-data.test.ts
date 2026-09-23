@@ -1,3 +1,4 @@
+import { historyProblems, type Manifest } from "./lock";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -20,13 +21,15 @@ const CLUSTER_FLOORS = { identifier: 37, "rare-word": 31, "common-word": 38, "sh
 describe("core golden data", () => {
   const { needles, edges, queries } = loadCoreData();
 
-  it("matches the manifest hashes, so any edit is deliberate (refresh with the lock command)", () => {
-    const manifest = JSON.parse(readFileSync(resolve(DATA, "manifest.json"), "utf8")) as { files: Record<string, string> };
+  it("matches the manifest hashes, so any edit is deliberate (record it with lock --accept-data-change)", () => {
+    const manifest = JSON.parse(readFileSync(resolve(DATA, "manifest.json"), "utf8")) as Manifest;
     const onDisk = readdirSync(DATA).filter(name => name.endsWith(".jsonl")).sort();
     expect(Object.keys(manifest.files).sort()).toEqual(onDisk);
     for (const [name, hash] of Object.entries(manifest.files)) {
       expect(createHash("sha256").update(readFileSync(resolve(DATA, name))).digest("hex"), name).toBe(hash);
     }
+    // A hash rewritten without a matching history entry is as bad as an unrecorded data edit.
+    expect(historyProblems(manifest)).toEqual([]);
   });
 
   it("records counts in the manifest that match the loaded data", () => {

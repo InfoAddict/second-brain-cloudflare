@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -9,10 +8,11 @@ import { listCorpora, replayPaths, resolveCorpus } from "./corpora";
 import { CORE_DATA_DIR, CORPUS_IDS } from "./corpus/build";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
 import type { CorpusSpec } from "./corpus/types";
-import { evaluateGate, formatGate, type Verdict } from "./gate";
-import { summarize, summarizeAll, type Summary } from "./metrics";
+import { evaluateGate, formatGate, type GateResult, type Verdict } from "./gate";
+import { LockRefused, applyLock } from "./lock";
+import { summarize, type Summary } from "./metrics";
 import { prepare } from "./prepare";
-import { readReport, runVariant, writeReport } from "./runner";
+import { readReport, runVariant } from "./runner";
 import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
 import { VARIANTS, getVariant, type VariantSpec } from "./variants";
 
@@ -23,7 +23,7 @@ export type CliCommand =
   | ({ kind: "run"; variant: string } & Common)
   | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; allowUnmeasuredRows: boolean } & Common)
   | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number } & Common)
-  | ({ kind: "lock" } & Common)
+  | ({ kind: "lock"; acceptDataChange?: string } & Common)
   | { kind: "list" };
 
 const HASH_MODEL = "hash-smoke";
@@ -50,7 +50,11 @@ export function parseCli(argv: string[]): CliCommand {
     hash: values["hash-embeddings"]!, limit: values.limit ? positive("limit", values.limit) : undefined, json: values.json,
   };
   const command = positionals[0];
-  if (command === "lock") return { kind: "lock", ...common };
+  if (command === "lock") {
+    if (values["accept-data-change"] !== undefined && !values["accept-data-change"].trim()) throw new UsageError("--accept-data-change needs a non-empty reason");
+    return { kind: "lock", acceptDataChange: values["accept-data-change"], ...common };
+  }
+  if (values["accept-data-change"] !== undefined) throw new UsageError("--accept-data-change only applies to lock");
   if (command === "prepare") {
     if (!values.variant) throw new UsageError("prepare needs --variant <name>");
     return {
@@ -79,7 +83,7 @@ function parse(argv: string[]) {
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
       "embedding-model": { type: "string", default: DEFAULTS.EMBEDDING_MODEL }, "hash-embeddings": { type: "boolean", default: false },
       limit: { type: "string" }, target: { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
-      "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false },
+      "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
   });
 }
@@ -92,25 +96,40 @@ const metricsLine = (s: Summary) => `recall@5 ${f(s.metrics.recall5)}  recall@10
 const row = (name: string, s: Summary) => `  ${name.padEnd(14)} n=${String(s.n).padEnd(4)} ${metricsLine(s)}`;
 
 export function formatReport(report: VariantReport): string {
-  const { overall, byCategory, knownGaps } = summarize(report.results);
-  const all = summarizeAll(report.results); // cost and invariants cover known-gap queries too
+  const { overall, byCategory, knownGaps, excludingGaps } = summarize(report.results);
   const gapKeys = Object.keys(knownGaps.byGap);
   return [
     `variant ${report.variant} | corpus ${report.corpus} | model ${report.embeddingModel} | d1 ${report.d1Backend} | ${report.isolate}`,
     ...(report.embeddingModel === HASH_MODEL ? ["  WARNING: hash embeddings are a harness smoke test; dense results are meaningless and not comparable."] : []),
     row("overall", overall),
     ...QUERY_CATEGORIES.filter(c => byCategory[c]).map(c => row(c, byCategory[c]!)),
-    ...(gapKeys.length ? [
-      "  known gaps (not in the headline):",
+    ...(excludingGaps ? [
+      "  excluding known gaps:",
+      row("overall", excludingGaps.overall),
+      ...QUERY_CATEGORIES.filter(c => excludingGaps.byCategory[c]).map(c => row(c, excludingGaps.byCategory[c]!)),
+      "  known gaps (already counted above):",
       ...gapKeys.map(k => row(k, knownGaps.byGap[k])),
     ] : []),
     "  cost per query (all queries):",
-    `    D1 statements  ${dist(all.d1Statements)}`,
-    all.d1RowsRead ? `    D1 rows_read   ${dist(all.d1RowsRead, 0)}` : "    D1 rows_read: not measured (use --d1 workerd)",
-    `    AI calls       mean ${all.aiCalls.mean.toFixed(2)}   neurons mean ${all.neurons.mean.toFixed(1)}${all.estimatedNeuronQueries ? ` (estimated for ${all.estimatedNeuronQueries} quer${all.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,
-    `    wall ms        p50 ${all.wallMs.p50.toFixed(0)}  p95 ${all.wallMs.p95.toFixed(0)}  (reported, never gated)`,
-    `  leaks ${all.leaks}   errors ${all.errors}   degraded ${all.degraded}`,
+    `    D1 statements  ${dist(overall.d1Statements)}`,
+    overall.d1RowsRead ? `    D1 rows_read   ${dist(overall.d1RowsRead, 0)}` : "    D1 rows_read: not measured (use --d1 workerd)",
+    `    AI calls       mean ${overall.aiCalls.mean.toFixed(2)}   neurons mean ${overall.neurons.mean.toFixed(1)}${overall.estimatedNeuronQueries ? ` (estimated for ${overall.estimatedNeuronQueries} quer${overall.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,
+    `    wall ms        p50 ${overall.wallMs.p50.toFixed(0)}  p95 ${overall.wallMs.p95.toFixed(0)}  (reported, never gated)`,
+    `  leaks ${overall.leaks}   errors ${overall.errors}   degraded ${overall.degraded}`,
   ].join("\n");
+}
+
+/** Which rules decided the verdict, so a FAIL is never opaque. */
+export function describeVerdict(gate: GateResult): string {
+  const named = (status: string) => gate.rules.filter(r => r.status === status).map(r => r.rule);
+  if (gate.verdict === "PASS") return "PASS";
+  if (gate.verdict === "FAIL") {
+    const failed = named("fail");
+    return failed.length === 1 && failed[0] === "improvement"
+      ? "FAIL (improvement only; no regression, no hard-invariant or cost failure)"
+      : `FAIL (failed: ${failed.join(", ")})`;
+  }
+  return `INCONCLUSIVE (${named("inconclusive").join(", ")})`;
 }
 
 /** Side-by-side known-gap groups; empty when neither report has any. */
@@ -171,7 +190,7 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   if (gaps) console.log(`${gaps}\n`);
   const targets = cmd.target.length ? cmd.target : [...(VARIANTS[candidate.variant]?.targetCategories ?? [])];
   const gate = evaluateGate(baseline, candidate, { targetCategories: targets, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
-  console.log(formatGate(gate));
+  console.log(`${describeVerdict(gate)}\n${formatGate(gate)}`);
   if (cmd.json) writeJson(cmd.json, { baseline, candidate, gate });
   // Hash vectors carry no semantics, so a smoke comparison must never read as a ship signal.
   if (gate.verdict === "PASS" && [baseline, candidate].some(r => r.embeddingModel === HASH_MODEL)) {
@@ -181,24 +200,18 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   return exitCodeFor(gate.verdict);
 }
 
-/** Rerun the baseline and rewrite the committed lock and manifest hashes (the Task 11 tripwire reads them). */
+/** Rerun the baseline and refresh the committed lock; changed golden data needs --accept-data-change. */
 async function runLock(cmd: CliCommand & { kind: "lock" }, spec: CorpusSpec): Promise<number> {
   if (cmd.hash) throw new UsageError("lock records real rankings; --hash-embeddings does not apply");
   if (cmd.limit) throw new UsageError("lock needs the full query set; drop --limit");
   if (!(CORPUS_IDS as readonly string[]).includes(cmd.corpus)) throw new UsageError(`lock covers the core corpora only (${CORPUS_IDS.join(", ")})`);
-  const report = await runNamed(cmd, spec, "baseline");
-  const all = summarizeAll(report.results);
-  if (all.errors || all.degraded || all.leaks) {
-    throw new Error(`refusing to lock a broken baseline (${all.errors} error(s), ${all.degraded} degraded, ${all.leaks} leak(s))`);
-  }
-  const lockPath = resolve(CORE_DATA_DIR, "../baselines", `${cmd.corpus}.${cmd.model.split("/").pop()}.json`);
-  mkdirSync(dirname(lockPath), { recursive: true });
-  writeReport(lockPath, { ...report, results: report.results.map(r => ({ ...r, cost: { ...r.cost, wallMs: 0 } })) });
-  const manifestPath = resolve(CORE_DATA_DIR, "manifest.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { files: Record<string, string> };
-  for (const name of Object.keys(manifest.files)) manifest.files[name] = createHash("sha256").update(readFileSync(resolve(CORE_DATA_DIR, name))).digest("hex");
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  console.log(`locked ${lockPath}`);
+  const { lockPath, dataChanged } = await applyLock({
+    dataDir: CORE_DATA_DIR,
+    lockPath: resolve(CORE_DATA_DIR, "../baselines", `${cmd.corpus}.${cmd.model.split("/").pop()}.json`),
+    acceptReason: cmd.acceptDataChange,
+    runBaseline: () => runNamed(cmd, spec, "baseline"),
+  });
+  console.log(`locked ${lockPath}${dataChanged ? " (golden data change recorded in manifest history)" : ""}`);
   return 0;
 }
 
@@ -218,7 +231,7 @@ export async function main(argv: string[]): Promise<number> {
     if (cmd.json) writeJson(cmd.json, report);
     return 0;
   } catch (e) {
-    console.error(e instanceof UsageError ? `usage: ${e.message}` : `error: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(e instanceof UsageError ? `usage: ${e.message}` : e instanceof LockRefused ? `lock refused: ${e.message}` : `error: ${e instanceof Error ? e.message : String(e)}`);
     return 2;
   }
 }

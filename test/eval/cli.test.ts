@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { UsageError, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli } from "./cli";
+import { UsageError, describeVerdict, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli } from "./cli";
 import { registerCorpusProvider } from "./corpora";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry } from "./corpus/types";
 import type { CostSample, GoldenQuery, QueryResult, VariantReport } from "./types";
@@ -25,6 +25,7 @@ describe("parseCli", () => {
     expect(parseCli(["prepare", "--variant", "baseline", "--corpus", "core-1k", "--max-neurons", "500"]))
       .toMatchObject({ kind: "prepare", maxNeurons: 500 });
     expect(parseCli(["lock"])).toMatchObject({ kind: "lock", corpus: "core-1k" });
+    expect(parseCli(["lock", "--accept-data-change", "new queries"])).toMatchObject({ kind: "lock", acceptDataChange: "new queries" });
     expect(parseCli(["--list"])).toEqual({ kind: "list" });
   });
 
@@ -37,6 +38,8 @@ describe("parseCli", () => {
     expect(() => parseCli(["--variant", "x", "--limit", "abc"])).toThrow(/limit/);
     expect(() => parseCli(["prepare", "--variant", "x", "--max-neurons", "-1"])).toThrow(/max-neurons/);
     expect(() => parseCli(["--bogus"])).toThrow(UsageError);
+    expect(() => parseCli(["lock", "--accept-data-change", " "])).toThrow(/reason/);
+    expect(() => parseCli(["--variant", "x", "--accept-data-change", "why"])).toThrow(/only applies to lock/);
   });
 });
 
@@ -54,16 +57,30 @@ describe("exit codes and formatting", () => {
     expect(text).toMatch(/degraded 1/);
   });
 
-  it("reports known-gap queries on their own lines, outside each category headline", () => {
+  it("scores every query in the headline, then shows the excluding-known-gaps view and the gap breakdown", () => {
     const text = formatReport(report([
       result({ queryId: "ok", category: "identifier", metrics: { recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 } }),
       result({ queryId: "gap", category: "identifier", tags: ["known-gap", "gap:T-0072"], metrics: { recall5: 0, recall10: 0, mrr10: 0, ndcg10: 0 } }),
     ]));
-    const identifier = text.split("\n").find(l => /^\s+identifier\s/.test(l))!;
-    expect(identifier).toMatch(/n=1\s/);
-    expect(identifier).toMatch(/recall@5 1\.000/);
-    expect(text).toMatch(/known gaps \(not in the headline\)/i);
+    const lines = text.split("\n");
+    const split = lines.findIndex(l => /excluding known gaps/.test(l));
+    expect(split).toBeGreaterThan(0);
+    const headline = lines.slice(0, split).find(l => /^\s+identifier\s/.test(l))!;
+    expect(headline).toMatch(/n=2\s/);
+    expect(headline).toMatch(/recall@5 0\.500/);
+    const excluding = lines.slice(split).find(l => /^\s+identifier\s/.test(l))!;
+    expect(excluding).toMatch(/n=1\s/);
+    expect(excluding).toMatch(/recall@5 1\.000/);
+    expect(lines.slice(split).find(l => /^\s+overall\s/.test(l))).toMatch(/n=1\s/);
     expect(text).toMatch(/gap:T-0072\s+n=1\s.*recall@5 0\.000/);
+  });
+
+  it("names the rule behind a verdict", () => {
+    const rule = (r: string, status: "pass" | "fail" | "inconclusive") => ({ rule: r, status, detail: "" });
+    expect(describeVerdict({ verdict: "FAIL", deltas: [], rules: [rule("regression", "pass"), rule("improvement", "fail")] })).toMatch(/improvement only; no regression/);
+    expect(describeVerdict({ verdict: "FAIL", deltas: [], rules: [rule("isolation", "fail"), rule("improvement", "fail")] })).toBe("FAIL (failed: isolation, improvement)");
+    expect(describeVerdict({ verdict: "INCONCLUSIVE", deltas: [], rules: [rule("power", "inconclusive")] })).toBe("INCONCLUSIVE (power)");
+    expect(describeVerdict({ verdict: "PASS", deltas: [], rules: [] })).toBe("PASS");
   });
 
   it("prints no known-gap block when no query is tagged", () => {
