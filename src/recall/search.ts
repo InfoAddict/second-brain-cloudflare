@@ -1,7 +1,6 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
-  FTS_MIN_TOKEN_LENGTH,
   KEYWORD_MAX_TOKENS,
   VECTORIZE_GET_BY_IDS_BATCH,
   VECTORIZE_TOP_K_MULTIPLIER,
@@ -35,7 +34,7 @@ import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
-import { ftsMatchQuery, ftsReady } from "./fts";
+import { ftsEligibleToken, ftsMatchQuery, ftsReady } from "./fts";
 
 async function keywordSearchLike(
   tokens: string[],
@@ -119,13 +118,11 @@ async function keywordSearch(
 ): Promise<{ rows: KeywordRow[]; fts: boolean }> {
   if (!tokens.length) return { rows: [], fts: false };
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
-  // A token under the trigram floor is dropped by ftsMatchQuery, so the match
-  // would silently search only the surviving tokens and hide entries matching
-  // just the short one. Any short token forces the LIKE path, which matches
-  // every term the query asked for.
-  const hasShortToken = terms.some(t => [...t].length < FTS_MIN_TOKEN_LENGTH);
+  // ftsEligibleToken is the single source of truth: any token ftsMatchQuery
+  // would drop means the match silently searches only the survivors and hides
+  // entries matching just that one, so the whole query goes to LIKE.
   const match = ftsMatchQuery(terms);
-  if (match && !hasShortToken && await ftsReady(env)) {
+  if (match && terms.every(ftsEligibleToken) && await ftsReady(env)) {
     try {
       return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true };
     } catch (e) {

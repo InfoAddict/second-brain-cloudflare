@@ -212,6 +212,24 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(driftedDiagnostics.keywordIds).toEqual(["peer"]);
   });
 
+  it("drops an FTS row whose id disagrees with the entry at its rowid", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    // This drift variant occupies the rowid of a live entry but claims another
+    // id. Only the id half of the join can tell it apart from that entry, so a
+    // rowid-only join would resurrect the wrong entry.
+    sqlite.seed({ id: "clean", content: "orchid note", createdAt: 1000 });
+    sqlite.seed({ id: "peer", content: "violet marker", createdAt: 1001 });
+    await sqlite.db.prepare(`UPDATE entries_fts SET id = 'impostor', content = 'orchid drift real text' WHERE rowid = (SELECT rowid FROM entries WHERE id = 'peer')`).run();
+
+    const diagnostics: RecallDiagnostics = {};
+    const res = await recallEntries({ query: "orchid", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(diagnostics.keywordIds).toEqual(["clean"]);
+    expect(res.matches.map(m => m.id)).toEqual(["clean"]);
+  });
+
   it("keeps before exclusive and honors the exact candidate limit", async () => {
     // before is exclusive: the row at exactly `before` is out, the row one
     // tick earlier is in.
@@ -283,6 +301,47 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "v1 widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics });
     expect(diagnostics.keywordIds).toContain("short-only");
+  });
+
+  it("routes queries with a NUL-bearing token to the LIKE path", async () => {
+    // "ab\0cd" cleared the old routing check (it is long enough) but
+    // ftsMatchQuery still drops it for NUL, so the ready path searched only
+    // "widget" and nul-only vanished while ftsUsed read true.
+    sqlite.seed({ id: "nul-only", content: "the ab\0cd spec shipped", createdAt: 1001 });
+    sqlite.seed({ id: "long", content: "the widget spec shipped", createdAt: 1000 });
+
+    const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: KEYWORD_MAX_TOKENS };
+    const likeDiagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "ab\0cd widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: likeDiagnostics });
+    expect(likeDiagnostics.ftsUsed).toBe(false);
+
+    resetFtsReadyMemo();
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    const readyDiagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "ab\0cd widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: readyDiagnostics });
+
+    expect(readyDiagnostics.ftsUsed).toBe(false);
+    expect(readyDiagnostics.keywordIds).toContain("nul-only");
+    expect([...readyDiagnostics.keywordIds!].sort()).toEqual([...likeDiagnostics.keywordIds!].sort());
+  });
+
+  it("keeps the 3-codepoint floor token eligible and routes only below it to LIKE", async () => {
+    // FTS_MIN_TOKEN_LENGTH is inclusive: "cat" is exactly the floor and the
+    // trigram index can match it, so it must stay on FTS; "ca" cannot and must
+    // not be silently dropped from the match.
+    sqlite.seed({ id: "cat-only", content: "cat scratch fever", createdAt: 1000 });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+
+    const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: KEYWORD_MAX_TOKENS };
+    const three: RecallDiagnostics = {};
+    await recallEntries({ query: "cat", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: three });
+    expect(three.ftsUsed).toBe(true);
+    expect(three.keywordIds).toEqual(["cat-only"]);
+
+    const two: RecallDiagnostics = {};
+    await recallEntries({ query: "ca", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: two });
+    expect(two.ftsUsed).toBe(false);
+    expect(two.keywordIds).toEqual(["cat-only"]);
   });
 
   it("uses FTS when every token clears the trigram floor", async () => {
