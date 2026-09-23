@@ -354,4 +354,32 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(diagnostics.ftsUsed).toBe(true);
     expect(diagnostics.keywordIds).toEqual(["only"]);
   });
+
+  it("keeps bm25 order as the fusion rank when FTS serves the rows", async () => {
+    // Same distinct-token JS weight for query token "dashboard": one token,
+    // word-boundary match in both. A is newer, so the JS weight's created_at
+    // tiebreak (and LIKE's newest-first window) put it first; B repeats the
+    // token in a much shorter doc, so bm25 ranks it first. The embed mock
+    // returns a vector orthogonal to both entries' vectors (which are never
+    // queried anyway: VECTORIZE.query rejects, so the dense arm contributes
+    // nothing and both entries are keyword-only candidates).
+    sqlite.seed({ id: "kw-a", content: "the dashboard redesign shipped last sprint with plenty of filler words padding the document body", createdAt: 2000 });
+    sqlite.seed({ id: "kw-b", content: "dashboard dashboard dashboard", createdAt: 1000 });
+
+    const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: 5 };
+
+    // LIKE: recency decides, A leads.
+    const likeDiagnostics: RecallDiagnostics = {};
+    const like = await recallEntries({ query: "dashboard", topK: 5, synthesize: false }, env, ctx, cfg, { diagnostics: likeDiagnostics });
+    expect(likeDiagnostics.ftsUsed).toBe(false);
+    expect(like.matches[0]?.id).toBe("kw-a");
+
+    // FTS: bm25 rank position must survive fusion, B leads.
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    const ftsDiagnostics: RecallDiagnostics = {};
+    const fts = await recallEntries({ query: "dashboard", topK: 5, synthesize: false }, env, ctx, cfg, { diagnostics: ftsDiagnostics });
+    expect(ftsDiagnostics.ftsUsed).toBe(true);
+    expect(fts.matches[0]?.id).toBe("kw-b");
+  });
 });

@@ -140,7 +140,8 @@ function fuseDenseAndKeyword(
   tokens: string[],
   allowKeywordOnly: boolean,
   corpus: Pick<DistilledQuery, "df" | "total">,
-  substringWeight: number
+  substringWeight: number,
+  keywordPreRanked = false,
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -181,10 +182,16 @@ function fuseDenseAndKeyword(
     return boundary.get(t)!.test(lc) ? idf(t) : idf(t) * substringWeight;
   };
 
-  const keywordRanked = kwLower
+  const keywordScored = kwLower
     .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + tokenWeight(x.lc, t), 0) }))
-    .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)))
-    .sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
+    .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)));
+  // FTS rows arrive bm25-ordered: rank position already carries TF and length
+  // normalization, so re-sorting by the JS weight would discard it. The JS
+  // weight still rides along as the RRF contribution weight — boundary and
+  // coverage quality, which trigram bm25 cannot see.
+  const keywordRanked = keywordPreRanked
+    ? keywordScored
+    : keywordScored.sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
 
   const fused = rrfFuse(denseRanked, keywordRanked.map(x => ({ id: x.row.id, weight: x.weight })));
   const keywordRowById = new Map(keywordRows.map(r => [r.id, r]));
@@ -389,8 +396,8 @@ export async function recallEntries(
       if (!semanticRankByParent.has(parentId)) semanticRankByParent.set(parentId, semanticRankByParent.size + 1);
     });
 
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, ftsServedKeywords);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, ftsServedKeywords);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
