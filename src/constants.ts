@@ -156,6 +156,27 @@ export const KEYWORD_MIN_TOKEN_LEN = 2;
 export const KEYWORD_MAX_TOKENS = 16;
 export const QUERY_SATURATION_FRACTION = 0.3;
 export const MAX_QUERY_TERMS = 3;
+
+// FTS5 lexical arm. Ready flag set once the backfill has covered every
+// pre-FTS row; until then recall stays on the LIKE fallback.
+export const FTS_READY_KV_KEY = "fts:ready";
+export const FTS_BACKFILL_CURSOR_KV_KEY = "fts:backfill-cursor";
+// Per-night ceiling: bounds FTS shadow-row writes against the 100k/day cap.
+export const FTS_BACKFILL_BATCH = 2000;
+// Trigram tokenizer floor: shorter tokens can never match.
+export const FTS_MIN_TOKEN_LENGTH = 3;
+// Readiness cache lifetime. Bounds both the KV read rate and how long a warm
+// isolate keeps using FTS after the integrity check clears the flag.
+export const FTS_READY_CACHE_MS = 5 * 60 * 1000;
+// Rows spot-checked nightly for rowid-mapping drift; newest rows move first.
+export const FTS_INTEGRITY_SPOT_CHECK = 5;
+// Rotating content check: rowid window compared nightly (both directions)
+// behind its own cursor, covering every row within ceil(N / window) nights.
+export const FTS_CONTENT_CHECK_WINDOW = 200;
+// Above this many estimated matches, bm25 must score them all while LIKE
+// stops at KEYWORD_CANDIDATE_LIMIT recency-ordered hits, so LIKE is cheaper.
+export const FTS_MATCH_BUDGET = 2000;
+export const FTS_CONTENT_CHECK_CURSOR_KV_KEY = "fts:content-check-cursor";
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",
   "i", "me", "my", "we", "you", "it", "this", "that", "these", "those", "with", "about", "from", "at", "as", "by",

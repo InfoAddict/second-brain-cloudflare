@@ -1145,7 +1145,24 @@ describe("the checker over the real source tree", () => {
   //   ✔ scope check: 106 queries, 53 documented exceptions, 6 scope-checked
   //     (clause assembled in JS), 1 scope-outer-join (clause governs a column,
   //     not the row set)
-  it("reports exactly 106 queries, 53 exceptions, 6 scope-checked and 1 outer-join", () => {
+  //
+  // MOVED queries 124 -> 127 and exempt 60 -> 63 by the combined T4-T6 review
+  // fixes (src/db/fts-backfill.ts): the ready-latch guard's two EXCEPT parity
+  // probes (liveness rides in the same batch as a bare variable the lexer
+  // never sees) and the rotating content check's in-place re-index
+  // INSERT...SELECT, each a rowid-keyed deployment-wide cron read carrying a
+  // scope-exempt licence. scope-checked and outer-join UNCHANGED.
+  // MOVED queries 127 -> 128 and exempt 63 -> 64 (T-0056 polish, rotating
+  // content check): the window's orphan half (entries_fts rowid range
+  // anti-joined to entries by rowid) is its own statement with its own
+  // scope-exempt licence. The old FTS-side window read touched no corpus
+  // table and was never counted, so the rewrite's two window statements land
+  // as +1 query and +1 exception, not one-for-one.
+  // MOVED queries 128 -> 127 and exempt 64 -> 63 (T-0056 final fix): the
+  // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
+  // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
+  // whose licence stays.
+  it("reports the checker's pinned totals (134 queries, 67 exceptions, 10 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1170,8 +1187,37 @@ describe("the checker over the real source tree", () => {
     // passes). Deliberate: +4 scoped queries for GET /due (overdue rows,
     // overdue count, upcoming rows, upcoming count). Deliberate: +1 scoped
     // query for src/push/send.ts's pushDueItems (the due-item SELECT, scoped
-    // to the one workspace it was called for).
-    ).toEqual({ queries: 117, exempt: 54, checked: 6, outerJoin: 1 });
+    // to the one workspace it was called for). Deliberate: +1 query and +1
+    // scope-checked for keywordSearchFts's entries_fts JOIN entries read
+    // (src/recall/search.ts, FTS5 lexical arm Task 3): its scope clause is a
+    // JS-assembled ` AND ${scope.clause}` fragment, same shape as the other
+    // scope-checked keyword-arm queries in this file.
+    // Deliberate: +3 queries and +3 scope-exempt for the FTS nightly backfill
+    // (src/db/fts-backfill.ts, Task 4): the rowid-keyset SELECT and the
+    // delete-then-insert batch's two statements, all cron, keyed on rowids
+    // that carry no workspace scope by construction.
+    // Deliberate: +3 queries and +3 scope-exempt for the nightly integrity
+    // self-heal (src/db/fts-backfill.ts, checkFtsIntegrity, Task 5): the
+    // count-parity SELECT, the rowid spot-check JOIN, and the orphan-cleanup
+    // DELETE — all deployment-wide and keyed on entries.rowid, same exemption
+    // shape as Task 4's backfill statements above.
+    // Deliberate: +2 queries and +2 scope-checked for T-0059 (src/recall/distill.ts):
+    // the FTS per-term MATCH count and the scoped total, both built the same
+    // JS-assembled way as the existing LIKE df scan's `where` above them.
+    // Deliberate: +4 queries, +3 scope-exempt, +1 scope-checked for T-0065
+    // (exact per-workspace entry counters, replacing distillation's total
+    // cache). Three GROUP BY seed/reseed/rebuild statements — the creation
+    // batch (src/db/init.ts), the hot-path repair (src/db/entry-counts-repair.ts),
+    // and the nightly drift rebuild (src/db/fts-backfill.ts) — are all
+    // deployment-wide by construction, same exemption shape as the FTS
+    // backfill's own seed reads. distill.ts's new SQL-capped per-term FTS
+    // count carries the same JS-assembled scope clause as its sibling above it.
+    // Deliberate: +1 query and +1 scope-exempt for checkFtsIntegrity's
+    // per-workspace parity read (src/db/fts-backfill.ts, FIX 1, final
+    // review): a per-workspace GROUP BY over entries, replacing the old
+    // global-SUM-only comparison, same deployment-wide exemption shape as
+    // the other nightly parity reads above it.
+    ).toEqual({ queries: 134, exempt: 67, checked: 10, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

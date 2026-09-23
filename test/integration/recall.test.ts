@@ -261,7 +261,11 @@ describe("GET /recall", () => {
     expect(getByIdsMock).toHaveBeenCalledWith(["entry-1"]);
   });
 
-  it("returns empty without calling Vectorize when tagged entries have no vectors", async () => {
+  // FIX 2 (final review): a tagged entry with no vector yet used to be
+  // dropped entirely. It now degrades to keyword-only fusion instead —
+  // same as when Vectorize itself is unavailable — so an exact keyword
+  // match still surfaces instead of returning nothing.
+  it("returns a keyword-only match without calling Vectorize's getByIds/query when tagged entries have no vectors", async () => {
     db.entries.push(
       { id: "entry-1", content: "Unvectorized memory", tags: '["work"]', source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 },
     );
@@ -271,9 +275,9 @@ describe("GET /recall", () => {
 
     const res = await worker.fetch(req("GET", "/recall?query=memory&tag=work"), env, ctx);
     const data = await res.json() as any;
-    expect(data.results).toEqual([]);
-    expect(getByIdsMock).not.toHaveBeenCalled();
-    expect(queryMock).not.toHaveBeenCalled();
+    expect(data.results.map((r: any) => r.id)).toEqual(["entry-1"]);
+    expect(getByIdsMock).not.toHaveBeenCalled(); // no vector ids to fetch — never called at all
+    expect(queryMock).not.toHaveBeenCalled(); // memberFirst never queries Vectorize directly
   });
 
   it("batches getByIds calls at 20 IDs (Vectorize error 40007 above that)", async () => {

@@ -24,10 +24,50 @@
  * `all`, `first`, `run`, `exec`. Reach for `d1-mock` for everything else.
  */
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const SCHEMA = resolve(import.meta.dirname, "../../db/schema.sql");
+
+// One FIFO queue per connection, shared by every standalone statement AND
+// every batch on that connection. A batch opens a SAVEPOINT for its whole
+// body; without this, a standalone statement issued while that SAVEPOINT is
+// open runs inside it on the same connection and gets rolled back with it if
+// the batch later fails, even though it has nothing to do with the batch.
+const connectionQueues = new WeakMap<DatabaseSync, Promise<unknown>>();
+
+// Marks "this async call chain is executing as part of a batch already
+// holding connection X's queue slot" — set only around db.batch()'s own
+// body (see below). AsyncLocalStorage, not a plain flag, because a flag
+// cannot tell a batch's OWN nested statement.run() calls (which must run
+// inline, or they would queue behind their own still-running batch and
+// deadlock) apart from a genuinely unrelated call that merely happens to
+// execute during the same window (which must still queue and wait its turn).
+//
+// The store is a token, not just the DatabaseSync, because a batch's own
+// statement.run() can spawn async work it does not await (a fire-and-forget
+// `.then()`). That work still closes over this ALS context, so it can resume
+// AFTER the batch has closed — by then the context is stale, and comparing
+// only the connection would let it run inline as if still part of that
+// batch, even inside a DIFFERENT, later batch's open SAVEPOINT. Comparing
+// the token catches that: it changes every time a batch starts, so a stale
+// context's token no longer matches whatever batch (if any) is active now.
+const activeBatchConnection = new AsyncLocalStorage<{ db: DatabaseSync; token: object }>();
+
+function enqueue<T>(db: DatabaseSync, fn: () => T | Promise<T>): Promise<T> {
+  const store = activeBatchConnection.getStore();
+  if (store && store.db === db && store.token === currentBatchToken.get(db)) {
+    return Promise.resolve().then(fn);
+  }
+  const prior = connectionQueues.get(db) ?? Promise.resolve();
+  const settled = prior.then(fn, fn);
+  connectionQueues.set(db, settled.then(() => undefined, () => undefined));
+  return settled;
+}
+
+/** The token of the batch CURRENTLY holding connection X's queue slot, if any. */
+const currentBatchToken = new WeakMap<DatabaseSync, object>();
 
 class SqliteStatement {
   constructor(
@@ -45,7 +85,7 @@ class SqliteStatement {
     return this.sql;
   }
 
-  async all(): Promise<{ results: unknown[]; success: true; meta: { rows_written: 0 } }> {
+  private allOnce(): { results: unknown[]; success: true; meta: { rows_written: 0 } } {
     const rows = this.db.prepare(this.sql).all(...(this.args as never[]));
     // SQLite can prove that this SELECT wrote no rows, but it cannot reproduce
     // Cloudflare D1's billed rows_read (which includes index/table work rather
@@ -53,7 +93,7 @@ class SqliteStatement {
     return { results: rows, success: true, meta: { rows_written: 0 } };
   }
 
-  async first(): Promise<unknown | null> {
+  private firstOnce(): unknown | null {
     const row = this.db.prepare(this.sql).get(...(this.args as never[]));
     return row ?? null;
   }
@@ -69,7 +109,7 @@ class SqliteStatement {
    * Additive for writes: `meta.rows_written` is unchanged, and `results` is
    * simply absent where there are no rows to report.
    */
-  async run(): Promise<{ results?: unknown[]; success: true; meta: { rows_written: number } }> {
+  private runOnce(): { results?: unknown[]; success: true; meta: { rows_written: number } } {
     const statement = this.db.prepare(this.sql);
     if (/^\s*(SELECT|WITH)\b/i.test(this.sql)) {
       return { results: statement.all(...(this.args as never[])), success: true, meta: { rows_written: 0 } };
@@ -77,6 +117,10 @@ class SqliteStatement {
     const result = statement.run(...(this.args as never[]));
     return { success: true, meta: { rows_written: Number(result.changes) } };
   }
+
+  async all() { return enqueue(this.db, () => this.allOnce()); }
+  async first() { return enqueue(this.db, () => this.firstOnce()); }
+  async run() { return enqueue(this.db, () => this.runOnce()); }
 }
 
 export interface SqliteD1 {
@@ -196,6 +240,7 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
 
   const issued: string[] = [];
   const batches: string[][] = [];
+  let savepointCounter = 0;
 
   return {
     issued,
@@ -232,9 +277,53 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
           if (typeof wrapped.__inner?.sourceSql === "function") return wrapped.__inner.sourceSql();
           return "[wrapped D1 statement]";
         }));
-        const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
-        for (const statement of statements) out.push(await statement.run());
-        return out;
+        // Real D1 documents batch() as one transaction: a failure partway through
+        // leaves no statement's effect behind. Without an explicit transaction here,
+        // node:sqlite commits each statement.run() as it goes, so a caller that
+        // retries a whole failed batch (the entries_fts write-path repair) would
+        // re-apply statements that already landed and hit spurious constraint
+        // errors that could never happen against real D1.
+        //
+        // A SAVEPOINT rather than BEGIN/COMMIT: this facade is one shared
+        // synchronous connection, and some callers run two logical requests
+        // concurrently (Promise.all of two handlers, each batching); BEGIN
+        // would fail the second with "cannot start a transaction within a
+        // transaction". Queued through enqueue() (shared with every
+        // standalone statement on this connection, see above) so two
+        // SAVEPOINTs never nest out of LIFO order, and no unrelated
+        // standalone statement can run while this one is open.
+        return enqueue(raw, () => {
+          const token = {};
+          currentBatchToken.set(raw, token);
+          return activeBatchConnection.run({ db: raw, token }, async () => {
+            const sp = `sqlite_d1_batch_${savepointCounter++}`;
+            raw.exec(`SAVEPOINT ${sp}`);
+            try {
+              const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
+              // Every statement.run() here — a real SqliteStatement directly,
+              // or one reached indirectly through a test double's own run() —
+              // is still inside the activeBatchConnection context this batch
+              // just entered, so enqueue() runs it inline instead of queuing
+              // it behind this same still-running batch.
+              for (const statement of statements as unknown as { run(): unknown }[]) {
+                out.push(await statement.run() as { results?: unknown[]; success: true; meta: { rows_written: number } });
+              }
+              raw.exec(`RELEASE ${sp}`);
+              return out;
+            } catch (e) {
+              raw.exec(`ROLLBACK TO ${sp}`);
+              raw.exec(`RELEASE ${sp}`);
+              throw e;
+            } finally {
+              // Ends this batch's queue slot. Any async work spawned inside
+              // it that resumes after this point no longer matches the
+              // token, so enqueue() routes it back through the FIFO queue
+              // instead of letting it run inline against whatever batch (if
+              // any) is active on this connection by the time it resumes.
+              if (currentBatchToken.get(raw) === token) currentBatchToken.delete(raw);
+            }
+          });
+        });
       },
     },
     columns() {
