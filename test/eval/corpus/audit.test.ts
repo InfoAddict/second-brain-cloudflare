@@ -203,8 +203,10 @@ describe("auditQueries fidelity and scale", () => {
   it("keeps common-word queries on the default read scope of a non-outsider viewer", () => {
     const g = gold("weekly review budget notes");
     const q = query({ id: "c", category: "common-word", text: "weekly review budget" });
-    expect(rules([...filler, g], [q])).toEqual([]);
-    expect(rules([...filler, g], [{ ...q, layer: "company" }])).toContain("c:common-word-layer-scoped");
-    expect(rules([...filler, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
+    // weekly and budget never co-occur outside the gold, so the trio is unique to it
+    const split = Array.from({ length: 40 }, (_, i) => entry(`s${i}`, i % 2 ? `weekly review notes ${i}` : `budget review notes ${i}`));
+    expect(rules([...split, g], [q])).toEqual([]);
+    expect(rules([...split, g], [{ ...q, layer: "company" }])).toContain("c:common-word-layer-scoped");
+    expect(rules([...split, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
   });
 });

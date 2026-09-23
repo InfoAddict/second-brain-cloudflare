@@ -16,8 +16,8 @@
 {"id":"q-id-012","text":"registry.example.com/tools/etl:2.81.0","category":"identifier","gold":[{"id":"n-id-012","grade":2}],"viewer":"avery"}
 {"id":"q-id-013","text":"SN-AX-880415","category":"identifier","gold":[{"id":"n-id-013","grade":2}],"viewer":"avery","tags":["tenancy"]}
 {"id":"q-id-014","text":"PNR-QX88421","category":"identifier","gold":[{"id":"n-id-014","grade":2}],"viewer":"avery"}
-{"id":"q-id-015","text":"ERR_TLS_90412","category":"identifier","gold":[{"id":"n-id-015","grade":2}],"viewer":"blake","layer":"company"}
-{"id":"q-id-016","text":"20260714_add_ledger_idx","category":"identifier","gold":[{"id":"n-id-016","grade":2}],"viewer":"avery","tags":["tenancy"]}
+{"id":"q-id-015","text":"ERR-TLS-90412","category":"identifier","gold":[{"id":"n-id-015","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-016","text":"20260714-add-ledger-idx","category":"identifier","gold":[{"id":"n-id-016","grade":2}],"viewer":"avery","tags":["tenancy"]}
 {"id":"q-id-017","text":"SPRING-88OFF","category":"identifier","gold":[{"id":"n-id-017","grade":2}],"viewer":"avery"}
 {"id":"q-id-017-c","text":"roadmap SPRING-88OFF","category":"identifier","gold":[{"id":"n-id-017","grade":2}],"viewer":"avery"}
 {"id":"q-id-018","text":"GR-2026-88014","category":"identifier","gold":[{"id":"n-id-018","grade":2}],"viewer":"avery"}
@@ -105,43 +105,43 @@
 {"id":"q-rare-037","text":"quixotic","category":"rare-word","gold":[{"id":"n-rare-037","grade":2}],"viewer":"avery"}
 {"id":"q-rare-037-c","text":"roadmap quixotic","category":"rare-word","gold":[{"id":"n-rare-037","grade":2}],"viewer":"avery"}
 {"id":"q-rare-038","text":"boreas","category":"rare-word","gold":[{"id":"n-rare-038","grade":2}],"viewer":"avery"}
-{"id":"q-common-001","category":"common-word","text":"budget vendor sleep","gold":[{"id":"n-common-001","grade":2}],"viewer":"avery"}
-{"id":"q-common-002","category":"common-word","text":"login swimming family","gold":[{"id":"n-common-002","grade":2}],"viewer":"avery"}
-{"id":"q-common-003","category":"common-word","text":"paprika train queue","gold":[{"id":"n-common-003","grade":2}],"viewer":"avery"}
-{"id":"q-common-004","category":"common-word","text":"export mornings ferry","gold":[{"id":"n-common-004","grade":2}],"viewer":"avery"}
-{"id":"q-common-005","category":"common-word","text":"workout billing kite","gold":[{"id":"n-common-005","grade":2}],"viewer":"avery"}
-{"id":"q-common-006","category":"common-word","text":"author trip search","gold":[{"id":"n-common-006","grade":2}],"viewer":"avery"}
-{"id":"q-common-007","category":"common-word","text":"decision ferns image","gold":[{"id":"n-common-007","grade":2}],"viewer":"avery"}
-{"id":"q-common-008","category":"common-word","text":"status flights tired","gold":[{"id":"n-common-008","grade":2}],"viewer":"avery"}
-{"id":"q-common-009","category":"common-word","text":"meeting rental sync","gold":[{"id":"n-common-009","grade":2}],"viewer":"avery"}
-{"id":"q-common-010","category":"common-word","text":"agreed mornings uploader","gold":[{"id":"n-common-010","grade":2}],"viewer":"avery"}
-{"id":"q-common-011","category":"common-word","text":"habits swimming paper","gold":[{"id":"n-common-011","grade":2}],"viewer":"avery"}
-{"id":"q-common-012","category":"common-word","text":"framing studies notification","gold":[{"id":"n-common-012","grade":2}],"viewer":"avery"}
-{"id":"q-common-013","category":"common-word","text":"hour budget paprika","gold":[{"id":"n-common-013","grade":2}],"viewer":"avery"}
-{"id":"q-common-014","category":"common-word","text":"vendor trip family","gold":[{"id":"n-common-014","grade":2}],"viewer":"avery"}
-{"id":"q-common-015","category":"common-word","text":"kite pause deep","gold":[{"id":"n-common-015","grade":2}],"viewer":"avery"}
-{"id":"q-common-016","category":"common-word","text":"train sleep billing","gold":[{"id":"n-common-016","grade":2}],"viewer":"avery"}
-{"id":"q-common-017","category":"common-word","text":"uploader ferns swimming","gold":[{"id":"n-common-017","grade":2}],"viewer":"avery"}
-{"id":"q-common-018","category":"common-word","text":"form meeting family","gold":[{"id":"n-common-018","grade":2}],"viewer":"avery"}
-{"id":"q-common-019","category":"common-word","text":"decision search rental","gold":[{"id":"n-common-019","grade":2}],"viewer":"avery"}
-{"id":"q-common-020","category":"common-word","text":"image workout author","gold":[{"id":"n-common-020","grade":2}],"viewer":"avery"}
-{"id":"q-common-021","category":"common-word","text":"reading tired car","gold":[{"id":"n-common-021","grade":2}],"viewer":"avery"}
-{"id":"q-common-022","category":"common-word","text":"export ferry family","gold":[{"id":"n-common-022","grade":2}],"viewer":"avery"}
-{"id":"q-common-023","category":"common-word","text":"queue vendor mornings","gold":[{"id":"n-common-023","grade":2}],"viewer":"avery"}
-{"id":"q-common-024","category":"common-word","text":"plan swimming invoice","gold":[{"id":"n-common-024","grade":2}],"viewer":"avery"}
-{"id":"q-common-025","category":"common-word","text":"sleep smoked friday","gold":[{"id":"n-common-025","grade":2}],"viewer":"avery"}
-{"id":"q-common-026","category":"common-word","text":"idea billing family","gold":[{"id":"n-common-026","grade":2}],"viewer":"avery"}
-{"id":"q-common-027","category":"common-word","text":"review ferns notes","gold":[{"id":"n-common-027","grade":2}],"viewer":"avery"}
-{"id":"q-common-028","category":"common-word","text":"tighten budget flights","gold":[{"id":"n-common-028","grade":2}],"viewer":"avery"}
-{"id":"q-common-029","category":"common-word","text":"notification rental kite","gold":[{"id":"n-common-029","grade":2}],"viewer":"avery"}
-{"id":"q-common-030","category":"common-word","text":"habits export keep","gold":[{"id":"n-common-030","grade":2}],"viewer":"avery"}
-{"id":"q-common-031","category":"common-word","text":"minutes swimming vendor","gold":[{"id":"n-common-031","grade":2}],"viewer":"avery"}
-{"id":"q-common-032","category":"common-word","text":"case studies before","gold":[{"id":"n-common-032","grade":2}],"viewer":"avery"}
-{"id":"q-common-033","category":"common-word","text":"ship decision train","gold":[{"id":"n-common-033","grade":2}],"viewer":"avery"}
-{"id":"q-common-034","category":"common-word","text":"mention paper family","gold":[{"id":"n-common-034","grade":2}],"viewer":"avery"}
-{"id":"q-common-035","category":"common-word","text":"another form export","gold":[{"id":"n-common-035","grade":2}],"viewer":"avery"}
-{"id":"q-common-036","category":"common-word","text":"reading budget kite","gold":[{"id":"n-common-036","grade":2}],"viewer":"avery"}
-{"id":"q-common-037","category":"common-word","text":"search page tired","gold":[{"id":"n-common-037","grade":2}],"viewer":"avery"}
+{"id":"q-common-001","category":"common-word","text":"coffee garden kitchen","gold":[{"id":"n-common-001","grade":2}],"viewer":"avery"}
+{"id":"q-common-002","category":"common-word","text":"table window letter","gold":[{"id":"n-common-002","grade":2}],"viewer":"avery"}
+{"id":"q-common-003","category":"common-word","text":"bread cheese kitchen","gold":[{"id":"n-common-003","grade":2}],"viewer":"blake"}
+{"id":"q-common-004","category":"common-word","text":"table garden bread","gold":[{"id":"n-common-004","grade":2}],"viewer":"blake"}
+{"id":"q-common-005","category":"common-word","text":"letter coffee window","gold":[{"id":"n-common-005","grade":2}],"viewer":"avery"}
+{"id":"q-common-006","category":"common-word","text":"cheese table garden","gold":[{"id":"n-common-006","grade":2}],"viewer":"avery"}
+{"id":"q-common-007","category":"common-word","text":"kitchen window letter","gold":[{"id":"n-common-007","grade":2}],"viewer":"blake"}
+{"id":"q-common-008","category":"common-word","text":"bread coffee window","gold":[{"id":"n-common-008","grade":2}],"viewer":"blake"}
+{"id":"q-common-009","category":"common-word","text":"letter cheese kitchen","gold":[{"id":"n-common-009","grade":2}],"viewer":"avery"}
+{"id":"q-common-010","category":"common-word","text":"table coffee kitchen","gold":[{"id":"n-common-010","grade":2}],"viewer":"avery"}
+{"id":"q-common-011","category":"common-word","text":"cheese window garden","gold":[{"id":"n-common-011","grade":2}],"viewer":"blake"}
+{"id":"q-common-012","category":"common-word","text":"letter table bread","gold":[{"id":"n-common-012","grade":2}],"viewer":"blake"}
+{"id":"q-common-013","category":"common-word","text":"letter coffee garden","gold":[{"id":"n-common-013","grade":2}],"viewer":"avery"}
+{"id":"q-common-014","category":"common-word","text":"window bread cheese","gold":[{"id":"n-common-014","grade":2}],"viewer":"avery"}
+{"id":"q-common-015","category":"common-word","text":"letter kitchen table","gold":[{"id":"n-common-015","grade":2}],"viewer":"blake"}
+{"id":"q-common-016","category":"common-word","text":"kitchen window garden","gold":[{"id":"n-common-016","grade":2}],"viewer":"blake"}
+{"id":"q-common-017","category":"common-word","text":"coffee bread cheese","gold":[{"id":"n-common-017","grade":2}],"viewer":"avery"}
+{"id":"q-common-018","category":"common-word","text":"table window coffee","gold":[{"id":"n-common-018","grade":2}],"viewer":"avery"}
+{"id":"q-common-019","category":"common-word","text":"letter bread garden","gold":[{"id":"n-common-019","grade":2}],"viewer":"blake"}
+{"id":"q-common-020","category":"common-word","text":"kitchen coffee bread","gold":[{"id":"n-common-020","grade":2}],"viewer":"blake"}
+{"id":"q-common-021","category":"common-word","text":"cheese coffee garden","gold":[{"id":"n-common-021","grade":2}],"viewer":"avery"}
+{"id":"q-common-022","category":"common-word","text":"letter bread kitchen","gold":[{"id":"n-common-022","grade":2}],"viewer":"avery"}
+{"id":"q-common-023","category":"common-word","text":"window coffee cheese","gold":[{"id":"n-common-023","grade":2}],"viewer":"blake"}
+{"id":"q-common-024","category":"common-word","text":"bread window garden","gold":[{"id":"n-common-024","grade":2}],"viewer":"blake"}
+{"id":"q-common-025","category":"common-word","text":"letter table cheese","gold":[{"id":"n-common-025","grade":2}],"viewer":"avery"}
+{"id":"q-common-026","category":"common-word","text":"bread garden kitchen","gold":[{"id":"n-common-026","grade":2}],"viewer":"avery"}
+{"id":"q-common-027","category":"common-word","text":"letter table coffee","gold":[{"id":"n-common-027","grade":2}],"viewer":"blake"}
+{"id":"q-common-028","category":"common-word","text":"kitchen window cheese","gold":[{"id":"n-common-028","grade":2}],"viewer":"blake"}
+{"id":"q-common-029","category":"common-word","text":"coffee table garden","gold":[{"id":"n-common-029","grade":2}],"viewer":"avery"}
+{"id":"q-common-030","category":"common-word","text":"bread table window","gold":[{"id":"n-common-030","grade":2}],"viewer":"avery"}
+{"id":"q-common-031","category":"common-word","text":"letter cheese coffee","gold":[{"id":"n-common-031","grade":2}],"viewer":"blake"}
+{"id":"q-common-032","category":"common-word","text":"cheese letter garden","gold":[{"id":"n-common-032","grade":2}],"viewer":"blake"}
+{"id":"q-common-033","category":"common-word","text":"coffee kitchen letter","gold":[{"id":"n-common-033","grade":2}],"viewer":"avery"}
+{"id":"q-common-034","category":"common-word","text":"kitchen table cheese","gold":[{"id":"n-common-034","grade":2}],"viewer":"avery"}
+{"id":"q-common-035","category":"common-word","text":"garden window coffee","gold":[{"id":"n-common-035","grade":2}],"viewer":"blake"}
+{"id":"q-common-036","category":"common-word","text":"bread cheese garden","gold":[{"id":"n-common-036","grade":2}],"viewer":"blake"}
+{"id":"q-common-037","category":"common-word","text":"kitchen table bread","gold":[{"id":"n-common-037","grade":2}],"viewer":"avery"}
 {"id":"q-short-001","category":"short-word","text":"ox latch","gold":[{"id":"n-short-001","grade":2}],"viewer":"avery"}
 {"id":"q-short-002","category":"short-word","text":"k8 upgrade","gold":[{"id":"n-short-002","grade":2}],"viewer":"avery"}
 {"id":"q-short-003","category":"short-word","text":"ai policy","gold":[{"id":"n-short-003","grade":2}],"viewer":"avery"}
@@ -191,7 +191,7 @@
 {"id":"q-para-017","category":"paraphrase","text":"what are my personal ambitions for 2026","gold":[{"id":"n-para-017","grade":2}],"viewer":"avery"}
 {"id":"q-para-018","category":"paraphrase","text":"who am I collecting late in the week","gold":[{"id":"n-para-018","grade":2}],"viewer":"avery"}
 {"id":"q-para-019","category":"paraphrase","text":"what makes rain get inside the house","gold":[{"id":"n-para-019","grade":2}],"viewer":"avery"}
-{"id":"q-para-020","category":"paraphrase","text":"what routine helps me feel settled at the start of the day","gold":[{"id":"n-para-020","grade":2}],"viewer":"avery"}
+{"id":"q-para-020","category":"paraphrase","text":"what routine helps me stay settled at the start of the day","gold":[{"id":"n-para-020","grade":2}],"viewer":"avery"}
 {"id":"q-para-021","category":"paraphrase","text":"did I save money on auto coverage","gold":[{"id":"n-para-021","grade":2}],"viewer":"avery"}
 {"id":"q-para-022","category":"paraphrase","text":"when do I need to leave to collect the child midweek","gold":[{"id":"n-para-022","grade":2}],"viewer":"avery"}
 {"id":"q-para-023","category":"paraphrase","text":"who should I contact about buying things from vendors","gold":[{"id":"n-para-023","grade":2}],"viewer":"avery"}

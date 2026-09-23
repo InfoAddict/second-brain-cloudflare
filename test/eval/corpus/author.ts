@@ -44,7 +44,7 @@ const LONG_SEED = 6031;
 
 const LEADS = [
   "Early on", "Around noon", "After the break", "Near the end", "At some point", "Just before two", "Once we sat down", "Later that day", "During the lull",
-  "Right at the start", "After a pause", "Toward evening", "Halfway through", "On the way out", "Before the coffee", "Around the table", "In the corridor",
+  "Right at the start", "After a pause", "Toward evening", "Halfway through", "On the way out", "Before the tea", "Around the room", "In the corridor",
   "At the back", "Over the noise", "Between items", "Without warning", "After the phone rang", "Once the door shut", "Past the halfway mark", "Before anyone left",
   "While we waited", "After some grumbling", "As the room warmed up", "Once the slides went dark", "Shortly after three", "In a quiet moment", "When the rain started",
   "As the light faded", "Right after the vote", "Once the printer jammed", "Before we broke for tea",
@@ -58,7 +58,7 @@ const ACTIONS = [
   "read out the attendance list", "asked whether the schedule still held", "sketched the layout on a napkin", "wondered aloud about the parking rules", "handed round a folder of printouts",
   "argued for a simpler arrangement", "recalled how the last attempt went", "offered to check the details by message", "pointed at a smudge on the screen", "suggested a shorter agenda next time",
   "collected the empty cups", "shared a photo from last spring", "found an error in the earlier figures", "proposed moving the discussion outdoors", "admitted to losing the original paperwork",
-  "complained about a stubborn draft from the window", "asked for the door to be propped ajar", "compared two versions of the same table", "volunteered to tidy the shared folder",
+  "complained about a stubborn draft from the hallway", "asked for the door to be propped ajar", "compared two versions of the same schedule", "volunteered to tidy the shared folder",
   "described an awkward phone call from the week before", "questioned a number nobody had verified", "passed around a bag of dried apricots", "wrote a reminder on the back of a receipt",
   "explained a shortcut for filing the forms", "mentioned a leaflet that had gone missing", "corrected the spelling of a surname", "reminded us about the deadline for replies",
   "lent out a spare cable", "checked the clock and sighed", "brought up an old rota nobody could find", "asked for a moment to think", "offered a plain summary of the story so far",

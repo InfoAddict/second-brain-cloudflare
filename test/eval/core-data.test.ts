@@ -7,8 +7,8 @@ import { readScopeWorkspaces } from "../../src/lib/scope";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
 import { auditQueries, haystackVocabulary } from "./corpus/audit";
 import { buildCorpus, loadCoreData } from "./corpus/build";
-import { COMMON_TOKENS } from "./corpus/haystack";
-import { IDENTITIES } from "./corpus/types";
+import { COMMON_TOKENS, DENSE_TOKENS } from "./corpus/haystack";
+import { IDENTITIES, WORKSPACES } from "./corpus/types";
 import { QUERY_CATEGORIES } from "./types";
 
 const DATA = resolve(import.meta.dirname, "data/core");
@@ -99,6 +99,24 @@ describe("core golden data", () => {
     for (const id of ["001", "021", "031"]) expect(outsider.has(`n-id-${id}-decoy`), id).toBe(true);
   });
 
+  it("gives each common-word query its own triple of dense words, found in its gold needle and no other", () => {
+    const dense = (text: string) => DENSE_TOKENS.filter(word => text.toLowerCase().includes(word));
+    const common = queries.filter(q => q.category === "common-word");
+    const triples = new Set<string>();
+    for (const q of common) {
+      const triple = q.text.split(" ").sort();
+      expect(triple.length, q.id).toBe(3);
+      expect(triple.every(word => (DENSE_TOKENS as readonly string[]).includes(word)), q.id).toBe(true);
+      triples.add(triple.join(","));
+      const gold = needles.find(n => n.id === q.gold[0].id)!;
+      expect(dense(gold.content).sort(), q.id).toEqual(triple);
+    }
+    expect(triples.size, "distinct triples").toBe(common.length);
+    const goldIds = new Set(common.map(q => q.gold[0].id));
+    // as substrings, so "timetable" or "newsletter" count
+    for (const n of needles.filter(n => !goldIds.has(n.id))) expect(dense(n.content).length, n.id).toBeLessThanOrEqual(2);
+  });
+
   it("keeps every rare and identifier key out of the haystack vocabulary", () => {
     const vocab = haystackVocabulary();
     for (const n of needles.filter(n => n.purpose === "rare-word" || n.purpose === "identifier")) {
@@ -122,6 +140,16 @@ describe("core golden data", () => {
       expect(new Set(spec.entries.map(e => e.id)).size).toBe(total);
       expect(spec.queries).toEqual(buildCorpus("core-1k").queries);
     }
+  });
+
+  it("draws the haystack at 45/45/10 across avery, company and blake, with nothing in the outsider tenant", () => {
+    const spec = buildCorpus("scale-5k");
+    const haystack = spec.entries.filter(e => e.id.startsWith("f-"));
+    const share = (workspaceId: string) => haystack.filter(e => e.workspaceId === workspaceId).length / haystack.length;
+    expect(share(WORKSPACES.avery)).toBeCloseTo(0.45, 1);
+    expect(share(WORKSPACES.company)).toBeCloseTo(0.45, 1);
+    expect(share(WORKSPACES.blake)).toBeCloseTo(0.1, 1);
+    expect(share(WORKSPACES.outsider)).toBe(0);
   });
 
   it("truncates the LIKE window only where intended: common token over 500 matches at 5k and 20k, under 500 at 1k", () => {

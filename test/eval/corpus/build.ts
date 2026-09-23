@@ -48,10 +48,9 @@ export function buildCorpus(id: CoreCorpusId): CorpusSpec {
     cjkRate: 0.08,
     longRate: 0.02,
     workspaces: [
-      { workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 50 },
-      { workspaceId: WORKSPACES.company, actorId: ACTORS.blake, weight: 35 },
+      { workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 45 },
+      { workspaceId: WORKSPACES.company, actorId: ACTORS.blake, weight: 45 },
       { workspaceId: WORKSPACES.blake, actorId: ACTORS.blake, weight: 10 },
-      { workspaceId: WORKSPACES.outsider, actorId: ACTORS.outsider, weight: 5 },
     ],
   });
   const entries = [...needleEntries, ...haystack];
