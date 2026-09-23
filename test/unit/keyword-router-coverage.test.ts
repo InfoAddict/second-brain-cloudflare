@@ -12,6 +12,7 @@ import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { resetDistillTotalCache } from "../../src/recall/distill";
 import { FTS_READY_KV_KEY } from "../../src/constants";
 import type { Env } from "../../src/env";
 import type { RecallDiagnostics } from "../../src/recall/types";
@@ -63,11 +64,13 @@ describe("keywordSearch's budget check needs df for every retrieval token", () =
   beforeEach(async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     sqlite = makeSqliteD1();
     env = recallEnv(sqlite);
     await initializeDatabase(env);
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   afterEach(() => {
     state.dropDfFor = null;

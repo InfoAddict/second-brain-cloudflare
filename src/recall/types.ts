@@ -64,6 +64,8 @@ export interface RecallDiagnostics {
   ftsUsed?: boolean;
   /** Why the keyword arm served FTS or LIKE on the last recall; memberFirst recalls never reach keywordSearch. */
   ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first";
+  /** T-0059: how df/total were obtained on the last recall's term distillation. */
+  distillSource?: "fts" | "like" | "shortcut";
 }
 
 export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"

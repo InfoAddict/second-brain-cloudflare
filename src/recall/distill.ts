@@ -1,18 +1,21 @@
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import {
+  FTS_MATCH_BUDGET,
+  FTS_READY_CACHE_MS,
   KEYWORD_MAX_TOKENS,
   MAX_QUERY_TERMS,
   QUERY_SATURATION_FRACTION,
 } from "../constants";
 import { readStreamText } from "../lib/ai";
 import type { Identity } from "../lib/identity";
-import { scopeWhereForRead } from "../lib/scope";
+import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { tokenizeQuery } from "../text/tokenize";
 import { extractHashtags } from "../text/hashtags";
 import { isTopicTag } from "../compression/eligibility";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { deterministicVariants } from "./query-profile";
+import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveRows } from "./fts";
 
 /**
  * `ctx` is optional only so this stays callable from tests and any future internal
@@ -76,11 +79,161 @@ export interface DistilledQuery {
   query: string;
   df: Map<string, number> | null;
   total: number | null;
+  /** How df/total were obtained: the FTS index, the LIKE full scan, or skipped (single term). */
+  distillSource: "fts" | "like" | "shortcut";
 }
 
 export interface TimeBounds {
   after?: number;
   before?: number;
+}
+
+// T-0059: the corpus-wide row count is the same number regardless of which
+// query asked for it, so it is cached per readable scope (identity, layer,
+// team) rather than re-scanned on every multi-word recall. Time-bounded
+// queries never read or write this map — their total is specific to the
+// bounds and would poison every other query sharing the scope key.
+interface ScopedTotalCacheEntry { total: number; at: number }
+const totalCache = new Map<string, ScopedTotalCacheEntry>();
+
+/** Test seam — the cache is module-scoped, same convention as fts.ts's readyCache. */
+export function resetDistillTotalCache(): void { totalCache.clear(); }
+
+function totalCacheKey(identity: Identity | undefined, only: "personal" | "company" | undefined, teamId: string | undefined): string {
+  return `${identity?.userId ?? ""}::${only ?? ""}::${teamId ?? ""}`;
+}
+
+/** Shared by both the FTS and LIKE df sources so their ranking can never drift apart. */
+function rankAndRebuild(
+  uniq: string[],
+  content: string[],
+  tokensOf: Map<string, string[]>,
+  df: Map<string, number>,
+  total: number,
+): string {
+  let candidates = uniq.filter(t => (df.get(t) ?? 0) / total <= QUERY_SATURATION_FRACTION);
+  if (!candidates.length) candidates = uniq;
+  const keep = new Set(
+    [...candidates].sort((a, b) => (df.get(a) ?? 0) - (df.get(b) ?? 0)).slice(0, MAX_QUERY_TERMS)
+  );
+  const rebuilt = [...new Set(content.filter(w => tokensOf.get(w)!.some(t => keep.has(t))))];
+  return rebuilt.length ? rebuilt.join(" ") : content.join(" ");
+}
+
+/** One term's scoped, time-bounded FTS MATCH count, capped at the saturation point. */
+function ftsTermCountStmt(
+  env: Env,
+  term: string,
+  bounds: Readonly<TimeBounds>,
+  scope: ScopeClause | null,
+  cap: number,
+) {
+  const match = ftsMatchQuery([term])!; // pre-filtered eligible by the caller
+  let timeWhere = "";
+  const timeBindings: number[] = [];
+  if (bounds.after !== undefined) { timeWhere += " AND e.created_at >= ?"; timeBindings.push(bounds.after); }
+  if (bounds.before !== undefined) { timeWhere += " AND e.created_at < ?"; timeBindings.push(bounds.before); }
+  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name. workspace_id exists only on entries, not on entries_fts's id/content columns, so the unqualified column in scope.clause resolves unambiguously to e.workspace_id in this join, same as keywordSearchFts in search.ts
+  return env.DB.prepare(
+    `SELECT count(*) AS n FROM (
+       SELECT 1 FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       LIMIT ?
+     )`
+  ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), cap);
+}
+
+/** Scoped, time-bounded COUNT(*), batched with the liveness check (one subrequest). */
+async function ftsScopedTotal(
+  env: Env,
+  bounds: Readonly<TimeBounds>,
+  scope: ScopeClause | null,
+): Promise<{ liveness: { name: string; sql: string | null }[] | undefined; total: number }> {
+  let where = "";
+  const bindings: number[] = [];
+  if (bounds.after !== undefined) { where += " created_at >= ?"; bindings.push(bounds.after); }
+  if (bounds.before !== undefined) { where += `${where ? " AND" : ""} created_at < ?`; bindings.push(bounds.before); }
+  if (scope) where += `${where ? " AND" : ""} ${scope.clause}`;
+  // scope-checked: the caller's clause IS applied when an identity is present — it is appended into `where` above; the lexer cannot see into a JS-assembled fragment
+  const [livenessResult, totalResult] = await env.DB.batch([
+    env.DB.prepare(FTS_LIVENESS_SQL),
+    env.DB.prepare(`SELECT COUNT(*) AS total FROM entries${where ? ` WHERE${where}` : ""}`)
+      .bind(...bindings, ...(scope?.bindings ?? [])),
+  ]);
+  const totalRow = totalResult.results?.[0] as Record<string, number> | undefined;
+  return {
+    liveness: livenessResult.results as { name: string; sql: string | null }[] | undefined,
+    total: (totalRow?.total as number) ?? 0,
+  };
+}
+
+/**
+ * The read-cost cap on a term's FTS count. Saturation alone (30% of the
+ * corpus) is not enough: keywordSearch's cost router (T-0058) sums these same
+ * df values against FTS_MATCH_BUDGET, an ABSOLUTE match-count threshold
+ * unrelated to corpus size. On a corpus under ~6,700 rows, 30% is smaller than
+ * the budget, so capping at the saturation point alone would report a common
+ * term as cheaper than it is and route an expensive query to FTS. Flooring
+ * the cap at FTS_MATCH_BUDGET + 1 keeps every count exact through the budget's
+ * own threshold — the only range the router's `dfSum > FTS_MATCH_BUDGET`
+ * comparison depends on — while still bounding the read on a saturating term
+ * in a large corpus.
+ */
+function saturationCap(total: number): number {
+  return Math.max(Math.floor(QUERY_SATURATION_FRACTION * total) + 1, FTS_MATCH_BUDGET + 1);
+}
+
+/**
+ * T-0059: df/total via the FTS index instead of a full LIKE scan. One batch
+ * when the scoped total is warm in cache (liveness + one MATCH count per
+ * term); two batches on a cold or time-bounded call (liveness + total, then
+ * the counts, since the counts' LIMIT cap needs total first). Returns null on
+ * any disqualifier (index not live, empty corpus) so the caller falls back to
+ * the existing LIKE statement.
+ */
+async function distillViaFts(
+  dfTerms: string[],
+  env: Env,
+  bounds: Readonly<TimeBounds>,
+  scope: ScopeClause | null,
+  identity: Identity | undefined,
+  only: "personal" | "company" | undefined,
+  teamId: string | undefined,
+): Promise<{ df: Map<string, number>; total: number } | null> {
+  const hasBounds = bounds.after !== undefined || bounds.before !== undefined;
+  const key = hasBounds ? null : totalCacheKey(identity, only, teamId);
+  const cached = key ? totalCache.get(key) : undefined;
+
+  let total: number;
+  let liveness: { name: string; sql: string | null }[] | undefined;
+  let countResults: { results?: unknown[] }[];
+
+  if (cached && Date.now() - cached.at < FTS_READY_CACHE_MS) {
+    total = cached.total;
+    const cap = saturationCap(total);
+    const results = await env.DB.batch([
+      env.DB.prepare(FTS_LIVENESS_SQL),
+      ...dfTerms.map(t => ftsTermCountStmt(env, t, bounds, scope, cap)),
+    ]);
+    liveness = results[0].results as { name: string; sql: string | null }[] | undefined;
+    countResults = results.slice(1);
+  } else {
+    const scoped = await ftsScopedTotal(env, bounds, scope);
+    liveness = scoped.liveness;
+    total = scoped.total;
+    if (key) totalCache.set(key, { total, at: Date.now() });
+    if (!isFtsLiveRows(liveness) || !total) return null;
+    const cap = saturationCap(total);
+    countResults = await env.DB.batch(dfTerms.map(t => ftsTermCountStmt(env, t, bounds, scope, cap)));
+  }
+
+  if (!isFtsLiveRows(liveness) || !total) return null;
+  const df = new Map(dfTerms.map((t, i) => {
+    const row = countResults[i].results?.[0] as Record<string, number> | undefined;
+    return [t, (row?.n as number) ?? 0];
+  }));
+  return { df, total };
 }
 
 export async function distillToRareTerms(
@@ -113,7 +266,7 @@ export async function distillToRareTerms(
   // Nothing to rank with at most one distinct term. A single whitespace word can
   // carry several terms once it is CJK; that case goes on to the scan.
   if (content.length <= 1 && uniq.length <= 1) {
-    return { query: content.length ? content.join(" ") : query, df: null, total: null };
+    return { query: content.length ? content.join(" ") : query, df: null, total: null, distillSource: "shortcut" };
   }
 
   // One bound parameter and one SUM column per term, so this scan is bounded by
@@ -124,6 +277,24 @@ export async function distillToRareTerms(
   // another workspace's rows must not be able to saturate a term out of (or
   // inflate a term's rarity within) this caller's query.
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
+
+  // T-0059: prefer the FTS index over the full LIKE scan when it is live and
+  // every term can be counted through it with no risk of a different answer
+  // than LIKE would give (ftsCountSafeToken — LIKE folds ASCII case only,
+  // trigram folds Unicode case). Any disqualifier, or a thrown error, falls
+  // through to the existing LIKE statement below, unchanged.
+  if (dfTerms.every(t => ftsEligibleToken(t) && ftsCountSafeToken(t)) && await ftsReady(env)) {
+    try {
+      const viaFts = await distillViaFts(dfTerms, env, bounds, scope, identity, only, teamId);
+      if (viaFts) {
+        const { df, total } = viaFts;
+        return { query: rankAndRebuild(uniq, content, tokensOf, df, total), df, total, distillSource: "fts" };
+      }
+    } catch (e) {
+      console.error("FTS distillation count failed (degrading to LIKE):", e);
+    }
+  }
+
   try {
     const sums = dfTerms.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
     let where = "";
@@ -142,17 +313,11 @@ export async function distillToRareTerms(
     // scope-checked: the caller's clause IS applied when an identity is present — it is appended into `where` above; the lexer cannot see into a JS-assembled fragment
     const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries${where ? ` WHERE${where}` : ""}`)
       .bind(...dfTerms.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? [])).first() as Record<string, number> | null;
-    if (!row || !row.total) return { query: content.join(" "), df: null, total: null };
+    if (!row || !row.total) return { query: content.join(" "), df: null, total: null, distillSource: "like" };
     const total = row.total;
     const df = new Map(dfTerms.map((t, i) => [t, (row[`d${i}`] as number) ?? 0]));
-    let candidates = uniq.filter(t => (df.get(t) ?? 0) / total <= QUERY_SATURATION_FRACTION);
-    if (!candidates.length) candidates = uniq;
-    const keep = new Set(
-      [...candidates].sort((a, b) => (df.get(a) ?? 0) - (df.get(b) ?? 0)).slice(0, MAX_QUERY_TERMS)
-    );
-    const rebuilt = [...new Set(content.filter(w => tokensOf.get(w)!.some(t => keep.has(t))))];
-    return { query: rebuilt.length ? rebuilt.join(" ") : content.join(" "), df, total };
+    return { query: rankAndRebuild(uniq, content, tokensOf, df, total), df, total, distillSource: "like" };
   } catch {
-    return { query: content.join(" "), df: null, total: null };
+    return { query: content.join(" "), df: null, total: null, distillSource: "like" };
   }
 }

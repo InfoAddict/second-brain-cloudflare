@@ -15,6 +15,7 @@ import { withFtsWriteGuard } from "../../src/db/fts-write-guard";
 import { setDbReady } from "../../src/runtime/state";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { resetDistillTotalCache } from "../../src/recall/distill";
 import { recallEntries } from "../../src/recall/search";
 import { STALENESS_AGE_MS } from "../../src/staleness/pass";
 import { FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
@@ -149,6 +150,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
     // suite exists to reproduce and fix through the write-path guard instead.
     setDbReady(true);
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -316,6 +318,7 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -405,6 +408,7 @@ describe("a corrupted index heals across nights (Task 5 end to end)", () => {
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -473,6 +477,7 @@ describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale in
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
@@ -533,6 +538,7 @@ describe("same-row content drift heals within ceil(N/window) nights (FIX 2 end t
   beforeEach(() => {
     setDbReady(true);
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 

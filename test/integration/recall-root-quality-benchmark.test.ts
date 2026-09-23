@@ -226,7 +226,7 @@ function expectSplitGates(split: RootQualitySplit, metrics: BenchmarkMetrics, ob
 describe("frozen recall root-quality fixture", () => {
   it("matches every declared intent to the runtime query profiler", () => {
     for (const c of ROOT_QUALITY_CASES) {
-      expect(buildQueryProfile(c.query, { query: c.query, df: null, total: null }).intent, caseId(c)).toBe(c.intent);
+      expect(buildQueryProfile(c.query, { query: c.query, df: null, total: null, distillSource: "shortcut" }).intent, caseId(c)).toBe(c.intent);
     }
   });
 

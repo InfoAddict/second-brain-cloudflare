@@ -14,6 +14,7 @@ import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { resetDistillTotalCache } from "../../src/recall/distill";
 import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY, KEYWORD_MAX_TOKENS } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
 import { CJK_RECALL_FIXTURE } from "../fixtures/cjk-recall";
@@ -53,6 +54,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   beforeEach(async () => {
     resetDatabaseInit();
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     sqlite = makeSqliteD1();
     env = recallEnv(sqlite);
     await initializeDatabase(env);
@@ -80,6 +82,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
 
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     const ftsDiagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: ftsDiagnostics });
     expect(ftsDiagnostics.ftsUsed).toBe(true);
@@ -89,6 +92,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("matches CJK substrings through the trigram index", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     // jp-29's query tokens ("データベース", "バックアップ") are both >= 3
     // codepoints, so they survive the trigram floor — unlike most of this
     // fixture's 2-character word segments (see jp-01/jp-02, used as distractors).
@@ -111,6 +115,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("applies time bounds and tenancy scope to FTS results", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     const now = 100_000;
     seedIn(sqlite, "in-scope", "ws-a", "quarterly roadmap notes", now);
     seedIn(sqlite, "foreign", "ws-b", "quarterly roadmap notes", now);
@@ -134,6 +139,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     sqlite.seed({ id: "peer", content: "violet residue", createdAt: 1001 });
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
 
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "violet", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
@@ -154,6 +160,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
       vi.setSystemTime(before);
       // Fresh cache was set moments ago in real time: still inside the TTL.
       resetFtsReadyMemo();
+      resetDistillTotalCache();
       await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
       const withinTtl: RecallDiagnostics = {};
       await recallEntries({ query: "violet", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics: withinTtl });
@@ -161,6 +168,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
 
       // Past the TTL the cached true expires: LIKE path serves the candidates.
       resetFtsReadyMemo();
+      resetDistillTotalCache();
       await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
       vi.setSystemTime(Date.now() + FTS_READY_CACHE_MS + 1);
       const afterTtl: RecallDiagnostics = {};
@@ -175,6 +183,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("falls back to LIKE when the FTS query throws", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     sqlite.seed({ id: "e1", content: "fallback safety content", createdAt: 1000 });
     await sqlite.db.exec(`DROP TABLE entries_fts`);
 
@@ -194,6 +203,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("stale read: ready flag still says 1 but a trigger is gone — recall discards FTS rows and uses LIKE", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     sqlite.seed({ id: "old", content: "searchable marker", createdAt: 1000 });
     await sqlite.db.exec(`DROP TRIGGER entries_fts_insert`);
     // No trigger fires for this insert: entries_fts never learns about it,
@@ -219,6 +229,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("wrong-body trigger: right name, tampered body — recall discards FTS rows and uses LIKE", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     sqlite.seed({ id: "old", content: "old searchable", createdAt: 1000 });
     await sqlite.db.exec("DROP TRIGGER entries_fts_insert");
     await sqlite.db.exec(
@@ -245,6 +256,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("ordinary table plus named triggers: liveness rejects it on definition, MATCH would have failed anyway", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     await sqlite.db.exec(
       "DROP TRIGGER entries_fts_insert; DROP TRIGGER entries_fts_update; DROP TRIGGER entries_fts_delete; DROP TABLE entries_fts;",
     );
@@ -266,6 +278,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("keys the FTS join on rowid as well as id", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     // Live peer must survive in the LIMIT window, and an id with several FTS
     // rows (a stale duplicate at another rowid) may not fill two slots.
     sqlite.seed({ id: "duplicate", content: "violet marker", createdAt: 1000 });
@@ -295,6 +308,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("drops an FTS row whose id disagrees with the entry at its rowid", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     // This drift variant occupies the rowid of a live entry but claims another
     // id. Only the id half of the join can tell it apart from that entry, so a
     // rowid-only join would resurrect the wrong entry.
@@ -317,6 +331,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     sqlite.seed({ id: "before-1", content: "violet marker", createdAt: 101 });
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
 
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "violet", topK: 5, before: 102, synthesize: false }, env, ctx, undefined, { diagnostics });
@@ -329,6 +344,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     sqlite.seed({ id: "at-before", content: "placeholder", createdAt: 1 });
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     const limit = 5;
     for (let i = 0; i < limit + 3; i++) sqlite.seed({ id: `row-${i}`, content: "violet marker", createdAt: 1000 + i });
 
@@ -363,12 +379,14 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: KEYWORD_MAX_TOKENS };
     for (const query of ["v1 widget", "東京 widget"]) {
       resetFtsReadyMemo();
+      resetDistillTotalCache();
       await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
       const likeDiagnostics: RecallDiagnostics = {};
       await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: likeDiagnostics });
       expect(likeDiagnostics.ftsUsed).toBe(false);
 
       resetFtsReadyMemo();
+      resetDistillTotalCache();
       await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
       const ftsDiagnostics: RecallDiagnostics = {};
       await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: ftsDiagnostics });
@@ -377,6 +395,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
       expect([...ftsDiagnostics.keywordIds!].sort()).toEqual([...likeDiagnostics.keywordIds!].sort());
     }
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "v1 widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics });
@@ -396,6 +415,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(likeDiagnostics.ftsUsed).toBe(false);
 
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     const readyDiagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "ab\0cd widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: readyDiagnostics });
@@ -457,6 +477,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     // FTS: bm25 rank position must survive fusion, B leads.
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     const ftsDiagnostics: RecallDiagnostics = {};
     const fts = await recallEntries({ query: "dashboard", topK: 5, synthesize: false }, env, ctx, cfg, { diagnostics: ftsDiagnostics });
     expect(ftsDiagnostics.ftsUsed).toBe(true);
@@ -551,6 +572,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("routes a query whose df sum exceeds the budget to LIKE with ftsRoute like-match-budget", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
 
     const diagnostics: RecallDiagnostics = {};
@@ -564,6 +586,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("keeps a rare-token query on FTS with ftsRoute fts", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     sqlite.seed({ id: "hit", content: "violet orchid ledger", createdAt: 1 });
     sqlite.seed({ id: "filler", content: "unrelated remark", createdAt: 2 });
 
@@ -577,6 +600,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("keeps routing on FTS when df is unknown for the query", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     // A 2,100-row corpus of the query's own token: had the scan run, the sum
     // would sit far over the budget — but a single-token query skips it
     // (distillToRareTerms early-exits with df null), so today's FTS rule holds.
@@ -592,6 +616,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("sits exactly on the budget: sum == budget stays on FTS, sum == budget+1 routes to LIKE", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     // Two tokens at df 1,000 each: the sum is exactly FTS_MATCH_BUDGET.
     for (let i = 0; i < 1000; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
 
@@ -615,6 +640,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   it("routes the plural form like its singular once variants are counted", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widgets gadgets ledger", createdAt: i + 1 });
 
     const diagnostics: RecallDiagnostics = {};

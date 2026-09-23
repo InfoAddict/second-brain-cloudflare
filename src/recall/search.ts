@@ -317,6 +317,7 @@ export async function recallEntries(
     internal.diagnostics.lexicalArmSkipped = profile.retrievalTokens.length === 0;
     internal.diagnostics.corpusIdfUsed = !!distilled.df && !!distilled.total
       && profile.lexicalTokens.every(t => distilled.df!.has(t));
+    internal.diagnostics.distillSource = distilled.distillSource;
   }
   markStage("setup");
 

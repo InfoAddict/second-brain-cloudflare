@@ -312,7 +312,7 @@ describe("sealed hidden recall validation regression", () => {
     );
     const funnel = {
       runtimeIntentMismatches: HIDDEN_VALIDATION_CASES.flatMap(c => {
-        const runtime = buildQueryProfile(c.query, { query: c.query, df: null, total: null }).intent;
+        const runtime = buildQueryProfile(c.query, { query: c.query, df: null, total: null, distillSource: "shortcut" }).intent;
         return runtime === c.intent ? [] : [{ id: caseId(c), declared: c.intent, runtime }];
       }),
       candidateGenerationMisses: observations.filter(row => !row.candidateAvailable).map(row => row.id),

@@ -25,6 +25,21 @@ export function ftsMatchQuery(tokens: string[]): string | null {
   return eligible.map(t => `"${t.replaceAll(`"`, `""`)}"`).join(" OR ");
 }
 
+// LIKE folds only ASCII case; the trigram tokenizer's casefold covers all of
+// Unicode (verified against real node:sqlite: content "RESUME" with an
+// uppercase accented E matches a lowercase-accented-E MATCH query, but not a
+// LIKE '%...%' with the same lowercase term). A term is safe to COUNT via the
+// FTS index only when that gap can never move its count: no non-ASCII
+// character with a case distinction (CJK and digits have none and are
+// unaffected either way). T-0059's equivalence proof requires FTS df to equal
+// LIKE df for every uncapped term, so a term this returns false for is routed
+// back to the LIKE scan instead of risking a silently different df.
+const NON_ASCII = /[^\x00-\x7F]/;
+export function ftsCountSafeToken(t: string): boolean {
+  if (!NON_ASCII.test(t)) return true;
+  return [...t].every(ch => !NON_ASCII.test(ch) || ch.toLowerCase() === ch.toUpperCase());
+}
+
 // The readiness answer is cached in BOTH directions for FTS_READY_CACHE_MS, so
 // a stable warm isolate pays one KV read per window in either state. False must
 // be cached too: without it every recall on a cold-but-backfilling brain pays a

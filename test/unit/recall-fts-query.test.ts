@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { FTS_LIVENESS_SQL, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveRows, resetFtsReadyMemo } from "../../src/recall/fts";
+import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveRows, resetFtsReadyMemo } from "../../src/recall/fts";
+import { resetDistillTotalCache } from "../../src/recall/distill";
 import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
 import { tokenizeQuery } from "../../src/text/tokenize";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -44,17 +45,56 @@ describe("ftsMatchQuery", () => {
   });
 });
 
+describe("ftsCountSafeToken", () => {
+  it("accepts plain ASCII terms", () => {
+    expect(ftsCountSafeToken("dashboard")).toBe(true);
+    expect(ftsCountSafeToken("v1.9")).toBe(true);
+    expect(ftsCountSafeToken("#149")).toBe(true);
+  });
+  it("accepts CJK, which has no case to fold", () => {
+    expect(ftsCountSafeToken("認証")).toBe(true);
+    expect(ftsCountSafeToken("東京都庁")).toBe(true);
+  });
+  it("rejects a term with a cased non-ASCII character (LIKE folds ASCII case only; trigram folds wider)", () => {
+    expect(ftsCountSafeToken("café")).toBe(false);
+    expect(ftsCountSafeToken("résumé")).toBe(false);
+    expect(ftsCountSafeToken("naïve")).toBe(false);
+  });
+  it("accepts non-ASCII punctuation and symbols with no case distinction", () => {
+    expect(ftsCountSafeToken("—dash—")).toBe(true);
+    expect(ftsCountSafeToken("100€")).toBe(true);
+  });
+  it("proves the divergence this guard exists for, against real FTS5 trigram", () => {
+    // SQLite's LIKE folds ASCII case only; the trigram tokenizer's casefold
+    // (case_sensitive defaults to 0) reaches accented Latin too. A row
+    // spelled with the uppercase accented form matches a MATCH query for the
+    // lowercase term, but not the equivalent LIKE pattern — exactly the gap
+    // ftsCountSafeToken exists to route around.
+    const db = new DatabaseSync(":memory:");
+    db.exec(`CREATE VIRTUAL TABLE probe USING fts5(content, tokenize='trigram')`);
+    db.prepare(`INSERT INTO probe(content) VALUES(?)`).run("the RÉSUMÉ was updated");
+    const ftsHit = db.prepare(`SELECT rowid FROM probe WHERE probe MATCH ?`).all(ftsMatchQuery(["résumé"])!);
+    const likeHit = db.prepare(`SELECT rowid FROM probe WHERE content LIKE ?`).all("%résumé%");
+    expect(ftsHit).toHaveLength(1);
+    expect(likeHit).toHaveLength(0); // LIKE never sees it: this is the divergence, not a bug in either operator
+    expect(ftsCountSafeToken("résumé")).toBe(false); // and this is why T-0059 routes it to the LIKE count instead
+    db.close();
+  });
+});
+
 describe("ftsReady", () => {
   // The readiness answer is cached in both directions for FTS_READY_CACHE_MS:
   // one KV read per recall window instead of one per request. A failure is
   // never cached — the next call retries.
   beforeEach(() => {
     resetFtsReadyMemo();
+    resetDistillTotalCache();
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
     resetFtsReadyMemo();
+    resetDistillTotalCache();
   });
   const envWith = (value: string | null, fail = false) => ({
     OAUTH_KV: { get: fail ? vi.fn().mockRejectedValue(new Error("kv down")) : vi.fn().mockResolvedValue(value) },

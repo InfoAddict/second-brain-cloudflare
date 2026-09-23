@@ -12,13 +12,13 @@ describe("recall query profile", () => {
     ["what is the current archive direction", "current"],
     ["quartz archive architecture", "direct"],
   ] as const)("classifies %s", (query, intent) => {
-    expect(buildQueryProfile(query, { query: "backend platform", df: null, total: null }).intent).toBe(intent);
+    expect(buildQueryProfile(query, { query: "backend platform", df: null, total: null, distillSource: "shortcut" }).intent).toBe(intent);
   });
 
   it("keeps semantic and lexical representations separate", () => {
     const profile = buildQueryProfile(
       "why did we change the quartz ledger direction",
-      { query: "quartz ledger", df: null, total: null },
+      { query: "quartz ledger", df: null, total: null, distillSource: "shortcut" },
     );
     expect(profile.semanticQuery).toBe("why did we change the quartz ledger direction");
     expect(profile.lexicalQuery).toBe("quartz ledger");
@@ -33,7 +33,7 @@ describe("recall query profile", () => {
   it("bounds full cleaned-query evidence tokens deterministically", () => {
     const query = Array.from({ length: 20 }, (_, index) => `signal${index}`).join(" ");
 
-    expect(buildQueryProfile(query, { query: "signal19 signal18 signal17", df: null, total: null }).evidenceTokens)
+    expect(buildQueryProfile(query, { query: "signal19 signal18 signal17", df: null, total: null, distillSource: "shortcut" }).evidenceTokens)
       .toEqual(Array.from({ length: 16 }, (_, index) => `signal${index}`));
   });
 
@@ -43,7 +43,7 @@ describe("recall query profile", () => {
     ]);
     const profile = buildQueryProfile(
       "why did the quartz ledger change for support protocol",
-      { query: "ledger", df, total: 100 },
+      { query: "ledger", df, total: 100, distillSource: "like" },
     );
 
     expect(profile.retrievalTokens).toEqual(["ledger", "support", "protocol", "quartz", "change"]);
@@ -52,7 +52,7 @@ describe("recall query profile", () => {
   it("preserves identifier-shaped anchors within the existing token cap", () => {
     const query = "why issue #311 changed v2.3.2 "
       + Array.from({ length: 30 }, (_, index) => `signal${index}`).join(" ");
-    const tokens = buildQueryProfile(query, { query: "changed", df: null, total: null }).retrievalTokens;
+    const tokens = buildQueryProfile(query, { query: "changed", df: null, total: null, distillSource: "shortcut" }).retrievalTokens;
 
     expect(tokens).toEqual(expect.arrayContaining(["#311", "v2.3.2"]));
     expect(tokens).toHaveLength(16);
@@ -61,7 +61,7 @@ describe("recall query profile", () => {
   it("uses bounded deterministic variants without replacing original evidence", () => {
     const tokens = buildQueryProfile(
       "Did North Harbor teams review launch-plans on June 3?",
-      { query: "review", df: null, total: null },
+      { query: "review", df: null, total: null, distillSource: "shortcut" },
     ).retrievalTokens;
 
     expect(tokens.slice(0, 6)).toEqual(["review", "launch-plans", "north", "harbor", "teams", "june"]);
@@ -73,7 +73,7 @@ describe("recall query profile", () => {
 
   it("never lets variants displace the capped original token set", () => {
     const query = Array.from({ length: 20 }, (_, index) => `records${index}`).join(" ");
-    const tokens = buildQueryProfile(query, { query: "records19", df: null, total: null }).retrievalTokens;
+    const tokens = buildQueryProfile(query, { query: "records19", df: null, total: null, distillSource: "shortcut" }).retrievalTokens;
 
     expect(tokens).toHaveLength(16);
     expect(tokens[0]).toBe("records19");

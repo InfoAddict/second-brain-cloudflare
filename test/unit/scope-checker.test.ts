@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (127 queries, 63 exceptions, 7 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (129 queries, 63 exceptions, 9 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1201,7 +1201,10 @@ describe("the checker over the real source tree", () => {
     // count-parity SELECT, the rowid spot-check JOIN, and the orphan-cleanup
     // DELETE — all deployment-wide and keyed on entries.rowid, same exemption
     // shape as Task 4's backfill statements above.
-    ).toEqual({ queries: 127, exempt: 63, checked: 7, outerJoin: 1 });
+    // Deliberate: +2 queries and +2 scope-checked for T-0059 (src/recall/distill.ts):
+    // the FTS per-term MATCH count and the scoped total, both built the same
+    // JS-assembled way as the existing LIKE df scan's `where` above them.
+    ).toEqual({ queries: 129, exempt: 63, checked: 9, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
