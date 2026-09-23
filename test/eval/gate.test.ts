@@ -9,7 +9,7 @@ function report(name: string, tweak: (i: number, r: QueryResult) => void = () =>
       const r: QueryResult = {
         queryId: `q${i}`, category: QUERY_CATEGORIES[i % QUERY_CATEGORIES.length], clusterKey: `q${i}`, rankedIds: [],
         metrics: { recall5: 0.5, recall10: 0.5, mrr10: 0.5, ndcg10: 0.5 },
-        cost: { d1Statements: 8, d1RowsRead: 1000, aiCalls: 1, embeddingCalls: 1, vectorizeQueries: 1, kvReads: 1, neurons: 2, wallMs: 50 },
+        cost: { d1Statements: 8, d1RowsRead: 1000, aiCalls: 1, embeddingCalls: 1, vectorizeQueries: 1, kvReads: 1, neurons: 2, neuronsEstimated: false, wallMs: 50 },
         leaked: [],
       };
       tweak(i, r);

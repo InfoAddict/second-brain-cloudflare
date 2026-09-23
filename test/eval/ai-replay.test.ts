@@ -278,7 +278,8 @@ describe("pricing and token estimates", () => {
     const replay = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "c.jsonl")], undefined, { root }), mode: "replay" });
     await replay.ai.run(LLM as never, input as never);
     expect(replay.drainCalls()[0].neurons).toBeCloseTo(recorded, 12);
-    expect(recorded).toBeCloseTo(estimateNeurons(LLM, "hi", "x".repeat(4000)), 12);
+    expect(recorded).toBeCloseTo((1 * 24545 + 1000 * 77273) / 1_000_000, 12);
+    expect(record.drainCalls()).toEqual([]);
   });
 
   it("reserves a configured maximum output before the live call and settles to the actual spend", async () => {
@@ -291,7 +292,7 @@ describe("pricing and token estimates", () => {
     const budget = new NeuronBudget(1000);
     const roomy = makeReplayAi({ store: store(root, "b.jsonl"), mode: "record", recordLlm: true, live, maxOutputTokens: 1000, budget });
     await roomy.ai.run(LLM as never, input as never);
-    expect(budget.spent).toBeCloseTo(estimateNeurons(LLM, "hi", "ok"), 12);
+    expect(budget.spent).toBeCloseTo((24545 + 77273) / 1_000_000, 12);
   });
 
   it("refunds the reservation when the live call fails", async () => {
@@ -306,6 +307,59 @@ describe("pricing and token estimates", () => {
       expect(estimateTokens(text)).toBeGreaterThanOrEqual(Buffer.byteLength(text));
     }
     expect(estimateTokens("😀".repeat(1000))).toBe(4000);
+  });
+
+  it("records provider usage for embeddings and reports its exact neurons in record and replay", async () => {
+    const root = tmp();
+    const input = embedInput("a".repeat(400));
+    const live = { run: vi.fn(async () => ({ data: [[0.5]], usage: { prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 } })) };
+    const budget = new NeuronBudget(100);
+    const record = makeReplayAi({ store: store(root, "usage.jsonl"), mode: "record", live, budget });
+    await record.ai.run(MODEL as never, input as never);
+    const expected = 7 * 1841 / 1_000_000;
+    expect(record.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: false, source: "live" }]);
+    expect(budget.spent).toBeCloseTo(expected, 12);
+    const cached = JSON.parse(rows(join(cacheOf(root), "usage.jsonl"))[0]);
+    expect(cached.v.usage).toEqual({ prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 });
+    const replay = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "usage.jsonl")], undefined, { root }), mode: "replay" });
+    await replay.ai.run(MODEL as never, input as never);
+    expect(replay.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: false, source: "replay" }]);
+  });
+
+  it("prices the LLM's prompt and completion token usage separately", async () => {
+    const root = tmp();
+    const input = { messages: [{ content: "hello" }], stream: false };
+    const record = makeReplayAi({ store: store(root, "llm-usage.jsonl"), mode: "record", recordLlm: true,
+      live: { run: async () => ({ response: "a".repeat(4000), usage: { prompt_tokens: 9, completion_tokens: 13, total_tokens: 22 } }) } });
+    await record.ai.run(LLM as never, input as never);
+    const expected = (9 * 24545 + 13 * 77273) / 1_000_000;
+    expect(record.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: false }]);
+    const replay = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "llm-usage.jsonl")], undefined, { root }), mode: "replay" });
+    await replay.ai.run(LLM as never, input as never);
+    expect(replay.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: false }]);
+  });
+
+  it("labels a cache entry without usage as estimated and uses realistic Latin pricing", async () => {
+    const root = tmp();
+    const input = embedInput("a".repeat(400));
+    const record = makeReplayAi({ store: store(root, "no-usage.jsonl"), mode: "record", live: fakeLive([1]) });
+    await record.ai.run(MODEL as never, input as never);
+    const expected = 100 * 1841 / 1_000_000;
+    expect(record.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: true, source: "live" }]);
+    const replay = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "no-usage.jsonl")], undefined, { root }), mode: "replay" });
+    await replay.ai.run(MODEL as never, input as never);
+    expect(replay.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: true, source: "replay" }]);
+  });
+
+  it("reserves the byte-count amount before live despite a lower reported fallback", async () => {
+    const root = tmp();
+    const live = fakeLive([1]);
+    const reported = 100 * 1841 / 1_000_000;
+    const reserved = 400 * 1841 / 1_000_000;
+    const record = makeReplayAi({ store: store(root, "reservation.jsonl"), mode: "record", live,
+      budget: new NeuronBudget((reported + reserved) / 2) });
+    await expect(record.ai.run(MODEL as never, embedInput("a".repeat(400)) as never)).rejects.toThrow(/budget/);
+    expect(live.run).not.toHaveBeenCalled();
   });
 });
 
@@ -328,6 +382,13 @@ describe("replay inputs", () => {
 });
 
 describe("makeRestAi", () => {
+  it("returns the provider's result.usage from REST", async () => {
+    const expected = { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 };
+    const rest = makeRestAi({ accountId: "acct", apiToken: "token", maxRetries: 0,
+      fetchImpl: (async () => new Response(JSON.stringify({ success: true, result: { response: "ok", usage: expected } }))) as never });
+    expect(await rest.run(LLM, { messages: [{ content: "hi" }] })).toMatchObject({ usage: expected });
+  });
+
   it("retries 429 with backoff, sends the token only in the header, and never echoes it in errors", async () => {
     const calls: RequestInit[] = [];
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {

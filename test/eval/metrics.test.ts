@@ -40,11 +40,12 @@ describe("metrics", () => {
     const base = (rows: number | null): QueryResult => ({
       queryId: "q", category: "rare-word", clusterKey: "q", rankedIds: [],
       metrics: { recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 },
-      cost: { d1Statements: 8, d1RowsRead: rows, aiCalls: 1, embeddingCalls: 1, vectorizeQueries: 1, kvReads: 1, neurons: 2, wallMs: 10 },
+      cost: { d1Statements: 8, d1RowsRead: rows, aiCalls: 1, embeddingCalls: 1, vectorizeQueries: 1, kvReads: 1, neurons: 2, neuronsEstimated: rows === null, wallMs: 10 },
       leaked: [],
     });
     expect(summarize([base(100), base(300)]).overall.d1RowsRead).toEqual({ mean: 200, p50: 100, p95: 300 });
     expect(summarize([base(100), base(null)]).overall.d1RowsRead).toBeNull();
     expect(summarize([base(1)]).byCategory["rare-word"]?.n).toBe(1);
+    expect(summarize([base(100), base(null)]).overall.estimatedNeuronQueries).toBe(1);
   });
 });

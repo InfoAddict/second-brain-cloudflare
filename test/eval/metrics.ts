@@ -54,6 +54,7 @@ export interface Summary {
   d1RowsRead: Dist | null;
   aiCalls: Dist;
   neurons: Dist;
+  estimatedNeuronQueries: number;
   wallMs: Dist;
   leaks: number;
   errors: number;
@@ -73,6 +74,7 @@ function summarizeGroup(results: readonly QueryResult[]): Summary {
     d1RowsRead: rows.length && rows.every((v): v is number => v !== null) ? dist(rows) : null,
     aiCalls: dist(results.map(r => r.cost.aiCalls)),
     neurons: dist(results.map(r => r.cost.neurons)),
+    estimatedNeuronQueries: results.filter(r => r.cost.neuronsEstimated).length,
     wallMs: dist(results.map(r => r.cost.wallMs)),
     leaks: results.reduce((s, r) => s + r.leaked.length, 0),
     errors: results.filter(r => r.error).length,

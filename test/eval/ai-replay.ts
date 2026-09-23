@@ -74,7 +74,38 @@ export function estimateNeurons(model: string, inputText: string, outputText = "
   return (estimateTokens(inputText) * rate.inputPerMillionTokens + estimateTokens(outputText) * (rate.outputPerMillionTokens ?? 0)) / 1_000_000;
 }
 
-type Stored = { f32: string[] } | { text: string } | { json: unknown };
+/** Provider counts, when the /ai/run result includes usage (LLM responses do; embeddings may not). */
+type TokenUsage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+type Stored = ({ f32: string[] } | { text: string } | { json: unknown }) & { usage?: TokenUsage };
+
+const CJK = /[぀-ヿ㐀-鿿가-힯]/u;
+
+/** Typical tokens for reporting when the provider omits usage; never used to reserve a budget. */
+function reportedTokens(text: string): number {
+  let latin = 0, cjk = 0, emoji = 0;
+  for (const ch of text) {
+    if (CJK.test(ch)) cjk++;
+    else if ((ch.codePointAt(0) ?? 0) > 0xffff) emoji += 2;
+    else latin++;
+  }
+  return Math.ceil(latin / 4 + cjk + emoji);
+}
+
+function validTokens(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function providerUsage(result: unknown): TokenUsage | undefined {
+  if (!result || typeof result !== "object" || !("usage" in result)) return;
+  const raw = (result as { usage?: unknown }).usage;
+  if (!raw || typeof raw !== "object") return;
+  const usage = raw as Record<string, unknown>;
+  const out: TokenUsage = {};
+  if (validTokens(usage.prompt_tokens)) out.prompt_tokens = usage.prompt_tokens;
+  if (validTokens(usage.completion_tokens)) out.completion_tokens = usage.completion_tokens;
+  if (validTokens(usage.total_tokens)) out.total_tokens = usage.total_tokens;
+  return Object.keys(out).length ? out : undefined;
+}
 
 const toBase64 = (row: number[]) => Buffer.from(new Float32Array(row).buffer).toString("base64");
 function fromBase64(b64: string): number[] {
@@ -392,7 +423,36 @@ function reserveNeurons(model: string, inputText: string, outputTokens: number):
   return (estimateTokens(inputText) * rate.inputPerMillionTokens + outputTokens * (rate.outputPerMillionTokens ?? 0)) / 1_000_000;
 }
 
-export interface AiCall { model: string; kind: "embedding" | "llm" | "other"; neurons: number; source: "replay" | "live" | "stub" | "dry" }
+type AiKind = "embedding" | "llm" | "other";
+
+/** Billed-token report. A cache without usage remains replayable, with its estimate labeled. */
+function reportedNeurons(model: string, kind: AiKind, inputText: string, stored?: Stored): { neurons: number; estimated: boolean } {
+  const rate = NEURON_RATES[model];
+  if (!rate) throw new Error(`no neuron rate for ${model}: add it to NEURON_RATES (test/eval/ai-replay.ts) before running this variant`);
+  const usage = stored?.usage;
+  const prompt = usage?.prompt_tokens ?? (kind === "llm" ? undefined : usage?.total_tokens);
+  const completion = kind === "llm"
+    ? usage?.completion_tokens ?? (prompt !== undefined && usage?.total_tokens !== undefined && usage.total_tokens >= prompt
+      ? usage.total_tokens - prompt : undefined)
+    : 0;
+  if (prompt !== undefined && completion !== undefined) {
+    return { neurons: (prompt * rate.inputPerMillionTokens + completion * (rate.outputPerMillionTokens ?? 0)) / 1_000_000, estimated: false };
+  }
+  const output = stored && "text" in stored ? stored.text : "";
+  return {
+    neurons: (reportedTokens(inputText) * rate.inputPerMillionTokens + reportedTokens(output) * (rate.outputPerMillionTokens ?? 0)) / 1_000_000,
+    estimated: true,
+  };
+}
+
+export interface AiCall {
+  model: string;
+  kind: AiKind;
+  neurons: number;
+  /** True when the provider omitted complete usage; the reported cost is an approximation. */
+  neuronsEstimated: boolean;
+  source: "replay" | "live" | "stub" | "dry";
+}
 export interface ReplayAi {
   ai: Ai;
   /** Calls since the last drain; the runner drains once per query. */
@@ -424,9 +484,10 @@ function respond(input: AiInput, stored: Stored): unknown {
 }
 
 function encode(kind: AiCall["kind"], result: any): Stored {
-  if (kind === "embedding") return { f32: (result.data as number[][]).map(toBase64) };
-  if (kind === "llm") return { text: String(result?.response ?? result?.choices?.[0]?.message?.content ?? "") };
-  return { json: result };
+  const usage = providerUsage(result);
+  if (kind === "embedding") return { f32: (result.data as number[][]).map(toBase64), ...(usage && { usage }) };
+  if (kind === "llm") return { text: String(result?.response ?? result?.choices?.[0]?.message?.content ?? ""), ...(usage && { usage }) };
+  return { json: result, ...(usage && { usage }) };
 }
 
 export function makeReplayAi(opts: {
@@ -447,22 +508,24 @@ export function makeReplayAi(opts: {
     const kind = kindOf(input);
     const key = replayKey(model, input);
     const text = inputText(kind, input);
-    // Reporting always prices the actual cached or returned output, so record and replay agree.
-    const price = (stored?: Stored) => estimateNeurons(model, text, stored && "text" in stored ? stored.text : "");
+    const price = (stored?: Stored) => reportedNeurons(model, kind, text, stored);
     const hit = opts.store.get(key);
     if (hit) {
-      calls.push({ model, kind, neurons: price(hit), source: "replay" });
+      const cost = price(hit);
+      calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: "replay" });
       return respond(input, hit);
     }
     const preview = text.slice(0, 60).replace(/\s+/g, " ");
     if (kind === "llm" && (opts.mode === "replay" || !opts.recordLlm)) {
-      calls.push({ model, kind, neurons: estimateNeurons(model, text), source: "stub" });
+      const cost = price();
+      calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "stub" });
       return input.stream ? sseStream("") : { response: "" };
     }
     if (opts.mode === "dry") {
       const neurons = estimateNeurons(model, text);
       misses.set(key, { model, preview, neurons });
-      calls.push({ model, kind, neurons, source: "dry" });
+      const cost = price();
+      calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "dry" });
       if (kind === "embedding") return { data: [hashVector(text, EMBEDDING_DIMS[model] ?? 384)] };
       if (kind === "llm") return input.stream ? sseStream("") : { response: "" };
       if (opts.dryOther) return opts.dryOther(model, input);
@@ -482,10 +545,11 @@ export function makeReplayAi(opts: {
         opts.budget?.refund(reserved);
         throw e;
       }
-      opts.budget?.settle(reserved, price(fresh));
+      opts.budget?.settle(reserved, price(fresh).neurons);
       return fresh;
     });
-    calls.push({ model, kind, neurons: price(stored), source: ranLive ? "live" : "replay" });
+    const cost = price(stored);
+    calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
     return respond(input, stored);
   };
   return {

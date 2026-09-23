@@ -35,8 +35,10 @@ export interface CostSample {
   embeddingCalls: number;
   vectorizeQueries: number;
   kvReads: number;
-  /** Estimated from the AI call log and NEURON_RATES; replayed calls still count. */
+  /** Provider usage when available, otherwise a labeled estimate; replayed calls still count. */
   neurons: number;
+  /** True if any call contributing to neurons lacked provider token usage. */
+  neuronsEstimated: boolean;
   wallMs: number;
 }
 
