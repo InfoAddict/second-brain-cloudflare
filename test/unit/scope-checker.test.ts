@@ -1175,7 +1175,11 @@ describe("the checker over the real source tree", () => {
     // (src/recall/search.ts, FTS5 lexical arm Task 3): its scope clause is a
     // JS-assembled ` AND ${scope.clause}` fragment, same shape as the other
     // scope-checked keyword-arm queries in this file.
-    ).toEqual({ queries: 118, exempt: 54, checked: 7, outerJoin: 1 });
+    // Deliberate: +3 queries and +3 scope-exempt for the FTS nightly backfill
+    // (src/db/fts-backfill.ts, Task 4): the rowid-keyset SELECT and the
+    // delete-then-insert batch's two statements, all cron, keyed on rowids
+    // that carry no workspace scope by construction.
+    ).toEqual({ queries: 121, exempt: 57, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

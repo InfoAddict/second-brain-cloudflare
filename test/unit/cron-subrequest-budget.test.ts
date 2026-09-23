@@ -44,7 +44,14 @@ import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
 // (config:overrides), its own cursor KV read (when:cursor), and the one
 // prefilter SELECT. Still nowhere near the platform's real 1,000-subrequest
 // ceiling.
-const NIGHTLY_D1_STATEMENT_BUDGET = 53;
+// MOVED 53 -> 57: runFtsMaintenance runs after the when pass and adds four
+// statements on the measured night — the ready-flag KV GET, the cursor KV
+// GET, the rowid-keyset SELECT, and the ready KV PUT. The two-statement
+// delete-then-insert batch and the cursor KV PUT only fire on a night with
+// pre-FTS rows to index, which this double's rowid SELECT cannot produce
+// (it returns no rows), so the measured ledger shows 4, not the real-D1
+// worst case of 6 — the exact pins below are the tight guard for that.
+const NIGHTLY_D1_STATEMENT_BUDGET = 57;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -269,10 +276,11 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin, not just the ceiling: 11 D1 statements (unchanged from before
     // the night-summary recorder) plus the ONE OAUTH_KV.put it adds per
     // maintenance invocation, plus when-extraction's fixed 3-statement
-    // baseline (see NIGHTLY_D1_STATEMENT_BUDGET's comment). If this number
-    // moves, say why in the same commit, see the scope-checker test's
-    // convention for this pattern.
-    expect(statements.length).toBe(15);
+    // baseline (see NIGHTLY_D1_STATEMENT_BUDGET's comment), plus FTS
+    // maintenance's 4 (ready KV GET, cursor KV GET, rowid SELECT, ready KV
+    // PUT). If this number moves, say why in the same commit, see the
+    // scope-checker test's convention for this pattern.
+    expect(statements.length).toBe(19);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -290,10 +298,10 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
-    // Exact pin: the same 15 as an ordinary night, plus the ONE dangling-edge
+    // Exact pin: the same 19 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(16);
+    expect(statements.length).toBe(20);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

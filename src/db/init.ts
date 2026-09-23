@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { FTS_READY_KV_KEY } from "../constants";
 
 // The schema work below is idempotent but not free. All four nightly jobs run inside a
 // single scheduled() invocation and therefore share one subrequest budget, and each of
@@ -568,5 +569,18 @@ async function applySchema(env: Env): Promise<void> {
     // DDL keeps the trigger as one SQLite statement.
     if (kindOf(ddl) === "trigger") await env.DB.prepare(ddl).run();
     else await env.DB.exec(ddl);
+  }
+
+  // Brand-new brain: entries did not exist before this pass, so there are no
+  // pre-FTS rows and the triggers cover everything from row one. Latch ready
+  // now instead of waiting for the first nightly. A failed put is non-fatal:
+  // the nightly backfill reaches the same latch. Probe-failure (existing ===
+  // null) skips this — an existing corpus must go through the backfill.
+  if (existing !== null && existing.objects.get("entries") !== "table") {
+    try {
+      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    } catch (e) {
+      console.error("FTS ready latch failed (non-fatal):", e);
+    }
   }
 }

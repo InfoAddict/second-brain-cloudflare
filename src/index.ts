@@ -12,6 +12,7 @@ import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integratio
 import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
+import { runFtsMaintenance } from "./db/fts-backfill";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -202,6 +203,17 @@ export default {
         if (!whenResult.ok) console.error("when-extraction pass: batch write failed, cursor not advanced (non-fatal)");
       } catch (e) {
         console.error("when-extraction pass failed (non-fatal):", e);
+      }
+
+      // Same shape as the when pass: sequential and separately caught after
+      // the core three. An FTS failure here is non-fatal and recoverable —
+      // the nightly try/catch logs it, and whichever write hit the index
+      // first triggers its own repair — so it must not delay or hide the
+      // when counts or the night summary.
+      try {
+        await runFtsMaintenance(env);
+      } catch (e) {
+        console.error("FTS maintenance failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing

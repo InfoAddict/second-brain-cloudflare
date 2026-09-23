@@ -1,8 +1,9 @@
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { FTS_READY_KV_KEY } from "../../src/constants";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
-import { makeTestEnv } from "../helpers/make-env";
+import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 
 const MIGRATION: [column: string, alter: string][] = [
@@ -873,6 +874,26 @@ describe("initializeDatabase against real SQLite", () => {
 
       expect(await ftsOf(d1)).toEqual(before);
       expect(await ftsOf(d1)).toEqual(await entriesOf(d1));
+    });
+
+    it("marks FTS ready immediately on a brand-new brain", async () => {
+      // No entries table before this pass, so there are no pre-FTS rows to
+      // backfill: the triggers cover everything from row one.
+      d1 = makeSqliteD1({ schema: false });
+      const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV() });
+
+      await initializeDatabase(env);
+
+      expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
+    });
+
+    it("does not latch ready on a migrated brain that may hold pre-FTS rows", async () => {
+      d1 = makeSqliteD1(); // schema.sql applied: entries already exists
+      const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV() });
+
+      await initializeDatabase(env);
+
+      expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
     });
 
     it("repairs missing triggers on a populated pre-FTS brain without invalidating capsules", async () => {

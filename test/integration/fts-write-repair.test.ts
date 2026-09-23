@@ -321,6 +321,12 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
     const row = d1.rows().find(r => r.id === "stale-1");
     expect(row).toBeDefined();
     expect(row!.staleness_checked_at).not.toBeNull();
-    await expectRepaired(d1, rawEnv);
+    // Repair rebuilt the index (guard applied in scheduled()), then the
+    // nightly's own backfill pass recovered from the cursor reset: every
+    // entry indexed exactly once and the ready flag latched.
+    expect(await ftsObjectNames(d1)).toEqual(ALL_FTS_OBJECTS);
+    expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
+    expect(((await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first()) as { n: number }).n)
+      .toBe(((await d1.db.prepare(`SELECT count(*) AS n FROM entries`).first()) as { n: number }).n);
   });
 });
