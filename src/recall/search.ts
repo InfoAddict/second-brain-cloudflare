@@ -295,7 +295,11 @@ export async function recallEntries(
     : undefined;
   const scope = readScope ? scopeWhereForRead(internal.identity!, readScope) : null;
   const identity = internal.identity;
-  const arms = memberFirst ? "both" : internal.variant?.arms ?? "both";
+  const requestedArms = internal.variant?.arms;
+  if (requestedArms !== undefined && requestedArms !== "both" && requestedArms !== "dense-only" && requestedArms !== "keyword-only") {
+    throw new Error(`Unknown recall variant arms: ${String(requestedArms)}`);
+  }
+  const arms = memberFirst ? "both" : requestedArms ?? "both";
 
   let semanticQuery = query;
   if (after === undefined && before === undefined) {

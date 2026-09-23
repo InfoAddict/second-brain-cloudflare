@@ -5,6 +5,7 @@ import worker from "../../src/index";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { FTS_READY_KV_KEY } from "../../src/constants";
+import { DEFAULTS } from "../../src/config";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
 import { recallEntries } from "../../src/recall/search";
 import { buildMcpServer } from "../../src/mcp/server";
@@ -22,7 +23,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setup(publicPath = false) {
+async function setup(publicPath = false, tagged = false, memberVectors = false) {
   resetDatabaseInit();
   resetFtsReadyMemo();
   const sqlite = makeSqliteD1();
@@ -30,15 +31,23 @@ async function setup(publicPath = false) {
   const query = vi.fn().mockResolvedValue({
     matches: [{ id: "dense-doc", score: 0.9, metadata: { parentId: "dense-doc", content: "semantic neighbor", created_at: 1 } }],
   });
+  const getByIds = vi.fn().mockImplementation(async (ids: string[]) => ids.map(id => ({
+    id,
+    values: new Array(384).fill(0.1),
+    metadata: { parentId: id.split("-chunk-")[0] },
+  })));
   const env = makeTestEnv(undefined, {
     DB: sqlite.db as unknown as Env["DB"],
     OAUTH_KV: makeMemoryKV(),
-    VECTORIZE: makeVectorizeMock({ query }),
+    VECTORIZE: makeVectorizeMock({ query, getByIds }),
   });
   await initializeDatabase(env);
   const roots = publicPath ? await ensureTenantBootstrap(env) : undefined;
-  sqlite.seed({ id: "dense-doc", content: "an unrelated semantic neighbor note", createdAt: 1 });
-  sqlite.seed({ id: "kw-doc", content: "the zylophantine rollout checklist", createdAt: 2 });
+  const tags = tagged ? ["pulsar", "work", "project:alpha"] : [];
+  sqlite.seed({ id: "dense-doc", content: "an unrelated semantic neighbor note", createdAt: 1,
+    tags: memberVectors ? tags : [], vectorIds: memberVectors ? ["dense-doc-chunk-0"] : [] });
+  sqlite.seed({ id: "kw-doc", content: "the zylophantine rollout checklist", createdAt: 2,
+    tags, vectorIds: memberVectors ? ["kw-doc-chunk-0"] : [] });
   if (roots) {
     await sqlite.db.prepare("UPDATE entries SET workspace_id = ?").bind(roots.ownerPersonalWorkspaceId).run();
   }
@@ -46,15 +55,20 @@ async function setup(publicPath = false) {
   resetFtsReadyMemo();
   sqlite.issued.length = 0;
   sqlite.batches.length = 0;
-  return { env, query, sqlite };
+  return { env, query, getByIds, sqlite };
 }
 
-async function run(env: Env, variant?: RecallInternalOptions["variant"], query = "zylophantine rollout") {
+async function run(
+  env: Env,
+  variant?: RecallInternalOptions["variant"],
+  query = "zylophantine rollout",
+  filters: Partial<Parameters<typeof recallEntries>[0]> = {},
+) {
   const diagnostics: RecallDiagnostics = {};
   const result = await recallEntries(
-    { query, topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics, variant },
+    { query, topK: 5, synthesize: false, ...filters }, env, ctx, undefined, { diagnostics, variant },
   );
-  return { ids: result.matches.map(m => m.id), diagnostics };
+  return { ids: result.matches.map(m => m.id), matches: result.matches.map(m => ({ id: m.id, score: m.score })), diagnostics };
 }
 
 describe("internal.variant.arms", () => {
@@ -68,12 +82,22 @@ describe("internal.variant.arms", () => {
     expect(query).toHaveBeenCalled();
   });
 
-  it("keyword-only skips embedding and Vectorize entirely", async () => {
-    const { env, query } = await setup();
+  it("keyword-only skips embedding and Vectorize but retains tag inference", async () => {
+    const { env, query } = await setup(false, true);
+    await run(env, { arms: "both" });
+    const ai = env.AI.run as ReturnType<typeof vi.fn>;
+    const bothAiCalls = ai.mock.calls.length;
+    expect(bothAiCalls).toBe(2);
+    expect(ai.mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL)).toHaveLength(1);
+    ai.mockClear();
+    query.mockClear();
+
     const r = await run(env, { arms: "keyword-only" });
     expect(r.ids).toEqual(["kw-doc"]);
     expect(query).not.toHaveBeenCalled();
-    expect((env.AI.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect(ai.mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL)).toHaveLength(0);
+    expect(ai.mock.calls).toHaveLength(bothAiCalls - 1);
+    expect(ai.mock.calls[0][0]).toBe(DEFAULTS.LLM_MODEL);
   });
 
   it("dense-only skips the keyword arm and reports why", async () => {
@@ -83,6 +107,43 @@ describe("internal.variant.arms", () => {
     expect(r.diagnostics.ftsRoute).toBe("skipped-by-variant");
     expect(r.diagnostics.keywordIds).toEqual([]);
     expect(sqlite.batches.some(batch => batch.some(sql => sql.includes("SELECT e.id, e.content") && sql.includes("entries_fts MATCH")))).toBe(false);
+  });
+
+  it("dense-only still sends a real 384-dimension embedding to Vectorize", async () => {
+    const { env, query } = await setup();
+    await run(env, { arms: "dense-only" });
+    expect((env.AI.run as ReturnType<typeof vi.fn>).mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL)).toHaveLength(1);
+    expect(query).toHaveBeenCalledTimes(1);
+    const vector = query.mock.calls[0][0] as number[];
+    expect(vector).toHaveLength(384);
+    expect(vector).toEqual(new Array(384).fill(0.1));
+  });
+
+  it.each(["tag", "project"])("ignores every arm flag for %s-scoped member-first recall", async scope => {
+    const { env, getByIds } = await setup(false, true, true);
+    const filters = scope === "tag"
+      ? { tag: "work" }
+      : { project: [{ id: "alpha", workspace_id: "", name: "Alpha", description: "", aliases: [], status: "active" as const, created_at: 1, updated_at: null }] };
+    const variants = [undefined, { arms: "both" as const }, { arms: "dense-only" as const }, { arms: "keyword-only" as const }];
+    const outputs = [];
+    for (const variant of variants) {
+      const before = getByIds.mock.calls.length;
+      const ai = env.AI.run as ReturnType<typeof vi.fn>;
+      const embeddingsBefore = ai.mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL).length;
+      const result = await run(env, variant, "zylophantine rollout", filters);
+      outputs.push(result.matches);
+      expect(result.ids).toEqual(expect.arrayContaining(["kw-doc", "dense-doc"]));
+      expect(getByIds.mock.calls.length).toBeGreaterThan(before);
+      expect(ai.mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL)).toHaveLength(embeddingsBefore + 1);
+      expect(result.diagnostics.ftsRoute).toBe("like-member-first");
+    }
+    for (const output of outputs.slice(1)) expect(output).toEqual(outputs[0]);
+  });
+
+  it("rejects an unknown arm value before running recall", async () => {
+    const { env } = await setup();
+    const invalid = { arms: "unexpected" } as unknown as RecallInternalOptions["variant"];
+    await expect(run(env, invalid)).rejects.toThrow("Unknown recall variant arms: unexpected");
   });
 
   it.each(["zylophantine rollout", "semantic neighbor", "absent phrase"])(
