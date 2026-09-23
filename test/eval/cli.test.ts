@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { UsageError, assertJsonPathAllowed, describeVerdict, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli, runProblems } from "./cli";
 import { CORE_DATA_DIR } from "./corpus/build";
+import { evaluateGate } from "./gate";
 import { buildCorpus } from "./corpus/build";
 import { resolve } from "node:path";
 import { registerVariant, unregisterVariant } from "./variants";
 import { registerCorpusProvider, resolveCorpus } from "./corpora";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry } from "./corpus/types";
-import type { CostSample, GoldenQuery, QueryResult, VariantReport } from "./types";
+import { RUNNER_VERSION, type CostSample, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
 
 const cost: CostSample = { d1Statements: 8, d1RowsRead: null, aiCalls: 1, embeddingCalls: 1, vectorizeQueries: 1, kvReads: 1, neurons: 2, neuronsEstimated: false, wallMs: 30 };
 const result = (o: Partial<QueryResult> & { queryId: string }): QueryResult => ({
@@ -83,11 +84,23 @@ describe("exit codes and formatting", () => {
     expect(lines.find(l => /all queries\s/.test(l))).toMatch(/n=2\s.*recall@5 0\.500/);
   });
 
+  it("tells the reader exactly how to get a verdict when rows_read is unmeasured", () => {
+    const many = report(Array.from({ length: 240 }, (_, i) => result({ queryId: `q${i}`, clusterKey: `c${i % 40}` })), { embeddingModel: "m", runnerVersion: RUNNER_VERSION });
+    const better = { ...many, variant: "better", results: many.results.map(r => ({ ...r, metrics: { recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 } })) };
+    const gate = evaluateGate(many, better); // sqlite reports: rows_read is null, and no --allow-unmeasured-rows
+    expect(gate.verdict).toBe("INCONCLUSIVE");
+    const text = describeVerdict(gate);
+    expect(text).toMatch(/rows_read is unmeasured on the sqlite backend/);
+    expect(text).toMatch(/--d1 workerd for a full verdict/);
+    expect(text).toMatch(/--allow-unmeasured-rows for a cost-blind comparison/);
+  });
+
   it("names the rule behind a verdict", () => {
     const rule = (r: string, status: "pass" | "fail" | "inconclusive") => ({ rule: r, status, detail: "" });
     expect(describeVerdict({ verdict: "FAIL", deltas: [], rules: [rule("regression", "pass"), rule("improvement", "fail")] })).toMatch(/improvement only; no regression/);
     expect(describeVerdict({ verdict: "FAIL", deltas: [], rules: [rule("isolation", "fail"), rule("improvement", "fail")] })).toBe("FAIL (failed: isolation, improvement)");
-    expect(describeVerdict({ verdict: "INCONCLUSIVE", deltas: [], rules: [rule("power", "inconclusive")] })).toBe("INCONCLUSIVE (power)");
+    expect(describeVerdict({ verdict: "INCONCLUSIVE", deltas: [], rules: [{ rule: "power", status: "inconclusive", detail: "100 queries is below the 200-query floor" }] }))
+      .toBe("INCONCLUSIVE (power: 100 queries is below the 200-query floor)");
     expect(describeVerdict({ verdict: "PASS", deltas: [], rules: [] })).toBe("PASS");
   });
 

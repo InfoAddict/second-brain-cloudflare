@@ -81,7 +81,8 @@ export interface LockDiff {
   extra: string[];
 }
 
-const fingerprintKey = (f?: Record<string, string>) => JSON.stringify(Object.entries(f ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+/** Order-independent identity of a fingerprint; a missing one equals an empty one. */
+export const fingerprintKey = (f?: Record<string, string>) => JSON.stringify(Object.entries(f ?? {}).sort(([a], [b]) => a.localeCompare(b)));
 
 /** Aligns by queryId, never by index, so inserting a query cannot shift every later comparison. */
 export function compareToLock(lock: VariantReport, current: VariantReport): LockDiff {

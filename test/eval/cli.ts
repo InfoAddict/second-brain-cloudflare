@@ -181,7 +181,10 @@ export function guardWrite(path: string): void {
  * there; that gets its own message. Everything else must satisfy guardWrite. One check fails first, with one error.
  */
 export function assertJsonPathAllowed(path: string): void {
-  const data = realpathSync(resolve(CORE_DATA_DIR, ".."));
+  let data: string;
+  try { data = realpathSync(resolve(CORE_DATA_DIR, "..")); } catch {
+    throw new UsageError(`the eval data directory ${resolve(CORE_DATA_DIR, "..")} does not exist; check SB_EVAL_ROOT points at a checkout`);
+  }
   const rel = relative(data, realTarget(path));
   if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
     throw new UsageError(`--json ${path} resolves inside test/eval/data, which holds the committed golden data and baselines; only lock writes there. Write reports elsewhere (for example .eval-cache/).`);
@@ -199,7 +202,9 @@ export function describeVerdict(gate: GateResult): string {
       ? "FAIL (improvement only; no regression, no hard-invariant or cost failure)"
       : `FAIL (failed: ${failed.join(", ")})`;
   }
-  return `INCONCLUSIVE (${named("inconclusive").join(", ")})`;
+  // Say why, not just which rule: an unmeasured-rows_read verdict is the one nobody can act on without the fix.
+  const why = gate.rules.filter(r => r.status === "inconclusive").map(r => `${r.rule}: ${r.detail}`);
+  return `INCONCLUSIVE (${why.join("; ")})`;
 }
 
 /** Side-by-side known-gap groups; empty when neither report has any. */
@@ -274,9 +279,13 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
 }
 
 /** Rerun the baseline and refresh the committed lock; changed golden data needs --accept-data-change. */
-async function runLock(cmd: CliCommand & { kind: "lock" }, spec: CorpusSpec): Promise<number> {
+function checkLockable(cmd: CliCommand & { kind: "lock" }): void {
   if (cmd.hash) throw new UsageError("lock records real rankings; --hash-embeddings does not apply");
-  if (!isCoreCorpus(cmd.corpus)) throw new UsageError(`lock covers the core corpora only (${CORPUS_IDS.join(", ")}); public corpora are local-only and never locked`);
+  if (!isCoreCorpus(cmd.corpus)) throw new UsageError(`public corpora are local-only and never locked; lock covers the core corpora only (${CORPUS_IDS.join(", ")})`);
+}
+
+async function runLock(cmd: CliCommand & { kind: "lock" }, spec: CorpusSpec): Promise<number> {
+  checkLockable(cmd);
   const lockPath = resolve(CORE_DATA_DIR, "../baselines", `${cmd.corpus}.${cmd.model.split("/").pop()}.json`);
   // lock is the one writer allowed under test/eval/data, and only to files the privacy allowlist names
   if (!isAllowedDataFile(`test/eval/data/baselines/${basename(lockPath)}`)) throw new UsageError(`${basename(lockPath)} is not an allowlisted baseline file name`);
@@ -299,6 +308,7 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (cmd.json) assertJsonPathAllowed(cmd.json); // before the slow part, not after
     if (cmd.kind === "prepare") return await runPrepare(cmd);
+    if (cmd.kind === "lock") checkLockable(cmd); // before resolveCorpus, so a public corpus is refused for the right reason
     const spec = await resolveCorpus(cmd.corpus);
     if (cmd.kind === "compare") return await runCompare(cmd, spec);
     if (cmd.kind === "lock") return await runLock(cmd, spec);

@@ -1,5 +1,6 @@
 import { gapKey, mean, percentile } from "./metrics";
 import { CORPUS_IDS } from "./corpus/build";
+import { fingerprintKey } from "./lock";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { pairedBootstrap, type BootstrapCI } from "./stats";
 import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
@@ -74,9 +75,6 @@ function duplicateIds(r: VariantReport): string[] {
   return [...dups];
 }
 
-const stableFingerprint = (f: Record<string, string> | undefined): string =>
-  f ? JSON.stringify(Object.entries(f).sort(([a], [b]) => a.localeCompare(b))) : "none";
-
 function comparabilityProblems(base: VariantReport, cand: VariantReport): string[] {
   const problems: string[] = [];
   if (base.corpus !== cand.corpus) problems.push(`corpus differs (${base.corpus} vs ${cand.corpus})`);
@@ -95,7 +93,7 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
       if (!r.dataFingerprint) problems.push(`the ${label} report has no golden-data fingerprint, which core and public corpus reports must carry; rerun it`);
     }
   }
-  if (base.dataFingerprint && cand.dataFingerprint && stableFingerprint(base.dataFingerprint) !== stableFingerprint(cand.dataFingerprint)) problems.push("golden data differs (fingerprint mismatch)");
+  if (base.dataFingerprint && cand.dataFingerprint && fingerprintKey(base.dataFingerprint) !== fingerprintKey(cand.dataFingerprint)) problems.push("golden data differs (fingerprint mismatch)");
   else if (!base.dataFingerprint !== !cand.dataFingerprint && !problems.some(p => p.includes("fingerprint"))) problems.push("golden-data fingerprint present on only one report");
   const baseDups = duplicateIds(base), candDups = duplicateIds(cand);
   if (baseDups.length) problems.push(`duplicate query IDs in baseline: ${listIds(baseDups)}`);
@@ -264,7 +262,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     rowsNote = "; rows_read unmeasured (allowed)";
   } else {
     add("cost", problemsCost.length ? "fail" : "inconclusive",
-      problemsCost.length ? problemsCost.join("; ") : "rows_read unmeasured: rerun with --d1 workerd or pass --allow-unmeasured-rows");
+      problemsCost.length ? problemsCost.join("; ") : "rows_read is unmeasured on the sqlite backend: rerun with --d1 workerd for a full verdict, or pass --allow-unmeasured-rows for a cost-blind comparison");
     return finish(rules, deltas);
   }
   add("cost", problemsCost.length ? "fail" : "pass", problemsCost.length ? problemsCost.join("; ") : `within budget${rowsNote}`);

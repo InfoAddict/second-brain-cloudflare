@@ -49,6 +49,23 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: davelosert/vitest-coverage-report-action@v2
 
+  # The eval's workerd D1 backend (wrangler's local miniflare) is the only source of a real rows_read, and the
+  # default suite skips its tests (EVAL_WORKERD unset). This job runs them. Everything is local: getPlatformProxy
+  # boots a workerd in the runner, with no Cloudflare account, no secrets, and no remote binding.
+  # The public-corpora download test (test:eval:public-download, about 1 GB and dataset licenses) is deliberately
+  # NOT run in CI.
+  eval-workerd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - run: npm run test:eval:workerd
+
   # The desktop app is Rust, and nothing above compiles it — the suite, the
   # wrangler dry-run and the worker bundle are all JavaScript. Without this job
   # a PR can turn the Tauri app into something that does not build and still go

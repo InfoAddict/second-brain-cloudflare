@@ -123,6 +123,10 @@ describe("evaluateGate", () => {
     const unmeasured = (v: string, up: number) => report(v, (i, r) => { shift(0.5, up)(i, r); r.cost.d1RowsRead = null; });
     const b = unmeasured("b", 0), c = unmeasured("c", 30);
     expect(evaluateGate(b, c).verdict).toBe("INCONCLUSIVE");
+    const detail = evaluateGate(b, c).rules.find(r => r.rule === "cost")!.detail;
+    expect(detail).toMatch(/rows_read is unmeasured on the sqlite backend/);
+    expect(detail).toMatch(/--d1 workerd for a full verdict/);
+    expect(detail).toMatch(/--allow-unmeasured-rows for a cost-blind comparison/);
     const allowed = evaluateGate(b, c, { allowUnmeasuredRowsRead: true });
     expect(status(allowed, "cost")).toBe("pass");
     expect(allowed.verdict).toBe("PASS");

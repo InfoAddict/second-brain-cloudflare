@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -77,7 +77,45 @@ describe("guard 2: tracked-data allowlist", () => {
 });
 
 describe("guard 3: canary and export-shape scan", () => {
-  it("finds nothing in what git tracks now", () => expect(scanTracked()).toEqual([]));
+  it("finds nothing in what git tracks now, having scanned a real tree", () => {
+    expect(trackedFiles().length).toBeGreaterThan(100); // a floor, so an empty listing can never pass vacuously
+    expect(scanTracked()).toEqual([]);
+  });
+
+  it("fails closed when git cannot list files (not a repo), instead of scanning nothing", () => {
+    const notRepo = mkdtempSync(join(tmpdir(), "privacy-norepo-"));
+    expect(() => trackedFiles(notRepo)).toThrow(/git ls-files/);
+    expect(() => scanTracked(notRepo)).toThrow(/git ls-files/);
+  });
+
+  it("sees through JSON \\uXXXX escapes in .json, .jsonl, and gzipped JSON", () => {
+    // the escaped letter and the escaped at-sign never appear raw in the file
+    const escapedCanary = CANARY.replace("CANARY", "CANAR\\u0059");
+    const escapedEmail = GMAIL.replace(AT, "\\u0040");
+    const { root } = sandbox({
+      "test/eval/data/core/needles.jsonl": `{"content":"note ${escapedCanary} here"}\n`,
+      "test/eval/data/core/queries.jsonl": `{"content":"mail ${escapedEmail}"}\n`,
+      "test/eval/data/core/manifest.json": `{"notes":["${escapedCanary}"]}`,
+      "test/eval/data/core/replay.m.jsonl.gz": gzipSync(`{"text":"${escapedCanary}"}\n`),
+    });
+    expect(scanText("f", `{"c":"${escapedCanary}"}`, false)).toEqual([]); // raw bytes really do evade the byte-level rule
+    const found = scanTracked(root).map(f => `${f.file}:${f.rule}`).sort();
+    expect(found).toEqual([
+      "test/eval/data/core/manifest.json:canary",
+      "test/eval/data/core/needles.jsonl:canary",
+      "test/eval/data/core/queries.jsonl:email",
+      "test/eval/data/core/replay.m.jsonl.gz:canary",
+    ]);
+  });
+
+  it("reports a tracked file it cannot read as a finding, but not one that was merely deleted", () => {
+    const { root, run } = sandbox({ "src/keep.ts": "export {};\n", "src/gone.ts": "export {};\n" });
+    symlinkSync(join(root, "no-such-target"), join(root, "src/broken-link"));
+    run("add", "-A", "-f");
+    rmSync(join(root, "src/gone.ts")); // unstaged deletion: still listed by git, nothing left to leak
+    const found = scanTracked(root).map(f => `${f.file}:${f.rule}`);
+    expect(found).toEqual(["src/broken-link:unreadable"]);
+  });
 
   const rules = (text: string, heuristics = true) => scanText("f", text, heuristics).map(f => f.rule);
 

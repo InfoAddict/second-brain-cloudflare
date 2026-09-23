@@ -99,10 +99,15 @@ describe("running public corpora", () => {
     expect(c.err.join("\n")).toMatch(/node scripts\/eval-fetch-public\.mjs miracl-ja/);
   });
 
-  it("can never be locked, and writes nothing", async () => {
+  it("can never be locked, says so before it tries to load the corpus, and writes nothing", async () => {
     const c = capture();
-    try { expect(await cli.main(["lock", "--corpus", "beir-scifact"])).toBe(2); } finally { c.restore(); }
-    expect(c.err.join("\n")).toMatch(/core corpora only/);
+    try {
+      // miracl-ja is not downloaded in this fixture: the refusal must not be a fetch hint
+      expect(await cli.main(["lock", "--corpus", "miracl-ja"])).toBe(2);
+      expect(await cli.main(["lock", "--corpus", "beir-scifact"])).toBe(2);
+    } finally { c.restore(); }
+    expect(c.err.join("\n")).toMatch(/public corpora are local-only and never locked/);
+    expect(c.err.join("\n")).not.toMatch(/eval-fetch-public/);
     expect(existsSync(join(root, "test/eval/data/baselines"))).toBe(false);
     expect(readdirSync(join(root, "test/eval/data/core"))).toEqual([]);
   });

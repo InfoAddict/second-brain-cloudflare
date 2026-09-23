@@ -157,3 +157,11 @@ describe("compareToLock (what the Task 11 tripwire uses)", () => {
     expect(compareToLock(r(["q1"]), r(["q1"])).fingerprintMismatch).toBe(false);
   });
 });
+describe("fingerprintKey", () => {
+  it("ignores key order and treats a missing fingerprint as empty", async () => {
+    const { fingerprintKey } = await import("./lock");
+    expect(fingerprintKey({ b: "2", a: "1" })).toBe(fingerprintKey({ a: "1", b: "2" }));
+    expect(fingerprintKey({ a: "1" })).not.toBe(fingerprintKey({ a: "2" }));
+    expect(fingerprintKey(undefined)).toBe(fingerprintKey({}));
+  });
+});
