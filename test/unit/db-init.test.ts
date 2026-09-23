@@ -43,6 +43,9 @@ const PROMPT_CAPSULE_TRIGGERS = [
   "prompt_capsule_entry_delete",
   "prompt_capsule_workspace_delete",
 ];
+// Lexical recall index (FTS5, trigram). entries_fts is a virtual table (SCHEMA_OBJECTS);
+// its sync triggers are post-column like the capsule triggers above.
+const FTS_TRIGGERS = ["entries_fts_insert", "entries_fts_update", "entries_fts_delete"];
 const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", "edges", "idx_edges_source", "idx_edges_target", "idx_edges_weight", "insight_candidates", "idx_insight_candidates_queue",
   // Team edition (v3). idx_entries_workspace_created is deliberately last-applied
   // (POST_COLUMN_OBJECTS): it indexes a column that arrives via ALTER.
@@ -53,7 +56,9 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "projects", "idx_projects_workspace", "idx_entries_project",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
-  ...PROMPT_CAPSULE_TRIGGERS];
+  "entries_fts",
+  ...PROMPT_CAPSULE_TRIGGERS,
+  ...FTS_TRIGGERS];
 // Columns in the base CREATE of entries since v3 — present on every brain init touches.
 const BASE_COLUMNS = ["id", "content", "tags", "source", "created_at", "vector_ids", "workspace_id", "actor_id"];
 /** Every object + column a fully-migrated brain reports through the probe. */
@@ -90,7 +95,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
   const prepared: string[] = [];
 
   const recordCreatedObject = (sql: string) => {
-    const created = sql.match(/CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/);
+    const created = sql.match(/CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/);
     if (!created) return;
     objects.add(created[1]);
     if (created[1] === "entries") BASE_COLUMNS.forEach(c => columns.add(c));
@@ -126,7 +131,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
               ...[...objects].map(name => ({
                 kind: name.startsWith("idx_")
                   ? "index"
-                  : PROMPT_CAPSULE_TRIGGERS.includes(name) ? "trigger" : "table",
+                  : PROMPT_CAPSULE_TRIGGERS.includes(name) || FTS_TRIGGERS.includes(name) ? "trigger" : "table",
                 name,
                 definition: name === "idx_entries_capsule" ? `CREATE INDEX IF NOT EXISTS idx_entries_capsule ON entries(workspace_id, id) WHERE instr(lower(tags), '"capsule:') > 0` : TRIGGER_DDL.get(name),
               })),
@@ -223,9 +228,11 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 46 -> 49 by the time-anchor ALTERs: when_at, when_kind, when_source.
       // MOVED 49 -> 50 by when_label, the nightly pass's persisted label.
       // MOVED 50 -> 52 by the push_subscriptions table and idx_push_subscriptions_workspace.
-      expect(migrated).toBe(52); // 26 base objects + 18 ALTERs + 6 post-column objects + the email-index CREATE
+      // MOVED 52 -> 56 by entries_fts (SCHEMA_OBJECTS) and its three sync triggers
+      // (POST_COLUMN_OBJECTS): entries_fts_insert, entries_fts_update, entries_fts_delete.
+      expect(migrated).toBe(56); // 27 base objects + 18 ALTERs + 10 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
-      expect(prepared).toHaveLength(7); // three probes plus four prepared trigger DDLs
+      expect(prepared).toHaveLength(10); // three probes plus seven prepared trigger DDLs
       expect(touchesEntries(execd)).toEqual([]);
     });
 
@@ -258,7 +265,7 @@ describe("initializeDatabase updated_at migration", () => {
       await Promise.all([initializeDatabase(env), initializeDatabase(env), initializeDatabase(env)]);
 
       expect(execd).toHaveLength(once);
-      expect(prepared).toHaveLength(5); // one probe + four trigger DDLs; no repeat work
+      expect(prepared).toHaveLength(8); // one probe + seven trigger DDLs (four capsule, three FTS); no repeat work
     });
 
     it("shares one in-flight promise across concurrent callers", async () => {
@@ -278,7 +285,7 @@ describe("initializeDatabase updated_at migration", () => {
       resetDatabaseInit();
       await initializeDatabase(env);
 
-      expect(prepared).toHaveLength(6); // first probe + four trigger DDLs + second probe
+      expect(prepared).toHaveLength(9); // first probe + seven trigger DDLs + second probe
     });
   });
 
@@ -543,7 +550,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 47 -> 50 by the time-anchor ALTERs: when_at, when_kind, when_source.
     // MOVED 50 -> 51 by when_label, the nightly pass's persisted label.
     // MOVED 51 -> 53 by the push_subscriptions table and idx_push_subscriptions_workspace.
-    expect(cold).toBe(53); // one probe, then the 52 statements a new brain needs
+    // MOVED 53 -> 57 by entries_fts and its three sync triggers.
+    expect(cold).toBe(57); // one probe, then the 56 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -798,6 +806,34 @@ describe("initializeDatabase against real SQLite", () => {
       }));
 
       await expectFullyMigrated();
+    });
+  });
+
+  describe("entries_fts", () => {
+    it("creates the FTS table and sync triggers on a fresh brain", async () => {
+      d1 = makeSqliteD1({ schema: false });
+
+      await initializeDatabase(envFor(d1));
+
+      const { results } = await d1.db.prepare(
+        `SELECT name, type FROM sqlite_master WHERE name IN ('entries_fts','entries_fts_insert','entries_fts_update','entries_fts_delete')`,
+      ).all() as { results: { name: string; type: string }[] };
+      expect(results).toHaveLength(4);
+    });
+
+    it("keeps the index in sync through insert, update, and delete", async () => {
+      d1 = makeSqliteD1(); // schema.sql applied
+      await initializeDatabase(envFor(d1));
+
+      await d1.db.prepare(`INSERT INTO entries (id, content, created_at) VALUES ('e1', 'the dashboard redesign shipped', 1)`).run();
+      expect(((await d1.db.prepare(`SELECT id FROM entries_fts WHERE entries_fts MATCH '"dashboard"'`).all()).results)).toHaveLength(1);
+
+      await d1.db.prepare(`UPDATE entries SET content = 'the composer landed' WHERE id = 'e1'`).run();
+      expect(((await d1.db.prepare(`SELECT id FROM entries_fts WHERE entries_fts MATCH '"dashboard"'`).all()).results)).toHaveLength(0);
+      expect(((await d1.db.prepare(`SELECT id FROM entries_fts WHERE entries_fts MATCH '"composer"'`).all()).results)).toHaveLength(1);
+
+      await d1.db.prepare(`DELETE FROM entries WHERE id = 'e1'`).run();
+      expect(await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first()).toEqual({ n: 0 });
     });
   });
 

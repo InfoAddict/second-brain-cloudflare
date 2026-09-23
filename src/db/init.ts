@@ -138,6 +138,12 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // device replaces rather than duplicates it.
   push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
   idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
+  // Lexical recall index (FTS5, trigram). Plain table, not external-content:
+  // entries has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid
+  // and sync by rowid — an O(1) delete instead of a content-table scan. id rides
+  // along UNINDEXED for the read-path join. Shadow tables (entries_fts_data etc.)
+  // appear in the probe as ordinary tables; they are ignored by name.
+  entries_fts: `CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`,
 };
 
 /**
@@ -283,6 +289,22 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
     BEGIN
       DELETE FROM prompt_capsule_revisions WHERE workspace_id = OLD.id;
     END`,
+  entries_fts_insert: `CREATE TRIGGER IF NOT EXISTS entries_fts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END`,
+  entries_fts_update: `CREATE TRIGGER IF NOT EXISTS entries_fts_update
+    AFTER UPDATE OF content ON entries
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END`,
+  entries_fts_delete: `CREATE TRIGGER IF NOT EXISTS entries_fts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+    END`,
 };
 
 /**
@@ -331,7 +353,7 @@ type ExistingSchema = { definitions: Map<string, string>; objects: Map<string, O
 
 /** Which kind of object a CREATE statement makes, so the probe can be asked about it. */
 const kindOf = (ddl: string): ObjectKind => {
-  if (ddl.startsWith("CREATE TABLE")) return "table";
+  if (ddl.startsWith("CREATE TABLE") || ddl.startsWith("CREATE VIRTUAL TABLE")) return "table";
   if (ddl.startsWith("CREATE TRIGGER")) return "trigger";
   return "index";
 };

@@ -39,7 +39,7 @@ const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../..
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
-    "push_subscriptions"]
+    "push_subscriptions", "entries_fts"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
@@ -48,7 +48,8 @@ const SCHEMA_PROBE_RESULTS = [
     "idx_projects_workspace", "idx_entries_project", "idx_push_subscriptions_workspace"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
-    "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete"]
+    "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
+    "entries_fts_insert", "entries_fts_update", "entries_fts_delete"]
     .map(name => ({ kind: "trigger", name, definition: TRIGGER_DDL.get(name) })),
   ...["id", "content", "tags", "source", "created_at", "vector_ids", "recall_count",
     "importance_score", "contradiction_wins", "contradiction_losses", "updated_at",

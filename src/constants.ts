@@ -156,6 +156,15 @@ export const KEYWORD_MIN_TOKEN_LEN = 2;
 export const KEYWORD_MAX_TOKENS = 16;
 export const QUERY_SATURATION_FRACTION = 0.3;
 export const MAX_QUERY_TERMS = 3;
+
+// FTS5 lexical arm. Ready flag set once the backfill has covered every
+// pre-FTS row; until then recall stays on the LIKE fallback.
+export const FTS_READY_KV_KEY = "fts:ready";
+export const FTS_BACKFILL_CURSOR_KV_KEY = "fts:backfill-cursor";
+// Per-night ceiling: bounds FTS shadow-row writes against the 100k/day cap.
+export const FTS_BACKFILL_BATCH = 2000;
+// Trigram tokenizer floor: shorter tokens can never match.
+export const FTS_MIN_TOKEN_LENGTH = 3;
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",
   "i", "me", "my", "we", "you", "it", "this", "that", "these", "those", "with", "about", "from", "at", "as", "by",

@@ -259,3 +259,28 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id);
+
+-- Lexical recall index (FTS5, trigram). Plain table, not external-content: entries
+-- has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid and sync
+-- by rowid — an O(1) delete instead of a content-table scan. Must stay in step
+-- with src/db/init.ts.
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_insert
+AFTER INSERT ON entries
+BEGIN
+  INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_update
+AFTER UPDATE OF content ON entries
+BEGIN
+  DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+  INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_delete
+AFTER DELETE ON entries
+BEGIN
+  DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+END;
