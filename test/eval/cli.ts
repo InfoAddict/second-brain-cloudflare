@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { DEFAULTS } from "../../src/config";
 import { ReplayStore, makeReplayAi, makeRestAi } from "./ai-replay";
-import { corpusFingerprint, listCorpora, replayPaths, resolveCorpus } from "./corpora";
+import { listCorpora, replayPaths, resolveCorpus } from "./corpora";
 import { CORE_DATA_DIR, CORPUS_IDS } from "./corpus/build";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
 import type { CorpusSpec } from "./corpus/types";
@@ -198,13 +198,7 @@ async function runNamed(cmd: Common, spec: CorpusSpec, name: string): Promise<Va
   const variant = getVariant(name);
   const queries = cmd.limit ? spec.queries.slice(0, cmd.limit) : spec.queries;
   const report = await withCorpus(cmd, spec, variant, corpus => runVariant({ corpus, variant, queries, isolate: cmd.isolate, embeddingModel: cmd.model }));
-  const fingerprint = corpusFingerprint(cmd.corpus);
-  return {
-    ...report,
-    ...(cmd.hash && { embeddingModel: HASH_MODEL }),
-    ...(fingerprint && { dataFingerprint: fingerprint }),
-    ...(cmd.limit && { limit: cmd.limit }),
-  };
+  return { ...report, ...(cmd.hash && { embeddingModel: HASH_MODEL }), ...(cmd.limit && { limit: cmd.limit }) };
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -249,7 +243,6 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
 /** Rerun the baseline and refresh the committed lock; changed golden data needs --accept-data-change. */
 async function runLock(cmd: CliCommand & { kind: "lock" }, spec: CorpusSpec): Promise<number> {
   if (cmd.hash) throw new UsageError("lock records real rankings; --hash-embeddings does not apply");
-  if (cmd.limit) throw new UsageError("lock needs the full query set; drop --limit");
   if (!(CORPUS_IDS as readonly string[]).includes(cmd.corpus)) throw new UsageError(`lock covers the core corpora only (${CORPUS_IDS.join(", ")})`);
   const { lockPath, dataChanged } = await applyLock({
     dataDir: CORE_DATA_DIR,

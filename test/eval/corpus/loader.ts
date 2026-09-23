@@ -19,6 +19,7 @@ export interface IndexVariant { id: string; storeEntry: typeof storeEntry }
 
 export interface LoadedCorpus {
   id: string;
+  dataFingerprint?: Record<string, string>;
   /** Which index-time variant built the vectors ("shipped" = the real storeEntry). */
   indexId: string;
   env: Env;
@@ -97,7 +98,7 @@ export async function loadCorpus(o: {
     resetFtsReadyMemo();
 
     return {
-      id: o.spec.id, indexId: o.index?.id ?? "shipped", env, d1, vectorize, replay: o.replay,
+      id: o.spec.id, dataFingerprint: o.spec.dataFingerprint, indexId: o.index?.id ?? "shipped", env, d1, vectorize, replay: o.replay,
       workspaceOf: new Map(entries.map(e => [e.id, e.workspaceId] as const)),
       entryCount: entries.length,
       close: () => d1.close(),

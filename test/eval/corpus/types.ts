@@ -55,6 +55,8 @@ export interface CorpusSpec {
   entries: CorpusEntry[];
   edges: CorpusEdge[];
   queries: GoldenQuery[];
+  /** sha256 of each golden-data file the spec was built from; copied into every report. Absent for corpora with no committed data. */
+  dataFingerprint?: Record<string, string>;
 }
 
 export function needleToEntry(row: NeedleRow): CorpusEntry {

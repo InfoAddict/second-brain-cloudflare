@@ -9,14 +9,13 @@ import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vecto
 import type { LoadedCorpus } from "./corpus/loader";
 import { EVAL_NOW, IDENTITIES } from "./corpus/types";
 import { scoreQuery } from "./metrics";
-import { QUERY_CATEGORIES, type CostSample, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
+import { QUERY_CATEGORIES, RUNNER_VERSION, type CostSample, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
 import type { VariantSpec } from "./variants";
 
 /** Metrics need the top 10; recall@5 is read from its first five (Decision 9). */
 export const EVAL_TOP_K = 10;
 
-/** Bump when what a report means changes (measurement, guards, degradation flags). */
-export const RUNNER_VERSION = 2; // 2: reports carry limit and dataFingerprint
+export { RUNNER_VERSION };
 
 export function freezeClock(fixed: number): () => void {
   const real = Date.now;
@@ -142,7 +141,7 @@ export async function runVariant(o: {
       }
       o.onProgress?.(results.length, o.queries.length);
     }
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, results };
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
   } finally {
     restoreClock();
   }

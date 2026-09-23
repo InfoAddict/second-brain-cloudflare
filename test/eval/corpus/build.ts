@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { EdgeType } from "../../../src/graph/types";
 import type { GoldenQuery } from "../types";
+import { hashDataDir } from "../lock";
 import { DENSE_RATE_BY_SCALE, generateHaystack } from "./haystack";
 import {
   ACTORS, EVAL_NOW, WORKSPACES, needleToEntry,
@@ -67,5 +68,6 @@ export function buildCorpus(id: CoreCorpusId): CorpusSpec {
     entries,
     edges: corpusEdges,
     queries: queries.map(q => ({ ...q, clusterKey: q.clusterKey ?? q.gold.find(g => g.grade === 2)?.id ?? q.gold[0].id })),
+    dataFingerprint: hashDataDir(CORE_DATA_DIR),
   };
 }

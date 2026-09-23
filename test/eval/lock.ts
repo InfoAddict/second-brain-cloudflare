@@ -81,14 +81,14 @@ export interface LockDiff {
   extra: string[];
 }
 
-const stable = (f?: Record<string, string>) => JSON.stringify(Object.entries(f ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+const fingerprintKey = (f?: Record<string, string>) => JSON.stringify(Object.entries(f ?? {}).sort(([a], [b]) => a.localeCompare(b)));
 
 /** Aligns by queryId, never by index, so inserting a query cannot shift every later comparison. */
 export function compareToLock(lock: VariantReport, current: VariantReport): LockDiff {
   const locked = new Map(lock.results.map(r => [r.queryId, r] as const));
   const now = new Map(current.results.map(r => [r.queryId, r] as const));
   return {
-    fingerprintMismatch: stable(lock.dataFingerprint) !== stable(current.dataFingerprint),
+    fingerprintMismatch: fingerprintKey(lock.dataFingerprint) !== fingerprintKey(current.dataFingerprint),
     changed: [...now].filter(([id, r]) => locked.has(id) && JSON.stringify(locked.get(id)!.rankedIds) !== JSON.stringify(r.rankedIds)).map(([id]) => id),
     missing: [...locked.keys()].filter(id => !now.has(id)),
     extra: [...now.keys()].filter(id => !locked.has(id)),
@@ -122,6 +122,8 @@ export async function applyLock(o: {
     throw new LockRefused(`golden data changed since the manifest was written (${changed.join(", ")}). Re-lock only if that is deliberate: pass --accept-data-change "<reason>" and it is recorded in the manifest history.`);
   }
   const report = await o.runBaseline();
+  if (!report.dataFingerprint) throw new LockRefused("the baseline report carries no dataFingerprint; a lock without one cannot be tied to its golden data");
+  if (fingerprintKey(report.dataFingerprint) !== fingerprintKey(now)) throw new LockRefused("the baseline report was built from different golden data than the files on disk");
   const baseline = summarizeBaseline(report);
   if (baseline.errors || baseline.degraded || baseline.leaks) {
     throw new LockRefused(`refusing to lock a broken baseline (${baseline.errors} error(s), ${baseline.degraded} degraded, ${baseline.leaks} leak(s))`);

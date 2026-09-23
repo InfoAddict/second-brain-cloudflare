@@ -22,7 +22,7 @@ function setup() {
   };
   writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
   const lockPath = join(dir, "baselines", "lock.json");
-  const run = vi.fn(async () => report());
+  const run = vi.fn(async () => ({ ...report(), dataFingerprint: hashDataDir(dir) }));
   const read = () => JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
   return { dir, lockPath, run, read };
 }
@@ -74,7 +74,7 @@ describe("applyLock", () => {
     const t = setup();
     writeFileSync(join(t.dir, "queries.jsonl"), "v2\n");
     const before = readFileSync(join(t.dir, "manifest.json"), "utf8");
-    await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, acceptReason: "x", runBaseline: async () => report({ leaked: ["z"] }) })).rejects.toThrow(/broken baseline/);
+    await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, acceptReason: "x", runBaseline: async () => ({ ...report({ leaked: ["z"] }), dataFingerprint: hashDataDir(t.dir) }) })).rejects.toThrow(/broken baseline/);
     expect(readFileSync(join(t.dir, "manifest.json"), "utf8")).toBe(before);
   });
 
@@ -88,6 +88,12 @@ describe("applyLock", () => {
     expect(historyProblems(m).join(" ")).toMatch(/without a history entry/);
     writeFileSync(join(t.dir, "manifest.json"), JSON.stringify(m));
     await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, runBaseline: t.run })).rejects.toThrow(/history is inconsistent/);
+  });
+
+  it("refuses a baseline with no fingerprint, or one from different data than the files on disk", async () => {
+    const t = setup();
+    await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, runBaseline: async () => report() })).rejects.toThrow(/no dataFingerprint/);
+    await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, runBaseline: async () => ({ ...report(), dataFingerprint: { "queries.jsonl": "stale" } }) })).rejects.toThrow(/different golden data/);
   });
 
   it("requires a genesis entry: an empty history cannot anchor the chain", async () => {

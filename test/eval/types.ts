@@ -76,3 +76,6 @@ export interface VariantReport {
   limit?: number;
   results: QueryResult[];
 }
+
+/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. */
+export const RUNNER_VERSION = 2;

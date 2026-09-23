@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, evaluateGate, formatGate } from "./gate";
-import { QUERY_CATEGORIES, type QueryResult, type VariantReport } from "./types";
+import { QUERY_CATEGORIES, RUNNER_VERSION, type QueryResult, type VariantReport } from "./types";
 
 function report(name: string, tweak: (i: number, r: QueryResult) => void = () => {}, n = 240): VariantReport {
   return {
-    schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: 1,
+    schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, dataFingerprint: { "queries.jsonl": "h" },
     results: Array.from({ length: n }, (_, i) => {
       const r: QueryResult = {
         queryId: `q${i}`, category: QUERY_CATEGORIES[i % QUERY_CATEGORIES.length], clusterKey: `q${i}`, rankedIds: [],
@@ -38,7 +38,7 @@ describe("evaluateGate", () => {
   });
 
   it("is INCONCLUSIVE when top-k or runner version differ", () => {
-    for (const tweak of [(r: VariantReport) => { r.topK = 5; }, (r: VariantReport) => { r.runnerVersion = 2; }]) {
+    for (const tweak of [(r: VariantReport) => { r.topK = 5; }, (r: VariantReport) => { r.runnerVersion = RUNNER_VERSION + 1; }]) {
       const cand = report("v");
       tweak(cand);
       expect(status(evaluateGate(base, cand), "comparable")).toBe("inconclusive");
@@ -383,7 +383,28 @@ describe("evaluateGate: comparability of golden data and limits", () => {
     const a = withFp("b", "h1");
     const b = { ...withFp("v", "h1", shift(0.5, 30)), dataFingerprint: { "needles.jsonl": "n1", "queries.jsonl": "h1" } };
     expect(evaluateGate(a, b).verdict).toBe("PASS");
-    expect(evaluateGate(report("b"), report("v", shift(0.5, 30))).verdict).toBe("PASS");
+    const bare = (name: string, tweak?: (i: number, r: QueryResult) => void) => { const { dataFingerprint: _x, ...rest } = { ...report(name, tweak), corpus: "scratch" }; return rest as VariantReport; };
+    expect(evaluateGate(bare("b"), bare("v", shift(0.5, 30))).verdict).toBe("PASS"); // non-core corpus: a fingerprint is optional
+  });
+
+  it("requires a fingerprint on both reports for a core corpus, saying which one is missing", () => {
+    const strip = (r: VariantReport) => { const { dataFingerprint: _x, ...rest } = r; return rest as VariantReport; };
+    const good = report("v", shift(0.5, 30));
+    const neither = evaluateGate(strip(report("b")), strip(good));
+    expect(neither.verdict).toBe("INCONCLUSIVE");
+    const detail = neither.rules.find(r => r.rule === "comparable")!.detail;
+    expect(detail).toMatch(/baseline.*fingerprint/i);
+    expect(detail).toMatch(/candidate.*fingerprint/i);
+    const one = evaluateGate(report("b"), strip(good)).rules.find(r => r.rule === "comparable")!.detail;
+    expect(one).toMatch(/candidate.*fingerprint/i);
+    expect(one).not.toMatch(/baseline.*fingerprint/i);
+  });
+
+  it("is INCONCLUSIVE when both reports came from a stale runner, not just when they disagree", () => {
+    const stale = (name: string, tweak?: (i: number, r: QueryResult) => void) => ({ ...report(name, tweak), runnerVersion: RUNNER_VERSION - 1 });
+    const result = evaluateGate(stale("b"), stale("v", shift(0.5, 30)));
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    expect(result.rules.find(r => r.rule === "comparable")!.detail).toMatch(/stale/);
   });
 
   it("is INCONCLUSIVE when either report was limited", () => {
@@ -400,27 +421,28 @@ describe("evaluateGate: comparability of golden data and limits", () => {
 
 describe("evaluateGate: known gaps", () => {
   const GAP = ["known-gap", "gap:T-0072"];
+  const set = (r: QueryResult, v: number) => { r.metrics = { recall5: v, recall10: v, mrr10: v, ndcg10: v }; };
+  // Gap queries are corpus-conditional (corpus/audit.ts): a gap can score 0 at one scale and 1 at another,
+  // so the gate reads the baseline score in THIS report instead of trusting the tag.
   const gapN = 20;
   const inGap = (i: number) => i < gapN;
-  // Gap queries: baseline scores 0 on all. Everything else is the usual 0.5.
-  const gapBase = (extra: (i: number, r: QueryResult) => void = () => {}) => report("baseline", (i, r) => {
-    if (inGap(i)) { r.tags = GAP; r.metrics = { recall5: 0, recall10: 0, mrr10: 0, ndcg10: 0 }; }
+  const gapBase = (baseScore: number, extra: (i: number, r: QueryResult) => void = () => {}) => report("baseline", (i, r) => {
+    if (inGap(i)) { r.tags = GAP; set(r, baseScore); }
     extra(i, r);
   });
-  const set = (r: QueryResult, v: number) => { r.metrics = { recall5: v, recall10: v, mrr10: v, ndcg10: v }; };
   const gapCand = (gapScore: number, extra: (i: number, r: QueryResult) => void = () => {}) => report("v", (i, r) => {
     if (inGap(i)) { r.tags = GAP; set(r, gapScore); }
     extra(i, r);
   });
 
   it("does not let an undeclared gap fix count as an improvement", () => {
-    const result = evaluateGate(gapBase(), gapCand(1));
+    const result = evaluateGate(gapBase(0), gapCand(1));
     expect(status(result, "improvement")).toBe("fail");
     expect(result.deltas.some(d => d.scope.startsWith("gap:"))).toBe(false);
   });
 
   it("PASSes a declared target-gap fix, and reports the gap's own power", () => {
-    const result = evaluateGate(gapBase(), gapCand(1), { targetGaps: ["T-0072"] });
+    const result = evaluateGate(gapBase(0), gapCand(1), { targetGaps: ["T-0072"] });
     expect(result.verdict).toBe("PASS");
     const detail = result.rules.find(r => r.rule === "improvement")!.detail;
     expect(detail).toMatch(/gap:T-0072/);
@@ -429,46 +451,94 @@ describe("evaluateGate: known gaps", () => {
   });
 
   it("does not PASS a declared gap when the gap did not improve", () => {
-    const result = evaluateGate(gapBase(), gapCand(0), { targetGaps: ["T-0072"] });
-    expect(status(result, "improvement")).toBe("fail");
+    expect(status(evaluateGate(gapBase(0), gapCand(0), { targetGaps: ["T-0072"] }), "improvement")).toBe("fail");
   });
 
   it("is INCONCLUSIVE, not a silent pass, when a declared gap matches no query", () => {
-    const result = evaluateGate(gapBase(), gapCand(1), { targetGaps: ["T-9999"] });
+    const result = evaluateGate(gapBase(0), gapCand(1), { targetGaps: ["T-9999"] });
     expect(status(result, "target-gaps")).toBe("inconclusive");
     expect(result.verdict).not.toBe("PASS");
   });
 
-  it("keeps undeclared gap queries out of the regression rule, and puts declared ones back", () => {
-    // gap queries that scored 0.5 drop to 0 in the candidate; nothing else moves
-    const b = report("baseline", (i, r) => { if (inGap(i)) { r.tags = GAP; set(r, 0.5); } });
-    const c = report("v", (i, r) => { if (inGap(i)) { r.tags = GAP; set(r, 0); } });
-    expect(status(evaluateGate(b, c), "regression")).toBe("pass");
+  it("protects gap queries the baseline already answers: a drop fails regression with or without a declaration", () => {
+    // gap queries scored 0.5 in the baseline (e.g. a scale-conditional gap at core-1k); the candidate drops them to 0
+    const b = gapBase(0.5), c = gapCand(0);
+    expect(status(evaluateGate(b, c), "regression")).toBe("fail");
     expect(status(evaluateGate(b, c, { targetGaps: ["T-0072"] }), "regression")).toBe("fail");
   });
 
-  it("scores the gate's headline over non-gap queries only (the same population as the report)", () => {
-    const result = evaluateGate(gapBase(), gapCand(1, shift(0.5, 60)));
+  it("does not count a protected gap query's gain as an overall improvement", () => {
+    // gap queries the baseline answers at 0.5 rise to 1; the 220 real queries do not move
+    const result = evaluateGate(gapBase(0.5), gapCand(1));
+    expect(status(result, "regression")).toBe("pass");
+    expect(status(result, "improvement")).toBe("fail");
+    expect(result.verdict).toBe("FAIL");
+  });
+
+  it("leaves gap queries the baseline scores 0 out of the regression population, so they cannot dilute it", () => {
+    const result = evaluateGate(gapBase(0), gapCand(0, shift(0.5, 60)));
     const overall = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
-    expect(overall.base).toBeCloseTo(0.5); // gap zeros would have dragged it below
+    expect(overall.base).toBeCloseTo(0.5); // 220 real queries, not 240 with 20 constant zeros
+  });
+
+  it("G1: a declared gap's wins never mask a regression among the real queries of the same category", () => {
+    // 38 identifier queries lose 0.1; 12 gap:T-0072 identifier queries go 0 -> 1
+    const shape = (i: number, r: QueryResult, gap: boolean) => {
+      if (i < 12) { r.category = "identifier"; r.tags = GAP; set(r, gap ? 1 : 0); }
+      else if (i < 50) { r.category = "identifier"; set(r, gap ? 0.8 : 0.9); }
+      else { r.category = "rare-word"; set(r, 0.9); }
+    };
+    const b = report("baseline", (i, r) => shape(i, r, false), 300);
+    const c = report("v", (i, r) => shape(i, r, true), 300);
+    for (const opts of [{}, { targetGaps: ["T-0072"] }]) {
+      const result = evaluateGate(b, c, opts);
+      expect(status(result, "regression"), JSON.stringify(opts)).toBe("fail");
+      expect(result.rules.find(r => r.rule === "regression")!.detail).toMatch(/identifier/);
+      expect(result.verdict).toBe("FAIL");
+    }
+  });
+
+  it("G1b: gap gains are never averaged into the overall or category deltas", () => {
+    const result = evaluateGate(gapBase(0), gapCand(1), { targetGaps: ["T-0072"] });
+    const overall = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
+    expect(overall.ci.mean).toBeCloseTo(0);
+  });
+
+  it("G2/G3: a declared gap below the category floors is INCONCLUSIVE with the power stated, never a PASS", () => {
+    const small = (score: number) => (i: number, r: QueryResult) => { if (i < 8) { r.tags = ["known-gap", "gap:T-0074"]; r.category = "short-word"; set(r, score); } };
+    const result = evaluateGate(report("baseline", small(0)), report("v", small(0.5)), { targetGaps: ["T-0074"] });
+    expect(status(result, "improvement")).toBe("inconclusive");
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    const detail = result.rules.find(r => r.rule === "improvement")!.detail;
+    expect(detail).toMatch(/gap:T-0074/);
+    expect(detail).toMatch(/8 queries in 8 clusters/);
+    expect(detail).toMatch(/floor/);
+  });
+
+  it("holds a declared gap to the same cluster floor as a category: 12 queries in 2 clusters is inconclusive", () => {
+    const few = (score: number) => (i: number, r: QueryResult) => { if (i < 12) { r.tags = GAP; r.clusterKey = `k${i % 2}`; set(r, score); } };
+    const result = evaluateGate(report("baseline", few(0)), report("v", few(1)), { targetGaps: ["T-0072"] });
+    expect(status(result, "improvement")).toBe("inconclusive");
   });
 
   it("keeps leaks, errors, and degradation in gap queries as hard failures", () => {
-    const leak = evaluateGate(gapBase(), gapCand(0, (i, r) => { if (i === 1) r.leaked = ["x"]; }));
+    const leak = evaluateGate(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.leaked = ["x"]; }));
     expect(status(leak, "isolation")).toBe("fail");
-    const err = evaluateGate(gapBase(), gapCand(0, (i, r) => { if (i === 1) r.error = "boom"; }));
+    const err = evaluateGate(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.error = "boom"; }));
     expect(status(err, "errors")).toBe("fail");
-    const deg = evaluateGate(gapBase(), gapCand(0, (i, r) => { if (i === 1) r.degraded = ["semantic-unavailable"]; }));
+    const deg = evaluateGate(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.degraded = ["semantic-unavailable"]; }));
     expect(status(deg, "degraded")).toBe("fail");
   });
 
   it("keeps cost across ALL queries: a cost blowup confined to gap queries still fails", () => {
     const heavy = gapCand(0, (i, r) => { if (inGap(i)) r.cost.neurons = 2 + 400; });
-    expect(status(evaluateGate(gapBase(), heavy), "cost")).toBe("fail");
+    expect(status(evaluateGate(gapBase(0), heavy), "cost")).toBe("fail");
   });
 
-  it("is INCONCLUSIVE when the two reports disagree about which queries are gaps", () => {
+  it("is INCONCLUSIVE when the two reports disagree about which queries are gaps, including a second gap id", () => {
     const c = report("v", (i, r) => { if (i < 5) r.tags = GAP; });
-    expect(status(evaluateGate(gapBase(), c), "comparable")).toBe("inconclusive");
+    expect(status(evaluateGate(gapBase(0), c), "comparable")).toBe("inconclusive");
+    const extraId = report("v", (i, r) => { if (inGap(i)) r.tags = [...GAP, "gap:T-0073"]; });
+    expect(status(evaluateGate(gapBase(0), extraId), "comparable")).toBe("inconclusive");
   });
 });

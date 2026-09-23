@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { CORE_DATA_DIR, CORPUS_IDS, buildCorpus, type CoreCorpusId } from "./corpus/build";
 import type { CorpusSpec } from "./corpus/types";
-import { hashDataDir } from "./lock";
 
 interface Provider { name: string; match: (id: string) => boolean; build: (id: string) => CorpusSpec | Promise<CorpusSpec> }
 const providers: Provider[] = [];
@@ -23,15 +22,14 @@ export const listCorpora = (): string[] => [...CORPUS_IDS, ...providers.filter(p
 
 const slug = (model: string) => model.split("/").pop()!;
 
+/**
+ * read lists only cache files that exist (the committed core cache, then the local one), so an empty
+ * read means nothing has been recorded and callers, including Task 11's skipIf guards, can test read.length.
+ * write is always the local file, which prepare creates.
+ */
 export function replayPaths(model: string): { read: string[]; write: string } {
   const root = process.env.SB_EVAL_ROOT ?? resolve(import.meta.dirname, "../..");
   const committed = resolve(CORE_DATA_DIR, `replay.${slug(model)}.jsonl.gz`);
   const local = resolve(root, `.eval-cache/replay/${slug(model)}.jsonl`);
-  // Read layers: the committed core cache, then the local one (recorded but uncommitted, e.g. 5k/20k).
-  return { read: [...(existsSync(committed) ? [committed] : []), local], write: local };
-}
-
-/** Hashes of the golden-data files a core corpus is built from; other corpora carry none. */
-export function corpusFingerprint(id: string): Record<string, string> | undefined {
-  return (CORPUS_IDS as readonly string[]).includes(id) ? hashDataDir(CORE_DATA_DIR) : undefined;
+  return { read: [committed, local].filter(existsSync), write: local };
 }

@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { UsageError, assertJsonPathAllowed, describeVerdict, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli, runProblems } from "./cli";
 import { CORE_DATA_DIR } from "./corpus/build";
-import { corpusFingerprint } from "./corpora";
+import { buildCorpus } from "./corpus/build";
 import { resolve } from "node:path";
 import { registerVariant, unregisterVariant } from "./variants";
-import { registerCorpusProvider } from "./corpora";
+import { registerCorpusProvider, resolveCorpus } from "./corpora";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry } from "./corpus/types";
 import type { CostSample, GoldenQuery, QueryResult, VariantReport } from "./types";
 
@@ -228,11 +228,11 @@ describe("main (end to end on a tiny registered corpus)", () => {
   });
 
   describe("report provenance", () => {
-    it("core corpora fingerprint their golden-data files; other corpora have none", () => {
-      const fp = corpusFingerprint("core-1k")!;
+    it("core corpora fingerprint their golden-data files; other corpora have none", async () => {
+      const fp = buildCorpus("core-1k").dataFingerprint!;
       const manifest = JSON.parse(readFileSync(resolve(CORE_DATA_DIR, "manifest.json"), "utf8")) as { files: Record<string, string> };
       expect(fp).toEqual(manifest.files);
-      expect(corpusFingerprint("tiny-cli")).toBeUndefined();
+      expect(await resolveCorpus("tiny-cli").then(c => c.dataFingerprint)).toBeUndefined();
     });
 
     it("run records limit and the golden-data fingerprint in the report", async () => {
@@ -243,7 +243,7 @@ describe("main (end to end on a tiny registered corpus)", () => {
       } finally { log.mockRestore(); }
       const r = JSON.parse(readFileSync(out, "utf8")) as VariantReport;
       expect(r.limit).toBe(3);
-      expect(r.dataFingerprint).toEqual(corpusFingerprint("core-1k"));
+      expect(r.dataFingerprint).toEqual(buildCorpus("core-1k").dataFingerprint);
       expect(r.runnerVersion).toBeGreaterThanOrEqual(2);
     });
   });
