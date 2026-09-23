@@ -2,14 +2,16 @@ import { CHUNK_MAX_CHARS, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "
 import { readScopeWorkspaces } from "../../../src/lib/scope";
 import { tokenizeQuery } from "../../../src/text/tokenize";
 import type { GoldenQuery } from "../types";
-import { generateHaystack } from "./haystack";
+import { DENSE_TOKENS, generateHaystack } from "./haystack";
 import { ACTORS, EVAL_NOW, IDENTITIES, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
 
 export interface AuditFinding { queryId: string; rule: string; detail: string }
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const IDENTIFIER_DF = 5;
-const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap"]);
+// Below this many entries the corpus is the 1k tie scale: LIKE and FTS must both see every union row.
+const TIE_SCALE_MAX_ENTRIES = 2500;
+const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap", "router-budget"]);
 const GAP_REF = /^gap:T-\d+$/;
 const WORD_CHAR = /[\p{L}\p{N}_-]/u;
 // Thresholds scale with the rows the viewer can read: a token in 0.4% of 5k rows is not "common".
@@ -38,7 +40,7 @@ export function auditQueries(spec: {
   const lower = spec.entries.map(entry => ({ entry, content: entry.content.toLowerCase() }));
   const lowerById = new Map(lower.map(row => [row.entry.id, row.content] as const));
   // df is per viewer: only rows the viewer can read count, so unreadable decoys never inflate it.
-  const views = new Map<string, { rows: number; df: (token: string) => number }>();
+  const views = new Map<string, { rows: number; visible: { entry: CorpusEntry; content: string }[]; df: (token: string) => number }>();
   const viewOf = (readable: ReadonlySet<string>) => {
     const key = [...readable].sort().join("|");
     if (!views.has(key)) {
@@ -46,6 +48,7 @@ export function auditQueries(spec: {
       const cache = new Map<string, number>();
       views.set(key, {
         rows: visible.length,
+        visible,
         df: token => {
           if (!cache.has(token)) cache.set(token, visible.filter(row => row.content.includes(token)).length);
           return cache.get(token)!;
@@ -76,7 +79,7 @@ export function auditQueries(spec: {
     if (goldEntries.some(entry => !readable.has(entry!.workspaceId))) add(query.id, "gold-unreadable", "gold is outside the viewer's scope");
     const primary = byId.get((query.gold.find(gold => gold.grade === 2) ?? query.gold[0]).id)!;
     const content = lowerById.get(primary.id)!;
-    const { rows, df } = viewOf(readable);
+    const { rows, visible, df } = viewOf(readable);
     const common = commonDf(rows);
     const tokens = tokenizeQuery(query.text);
     const shared = tokens.filter(token => content.includes(token));
@@ -113,12 +116,24 @@ export function auditQueries(spec: {
         // The dense tier only guarantees a full match per scope for the default (personal + company) read scope.
         if (query.layer || query.viewer === "outsider") add(query.id, "common-word-layer-scoped", `${query.viewer}/${query.layer ?? "default"}`);
         if (tokens.length < 2) add(query.id, "common-word-too-short", query.text);
+        // Only the dense tier is guaranteed to overflow the keyword window at 5k+ while unique per triple.
+        const sparse = tokens.find(token => !(DENSE_TOKENS as readonly string[]).includes(token));
+        if (sparse) add(query.id, "common-word-not-dense", sparse);
         const rare = tokens.find(token => df(token) < common);
         if (rare) add(query.id, "common-word-rare-token", `${rare} df=${df(rare)}`);
         if (shared.length < tokens.length) add(query.id, "common-word-gold-missing-token", query.text);
         const goldIds = new Set(query.gold.map(gold => gold.id));
         const rivals = lower.filter(row => !goldIds.has(row.entry.id) && readable.has(row.entry.workspaceId) && tokens.every(token => row.content.includes(token.toLowerCase())));
         if (tokens.length && rivals.length) add(query.id, "common-word-ambiguous", `${rivals.length} non-gold readable entries contain every token, e.g. ${rivals[0].entry.id}`);
+        // LIKE keeps the KEYWORD_CANDIDATE_LIMIT newest rows matching any term: the gold must fall outside
+        // that window at scale (so LIKE loses it) and every union row must fit inside it at the 1k tie scale.
+        const union = visible.filter(row => tokens.some(token => row.content.includes(token)));
+        if (spec.entries.length < TIE_SCALE_MAX_ENTRIES) {
+          if (union.length > KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-union-truncates", `union=${union.length}`);
+        } else {
+          const newer = union.filter(row => row.entry.createdAt > primary.createdAt).length;
+          if (newer < KEYWORD_CANDIDATE_LIMIT) add(query.id, "common-word-gold-in-window", `${newer} newer union rows of ${union.length}`);
+        }
         break;
       }
       case "short-word": {

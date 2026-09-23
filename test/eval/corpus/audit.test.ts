@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { auditQueries, haystackVocabulary } from "./audit";
-import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
+import { ACTORS, DAY_MS, EVAL_NOW, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
 import type { GoldenQuery } from "../types";
 
 const entry = (id: string, content: string, workspace: keyof typeof WORKSPACES = "avery"): CorpusEntry => ({
@@ -12,6 +12,10 @@ const query = (over: Partial<GoldenQuery> & Pick<GoldenQuery, "id" | "category" 
 });
 const rules = (entries: CorpusEntry[], queries: GoldenQuery[], edges: CorpusEdge[] = []) =>
   auditQueries({ entries, edges, queries }).map(finding => `${finding.queryId}:${finding.rule}`);
+// Pairs only: no filler row holds the whole triple, so the gold stays the sole full match.
+const pairText = (i: number) => ["garden window", "window coffee", "garden coffee"][i % 3];
+const denseFiller = Array.from({ length: 40 }, (_, i) => entry(`d${i}`, `${pairText(i)} note ${i}`));
+const dated = (id: string, content: string, ageDays: number, workspace: keyof typeof WORKSPACES = "avery"): CorpusEntry => ({ ...entry(id, content, workspace), createdAt: EVAL_NOW - ageDays * DAY_MS });
 const filler = Array.from({ length: 40 }, (_, i) => entry(`f${i}`, `weekly review notes about budget planning number ${i}`));
 
 describe("auditQueries", () => {
@@ -76,27 +80,25 @@ describe("auditQueries", () => {
 
   it("checks rare, common, and short word category definitions", () => {
     const gold = entry("g", "budget review planning session zylophantine project v2");
-    // budget and planning never co-occur outside the gold, so the trio is unique to it
-    const split = Array.from({ length: 40 }, (_, i) => entry(`s${i}`, i % 2 ? `weekly review notes about budget ${i}` : `planning notes about review ${i}`));
     expect(rules([...filler, gold], [query({ id: "rare", category: "rare-word", text: "zylophantine" })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "no-rare", category: "rare-word", text: "budget review" })])).toContain("no-rare:rare-word-no-rare-token");
-    expect(rules([...split, gold], [query({ id: "common", category: "common-word", text: "budget review planning" })])).toEqual([]);
-    expect(rules([...filler, gold], [query({ id: "mixed", category: "common-word", text: "budget zylophantine" })])).toContain("mixed:common-word-rare-token");
-    expect(rules([...filler, gold], [query({ id: "missing", category: "common-word", text: "budget review notes" })])).toContain("missing:common-word-gold-missing-token");
+    const dense = entry("g", "garden window coffee session zylophantine");
+    expect(rules([...denseFiller, dense], [query({ id: "common", category: "common-word", text: "garden window coffee" })])).toEqual([]);
+    expect(rules([...denseFiller, dense], [query({ id: "mixed", category: "common-word", text: "garden zylophantine" })])).toContain("mixed:common-word-rare-token");
+    expect(rules([...denseFiller, dense], [query({ id: "missing", category: "common-word", text: "garden window kitchen" })])).toContain("missing:common-word-gold-missing-token");
+    expect(rules([...filler, gold], [query({ id: "plain", category: "common-word", text: "budget review planning" })])).toContain("plain:common-word-not-dense");
     expect(rules([...filler, gold], [query({ id: "short", category: "short-word", text: "v2" })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "long", category: "short-word", text: "project" })])).toContain("long:short-word-no-short-token");
   });
 
   it("rejects a common-word query that another readable entry also fully matches", () => {
-    const gold = entry("g", "budget review planning session");
-    const split = Array.from({ length: 40 }, (_, i) => entry(`s${i}`, i % 2 ? `weekly review notes about budget ${i}` : `planning notes about review ${i}`));
-    const text = "budget review planning";
-    const ask = (entries: CorpusEntry[], viewer: GoldenQuery["viewer"] = "avery") => rules(entries, [query({ id: "amb", category: "common-word", text, viewer })]);
-    expect(ask([...split, gold])).toEqual([]);
-    expect(ask([...split, gold, entry("rival", "Notes on the planning review and budget")])).toContain("amb:common-word-ambiguous");
-    expect(ask([...split, gold, entry("rival", "BUDGETS, reviews and planning")])).toContain("amb:common-word-ambiguous");
+    const gold = entry("g", "garden window coffee session");
+    const ask = (entries: CorpusEntry[]) => rules(entries, [query({ id: "amb", category: "common-word", text: "garden window coffee" })]);
+    expect(ask([...denseFiller, gold])).toEqual([]);
+    expect(ask([...denseFiller, gold, entry("rival", "Notes on the coffee window and garden")])).toContain("amb:common-word-ambiguous");
+    expect(ask([...denseFiller, gold, entry("rival", "GARDENS, windows and coffee")])).toContain("amb:common-word-ambiguous");
     // an unreadable rival does not make the query ambiguous
-    expect(ask([...split, gold, entry("hidden", "budget review planning", "blake")])).toEqual([]);
+    expect(ask([...denseFiller, gold, entry("hidden", "garden window coffee", "blake")])).toEqual([]);
   });
 
   it("rejects missing, unreadable, or duplicated gold queries and missing tenancy decoys", () => {
@@ -162,16 +164,16 @@ describe("auditQueries fidelity and scale", () => {
   });
 
   it("counts df over the rows the viewer can read", () => {
-    const rows = [gold("zorbital flimwatt"), ...many(40, () => "zorbital flimwatt", "blake")];
-    expect(rules(rows, [query({ id: "c", category: "common-word", text: "zorbital flimwatt" })])).toContain("c:common-word-rare-token");
+    const rows = [gold("garden window"), ...many(40, () => "garden window", "blake")];
+    expect(rules(rows, [query({ id: "c", category: "common-word", text: "garden window" })])).toContain("c:common-word-rare-token");
     const decoys = many(6, () => "Ticket OPS-90210 rollback", "outsider");
     expect(rules([gold("Ticket OPS-90210 rollback"), ...decoys], [query({ id: "i", category: "identifier", text: "OPS-90210" })])).toEqual([]);
   });
 
   it("scales the paraphrase and common thresholds with the corpus", () => {
     const corpus = (total: number, dense: number) => [
-      gold("zonkfrel appears in the answer"),
-      ...many(dense - 1, i => `zonkfrel filler note ${i}`),
+      gold("zonkfrel appears in the answer garden window"),
+      ...many(dense - 1, i => `zonkfrel filler note ${i} garden window`),
       ...many(total - dense, i => `plain unrelated note ${i}`),
     ];
     const para = query({ id: "p", category: "paraphrase", text: "zonkfrel origin story" });
@@ -179,7 +181,7 @@ describe("auditQueries fidelity and scale", () => {
     expect(rules(corpus(5000, 30), [para])).toContain("p:paraphrase-lexical-leak");
     expect(rules(corpus(20_000, 300), [para])).toContain("p:paraphrase-lexical-leak");
     expect(rules(corpus(20_000, 500), [para])).toEqual([]);
-    const common = query({ id: "c", category: "common-word", text: "zonkfrel appears" });
+    const common = query({ id: "c", category: "common-word", text: "garden window" });
     expect(rules(corpus(5000, 30), [common])).toContain("c:common-word-rare-token");
   });
 
@@ -201,13 +203,11 @@ describe("auditQueries fidelity and scale", () => {
   });
 
   it("keeps common-word queries on the default read scope of a non-outsider viewer", () => {
-    const g = gold("weekly review budget notes");
-    const q = query({ id: "c", category: "common-word", text: "weekly review budget" });
-    // weekly and budget never co-occur outside the gold, so the trio is unique to it
-    const split = Array.from({ length: 40 }, (_, i) => entry(`s${i}`, i % 2 ? `weekly review notes ${i}` : `budget review notes ${i}`));
-    expect(rules([...split, g], [q])).toEqual([]);
-    expect(rules([...split, g], [{ ...q, layer: "company" }])).toContain("c:common-word-layer-scoped");
-    expect(rules([...split, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
+    const g = gold("garden window coffee notes");
+    const q = query({ id: "c", category: "common-word", text: "garden window coffee" });
+    expect(rules([...denseFiller, g], [q])).toEqual([]);
+    expect(rules([...denseFiller, g], [{ ...q, layer: "company" }])).toContain("c:common-word-layer-scoped");
+    expect(rules([...denseFiller, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
   });
 
   it("waives only identifier-not-in-gold for a known-gap underscore query, and demands a gap reference", () => {
@@ -230,5 +230,36 @@ describe("auditQueries fidelity and scale", () => {
     expect(rules([...filler, gold], [q({ tags: ["known-gap", "gap:T-0072", "gap:oops"] })])).toContain("u:unknown-tag");
     expect(rules([...filler, gold], [q({ tags: ["gap:T-0072"] })])).toContain("u:gap-ref-without-known-gap");
     expect(rules([...filler, gold], [q({ tags: ["gap"] })])).toContain("u:unknown-tag");
+  });
+
+  describe("common-word recency (LIKE keeps the 500 newest matching rows)", () => {
+    const q = query({ id: "r", category: "common-word", text: "garden window coffee" });
+    const corpus = (matching: number, goldAge: number, total: number) => [
+      dated("g", "garden window coffee reunion", goldAge),
+      ...Array.from({ length: matching }, (_, i) => dated(`m${i}`, `${pairText(i)} note ${i}`, 1 + (i % 100))),
+      ...Array.from({ length: total - matching - 1 }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+    ];
+
+    it("needs the gold outside the newest 500 matching rows at scale", () => {
+      expect(rules(corpus(800, 300, 3000), [q])).toEqual([]);
+      expect(rules(corpus(800, 0.5, 3000), [q])).toContain("r:common-word-gold-in-window");
+      expect(rules(corpus(400, 300, 3000), [q])).toContain("r:common-word-gold-in-window");
+    });
+
+    it("needs the whole union inside the window at the 1k tie scale", () => {
+      expect(rules(corpus(300, 300, 1000), [q])).toEqual([]);
+      expect(rules(corpus(600, 300, 1000), [q])).toContain("r:common-word-union-truncates");
+    });
+
+    it("counts the union within the viewer's scope only", () => {
+      const rows = [...corpus(800, 300, 3000).filter(row => !row.id.startsWith("m")), ...Array.from({ length: 800 }, (_, i) => dated(`b${i}`, `${pairText(i)} note ${i}`, 1 + (i % 100), "blake"))];
+      expect(rules(rows, [q])).toContain("r:common-word-gold-in-window");
+    });
+  });
+
+  it("accepts the router-budget tag and flags a Latin token that answers a CJK query", () => {
+    expect(rules([gold("hello world")], [query({ id: "t", category: "paraphrase", text: "greeting", tags: ["router-budget"] })])).not.toContain("t:unknown-tag");
+    const mixed = gold("来月の予算について話した budget review");
+    expect(rules([mixed], [query({ id: "latin", category: "cjk", text: "budget 採用計画" })])).toContain("latin:cjk-no-shared-substring");
   });
 });
