@@ -89,6 +89,8 @@ describe("memory-bearing files", () => {
     "state.db",
     "state.db-wal",                    // SQLite's sidecars carry content too
     "state.db-shm",
+    ".eval-cache/public/miracl-ja/corpus.jsonl", // normalized public eval datasets (Task 12)
+    ".eval-cache/replay/bge-m3.jsonl",           // derived vectors over them
   ]) {
     it(`ignores ${path}`, () => {
       expect(ignored(path), `${path} could be committed`).toBe(true);
