@@ -52,6 +52,8 @@ export interface QueryResult {
   /** Returned ids whose workspace the viewer cannot read. Must always be empty. */
   leaked: string[];
   ftsRoute?: string;
+  /** Degradation recall reported for this query (dense arm down, filter rejected, FTS error). Any entry is a hard-invariant problem. */
+  degraded?: string[];
   error?: string;
 }
 
@@ -62,5 +64,9 @@ export interface VariantReport {
   embeddingModel: string;
   d1Backend: "sqlite" | "workerd";
   isolate: "warm" | "cold";
+  /** Result depth every query ran at; reports at different depths are not comparable. */
+  topK: number;
+  /** Bumped when the runner's measurement semantics change. */
+  runnerVersion: number;
   results: QueryResult[];
 }

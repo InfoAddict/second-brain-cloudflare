@@ -58,6 +58,7 @@ export interface Summary {
   wallMs: Dist;
   leaks: number;
   errors: number;
+  degraded: number;
 }
 
 function summarizeGroup(results: readonly QueryResult[]): Summary {
@@ -78,6 +79,7 @@ function summarizeGroup(results: readonly QueryResult[]): Summary {
     wallMs: dist(results.map(r => r.cost.wallMs)),
     leaks: results.reduce((s, r) => s + r.leaked.length, 0),
     errors: results.filter(r => r.error).length,
+    degraded: results.filter(r => r.degraded?.length).length,
   };
 }
 

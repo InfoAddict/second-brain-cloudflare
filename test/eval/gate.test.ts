@@ -4,7 +4,7 @@ import { QUERY_CATEGORIES, type QueryResult, type VariantReport } from "./types"
 
 function report(name: string, tweak: (i: number, r: QueryResult) => void = () => {}, n = 240): VariantReport {
   return {
-    schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm",
+    schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: 1,
     results: Array.from({ length: n }, (_, i) => {
       const r: QueryResult = {
         queryId: `q${i}`, category: QUERY_CATEGORIES[i % QUERY_CATEGORIES.length], clusterKey: `q${i}`, rankedIds: [],
@@ -24,6 +24,26 @@ const status = (result: ReturnType<typeof evaluateGate>, rule: string) => result
 
 describe("evaluateGate", () => {
   const base = report("baseline");
+
+  it("FAILs on a degraded query in the candidate", () => {
+    const result = evaluateGate(base, report("v", (i, r) => { if (i === 3) r.degraded = ["semantic-unavailable"]; }));
+    expect(result.verdict).toBe("FAIL");
+    expect(status(result, "degraded")).toBe("fail");
+  });
+
+  it("FAILs when the baseline is degraded, so a broken baseline cannot flatter a candidate", () => {
+    const result = evaluateGate(report("baseline", (i, r) => { if (i === 3) r.degraded = ["vectorize-filter-unfiltered"]; }), report("v", shift(0.5, 30)));
+    expect(result.verdict).toBe("FAIL");
+    expect(status(result, "degraded")).toBe("fail");
+  });
+
+  it("is INCONCLUSIVE when top-k or runner version differ", () => {
+    for (const tweak of [(r: VariantReport) => { r.topK = 5; }, (r: VariantReport) => { r.runnerVersion = 2; }]) {
+      const cand = report("v");
+      tweak(cand);
+      expect(status(evaluateGate(base, cand), "comparable")).toBe("inconclusive");
+    }
+  });
 
   it("PASSes a clear improvement with no regression and no extra cost", () => {
     const result = evaluateGate(base, report("v", shift(0.5, 30)), { allowUnmeasuredRowsRead: false });

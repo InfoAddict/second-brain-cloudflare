@@ -43,8 +43,17 @@ const builtin: VariantSpec[] = [
 
 export const VARIANTS: Record<string, VariantSpec> = Object.fromEntries(builtin.map(v => [v.name, v]));
 
+const BUILTIN = new Set(builtin.map(v => v.name));
+
 export function registerVariant(spec: VariantSpec): void {
+  if (VARIANTS[spec.name]) throw new Error(`variant "${spec.name}" is already registered`);
   VARIANTS[spec.name] = spec;
+}
+
+/** For tests: removes a registered variant. Builtins cannot be removed. */
+export function unregisterVariant(name: string): void {
+  if (BUILTIN.has(name)) throw new Error(`"${name}" is a builtin variant and cannot be unregistered`);
+  delete VARIANTS[name];
 }
 
 export function getVariant(name: string): VariantSpec {

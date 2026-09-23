@@ -73,6 +73,8 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   if (base.embeddingModel !== cand.embeddingModel) problems.push("embedding model differs");
   if (base.d1Backend !== cand.d1Backend) problems.push("D1 backend differs");
   if (base.isolate !== cand.isolate) problems.push("isolate mode differs");
+  if (base.topK !== cand.topK) problems.push(`top-k differs (${base.topK} vs ${cand.topK})`);
+  if (base.runnerVersion !== cand.runnerVersion) problems.push(`runner version differs (${base.runnerVersion} vs ${cand.runnerVersion})`);
   const baseDups = duplicateIds(base), candDups = duplicateIds(cand);
   if (baseDups.length) problems.push(`duplicate query IDs in baseline: ${listIds(baseDups)}`);
   if (candDups.length) problems.push(`duplicate query IDs in candidate: ${listIds(candDups)}`);
@@ -105,6 +107,11 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   const baseErrors = base.results.filter(r => r.error).length;
   const candErrors = cand.results.filter(r => r.error).length;
   add("errors", candErrors <= baseErrors ? "pass" : "fail", `${candErrors} query error(s) vs ${baseErrors} in the baseline`);
+
+  // A degraded run measures a broken pipeline: fail closed on either side, so a degraded baseline cannot flatter a candidate.
+  const degradedBase = base.results.filter(r => r.degraded?.length).length;
+  const degradedCand = cand.results.filter(r => r.degraded?.length).length;
+  add("degraded", degradedBase + degradedCand === 0 ? "pass" : "fail", `${degradedCand} degraded query(ies) in the candidate, ${degradedBase} in the baseline`);
 
   const problems = comparabilityProblems(base, cand);
   if (problems.length) {

@@ -5,7 +5,7 @@ import { readScopeWorkspaces } from "../../src/lib/scope";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
-import { resetVectorizeFilterState } from "../../src/vectorize/scope";
+import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vectorize/scope";
 import type { LoadedCorpus } from "./corpus/loader";
 import { EVAL_NOW, IDENTITIES } from "./corpus/types";
 import { scoreQuery } from "./metrics";
@@ -14,6 +14,9 @@ import type { VariantSpec } from "./variants";
 
 /** Metrics need the top 10; recall@5 is read from its first five (Decision 9). */
 export const EVAL_TOP_K = 10;
+
+/** Bump when what a report means changes (measurement, guards, degradation flags). */
+export const RUNNER_VERSION = 1;
 
 export function freezeClock(fixed: number): () => void {
   const real = Date.now;
@@ -27,13 +30,19 @@ export function findLeaks(rankedIds: readonly string[], readable: ReadonlySet<st
 
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
+class RecallCountDrift extends Error {
+  constructor(queryId: string) {
+    super(`query ${queryId} returned results but no recall_count write was intercepted; the statement in search.ts changed, update RECALL_COUNT_BUMP`);
+  }
+}
+
 const RECALL_COUNT_BUMP = /^\s*UPDATE\s+entries\s+SET\s+recall_count\s*=\s*recall_count\s*\+\s*1\b/i;
 
 /**
  * recallEntries builds the recall_count UPDATE eagerly (search.ts), so a no-op waitUntil alone does not
  * stop it. Answer that one statement with an inert result priced like the real PK update; it stays visible to the cost counters.
  */
-function withoutRecallCountWrites(db: D1Database): D1Database {
+function withoutRecallCountWrites(db: D1Database, onIntercept: () => void): D1Database {
   return new Proxy(db, {
     get(target, prop, receiver) {
       if (prop !== "prepare") {
@@ -42,6 +51,7 @@ function withoutRecallCountWrites(db: D1Database): D1Database {
       }
       return (sql: string) => {
         if (!RECALL_COUNT_BUMP.test(sql)) return target.prepare(sql);
+        onIntercept();
         const inert = { bind: () => inert, run: async () => ({ success: true, results: [], meta: { rows_read: 1, rows_written: 1 } }) };
         return inert as unknown as D1PreparedStatement;
       };
@@ -69,18 +79,25 @@ export async function runVariant(o: {
     if (variant.ftsReady === false) await corpus.env.OAUTH_KV.delete(FTS_READY_KV_KEY);
     else await corpus.env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    resetVectorizeFilterState(); // module-level latch: every run starts from a fresh isolate
 
-    const env = { ...corpus.env, DB: withoutRecallCountWrites(corpus.env.DB) } as typeof corpus.env;
+    let intercepted = 0;
+    const env = { ...corpus.env, DB: withoutRecallCountWrites(corpus.env.DB, () => { intercepted++; }) } as typeof corpus.env;
     const recallOnce = async (q: GoldenQuery) => {
       const diagnostics: RecallDiagnostics = {};
       corpus.replay.drainCalls();
+      const degradedBefore = vectorizeFilterState().degradedQueries;
+      intercepted = 0;
       const started = performance.now();
       const result = await recallEntries(
         { query: q.text, topK: EVAL_TOP_K, hops: q.hops, synthesize: false },
         env, ctx, cfg,
         { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
       );
-      return { result, diagnostics, wallMs: performance.now() - started, calls: corpus.replay.drainCalls() };
+      return {
+        result, diagnostics, wallMs: performance.now() - started, calls: corpus.replay.drainCalls(),
+        filterDegraded: vectorizeFilterState().degradedQueries > degradedBefore,
+      };
     };
 
     if (o.isolate === "warm") {
@@ -98,7 +115,7 @@ export async function runVariant(o: {
       const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
       const base = { queryId: q.id, category: q.category, clusterKey: q.clusterKey ?? q.id };
       try {
-        const { result, diagnostics, wallMs, calls } = await recallOnce(q);
+        const { result, diagnostics, wallMs, calls, filterDegraded } = await recallOnce(q);
         const rankedIds = result.matches.map(m => m.id);
         const ops = diagnostics.operations!;
         results.push({
@@ -111,13 +128,21 @@ export async function runVariant(o: {
           },
           leaked: findLeaks(rankedIds, readable, corpus.workspaceOf),
           ftsRoute: diagnostics.ftsRoute,
+          degraded: [
+            ...(result.semanticUnavailable ? ["semantic-unavailable"] : []),
+            ...(filterDegraded ? ["vectorize-filter-unfiltered"] : []),
+            ...(diagnostics.ftsRoute === "like-error" ? ["fts-error"] : []),
+          ],
         });
+        // Presented direct results always bump recall_count; none seen means the write drifted past the guard.
+        if (rankedIds.length && intercepted === 0) throw new RecallCountDrift(q.id);
       } catch (e) {
+        if (e instanceof RecallCountDrift) throw e;
         results.push({ ...base, rankedIds: [], metrics: scoreQuery([], q.gold), cost: ZERO_COST, leaked: [], error: e instanceof Error ? e.message : String(e) });
       }
       o.onProgress?.(results.length, o.queries.length);
     }
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, d1Backend: corpus.d1.kind, isolate: o.isolate, results };
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, results };
   } finally {
     restoreClock();
   }

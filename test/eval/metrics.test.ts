@@ -48,4 +48,17 @@ describe("metrics", () => {
     expect(summarize([base(1)]).byCategory["rare-word"]?.n).toBe(1);
     expect(summarize([base(100), base(null)]).overall.estimatedNeuronQueries).toBe(1);
   });
+
+  it("summarize counts degraded queries overall and per category", () => {
+    const q = (id: string, degraded?: string[]): QueryResult => ({
+      queryId: id, category: id === "c" ? "cjk" : "rare-word", clusterKey: id, rankedIds: [],
+      metrics: { recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 },
+      cost: { d1Statements: 1, d1RowsRead: 1, aiCalls: 0, embeddingCalls: 0, vectorizeQueries: 0, kvReads: 0, neurons: 0, neuronsEstimated: false, wallMs: 1 },
+      leaked: [], degraded,
+    });
+    const s = summarize([q("a", ["semantic-unavailable"]), q("b", []), q("c", ["fts-error"]), q("d")]);
+    expect(s.overall.degraded).toBe(2);
+    expect(s.byCategory["rare-word"]?.degraded).toBe(1);
+    expect(s.byCategory.cjk?.degraded).toBe(1);
+  });
 });

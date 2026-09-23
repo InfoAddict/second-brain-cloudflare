@@ -4,23 +4,28 @@ import type { Config } from "../../src/config";
 import type { RecallInternalOptions } from "../../src/recall/types";
 import { ReplayStore, makeReplayAi } from "./ai-replay";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
-import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry } from "./corpus/types";
-import { findLeaks, freezeClock, readReport, runVariant, writeReport } from "./runner";
+import { ACTORS, EVAL_NOW, IDENTITIES, WORKSPACES, type CorpusEntry } from "./corpus/types";
+import { EMBEDDING_DIMS } from "./ai-replay";
+import { readScopeWorkspaces } from "../../src/lib/scope";
+import { vectorizeFilterState } from "../../src/vectorize/scope";
+import { ExactVectorize } from "./vectorize-emulator";
+import { EVAL_TOP_K, RUNNER_VERSION, findLeaks, freezeClock, readReport, runVariant, writeReport } from "./runner";
 import type { GoldenQuery } from "./types";
-import { getVariant } from "./variants";
+import { getVariant, registerVariant, unregisterVariant } from "./variants";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 type Call = { params: Record<string, unknown>; ctx: ExecutionContext; cfg: Readonly<Config>; internal: RecallInternalOptions; now: number };
 const seen: Call[] = [];
+let bypassDb: unknown; // drift probe: hand recall the unguarded DB
 vi.mock("../../src/recall/search", async (orig) => {
   const actual = await orig<typeof import("../../src/recall/search")>();
   return {
     ...actual,
     recallEntries: (params: Call["params"], env: never, ctx: ExecutionContext, cfg: Readonly<Config>, internal: RecallInternalOptions) => {
       seen.push({ params, ctx, cfg, internal, now: Date.now() });
-      return actual.recallEntries(params as never, env, ctx, cfg, internal);
+      return actual.recallEntries(params as never, bypassDb ? { ...(env as object), DB: bypassDb } as never : env, ctx, cfg, internal);
     },
   };
 });
@@ -43,7 +48,7 @@ const queries: GoldenQuery[] = [
 
 let open: LoadedCorpus[] = [];
 afterEach(async () => {
-  seen.length = 0; await Promise.all(open.map(c => c.close())); open = []; });
+  seen.length = 0; bypassDb = undefined; await Promise.all(open.map(c => c.close())); open = []; });
 
 async function corpus(): Promise<LoadedCorpus> {
   const c = await loadCorpus({
@@ -207,5 +212,123 @@ describe("runner determinism rules", () => {
     open.push(c);
     const report = await run(c);
     expect(report.results.every(r => typeof r.cost.d1RowsRead === "number" && r.cost.d1RowsRead > 0)).toBe(true);
+ }, 30_000); // workerd startup is slow under parallel load
+});
+
+describe("leak sentinel", () => {
+  it("flags an unplaceable id even for an admin whose readable set contains the empty string", () => {
+    const readable = new Set(readScopeWorkspaces(IDENTITIES.avery));
+    expect(readable.has("")).toBe(true); // premise: the admin identity's default share is ""
+    expect(findLeaks(["ghost"], readable, new Map())).toEqual(["ghost"]);
+  });
+});
+
+describe("degraded recalls", () => {
+  const dead = (c: LoadedCorpus) => { (c.vectorize as unknown as { query: unknown }).query = async () => { throw new Error("vectorize down"); }; };
+
+  it("records a dead dense arm on the query instead of reporting a clean run", async () => {
+    const c = await corpus();
+    dead(c);
+    const report = await run(c);
+    expect(report.results.every(r => !r.error)).toBe(true);
+    expect(report.results.every(r => r.degraded?.includes("semantic-unavailable"))).toBe(true);
+  });
+
+  it("records a rejected workspace filter as degraded", async () => {
+    const c = await corpus();
+    (c.env as { VECTORIZE: unknown }).VECTORIZE = new ExactVectorize({ dimensions: EMBEDDING_DIMS[MODEL]!, indexedProperties: [] });
+    const report = await run(c);
+    expect(report.results.every(r => r.degraded?.includes("vectorize-filter-unfiltered"))).toBe(true);
+  });
+
+  it("records an FTS failure that fell back to LIKE as degraded", async () => {
+    const c = await corpus();
+    await c.env.DB.prepare(`DROP TABLE entries_fts`).run(); // the ready flag still says fts
+    const report = await run(c);
+    expect(report.results[0].ftsRoute).toBe("like-error");
+    expect(report.results.every(r => r.degraded?.includes("fts-error"))).toBe(true);
+  });
+
+  it("leaves a healthy run with no degradation", async () => {
+    const report = await run(await corpus());
+    expect(report.results.map(r => r.degraded)).toEqual([[], [], []]);
+  });
+});
+
+describe("report identity", () => {
+  it("carries clusterKey into the report and defaults it to the query id", async () => {
+    const c = await corpus();
+    const qs: GoldenQuery[] = [{ ...queries[0], clusterKey: "grp" }, queries[1]];
+    const report = await runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL });
+    expect(report.results.map(r => r.clusterKey)).toEqual(["grp", "q2"]);
+  });
+
+  it("records the top-k and runner version so reports from different harnesses are not compared", async () => {
+    const report = await run(await corpus());
+    expect(report).toMatchObject({ topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION });
+  });
+});
+
+describe("isolate hygiene", () => {
+  const strict = async () => {
+    const c = await corpus();
+    (c.env as { VECTORIZE: unknown }).VECTORIZE = new ExactVectorize({ dimensions: EMBEDDING_DIMS[MODEL]!, indexedProperties: [] });
+    return c;
+  };
+  const probes = (r: Awaited<ReturnType<typeof run>>) => r.results.map(x => x.cost.vectorizeQueries);
+
+  it("starts every run with a fresh Vectorize filter latch", async () => {
+    const a = await run(await strict());
+    expect(a.results.every(r => r.degraded?.includes("vectorize-filter-unfiltered"))).toBe(true);
+    expect(vectorizeFilterState().supported).toBe(false); // the first run left the latch tripped
+    const b = await run(await corpus()); // a healthy index must not inherit that state
+    expect(b.results.map(r => r.degraded)).toEqual([[], [], []]);
+  });
+
+  it("cold mode re-probes the filter on every query; warm mode learns it once", async () => {
+    const c = await strict();
+    const warm = await run(c, "baseline", "warm");
+    const cold = await run(c, "baseline", "cold");
+    expect(probes(warm).every(n => n === 1)).toBe(true);
+    expect(probes(cold).every(n => n === 2)).toBe(true);
+  });
+
+  it("restores Date.now even when the run itself throws", async () => {
+    const c = await corpus();
+    const real = Date.now;
+    vi.spyOn(c.env.OAUTH_KV, "put").mockRejectedValue(new Error("kv down"));
+    await expect(run(c)).rejects.toThrow(/kv down/);
+    expect(Date.now).toBe(real);
+    vi.restoreAllMocks();
+  });
+});
+
+describe("seam and guard", () => {
+  it("fts-orderless reaches recall as keywordPreRankedOverride=false; baseline leaves it unset", async () => {
+    const c = await corpus();
+    await run(c, "fts-orderless");
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(x => x.internal.keywordPreRankedOverride === false)).toBe(true);
+    seen.length = 0;
+    await run(c, "baseline");
+    expect(seen.every(x => x.internal.keywordPreRankedOverride === undefined)).toBe(true);
+  });
+
+  it("fails the run at the point of breakage if the recall_count write stops being intercepted", async () => {
+    const c = await corpus();
+    bypassDb = c.env.DB;
+    await expect(run(c)).rejects.toThrow(/recall_count/);
+  });
+});
+
+describe("variant registry", () => {
+  it("registers, resolves and unregisters a variant; refuses duplicates and builtins", () => {
+    registerVariant({ name: "tmp-x", description: "x" });
+    expect(getVariant("tmp-x").name).toBe("tmp-x");
+    expect(() => registerVariant({ name: "tmp-x", description: "y" })).toThrow(/already/);
+    unregisterVariant("tmp-x");
+    expect(() => getVariant("tmp-x")).toThrow(/unknown variant/);
+    expect(() => unregisterVariant("baseline")).toThrow(/builtin/);
+    expect(() => registerVariant({ name: "baseline", description: "z" })).toThrow(/already/);
   });
 });
