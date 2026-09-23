@@ -67,7 +67,27 @@ Second Brain runs as a Cloudflare Worker backed by D1, Vectorize, Workers AI, an
 2. **Organize:** Second Brain classifies it, checks for duplicates and contradictions, creates relationships, and indexes it for semantic search.
 3. **Recall:** Ask in natural language. Second Brain retrieves relevant memories, follows useful connections, and returns source-backed context to the tool you are using.
 
-If Vectorize is unavailable, captures and keyword recall continue working. Your memories remain usable while semantic indexing is restored. Keyword recall works for Japanese, Chinese, and other scripts written without spaces, and for full-width text. The shipped embedding models read English best; the desktop app's Settings can switch a brain to a multilingual reading.
+If Vectorize is unavailable, captures and keyword recall continue working. Your
+memories remain usable while semantic indexing is restored. The shipped
+embedding models read English best; the desktop app's Settings can switch a
+brain to a multilingual reading.
+
+Keyword recall is backed by a full-text index (SQLite FTS5 with a trigram
+tokenizer) ranked by relevance rather than a scan of every memory. Exact words,
+names, and identifiers such as `#149` or `v1.9` are found reliably even in older
+memories, as are Japanese, Chinese, and other scripts written without spaces,
+and full-width text. An old memory holding a rare word is no longer crowded out
+of the results by newer matches of other words, and the search's cost stays
+roughly flat as a brain grows, which protects the free plan's daily read limit
+on D1. New memories are indexed as they are saved.
+
+Queries containing a word shorter than three characters use the previous keyword
+search, so nothing is lost for them. Upgrading needs no action: new installs use
+the index immediately, and existing brains index their current memories in a
+nightly job, 2,000 per night, while recall keeps using the previous search and
+switches over once the index is complete. A nightly check detects index drift
+and rebuilds automatically. Semantic (vector) search, the graph, and the API and
+MCP tools are unchanged; no client needs updating.
 
 ### Memory tools
 
