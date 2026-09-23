@@ -49,10 +49,11 @@ const report = (label: string, mode: LegacyMode, metrics: LegacyMetrics) => {
   if (reporting) appendFileSync(REPORT_FILE, JSON.stringify({ label, mode, metrics }) + "\n");
 };
 
-function expectGates(suite: string, mode: LegacyMode, metrics: LegacyMetrics, gates: readonly Gate[]) {
-  const failures = gates.map(g => checkGate(suite, mode, metrics, g)).filter((f): f is string => f !== undefined);
-  expect(failures, failures.join("\n")).toEqual([]);
+function gateFailures(suite: string, mode: LegacyMode, metrics: LegacyMetrics, gates: readonly Gate[]): string[] {
+  return gates.map(g => checkGate(suite, mode, metrics, g)).filter((f): f is string => f !== undefined);
 }
+
+const expectNoFailures = (failures: string[]) => expect(failures, failures.join("\n")).toEqual([]);
 
 describe.each(LEGACY_MODES)("legacy benchmarks on real SQL, honest baseline: %s mode", (mode) => {
   it("root-quality: every original frozen gate, per split and overall", async () => {
@@ -61,16 +62,19 @@ describe.each(LEGACY_MODES)("legacy benchmarks on real SQL, honest baseline: %s 
     report("root-quality/holdout", mode, hold.metrics);
     report("root-quality/overall", mode, all.metrics);
     for (const o of all.observations) if (!hasShortToken(o.query)) expect(o.ftsUsed, `${o.id} (${mode})`).toBe(mode !== "like");
-    expectGates("root-quality/development", mode, dev.metrics, ROOT_QUALITY_GATES.development);
-    expectGates("root-quality/holdout", mode, hold.metrics, ROOT_QUALITY_GATES.holdout);
-    expectGates("root-quality/overall", mode, all.metrics, ROOT_QUALITY_GATES.overall);
+    // Collected across all three scopes so one run lists every failure.
+    expectNoFailures([
+      ...gateFailures("root-quality/development", mode, dev.metrics, ROOT_QUALITY_GATES.development),
+      ...gateFailures("root-quality/holdout", mode, hold.metrics, ROOT_QUALITY_GATES.holdout),
+      ...gateFailures("root-quality/overall", mode, all.metrics, ROOT_QUALITY_GATES.overall),
+    ]);
   });
 
   it("hidden validation: every original frozen gate", async () => {
     const { metrics, observations } = await evaluated("hidden", mode);
     report("hidden", mode, metrics);
     for (const o of observations) if (!hasShortToken(o.query)) expect(o.ftsUsed, `${o.id} (${mode})`).toBe(mode !== "like");
-    expectGates("hidden", mode, metrics, HIDDEN_GATES);
+    expectNoFailures(gateFailures("hidden", mode, metrics, HIDDEN_GATES));
     for (const domain of ["personal", "enterprise", "product", "architecture"] as const) {
       const rows = observations.filter(o => o.domain === domain);
       expect(rows.filter(o => o.authoritative).length, `${domain} (${mode})`).toBeGreaterThanOrEqual(rows.filter(o => o.baselineAuthoritative).length);

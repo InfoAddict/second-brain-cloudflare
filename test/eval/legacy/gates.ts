@@ -17,11 +17,14 @@ export interface GapEntry {
 export type GapTable = Record<string, GapEntry>;
 
 /**
- * Ceiling of a third of the headroom (candidateAvailability minus the honest
- * baseline's answers). The mock's improvement gates were exactly this against
- * its label-starved baseline: root-quality (16 - 4) / 3 = 4, hidden (8 - 2) / 3
- * = 2. Re-derived on the honest baseline: root-quality (16 - 13) / 3 -> 1,
- * hidden (8 - 8) / 3 -> 0 (the honest baseline is already at the ceiling).
+ * A judgment call, not a derivation. The mock's floors (root-quality 4, hidden 2)
+ * fit several formulas equally: headroom/3 (candidateAvailability minus baseline
+ * answers, so (16-4)/3 and (8-2)/3), candidateAvailability/4 and cases/5. This
+ * form was chosen because it is the only one that responds to the baseline's
+ * strength: on the honest baseline (13/20, 8/8) it gives 1 and 0, where the
+ * others would demand 4 and 2 of a baseline that leaves almost no room. That
+ * relaxed relative gate is safe only because absolute floors sit beside it:
+ * root-quality authoritativeAnswers >= 14 and hidden authoritativeAnswers >= 8.
  */
 export function improvementFloor(m: LegacyMetrics): number {
   return Math.ceil((m.candidateAvailability - m.baselineAuthoritativeAnswers) / 3);
@@ -76,6 +79,8 @@ export const HIDDEN_GATES: Gate[] = [
   gate("cases == 10", "cases", m => m.cases === 10),
   gate("candidateAvailability == 8", "candidateAvailability", m => m.candidateAvailability === 8),
   gate("seedHits >= 7", "seedHits", m => m.seedHits >= 7),
+  // Absolute floor: with the relative improvement gate, a pipeline and baseline that degrade together would pass.
+  gate("authoritativeAnswers >= 8", "authoritativeAnswers", m => m.authoritativeAnswers >= 8),
   improvement,
   reach(6),
   ...common,
@@ -103,9 +108,9 @@ export const HIDDEN_GATES: Gate[] = [
  */
 export const KNOWN_GAPS: GapTable = {};
 
-function gap(suite: string, gateName: string, metric: keyof LegacyMetrics, item: string, values: number | null | Record<"like" | "fts-orderless" | "fts", number | null>): void {
+function gap(suite: string, gateName: string, metric: keyof LegacyMetrics, item: string, value: number | null): void {
   for (const mode of ["like", "fts-orderless", "fts"] as const) {
-    KNOWN_GAPS[`${suite}/${mode}/${gateName}`] = { metric, value: typeof values === "object" && values !== null ? values[mode] : values, item };
+    KNOWN_GAPS[`${suite}/${mode}/${gateName}`] = { metric, value, item };
   }
 }
 

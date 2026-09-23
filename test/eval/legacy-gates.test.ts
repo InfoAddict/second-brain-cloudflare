@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { authorityRank, authorityRankRegressed, type LegacyMetrics } from "./legacy/harness";
-import { checkGate, improvementFloor, type Gate, type GapTable } from "./legacy/gates";
+import { HIDDEN_GATES, checkGate, improvementFloor, type Gate, type GapTable } from "./legacy/gates";
 
 const base: LegacyMetrics = {
   cases: 10, candidateAvailability: 8, fusionSurvival: 8, seedHits: 6, neighborhoodReach: 0,
@@ -74,5 +74,23 @@ describe("authority rank", () => {
     expect(authorityRankRegressed(["x"], ["a"], auth)).toBe(true); // answer lost
     expect(authorityRankRegressed(["x"], ["y"], auth)).toBe(false); // absent on both sides
     expect(authorityRankRegressed(["y", "a"], ["x", "a"], auth)).toBe(false); // distractor permutation
+  });
+});
+
+describe("hidden absolute floor", () => {
+  const hidden = (m: Partial<LegacyMetrics>): LegacyMetrics => ({
+    ...base, candidateAvailability: 8, seedHits: 8, neighborhoodReach: 6, usefulGraphPrecision: 1,
+    authorityRankRegressions: 0, authoritativeAnswers: 8, baselineAuthoritativeAnswers: 8, improvement: 0, ...m,
+  });
+  const failing = (m: LegacyMetrics) => HIDDEN_GATES.filter(g => !g.holds(m)).map(g => g.name);
+
+  it("holds at today's measurement", () => {
+    expect(failing(hidden({}))).toEqual([]);
+  });
+
+  it("fails when pipeline and baseline degrade together (8 -> 6 vs 8 -> 5), which the relative gate alone lets through", () => {
+    const m = hidden({ authoritativeAnswers: 6, baselineAuthoritativeAnswers: 5, improvement: 1 });
+    expect(m.improvement).toBeGreaterThanOrEqual(improvementFloor(m));
+    expect(failing(m)).toEqual(["authoritativeAnswers >= 8"]);
   });
 });
