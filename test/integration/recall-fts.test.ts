@@ -102,7 +102,9 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     const res = await recallEntries({ query: target.query, topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
 
     expect(diagnostics.ftsUsed).toBe(true);
-    expect(sqlite.issued.some(sql => sql.includes("entries_fts"))).toBe(true);
+    // v2.2: the FTS query now rides in a batch alongside the liveness check
+    // (one subrequest), so its SQL text is in sqlite.batches, not sqlite.issued.
+    expect(sqlite.batches.some(batch => batch.some(sql => sql.includes("entries_fts MATCH")))).toBe(true);
     expect(res.matches[0]?.id).toBe(target.id);
   });
 
@@ -181,6 +183,31 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
 
     expect(diagnostics.ftsUsed).toBe(false);
     expect(res.matches.map(m => m.id)).toContain("e1");
+  });
+
+  // v2.2 review: the "stale-read" case. A hot-path repair drops a corrupt
+  // trigger but the KV ready flag stays "1" (KV was down when the repair
+  // tried to clear it). Before the liveness check, entries_fts MATCH still
+  // ran fine against a table that had simply stopped syncing — no exception,
+  // just silently stale results forever. The liveness check is the fix:
+  // correctness never depends on KV.
+  it("stale read: ready flag still says 1 but a trigger is gone — recall discards FTS rows and uses LIKE", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    sqlite.seed({ id: "old", content: "searchable marker", createdAt: 1000 });
+    await sqlite.db.exec(`DROP TRIGGER entries_fts_insert`);
+    // No trigger fires for this insert: entries_fts never learns about it,
+    // yet the query itself would still succeed against the live table —
+    // exactly why an exception-based fallback alone cannot catch this.
+    sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at) VALUES ('new','new searchable marker','[]','api',1)`,
+    ).run();
+
+    const diagnostics: RecallDiagnostics = {};
+    const res = await recallEntries({ query: "searchable marker", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(res.matches.map(m => m.id)).toContain("new");
   });
 
   it("keys the FTS join on rowid as well as id", async () => {

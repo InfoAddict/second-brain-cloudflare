@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { isFtsFailure, isMissingFtsTable, repairFtsIndex, rebuildFtsIndex } from "../../src/db/fts-repair";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
@@ -86,16 +86,6 @@ describe("isFtsFailure", () => {
   it("matches SQLITE_CORRUPT_VTAB by name", () => {
     expect(isFtsFailure(err("SQLITE_CORRUPT_VTAB"))).toBe(true);
   });
-
-  // v2.1: the durable disabled marker renames entries_fts to
-  // entries_fts_disabled. An error naming THAT table must never be read as
-  // "entries_fts is missing" — the `\b` boundary after "entries_fts" already
-  // protects the missing-table pattern; verify it holds here too so a stray
-  // read against the disabled table never re-triggers repair.
-  it("does not match errors naming entries_fts_disabled", () => {
-    expect(isFtsFailure(err("no such table: entries_fts_disabled"))).toBe(false);
-    expect(isFtsFailure(err("table entries_fts_disabled has no column named id"))).toBe(false);
-  });
 });
 
 describe("isMissingFtsTable", () => {
@@ -115,10 +105,6 @@ describe("isMissingFtsTable", () => {
   it("is false for non-matching errors", () => {
     expect(isMissingFtsTable(err("no such table: entries"))).toBe(false);
     expect(isMissingFtsTable(null)).toBe(false);
-  });
-
-  it("is false for an error naming entries_fts_disabled", () => {
-    expect(isMissingFtsTable(err("no such table: entries_fts_disabled"))).toBe(false);
   });
 });
 
@@ -146,7 +132,7 @@ function envFor(s: SqliteD1, kv: ReturnType<typeof makeMemoryKV> = makeMemoryKV(
 const MISSING_TABLE_ERROR = new Error("no such table: entries_fts");
 const CORRUPT_ERROR = new Error("database disk image is malformed");
 
-describe("repairFtsIndex — write-path isolation v2 (never destroys the index)", () => {
+describe("repairFtsIndex — write-path isolation v2.2 (never destroys the index)", () => {
   it("missing table + KV success: creates the table and triggers, clears ready, resets cursor", async () => {
     const s = makeSqliteD1();
     try {
@@ -169,7 +155,7 @@ describe("repairFtsIndex — write-path isolation v2 (never destroys the index)"
     } finally { s.close(); }
   });
 
-  it("corrupt or wrong-shaped table: drops the FTS triggers and renames it to entries_fts_disabled, rows intact under the new name", async () => {
+  it("corrupt or wrong-shaped table: drops only the FTS triggers, leaves the table and its rows intact", async () => {
     const s = makeSqliteD1();
     try {
       s.seed({ id: "e1", content: "existing indexed row", createdAt: 1 });
@@ -183,11 +169,10 @@ describe("repairFtsIndex — write-path isolation v2 (never destroys the index)"
       await repairFtsIndex(envFor(s, kv), CORRUPT_ERROR);
 
       expect(await triggerNames(s)).toEqual([]);
-      // Renamed, not dropped: the original name is gone...
-      const originalName = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
-      expect(originalName.results).toEqual([]);
-      // ...but the table and its row survive under the disabled name.
-      const rows = await s.db.prepare("SELECT wrong_col FROM entries_fts_disabled").all() as { results: { wrong_col: string }[] };
+      // The (wrong-shaped) table itself is untouched: still there, same row.
+      // Not live (src/recall/fts.ts) — that is what makes this safe to
+      // observe, not a rename or any other new state.
+      const rows = await s.db.prepare("SELECT wrong_col FROM entries_fts").all() as { results: { wrong_col: string }[] };
       expect(rows.results).toEqual([{ wrong_col: "leftover" }]);
       expect(s.rows().map(r => r.id)).toEqual(["e1"]);
       expect(await kv.get(FTS_READY_KV_KEY)).toBeNull();
@@ -232,26 +217,25 @@ describe("repairFtsIndex — write-path isolation v2 (never destroys the index)"
     } finally { s.close(); }
   });
 
-  it("a non-missing-table error with a working KV renames the table to entries_fts_disabled, never drops it", async () => {
+  it("a non-missing-table error with a working KV still only drops triggers, never the table", async () => {
     const s = makeSqliteD1();
     try {
       s.seed({ id: "healthy", content: "still there", createdAt: 1 });
       await repairFtsIndex(envFor(s), CORRUPT_ERROR);
 
-      const disabled = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`).all() as { results: unknown[] };
-      expect(disabled.results).toHaveLength(1); // table itself still exists, renamed — was never dropped
-      const row = await s.db.prepare("SELECT count(*) AS n FROM entries_fts_disabled").first() as { n: number };
-      expect(row.n).toBe(1); // the insert trigger already populated it; repair must not touch its rows
+      expect(await ftsRowCount(s)).toBe(1); // the insert trigger already populated it; repair must not touch it
+      const table = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
+      expect(table.results).toHaveLength(1); // table itself still exists — was never dropped
     } finally { s.close(); }
   });
 
   it("a healthy index keeps every row even when the triggering error was corruption-shaped (no probe left to misfire)", async () => {
-    // Reproduces the reviewer's scenario without the health probe that used
-    // to cause it: an entries write throws an FTS-allowlisted error even
-    // though entries_fts itself is perfectly healthy. v2.1 never re-checks
-    // health — it renames the table out of the way (branch: not
-    // missing-table) instead of dropping anything, so no probe exists to
-    // flake and no row is ever destroyed, just relocated.
+    // An entries write throws an FTS-allowlisted error even though
+    // entries_fts itself is perfectly healthy. v2.2 never re-checks health —
+    // it just drops the triggers (branch: not missing-table) and leaves the
+    // table exactly as it was, so no probe exists to flake. Recall's own
+    // liveness check (src/recall/fts.ts), not this repair, is what then
+    // correctly reads the now-trigger-less table as not live.
     const s = makeSqliteD1();
     try {
       s.seed({ id: "seed", content: "searchable seed", createdAt: 1 });
@@ -260,57 +244,34 @@ describe("repairFtsIndex — write-path isolation v2 (never destroys the index)"
 
       await repairFtsIndex(envFor(s, kv), CORRUPT_ERROR);
 
-      const row = await s.db.prepare("SELECT count(*) AS n FROM entries_fts_disabled").first() as { n: number };
-      expect(row.n).toBe(1);
+      expect(await ftsRowCount(s)).toBe(1);
       expect(s.rows().map(r => r.id)).toEqual(["seed"]);
     } finally { s.close(); }
   });
 
-  it("missing table + entries_fts_disabled already exists: leaves the index down instead of recreating it", async () => {
+  // Ownership (v2.2): ENTRIES_FTS_TABLE_DDL has no IF NOT EXISTS, so two
+  // isolates racing to create a missing table cannot both partially apply —
+  // the loser's whole batch fails atomically ("table entries_fts already
+  // exists") and that failure is a no-op, not an error, not a retry.
+  it("missing table when a racing isolate already created it: treated as a no-op, not an error", async () => {
     const s = makeSqliteD1();
     try {
-      // A prior repair already renamed entries_fts away; a racing cold start
-      // (or a second guarded write) re-armed the triggers in the meantime,
-      // referencing a table that is genuinely missing under its own name.
-      await s.db.exec("ALTER TABLE entries_fts RENAME TO entries_fts_disabled");
-      const kv = makeMemoryKV();
+      await s.db.exec(
+        "DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;" +
+        "DROP TRIGGER IF EXISTS entries_fts_delete; DROP TABLE IF EXISTS entries_fts;",
+      );
+      // Simulates the winner: recreate the table+triggers directly, as the
+      // real creation batch would, before the loser's own repair runs.
+      await s.db.exec(
+        `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram');` +
+        `CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content); END;` +
+        `CREATE TRIGGER entries_fts_update AFTER UPDATE ON entries WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content BEGIN DELETE FROM entries_fts WHERE rowid = OLD.rowid; INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content); END;` +
+        `CREATE TRIGGER entries_fts_delete AFTER DELETE ON entries BEGIN DELETE FROM entries_fts WHERE rowid = OLD.rowid; END;`,
+      );
 
-      await repairFtsIndex(envFor(s, kv), MISSING_TABLE_ERROR);
+      await expect(repairFtsIndex(envFor(s), MISSING_TABLE_ERROR)).resolves.toBeUndefined();
 
-      expect(await triggerNames(s)).toEqual([]);
-      const table = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
-      expect(table.results).toEqual([]); // never recreated while disabled
-      const disabled = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`).all() as { results: unknown[] };
-      expect(disabled.results).toHaveLength(1); // the marker itself is untouched
-    } finally { s.close(); }
-  });
-
-  it("rename failure falls back to dropping only the triggers, and logs one line", async () => {
-    const s = makeSqliteD1();
-    try {
-      s.seed({ id: "e1", content: "survives the failed rename", createdAt: 1 });
-      const rawBatch = (s.db as unknown as { batch: (statements: unknown[]) => Promise<unknown> }).batch.bind(s.db);
-      const db = {
-        prepare: s.db.prepare.bind(s.db),
-        batch: (statements: { sourceSql?: () => string }[]) => {
-          if (statements.some(st => st.sourceSql?.().includes("RENAME TO entries_fts_disabled"))) {
-            return Promise.reject(new Error("ALTER TABLE failed: vtable rename unsupported"));
-          }
-          return rawBatch(statements);
-        },
-      } as unknown as D1Database;
-      const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      await repairFtsIndex(makeTestEnv(undefined, { DB: db, OAUTH_KV: makeMemoryKV() }), CORRUPT_ERROR);
-
-      expect(await triggerNames(s)).toEqual([]);
-      // The rename never landed: entries_fts is still there under its own
-      // name, not renamed, not dropped — only its triggers are gone.
-      const original = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
-      expect(original.results).toHaveLength(1);
-      expect(s.rows().map(r => r.id)).toEqual(["e1"]);
-      expect(logSpy).toHaveBeenCalledTimes(1);
-      logSpy.mockRestore();
+      expect(await ftsObjectNames(s)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
     } finally { s.close(); }
   });
 
@@ -330,16 +291,18 @@ describe("repairFtsIndex — write-path isolation v2 (never destroys the index)"
       const envA = envFor(s); (envA as { DB: D1Database }).DB = dbA; (envA as { OAUTH_KV: unknown }).OAUTH_KV = kvA;
       const envB = envFor(s); (envB as { DB: D1Database }).DB = dbB; (envB as { OAUTH_KV: unknown }).OAUTH_KV = kvB;
 
-      const [firstOk, secondOk] = await Promise.all([
-        repairFtsIndex(envA, MISSING_TABLE_ERROR).then(() => true),
-        repairFtsIndex(envB, MISSING_TABLE_ERROR).then(() => true),
+      const [firstOk, secondOk] = await Promise.allSettled([
+        repairFtsIndex(envA, MISSING_TABLE_ERROR),
+        repairFtsIndex(envB, MISSING_TABLE_ERROR),
       ]);
       await s.db.prepare(
         "INSERT INTO entries (id,content,tags,source,created_at) VALUES ('first','first searchable','[]','api',1)",
       ).run();
 
-      expect(firstOk).toBe(true);
-      expect(secondOk).toBe(true);
+      // One of the two may see "table already exists" and no-op; neither
+      // may ever reject with anything else.
+      expect(firstOk.status).toBe("fulfilled");
+      expect(secondOk.status).toBe("fulfilled");
       const fts = (await s.db.prepare("SELECT id FROM entries_fts ORDER BY id").all() as { results: { id: string }[] }).results.map(r => r.id);
       expect(fts).toEqual(["first"]);
       expect(s.rows().map(r => r.id).sort()).toEqual(["first", "old"]);
@@ -367,6 +330,10 @@ describe("rebuildFtsIndex — the ONLY destructive path (nightly, Task 5)", () =
     } finally { s.close(); }
   });
 
+  // Verified against real node:sqlite: DROP TABLE entries_fts does NOT drop
+  // these triggers — they are defined ON entries, not ON entries_fts — so a
+  // trigger-drop step is required in its own right, not implied by the
+  // table drop.
   it("drops and recreates a table that is missing its sync triggers", async () => {
     const s = makeSqliteD1();
     try {
@@ -381,41 +348,40 @@ describe("rebuildFtsIndex — the ONLY destructive path (nightly, Task 5)", () =
     } finally { s.close(); }
   });
 
+  it("drops a stray, still-live trigger the table drop alone would have left behind", async () => {
+    // A trigger surviving DROP TABLE entries_fts (see the node:sqlite note
+    // above) must not go on running against the freshly recreated table
+    // with a mismatched or otherwise stale body.
+    const s = makeSqliteD1();
+    try {
+      await s.db.exec("DROP TRIGGER entries_fts_insert");
+      await s.db.exec("CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN SELECT RAISE(ABORT, 'fts5: corrupt'); END");
+      const kv = makeMemoryKV();
+
+      await rebuildFtsIndex(envFor(s, kv));
+
+      const row = await s.db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'entries_fts_insert'`,
+      ).first() as { sql: string };
+      expect(row.sql).not.toContain("RAISE");
+      await s.db.prepare(
+        "INSERT INTO entries (id,content,tags,source,created_at) VALUES ('e1','e1 searchable','[]','api',1)",
+      ).run();
+      expect(await ftsRowCount(s)).toBe(1);
+    } finally { s.close(); }
+  });
+
   it("is never called from repairFtsIndex's own module path (no accidental hot-path use)", async () => {
     // rebuildFtsIndex is exported for Task 5 to call; repairFtsIndex must
     // never reach for it. Proven behaviourally: repairFtsIndex on a corrupt
-    // table never drops the table itself (see the tests above) — it exists
-    // under one of its two names (live or disabled) — which is exactly the
-    // distinction rebuildFtsIndex does not preserve (it always drops both).
+    // table never drops the table itself (see the tests above), which is
+    // exactly what rebuildFtsIndex always does.
     const s = makeSqliteD1();
     try {
       s.seed({ id: "e1", content: "must survive repairFtsIndex", createdAt: 1 });
       await repairFtsIndex(envFor(s), CORRUPT_ERROR);
-      const table = await s.db.prepare(
-        `SELECT name FROM sqlite_master WHERE name IN ('entries_fts','entries_fts_disabled')`,
-      ).all() as { results: unknown[] };
+      const table = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
       expect(table.results).toHaveLength(1);
-    } finally { s.close(); }
-  });
-
-  it("clears an entries_fts_disabled marker along with entries_fts", async () => {
-    const s = makeSqliteD1();
-    try {
-      await s.db.exec("DROP TABLE entries_fts");
-      await s.db.exec("CREATE TABLE entries_fts_disabled (wrong_col TEXT)");
-      await s.db.exec("INSERT INTO entries_fts_disabled (wrong_col) VALUES ('stale')");
-      const kv = makeMemoryKV();
-      await kv.put(FTS_READY_KV_KEY, "1");
-      await kv.put(FTS_BACKFILL_CURSOR_KV_KEY, "500");
-
-      await rebuildFtsIndex(envFor(s, kv));
-
-      const disabled = await s.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`).all() as { results: unknown[] };
-      expect(disabled.results).toEqual([]);
-      expect(await ftsObjectNames(s)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
-      expect(await ftsRowCount(s)).toBe(0);
-      expect(await kv.get(FTS_READY_KV_KEY)).toBeNull();
-      expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
     } finally { s.close(); }
   });
 

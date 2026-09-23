@@ -4,6 +4,7 @@ import type { Env } from "../../src/env";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
 import { TAG_VOCABULARY_KEY } from "../../src/tags/vocabulary";
+import { FTS_READY_KV_KEY } from "../../src/constants";
 import { makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { snapshotRecallBudget } from "../helpers/recall-budget";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -137,5 +138,29 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     );
     await Promise.all(state.deferred);
     expect(snapshotRecallBudget(warmDiagnostics, warm).kvReads).toBe(1); // tag vocabulary only; no readiness re-read
+  });
+
+  // Write-path isolation v2.2: the liveness check (src/recall/fts.ts) rides
+  // in the SAME env.DB.batch() as the FTS query, so it costs one extra SQL
+  // statement but zero extra subrequests — a batch counts as one D1 call
+  // (src/recall/diagnostics.ts's observeD1) regardless of how many
+  // statements it carries, the same convention production D1 bills by.
+  it("a live FTS index costs the same one D1 call as the LIKE fallback — the liveness check rides in the batch", async () => {
+    resetFtsReadyMemo();
+    const state = await setup(0);
+    await state.env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+
+    const result = await recallEntries(
+      { query: "why atlas ledger changed", topK: 5, hops: 0, synthesize: false },
+      state.env,
+      state.ctx,
+      DEFAULTS,
+      { diagnostics: state.diagnostics },
+    );
+    await Promise.all(state.deferred);
+
+    expect(state.diagnostics.ftsUsed).toBe(true); // the live index actually served this
+    const budget = snapshotRecallBudget(state.diagnostics, result);
+    expect(budget.d1Statements).toBe(5); // identical to the LIKE-path baseline above
   });
 });

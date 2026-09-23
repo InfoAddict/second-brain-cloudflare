@@ -407,6 +407,13 @@ export class D1Mock {
         return { meta: {} };
       },
       async first() {
+        // src/recall/fts.ts's FTS_LIVENESS_SQL (write-path isolation v2.2):
+        // this mock represents a migrated, healthy brain (SCHEMA_PROBE_RESULTS
+        // above already lists entries_fts and all three of its triggers), so
+        // the honest answer is "live" — the count of all four.
+        if (s.includes("FROM sqlite_master") && s.includes("entries_fts_insert") && s.includes("count(*)")) {
+          return { n: 4 };
+        }
         // ── ensureTenantBootstrap / resolveIdentity (tenancy) ──
         if (s.startsWith("SELECT id FROM workspaces WHERE kind")) {
           const kind = s.match(/kind = '(\w+)'/)?.[1];

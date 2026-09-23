@@ -135,7 +135,10 @@ function skipBalancedParens(sql: string, i: number): number {
  */
 function skipLeadingWith(sql: string): string {
   const n = sql.length;
-  let i = /^WITH\s*/i.exec(sql)![0].length;
+  // Optional RECURSIVE must be consumed here, before the loop starts looking
+  // for the first CTE's name — otherwise it reads "RECURSIVE" itself as that
+  // name and never finds the real one (v2.2 review).
+  let i = /^WITH\s*(?:RECURSIVE\s+)?/i.exec(sql)![0].length;
   for (;;) {
     i = skipWsAndComments(sql, i);
     const nameStart = i;

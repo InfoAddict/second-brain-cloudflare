@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { ftsMatchQuery, ftsReady, resetFtsReadyMemo } from "../../src/recall/fts";
+import { FTS_LIVENESS_SQL, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveCount, resetFtsReadyMemo } from "../../src/recall/fts";
 import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
 import { tokenizeQuery } from "../../src/text/tokenize";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { makeTestEnv } from "../helpers/make-env";
 
 describe("ftsMatchQuery", () => {
   it("quotes each token and joins with OR", () => {
@@ -101,5 +103,52 @@ describe("ftsReady", () => {
     fail = false;
     vi.setSystemTime(1); // one ms later, still inside any TTL window
     expect(await ftsReady(env)).toBe(true);
+  });
+});
+
+describe("isFtsLiveCount / isFtsLive — write-path isolation v2.2 invariant", () => {
+  it("is live only when the count is exactly 4 (table plus all three triggers)", () => {
+    expect(isFtsLiveCount({ n: 4 })).toBe(true);
+    expect(isFtsLiveCount({ n: 0 })).toBe(false);
+    expect(isFtsLiveCount({ n: 1 })).toBe(false);
+    expect(isFtsLiveCount({ n: 3 })).toBe(false);
+    expect(isFtsLiveCount(null)).toBe(false);
+    expect(isFtsLiveCount(undefined)).toBe(false);
+  });
+
+  let d1: SqliteD1;
+  afterEach(() => d1?.close());
+
+  it("reports live against a real, fully-migrated schema", async () => {
+    d1 = makeSqliteD1();
+    const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
+
+    expect(await isFtsLive(env)).toBe(true);
+  });
+
+  it("reports not live when a trigger is missing", async () => {
+    d1 = makeSqliteD1();
+    await d1.db.exec("DROP TRIGGER entries_fts_insert");
+    const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
+
+    expect(await isFtsLive(env)).toBe(false);
+  });
+
+  it("reports not live when the table itself is missing", async () => {
+    d1 = makeSqliteD1();
+    await d1.db.exec("DROP TABLE entries_fts");
+    const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
+
+    expect(await isFtsLive(env)).toBe(false);
+  });
+
+  it("costs exactly one D1 statement", async () => {
+    d1 = makeSqliteD1();
+    d1.issued.length = 0;
+    const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
+
+    await isFtsLive(env);
+
+    expect(d1.issued).toEqual([FTS_LIVENESS_SQL]);
   });
 });

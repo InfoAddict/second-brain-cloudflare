@@ -96,7 +96,9 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
   const prepared: string[] = [];
 
   const recordCreatedObject = (sql: string) => {
-    const created = sql.match(/CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/);
+    // "IF NOT EXISTS" is optional: entries_fts's own CREATE VIRTUAL TABLE
+    // deliberately has none (v2.2 ownership rule — see ENTRIES_FTS_TABLE_DDL).
+    const created = sql.match(/CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER)(?:\s+IF NOT EXISTS)?\s+(\w+)/);
     if (!created) return;
     objects.add(created[1]);
     if (created[1] === "entries") BASE_COLUMNS.forEach(c => columns.add(c));
@@ -150,6 +152,12 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
       });
       return make([]);
     },
+    // v2.2 ownership rule: entries_fts and its triggers are created in one
+    // batch (src/db/init.ts). Mirrors D1Mock's own batch(): run each
+    // statement through run(), which is what already tracks created objects.
+    async batch(stmts: { run(): Promise<unknown> }[]) {
+      return Promise.all(stmts.map(s => s.run()));
+    },
   } as unknown as D1Database;
 
   return { env: makeTestEnv(undefined, { DB }), execd, prepared, rows };
@@ -175,7 +183,7 @@ describe("initializeDatabase updated_at migration", () => {
 
     await initializeDatabase(env);
 
-    expect(prepared.filter(s => !PROBE.test(s) && !s.startsWith("CREATE TRIGGER"))).toEqual([]);
+    expect(prepared.filter(s => !PROBE.test(s) && !s.startsWith("CREATE TRIGGER") && !s.startsWith("CREATE VIRTUAL TABLE"))).toEqual([]);
     expect(touchesEntries(execd)).toEqual([]);
     // The rows are left NULL on purpose — readers coalesce updated_at to created_at.
     expect(rows.every(r => r.updated_at === null)).toBe(true);
@@ -229,11 +237,14 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 46 -> 49 by the time-anchor ALTERs: when_at, when_kind, when_source.
       // MOVED 49 -> 50 by when_label, the nightly pass's persisted label.
       // MOVED 50 -> 52 by the push_subscriptions table and idx_push_subscriptions_workspace.
-      // MOVED 52 -> 56 by entries_fts (SCHEMA_OBJECTS) and its three sync triggers
-      // (POST_COLUMN_OBJECTS): entries_fts_insert, entries_fts_update, entries_fts_delete.
+      // MOVED 52 -> 56 by entries_fts and its three sync triggers, created
+      // together in one dedicated batch (v2.2 ownership rule) rather than as
+      // a SCHEMA_OBJECTS entry (execd) plus three POST_COLUMN_OBJECTS
+      // entries (prepared) — all four now go through prepare(), moving one
+      // statement from execd to prepared without changing the combined total.
       expect(migrated).toBe(56); // 27 base objects + 18 ALTERs + 10 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
-      expect(prepared).toHaveLength(10); // three probes plus seven prepared trigger DDLs
+      expect(prepared).toHaveLength(11); // three probes plus eight prepared DDLs (four capsule triggers, entries_fts + its three triggers)
       expect(touchesEntries(execd)).toEqual([]);
     });
 
@@ -266,7 +277,7 @@ describe("initializeDatabase updated_at migration", () => {
       await Promise.all([initializeDatabase(env), initializeDatabase(env), initializeDatabase(env)]);
 
       expect(execd).toHaveLength(once);
-      expect(prepared).toHaveLength(8); // one probe + seven trigger DDLs (four capsule, three FTS); no repeat work
+      expect(prepared).toHaveLength(9); // one probe + eight prepared DDLs (four capsule triggers, entries_fts + its three triggers); no repeat work
     });
 
     it("shares one in-flight promise across concurrent callers", async () => {
@@ -286,7 +297,7 @@ describe("initializeDatabase updated_at migration", () => {
       resetDatabaseInit();
       await initializeDatabase(env);
 
-      expect(prepared).toHaveLength(9); // first probe + seven trigger DDLs + second probe
+      expect(prepared).toHaveLength(10); // first probe + eight prepared DDLs (four capsule triggers, entries_fts + its three triggers) + second probe
     });
   });
 
@@ -312,6 +323,7 @@ describe("initializeDatabase updated_at migration", () => {
           all: async () => (state.failing ? fail() : { results: [] }),
           run: async () => (state.failing ? fail() : { meta: { changes: 0 } }),
         }),
+        batch: async (stmts: { run(): Promise<unknown> }[]) => Promise.all(stmts.map(s => s.run())),
       } as unknown as D1Database;
       return { state, env: makeTestEnv(undefined, { DB }) };
     }
@@ -345,6 +357,7 @@ describe("initializeDatabase updated_at migration", () => {
           all: async () => ({ results: [] }),
           run: async () => ({ meta: { changes: 0 } }),
         }),
+        batch: async (stmts: { run(): Promise<unknown> }[]) => Promise.all(stmts.map(s => s.run())),
       } as unknown as D1Database;
       const env = makeTestEnv(undefined, { DB });
 
@@ -368,6 +381,7 @@ describe("initializeDatabase updated_at migration", () => {
           all: async () => ({ results: [] }),
           run: async () => ({ meta: { changes: 0 } }),
         }),
+        batch: async (stmts: { run(): Promise<unknown> }[]) => Promise.all(stmts.map(s => s.run())),
       } as unknown as D1Database;
 
       await expect(initializeDatabase(makeTestEnv(undefined, { DB }))).resolves.toBeUndefined();
@@ -384,6 +398,7 @@ describe("initializeDatabase updated_at migration", () => {
           all: async () => ({ results: [] }),
           run: async () => ({ meta: { changes: 0 } }),
         }),
+        batch: async (stmts: { run(): Promise<unknown> }[]) => Promise.all(stmts.map(s => s.run())),
       } as unknown as D1Database;
 
       await expect(initializeDatabase(makeTestEnv(undefined, { DB }))).rejects.toThrow(/database is locked/);
@@ -551,8 +566,12 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 47 -> 50 by the time-anchor ALTERs: when_at, when_kind, when_source.
     // MOVED 50 -> 51 by when_label, the nightly pass's persisted label.
     // MOVED 51 -> 53 by the push_subscriptions table and idx_push_subscriptions_workspace.
-    // MOVED 53 -> 57 by entries_fts and its three sync triggers.
-    expect(cold).toBe(57); // one probe, then the 56 statements a new brain needs
+    // MOVED 53 -> 54 by entries_fts and its three sync triggers, created
+    // together in ONE batch (v2.2 ownership rule) rather than as four
+    // separate D1 calls — this real-SQLite double collapses a batch() to a
+    // single "BATCH" entry in `issued`, the same convention production D1
+    // bills by, so the net cost here is +1 (the batch), not +4.
+    expect(cold).toBe(54); // one probe, then the 53 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -928,8 +947,9 @@ describe("initializeDatabase against real SQLite", () => {
     });
   });
 
-  // Write-path isolation v2.1: a durable disabled marker in the schema.
-  describe("entries_fts_disabled (v2.1)", () => {
+  // Write-path isolation v2.2: ownership (triggers created only with the
+  // table) and the populated-brain creation rule.
+  describe("entries_fts ownership (v2.2)", () => {
     const envWithKv = (sqlite: SqliteD1, kv: KVNamespace) =>
       makeTestEnv(undefined, { DB: sqlite.db as unknown as D1Database, OAUTH_KV: kv });
 
@@ -940,24 +960,29 @@ describe("initializeDatabase against real SQLite", () => {
       return results.map(r => r.name).sort();
     }
 
-    // Rule 2: applySchema must never create entries_fts or its triggers
-    // while the disabled marker exists — that would re-arm a deliberately
-    // disabled index (v2 review, B2: a racing cold start's applySchema
-    // recreated missing FTS triggers unconditionally).
-    it("does not create entries_fts or its triggers while entries_fts_disabled exists", async () => {
+    async function triggerNames(sqlite: SqliteD1): Promise<string[]> {
+      const { results } = await sqlite.db.prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete')`,
+      ).all() as { results: { name: string }[] };
+      return results.map(r => r.name).sort();
+    }
+
+    // Test 3 (v2.2 review, disabled-existing-trigger-repaired): applySchema
+    // never creates or repairs an FTS trigger independently of the table.
+    // Missing one trigger while the table exists is simply "not live"
+    // (src/recall/fts.ts) — left for the nightly rebuildFtsIndex, not
+    // silently patched back in on the next cold start.
+    it("never repairs a missing FTS trigger on an existing table", async () => {
       d1 = makeSqliteD1();
       await initializeDatabase(envFor(d1));
-      await d1.db.exec(
-        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
-        `DROP TRIGGER IF EXISTS entries_fts_delete; ALTER TABLE entries_fts RENAME TO entries_fts_disabled;`,
-      );
+      await d1.db.exec(`DROP TRIGGER entries_fts_insert`); // table stays; not live
       resetDatabaseInit();
 
       await initializeDatabase(envFor(d1));
 
-      expect(await ftsObjectNames(d1)).toEqual([]);
-      const disabled = await d1.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`).all() as { results: unknown[] };
-      expect(disabled.results).toHaveLength(1); // the marker itself is untouched
+      expect(await triggerNames(d1)).toEqual(["entries_fts_delete", "entries_fts_update"]); // insert stays gone
+      const table = (await d1.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all()).results;
+      expect(table).toHaveLength(1); // the table itself is untouched
     });
 
     // Rule 4: creating entries_fts on a brain whose `entries` table already
@@ -981,7 +1006,11 @@ describe("initializeDatabase against real SQLite", () => {
       expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
     });
 
-    it("populated brain, KV failing: does not create entries_fts this pass", async () => {
+    // Test 5 (v2.2 review, init-memo-kv-recovery): a deferred creation must
+    // leave initializeDatabase retryable, not silently memoized as done —
+    // the OLD (v2.1) behavior left a populated brain without FTS forever,
+    // even after KV recovered, because the first call still resolved.
+    it("populated brain, KV failing: defers creation and leaves init retryable", async () => {
       d1 = makeSqliteD1(); // schema.sql applied: `entries` already exists
       await d1.db.exec(
         `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
@@ -993,9 +1022,13 @@ describe("initializeDatabase against real SQLite", () => {
         delete: async () => { throw new Error("KV unavailable"); },
       } as unknown as KVNamespace;
 
-      await initializeDatabase(envWithKv(d1, kv));
-
+      await expect(initializeDatabase(envWithKv(d1, kv))).rejects.toThrow(/FTS creation deferred/);
       expect(await ftsObjectNames(d1)).toEqual([]);
+
+      // No resetDatabaseInit(): the rejection above must already have
+      // cleared the memo itself, or this second call would be a no-op.
+      await initializeDatabase(envWithKv(d1, makeMemoryKV()));
+      expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
     });
 
     // Fresh-brain exemption: `entries` did not exist before this pass, so

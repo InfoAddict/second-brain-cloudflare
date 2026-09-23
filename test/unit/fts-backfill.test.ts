@@ -99,16 +99,19 @@ describe("runFtsBackfill", () => {
     expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
   });
 
-  // Write-path isolation v2.1: a corrupt-write repair renames entries_fts to
-  // entries_fts_disabled rather than dropping it. Without a guard, the
-  // backfill's DELETE+INSERT batch below would throw "no such table:
-  // entries_fts" into this every night (or, with no backlog, wrongly latch
-  // ready="1" over a table that does not exist). Only Task 5's nightly
-  // rebuild may recreate entries_fts; the backfill must leave it alone.
-  it("skips cleanly without throwing while entries_fts is disabled, even with a backlog", async () => {
+  // Write-path isolation v2.2: FTS is live only if entries_fts exists AND
+  // all three sync triggers exist. A hot-path repair on a non-missing-table
+  // failure only drops the failed trigger (no rename in v2.2), so this is
+  // "table present, one trigger gone" — the live table's data is stale but
+  // querying it throws nothing. Without the liveness check the backfill's
+  // DELETE+INSERT batch would either throw "no such table: entries_fts"
+  // (missing-table shape) or silently index against a still-broken sync
+  // (missing-trigger shape) every night. Only Task 5's nightly rebuild may
+  // recreate entries_fts; the backfill must leave it alone either way.
+  it("skips cleanly without throwing while entries_fts is not live (a trigger is missing), even with a backlog", async () => {
     seed(d1, 5);
     await emptyFts(d1); // a genuine backlog: these rows predate the index
-    await d1.db.prepare(`ALTER TABLE entries_fts RENAME TO entries_fts_disabled`).run();
+    await d1.db.exec("DROP TRIGGER entries_fts_insert");
     const env = envFor(d1);
     const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -116,17 +119,16 @@ describe("runFtsBackfill", () => {
 
     expect(result).toEqual({ indexed: 0, done: false });
     expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
-    const disabledCount = await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts_disabled`).first() as { n: number };
-    expect(disabledCount).toEqual({ n: 0 }); // untouched — the backlog never got written
+    expect(await ftsCount(d1)).toEqual({ n: 0 }); // untouched — the backlog never got written
     expect(logSpy).toHaveBeenCalledTimes(1);
     logSpy.mockRestore();
   });
 
-  it("skips cleanly without throwing while entries_fts is disabled, even with no backlog", async () => {
+  it("skips cleanly without throwing while entries_fts is not live (table missing), even with no backlog", async () => {
     // No pre-FTS rows to index: the old code's early "no backlog -> ready=1"
     // path did not check entries_fts's existence at all, so this shape would
     // have wrongly latched ready over a table that does not exist.
-    await d1.db.prepare(`ALTER TABLE entries_fts RENAME TO entries_fts_disabled`).run();
+    await d1.db.exec("DROP TABLE entries_fts");
     const env = envFor(d1);
     const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

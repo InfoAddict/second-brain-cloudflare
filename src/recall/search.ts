@@ -34,7 +34,7 @@ import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
-import { ftsEligibleToken, ftsMatchQuery, ftsReady } from "./fts";
+import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveCount } from "./fts";
 
 async function keywordSearchLike(
   tokens: string[],
@@ -94,17 +94,35 @@ async function keywordSearchFts(
   // workspace_id exists only on entries, not on entries_fts's id/content
   // columns, so the clause below resolves unambiguously though unqualified.
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
-  // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
   // Join on rowid as well as id: rowids are unique, so a stale duplicate FTS
   // row for one id cannot fill two LIMIT slots, and a drifted row (an FTS id
   // at a rowid whose entries.id differs) maps to nothing instead of a wrong entry.
-  const { results } = await env.DB.prepare(
-    `SELECT e.id, e.content, e.tags, e.source, e.created_at
-     FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-     WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
-     ORDER BY bm25(entries_fts) LIMIT ?`
-  ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit).all();
-  return results as unknown as KeywordRow[];
+  //
+  // Write-path isolation v2.2 INVARIANT: FTS is live only if entries_fts
+  // exists AND all three sync triggers exist. A hot-path repair can drop a
+  // trigger without ever touching KV, leaving a table that still answers
+  // MATCH queries — successfully, no exception — but has silently stopped
+  // syncing. The liveness check rides in the SAME env.DB.batch() as the FTS
+  // query (one subrequest, one extra statement) so that staleness is caught
+  // structurally instead of relying on an error that never comes. Throwing
+  // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
+  // wiring below, rather than adding a second control path.
+  const [livenessResult, ftsResult] = await env.DB.batch([
+    // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
+    // never entries/edges rows — nothing here to scope by workspace.
+    env.DB.prepare(FTS_LIVENESS_SQL),
+    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+    env.DB.prepare(
+      `SELECT e.id, e.content, e.tags, e.source, e.created_at
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       ORDER BY bm25(entries_fts) LIMIT ?`
+    ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit),
+  ]);
+  if (!isFtsLiveCount((livenessResult.results as { n: number }[] | undefined)?.[0])) {
+    throw new Error("entries_fts is not live (missing table or a sync trigger)");
+  }
+  return ftsResult.results as unknown as KeywordRow[];
 }
 
 async function keywordSearch(

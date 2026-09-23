@@ -241,15 +241,15 @@ describe("withFtsWriteGuard", () => {
     } finally { s.close(); }
   });
 
-  // B2 (v2 adversarial review of b4bb804): a racing cold start's applySchema
-  // interleaved between the write guard's trigger-drop and its retry, and
-  // (pre-v2.1) applySchema recreated the missing FTS triggers unconditionally
-  // — re-arming the very triggers the repair had just dropped, so the retry
-  // failed the same way all over again. v2.1's fix is structural: the drop
-  // and the durable rename land in ONE atomic batch, and applySchema (rule 2)
-  // refuses to recreate anything while entries_fts_disabled exists, so a
-  // racing cold start can no longer undo the repair no matter when it runs.
-  it("a racing cold start interleaved right after the repair batch does not re-arm the triggers or fail the retry", async () => {
+  // Test 1 (v2.2 review, pre-rename-schema-snapshot adapted): a cold start's
+  // own probe snapshot, taken BEFORE a hot-path repair drops a corrupt
+  // trigger, could (pre-v2.2) later be used to recreate the trigger the
+  // repair had just removed — a snapshot is only ever as fresh as the
+  // moment it was taken. v2.2's fix is structural, not timing-dependent:
+  // applySchema never creates or repairs an FTS trigger on an EXISTING
+  // table at all, so a stale snapshot showing the trigger "still there" no
+  // longer matters — there is no code path left that would act on it.
+  it("a cold-start snapshot taken before a hot-path trigger drop does not re-arm it, and the retried write succeeds", async () => {
     const actual = await vi.importActual<typeof import("../../src/db/fts-repair")>("../../src/db/fts-repair");
     vi.mocked(repairFtsIndex).mockImplementation(actual.repairFtsIndex);
     const s = makeSqliteD1();
@@ -258,40 +258,50 @@ describe("withFtsWriteGuard", () => {
       const coldEnv = makeTestEnv(undefined, { DB: s.db as unknown as D1Database, OAUTH_KV: kv });
       resetDatabaseInit();
       await initializeDatabase(coldEnv);
-      await s.db.exec("DROP TABLE entries_fts");
-      await s.db.exec("CREATE TABLE entries_fts (wrong_col TEXT)"); // triggers remain, now wrong-shaped
+      // A real SQLite write failure with the corruption shape (not
+      // missing-table), so the hot path drops the triggers rather than
+      // running the creation batch.
+      await s.db.exec("DROP TRIGGER entries_fts_insert");
+      await s.db.exec("CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN SELECT RAISE(ABORT, 'fts5: corrupt'); END");
 
-      let coldStarts = 0;
-      const db = {
-        prepare: s.db.prepare.bind(s.db),
-        batch: async (statements: { sourceSql?: () => string }[]) => {
-          const result = await s.db.batch(statements as never);
-          if (statements.some(st => st.sourceSql?.().includes("RENAME TO entries_fts_disabled"))) {
-            // A different isolate's applySchema is allowed to interleave here.
-            resetDatabaseInit();
-            await initializeDatabase(coldEnv);
-            coldStarts++;
-          }
-          return result;
+      // A cold start's own probe snapshot, taken BEFORE the hot path's
+      // repair drops the triggers, paused right after so the guarded write
+      // below can run to completion first.
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let snapshotTaken!: () => void;
+      const snapped = new Promise<void>(resolve => { snapshotTaken = resolve; });
+      const coldDb = {
+        prepare(sql: string) {
+          const raw = s.db.prepare(sql);
+          if (!sql.startsWith("SELECT type AS kind, name")) return raw;
+          return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
         },
+        exec: s.db.exec.bind(s.db),
+        batch: s.db.batch.bind(s.db),
       } as unknown as D1Database;
-      const env = withFtsWriteGuard(makeTestEnv(undefined, { DB: db, OAUTH_KV: kv }));
+      resetDatabaseInit();
+      const cold = initializeDatabase(makeTestEnv(undefined, { DB: coldDb, OAUTH_KV: kv }));
+      await snapped;
 
+      const env = withFtsWriteGuard(makeTestEnv(undefined, { DB: s.db as unknown as D1Database, OAUTH_KV: kv }));
       const result = await env.DB.prepare(
         "INSERT INTO entries (id,content,tags,source,created_at) VALUES ('recovered','recovered searchable','[]','api',1)",
       ).run();
 
+      // Now let the paused cold start resume and finish, using its stale
+      // snapshot (taken while the trigger still existed).
+      release();
+      await cold;
+
       const triggers = (await s.db.prepare(
         `SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'entries_fts_%'`,
       ).all() as { results: unknown[] }).results;
-      const disabled = (await s.db.prepare(
-        `SELECT name FROM sqlite_master WHERE name = 'entries_fts_disabled'`,
-      ).all() as { results: unknown[] }).results;
-      expect(coldStarts).toBe(1);
       expect(result.success).toBe(true);
       expect(s.rows().map(r => r.id)).toEqual(["recovered"]);
-      expect(triggers).toEqual([]); // the racing cold start did not re-arm them
-      expect(disabled).toHaveLength(1); // the rename stuck
+      // The corruption-shaped repair drops all three triggers (not just the
+      // failing one) — none of them come back, stale snapshot or not.
+      expect(triggers).toEqual([]);
     } finally { s.close(); }
   });
 });
@@ -333,6 +343,10 @@ describe("ENTRIES_WRITE_SQL classifier (table-driven)", () => {
       `WITH c AS (SELECT id FROM entries) INSERT INTO entries (id) SELECT id FROM c`],
     ["CTE body containing a doubled-quote-escaped string, outer statement writes entries",
       `WITH c AS (SELECT 'it''s (fake) INSERT INTO entries' AS text) INSERT INTO entries (id) SELECT id FROM c`],
+    // v2.2 review: WITH RECURSIVE was parsed as if "RECURSIVE" were the CTE's
+    // own name, so the real name/AS/body never matched and the scanner bailed
+    // out before ever reaching the outer INSERT.
+    ["WITH RECURSIVE write", `WITH RECURSIVE c(x) AS (SELECT 1) INSERT INTO entries(id,content,tags,source,created_at) VALUES ('r','r searchable','[]','api',1)`],
   ];
 
   const NEGATIVES: [string, string][] = [

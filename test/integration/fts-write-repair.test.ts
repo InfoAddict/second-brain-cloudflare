@@ -86,17 +86,15 @@ async function expectTableAndTriggersCreated(d1: SqliteD1, env: Env): Promise<vo
 }
 
 /**
- * Corrupt/wrong-shape outcome (v2.1 branch 4): triggers are dropped and the
- * table is renamed to entries_fts_disabled in the same batch — a durable,
- * non-destructive marker. No DDL ever drops the table itself, so its prior
- * (even wrong-shaped) rows survive under the new name — proof that nothing
- * here is destructive.
+ * Corrupt/wrong-shape outcome (v2.2): only the triggers are dropped. No DDL
+ * ever touches the table itself, so its prior (even wrong-shaped) rows
+ * survive under the SAME name — proof that nothing here is destructive.
+ * Recall's own liveness check (src/recall/fts.ts), not this repair, is what
+ * then reads the table as not live.
  */
-async function expectTriggersDroppedTableRenamedDisabled(d1: SqliteD1, env: Env): Promise<void> {
+async function expectTriggersDroppedTableIntact(d1: SqliteD1, env: Env): Promise<void> {
   expect(await triggerNames(d1)).toEqual([]);
-  const original = await d1.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'entries_fts'`).all() as { results: unknown[] };
-  expect(original.results).toEqual([]);
-  const leftover = await d1.db.prepare(`SELECT wrong_col FROM entries_fts_disabled`).all() as { results: { wrong_col: string }[] };
+  const leftover = await d1.db.prepare(`SELECT wrong_col FROM entries_fts`).all() as { results: { wrong_col: string }[] };
   expect(leftover.results).toEqual([{ wrong_col: "leftover" }]);
   expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
 }
@@ -280,7 +278,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
 
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
-      await expectTriggersDroppedTableRenamedDisabled(d1, env);
+      await expectTriggersDroppedTableIntact(d1, env);
     });
 
     // forget's DELETE trigger body only references `rowid` (valid on any
@@ -301,7 +299,7 @@ describe("a write to entries repairs a missing or broken entries_fts and retries
       expect(res.status).toBe(200);
       expect(d1.rows()).toHaveLength(1);
       expect(d1.rows()[0].content).toBe("fresh content");
-      await expectTriggersDroppedTableRenamedDisabled(d1, env);
+      await expectTriggersDroppedTableIntact(d1, env);
     });
   });
 });
@@ -389,7 +387,7 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
     const row = d1.rows().find(r => r.id === "stale-1");
     expect(row).toBeDefined();
     expect(row!.staleness_checked_at).not.toBeNull(); // the staleness write itself still succeeded
-    await expectTriggersDroppedTableRenamedDisabled(d1, rawEnv);
+    await expectTriggersDroppedTableIntact(d1, rawEnv);
     // The backfill saw entries_fts_disabled and skipped: it never recovered
     // ready, unlike the missing-table night above.
     expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
@@ -399,10 +397,11 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
 // B1 (v2 adversarial review of b4bb804): with KV down, a corrupt write's
 // repair only dropped triggers — the table (still named entries_fts) stayed
 // queryable and, since KV could not clear ready, kept being served as ready
-// indefinitely, silently losing every write from then on. v2.1's durable
-// rename fixes this with no KV dependence: the renamed table fails MATCH
-// with "no such table", which keywordSearch's existing fallback already
-// catches, so recall falls back to LIKE regardless of what KV says.
+// indefinitely, silently losing every write from then on. v2.2's fix has no
+// KV dependence either, but does not need a rename to get it: recall's own
+// liveness check (src/recall/fts.ts) queries sqlite_master directly on every
+// keyword search, so a trigger-less table reads as not live regardless of
+// what KV says or whether the table kept its own name.
 describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale index served", () => {
   let d1: SqliteD1;
 
@@ -412,7 +411,7 @@ describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale in
   });
   afterEach(() => { d1?.close(); setDbReady(false); });
 
-  it("after the corrupt write, recall finds the new row via LIKE and the disabled table keeps the old rows", async () => {
+  it("after the corrupt write, recall finds the new row via LIKE and entries_fts keeps the old rows intact", async () => {
     d1 = makeSqliteD1();
     const kv = makeMemoryKV();
     await kv.put(FTS_READY_KV_KEY, "1");
@@ -449,8 +448,9 @@ describe("B1: corrupt write + KV down — recall falls back to LIKE, no stale in
     expect(diagnostics.ftsUsed).toBe(false);
     expect(result.matches.map(m => m.id)).toContain("new");
     expect(d1.rows().map(r => r.id).sort()).toEqual(["new", "old"]);
-    // The disabled marker keeps the pre-corruption rows — nothing destroyed.
-    const disabledRows = (await d1.db.prepare("SELECT id FROM entries_fts_disabled").all() as { results: { id: string }[] }).results;
-    expect(disabledRows.map(r => r.id)).toEqual(["old"]);
+    // The table itself was never touched — only its triggers were dropped —
+    // so the pre-corruption row survives under entries_fts's own name.
+    const ftsRows = (await d1.db.prepare("SELECT id FROM entries_fts").all() as { results: { id: string }[] }).results;
+    expect(ftsRows.map(r => r.id)).toEqual(["old"]);
   });
 });

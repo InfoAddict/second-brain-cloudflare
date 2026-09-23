@@ -38,8 +38,15 @@ export function resetDatabaseInit(): void {
 // FTS DDL is shared with src/db/fts-repair.ts (a write-path failure recreates
 // this same table and these same triggers), so each string is a named export
 // rather than an inline literal — one definition, referenced from both places.
+//
+// Ownership (v2.2): deliberately NOT "IF NOT EXISTS". The table and its three
+// triggers are created only together, in one batch — see applySchema below
+// and src/db/fts-repair.ts's repairFtsIndex — and this is what makes a race
+// between two creators safe: the loser's whole batch fails atomically
+// ("table entries_fts already exists", verified against real node:sqlite),
+// never partially applying, and is treated as a no-op rather than retried.
 export const ENTRIES_FTS_TABLE_DDL =
-  `CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`;
+  `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`;
 export const ENTRIES_FTS_INSERT_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_insert
     AFTER INSERT ON entries
     BEGIN
@@ -57,12 +64,6 @@ export const ENTRIES_FTS_DELETE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entr
     BEGIN
       DELETE FROM entries_fts WHERE rowid = OLD.rowid;
     END`;
-
-// Write-path isolation v2.1: a corrupt or wrong-shaped entries_fts is
-// disabled by renaming it to this name instead of dropping it (durable,
-// atomic, non-destructive — see src/db/fts-repair.ts). Shared here so
-// src/db/init.ts's own schema application can recognize and respect it.
-export const ENTRIES_FTS_DISABLED_TABLE = "entries_fts_disabled";
 
 /**
  * Tables, indexes, and triggers, keyed by the name each occupies in sqlite_master.
@@ -168,12 +169,10 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // device replaces rather than duplicates it.
   push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
   idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
-  // Lexical recall index (FTS5, trigram). Plain table, not external-content:
-  // entries has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid
-  // and sync by rowid — an O(1) delete instead of a content-table scan. id rides
-  // along UNINDEXED for the read-path join. Shadow tables (entries_fts_data etc.)
-  // appear in the probe as ordinary tables; they are ignored by name.
-  entries_fts: ENTRIES_FTS_TABLE_DDL,
+  // entries_fts and its three sync triggers are NOT here (v2.2 ownership
+  // rule): they are created together, in one dedicated batch, below in
+  // applySchema — never as independent SCHEMA_OBJECTS/POST_COLUMN_OBJECTS
+  // entries, which would let one be created or repaired without the other.
 };
 
 /**
@@ -319,9 +318,11 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
     BEGIN
       DELETE FROM prompt_capsule_revisions WHERE workspace_id = OLD.id;
     END`,
-  entries_fts_insert: ENTRIES_FTS_INSERT_TRIGGER_DDL,
-  entries_fts_update: ENTRIES_FTS_UPDATE_TRIGGER_DDL,
-  entries_fts_delete: ENTRIES_FTS_DELETE_TRIGGER_DDL,
+  // entries_fts_insert/update/delete are NOT here (v2.2 ownership rule):
+  // applySchema never creates or repairs an FTS trigger independently of the
+  // table — see the dedicated creation batch below. On an existing table
+  // with a trigger missing, that is "not live" (src/recall/fts.ts), left for
+  // the nightly rebuildFtsIndex, not silently patched back in here.
 };
 
 /**
@@ -475,52 +476,67 @@ function isUniqueViolation(e: unknown): boolean {
 // A fully migrated brain leaves here having issued the probe and nothing else. The DDL
 // keeps its IF NOT EXISTS: it costs nothing to keep and it is the same backstop as the
 // duplicate-column tolerance, for the same concurrent-cold-start race.
-// Write-path isolation v2.1: three of the FTS objects (the table, and the
-// three sync triggers in POST_COLUMN_OBJECTS below) must never be created or
-// repaired here while entries_fts_disabled exists — doing so re-arms a
-// deliberately disabled index (v2 review B2: a racing cold start's
-// applySchema recreated missing FTS triggers unconditionally, undoing the
-// write guard's own repair before its retry could run).
-const ENTRIES_FTS_TRIGGER_NAMES = new Set(["entries_fts_insert", "entries_fts_update", "entries_fts_delete"]);
+/**
+ * The one CREATE failure that is routine rather than a fault: a racing
+ * isolate's own gated creation batch below already created entries_fts and
+ * its triggers first. ENTRIES_FTS_TABLE_DDL deliberately has no IF NOT
+ * EXISTS, so this collision fails the WHOLE batch atomically (verified
+ * against real node:sqlite: "table entries_fts already exists") rather than
+ * partially applying — nothing here to clean up by hand.
+ */
+function isTableAlreadyExists(e: unknown): boolean {
+  return /table entries_fts already exists/i.test(String((e as { message?: string })?.message ?? e));
+}
 
 async function applySchema(env: Env): Promise<void> {
   const existing = await probeSchema(env);
-  const ftsDisabled = existing?.objects.get(ENTRIES_FTS_DISABLED_TABLE) === "table";
-
-  // Populated-brain creation rule (v2.1): creating entries_fts on a brain
-  // whose `entries` table already existed must first invalidate the ready
-  // flag and reset the backfill cursor, so a freshly (re)created but
-  // not-yet-backfilled index is never served as ready. A brand-new brain
-  // (entries did not exist before this pass) is exempt — there is nothing to
-  // invalidate, and the triggers cover it from row one (see the fresh-brain
-  // ready latch). Memoised: only ever runs once per applySchema call, and
-  // only when entries_fts genuinely needs to be created.
-  let ftsTableCreateAllowedPromise: Promise<boolean> | null = null;
-  const ftsTableCreateAllowed = (): Promise<boolean> => {
-    if (ftsTableCreateAllowedPromise) return ftsTableCreateAllowedPromise;
-    ftsTableCreateAllowedPromise = (async () => {
-      if (ftsDisabled) return false;
-      const entriesPreexisted = existing !== null && existing.objects.get("entries") === "table";
-      if (!entriesPreexisted) return true;
-      try {
-        await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
-        await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
-        return true;
-      } catch {
-        return false;
-      }
-    })();
-    return ftsTableCreateAllowedPromise;
-  };
 
   for (const [name, ddl] of Object.entries(SCHEMA_OBJECTS)) {
     // Kind as well as name: if something else has taken the name, this is not the object
     // we need and the CREATE has to be issued so SQLite raises the collision, which is
     // what it did before the probe existed.
     if (existing?.objects.get(name) === kindOf(ddl)) continue;
-    if (name === "entries_fts" && !(await ftsTableCreateAllowed())) continue;
     await env.DB.exec(ddl);
   }
+
+  // Ownership (v2.2): entries_fts and its three sync triggers are created
+  // together, in ONE batch, only when the table itself is missing — never
+  // independently, and never repaired once the table exists (a trigger
+  // missing on an existing table just reads as "not live" to every other
+  // caller, src/recall/fts.ts, left for the nightly rebuildFtsIndex).
+  //
+  // Populated-brain creation rule: creating the table on a brain whose
+  // `entries` already existed must first invalidate the ready flag and reset
+  // the backfill cursor, so a freshly created but not-yet-backfilled index
+  // is never served as ready. If that invalidation fails, DEFER: do not
+  // create the table this pass, and do not resolve this pass as successful
+  // either — throwing here clears initializeDatabase's memo (see its own
+  // comment), so the very next call retries from scratch rather than
+  // silently going without FTS forever. A brand-new brain (entries did not
+  // exist before this pass) is exempt: nothing to invalidate, and the
+  // triggers cover it from row one (see the fresh-brain ready latch below).
+  if (existing?.objects.get("entries_fts") !== "table") {
+    const entriesPreexisted = existing !== null && existing.objects.get("entries") === "table";
+    if (entriesPreexisted) {
+      try {
+        await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+        await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+      } catch (e) {
+        throw new Error("FTS creation deferred: ready-flag/cursor invalidation failed on a populated brain; retry next pass", { cause: e });
+      }
+    }
+    try {
+      await env.DB.batch([
+        env.DB.prepare(ENTRIES_FTS_TABLE_DDL),
+        env.DB.prepare(ENTRIES_FTS_INSERT_TRIGGER_DDL),
+        env.DB.prepare(ENTRIES_FTS_UPDATE_TRIGGER_DDL),
+        env.DB.prepare(ENTRIES_FTS_DELETE_TRIGGER_DDL),
+      ]);
+    } catch (e) {
+      if (!isTableAlreadyExists(e)) throw e;
+    }
+  }
+
   for (const [column, ddl] of Object.entries(ENTRIES_COLUMNS)) {
     if (existing?.columns.has(column)) continue;
     try {
@@ -568,19 +584,7 @@ async function applySchema(env: Env): Promise<void> {
       await env.DB.exec(EMAIL_UNIQUE_INDEX_DDL);
     }
   }
-  const ftsTableExists = existing?.objects.get("entries_fts") === "table";
   for (const [name, ddl] of Object.entries(POST_COLUMN_OBJECTS)) {
-    // Leave the index down: while entries_fts_disabled exists, none of its
-    // three sync triggers may be created or repaired, or a racing cold start
-    // re-arms them against a table that is deliberately missing under its
-    // own name (see ftsDisabled above). A trigger that is missing while the
-    // table is ALSO missing shares the table's creation gate (rule 4) — a
-    // populated brain whose KV failed must end this pass with neither
-    // created. A trigger missing while the table already exists (a rare,
-    // independent drop) is an ordinary repair, unrelated to either rule, and
-    // needs no KV round trip.
-    if (ENTRIES_FTS_TRIGGER_NAMES.has(name) && existing?.objects.get(name) !== "trigger"
-      && (ftsDisabled || (!ftsTableExists && !(await ftsTableCreateAllowed())))) continue;
     if (name === "idx_entries_capsule" && (existing === null || existing.objects.has(name))) {
       // 強制利用する専用indexは、同名でも定義が異なれば修復する。
       const normalize = (sql: string) => sql
@@ -630,17 +634,7 @@ async function applySchema(env: Env): Promise<void> {
   // now instead of waiting for the first nightly. A failed put is non-fatal:
   // the nightly backfill reaches the same latch. Probe-failure (existing ===
   // null) skips this — an existing corpus must go through the backfill.
-  //
-  // `!ftsDisabled` is defensive, not reachable: entries_fts_disabled can only
-  // be created by renaming an existing entries_fts (src/db/fts-repair.ts),
-  // which only happens in response to a write FAILURE against `entries` —
-  // which requires `entries` to already exist. That contradicts this
-  // branch's own condition (entries did not exist before THIS pass, whose
-  // probe ran before anything below it could create entries_fts to rename in
-  // the first place), so the two can never be true together. Kept as a
-  // guard anyway, at zero extra cost — ftsDisabled is already computed above
-  // — rather than trust the proof to stay true as this function changes.
-  if (existing !== null && existing.objects.get("entries") !== "table" && !ftsDisabled) {
+  if (existing !== null && existing.objects.get("entries") !== "table") {
     try {
       await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     } catch (e) {
