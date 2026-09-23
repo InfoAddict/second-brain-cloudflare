@@ -1,4 +1,4 @@
-import { FTS_MIN_TOKEN_LENGTH, FTS_READY_KV_KEY } from "../constants";
+import { FTS_MIN_TOKEN_LENGTH, FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../constants";
 import type { Env } from "../env";
 
 const NUL_TOKEN = /\u0000/;
@@ -16,19 +16,26 @@ export function ftsMatchQuery(tokens: string[]): string | null {
   return eligible.map(t => `"${t.replaceAll(`"`, `""`)}"`).join(" OR ");
 }
 
-// Memoizes only `true`: ready is a one-way latch set by the backfill, so a
-// stale false costs one KV read per recall while a memoized false would pin a
-// long-lived isolate on the LIKE path after the index is complete.
-let ftsReadyMemo = false;
+// The readiness answer is cached in BOTH directions for FTS_READY_CACHE_MS, so
+// a stable warm isolate pays one KV read per window in either state. False must
+// be cached too: without it every recall on a cold-but-backfilling brain pays a
+// KV read just to stay on LIKE, which is the pre-arm read rate the arm was meant
+// to cut. The expiry is the self-heal's propagation delay — after the nightly
+// integrity check clears the flag, an isolate keeps serving FTS for at most
+// FTS_READY_CACHE_MS. A KV FAILURE returns false and is NOT cached, so the next
+// call retries instead of pinning LIKE for a constant window on a transient
+// binding error.
+let readyCache: { ready: boolean; at: number } | null = null;
 
-/** Test seam — the memo is module-scoped. */
-export function resetFtsReadyMemo(): void { ftsReadyMemo = false; }
+/** Test seam — the cache is module-scoped. */
+export function resetFtsReadyMemo(): void { readyCache = null; }
 
 export async function ftsReady(env: Env): Promise<boolean> {
-  if (ftsReadyMemo) return true;
+  const now = Date.now();
+  if (readyCache && now - readyCache.at < FTS_READY_CACHE_MS) return readyCache.ready;
   try {
     const ready = (await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1";
-    if (ready) ftsReadyMemo = true;
+    readyCache = { ready, at: now };
     return ready;
   } catch (e) {
     console.error("FTS ready-flag read failed (staying on LIKE):", e);

@@ -14,7 +14,7 @@ import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
-import { FTS_READY_KV_KEY } from "../../src/constants";
+import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY, KEYWORD_MAX_TOKENS } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
 import { CJK_RECALL_FIXTURE } from "../fixtures/cjk-recall";
 import type { Identity } from "../../src/lib/identity";
@@ -122,6 +122,54 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(diagnostics.keywordIds).toEqual(["in-scope"]);
   });
 
+  it("keeps serving FTS within the readiness TTL after the flag clears, then reverts", async () => {
+    // Documented behavior: the readiness answer is cached for
+    // FTS_READY_CACHE_MS in both directions, so a cleared flag is observed at
+    // most one TTL after the integrity check clears it — the isolate keeps
+    // using FTS until then (even with the index row deleted, the match still
+    // answers via its shadow row) and must be back on LIKE after the TTL.
+    sqlite.seed({ id: "answer", content: "violet marker", createdAt: 1000 });
+    sqlite.seed({ id: "peer", content: "violet residue", createdAt: 1001 });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "violet", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+    expect(diagnostics.ftsUsed).toBe(true);
+
+    // Clear the flag and delete the FTS row: within the TTL the cached true
+    // still routes to FTS, and the deleted-content row match (kept) survives
+    // only because the join now keys on rowid — this exercises the stale
+    // window, documented above.
+    await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+    const rowids = (await sqlite.db.prepare(`SELECT rowid FROM entries_fts WHERE rowid = (SELECT rowid FROM entries WHERE id = 'answer')`).first()) as { rowid: number } | null;
+    expect(rowids).not.toBeNull();
+    await sqlite.db.prepare(`DELETE FROM entries_fts WHERE rowid = ?`).bind(rowids!.rowid).run();
+
+    vi.useFakeTimers();
+    try {
+      const before = Date.now();
+      vi.setSystemTime(before);
+      // Fresh cache was set moments ago in real time: still inside the TTL.
+      resetFtsReadyMemo();
+      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+      const withinTtl: RecallDiagnostics = {};
+      await recallEntries({ query: "violet", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics: withinTtl });
+      expect(withinTtl.ftsUsed).toBe(true);
+
+      // Past the TTL the cached true expires: LIKE path serves the candidates.
+      resetFtsReadyMemo();
+      await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+      vi.setSystemTime(Date.now() + FTS_READY_CACHE_MS + 1);
+      const afterTtl: RecallDiagnostics = {};
+      const res = await recallEntries({ query: "violet", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics: afterTtl });
+      expect(afterTtl.ftsUsed).toBe(false);
+      expect(res.matches.map(m => m.id)).toContain("peer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to LIKE when the FTS query throws", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
@@ -135,6 +183,65 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(res.matches.map(m => m.id)).toContain("e1");
   });
 
+  it("keys the FTS join on rowid as well as id", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    // Live peer must survive in the LIMIT window, and an id with several FTS
+    // rows (a stale duplicate at another rowid) may not fill two slots.
+    sqlite.seed({ id: "duplicate", content: "violet marker", createdAt: 1000 });
+    sqlite.seed({ id: "peer", content: "violet marker", createdAt: 1001 });
+    await sqlite.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (?, ?, ?)`)
+      .bind(50000, "duplicate", "violet marker").run();
+
+    const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: 2 };
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "violet", topK: 5, synthesize: false }, env, ctx, cfg, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(diagnostics.keywordIds).toContain("peer");
+    expect(diagnostics.keywordIds!.filter(id => id === "duplicate")).toHaveLength(1);
+
+    // A drifted row — an FTS id at a rowid whose entries.id differs — must be
+    // excluded rather than resurrecting whatever that rowid maps to now.
+    sqlite.db.prepare(`UPDATE entries SET content = 'orchid drift' WHERE id = 'peer'`).run();
+    sqlite.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (?, ?, ?)`)
+      .bind(50001, "duplicate", "orchid drift real text").run();
+    const driftedDiagnostics: RecallDiagnostics = {};
+    const res = await recallEntries({ query: "orchid", topK: 5, synthesize: false }, env, ctx, cfg, { diagnostics: driftedDiagnostics });
+    expect(res.matches.map(m => m.id)).toEqual(["peer"]);
+    expect(driftedDiagnostics.keywordIds).toEqual(["peer"]);
+  });
+
+  it("keeps before exclusive and honors the exact candidate limit", async () => {
+    // before is exclusive: the row at exactly `before` is out, the row one
+    // tick earlier is in.
+    sqlite.seed({ id: "at-before", content: "violet marker", createdAt: 102 });
+    sqlite.seed({ id: "before-1", content: "violet marker", createdAt: 101 });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "violet", topK: 5, before: 102, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(diagnostics.keywordIds).toEqual(["before-1"]);
+  });
+
+  it("returns exactly KEYWORD_CANDIDATE_LIMIT keyword candidates", async () => {
+    sqlite.seed({ id: "at-before", content: "placeholder", createdAt: 1 });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    const limit = 5;
+    for (let i = 0; i < limit + 3; i++) sqlite.seed({ id: `row-${i}`, content: "violet marker", createdAt: 1000 + i });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "violet", topK: 20, synthesize: false }, env, ctx, { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: limit }, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(new Set(diagnostics.keywordIds).size).toBe(diagnostics.keywordIds!.length);
+    expect(diagnostics.keywordIds).toHaveLength(limit);
+  });
+
   it("stays on LIKE when the ready flag is absent", async () => {
     sqlite.seed({ id: "e1", content: "default path content", createdAt: 1000 });
 
@@ -144,5 +251,48 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(diagnostics.ftsUsed).toBe(false);
     expect(res.matches.map(m => m.id)).toContain("e1");
     expect(sqlite.issued.some(sql => sql.includes("entries_fts"))).toBe(false);
+  });
+
+  it("routes queries with any sub-trigram-floor token to the LIKE path", async () => {
+    // The old builder silently dropped tokens under FTS_MIN_TOKEN_LENGTH, so
+    // ftsMatchQuery("v1 widget") searched only "widget" on the FTS path and
+    // short-only was unretrievable while ftsUsed read true.
+    sqlite.seed({ id: "short-only", content: "v1 release note", createdAt: 1001 });
+    sqlite.seed({ id: "long-only", content: "release note about widget", createdAt: 1000 });
+    sqlite.seed({ id: "cjk-short", content: "東京 release notes", createdAt: 1002 });
+    sqlite.seed({ id: "cjk-long", content: "release notes about widget", createdAt: 1003 });
+
+    const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: KEYWORD_MAX_TOKENS };
+    for (const query of ["v1 widget", "東京 widget"]) {
+      resetFtsReadyMemo();
+      await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+      const likeDiagnostics: RecallDiagnostics = {};
+      await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: likeDiagnostics });
+      expect(likeDiagnostics.ftsUsed).toBe(false);
+
+      resetFtsReadyMemo();
+      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+      const ftsDiagnostics: RecallDiagnostics = {};
+      await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: ftsDiagnostics });
+
+      expect(ftsDiagnostics.ftsUsed).toBe(false);
+      expect([...ftsDiagnostics.keywordIds!].sort()).toEqual([...likeDiagnostics.keywordIds!].sort());
+    }
+    resetFtsReadyMemo();
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "v1 widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics });
+    expect(diagnostics.keywordIds).toContain("short-only");
+  });
+
+  it("uses FTS when every token clears the trigram floor", async () => {
+    sqlite.seed({ id: "only", content: "quarterly roadmap notes", createdAt: 1000 });
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "quarterly roadmap", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(diagnostics.keywordIds).toEqual(["only"]);
   });
 });

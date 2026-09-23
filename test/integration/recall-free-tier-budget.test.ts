@@ -7,12 +7,17 @@ import { TAG_VOCABULARY_KEY } from "../../src/tags/vocabulary";
 import { makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { snapshotRecallBudget } from "../helpers/recall-budget";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import { resetFtsReadyMemo } from "../../src/recall/fts";
 
 describe("recall stays within the Cloudflare Free operation envelope", () => {
   const open: SqliteD1[] = [];
   afterEach(() => open.splice(0).forEach(sqlite => sqlite.close()));
 
   async function run(hops: 0 | 1) {
+    // Each case models its own invocation; the readiness answer is cached per
+    // isolate for FTS_READY_CACHE_MS, so a cold start must be simulated or the
+    // second case would inherit the first case's cached answer and undercount.
+    resetFtsReadyMemo();
     const sqlite = makeSqliteD1();
     open.push(sqlite);
     await sqlite.db.prepare(`ALTER TABLE entries ADD COLUMN updated_at INTEGER`).run();
@@ -63,8 +68,9 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
       vectorizeQueries: 1,
       vectorizeGets: 0,
       // Tag vocabulary read plus the FTS readiness flag read (Task 3): the
-      // keyword arm checks fts:ready on every non-tag recall, memoizing only
-      // true, so an unset flag costs one KV read per call.
+      // keyword arm checks fts:ready on every non-tag recall. The answer is
+      // cached per isolate for FTS_READY_CACHE_MS in both directions, so a
+      // cold isolate pays one read per recall window, not per request.
       kvReads: 2,
       kvWrites: 0,
       graphSeeds: 0,
@@ -86,7 +92,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     expect(budget.embeddingCalls).toBe(1);
     expect(budget.vectorizeQueries).toBe(1);
     expect(budget.vectorizeGets).toBe(0);
-    // Tag vocabulary read plus the FTS readiness flag read (Task 3).
+    // Tag vocabulary read plus the FTS readiness flag read (Task 3); the
+    // ready-cache reset in run() models each case's cold isolate.
     expect(budget.kvReads).toBe(2);
     expect(budget.kvWrites).toBe(0);
     expect(budget.workerRequests).toBe(1);

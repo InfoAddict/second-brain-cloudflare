@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { ftsMatchQuery, ftsReady, resetFtsReadyMemo } from "../../src/recall/fts";
-import { FTS_READY_KV_KEY } from "../../src/constants";
+import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
 import { tokenizeQuery } from "../../src/text/tokenize";
 
 describe("ftsMatchQuery", () => {
@@ -43,24 +43,63 @@ describe("ftsMatchQuery", () => {
 });
 
 describe("ftsReady", () => {
-  beforeEach(() => resetFtsReadyMemo());
+  // The readiness answer is cached in both directions for FTS_READY_CACHE_MS:
+  // one KV read per recall window instead of one per request. A failure is
+  // never cached — the next call retries.
+  beforeEach(() => {
+    resetFtsReadyMemo();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    resetFtsReadyMemo();
+  });
   const envWith = (value: string | null, fail = false) => ({
     OAUTH_KV: { get: fail ? vi.fn().mockRejectedValue(new Error("kv down")) : vi.fn().mockResolvedValue(value) },
   }) as any;
 
-  it("is false until the KV flag is set, without memoizing false", async () => {
+  it("caches false within the TTL and re-reads after it", async () => {
+    vi.setSystemTime(0);
     const env = envWith(null);
     expect(await ftsReady(env)).toBe(false);
     expect(await ftsReady(env)).toBe(false);
-    expect(env.OAUTH_KV.get).toHaveBeenCalledTimes(2); // false is re-checked
+    expect(env.OAUTH_KV.get).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(FTS_READY_CACHE_MS + 1);
+    expect(await ftsReady(env)).toBe(false);
+    expect(env.OAUTH_KV.get).toHaveBeenCalledTimes(2);
   });
-  it("memoizes true so the flag costs one KV read per isolate", async () => {
+  it("caches true within the TTL and re-reads after it", async () => {
+    vi.setSystemTime(0);
     const env = envWith("1");
     expect(await ftsReady(env)).toBe(true);
     expect(await ftsReady(env)).toBe(true);
     expect(env.OAUTH_KV.get).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(FTS_READY_CACHE_MS + 1);
+    expect(await ftsReady(env)).toBe(true);
+    expect(env.OAUTH_KV.get).toHaveBeenCalledTimes(2);
   });
-  it("treats a KV failure as not ready", async () => {
-    expect(await ftsReady(envWith(null, true))).toBe(false);
+  it("observes a cleared flag after the TTL when true was cached", async () => {
+    vi.setSystemTime(0);
+    const env = envWith("1");
+    expect(await ftsReady(env)).toBe(true);
+    (env.OAUTH_KV.get as any).mockResolvedValue(null);
+    vi.setSystemTime(FTS_READY_CACHE_MS - 1);
+    expect(await ftsReady(env)).toBe(true);
+    vi.setSystemTime(FTS_READY_CACHE_MS + 1);
+    expect(await ftsReady(env)).toBe(false);
+  });
+  it("never caches a KV failure", async () => {
+    vi.setSystemTime(0);
+    let fail = true;
+    const env = {
+      OAUTH_KV: { get: vi.fn(async () => {
+        if (fail) throw new Error("kv down");
+        return "1";
+      }) },
+    } as any;
+    expect(await ftsReady(env)).toBe(false);
+    fail = false;
+    vi.setSystemTime(1); // one ms later, still inside any TTL window
+    expect(await ftsReady(env)).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
+  FTS_MIN_TOKEN_LENGTH,
   KEYWORD_MAX_TOKENS,
   VECTORIZE_GET_BY_IDS_BATCH,
   VECTORIZE_TOP_K_MULTIPLIER,
@@ -95,9 +96,12 @@ async function keywordSearchFts(
   // columns, so the clause below resolves unambiguously though unqualified.
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+  // Join on rowid as well as id: rowids are unique, so a stale duplicate FTS
+  // row for one id cannot fill two LIMIT slots, and a drifted row (an FTS id
+  // at a rowid whose entries.id differs) maps to nothing instead of a wrong entry.
   const { results } = await env.DB.prepare(
     `SELECT e.id, e.content, e.tags, e.source, e.created_at
-     FROM entries_fts JOIN entries e ON e.id = entries_fts.id
+     FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
      WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
      ORDER BY bm25(entries_fts) LIMIT ?`
   ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit).all();
@@ -114,8 +118,14 @@ async function keywordSearch(
   teamId?: string,
 ): Promise<{ rows: KeywordRow[]; fts: boolean }> {
   if (!tokens.length) return { rows: [], fts: false };
-  const match = ftsMatchQuery(tokens.slice(0, KEYWORD_MAX_TOKENS));
-  if (match && await ftsReady(env)) {
+  const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
+  // A token under the trigram floor is dropped by ftsMatchQuery, so the match
+  // would silently search only the surviving tokens and hide entries matching
+  // just the short one. Any short token forces the LIKE path, which matches
+  // every term the query asked for.
+  const hasShortToken = terms.some(t => [...t].length < FTS_MIN_TOKEN_LENGTH);
+  const match = ftsMatchQuery(terms);
+  if (match && !hasShortToken && await ftsReady(env)) {
     try {
       return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true };
     } catch (e) {

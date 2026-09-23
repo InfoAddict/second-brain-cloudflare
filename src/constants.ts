@@ -165,6 +165,9 @@ export const FTS_BACKFILL_CURSOR_KV_KEY = "fts:backfill-cursor";
 export const FTS_BACKFILL_BATCH = 2000;
 // Trigram tokenizer floor: shorter tokens can never match.
 export const FTS_MIN_TOKEN_LENGTH = 3;
+// Readiness cache lifetime. Bounds both the KV read rate and how long a warm
+// isolate keeps using FTS after the integrity check clears the flag.
+export const FTS_READY_CACHE_MS = 5 * 60 * 1000;
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",
   "i", "me", "my", "we", "you", "it", "this", "that", "these", "those", "with", "about", "from", "at", "as", "by",
