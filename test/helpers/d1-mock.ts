@@ -139,6 +139,16 @@ export class D1Mock {
           const one = await stmt.first();
           return { results: one ? [one] : [], meta: { changes: 0 } };
         }
+        // src/db/fts-backfill.ts's nightly integrity-check (Task 5): the
+        // literal FTS5 command, not a write to `entries`. Checked before the
+        // "INSERT INTO entries" branch below, whose startsWith would otherwise
+        // also match "INSERT INTO entries_fts". This mock represents a
+        // healthy, migrated brain (see the sqlite_master liveness branch in
+        // all()), so the honest answer is success — FTS5's real check would
+        // only throw for an index the mock does not simulate corrupting.
+        if (s.startsWith("INSERT INTO entries_fts(entries_fts, rank)")) {
+          return { meta: { changes: 0 } };
+        }
         if (s.startsWith("INSERT INTO workspaces")) {
           db.workspaces.push({ id: args[0], kind: args[1], name: args[2], created_at: args[3] });
           return { meta: { changes: 1 } };

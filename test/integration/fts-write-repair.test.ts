@@ -17,7 +17,7 @@ import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
 import { recallEntries } from "../../src/recall/search";
 import { STALENESS_AGE_MS } from "../../src/staleness/pass";
-import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
+import { FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
 import { OWNER_WRITE_CONTEXT } from "../../src/lib/scope";
 import { makeAIMock, makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
@@ -359,14 +359,15 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
       .toBe(((await d1.db.prepare(`SELECT count(*) AS n FROM entries`).first()) as { n: number }).n);
   });
 
-  // v2.1 composition: when the SAME nightly write instead hits the
-  // corruption-shaped (not missing-table) branch, repair renames entries_fts
-  // to entries_fts_disabled rather than recreating it. runFtsMaintenance
-  // then runs in the SAME scheduled() invocation (Task 4) and must skip
-  // cleanly instead of throwing into a table that no longer exists under its
-  // own name — and it must NOT recover ready to "1", since nothing was
-  // actually indexed. The index stays down until Task 5's nightly rebuild.
-  it("a nightly write that disables the index leaves the backfill to skip cleanly, not recover ready", async () => {
+  // Task 5: when the SAME nightly write instead hits the corruption-shaped
+  // (not missing-table) branch, the write-path repair only drops the FTS
+  // triggers (v2.2), leaving entries_fts not live. runFtsMaintenance now runs
+  // later in this SAME scheduled() invocation and, regardless of the ready
+  // flag, treats "not live" as broken: it rebuilds the table and triggers
+  // (the only destructive path, confined to the nightly job) and the
+  // backfill starts immediately after — so the outage does not compound into
+  // a second night of waiting.
+  it("a nightly write that disables the index is rebuilt and re-backfilled in the same run", async () => {
     d1 = makeSqliteD1();
     const rawEnv = makeTestEnv(undefined, {
       DB: d1.db as unknown as D1Database,
@@ -387,10 +388,74 @@ describe("scheduled() repairs entries_fts for nightly writes (S3)", () => {
     const row = d1.rows().find(r => r.id === "stale-1");
     expect(row).toBeDefined();
     expect(row!.staleness_checked_at).not.toBeNull(); // the staleness write itself still succeeded
-    await expectTriggersDroppedTableIntact(d1, rawEnv);
-    // The backfill saw entries_fts_disabled and skipped: it never recovered
-    // ready, unlike the missing-table night above.
+    // The nightly rebuild recreated the table and triggers under their own
+    // names, and the backfill that ran right after latched ready.
+    expect(await ftsObjectNames(d1)).toEqual(ALL_FTS_OBJECTS);
+    expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
+  });
+});
+
+// Task 5, end to end: a corrupted index heals across nights through the real
+// worker.scheduled() entry point, and recall serves complete results from it
+// once healed — not just that the DDL comes back (S3 above), but that every
+// row the corruption-era backlog covers actually lands in the index.
+describe("a corrupted index heals across nights (Task 5 end to end)", () => {
+  let d1: SqliteD1;
+
+  beforeEach(() => {
+    setDbReady(true);
+    resetFtsReadyMemo();
+  });
+  afterEach(() => { d1?.close(); setDbReady(false); });
+
+  it("night 1 rebuilds and starts the backfill; night 2 latches ready; recall then finds a row from the second night's batch via FTS", async () => {
+    d1 = makeSqliteD1();
+    const rawEnv = makeTestEnv(undefined, {
+      DB: d1.db as unknown as D1Database,
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockRejectedValue(new Error("dense down")) }),
+      AI: makeAIMock(),
+    });
+    resetDatabaseInit();
+    await initializeDatabase(rawEnv);
+    // More than one backfill batch, so night 1 cannot finish it in one pass —
+    // the marker entry lands in the tail that only night 2's batch reaches.
+    const total = FTS_BACKFILL_BATCH + 3;
+    for (let i = 1; i <= total; i++) {
+      d1.seed({ id: `e${i}`, content: `memory number ${i} about dashboards`, createdAt: i });
+    }
+    d1.seed({ id: "tail-marker", content: "a rare zzzqqxviii marker in the final batch", createdAt: total + 1 });
+    await breakByDroppingTable(d1); // triggers still reference a table that is now gone: not live
+
+    const { ctx: ctx1, drain: drain1 } = makeCtx();
+    await worker.scheduled({ cron: MAINTENANCE_CRON } as ScheduledEvent, rawEnv, ctx1);
+    await drain1();
+
+    // Night 1: rebuilt (table and triggers back), backfill started but did
+    // not finish — one full batch is not the whole corpus.
+    expect(await ftsObjectNames(d1)).toEqual(ALL_FTS_OBJECTS);
     expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    const midCount = await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first() as { n: number };
+    expect(midCount.n).toBe(FTS_BACKFILL_BATCH);
+
+    resetDatabaseInit(); // a fresh cold-start probe, as a new night's isolate would run
+    const { ctx: ctx2, drain: drain2 } = makeCtx();
+    await worker.scheduled({ cron: MAINTENANCE_CRON } as ScheduledEvent, rawEnv, ctx2);
+    await drain2();
+
+    // Night 2: the remaining tail is indexed and ready latches.
+    expect(await rawEnv.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1");
+    const finalCount = await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts`).first() as { n: number };
+    expect(finalCount.n).toBe(total + 1);
+
+    const diagnostics: RecallDiagnostics = {};
+    const recallCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+    const result = await recallEntries(
+      { query: "zzzqqxviii", topK: 5, synthesize: false }, rawEnv, recallCtx, undefined, { diagnostics },
+    );
+
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(result.matches.map(m => m.id)).toContain("tail-marker");
   });
 });
 

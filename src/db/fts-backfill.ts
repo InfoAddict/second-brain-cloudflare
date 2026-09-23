@@ -1,6 +1,9 @@
-import { FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../constants";
+import {
+  FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_INTEGRITY_SPOT_CHECK, FTS_READY_KV_KEY,
+} from "../constants";
 import type { Env } from "../env";
 import { isFtsLive } from "../recall/fts";
+import { rebuildFtsIndex } from "./fts-repair";
 
 // Resumable nightly backfill for rows that predate entries_fts. Trigger-covered
 // rows are handled too: each batch deletes its rowid range before inserting, so
@@ -55,11 +58,62 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
   return { indexed: results.length, done };
 }
 
-// Single nightly entry point. In this task it only backfills; Task 5 adds the
-// ready-state integrity branch here, so src/index.ts never changes again.
-// The statements write to entries_fts directly, so the entries write guard does
-// not wrap them (by design). If entries_fts is missing when one runs, it
-// throws; src/index.ts catches it and the nightly logs non-fatal.
+// Nightly drift detector, run only once the backfill has latched ready. Count
+// parity catches missed triggers and partial batches; the spot check catches
+// rowid renumbering, which keeps counts equal while breaking the mapping.
+// Repair is a reset, not a rebuild: delete orphans (the backfill's own
+// delete-range-then-insert batches cover rowids present in entries, so
+// orphans would survive them otherwise), then clear the cursor and ready flag
+// so the ordinary backfill re-covers the corpus over the following nights.
+export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
+  // scope-exempt: cron: deployment-wide parity check, like the backfill above —
+  // the index has no per-workspace shape, so there is no workspace scope to apply.
+  const counts = await env.DB.prepare(
+    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f`,
+  ).first<{ e: number; f: number }>();
+  let healthy = counts !== null && counts.e === counts.f;
+  if (healthy) {
+    // scope-exempt: cron: same rowid-keyed, deployment-wide check as the count above.
+    const { results } = await env.DB.prepare(
+      `SELECT e.id AS eid, f.id AS fid FROM entries e LEFT JOIN entries_fts f ON f.rowid = e.rowid ORDER BY e.rowid DESC LIMIT ?`,
+    ).bind(FTS_INTEGRITY_SPOT_CHECK).all<{ eid: string; fid: string | null }>();
+    healthy = results.every(r => r.fid === r.eid);
+  }
+  if (!healthy) {
+    console.error("FTS integrity check failed; resetting backfill");
+    // scope-exempt: cron: orphan cleanup keyed on rowid presence in entries, not
+    // on any single workspace's rows.
+    await env.DB.prepare(`DELETE FROM entries_fts WHERE rowid NOT IN (SELECT rowid FROM entries)`).run();
+    await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+    await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+  }
+  return { healthy };
+}
+
+// Single nightly entry point. Write-path isolation v2.2: a live request never
+// destroys the index; only this nightly job rebuilds. Not live (table or any
+// sync trigger missing or drifted from its expected body) means a hot-path
+// repair left it disabled — rebuildFtsIndex is the only place that DROP/
+// CREATEs entries_fts, and the backfill starts the same night so the outage
+// is not compounded by a second night of waiting. Live: FTS5's own
+// integrity-check is the corruption probe count parity cannot see; a throw
+// there also rebuilds. Otherwise, ready not yet latched means the backfill is
+// still in progress, so the parity checks below are skipped until it is.
 export async function runFtsMaintenance(env: Env): Promise<{ indexed: number; done: boolean }> {
-  return runFtsBackfill(env);
+  if (!(await isFtsLive(env))) {
+    await rebuildFtsIndex(env);
+    return runFtsBackfill(env);
+  }
+  try {
+    await env.DB.prepare(`INSERT INTO entries_fts(entries_fts, rank) VALUES('integrity-check', 1)`).run();
+  } catch (e) {
+    console.error("FTS integrity-check statement failed; rebuilding:", e);
+    await rebuildFtsIndex(env);
+    return runFtsBackfill(env);
+  }
+  if ((await env.OAUTH_KV.get(FTS_READY_KV_KEY)) !== "1") {
+    return runFtsBackfill(env);
+  }
+  const { healthy } = await checkFtsIntegrity(env);
+  return { indexed: 0, done: healthy };
 }

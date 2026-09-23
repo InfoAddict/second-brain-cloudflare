@@ -56,7 +56,23 @@ import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
 // before touching entries_fts, so it can skip cleanly instead of throwing
 // into a renamed-away table. That check runs unconditionally, so it adds
 // one D1 statement to every ordinary night, not just a disabled one.
-const NIGHTLY_D1_STATEMENT_BUDGET = 58;
+// MOVED 58 -> 61 (Task 5, nightly integrity self-heal): runFtsMaintenance now
+// checks liveness itself (one D1 SELECT against sqlite_master, the same
+// query isFtsLive already used inside runFtsBackfill) before deciding
+// whether to rebuild, then on a live index runs FTS5's own integrity-check
+// statement (one D1 statement), then reads the ready flag itself (one KV
+// GET) to decide whether to defer to the backfill or run the count/spot
+// parity checks. On a healthy night with the backfill still in progress —
+// what this suite measures — that is +3 D1/KV statements on top of the 5
+// already counted above (runFtsBackfill's own liveness check, ready GET,
+// cursor GET, rowid SELECT, and ready PUT all still run unchanged; the
+// liveness check and ready GET are paid twice, once by runFtsMaintenance and
+// once by runFtsBackfill, since Task 5 calls the latter as an ordinary
+// caller rather than threading its own answers through). A genuinely
+// unhealthy night costs more still (rebuild's DDL batch, or
+// checkFtsIntegrity's count and spot-check SELECTs) but is not the shape
+// this budget suite exercises.
+const NIGHTLY_D1_STATEMENT_BUDGET = 61;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -281,12 +297,13 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin, not just the ceiling: 11 D1 statements (unchanged from before
     // the night-summary recorder) plus the ONE OAUTH_KV.put it adds per
     // maintenance invocation, plus when-extraction's fixed 3-statement
-    // baseline (see NIGHTLY_D1_STATEMENT_BUDGET's comment), plus FTS
-    // maintenance's 5 (the entries_fts_disabled check, ready KV GET, cursor
-    // KV GET, rowid SELECT, ready KV PUT). If this number moves, say why in
-    // the same commit, see the scope-checker test's convention for this
-    // pattern.
-    expect(statements.length).toBe(20);
+    // baseline, plus FTS maintenance's 8 (see NIGHTLY_D1_STATEMENT_BUDGET's
+    // comment: runFtsMaintenance's own liveness check, the integrity-check
+    // statement, and its own ready GET, then runFtsBackfill's liveness
+    // check, ready GET, cursor GET, rowid SELECT, and ready PUT). If this
+    // number moves, say why in the same commit, see the scope-checker test's
+    // convention for this pattern.
+    expect(statements.length).toBe(23);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -304,10 +321,10 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
-    // Exact pin: the same 20 as an ordinary night, plus the ONE dangling-edge
+    // Exact pin: the same 23 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(21);
+    expect(statements.length).toBe(24);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

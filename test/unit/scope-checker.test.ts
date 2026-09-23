@@ -1179,7 +1179,12 @@ describe("the checker over the real source tree", () => {
     // (src/db/fts-backfill.ts, Task 4): the rowid-keyset SELECT and the
     // delete-then-insert batch's two statements, all cron, keyed on rowids
     // that carry no workspace scope by construction.
-    ).toEqual({ queries: 121, exempt: 57, checked: 7, outerJoin: 1 });
+    // Deliberate: +3 queries and +3 scope-exempt for the nightly integrity
+    // self-heal (src/db/fts-backfill.ts, checkFtsIntegrity, Task 5): the
+    // count-parity SELECT, the rowid spot-check JOIN, and the orphan-cleanup
+    // DELETE — all deployment-wide and keyed on entries.rowid, same exemption
+    // shape as Task 4's backfill statements above.
+    ).toEqual({ queries: 124, exempt: 60, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
