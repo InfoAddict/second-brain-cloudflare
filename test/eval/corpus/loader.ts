@@ -1,3 +1,4 @@
+import { normalizeCaptureInput } from "../../../src/capture/entry";
 import { storeEntry } from "../../../src/capture/store";
 import { DEFAULTS } from "../../../src/config";
 import { FTS_READY_KV_KEY } from "../../../src/constants";
@@ -9,6 +10,9 @@ import { EMBEDDING_DIMS, type ReplayAi } from "../ai-replay";
 import { openD1, type EvalD1 } from "../d1";
 import { ExactVectorize } from "../vectorize-emulator";
 import type { CorpusSpec } from "./types";
+
+// The classifier's own fallback (src/capture/classify.ts); 0 would switch off a live ranking signal.
+const DEFAULT_IMPORTANCE = 3;
 
 /** Index-time variant hook: T-0042 supplies its contextual storeEntry here. */
 export interface IndexVariant { id: string; storeEntry: typeof storeEntry }
@@ -37,6 +41,13 @@ export async function loadCorpus(o: {
 }): Promise<LoadedCorpus> {
   const dimensions = EMBEDDING_DIMS[o.embeddingModel];
   if (!dimensions) throw new Error(`no known embedding dimensions for ${o.embeddingModel}`);
+  for (const e of o.spec.entries) {
+    if (e.importanceScore !== undefined && !(Number.isInteger(e.importanceScore) && e.importanceScore >= 1 && e.importanceScore <= 5)) {
+      throw new Error(`entry ${e.id}: importanceScore must be an integer 1-5, got ${e.importanceScore}`);
+    }
+  }
+  // Same normalization captureEntry applies; the rows and the vectors both use the normalized form.
+  const entries = o.spec.entries.map(e => ({ ...e, ...normalizeCaptureInput(e.content, e.tags) }));
   const d1 = await openD1(o.backend);
   try {
     const kv = makeMemoryKV();
@@ -48,12 +59,12 @@ export async function loadCorpus(o: {
     resetFtsReadyMemo();
     await initializeDatabase(env);
 
-    const { entries, edges } = o.spec;
+    const { edges } = o.spec;
     for (let i = 0; i < entries.length; i += 100) {
       await env.DB.batch(entries.slice(i, i + 100).map(e =>
         env.DB.prepare(
-          `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
-        ).bind(e.id, e.content, JSON.stringify(e.tags), e.source, e.createdAt, e.createdAt, e.workspaceId, e.actorId)));
+          `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)`,
+        ).bind(e.id, e.content, JSON.stringify(e.tags), e.source, e.createdAt, e.createdAt, e.importanceScore ?? DEFAULT_IMPORTANCE, e.workspaceId, e.actorId)));
     }
 
     // The real write path: chunking, embedding, Vectorize metadata, entries.vector_ids.

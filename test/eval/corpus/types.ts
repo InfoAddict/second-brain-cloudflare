@@ -22,6 +22,8 @@ export interface CorpusEntry {
   createdAt: number;
   workspaceId: string;
   actorId: string;
+  /** Classifier score 1-5 (loader default 3, the classifier's own fallback; never 0). */
+  importanceScore?: number;
 }
 
 export interface CorpusEdge {
