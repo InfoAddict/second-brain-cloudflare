@@ -282,6 +282,82 @@ describe("lock lease and fence", () => {
       expect(live.run).toHaveBeenCalledTimes(1);
     }
   });
+
+  const settles = (p: Promise<unknown>, ms: number) =>
+    Promise.race([p.then(() => "returned", () => "threw"), sleep(ms).then(() => "still-waiting")]);
+
+  it("treats a lock timestamped far in the future as stale instead of waiting on it forever", async () => {
+    const root = tmp();
+    const lock = lockOf(root, MODEL, embedInput("x"), "future.jsonl");
+    writeFileSync(lock, JSON.stringify({ pid: 1, t: Date.now() + 3_600_000, token: "skewed" }));
+    const live = fakeLive();
+    const r = makeReplayAi({ store: store(root, "future.jsonl", { lockStaleMs: 50 }), mode: "record", live });
+    expect(await settles(r.ai.run(MODEL as never, embedInput("x") as never), 1500)).toBe("returned");
+    expect(live.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a malformed lock with a future mtime as stale too", async () => {
+    const root = tmp();
+    const lock = lockOf(root, MODEL, embedInput("x"), "futuremtime.jsonl");
+    writeFileSync(lock, "garbage");
+    const ahead = new Date(Date.now() + 3_600_000);
+    utimesSync(lock, ahead, ahead);
+    const live = fakeLive();
+    const r = makeReplayAi({ store: store(root, "futuremtime.jsonl", { lockStaleMs: 50 }), mode: "record", live });
+    expect(await settles(r.ai.run(MODEL as never, embedInput("x") as never), 1500)).toBe("returned");
+    expect(live.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on a lock that stays live past the wait cap, naming the lock path", async () => {
+    const root = tmp();
+    const lock = lockOf(root, MODEL, embedInput("x"), "cap.jsonl");
+    const beat = () => writeFileSync(lock, JSON.stringify({ pid: 1, t: Date.now(), token: "holder" }));
+    beat();
+    const timer = setInterval(beat, 10); // a holder that keeps renewing, so the lock is never stale
+    try {
+      const live = fakeLive();
+      const r = makeReplayAi({ store: store(root, "cap.jsonl", { lockStaleMs: 60 }), mode: "record", live });
+      const err = await r.ai.run(MODEL as never, embedInput("x") as never).then(() => null, (e: Error) => e);
+      expect(err?.message).toContain(lock);
+      expect(err?.message).toMatch(/delete/i);
+      expect(live.run).not.toHaveBeenCalled();
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  it("waits for a winner whose row lands shortly after the lease was lost, rather than discarding the paid call", async () => {
+    const root = tmp();
+    const file = join(cacheOf(root), "late.jsonl");
+    const lock = lockOf(root, MODEL, embedInput("x"), "late.jsonl");
+    const key = replayKey(MODEL, embedInput("x"));
+    const f32 = Buffer.from(new Float32Array([7]).buffer).toString("base64");
+    const live = { run: vi.fn(async () => {
+      writeFileSync(lock, JSON.stringify({ pid: 2, t: Date.now(), token: "winner" }));
+      setTimeout(() => appendFileSync(file, `${JSON.stringify({ k: key, v: { f32: [f32] } })}\n`), 60); // well inside the stale window
+      return { data: [[1]] };
+    }) };
+    const r = makeReplayAi({ store: store(root, "late.jsonl", { lockStaleMs: 1500 }), mode: "record", live });
+    expect(await r.ai.run(MODEL as never, embedInput("x") as never)).toEqual({ data: [[7]] });
+    expect(rows(file)).toHaveLength(1);
+    expect(live.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("when no winner row ever lands, the lost-lease error names the model, input, cache file and rerun command", async () => {
+    const root = tmp();
+    const lock = lockOf(root, MODEL, embedInput("needle text"), "gone.jsonl");
+    const live = { run: vi.fn(async () => {
+      writeFileSync(lock, JSON.stringify({ pid: 2, t: Date.now(), token: "winner" }));
+      return { data: [[1]] };
+    }) };
+    const r = makeReplayAi({ store: store(root, "gone.jsonl", { lockStaleMs: 60 }), mode: "record", live });
+    const err = await r.ai.run(MODEL as never, embedInput("needle text") as never).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain(MODEL);
+    expect(err?.message).toContain("needle text");
+    expect(err?.message).toContain("gone.jsonl");
+    expect(err?.message).toContain("npm run eval:recall");
+    expect(err?.message).toContain(replayKey(MODEL, embedInput("needle text")));
+  });
 });
 
 describe("NEURON_RATES", () => {

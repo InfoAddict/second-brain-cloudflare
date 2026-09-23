@@ -123,6 +123,8 @@ const COMMITTED_DIR = "test/eval/data/core";
 const COMMITTED_FILE = /^replay\..+\.jsonl\.gz$/;
 const DEFAULT_LOCK_STALE_MS = 120_000;
 const LOCK_POLL_MS = 25;
+/** How many stale windows a contender waits on a lock that keeps being renewed before giving up. */
+const LOCK_WAIT_WINDOWS = 5;
 
 const sleep = (ms: number) => new Promise(done => setTimeout(done, ms));
 const errCode = (e: unknown) => (e as NodeJS.ErrnoException).code;
@@ -144,6 +146,21 @@ function realTarget(path: string): string {
     }
     rest.push(basename(cur));
   }
+}
+
+/** Puts a lock we moved aside back without ever clobbering a lock another contender created meanwhile. */
+function restoreLock(aside: string, lock: string): void {
+  try {
+    linkSync(aside, lock);
+    return;
+  } catch (e) {
+    if (errCode(e) === "EEXIST") return; // another contender already took the slot
+  }
+  // No hardlinks on this filesystem: exclusive-create a copy instead (never rename, which would overwrite).
+  try {
+    const fd = openSync(lock, "wx");
+    try { writeSync(fd, readFileSync(aside)); } finally { closeSync(fd); }
+  } catch { /* slot taken, or aside already gone: nothing safe left to do */ }
 }
 
 const isInside = (child: string, parent: string) => {
@@ -297,15 +314,20 @@ export class ReplayStore {
     this.map.set(key, value);
   }
 
-  /** When the lock was last renewed: its `t`, or the file's mtime if `t` is missing or not a number. */
+  /**
+   * When the lock was last renewed: its `t`, or the file's mtime if `t` is missing or not a number. A time
+   * more than one stale window in the future (clock stepped back, skewed mount) counts as 0, i.e. stale,
+   * so it cannot block every run until the clock catches up.
+   */
   private lockTime(lock: string): number {
+    const bounded = (ts: number) => (ts > Date.now() + this.lockStaleMs ? 0 : ts);
     try {
       const t = (JSON.parse(readFileSync(lock, "utf8")) as { t?: unknown }).t;
-      if (typeof t === "number" && Number.isFinite(t)) return t;
+      if (typeof t === "number" && Number.isFinite(t)) return bounded(t);
     } catch (e) {
       if (errCode(e) === "ENOENT") throw e;
     }
-    return statSync(lock).mtimeMs; // unreadable, half-written, or malformed lock: age on disk
+    return bounded(statSync(lock).mtimeMs); // unreadable, half-written, or malformed lock: age on disk
   }
 
   /** Stale-lock takeover: move the lock aside atomically, so only one contender wins, then confirm it really was stale. */
@@ -325,7 +347,7 @@ export class ReplayStore {
     }
     try {
       if (Date.now() - this.lockTime(aside) > this.lockStaleMs) return true;
-      try { linkSync(aside, lock); } catch { /* another contender already took the slot */ } // we moved a fresh lock: put it back
+      restoreLock(aside, lock); // we moved a fresh lock: put it back
       return false;
     } finally {
       try { unlinkSync(aside); } catch { /* already gone */ }
@@ -336,7 +358,9 @@ export class ReplayStore {
    * Cross-process advisory lock: exclusive-create lockfile next to the write file, one per key. It is a
    * lease: the holder renews the timestamp every third of the stale window while `fn` runs, so a slow
    * live call is never mistaken for a dead process. `fn` gets a fence that re-reads the lock and says
-   * whether this holder's token is still on it; check it right before writing.
+   * whether this holder's token is still on it; check it right before writing. The fence is advisory: a
+   * sub-50µs window between check and append, after a stall longer than the stale window, can yield one
+   * duplicate line for a key (last write wins on load).
    */
   private async withLock<T>(key: string, fn: (stillOwner: () => boolean) => Promise<T>): Promise<T> {
     const lock = `${this.writeFile}.${key}.lock`;
@@ -346,6 +370,7 @@ export class ReplayStore {
       try { return (JSON.parse(readFileSync(lock, "utf8")) as { token?: string }).token === token; } catch { return false; }
     };
     mkdirSync(dirname(lock), { recursive: true }); // clean checkout: the contained .eval-cache/ may not exist yet
+    const giveUpAt = Date.now() + LOCK_WAIT_WINDOWS * this.lockStaleMs;
     for (;;) {
       try {
         const fd = openSync(lock, "wx");
@@ -353,6 +378,9 @@ export class ReplayStore {
         break;
       } catch (e) {
         if (errCode(e) !== "EEXIST") throw e;
+        if (Date.now() > giveUpAt) {
+          throw new Error(`timed out after ${LOCK_WAIT_WINDOWS * this.lockStaleMs}ms waiting for replay lock ${lock}, which is still being renewed. If no other eval run is active, delete it and rerun`);
+        }
         if (!this.breakIfStale(lock)) await sleep(LOCK_POLL_MS);
       }
     }
@@ -372,9 +400,10 @@ export class ReplayStore {
    * Makes `produce` run at most once per key: concurrent callers in this process share the one call, and
    * across processes the lockfile lease serializes contenders, with a cache recheck after acquiring it.
    * `live` is true only for the caller whose `produce` ran. If the lease was lost during `produce`, nothing
-   * is appended: the winner's row is returned, or this throws if the winner has not written yet.
+   * is appended: the winner's row is returned, waiting up to one stale window for it to land, or this throws if none does. `what` names the
+   * request in that error.
    */
-  async fill(key: string, produce: () => Promise<Stored>): Promise<{ stored: Stored; live: boolean }> {
+  async fill(key: string, produce: () => Promise<Stored>, what = "request"): Promise<{ stored: Stored; live: boolean }> {
     const running = this.inflight.get(key);
     if (running) return { stored: (await running).stored, live: false };
     const flight = this.withLock(key, async stillOwner => {
@@ -383,10 +412,13 @@ export class ReplayStore {
       if (cached) return { stored: cached, live: false };
       const stored = await produce();
       if (!stillOwner()) {
-        this.refresh();
-        const winner = this.get(key);
-        if (winner) return { stored: winner, live: false };
-        throw new Error(`replay lock for ${key} was taken over during a live call and no result was recorded; rerun to retry`);
+        for (const deadline = Date.now() + this.lockStaleMs; ; await sleep(LOCK_POLL_MS)) {
+          this.refresh();
+          const winner = this.get(key);
+          if (winner) return { stored: winner, live: false };
+          if (Date.now() >= deadline) break;
+        }
+        throw new Error(`replay lock for ${what} (sha256 ${key}) was taken over during a live call and no result was recorded in ${this.writeFile}. Rerun to retry: npm run eval:recall -- prepare --variant <name> --corpus <id>`);
       }
       this.put(key, stored);
       return { stored, live: true };
@@ -575,7 +607,7 @@ export function makeReplayAi(opts: {
       }
       opts.budget?.settle(reserved, price(fresh).neurons);
       return fresh;
-    });
+    }, `${model} "${preview}"`);
     const cost = price(stored);
     calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
     return respond(input, stored);
