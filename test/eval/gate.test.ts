@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { mulberry32 } from "./stats";
 import { DEFAULT_GATE, evaluateGate, formatGate } from "./gate";
 import { QUERY_CATEGORIES, type QueryResult, type VariantReport } from "./types";
 
@@ -147,24 +146,85 @@ describe("evaluateGate statistical correctness (known outcomes, seeded)", () => 
     expect(status(result, "regression")).toBe("fail");
   });
 
-  it("zero-mean paired noise passes at most rarely, and only on a real sample gain", () => {
-    // 240 queries, sd 0.115: a +0.02 sample mean is ~2.7 sigma, so a fluke is possible but rare.
-    let passes = 0;
-    for (let seed = 1; seed <= 40; seed++) {
-      const rand = mulberry32(seed);
-      const noisy = report("v", (_i, r) => {
-        const d = (rand() - 0.5) * 0.4;
-        for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] += d;
-      });
-      const result = evaluateGate(base, noisy);
-      if (result.verdict !== "PASS") continue;
-      passes++;
-      const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
-      expect(row.ci.mean).toBeGreaterThanOrEqual(0.02);
-      expect(row.ci.lo).toBeGreaterThan(0);
+  it("zero-mean paired noise and sub-margin gains never PASS", () => {
+    // Deterministic stand-ins for noise; the seeded 300-dataset null test in stats.test.ts covers the rest.
+    const swing = report("swing", (i, r) => { r.metrics.recall10 += i % 2 ? 0.2 : -0.2; });
+    expect(evaluateGate(base, swing).verdict).toBe("FAIL");
+    const small = report("small", (_i, r) => { r.metrics.recall10 += 0.0125; r.metrics.mrr10 += 0.0125; r.metrics.ndcg10 += 0.0125; });
+    const smallResult = evaluateGate(base, small);
+    expect(status(smallResult, "improvement")).toBe("fail");
+    expect(status(smallResult, "regression")).toBe("pass");
+    const mixed = report("mixed", (i, r) => { if (i < 120) r.metrics.recall10 += 0.05; else r.metrics.recall10 -= 0.05; });
+    expect(status(evaluateGate(base, mixed), "improvement")).toBe("fail");
+  });
+});
+
+describe("evaluateGate pairing and cluster validation", () => {
+  const base = report("baseline", () => {}, 200);
+  const rule = (result: ReturnType<typeof evaluateGate>, name: string) => result.rules.find(r => r.rule === name);
+  const clustered = (k: number) => (i: number, r: QueryResult) => { r.clusterKey = `c${i % k}`; };
+
+  it("is INCONCLUSIVE, naming the ID, when a report repeats a query ID (power-floor bypass)", () => {
+    const dup = (name: string, gain: number) => {
+      const r = report(name, () => {}, 200);
+      r.results.forEach(x => { x.queryId = "q0"; x.clusterKey = "q0"; x.metrics.recall10 += gain; x.metrics.mrr10 += gain; x.metrics.ndcg10 += gain; });
+      return r;
+    };
+    const result = evaluateGate(dup("b", 0), dup("v", 0.5));
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    expect(rule(result, "comparable")?.detail).toMatch(/duplicate query IDs.*q0/);
+  });
+
+  it("is INCONCLUSIVE when one report holds extra query IDs, naming them", () => {
+    const cand = report("v", shift(0.5, 30), 200);
+    cand.results[199].queryId = "stray";
+    const detail = rule(evaluateGate(base, cand), "comparable")?.detail ?? "";
+    expect(detail).toMatch(/q199/);
+    expect(detail).toMatch(/stray/);
+  });
+
+  it("is INCONCLUSIVE when the candidate relabels clusters (20 clusters presented as 200 independent queries)", () => {
+    const honestBase = report("b", clustered(40), 200);
+    const gain = (i: number, r: QueryResult) => { clustered(40)(i, r); if (i % 40 < 2) for (const k of ["recall10", "mrr10", "ndcg10"] as const) r.metrics[k] += 0.5; };
+    expect(status(evaluateGate(honestBase, report("v", gain, 200)), "improvement")).toBe("fail");
+    const relabeled = report("v", (i, r) => { gain(i, r); r.clusterKey = `q${i}`; }, 200);
+    const result = evaluateGate(honestBase, relabeled);
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    expect(rule(result, "comparable")?.detail).toMatch(/cluster.*q0/);
+  });
+
+  it("is INCONCLUSIVE when a query changes category between reports", () => {
+    const cand = report("v", shift(0.5, 30), 200);
+    cand.results[3].category = "cjk";
+    const result = evaluateGate(base, cand);
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    expect(rule(result, "comparable")?.detail).toMatch(/category.*q3/);
+  });
+
+  it("pairs each candidate score with its own baseline query, whatever the row order", () => {
+    // Baseline recall@10 alternates 0.75/0.25; candidate is baseline + 0.03125 for every query.
+    const hetero = (gain: number) => report("h", (i, r) => { r.metrics.recall10 = (i % 2 ? 0.25 : 0.75) + gain; }, 200);
+    const cand = hetero(0.03125);
+    for (const order of [cand.results, [...cand.results].reverse()]) {
+      const result = evaluateGate(hetero(0), { ...cand, results: order });
+      const ci = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!.ci;
+      expect(ci.mean).toBe(0.03125);
+      expect(ci.lo).toBe(0.03125);
+      expect(ci.hi).toBe(0.03125);
+      expect(status(result, "improvement")).toBe("pass");
     }
-    expect(passes).toBeLessThanOrEqual(2);
-  }, 60_000);
+  });
+
+  it("is INCONCLUSIVE when the queries fall into too few clusters, even above the query floor", () => {
+    const few = (n: number) => report("v", (i, r) => { clustered(n)(i, r); shift(0.5, 60)(i, r); }, 200);
+    const fewBase = report("b", clustered(4), 200);
+    const result = evaluateGate(fewBase, few(4));
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    expect(rule(result, "power")?.detail).toMatch(/4 distinct clusters/);
+    const ok = evaluateGate(report("b", clustered(30), 200), few(30));
+    expect(rule(ok, "power")).toBeUndefined();
+    expect(ok.verdict).toBe("PASS");
+  });
 });
 
 describe("evaluateGate boundaries", () => {
@@ -186,15 +246,42 @@ describe("evaluateGate boundaries", () => {
   });
 
   it("a gain whose interval bottoms out at exactly zero is not an improvement", () => {
-    // All the gain sits in 1 of 4 clusters, so about 32% of resamples miss it and lo is exactly 0.
+    // All the gain sits in 2 of 30 clusters, so about 13% of resamples miss it and lo is exactly 0.
     const cand = report("v", (i, r) => {
-      r.clusterKey = `c${i % 4}`;
-      if (i % 4 === 0) for (const k of ["recall10", "mrr10", "ndcg10"] as const) r.metrics[k] += 0.5;
+      r.clusterKey = `c${i % 30}`;
+      if (i % 30 < 2) for (const k of ["recall10", "mrr10", "ndcg10"] as const) r.metrics[k] += 0.5;
     }, 200);
-    const result = evaluateGate(base, cand);
+    const baseC = report("b", (i, r) => { r.clusterKey = `c${i % 30}`; }, 200);
+    const result = evaluateGate(baseC, cand);
     const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(row.ci.mean).toBeGreaterThanOrEqual(0.02);
     expect(row.ci.lo).toBe(0);
     expect(status(result, "improvement")).toBe("fail");
+  });
+
+  // Gains are dyadic (0.5, 0.25) so the sums are exact and the mean lands on the threshold literal.
+  it("an overall gain of exactly +0.0200 passes; just under fails", () => {
+    const at = (top: number) => evaluateGate(report("b", (_i, r) => { r.metrics.recall10 = 0; }, 200),
+      report("v", (i, r) => { r.metrics.recall10 = i < 7 ? 0.5 : i === 7 ? top : 0; }, 200));
+    const exact = at(0.5); // 8 x 0.5 / 200
+    expect(exact.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!.ci.mean).toBe(0.02);
+    expect(status(exact, "improvement")).toBe("pass");
+    expect(status(at(0.48), "improvement")).toBe("fail");
+  });
+
+  it("a targeted gain of exactly +0.0500 passes; just under fails", () => {
+    // 25 paraphrase queries out of 200; overall recall@10 moves far less than the 0.02 margin.
+    const at = (last: number) => {
+      let seen = 0;
+      return evaluateGate(report("b", (_i, r) => { r.metrics.recall10 = 0; }, 200),
+        report("v", (_i, r) => {
+          const hit = r.category === "paraphrase" && seen++ < 5;
+          r.metrics.recall10 = hit ? (seen === 5 ? last : 0.25) : 0;
+        }, 200), { targetCategories: ["paraphrase"] });
+    };
+    const exact = at(0.25); // 5 x 0.25 / 25
+    expect(exact.deltas.find(d => d.scope === "paraphrase (target)" && d.metric === "recall10")!.ci.mean).toBe(0.05);
+    expect(status(exact, "improvement")).toBe("pass");
+    expect(status(at(0.24), "improvement")).toBe("fail");
   });
 });

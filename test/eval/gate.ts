@@ -9,6 +9,7 @@ export interface GateThresholds {
   improvementMargin: number;
   targetMargin: number;
   minQueries: number;
+  minClusters: number;
   maxAddedD1Statements: number;
   d1StatementCeiling: number;
   rowsReadRatio: number;
@@ -25,6 +26,8 @@ export const DEFAULT_GATE: Readonly<GateThresholds> = Object.freeze({
   improvementMargin: 0.02,
   targetMargin: 0.05,
   minQueries: 200,
+  // Provisional: 4 clusters x 50 queries covered only 78.5% of a nominal 95% interval; Task 11 calibrates this.
+  minClusters: 30,
   maxAddedD1Statements: 2,
   d1StatementCeiling: 50,
   rowsReadRatio: 1.25,
@@ -53,15 +56,37 @@ function finish(rules: RuleResult[], deltas: MetricDelta[]): GateResult {
   return { verdict, rules, deltas };
 }
 
+const listIds = (ids: string[]) => ids.length > 5 ? `${ids.slice(0, 5).join(", ")} (+${ids.length - 5} more)` : ids.join(", ");
+
+function duplicateIds(r: VariantReport): string[] {
+  const seen = new Set<string>(), dups = new Set<string>();
+  for (const q of r.results) (seen.has(q.queryId) ? dups : seen).add(q.queryId);
+  return [...dups];
+}
+
 function comparabilityProblems(base: VariantReport, cand: VariantReport): string[] {
   const problems: string[] = [];
   if (base.corpus !== cand.corpus) problems.push(`corpus differs (${base.corpus} vs ${cand.corpus})`);
   if (base.embeddingModel !== cand.embeddingModel) problems.push("embedding model differs");
   if (base.d1Backend !== cand.d1Backend) problems.push("D1 backend differs");
   if (base.isolate !== cand.isolate) problems.push("isolate mode differs");
-  const baseIds = new Set(base.results.map(r => r.queryId));
-  const candIds = new Set(cand.results.map(r => r.queryId));
-  if (baseIds.size !== candIds.size || [...baseIds].some(id => !candIds.has(id))) problems.push("query sets differ");
+  const baseDups = duplicateIds(base), candDups = duplicateIds(cand);
+  if (baseDups.length) problems.push(`duplicate query IDs in baseline: ${listIds(baseDups)}`);
+  if (candDups.length) problems.push(`duplicate query IDs in candidate: ${listIds(candDups)}`);
+  if (baseDups.length || candDups.length) return problems;
+
+  const baseById = new Map(base.results.map(r => [r.queryId, r] as const));
+  const candById = new Map(cand.results.map(r => [r.queryId, r] as const));
+  const onlyBase = [...baseById.keys()].filter(id => !candById.has(id));
+  const onlyCand = [...candById.keys()].filter(id => !baseById.has(id));
+  if (onlyBase.length || onlyCand.length) {
+    problems.push(`query sets differ (only in baseline: ${listIds(onlyBase) || "none"}; only in candidate: ${listIds(onlyCand) || "none"})`);
+    return problems;
+  }
+  const badCategory = [...baseById].filter(([id, b]) => b.category !== candById.get(id)!.category).map(([id]) => id);
+  const badCluster = [...baseById].filter(([id, b]) => b.clusterKey !== candById.get(id)!.clusterKey).map(([id]) => id);
+  if (badCategory.length) problems.push(`category differs between reports for: ${listIds(badCategory)}`);
+  if (badCluster.length) problems.push(`clusterKey differs between reports for: ${listIds(badCluster)}`);
   return problems;
 }
 
@@ -77,9 +102,15 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     return finish(rules, deltas);
   }
   const baseById = new Map(base.results.map(r => [r.queryId, r] as const));
+  // IDs are unique and labels identical (validated above), so the shared keys are safe to resample on.
   const pairs: Pair[] = cand.results.map(c => ({ b: baseById.get(c.queryId)!, c }));
   if (pairs.length < t.minQueries) {
     add("power", "inconclusive", `${pairs.length} queries is below the ${t.minQueries}-query floor`);
+    return finish(rules, deltas);
+  }
+  const clusters = new Set(pairs.map(p => p.c.clusterKey)).size;
+  if (clusters < t.minClusters) {
+    add("power", "inconclusive", `${clusters} distinct clusters is below the ${t.minClusters}-cluster floor`);
     return finish(rules, deltas);
   }
 
