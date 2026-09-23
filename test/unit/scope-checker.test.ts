@@ -1152,7 +1152,13 @@ describe("the checker over the real source tree", () => {
   // never sees) and the rotating content check's in-place re-index
   // INSERT...SELECT, each a rowid-keyed deployment-wide cron read carrying a
   // scope-exempt licence. scope-checked and outer-join UNCHANGED.
-  it("reports the checker's pinned totals (127 queries, 63 exceptions, 7 scope-checked, 1 outer-join)", () => {
+  // MOVED queries 127 -> 128 and exempt 63 -> 64 (T-0056 polish, rotating
+  // content check): the window's orphan half (entries_fts rowid range
+  // anti-joined to entries by rowid) is its own statement with its own
+  // scope-exempt licence. The old FTS-side window read touched no corpus
+  // table and was never counted, so the rewrite's two window statements land
+  // as +1 query and +1 exception, not one-for-one.
+  it("reports the checker's pinned totals (128 queries, 64 exceptions, 7 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1191,7 +1197,7 @@ describe("the checker over the real source tree", () => {
     // count-parity SELECT, the rowid spot-check JOIN, and the orphan-cleanup
     // DELETE — all deployment-wide and keyed on entries.rowid, same exemption
     // shape as Task 4's backfill statements above.
-    ).toEqual({ queries: 127, exempt: 63, checked: 7, outerJoin: 1 });
+    ).toEqual({ queries: 128, exempt: 64, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

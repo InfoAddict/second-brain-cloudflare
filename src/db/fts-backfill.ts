@@ -1,15 +1,10 @@
 import {
-  FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_CONTENT_CHECK_CURSOR_KV_KEY,
+  D1_MAX_BOUND_PARAMS, FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_CONTENT_CHECK_CURSOR_KV_KEY,
   FTS_CONTENT_CHECK_WINDOW, FTS_INTEGRITY_SPOT_CHECK, FTS_READY_KV_KEY,
 } from "../constants";
 import type { Env } from "../env";
 import { FTS_LIVENESS_SQL, isFtsLive, isFtsLiveRows } from "../recall/fts";
 import { rebuildFtsIndex } from "./fts-repair";
-
-// D1 caps bound parameters per statement at 100. A badly drifted window can
-// flag every rowid in it (FTS_CONTENT_CHECK_WINDOW), so in-place re-index
-// pairs are chunked to the cap — still one batch.
-const FTS_REINDEX_CHUNK = 100;
 
 // Ready-latch guard (combined review of Tasks 4-6): the old latch fired on
 // "the cursor found no rows" alone, so a cursor past max rowid — or a sync
@@ -151,24 +146,26 @@ export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }>
 async function rotateContentCheck(env: Env, maxRowid: number | null): Promise<void> {
   const cursor = Number(await env.OAUTH_KV.get(FTS_CONTENT_CHECK_CURSOR_KV_KEY) ?? "0");
   const hi = cursor + FTS_CONTENT_CHECK_WINDOW;
-  const [entriesWindow, ftsWindow] = await env.DB.batch([
+  // Both sides must touch only the window. A bare
+  // `SELECT rowid, id, content FROM entries_fts WHERE rowid > ? AND rowid <= ?`
+  // meters a full virtual-table scan on D1 (rows_read = corpus size), so the
+  // mismatch side drives from entries' rowid range and reads FTS by exact
+  // rowid (FTS5 pushes `rowid = ?` through as VIRTUAL TABLE INDEX 0:=), and
+  // the orphan side keeps the range on entries_fts (INDEX 0:><) and
+  // anti-joins entries by rowid. The two result sets are disjoint: a drifted
+  // rowid has an entries row, an orphan does not.
+  const [drifted, orphans] = await env.DB.batch([
     // scope-exempt: cron: same rowid-keyed, deployment-wide parity read as the checks above — the window carries no workspace shape.
-    env.DB.prepare(`SELECT rowid, id, content FROM entries WHERE rowid > ? AND rowid <= ?`).bind(cursor, hi),
-    env.DB.prepare(`SELECT rowid, id, content FROM entries_fts WHERE rowid > ? AND rowid <= ?`).bind(cursor, hi),
+    env.DB.prepare(`SELECT e.rowid AS rowid FROM entries e LEFT JOIN entries_fts f ON f.rowid = e.rowid WHERE e.rowid > ? AND e.rowid <= ? AND (f.rowid IS NULL OR f.id IS NOT e.id OR f.content IS NOT e.content)`).bind(cursor, hi),
+    // scope-exempt: cron: the orphan half of the same windowed parity read — anti-joins entries by rowid existence only, deployment-wide like the backfill.
+    env.DB.prepare(`SELECT f.rowid AS rowid FROM entries_fts f WHERE f.rowid > ? AND f.rowid <= ? AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.rowid = f.rowid)`).bind(cursor, hi),
   ]);
-  const source = new Map((entriesWindow.results as { rowid: number; id: string; content: string }[]).map(r => [r.rowid, r]));
-  const shadow = new Map((ftsWindow.results as { rowid: number; id: string; content: string }[]).map(r => [r.rowid, r]));
-  const mismatched = new Set<number>();
-  for (const [rid, row] of source) {
-    const s = shadow.get(rid);
-    if (!s || s.id !== row.id || s.content !== row.content) mismatched.add(rid);
-  }
-  for (const rid of shadow.keys()) if (!source.has(rid)) mismatched.add(rid);
-  if (mismatched.size) {
-    const rowids = [...mismatched].sort((a, b) => a - b);
+  const rowids = [...drifted.results as { rowid: number }[], ...orphans.results as { rowid: number }[]]
+    .map(r => r.rowid).sort((a, b) => a - b);
+  if (rowids.length) {
     const statements: D1PreparedStatement[] = [];
-    for (let i = 0; i < rowids.length; i += FTS_REINDEX_CHUNK) {
-      const chunk = rowids.slice(i, i + FTS_REINDEX_CHUNK);
+    for (let i = 0; i < rowids.length; i += D1_MAX_BOUND_PARAMS) {
+      const chunk = rowids.slice(i, i + D1_MAX_BOUND_PARAMS);
       const markers = chunk.map(() => "?").join(",");
       statements.push(env.DB.prepare(`DELETE FROM entries_fts WHERE rowid IN (${markers})`).bind(...chunk));
       // scope-exempt: cron: in-place re-index for exactly the rowids the

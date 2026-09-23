@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { runFtsBackfill, runFtsMaintenance, checkFtsIntegrity } from "../../src/db/fts-backfill";
+import { isFtsLive } from "../../src/recall/fts";
 import {
   FTS_BACKFILL_BATCH, FTS_BACKFILL_CURSOR_KV_KEY, FTS_CONTENT_CHECK_CURSOR_KV_KEY, FTS_READY_KV_KEY, FTS_INTEGRITY_SPOT_CHECK,
 } from "../../src/constants";
@@ -256,6 +257,64 @@ describe("runFtsBackfill", () => {
     expect(await sourceOf(d1)).toHaveLength(3);
     expect(await shadowOf(d1)).toHaveLength(2);
   });
+
+  // Promoted from review/mutation-b-orphan.probe.ts (T-0056 mutation testing):
+  // with the latch guard's REVERSE parity probe deleted, every other shipped
+  // test still passes. An FTS row whose rowid is absent from entries is
+  // invisible to the forward EXCEPT probe and to the newest-5 spot check —
+  // only the reverse direction refuses the latch over it.
+  it("does not latch ready while an FTS orphan row (rowid absent from entries) exists", async () => {
+    seed(d1, 1);
+    await d1.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (9999, 'ghost', 'ghost content')`).run();
+    const env = envFor(d1);
+
+    const result = await runFtsBackfill(env);
+
+    expect(result).toEqual({ indexed: 1, done: false });
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0"); // restart, not latch
+    // The refusal repairs nothing itself; the nightly integrity check owns orphan cleanup.
+    expect(await d1.db.prepare(`SELECT count(*) AS n FROM entries_fts WHERE id = 'ghost'`).first()).toEqual({ n: 1 });
+  });
+
+  // Promoted from review/mutation-e-liveness-race.probe.ts: with the latch
+  // guard's OWN liveness recheck deleted, every other shipped test still
+  // passes. Unlike the trigger-drop test above, nothing is written between
+  // the final batch and the latch, so both EXCEPT parity probes come back
+  // clean — only the guard's fresh liveness read sees the dropped trigger.
+  it("does not latch ready when a trigger drops between the final batch and the latch with data still in parity", async () => {
+    seed(d1, 2);
+    const raw = d1.db;
+    let dropped = false;
+    const DB = {
+      prepare(sql: string) {
+        const stmt = raw.prepare(sql);
+        if (!sql.includes("SELECT rowid AS rid FROM entries")) return stmt;
+        return {
+          bind(...args: unknown[]) {
+            const bound = stmt.bind(...args);
+            return {
+              all: async () => {
+                const selected = await bound.all();
+                if (!dropped) { dropped = true; await raw.exec("DROP TRIGGER entries_fts_insert"); }
+                return selected;
+              },
+            };
+          },
+        };
+      },
+      exec: raw.exec.bind(raw),
+      batch: raw.batch.bind(raw),
+    } as unknown as D1Database;
+    const env = makeTestEnv(undefined, { DB, OAUTH_KV: makeMemoryKV() });
+
+    const result = await runFtsBackfill(env);
+
+    expect(result).toEqual({ indexed: 2, done: false });
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBeNull();
+    expect(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
+    expect(await isFtsLive(env)).toBe(false);
+  });
 });
 
 describe("checkFtsIntegrity", () => {
@@ -362,6 +421,78 @@ describe("checkFtsIntegrity", () => {
     await checkFtsIntegrity(env);
     expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
   });
+
+  it("the rotating window's FTS reads scale with the window, not the corpus", async () => {
+    // Cost proof on a real 5,000-row corpus (the E2E finding measured a
+    // 5,747-row brain). node:sqlite exposes no rows_read meter, so cost is
+    // pinned by SQLite's own access-path verdicts — EXPLAIN QUERY PLAN of the
+    // exact statements the run issues — plus a wall-clock ratio against a
+    // full entries_fts scan of the same database.
+    seed(d1, 5000);
+    // Realistic memory-size content so the full-scan baseline is honest; the
+    // update trigger re-mirrors FTS, keeping (rowid, id, content) parity.
+    await d1.db.prepare(`UPDATE entries SET content = content || ' with violet orchid dashboard detail repeated for a realistic memory size'`).run();
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    await d1.db.prepare(`UPDATE entries_fts SET content = 'stale orchid payload' WHERE rowid = 7`).run();
+
+    const result = await checkFtsIntegrity(env);
+
+    expect(result).toEqual({ healthy: true });
+    expect(await env.OAUTH_KV.get(FTS_READY_KV_KEY)).toBe("1"); // healed in place, no reset
+    expect(await ftsCount(d1)).toEqual({ n: 5000 });
+    expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
+
+    // The window statements, verbatim from the batch the run issued.
+    const batchSql = d1.batches.flat();
+    const driftSql = batchSql.find(sql => sql.includes("LEFT JOIN entries_fts f"));
+    const orphanSql = batchSql.find(sql => sql.includes("NOT EXISTS (SELECT 1 FROM entries e"));
+    expect(driftSql).toBeTruthy();
+    expect(orphanSql).toBeTruthy();
+
+    // FTS5 serves the drift side by exact-rowid lookups (INDEX 0:=) driven by
+    // entries' pk range — never a scan of the virtual table.
+    const planDetails = async (sql: string): Promise<string[]> =>
+      ((await d1.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(0, 4294967295).all()).results as { detail: string }[])
+        .map(r => r.detail);
+    const driftPlan = await planDetails(driftSql!);
+    expect(driftPlan).toContain("SEARCH e USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)");
+    expect(driftPlan).toContain("SCAN f VIRTUAL TABLE INDEX 0:= LEFT-JOIN");
+    expect(driftPlan.some(d => d.startsWith("SCAN entries_fts"))).toBe(false);
+    // The orphan side keeps the range on entries_fts, pushed into xBestIndex
+    // (INDEX 0:><), and anti-joins entries by pk.
+    const orphanPlan = await planDetails(orphanSql!);
+    expect(orphanPlan).toContain("SCAN f VIRTUAL TABLE INDEX 0:><");
+    expect(orphanPlan).toContain("SEARCH e USING INTEGER PRIMARY KEY (rowid=?)");
+
+    // Count probes: the window statements return exactly the window's worth
+    // of rows. The run healed rowid 7, so re-inject faults first: one drifted
+    // row at rowid 6 and one orphan inside the window (entries rowid 50 is
+    // deleted — its trigger removes the FTS row — then re-inserted by hand).
+    await d1.db.prepare(`UPDATE entries_fts SET content = 'stale again' WHERE rowid = 6`).run();
+    await d1.db.prepare(`DELETE FROM entries WHERE rowid = 50`).run();
+    await d1.db.prepare(`INSERT INTO entries_fts (rowid, id, content) VALUES (50, 'ghost', 'ghost content')`).run();
+    expect((await d1.db.prepare(driftSql!).bind(0, 200).all()).results).toEqual([{ rowid: 6 }]);
+    expect((await d1.db.prepare(orphanSql!).bind(0, 200).all()).results).toEqual([{ rowid: 50 }]);
+
+    // Wall-clock: both window statements together stay well under one full
+    // scan of the same corpus. Runs interleave so both timings share load
+    // conditions, and each takes the min over 30 runs to dodge scheduler
+    // noise on a busy CI worker. Measured ratio ~4.4x; a de-facto corpus
+    // scan would sit at ~1x, so 2.5x separates the shapes without flaking.
+    let windowBest = Infinity;
+    let fullBest = Infinity;
+    for (let k = 0; k < 30; k++) {
+      let t0 = performance.now();
+      await d1.db.prepare(driftSql!).bind(4000, 4200).all();
+      await d1.db.prepare(orphanSql!).bind(4000, 4200).all();
+      windowBest = Math.min(windowBest, performance.now() - t0);
+      t0 = performance.now();
+      await d1.db.prepare(`SELECT rowid, id, content FROM entries_fts`).all();
+      fullBest = Math.min(fullBest, performance.now() - t0);
+    }
+    expect(windowBest * 2.5).toBeLessThan(fullBest);
+  }, 30000);
 });
 
 describe("runFtsMaintenance", () => {
