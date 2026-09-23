@@ -60,6 +60,8 @@ export interface RecallDiagnostics {
   lexicalArmSkipped?: boolean;
   /** Whether fusion could use corpus-wide DF for every lexical token (false = fetch-window estimate). */
   corpusIdfUsed?: boolean;
+  /** Whether the FTS5 path served the keyword rows (false = LIKE, including any degrade-on-error). */
+  ftsUsed?: boolean;
 }
 
 export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"

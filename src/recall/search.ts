@@ -34,8 +34,9 @@ import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
+import { ftsMatchQuery, ftsReady } from "./fts";
 
-async function keywordSearch(
+async function keywordSearchLike(
   tokens: string[],
   env: Env,
   limit: number,
@@ -74,6 +75,54 @@ async function keywordSearch(
     `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} ORDER BY created_at DESC LIMIT ?`
   ).bind(...terms.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? []), limit).all();
   return results as unknown as KeywordRow[];
+}
+
+async function keywordSearchFts(
+  match: string,
+  env: Env,
+  limit: number,
+  bounds: Readonly<TimeBounds>,
+  identity?: Identity,
+  only?: "personal" | "company",
+  teamId?: string,
+): Promise<KeywordRow[]> {
+  let timeWhere = "";
+  const timeBindings: number[] = [];
+  if (bounds.after !== undefined) { timeWhere += " AND e.created_at >= ?"; timeBindings.push(bounds.after); }
+  if (bounds.before !== undefined) { timeWhere += " AND e.created_at < ?"; timeBindings.push(bounds.before); }
+  const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
+  // workspace_id exists only on entries, not on entries_fts's id/content
+  // columns, so the clause below resolves unambiguously though unqualified.
+  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+  const { results } = await env.DB.prepare(
+    `SELECT e.id, e.content, e.tags, e.source, e.created_at
+     FROM entries_fts JOIN entries e ON e.id = entries_fts.id
+     WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+     ORDER BY bm25(entries_fts) LIMIT ?`
+  ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit).all();
+  return results as unknown as KeywordRow[];
+}
+
+async function keywordSearch(
+  tokens: string[],
+  env: Env,
+  limit: number,
+  bounds: Readonly<TimeBounds> = {},
+  identity?: Identity,
+  only?: "personal" | "company",
+  teamId?: string,
+): Promise<{ rows: KeywordRow[]; fts: boolean }> {
+  if (!tokens.length) return { rows: [], fts: false };
+  const match = ftsMatchQuery(tokens.slice(0, KEYWORD_MAX_TOKENS));
+  if (match && await ftsReady(env)) {
+    try {
+      return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true };
+    } catch (e) {
+      console.error("FTS keyword search failed (degrading to LIKE):", e);
+    }
+  }
+  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false };
 }
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -219,6 +268,7 @@ export async function recallEntries(
   markStage("querySignals");
 
   let keywordRows: KeywordRow[] = [];
+  let ftsServedKeywords = false; // memberFirst never sets this: tag rows are not bm25-ordered
   let results: { matches: VectorizeMatch[] };
   if (memberFirst) {
     // Escaped: a tag is user data and LIKE reads _ and % as wildcards. This is a read, so
@@ -290,12 +340,13 @@ export async function recallEntries(
         return { matches: [] as VectorizeMatch[] };
       }
     };
-    const [denseResults, kwRows] = await Promise.all([
+    const [denseResults, kw] = await Promise.all([
       denseQuery(),
       keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId),
     ]);
     results = denseResults;
-    keywordRows = kwRows;
+    keywordRows = kw.rows;
+    ftsServedKeywords = kw.fts;
 
     // Governed by its own threshold, not the write-path duplicate flag: the two
     // shared a constant until #245, so retuning duplicate detection silently
@@ -319,6 +370,7 @@ export async function recallEntries(
   if (internal.diagnostics) {
     internal.diagnostics.denseIds = [...new Set(results.matches.map(m => ((m.metadata as any)?.parentId ?? m.id) as string))];
     internal.diagnostics.keywordIds = [...new Set(keywordRows.map(row => row.id))];
+    internal.diagnostics.ftsUsed = ftsServedKeywords;
   }
   markStage("candidateGeneration");
 

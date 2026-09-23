@@ -62,7 +62,10 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
       embeddingCalls: 1,
       vectorizeQueries: 1,
       vectorizeGets: 0,
-      kvReads: 1,
+      // Tag vocabulary read plus the FTS readiness flag read (Task 3): the
+      // keyword arm checks fts:ready on every non-tag recall, memoizing only
+      // true, so an unset flag costs one KV read per call.
+      kvReads: 2,
       kvWrites: 0,
       graphSeeds: 0,
       expandedNodes: 0,
@@ -83,7 +86,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     expect(budget.embeddingCalls).toBe(1);
     expect(budget.vectorizeQueries).toBe(1);
     expect(budget.vectorizeGets).toBe(0);
-    expect(budget.kvReads).toBe(1);
+    // Tag vocabulary read plus the FTS readiness flag read (Task 3).
+    expect(budget.kvReads).toBe(2);
     expect(budget.kvWrites).toBe(0);
     expect(budget.workerRequests).toBe(1);
     expect(budget.graphSeeds).toBe(1);

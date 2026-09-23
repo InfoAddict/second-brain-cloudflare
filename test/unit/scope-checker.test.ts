@@ -1170,8 +1170,12 @@ describe("the checker over the real source tree", () => {
     // passes). Deliberate: +4 scoped queries for GET /due (overdue rows,
     // overdue count, upcoming rows, upcoming count). Deliberate: +1 scoped
     // query for src/push/send.ts's pushDueItems (the due-item SELECT, scoped
-    // to the one workspace it was called for).
-    ).toEqual({ queries: 117, exempt: 54, checked: 6, outerJoin: 1 });
+    // to the one workspace it was called for). Deliberate: +1 query and +1
+    // scope-checked for keywordSearchFts's entries_fts JOIN entries read
+    // (src/recall/search.ts, FTS5 lexical arm Task 3): its scope clause is a
+    // JS-assembled ` AND ${scope.clause}` fragment, same shape as the other
+    // scope-checked keyword-arm queries in this file.
+    ).toEqual({ queries: 118, exempt: 54, checked: 7, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
