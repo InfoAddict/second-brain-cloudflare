@@ -419,6 +419,29 @@ describe("evaluateGate: comparability of golden data and limits", () => {
   });
 });
 
+describe("evaluateGate: public and core reports stay apart", () => {
+  const pub = (name: string, tweak?: (i: number, r: QueryResult) => void) => ({ ...report(name, tweak), corpus: "beir-scifact", dataFingerprint: { "corpus.jsonl": "a", "queries.jsonl": "b", "qrels.tsv": "c" } });
+
+  it("is INCONCLUSIVE comparing a public report with a core report, in either direction", () => {
+    for (const [b, c] of [[report("b"), pub("v", shift(0.5, 30))], [pub("b"), report("v", shift(0.5, 30))]] as const) {
+      const result = evaluateGate(b, c);
+      expect(result.verdict).toBe("INCONCLUSIVE");
+      expect(result.rules.find(r => r.rule === "comparable")!.detail).toMatch(/corpus differs/);
+    }
+  });
+
+  it("requires the derived-manifest fingerprint on public reports, like core reports", () => {
+    const bare = (r: VariantReport) => { const { dataFingerprint: _x, ...rest } = r; return rest as VariantReport; };
+    const result = evaluateGate(bare(pub("b")), pub("v", shift(0.5, 30)));
+    expect(result.verdict).toBe("INCONCLUSIVE");
+    expect(result.rules.find(r => r.rule === "comparable")!.detail).toMatch(/baseline.*fingerprint/);
+  });
+
+  it("compares two reports over the same public data", () => {
+    expect(evaluateGate(pub("b"), pub("v", shift(0.5, 30))).verdict).toBe("PASS");
+  });
+});
+
 describe("evaluateGate: known gaps", () => {
   const GAP = ["known-gap", "gap:T-0072"];
   const set = (r: QueryResult, v: number) => { r.metrics = { recall5: v, recall10: v, mrr10: v, ndcg10: v }; };

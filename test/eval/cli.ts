@@ -4,14 +4,16 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { DEFAULTS } from "../../src/config";
 import { ReplayStore, makeReplayAi, makeRestAi } from "./ai-replay";
-import { listCorpora, replayPaths, resolveCorpus } from "./corpora";
+import { isCoreCorpus, listCorpora, replayPaths, resolveCorpus } from "./corpora";
 import { CORE_DATA_DIR, CORPUS_IDS } from "./corpus/build";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
 import type { CorpusSpec } from "./corpus/types";
 import { evaluateGate, formatGate, type GateResult, type Verdict } from "./gate";
 import { LockRefused, applyLock } from "./lock";
 import { summarize, type Summary } from "./metrics";
+import { assertIgnored, isAllowedDataFile } from "./privacy";
 import { prepare } from "./prepare";
+import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
 import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
 import { VARIANTS, getVariant, type VariantSpec } from "./variants";
@@ -36,6 +38,20 @@ function positive(name: string, raw: string, opts: { allowZero?: boolean; intege
   return n;
 }
 
+/**
+ * A public corpus is recorded and run with the one model it was built for (PUBLIC_CORPORA), so the model defaults
+ * from the corpus. Naming any other model is refused, even explicitly: replay caches and reports for a corpus
+ * under a different model would be silently incomparable. Core corpora default to the shipped model and accept any.
+ */
+function resolveModel(corpus: string, explicit: string | undefined): string {
+  const pub = Object.hasOwn(PUBLIC_CORPORA, corpus) ? PUBLIC_CORPORA[corpus] : undefined;
+  if (!pub) return explicit ?? DEFAULTS.EMBEDDING_MODEL;
+  if (explicit !== undefined && explicit !== pub.embeddingModel) {
+    throw new UsageError(`${corpus} must run with ${pub.embeddingModel} (its recorded embedding model); --embedding-model ${explicit} is refused`);
+  }
+  return pub.embeddingModel;
+}
+
 export function parseCli(argv: string[]): CliCommand {
   let parsed: ReturnType<typeof parse>;
   try {
@@ -48,7 +64,7 @@ export function parseCli(argv: string[]): CliCommand {
   if (values.d1 !== "sqlite" && values.d1 !== "workerd") throw new UsageError(`--d1 must be sqlite or workerd, got ${values.d1}`);
   if (values.isolate !== "warm" && values.isolate !== "cold") throw new UsageError(`--isolate must be warm or cold, got ${values.isolate}`);
   const common: Common = {
-    corpus: values.corpus!, d1: values.d1, isolate: values.isolate, model: values["embedding-model"]!,
+    corpus: values.corpus!, d1: values.d1, isolate: values.isolate, model: resolveModel(values.corpus!, values["embedding-model"]),
     hash: values["hash-embeddings"]!, limit: values.limit !== undefined ? positive("limit", values.limit, { integer: true }) : undefined, json: values.json,
   };
   const command = positionals[0];
@@ -89,7 +105,7 @@ function parse(argv: string[]) {
     options: {
       variant: { type: "string" }, compare: { type: "string" }, corpus: { type: "string", default: "core-1k" },
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
-      "embedding-model": { type: "string", default: DEFAULTS.EMBEDDING_MODEL }, "hash-embeddings": { type: "boolean", default: false },
+      "embedding-model": { type: "string" }, "hash-embeddings": { type: "boolean", default: false },
       limit: { type: "string" }, target: { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
       "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
@@ -148,13 +164,29 @@ function realTarget(path: string, hops = 0): string {
   return parent === abs ? abs : join(realTarget(parent, hops + 1), basename(abs));
 }
 
-/** --json is for scratch reports. The committed golden data and baselines are written only by lock. */
+/**
+ * Every CLI write except lock's allowlisted baseline goes through this: git must ignore the path and not track it
+ * (privacy.assertIgnored); paths outside the repo cannot be committed and pass. Symlinks, dangling ones included,
+ * are followed first. Refusals are usage errors.
+ */
+export function guardWrite(path: string): void {
+  try { assertIgnored(realTarget(path)); } catch (e) {
+    if (e instanceof UsageError) throw e;
+    throw new UsageError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * --json is for scratch reports. test/eval/data holds the committed golden data and baselines, and only lock writes
+ * there; that gets its own message. Everything else must satisfy guardWrite. One check fails first, with one error.
+ */
 export function assertJsonPathAllowed(path: string): void {
   const data = realpathSync(resolve(CORE_DATA_DIR, ".."));
   const rel = relative(data, realTarget(path));
   if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
     throw new UsageError(`--json ${path} resolves inside test/eval/data, which holds the committed golden data and baselines; only lock writes there. Write reports elsewhere (for example .eval-cache/).`);
   }
+  guardWrite(path);
 }
 
 /** Which rules decided the verdict, so a FAIL is never opaque. */
@@ -184,7 +216,7 @@ export function formatKnownGapDelta(base: VariantReport, cand: VariantReport): s
 }
 
 async function withCorpus<T>(cmd: Common, spec: CorpusSpec, variant: VariantSpec, fn: (c: LoadedCorpus) => Promise<T>): Promise<T> {
-  const paths = replayPaths(cmd.model);
+  const paths = replayPaths(cmd.model, cmd.corpus);
   // Hash smoke: an empty in-memory store, so no recorded vector is mixed in and nothing is read from disk.
   const replay = cmd.hash
     ? makeReplayAi({ store: new ReplayStore([]), mode: "dry" })
@@ -212,7 +244,8 @@ async function runPrepare(cmd: CliCommand & { kind: "prepare" }): Promise<number
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID, apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken) throw new UsageError("prepare needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the environment (Workers AI, compute only)");
   const spec = await resolveCorpus(cmd.corpus);
-  const paths = replayPaths(cmd.model);
+  const paths = replayPaths(cmd.model, cmd.corpus);
+  guardWrite(paths.write); // the cache is the one thing prepare writes
   await prepare({
     spec, variant: getVariant(cmd.variant), backend: cmd.d1, model: cmd.model,
     store: new ReplayStore(paths.read, paths.write), live: makeRestAi({ accountId, apiToken }),
@@ -243,10 +276,13 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
 /** Rerun the baseline and refresh the committed lock; changed golden data needs --accept-data-change. */
 async function runLock(cmd: CliCommand & { kind: "lock" }, spec: CorpusSpec): Promise<number> {
   if (cmd.hash) throw new UsageError("lock records real rankings; --hash-embeddings does not apply");
-  if (!(CORPUS_IDS as readonly string[]).includes(cmd.corpus)) throw new UsageError(`lock covers the core corpora only (${CORPUS_IDS.join(", ")})`);
-  const { lockPath, dataChanged } = await applyLock({
+  if (!isCoreCorpus(cmd.corpus)) throw new UsageError(`lock covers the core corpora only (${CORPUS_IDS.join(", ")}); public corpora are local-only and never locked`);
+  const lockPath = resolve(CORE_DATA_DIR, "../baselines", `${cmd.corpus}.${cmd.model.split("/").pop()}.json`);
+  // lock is the one writer allowed under test/eval/data, and only to files the privacy allowlist names
+  if (!isAllowedDataFile(`test/eval/data/baselines/${basename(lockPath)}`)) throw new UsageError(`${basename(lockPath)} is not an allowlisted baseline file name`);
+  const { dataChanged } = await applyLock({
     dataDir: CORE_DATA_DIR,
-    lockPath: resolve(CORE_DATA_DIR, "../baselines", `${cmd.corpus}.${cmd.model.split("/").pop()}.json`),
+    lockPath,
     acceptReason: cmd.acceptDataChange,
     runBaseline: () => runNamed(cmd, spec, "baseline"),
   });

@@ -1,5 +1,6 @@
 import { gapKey, mean, percentile } from "./metrics";
 import { CORPUS_IDS } from "./corpus/build";
+import { PUBLIC_CORPORA } from "./public/neutral";
 import { pairedBootstrap, type BootstrapCI } from "./stats";
 import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
@@ -88,9 +89,10 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
     if (r.runnerVersion !== RUNNER_VERSION) problems.push(`the ${label} was produced by runner version ${r.runnerVersion}, which is stale (current ${RUNNER_VERSION}); rerun it`);
   }
   if (base.limit !== undefined || cand.limit !== undefined) problems.push(`a report was limited to the first N queries (baseline ${base.limit ?? "full"}, candidate ${cand.limit ?? "full"}); rerun without --limit`);
-  if ((CORPUS_IDS as readonly string[]).includes(base.corpus) || (CORPUS_IDS as readonly string[]).includes(cand.corpus)) {
+  const fingerprinted = (id: string) => (CORPUS_IDS as readonly string[]).includes(id) || Object.hasOwn(PUBLIC_CORPORA, id);
+  if (fingerprinted(base.corpus) || fingerprinted(cand.corpus)) {
     for (const [label, r] of [["baseline", base], ["candidate", cand]] as const) {
-      if (!r.dataFingerprint) problems.push(`the ${label} report has no golden-data fingerprint, which core-corpus reports must carry; rerun it`);
+      if (!r.dataFingerprint) problems.push(`the ${label} report has no golden-data fingerprint, which core and public corpus reports must carry; rerun it`);
     }
   }
   if (base.dataFingerprint && cand.dataFingerprint && stableFingerprint(base.dataFingerprint) !== stableFingerprint(cand.dataFingerprint)) problems.push("golden data differs (fingerprint mismatch)");

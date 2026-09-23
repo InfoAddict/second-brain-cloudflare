@@ -34,6 +34,12 @@ describe("loadNeutralCorpus", () => {
     expect(spec.queries[0]).toMatchObject({ category: "paraphrase", viewer: "avery", tags: ["public"] });
   });
 
+  it("carries the derived-manifest hashes as the corpus fingerprint", () => {
+    const dir = fixture();
+    const derived = (JSON.parse(readFileSync(join(dir, "MANIFEST.json"), "utf8")) as { derived: Record<string, string> }).derived;
+    expect(loadNeutralCorpus({ id: "beir-scifact", dir, category: "paraphrase" }).dataFingerprint).toEqual(derived);
+  });
+
   it("is deterministic and keeps every judged document when truncating", () => {
     const dir = fixture();
     const a = loadNeutralCorpus({ id: "x", dir, category: "cjk", maxDocs: 10 });

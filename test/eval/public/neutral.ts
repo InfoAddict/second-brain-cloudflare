@@ -19,18 +19,21 @@ const jsonl = <T>(path: string): T[] => readFileSync(path, "utf8").split("\n").f
 const ageDays = (id: string) => createHash("sha256").update(id).digest().readUInt16BE(0) % 730;
 
 /** Every derived file must match the sha256 the fetch script recorded, so a truncated or edited file cannot pass silently. */
-function verifyDerived(dir: string, id: string): void {
+function verifyDerived(dir: string, id: string): Record<string, string> {
   const refetch = `re-run: node scripts/eval-fetch-public.mjs ${id}`;
   const manifestPath = join(dir, "MANIFEST.json");
   if (!existsSync(manifestPath)) throw new Error(`${manifestPath} not found (incomplete fetch); ${refetch}`);
   const derived = (JSON.parse(readFileSync(manifestPath, "utf8")) as { derived?: Record<string, string> }).derived;
+  const checked: Record<string, string> = {};
   for (const file of ["corpus.jsonl", "queries.jsonl", "qrels.tsv"]) {
     const path = join(dir, file);
     const want = derived?.[file];
     if (!want) throw new Error(`MANIFEST.json has no sha256 for ${file}; ${refetch}`);
     if (!existsSync(path)) throw new Error(`${path} not found; ${refetch}`);
     if (createHash("sha256").update(readFileSync(path)).digest("hex") !== want) throw new Error(`${path} does not match MANIFEST.json (truncated or edited); ${refetch}`);
+    checked[file] = want;
   }
+  return checked;
 }
 
 export function loadNeutralCorpus(o: { id: string; dir: string; category: QueryCategory; maxDocs?: number; maxQueries?: number }): CorpusSpec {
@@ -39,7 +42,7 @@ export function loadNeutralCorpus(o: { id: string; dir: string; category: QueryC
     if (!existsSync(path)) throw new Error(`${path} not found; run: node scripts/eval-fetch-public.mjs ${o.id}`);
     return path;
   };
-  verifyDerived(o.dir, o.id);
+  const fingerprint = verifyDerived(o.dir, o.id);
   const docs = jsonl<{ id: string; text: string }>(need("corpus.jsonl"));
   const queryRows = jsonl<{ id: string; text: string }>(need("queries.jsonl"));
   const qrels = new Map<string, { id: string; grade: 1 | 2 }[]>();
@@ -64,6 +67,7 @@ export function loadNeutralCorpus(o: { id: string; dir: string; category: QueryC
     entries: kept.map(d => ({ id: d.id, content: d.text, tags: [], source: "api", createdAt: EVAL_NOW - ageDays(d.id) * DAY_MS, workspaceId: WORKSPACES.avery, actorId: ACTORS.avery })),
     edges: [],
     queries,
+    dataFingerprint: fingerprint, // the derived-manifest hashes: what this corpus was built from
   };
 }
 
