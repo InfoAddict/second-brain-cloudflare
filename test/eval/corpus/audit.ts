@@ -100,6 +100,8 @@ export function auditQueries(spec: {
         break;
       }
       case "common-word": {
+        // The dense tier only guarantees a full match per scope for the default (personal + company) read scope.
+        if (query.layer || query.viewer === "outsider") add(query.id, "common-word-layer-scoped", `${query.viewer}/${query.layer ?? "default"}`);
         if (tokens.length < 2) add(query.id, "common-word-too-short", query.text);
         const rare = tokens.find(token => df(token) < common);
         if (rare) add(query.id, "common-word-rare-token", `${rare} df=${df(rare)}`);

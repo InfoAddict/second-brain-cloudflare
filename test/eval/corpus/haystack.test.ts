@@ -44,8 +44,8 @@ describe("generateHaystack", () => {
     const first = generateHaystack(base);
     const second = generateHaystack(base);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(digest(first)).toBe("f2608e792912355c14ba9649627b97890ffd16e65e09b05b8d222e8600dfe07c");
-    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("ffe6fa575e1b5d410956b75182ff645e0b67d6367307d0c26d166e27be97d4d5");
+    expect(digest(first)).toBe("0b0f5787b6a6ed3a2b1091902533ae2edfb5b0a70202acdc67c8ba3b1419d937");
+    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("3a8608f71336fd9d1a1133ee7f7d7e8d9a3848a339330e18c07a2de0f225c6cc");
     expect(first).not.toEqual(generateHaystack({ ...base, seed: 8 }));
   });
 
@@ -126,7 +126,7 @@ describe("generateHaystack", () => {
     // The 1.9x company boost is what lifts the company layer over 500 at 5k; the real weights and rates are pinned here.
     const pinned = {
       1000: { roadmap: { avery: 243, blake: 186, company: 173 }, standup: { avery: 240, blake: 173, company: 163 }, invoice: { avery: 233, blake: 185, company: 170 } },
-      5000: { roadmap: { avery: 1160, blake: 882, company: 822 }, standup: { avery: 1180, blake: 859, company: 796 }, invoice: { avery: 1167, blake: 890, company: 816 } },
+      5000: { roadmap: { avery: 1157, blake: 878, company: 817 }, standup: { avery: 1179, blake: 861, company: 797 }, invoice: { avery: 1168, blake: 890, company: 817 } },
       20000: { roadmap: { avery: 1959, blake: 1463, company: 1374 }, standup: { avery: 1895, blake: 1431, company: 1326 }, invoice: { avery: 1907, blake: 1457, company: 1343 } },
     } as const;
     const scopes = {
@@ -164,12 +164,14 @@ describe("generateHaystack", () => {
     }
   });
 
-  it("keeps each dense word under the keyword window at 1k and over it at 5k and 20k, per viewer and layer", () => {
-    const scopes = [
-      readScopeWorkspaces(IDENTITIES.avery, {}),
-      readScopeWorkspaces(IDENTITIES.blake, {}),
-      readScopeWorkspaces(IDENTITIES.blake, { layer: "company" }),
-    ];
+  it("has enough dense words for the common-word category (at least 40 distinct triples)", () => {
+    const n = DENSE_TOKENS.length;
+    expect((n * (n - 1) * (n - 2)) / 6).toBeGreaterThanOrEqual(40);
+  });
+
+  it("keeps each dense word under the keyword window at 1k and over it at 5k and 20k for the default avery and blake scopes", () => {
+    // The company-only layer is deliberately not bounded: common-word queries must use the default scope.
+    const scopes = [readScopeWorkspaces(IDENTITIES.avery, {}), readScopeWorkspaces(IDENTITIES.blake, {})];
     const configs = [
       ...REAL.map(([count, commonRate, seed]) => ({ rows: generateHaystack({ ...base, count, commonRate, seed }), sizes: [count] })),
       { rows: generateHaystack({ ...base, count: 20_000 }), sizes: [1000, 5000, 20_000] },

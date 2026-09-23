@@ -185,4 +185,12 @@ describe("auditQueries fidelity and scale", () => {
     const g = gold("roadmap review scheduled");
     expect(rules([...filler, g], [query({ id: "dots", category: "common-word", text: "roadmap. review." })])).toContain("dots:common-word-gold-missing-token");
   });
+
+  it("keeps common-word queries on the default read scope of a non-outsider viewer", () => {
+    const g = gold("weekly review budget notes");
+    const q = query({ id: "c", category: "common-word", text: "weekly review budget" });
+    expect(rules([...filler, g], [q])).toEqual([]);
+    expect(rules([...filler, g], [{ ...q, layer: "company" }])).toContain("c:common-word-layer-scoped");
+    expect(rules([...filler, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
+  });
 });
