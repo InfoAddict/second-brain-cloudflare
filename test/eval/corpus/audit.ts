@@ -174,7 +174,7 @@ export function auditQueries(spec: {
 
 export function haystackVocabulary(): Set<string> {
   const rows = generateHaystack({
-    count: 8000, seed: 1, commonRate: 0.5, idPrefix: "v", now: EVAL_NOW, spanDays: 730, cjkRate: 0.2, longRate: 0.05,
+    count: 8000, seed: 1, commonRate: 0.5, idPrefix: "v", now: EVAL_NOW, spanDays: 730, cjkRate: 0.2, longRate: 0.05, denseRate: 1,
     workspaces: [{ workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 1 }],
   });
   const vocabulary = new Set(rows.flatMap(row => tokenizeQuery(row.content).map(token => token.replace(/[^\p{L}\p{N}]+$/gu, ""))));

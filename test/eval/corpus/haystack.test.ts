@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { COMMON_TOKENS, DENSE_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
+import { COMMON_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
+import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT, QUERY_SATURATION_FRACTION } from "../../../src/constants";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
 import { ACTORS, DAY_MS, EVAL_NOW, IDENTITIES, WORKSPACES, needleToEntry } from "./types";
 
@@ -13,6 +17,7 @@ const base: HaystackOptions = {
   spanDays: 730,
   cjkRate: 0.08,
   longRate: 0.02,
+  denseRate: 1.2,
   workspaces: [
     { workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 45 },
     { workspaceId: WORKSPACES.company, actorId: ACTORS.blake, weight: 45 },
@@ -20,8 +25,29 @@ const base: HaystackOptions = {
   ],
 };
 
-// The real corpus parameters (plan 6c CORPUS_PARAMS): total, commonRate, seed.
-const REAL = [[1000, 0.25, 1001], [5000, 0.25, 5001], [20_000, 0.10, 20_001]] as const;
+// The real corpus parameters (plan 6c CORPUS_PARAMS; the 20k commonRate is 0.08 so a rare+common query keeps
+// FTS). The haystack is the total minus about 330 authored needles; `TOTAL` sizes are the looser variant.
+const NEEDLES = 330;
+const REAL = [
+  { scale: "1k", total: 1000, commonRate: 0.25, seed: 1001 },
+  { scale: "5k", total: 5000, commonRate: 0.25, seed: 5001 },
+  { scale: "20k", total: 20_000, commonRate: 0.08, seed: 20_001 },
+] as const;
+type Real = (typeof REAL)[number];
+const realRows = (config: Real, count = config.total - NEEDLES, seed: number = config.seed) =>
+  generateHaystack({ ...base, count, commonRate: config.commonRate, seed, denseRate: DENSE_RATE_BY_SCALE[config.scale] });
+const SCOPES = {
+  avery: readScopeWorkspaces(IDENTITIES.avery, {}),
+  blake: readScopeWorkspaces(IDENTITIES.blake, {}),
+};
+const inScope = <T extends { workspaceId: string }>(rows: T[], scope: keyof typeof SCOPES) => rows.filter(row => SCOPES[scope].includes(row.workspaceId));
+const TRIPLES = DENSE_TOKENS.flatMap((a, i) => DENSE_TOKENS.slice(i + 1).flatMap((b, j) => DENSE_TOKENS.slice(i + j + 2).map(c => [a, b, c] as const)));
+
+const PINNED_COMMON = {
+  "1k": { roadmap: { avery: 153, blake: 139, company: 136 }, standup: { avery: 169, blake: 153, company: 150 }, invoice: { avery: 166, blake: 150, company: 147 } },
+  "5k": { roadmap: { avery: 1139, blake: 1036, company: 1001 }, standup: { avery: 1101, blake: 1001, company: 971 }, invoice: { avery: 1125, blake: 1029, company: 994 } },
+  "20k": { roadmap: { avery: 1534, blake: 1386, company: 1349 }, standup: { avery: 1521, blake: 1373, company: 1323 }, invoice: { avery: 1501, blake: 1343, company: 1302 } },
+};
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const df = (rows: { content: string }[], token: string) =>
@@ -44,8 +70,8 @@ describe("generateHaystack", () => {
     const first = generateHaystack(base);
     const second = generateHaystack(base);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(digest(first)).toBe("360d4bd6a5901acc8b6913da71400ce6c2c1d33fdb8376d2383b00127d0aabba");
-    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("71d8bd946872ee03203eac027f51d00c199f9cab5969d23c88a982d63bcdcda4");
+    expect(digest(first)).toBe("c50e662c4bd0b320e948a04da409083783644c8a32a81ec99cfe2d5504c20eb5");
+    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("a01f0eec4604858f456896fe4875e92fccc02fc94b038bf9e0f6f5b12e4011ef");
     expect(first).not.toEqual(generateHaystack({ ...base, seed: 8 }));
   });
 
@@ -79,7 +105,7 @@ describe("generateHaystack", () => {
   it("has no exact-duplicate rows at any scale, for the test and the real corpus parameters", () => {
     const rows = generateHaystack({ ...base, count: 20_000 });
     for (const count of [1000, 5000, 20_000]) expect(duplicateShare(rows.slice(0, count))).toBe(0);
-    for (const [count, commonRate, seed] of REAL) expect(duplicateShare(generateHaystack({ ...base, count, commonRate, seed }))).toBe(0);
+    for (const config of REAL) expect(duplicateShare(realRows(config))).toBe(0);
   });
 
   it("gives ordinary words realistic document frequency, with many dense tokens beyond the three common ones", () => {
@@ -120,36 +146,30 @@ describe("generateHaystack", () => {
         expect(actual).toEqual(pinned[count][token]);
       }
     }
-  });
+  }, 30_000);
 
   it("keeps every viewer and the company layer past the keyword window at the real corpus parameters (45/45/10 weights)", () => {
-    // The 1.9x company boost is what lifts the company layer over 500 at 5k; the real weights and rates are pinned here.
-    const pinned = {
-      1000: { roadmap: { avery: 237, blake: 211, company: 205 }, standup: { avery: 245, blake: 229, company: 219 }, invoice: { avery: 238, blake: 219, company: 212 } },
-      5000: { roadmap: { avery: 1223, blake: 1111, company: 1076 }, standup: { avery: 1186, blake: 1079, company: 1049 }, invoice: { avery: 1206, blake: 1109, company: 1071 } },
-      20000: { roadmap: { avery: 1961, blake: 1806, company: 1749 }, standup: { avery: 1965, blake: 1795, company: 1724 }, invoice: { avery: 1916, blake: 1714, company: 1668 } },
-    } as const;
-    const scopes = {
-      avery: readScopeWorkspaces(IDENTITIES.avery, {}),
-      blake: readScopeWorkspaces(IDENTITIES.blake, {}),
-      company: readScopeWorkspaces(IDENTITIES.blake, { layer: "company" }),
-    };
-    for (const [count, commonRate, seed] of REAL) {
-      const rows = generateHaystack({ ...base, count, commonRate, seed });
+    // The 1.9x company boost lifts the company layer over 500 at 5k; the real weights and rates are pinned here.
+    const pinned: Record<string, Record<string, Record<string, number>>> = PINNED_COMMON;
+    const scopes = { ...SCOPES, company: readScopeWorkspaces(IDENTITIES.blake, { layer: "company" }) };
+    for (const config of REAL) {
+      const rows = realRows(config);
       for (const token of COMMON_TOKENS) {
         const actual: Record<string, number> = {};
         for (const [viewer, workspaces] of Object.entries(scopes)) {
           actual[viewer] = df(rows.filter(row => workspaces.includes(row.workspaceId)), token);
-          if (count === 1000) expect(actual[viewer], `${token} ${viewer} at 1k`).toBeLessThan(500);
-          else expect(actual[viewer], `${token} ${viewer} at ${count}`).toBeGreaterThan(500);
+          if (config.scale === "1k") expect(actual[viewer], `${token} ${viewer} at 1k`).toBeLessThan(KEYWORD_CANDIDATE_LIMIT);
+          else expect(actual[viewer], `${token} ${viewer} at ${config.scale}`).toBeGreaterThan(KEYWORD_CANDIDATE_LIMIT);
+          // A rare+common two-term query must stay on FTS: the common token alone leaves room under the budget.
+          expect(actual[viewer], `${token} ${viewer} rare+common headroom`).toBeLessThan(FTS_MATCH_BUDGET * 0.85);
         }
-        expect(actual).toEqual(pinned[count][token]);
+        expect(actual).toEqual(pinned[config.scale][token]);
       }
     }
-  });
+  }, 30_000);
 
   it("carries at most two dense-tier words per row and no other word contains one", () => {
-    for (const rows of [generateHaystack({ ...base, count: 20_000 }), ...REAL.map(([count, commonRate, seed]) => generateHaystack({ ...base, count, commonRate, seed }))]) {
+    for (const rows of [generateHaystack({ ...base, count: 20_000 }), ...REAL.map(config => realRows(config))]) {
       const words = new Set<string>();
       for (const row of rows) {
         const text = row.content.toLowerCase();
@@ -162,31 +182,72 @@ describe("generateHaystack", () => {
         for (const other of DENSE_TOKENS) if (other !== token) expect(other.includes(token)).toBe(false);
       }
     }
+  }, 30_000);
+
+  it("declares no pool or template word that contains a dense word", () => {
+    let source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "haystack.ts"), "utf8");
+    source = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1").replace(/export const DENSE_TOKENS[^;]*;/, "");
+    const words = new Set<string>();
+    for (const match of source.matchAll(/"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)) {
+      const text = (match[1] ?? match[2]).replace(/\$\{[^}]*\}/g, " ").toLowerCase();
+      for (const word of text.match(/\p{L}+/gu) ?? []) words.add(word);
+    }
+    expect(words.size).toBeGreaterThan(500);
+    for (const token of DENSE_TOKENS) expect([...words].filter(word => word.includes(token)), token).toEqual([]);
   });
 
-  it("has enough dense words for the common-word category (at least 40 distinct triples)", () => {
+  it("has enough dense words for the common-word category and keeps them below the saturation fraction", () => {
     const n = DENSE_TOKENS.length;
-    expect((n * (n - 1) * (n - 2)) / 6).toBeGreaterThanOrEqual(40);
+    expect(TRIPLES).toHaveLength((n * (n - 1) * (n - 2)) / 6);
+    expect(TRIPLES.length).toBeGreaterThanOrEqual(40);
+    // At most 2 dense words per row: a word's df cannot exceed 2/n of the rows; keep margin under the ceiling.
+    expect(2 / n).toBeLessThanOrEqual(QUERY_SATURATION_FRACTION - 0.03);
   });
 
-  it("keeps each dense word under the keyword window at 1k and over it at 5k and 20k for the default avery and blake scopes", () => {
-    // The company-only layer is deliberately not bounded: common-word queries must use the default scope.
-    const scopes = [readScopeWorkspaces(IDENTITIES.avery, {}), readScopeWorkspaces(IDENTITIES.blake, {})];
-    const configs = [
-      ...REAL.map(([count, commonRate, seed]) => ({ rows: generateHaystack({ ...base, count, commonRate, seed }), sizes: [count] })),
-      { rows: generateHaystack({ ...base, count: 20_000 }), sizes: [1000, 5000, 20_000] },
-    ];
-    for (const { rows, sizes } of configs) {
-      for (const size of sizes) {
-        for (const workspaces of scopes) {
-          const visible = rows.slice(0, size).filter(row => workspaces.includes(row.workspaceId));
-          for (const token of DENSE_TOKENS) {
-            const count = df(visible, token);
-            if (size === 1000) expect(count, `${token} at 1k`).toBeLessThan(500);
-            else expect(count, `${token} at ${size}`).toBeGreaterThanOrEqual(550);
+  // Each dense word must overflow the LIKE window (500) at 5k/20k yet a three-word query must stay under the
+  // router's FTS budget, so the baseline uses FTS and the `like` ablation differs. 1k must never truncate.
+  it("holds each dense word in the keyword band per scope and scale, with margin", () => {
+    const configs = REAL.flatMap(config => [
+      { config, rows: realRows(config), loose: false },
+      { config, rows: realRows(config, config.total), loose: true },
+      ...(config.scale === "1k" ? [] : [{ config, rows: realRows(config, undefined, config.seed + 2), loose: false }]),
+    ]);
+    for (const { config, rows, loose } of configs) {
+      for (const scope of ["avery", "blake"] as const) {
+        const visible = inScope(rows, scope);
+        const counts = Object.fromEntries(DENSE_TOKENS.map(token => [token, df(visible, token)]));
+        const label = `${scope} ${config.scale}${loose ? " (total)" : ""}`;
+        for (const token of DENSE_TOKENS) {
+          const count = counts[token];
+          expect(count / visible.length, `${token} ${label} saturation`).toBeLessThan(QUERY_SATURATION_FRACTION - 0.05);
+          if (config.scale === "1k") continue;
+          expect(count, `${token} ${label}`).toBeGreaterThan(loose ? KEYWORD_CANDIDATE_LIMIT : KEYWORD_CANDIDATE_LIMIT * 1.08);
+        }
+        for (const [a, b, c] of TRIPLES) {
+          const dfSum = counts[a] + counts[b] + counts[c];
+          const union = visible.filter(row => row.content.includes(a) || row.content.includes(b) || row.content.includes(c)).length;
+          if (config.scale === "1k") {
+            // Room for the needles merged in later: the union of any three must stay well under the window.
+            expect(union, `${a} ${b} ${c} ${label} union`).toBeLessThanOrEqual(KEYWORD_CANDIDATE_LIMIT * 0.7);
+          } else {
+            expect(dfSum, `${a} ${b} ${c} ${label} dfSum`).toBeLessThan(FTS_MATCH_BUDGET * (loose ? 1 : 0.975));
           }
         }
       }
     }
-  });
+  }, 30_000);
+
+  it("puts the 501st most recent row of any three-word union at most 300 days back at 5k and 20k", () => {
+    // A gold older than that is outside LIKE's ORDER BY created_at DESC LIMIT 500 window (measured max ~250 days).
+    for (const config of REAL.filter(item => item.scale !== "1k")) {
+      const rows = realRows(config);
+      for (const scope of ["avery", "blake"] as const) {
+        const visible = inScope(rows, scope);
+        for (const [a, b, c] of TRIPLES) {
+          const times = visible.filter(row => row.content.includes(a) || row.content.includes(b) || row.content.includes(c)).map(row => row.createdAt).sort((x, y) => y - x);
+          expect((EVAL_NOW - times[KEYWORD_CANDIDATE_LIMIT]) / DAY_MS, `${a} ${b} ${c} ${scope} ${config.scale}`).toBeLessThanOrEqual(300);
+        }
+      }
+    }
+  }, 30_000);
 });

@@ -5,12 +5,24 @@ import { DAY_MS, WORKSPACES, type CorpusEntry } from "./types";
 export const COMMON_TOKENS = ["roadmap", "standup", "invoice"] as const;
 /**
  * Dense tier: everyday words that no other haystack word contains. Every row carries at most two of them,
- * so a query of three dense words matches only its gold (8 words give 56 distinct triples), while each word
- * alone exceeds the 500-row keyword window at 5k+ for the default scope of avery and of blake. The
- * company-only layer is not covered: common-word queries must use the default scope. Sizing: blake reads 55% of rows
- * at 45/45/10 weights, and each word needs 500 x words <= 2 x rows read, with margin (about 650 at 5k).
+ * so a query of three dense words matches only its gold (8 words give 56 distinct triples). `denseRate`
+ * tunes each word's df into the band the keyword arm needs in the default scope of avery and of blake:
+ * over KEYWORD_CANDIDATE_LIMIT (LIKE truncates) yet a three-word dfSum under FTS_MATCH_BUDGET (the router
+ * keeps FTS), and at most 2 words per row keeps df / rows under QUERY_SATURATION_FRACTION.
  */
 export const DENSE_TOKENS = ["garden", "window", "coffee", "kitchen", "letter", "table", "bread", "cheese"] as const;
+
+/**
+ * Mean dense words per row by workspace (0-2), per scale. df of one word = sum(rows x mean) / 8 over the
+ * scope, so the three scopes' rates are solved together: avery reads avery+company, blake reads
+ * company+blake. Solved for haystacks of about 670 / 4670 / 19670 rows (total minus ~330 needles), which
+ * lands each word near 75 / 585 / 585 rows in both default scopes.
+ */
+export const DENSE_RATE_BY_SCALE = {
+  "1k": { [WORKSPACES.avery]: 0.22, [WORKSPACES.company]: 1.75, [WORKSPACES.blake]: 1 },
+  "5k": { [WORKSPACES.avery]: 0.44, [WORKSPACES.company]: 1.78, [WORKSPACES.blake]: 2 },
+  "20k": { [WORKSPACES.avery]: 0.09, [WORKSPACES.company]: 0.44, [WORKSPACES.blake]: 0.4 },
+} as const;
 
 export interface HaystackOptions {
   count: number;
@@ -23,6 +35,8 @@ export interface HaystackOptions {
   cjkRate: number;
   /** Share of notes long enough to span several chunks (over CHUNK_MAX_CHARS). */
   longRate: number;
+  /** Mean dense-tier words (0-2) per row: one number for every workspace, or a rate per workspace id (missing = 0). */
+  denseRate: number | Readonly<Record<string, number>>;
   workspaces: { workspaceId: string; actorId: string; weight: number }[];
 }
 
@@ -102,15 +116,33 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
   const otherFactor = companyWeight < totalWeight ? (totalWeight - companyFactor * companyWeight) / (totalWeight - companyWeight) : 1;
   // Own stream, so the dense tier never shifts the rest of the corpus.
   const denseRand = mulberry32(options.seed ^ 0x9e3779b9);
+  // Each workspace deals dense words from its own shuffled deck, so every word gets (almost) the same
+  // number of slots in any scope built from whole workspaces; consecutive cards never repeat.
+  const decks = new Map<string, string[]>();
+  const deal = (workspaceId: string) => {
+    const deck = decks.get(workspaceId) ?? [];
+    decks.set(workspaceId, deck);
+    while (deck.length < 2) {
+      const last = deck.at(-1);
+      let perm: string[];
+      do {
+        perm = [...DENSE_TOKENS];
+        for (let i = perm.length - 1; i > 0; i--) {
+          const j = Math.floor(denseRand() * (i + 1));
+          [perm[i], perm[j]] = [perm[j], perm[i]];
+        }
+      } while (perm[0] === last);
+      deck.push(...perm);
+    }
+    return deck.shift()!;
+  };
   const denseClause = (workspaceId: string) => {
-    // Blake reads the company and blake workspaces (the smallest default scope), so those rows always carry two.
-    const full = workspaceId === WORKSPACES.company || workspaceId === WORKSPACES.blake;
-    const r = denseRand();
-    const count = full || r < 0.5 ? 2 : r < 0.8 ? 1 : 0;
+    const mean = typeof options.denseRate === "number" ? options.denseRate : (options.denseRate[workspaceId] ?? 0);
+    const whole = Math.min(2, Math.floor(mean));
+    const count = Math.min(2, whole + (denseRand() < mean - whole ? 1 : 0));
     if (!count) return "";
-    const first = Math.floor(denseRand() * DENSE_TOKENS.length);
-    const second = (first + 1 + Math.floor(denseRand() * (DENSE_TOKENS.length - 1))) % DENSE_TOKENS.length;
-    return count === 1 ? ` Also thinking about the ${DENSE_TOKENS[first]}.` : ` Also thinking about the ${DENSE_TOKENS[first]} and the ${DENSE_TOKENS[second]}.`;
+    const first = deal(workspaceId);
+    return count === 1 ? ` Also thinking about the ${first}.` : ` Also thinking about the ${first} and the ${deal(workspaceId)}.`;
   };
   const pickWorkspace = () => {
     let remaining = rand() * totalWeight;
