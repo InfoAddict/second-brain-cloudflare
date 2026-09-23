@@ -28,7 +28,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const SCHEMA = resolve(import.meta.dirname, "../../db/schema.sql");
+// SB_EVAL_ROOT lets the bundled eval CLI (whose import.meta.dirname is the bundle's) find the schema.
+const SCHEMA = resolve(process.env.SB_EVAL_ROOT ?? resolve(import.meta.dirname, "../.."), "db/schema.sql");
 
 // One FIFO queue per connection, shared by every standalone statement AND
 // every batch on that connection. A batch opens a SAVEPOINT for its whole
@@ -166,7 +167,7 @@ export interface SqliteD1 {
  * Remove `-- …` line comments, respecting single-quoted string literals so a
  * "--" inside a default value is not mistaken for a comment.
  */
-function stripSqlComments(sql: string): string {
+export function stripSqlComments(sql: string): string {
   let out = "";
   let inString = false;
   for (let i = 0; i < sql.length; i++) {
@@ -193,7 +194,7 @@ function stripSqlComments(sql: string): string {
 }
 
 /** Split top-level schema statements without cutting semicolons inside triggers. */
-function splitSchemaStatements(sql: string): string[] {
+export function splitSchemaStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = "";
   let trigger = false;
