@@ -332,3 +332,72 @@ describe("T-0059 ranking effect: a saturated (capped) term still gets dropped, s
     sqlite.close();
   });
 });
+
+describe("T-0059 all-saturated fallback: capped counts that cannot rank fall back to LIKE", () => {
+  it("an all-saturated query keeps exactly what LIKE keeps, via the LIKE path", async () => {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    resetDistillTotalCache();
+    const sqlite = makeSqliteD1();
+    const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
+    await initializeDatabase(env);
+
+    // The reviewer's case: 8,000 rows, four terms with true df 8000/7000/
+    // 6000/5000. All four sit above the saturation cap (2,401), so FTS caps
+    // every count at the LIMIT and the kept set collapses to the cap order —
+    // terma termb termc — while LIKE's exact counts keep termb termc termd.
+    const total = 8000;
+    const content = (i: number) =>
+      [i < 8000, i < 7000, i < 6000, i < 5000]
+        .map((has, j) => (has ? `term${"abcd"[j]}` : ""))
+        .filter(Boolean).join(" ");
+    for (let i = 0; i < total; i++) {
+      const filler = i % 2 ? " filler" : "";
+      sqlite.seed({ id: `row-${i}`, content: `${content(i)}${filler}`, createdAt: i + 1 });
+    }
+
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    resetDistillTotalCache();
+    const out = await distillToRareTerms("terma termb termc termd", env);
+
+    // Without the fallback, all four df values read 2401 and rankAndRebuild
+    // keeps the first three by df order: "terma termb termc".
+    expect(out.distillSource).toBe("like");
+    expect(out.query).toBe("termb termc termd");
+    expect(out.df!.get("terma")).toBe(8000);
+    expect(out.df!.get("termb")).toBe(7000);
+    expect(out.df!.get("termc")).toBe(6000);
+    expect(out.df!.get("termd")).toBe(5000);
+    expect(out.total).toBe(8000);
+    sqlite.close();
+  });
+
+  it("one unsaturated original term keeps the query on the FTS path", async () => {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    resetDistillTotalCache();
+    const sqlite = makeSqliteD1();
+    const env: Env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
+    await initializeDatabase(env);
+
+    // Same shape, but "rare" appears in only 5 rows: the fallback must not
+    // fire because one original term is genuinely rankable.
+    const total = 8000;
+    for (let i = 0; i < total; i++) {
+      const content = `${i < 8000 ? "term1" : ""} ${i < 7000 ? "term2" : ""} ${i < 5 ? "rare" : ""}`.trim();
+      const filler = i % 2 ? " filler" : "";
+      sqlite.seed({ id: `row-${i}`, content: `${content}${filler}`, createdAt: i + 1 });
+    }
+
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    resetDistillTotalCache();
+    const out = await distillToRareTerms("term1 term2 rare", env);
+
+    expect(out.distillSource).toBe("fts");
+    expect(out.query).toBe("rare");
+    expect(out.df!.get("rare")).toBe(5); // exact, uncapped
+    sqlite.close();
+  });
+});

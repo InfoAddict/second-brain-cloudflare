@@ -109,6 +109,9 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
 // so the ordinary backfill re-covers the corpus over the following nights.
 // This is where orphans are found now: with the window's orphan half gone
 // (see rotateContentCheck), an orphan surfaces only as fts > entries here.
+// An exactly canceling missing+orphan pair heals within
+// ceil(N / FTS_CONTENT_CHECK_WINDOW) + 1 nights; a global probe would double
+// nightly reads for a near-impossible case, so that delay is accepted.
 export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
   // scope-exempt: cron: deployment-wide parity check, like the backfill above —
   // the index has no per-workspace shape, so there is no workspace scope to apply.

@@ -286,7 +286,15 @@ export async function distillToRareTerms(
   if (dfTerms.every(t => ftsEligibleToken(t) && ftsCountSafeToken(t)) && await ftsReady(env)) {
     try {
       const viaFts = await distillViaFts(dfTerms, env, bounds, scope, identity, only, teamId);
-      if (viaFts) {
+      // Every original term saturated and at least one count hit its LIMIT
+      // cap: the capped counts can no longer order the terms against each
+      // other, so the FTS ranking could differ from LIKE's. Discard them and
+      // count exactly through the LIKE fallback — the byte-identical
+      // statement below.
+      const unrankable = !!viaFts
+        && uniq.every(t => (viaFts.df.get(t) ?? 0) / viaFts.total > QUERY_SATURATION_FRACTION)
+        && uniq.some(t => (viaFts.df.get(t) ?? 0) === saturationCap(viaFts.total));
+      if (viaFts && !unrankable) {
         const { df, total } = viaFts;
         return { query: rankAndRebuild(uniq, content, tokensOf, df, total), df, total, distillSource: "fts" };
       }
