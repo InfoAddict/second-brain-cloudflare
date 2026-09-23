@@ -46,5 +46,11 @@ document.getElementById('edit-sheet').addEventListener('click', (e) => {
 document.getElementById('patterns-sheet').addEventListener('click', (e) => {
   if (e.target === document.getElementById('patterns-sheet')) closePatternsSheet()
 })
+document.getElementById('due-sheet').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('due-sheet')) closeDueSheet()
+})
+document.getElementById('install-guide-sheet').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('install-guide-sheet')) closeInstallGuide()
+})
 
 init()

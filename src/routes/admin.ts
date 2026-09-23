@@ -15,6 +15,7 @@ import { storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
+import { OPEN_LOOP_SQL, withTaskDone, withoutTask } from "../memory/loops";
 import { getStatus, withStatus } from "../memory/status";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { withKind } from "../memory/kind";
@@ -25,9 +26,11 @@ import { reasonOverPair, restatesRecent } from "../insight/reason";
 import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../insight/weekly";
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
 import { adminAuditEvent } from "../lib/admin-audit";
-import { auditEvents, type AuditEventInput } from "../lib/audit";
+import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
+import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
+import { DUE_WITHIN_MS, DUE_SQL, parseExplicitWhen } from "../when/input";
 
 /**
  * Ids accepted by one bulk resolve. D1 allows 100 bound parameters per
@@ -41,6 +44,11 @@ import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 
 /** How many nodes the degree ranking returns: a ranking, not a dump of the graph. */
 const GRAPH_STATS_TOP_DEGREE = 20;
+
+/** Rows per bucket on GET /due — a feed, not a full export. */
+const DUE_FEED_LIMIT = 20;
+/** How much of an entry's content GET /due and GET /extract/dry-run print. */
+const DUE_CONTENT_CHARS = 200;
 
 export async function handleAdminRoutes(
   request: Request,
@@ -1162,6 +1170,274 @@ export async function handleAdminRoutes(
     auditEvents(env, ctx, [{ entryId: id, actorId: auth.userId, event: "updated", payload: { stale_confirmed: true } }]);
 
     return json({ ok: true, id });
+  }
+
+  // GET /loops, the open-commitments review queue. Mirrors GET /stale: the
+  // predicate is shared with the count GET /brief puts on its chip
+  // (OPEN_LOOP_SQL) so the two cannot disagree, and this queue exists for the
+  // same reason that one does — a member re-reading a scrollback for "what did
+  // I say I'd do" cannot ask a vector index that question reliably.
+  if (url.pathname === "/loops" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limit = intParam(url, "limit", { fallback: 50, min: 1, max: 100 });
+    if (limit instanceof Response) return limit;
+    const offset = intParam(url, "offset", { fallback: 0, min: 0 });
+    if (offset instanceof Response) return offset;
+
+    const scope = scopeWhere(auth);
+    const [rows, countRow] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, tags, source, created_at FROM entries
+         WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+         ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      ).bind(...scope.bindings, limit, offset).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}`,
+      ).bind(...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      entries: (rows.results as Record<string, any>[]).map(r => ({
+        id: r.id as string,
+        content: r.content as string,
+        source: r.source as string,
+        tags: parseTags(r.tags as string),
+        created_at: r.created_at as number,
+      })),
+      total: (countRow?.n as number) ?? 0,
+      limit,
+      offset,
+    });
+  }
+
+  // POST /loops/resolve, close out one open commitment. "done" marks it
+  // finished without disturbing the "task" tag, which is history; "not-task"
+  // means the tag never belonged, so it comes off outright.
+  //
+  // CAS on tags AND content, three attempts — the same guard shape as the
+  // staleness pass's per-row write (src/staleness/pass.ts): tags alone would
+  // not catch a concurrent content-only rewrite landing between the read here
+  // and the write below, and re-reading the row for each attempt means a
+  // retry classifies from what is actually there rather than a snapshot that
+  // just lost a race.
+  if (url.pathname === "/loops/resolve" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; action?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    if (body.action !== "done" && body.action !== "not-task") {
+      return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
+    }
+
+    const id = body.id.trim();
+    const action = body.action;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanEditContent(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const tags: string[] = parseTags(row.tags as string);
+      const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
+
+      const result = await env.DB.prepare(
+        `UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`,
+      ).bind(JSON.stringify(nextTags), id, row.tags, row.content).run();
+
+      // meta.changes is D1's field; the SQLite test double reports rows_written
+      // instead (see test/helpers/sqlite-d1.ts), same fallback as team-admin.ts.
+      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { loop_action: action } });
+        return json({ ok: true, id, action });
+      }
+      // Lost the race — someone else wrote this row between the read and the
+      // write above. Loop back and re-read rather than retrying the stale tags.
+    }
+
+    return json({ ok: false, error: "Could not resolve — try again" }, 409);
+  }
+
+  // GET /due, the time-anchored feed: overdue commitments (when_at already
+  // passed) and upcoming ones (within the next 48 hours), each capped and
+  // counted. This is the only source scripts/brief-preview.mjs's --dry-run
+  // check and the future push sender both read from — a due date exists on
+  // an entry the moment when_at is set, by whichever of the three producers
+  // (explicit, src/when/heuristic.ts, src/when/pass.ts) set it.
+  if (url.pathname === "/due" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const scope = scopeWhere(auth);
+    const now = Date.now();
+    const upcomingBefore = now + DUE_WITHIN_MS;
+
+    const rowShape = (r: Record<string, any>) => ({
+      id: r.id as string,
+      content: (r.content as string).slice(0, DUE_CONTENT_CHARS),
+      // The nightly pass's short label when it set the when (src/when/pass.ts),
+      // else the first 80 characters of content as a fallback for the
+      // explicit/regex paths, which never generate one.
+      label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
+      tags: parseTags(r.tags as string),
+      when_at: r.when_at as number,
+      when_kind: r.when_kind as string,
+      when_source: r.when_source as string,
+    });
+
+    const [overdueRows, overdueCount, upcomingRows, upcomingCount] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
+         WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}
+         ORDER BY when_at ASC LIMIT ?`,
+      ).bind(now, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at < ? AND ${scope.clause}`,
+      ).bind(now, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+      env.DB.prepare(
+        `SELECT id, content, tags, when_at, when_kind, when_source, when_label FROM entries
+         WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}
+         ORDER BY when_at ASC LIMIT ?`,
+      ).bind(now, upcomingBefore, ...scope.bindings, DUE_FEED_LIMIT).all(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM entries WHERE ${DUE_SQL} AND when_at >= ? AND when_at <= ? AND ${scope.clause}`,
+      ).bind(now, upcomingBefore, ...scope.bindings).first() as Promise<Record<string, any> | null>,
+    ]);
+
+    return json({
+      ok: true,
+      overdue: (overdueRows.results as Record<string, any>[]).map(rowShape),
+      upcoming: (upcomingRows.results as Record<string, any>[]).map(rowShape),
+      counts: {
+        overdue: (overdueCount?.n as number) ?? 0,
+        upcoming: (upcomingCount?.n as number) ?? 0,
+      },
+    });
+  }
+
+  // POST /due/snooze, push a time anchor out to a new date without touching
+  // when_kind or when_label. Validated the same way an explicit when is
+  // (future, no more than 5 years out) plus a floor parseExplicitWhen does
+  // not itself enforce: a snooze into the past is not a snooze.
+  //
+  // CAS on tags AND content, three attempts — same guard shape as
+  // /loops/resolve above, so a concurrent edit or delete between the read and
+  // the write below is caught rather than clobbered.
+  if (url.pathname === "/due/snooze" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; until?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
+
+    const parsed = parseExplicitWhen(body.until, undefined, undefined, (await resolveConfig(env)).TIMEZONE);
+    if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
+    const until = parsed.value!.at;
+    if (until <= Date.now()) return json({ ok: false, error: "until must be in the future" }, 400);
+
+    const id = body.id.trim();
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanEditContent(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const result = await env.DB.prepare(
+        `UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ?`,
+      ).bind(until, id, row.tags, row.content).run();
+
+      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "snooze", until } });
+        return json({ ok: true, id, when_at: until });
+      }
+      // Lost the race — loop back and re-read rather than retrying stale tags/content.
+    }
+
+    return json({ ok: false, error: "Could not snooze — try again" }, 409);
+  }
+
+  // POST /due/clear, drop the time anchor entirely: not a commitment, or
+  // already handled outside the loop-resolve flow. when_source becomes
+  // 'cleared' rather than NULL so the nightly pass's prefilter (when_at IS
+  // NULL AND when_source IS NULL, src/when/pass.ts) never re-stamps it — a
+  // cleared entry stays cleared until a caller sets a when explicitly again.
+  //
+  // CAS on tags AND content, same shape as /loops/resolve and /due/snooze above.
+  if (url.pathname === "/due/clear" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+
+    const id = body.id.trim();
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanEditContent(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const result = await env.DB.prepare(
+        `UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ?`,
+      ).bind(id, row.tags, row.content).run();
+
+      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "clear" } });
+        return json({ ok: true, id });
+      }
+      // Lost the race — loop back and re-read rather than retrying stale tags/content.
+    }
+
+    return json({ ok: false, error: "Could not clear — try again" }, 409);
+  }
+
+  // GET /extract/dry-run, a preview of the nightly when-extraction pass
+  // (src/when/pass.ts) against the live brain: the exact prefilter and the
+  // exact model call, on the next N candidates past the pass's own cursor,
+  // reporting every verdict without persisting anything or moving the
+  // cursor. Mirrors GET /insights/dry-run's shape and purpose — testing
+  // extraction quality on real data is the whole reason this exists.
+  if (url.pathname === "/extract/dry-run" && request.method === "GET") {
+    const auth = await requireAdmin(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limit = intParam(url, "limit", { fallback: 5, min: 1, max: 10 });
+    if (limit instanceof Response) return limit;
+
+    const cursor = await readWhenCursor(env);
+    const scope = scopeWhere(auth);
+    const candidates = await fetchWhenCandidates(env, cursor, scope, limit);
+
+    const cfg = await resolveConfig(env);
+    const verdicts = [];
+    for (const candidate of candidates) {
+      const outcome = await judgeCommitment(candidate.content, Date.now(), env, cfg);
+      verdicts.push({
+        id: candidate.id,
+        content: candidate.content.slice(0, DUE_CONTENT_CHARS),
+        outcome: outcome.outcome,
+        what: outcome.outcome === "commitment" ? outcome.what : null,
+        due_at: outcome.outcome === "commitment" ? outcome.dueAt : null,
+        kind: outcome.outcome === "commitment" ? outcome.kind : null,
+        confidence: outcome.outcome === "commitment" ? outcome.confidence : null,
+      });
+      // A failed call means the batch stops here in production (the pass
+      // does not risk skipping it); the preview keeps going so a reviewer
+      // sees every candidate in the window, not just the ones before the
+      // first hiccup.
+    }
+
+    return json({ ok: true, candidates: verdicts });
   }
 
   // POST /patterns/resolve, confirm or dismiss a proposed insight.

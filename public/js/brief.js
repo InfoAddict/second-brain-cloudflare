@@ -124,6 +124,9 @@ function briefAttention(a) {
     // the number refers to.
     items.push(`<button class="attn" onclick="openStaleSheet()"><i class="ti ti-clock-exclamation"></i>${escHtml(t('brief.attentionStale', { n: a.stale }))}</button>`)
   }
+  if (a.due > 0) {
+    items.push(`<button class="attn" onclick="openDueSheet()"><i class="ti ti-bell"></i>${escHtml(t('brief.attentionDue', { n: a.due }))}</button>`)
+  }
   if (!items.length) return ''
   return `<div class="brief-attention">${items.join('')}</div>`
 }

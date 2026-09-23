@@ -10,6 +10,7 @@ import { handleEntriesRoutes } from "./entries";
 import { handleGraphRoutes } from "./graph";
 import { handleIntegrationsRoutes } from "./integrations";
 import { handleAdminRoutes } from "./admin";
+import { handlePushRoutes } from "./push";
 import { handleBriefRoutes } from "./brief";
 import { handleConfigRoutes } from "./config";
 import { handleMigrationRoutes } from "./migration";
@@ -33,6 +34,7 @@ const routeHandlers: RouteHandler[] = [
   handleGraphRoutes,
   handleIntegrationsRoutes,
   handleAdminRoutes,
+  handlePushRoutes,
   handleBriefRoutes,
   handleConfigRoutes,
   handleMigrationRoutes,

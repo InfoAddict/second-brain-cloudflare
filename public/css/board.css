@@ -1045,6 +1045,12 @@
   color: var(--text-secondary);
 }
 
+.task-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .board .src .ti {
   color: var(--text-secondary);
 }

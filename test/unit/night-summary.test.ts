@@ -15,7 +15,7 @@ describe("recordNightSummary", () => {
     const before = Date.now();
 
     await recordNightSummary(env, "ws-a", {
-      linksInferred: 3, insightsProposed: 0, digestsWritten: 1, claimsFlagged: 5,
+      linksInferred: 3, insightsProposed: 0, digestsWritten: 1, claimsFlagged: 5, whenJudged: 0, whenExtracted: 0, whenSkipped: 0,
     });
 
     const raw = await kv.get(nightSummaryKey("ws-a"));
@@ -29,8 +29,8 @@ describe("recordNightSummary", () => {
     const kv = makeMemoryKV();
     const env = makeTestEnv(undefined, { OAUTH_KV: kv });
 
-    await recordNightSummary(env, "ws-a", { linksInferred: 1, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0 });
-    await recordNightSummary(env, "ws-b", { linksInferred: 9, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0 });
+    await recordNightSummary(env, "ws-a", { linksInferred: 1, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0, whenJudged: 0, whenExtracted: 0, whenSkipped: 0 });
+    await recordNightSummary(env, "ws-b", { linksInferred: 9, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0, whenJudged: 0, whenExtracted: 0, whenSkipped: 0 });
 
     expect(await readNightSummary(env, "ws-a")).toMatchObject({ linksInferred: 1 });
     expect(await readNightSummary(env, "ws-b")).toMatchObject({ linksInferred: 9 });
@@ -44,7 +44,7 @@ describe("recordNightSummary", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(recordNightSummary(env, "ws-a", {
-      linksInferred: 1, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0,
+      linksInferred: 1, insightsProposed: 0, digestsWritten: 0, claimsFlagged: 0, whenJudged: 0, whenExtracted: 0, whenSkipped: 0,
     })).resolves.toBeUndefined();
 
     expect(put).toHaveBeenCalledTimes(1);

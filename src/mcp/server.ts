@@ -21,6 +21,7 @@ import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
+import { WHEN_KIND_VALUES, parseExplicitWhen } from "../when/input";
 import { recallEntries } from "../recall/search";
 import { renderRecallText, memoryHeader } from "../recall/render";
 import { RECALL_OUTPUT_BUDGET, SNIPPET_MAX_CHARS, snippetOf, truncationNote } from "../recall/snippet";
@@ -48,6 +49,20 @@ const volatilityParam = z
   .enum([...VOLATILITY_VALUES] as [string, ...string[]])
   .optional()
   .describe(VOLATILITY_DESCRIPTION);
+
+const WHEN_DESCRIPTION =
+  "Optional future date this memory should come back to you: a deadline, an event, or a reminder. "
+  + "Pass either a plain date (2026-06-15) or a full datetime with an explicit UTC/offset "
+  + "(2026-06-15T09:00:00Z or 2026-06-15T09:00:00-05:00). A plain date, or a datetime with no "
+  + "offset, is read as that calendar date/time in the brain's configured timezone (UTC by default).";
+const WHEN_KIND_DESCRIPTION =
+  "What kind of moment `when` marks: due (a deadline), event (something happening then), or wake (a plain reminder, the default).";
+
+const whenParam = z.string().optional().describe(WHEN_DESCRIPTION);
+const whenKindParam = z
+  .enum([...WHEN_KIND_VALUES] as [string, ...string[]])
+  .optional()
+  .describe(WHEN_KIND_DESCRIPTION);
 
 // The read/write tool descriptions below are the only place this behaviour is
 // specified. The server does no reranking, query rewriting, or duplicate
@@ -332,12 +347,22 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         volatility: volatilityParam,
         workspace: z.enum(["personal", "company"]).optional().describe("Where to store it: your private workspace (default) or the shared company layer"),
         team: z.string().optional().describe("When workspace is company, which team workspace — id from list_teams. Omit for your primary team."),
+        when: whenParam,
+        when_kind: whenKindParam,
       },
     },
-    async ({ content, tags, project, source, volatility, workspace, team }) => {
+    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind }) => {
       // Same grammar checks, same messages, as POST /capture. Bad input fails before any write.
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
+      let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
+      if (when !== undefined) {
+        const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
+        if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
+        whenInput = parsed.value;
+      } else if (when_kind !== undefined) {
+        return { content: [{ type: "text", text: "when_kind requires when" }] };
+      }
       const projectSlug = project?.trim() || undefined;
       const badSlug = projectSlug ? projectSlugError(projectSlug) : null;
       if (badSlug) return { content: [{ type: "text", text: badSlug }] };
@@ -365,7 +390,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           actorId: identity.userId,
         };
       }
-      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx);
+      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput);
       // Silent, after the write: a lost registry row never fails the memory.
       if (identity && projectSlug && result.status !== "blocked") {
         await autoCreateProject(env, ctx, { workspaceId: targetCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -412,9 +437,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         id: z.string().describe("Entry ID to append to — from recall or list_recent"),
         addition: z.string().refine(value => !value.includes("\0"), "NUL is not allowed").describe("The new information to add to the existing entry — what actually changed, not a restatement of what is already there"),
         volatility: volatilityParam,
+        when: whenParam,
+        when_kind: whenKindParam,
       },
     },
-    async ({ id, addition, volatility }) => {
+    async ({ id, addition, volatility, when, when_kind }) => {
       const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, tags, source");
 
       if (!row) {
@@ -426,6 +453,15 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const denied = assertCanEditContent(identity, row);
       if (denied) {
         return { content: [{ type: "text", text: denied.message }] };
+      }
+
+      let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
+      if (when !== undefined) {
+        const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
+        if (parsed.error) return { content: [{ type: "text", text: parsed.error }] };
+        whenInput = parsed.value;
+      } else if (when_kind !== undefined) {
+        return { content: [{ type: "text", text: "when_kind requires when" }] };
       }
 
       const existingContent = row.content as string;
@@ -451,6 +487,15 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return {
           content: [{ type: "text", text: `Append failed: ${(e as Error).message}` }],
         };
+      }
+
+      // A separate, simple UPDATE rather than threading `when` through
+      // appendToEntry: that function already has two content-rewrite branches
+      // (short append, reembed-on-overflow) and the time anchor is orthogonal
+      // to both — it does not care which one ran.
+      if (whenInput) {
+        await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id = ?`)
+          .bind(whenInput.at, whenInput.kind, id).run();
       }
 
       if (identity) {

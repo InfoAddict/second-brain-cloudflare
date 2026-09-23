@@ -108,7 +108,9 @@ const I18N_EN = {
     decideSub: 'Nothing here is recallable until you rule on it',
     topicsTitle: 'What it is about',
     topicsSub: 'Most used tags',
-    rereadSub: 'High importance, not recalled in six months',
+    rereadSub: 'Old, important, and connected to what you\'re working on now',
+    loopsTitle: 'Open loops',
+    loopsSub: 'Things you said you would do',
     saved: 'Saved',
     growthTitle: 'Memories over time',
     growthSubDay: 'Saved per day',
@@ -748,6 +750,7 @@ const I18N_EN = {
     },
     attentionUnindexed: '{n} not searchable',
     attentionStale: '{n} may be out of date',
+    attentionDue: '{n} due',
     patternNoticed: 'Insight noticed',
     confirm: 'Confirm',
     dismiss: 'Dismiss',
@@ -773,6 +776,58 @@ const I18N_EN = {
     keep: 'Keep',
     keepFailed: 'Could not keep this memory: {message}',
     more: '{n} more',
+  },
+  loops: {
+    title: 'Open loops',
+    empty: 'Nothing open.',
+    loadFailed: 'Could not load your open loops.',
+    done: 'Done',
+    notTask: 'Not a task',
+    doneFailed: 'Could not mark this done: {message}',
+    notTaskFailed: 'Could not update this: {message}',
+    more: '{n} more',
+    seeAll: 'See all',
+  },
+  due: {
+    title: 'Due',
+    empty: 'Nothing due.',
+    loadFailed: 'Could not load what is due.',
+    due: 'Due {date}',
+    done: 'Done',
+    notCommitment: 'Not a commitment',
+    snoozeTomorrow: 'Tomorrow',
+    snoozeNextWeek: 'Next week',
+    doneFailed: 'Could not mark this done: {message}',
+    clearFailed: 'Could not update this: {message}',
+    snoozeFailed: 'Could not snooze this: {message}',
+  },
+  notifications: {
+    title: 'Notifications',
+    enable: 'Enable notifications',
+    disable: 'Disable notifications',
+    enabled: 'Notifications are on for this device.',
+    disabledHint: 'Get a notification on this device when something becomes due.',
+    contentFree: 'Hide memory content in notifications',
+    unsupported: 'Push notifications are not supported in this browser.',
+    installToEnable: 'Install the app to enable notifications',
+    installHint: 'Notifications need Second Brain installed to your Home Screen first.',
+    permissionDenied: 'Notifications are blocked for this site. Allow them in your browser settings.',
+    enableFailed: 'Could not enable notifications: {message}',
+    disableFailed: 'Could not disable notifications: {message}',
+  },
+  installGuide: {
+    title: 'Install Second Brain',
+    why: 'Reminders can reach this phone once Second Brain is on your Home Screen.',
+    installButton: 'Install',
+    stepShareIcon: 'Tap the share icon',
+    stepAddToHomeScreen: 'Then tap "Add to Home Screen"',
+    stepMenu: 'Open the menu',
+    stepInstallAndroid: 'Then tap "Install" or "Add to Home screen"',
+    stepGeneric: 'Open your browser\'s menu and look for "Add to Home Screen" or "Install app."',
+    thenOpen: 'Then open it from your Home Screen and turn on notifications.',
+    nudgeText: 'Install Second Brain to get reminders on this phone.',
+    nudgeAction: 'Learn how',
+    dismissAria: 'Dismiss',
   },
   patterns: {
     title: 'Insights noticed',
@@ -1039,7 +1094,9 @@ const I18N_IT = {
     decideSub: 'Niente di questo è richiamabile finché non decidi',
     topicsTitle: 'Di cosa parla',
     topicsSub: 'I tag più usati',
-    rereadSub: 'Importanza alta, non richiamato da sei mesi',
+    rereadSub: 'Vecchio, importante e collegato a ciò su cui stai lavorando ora',
+    loopsTitle: 'Impegni aperti',
+    loopsSub: 'Cose che hai detto che avresti fatto',
     saved: 'Salvato',
     growthTitle: 'Ricordi nel tempo',
     growthSubDay: 'Salvati al giorno',
@@ -1660,6 +1717,7 @@ const I18N_IT = {
     },
     attentionUnindexed: '{n} non ricercabili',
     attentionStale: '{n} potrebbero essere datati',
+    attentionDue: '{n} in scadenza',
     patternNoticed: 'Insight notato',
     confirm: 'Conferma',
     dismiss: 'Ignora',
@@ -1685,6 +1743,58 @@ const I18N_IT = {
     keep: 'Tieni',
     keepFailed: 'Impossibile tenere questa memoria: {message}',
     more: 'Altri {n}',
+  },
+  loops: {
+    title: 'Impegni aperti',
+    empty: 'Nessun impegno aperto.',
+    loadFailed: 'Impossibile caricare i tuoi impegni aperti.',
+    done: 'Fatto',
+    notTask: 'Non è un impegno',
+    doneFailed: 'Impossibile segnare come fatto: {message}',
+    notTaskFailed: 'Impossibile aggiornare: {message}',
+    more: 'Altri {n}',
+    seeAll: 'Vedi tutti',
+  },
+  due: {
+    title: 'Scadenze',
+    empty: 'Nessuna scadenza.',
+    loadFailed: 'Impossibile caricare le scadenze.',
+    due: 'Scade il {date}',
+    done: 'Fatto',
+    notCommitment: 'Non è un impegno',
+    snoozeTomorrow: 'Domani',
+    snoozeNextWeek: 'La prossima settimana',
+    doneFailed: 'Impossibile segnare come fatto: {message}',
+    clearFailed: 'Impossibile aggiornare: {message}',
+    snoozeFailed: 'Impossibile rimandare: {message}',
+  },
+  notifications: {
+    title: 'Notifiche',
+    enable: 'Attiva le notifiche',
+    disable: 'Disattiva le notifiche',
+    enabled: 'Le notifiche sono attive su questo dispositivo.',
+    disabledHint: 'Ricevi una notifica su questo dispositivo quando qualcosa scade.',
+    contentFree: 'Nascondi il contenuto dei ricordi nelle notifiche',
+    unsupported: 'Le notifiche push non sono supportate in questo browser.',
+    installToEnable: 'Installa l\'app per attivare le notifiche',
+    installHint: 'Le notifiche richiedono prima di installare Second Brain nella schermata Home.',
+    permissionDenied: 'Le notifiche sono bloccate per questo sito. Consentile nelle impostazioni del browser.',
+    enableFailed: 'Impossibile attivare le notifiche: {message}',
+    disableFailed: 'Impossibile disattivare le notifiche: {message}',
+  },
+  installGuide: {
+    title: 'Installa Second Brain',
+    why: 'I promemoria potranno raggiungere questo telefono una volta che Second Brain sarà nella schermata Home.',
+    installButton: 'Installa',
+    stepShareIcon: 'Tocca l\'icona di condivisione',
+    stepAddToHomeScreen: 'Poi tocca "Aggiungi a Home"',
+    stepMenu: 'Apri il menu',
+    stepInstallAndroid: 'Poi tocca "Installa" o "Aggiungi a Home"',
+    stepGeneric: 'Apri il menu del browser e cerca "Aggiungi a Home" o "Installa app."',
+    thenOpen: 'Poi aprila dalla schermata Home e attiva le notifiche.',
+    nudgeText: 'Installa Second Brain per ricevere promemoria su questo telefono.',
+    nudgeAction: 'Scopri come',
+    dismissAria: 'Ignora',
   },
   patterns: {
     title: 'Insight notati',
@@ -1890,6 +2000,21 @@ function formatDateUI(value, options) {
   const hasTimePart = options && (options.hour || options.minute || options.second)
   if (hasTimePart && !hasDatePart) return d.toLocaleTimeString(localeTag(), options)
   return d.toLocaleDateString(localeTag(), options)
+}
+
+/**
+ * Same as formatDateUI, but reads the UTC calendar date rather than the
+ * viewer's local one. For values that ARE a calendar date rather than a
+ * moment — when_at's date-only case (always midnight UTC; we never store a
+ * meaningful time). formatDateUI would read a UTC midnight as the previous
+ * day everywhere west of Greenwich, which is exactly the bug this exists to
+ * avoid: a due-by date has to read the same regardless of the viewer's
+ * timezone, since nothing about "when" it is due is timezone-relative yet.
+ */
+function formatDateUTC(value, options) {
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat(localeTag(), { ...options, timeZone: 'UTC' }).format(d)
 }
 
 function formatNumberUI(n) {
