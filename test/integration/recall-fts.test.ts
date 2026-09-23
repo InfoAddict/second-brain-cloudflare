@@ -645,4 +645,52 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(diagnostics.ftsUsed).toBe(false);
     expect(diagnostics.ftsRoute).toBe("like-member-first");
   });
+
+  // FIX 2 (final review): a tag/project recall used to return zero matches
+  // whenever every member row had no vector yet (vector_ids = []), even when
+  // its content matched the query exactly. It now continues with empty
+  // dense results and allows keyword-only fusion, the same degrade the
+  // non-memberFirst path already applies when Vectorize itself is down.
+  it("returns an exact tag match that has no vector yet, instead of dropping it", async () => {
+    const scopedEnv = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as Env["DB"],
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockRejectedValue(new Error("index unavailable")),
+        getByIds: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    sqlite.seed({ id: "tagged-vectorless", content: "exact tagged memory", createdAt: 1, tags: ["work"] });
+
+    const diagnostics: RecallDiagnostics = {};
+    const result = await recallEntries(
+      { query: "exact tagged memory", topK: 5, tag: "work", synthesize: false },
+      scopedEnv, ctx, undefined, { diagnostics },
+    );
+
+    expect(result.matches.map(m => m.id)).toContain("tagged-vectorless");
+    expect(diagnostics.ftsRoute).toBe("like-member-first");
+  });
+
+  // A tag that matches no member rows at all is a genuinely different case
+  // from "matched rows with no vector" above — it must still return empty,
+  // but with diagnostics initialized the same as every other path (FIX 2).
+  it("still returns empty for a tag with no matching rows, diagnostics initialized", async () => {
+    const scopedEnv = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as Env["DB"],
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({ query: vi.fn().mockRejectedValue(new Error("index unavailable")) }),
+    });
+
+    const diagnostics: RecallDiagnostics = {};
+    const result = await recallEntries(
+      { query: "missing tag query", topK: 5, tag: "does-not-exist", synthesize: false },
+      scopedEnv, ctx, undefined, { diagnostics },
+    );
+
+    expect(result.matches).toEqual([]);
+    expect(diagnostics.ftsRoute).toBe("like-member-first");
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(diagnostics.keywordIds).toEqual([]);
+  });
 });

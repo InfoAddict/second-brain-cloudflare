@@ -1,6 +1,7 @@
 import type { Env } from "../env";
-import { isFtsFailure, repairFtsIndex } from "./fts-repair";
-import { isEntryCountsFailure, repairEntryCounts } from "./entry-counts-repair";
+import { ftsTableMissing, isFtsFailure, repairFtsIndex } from "./fts-repair";
+import { isEntryCountsFailure, isEntryCountsLive, repairEntryCounts } from "./entry-counts-repair";
+import { isFtsLive } from "../recall/fts";
 
 // One choke point for every write to `entries`, instead of touching each of
 // the several dozen call sites individually (see the fix's report). Patches
@@ -169,18 +170,36 @@ function isEntriesWriteSql(sql: string): boolean {
 
 function retryOnce<T>(ref: GuardRef, attempt: () => Promise<T>): Promise<T> {
   return attempt().catch(async (e) => {
+    const ftsFailed = isFtsFailure(e);
+    const entryCountsFailed = isEntryCountsFailure(e);
+    if (!ftsFailed && !entryCountsFailed) throw e;
     // Repair through ref.rawDB (the captured pre-patch prepare/batch), not
     // ref.current.DB — that binding is the one being patched, and calling it
     // here would recurse into this same guard.
-    if (isFtsFailure(e)) {
-      await repairFtsIndex({ ...ref.current, DB: ref.rawDB as D1Database }, e);
-      return attempt();
+    const rawEnv = { ...ref.current, DB: ref.rawDB as D1Database };
+    // FIX 3 (final review): one retry cannot heal two independently broken
+    // dependencies. The caught error identifies exactly ONE of them; with
+    // both entries_fts and entry_counts missing, the un-probed other would
+    // throw again on the single retry below with nothing left to catch it.
+    // The short-circuit (`x || !(await isXLive(...))`) skips the extra probe
+    // entirely for the dependency the caught error already identifies —
+    // only the OTHER one, which has no error to go on, is actually queried.
+    const needsFtsRepair = ftsFailed || !(await isFtsLive(rawEnv));
+    const needsEntryCountsRepair = entryCountsFailed || !(await isEntryCountsLive(rawEnv));
+    if (needsFtsRepair) {
+      // repairFtsIndex reads the error to tell "missing table" (recreate)
+      // apart from "some other corruption" (drop-only). When the CAUGHT
+      // error is entry_counts' instead (ftsFailed is false — FTS was only
+      // found broken by the probe above), that error's text says nothing
+      // about entries_fts, so ask directly rather than misclassify a
+      // genuinely missing table as corruption.
+      const ftsError = ftsFailed || !(await ftsTableMissing(rawEnv))
+        ? e
+        : new Error("no such table: main.entries_fts");
+      await repairFtsIndex(rawEnv, ftsError);
     }
-    if (isEntryCountsFailure(e)) {
-      await repairEntryCounts({ ...ref.current, DB: ref.rawDB as D1Database });
-      return attempt();
-    }
-    throw e;
+    if (needsEntryCountsRepair) await repairEntryCounts(rawEnv);
+    return attempt();
   });
 }
 

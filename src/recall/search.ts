@@ -334,7 +334,14 @@ export async function recallEntries(
   if (memberFirst) {
     // Tag/project recalls never run keywordSearch (tag rows are not bm25-
     // ordered), so name the route here: ftsRoute is set on every recall path.
-    if (internal.diagnostics) internal.diagnostics.ftsRoute = "like-member-first";
+    // Initialized before any early return below (FIX 2, final review), so a
+    // "no member rows at all" return leaves diagnostics in the same shape
+    // every other path does, instead of undefined.
+    if (internal.diagnostics) {
+      internal.diagnostics.ftsRoute = "like-member-first";
+      internal.diagnostics.ftsUsed = false;
+      internal.diagnostics.keywordIds = [];
+    }
     // Escaped: a tag is user data and LIKE reads _ and % as wildcards. This is a read, so
     // the failure is over-broad results rather than the permanent rollup the same bug
     // caused in compressTag — but `?tag=%` silently defeats the filter entirely and
@@ -354,16 +361,24 @@ export async function recallEntries(
     const vectorIds = [...new Set(
       (tagRows as any[]).flatMap(r => JSON.parse((r.vector_ids as string) ?? "[]") as string[])
     )];
-    if (!vectorIds.length) return { matches: [], insight: "", semanticUnavailable };
 
     const vectors: VectorizeVector[] = [];
-    try {
-      for (let i = 0; i < vectorIds.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
-        vectors.push(...await env.VECTORIZE.getByIds(vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH)));
-      }
-    } catch (e) {
-      console.error("Vectorize getByIds failed (degrading to keyword-only):", e);
+    if (!vectorIds.length) {
+      // No member row carries a vector yet. Mirror the non-memberFirst
+      // path's Vectorize-unavailable degrade (FIX 2, final review): continue
+      // with empty dense results and allow keyword-only fusion below,
+      // instead of dropping an exact keyword match that simply has no
+      // embedding.
       semanticUnavailable = true;
+    } else {
+      try {
+        for (let i = 0; i < vectorIds.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
+          vectors.push(...await env.VECTORIZE.getByIds(vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH)));
+        }
+      } catch (e) {
+        console.error("Vectorize getByIds failed (degrading to keyword-only):", e);
+        semanticUnavailable = true;
+      }
     }
 
     results = {

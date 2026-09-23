@@ -5,6 +5,26 @@ import {
 import type { Env } from "../env";
 import { FTS_LIVENESS_SQL, isFtsLive, isFtsLiveRows } from "../recall/fts";
 import { rebuildFtsIndex } from "./fts-repair";
+import {
+  ENTRY_COUNTS_INSERT_TRIGGER_DDL, ENTRY_COUNTS_UPDATE_TRIGGER_DDL, ENTRY_COUNTS_DELETE_TRIGGER_DDL,
+} from "./init";
+
+// T-0065 nightly check (FIX 1, final review): mirrors the FTS liveness
+// pattern above — a right-named entry_counts trigger with a tampered body
+// (or one silently dropped and never recreated) is not "healthy" just
+// because a trigger by that name exists in sqlite_master.
+const ENTRY_COUNTS_TRIGGER_LIVENESS_SQL =
+  `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND ` +
+  `name IN ('entry_counts_insert','entry_counts_update','entry_counts_delete')`;
+const EXPECTED_ENTRY_COUNTS_TRIGGER_DEFINITIONS: Record<string, string> = {
+  entry_counts_insert: ENTRY_COUNTS_INSERT_TRIGGER_DDL.replace(/\bIF NOT EXISTS\s+/i, ""),
+  entry_counts_update: ENTRY_COUNTS_UPDATE_TRIGGER_DDL.replace(/\bIF NOT EXISTS\s+/i, ""),
+  entry_counts_delete: ENTRY_COUNTS_DELETE_TRIGGER_DDL.replace(/\bIF NOT EXISTS\s+/i, ""),
+};
+function entryCountsTriggersLive(rows: { name: string; sql: string | null }[] | undefined): boolean {
+  if (!rows || rows.length !== 3) return false;
+  return rows.every(row => EXPECTED_ENTRY_COUNTS_TRIGGER_DEFINITIONS[row.name] === row.sql);
+}
 
 // Ready-latch guard (combined review of Tasks 4-6): the old latch fired on
 // "the cursor found no rows" alone, so a cursor past max rowid — or a sync
@@ -114,20 +134,56 @@ export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done:
 // nightly reads for a near-impossible case, so that delay is accepted.
 export async function checkFtsIntegrity(env: Env): Promise<{ healthy: boolean }> {
   // scope-exempt: cron: deployment-wide parity check, like the backfill above —
-  // no per-workspace shape. max(rowid) bounds the rotating window's wrap;
-  // entry_counts' SUM (T-0065) rides along at no extra scan on the healthy path.
+  // no per-workspace shape. max(rowid) bounds the rotating window's wrap.
   const counts = await env.DB.prepare(
-    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx, (SELECT COALESCE(SUM(n), 0) FROM entry_counts) AS ec`,
-  ).first<{ e: number; f: number; mx: number | null; ec: number }>();
+    `SELECT (SELECT count(*) FROM entries) AS e, (SELECT count(*) FROM entries_fts) AS f, (SELECT max(rowid) FROM entries) AS mx`,
+  ).first<{ e: number; f: number; mx: number | null }>();
 
-  // T-0065: entry_counts parity, independent of the entries_fts branch below
-  // — a missed trigger or partial batch failure can drift one without the
-  // other. Repair is a reset, not a patch: DELETE + a fresh GROUP BY seed, in
-  // ONE atomic batch, the same shape applySchema uses to build it the first
-  // time.
-  if (counts !== null && counts.e !== counts.ec) {
-    console.error("entry_counts drift detected; rebuilding");
+  // T-0065 (FIX 1, final review): per-workspace parity, not a global SUM —
+  // a global total can equal count(*) even when one workspace's counter
+  // drifted from another's (a missing entry_counts_update trigger plus a
+  // cross-workspace move nets to zero globally, which the old global check
+  // read as healthy forever). The GROUP BY below is the SAME one full scan
+  // of entries the count(*) above already pays for; nothing here re-scans
+  // it a second time for the per-workspace shape. Batched with the
+  // entry_counts read and the trigger-definition check so this whole
+  // probe still costs one D1 call.
+  const [entriesByWorkspace, cachedByWorkspace, triggerRows] = await env.DB.batch([
+    // scope-exempt: cron: deployment-wide parity read, like the backfill and
+    // the count(*) above — every workspace's own row, by design, not a
+    // response any one caller reads.
+    env.DB.prepare(`SELECT workspace_id, count(*) AS n FROM entries GROUP BY workspace_id`),
+    env.DB.prepare(`SELECT workspace_id, n FROM entry_counts`),
+    env.DB.prepare(ENTRY_COUNTS_TRIGGER_LIVENESS_SQL),
+  ]);
+  const actualByWorkspace = new Map((entriesByWorkspace.results as { workspace_id: string; n: number }[]).map(r => [r.workspace_id, r.n]));
+  const cachedByWorkspaceMap = new Map((cachedByWorkspace.results as { workspace_id: string; n: number }[]).map(r => [r.workspace_id, r.n]));
+  // Bidirectional: a workspace present on only one side (moved away entirely,
+  // or a stale counter row for a workspace with zero live entries) is a
+  // mismatch too — treat the missing side as 0.
+  const allWorkspaces = new Set([...actualByWorkspace.keys(), ...cachedByWorkspaceMap.keys()]);
+  let countersDrifted = false;
+  for (const ws of allWorkspaces) {
+    if ((actualByWorkspace.get(ws) ?? 0) !== (cachedByWorkspaceMap.get(ws) ?? 0)) { countersDrifted = true; break; }
+  }
+  const triggersLive = entryCountsTriggersLive(triggerRows.results as { name: string; sql: string | null }[] | undefined);
+
+  // entry_counts repair, independent of the entries_fts branch below — a
+  // missed trigger, a tampered trigger body, or a partial batch failure can
+  // drift one without the other. Repair is a reset, not a patch: drop and
+  // recreate the three triggers, DELETE, and reseed from the GROUP BY above,
+  // in ONE atomic batch, mirroring the shape applySchema uses to build it
+  // the first time — applySchema itself never repairs triggers on an
+  // existing table, so this nightly check is the only place that does.
+  if (countersDrifted || !triggersLive) {
+    console.error("entry_counts drift detected (per-workspace mismatch or a tampered trigger); rebuilding");
     await env.DB.batch([
+      env.DB.prepare(`DROP TRIGGER IF EXISTS entry_counts_insert`),
+      env.DB.prepare(`DROP TRIGGER IF EXISTS entry_counts_update`),
+      env.DB.prepare(`DROP TRIGGER IF EXISTS entry_counts_delete`),
+      env.DB.prepare(ENTRY_COUNTS_INSERT_TRIGGER_DDL),
+      env.DB.prepare(ENTRY_COUNTS_UPDATE_TRIGGER_DDL),
+      env.DB.prepare(ENTRY_COUNTS_DELETE_TRIGGER_DDL),
       env.DB.prepare(`DELETE FROM entry_counts`),
       // scope-exempt: cron: deployment-wide rebuild, like the backfill above —
       // entry_counts itself carries every workspace's row by design.

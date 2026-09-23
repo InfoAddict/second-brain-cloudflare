@@ -153,7 +153,7 @@ describe("T-0059 equivalence: FTS-counted distillation vs the LIKE scan it repla
     // (ftsCountSafeToken), so likeFallbackCount > 0 is expected too.
     expect(ftsRunCount).toBeGreaterThan(TRIALS / 4);
     expect(likeFallbackCount).toBeGreaterThan(0);
-  });
+  }, 30000); // 320 real-SQLite trials measured at 4.09s against the 5s default; give it headroom under load.
 });
 
 describe("T-0059 cost: the FTS count path never scans entries or entries_fts in full", () => {

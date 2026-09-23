@@ -20,6 +20,22 @@ export function isEntryCountsFailure(e: unknown): boolean {
   return MISSING_ENTRY_COUNTS_TABLE_PATTERN.test(ftsErrorMessage(e));
 }
 
+// FIX 3 (final review): the write guard's dual-dependency retry needs a live
+// answer for "is entry_counts okay" for the dependency that did NOT throw —
+// there is no caught error to classify for that one. Presence only (not the
+// exact trigger bodies FIX 1's nightly check validates): enough signal to
+// decide whether the hot-path repair applies, without the extra query FIX
+// 1's forensic-grade check pays for on a path that has to stay cheap.
+const ENTRY_COUNTS_LIVENESS_SQL =
+  `SELECT name FROM sqlite_master WHERE ` +
+  `(type = 'table' AND name = 'entry_counts') OR ` +
+  `(type = 'trigger' AND name IN ('entry_counts_insert','entry_counts_update','entry_counts_delete'))`;
+
+export async function isEntryCountsLive(env: Env): Promise<boolean> {
+  const { results } = await env.DB.prepare(ENTRY_COUNTS_LIVENESS_SQL).all<{ name: string }>();
+  return results.length === 4;
+}
+
 /**
  * Ownership (T-0065, mirrors v2.2): the table and its three triggers are
  * recreated together, in ONE atomic batch, with a fresh GROUP BY seed — the

@@ -564,7 +564,7 @@ export class D1Mock {
         // stored definitions — the same TRIGGER_DDL text already used for
         // SCHEMA_PROBE_RESULTS below, with "IF NOT EXISTS" stripped the way
         // SQLite itself strips it from sqlite_master.sql.
-        if (s.startsWith("SELECT name, sql FROM sqlite_master")) {
+        if (s.startsWith("SELECT name, sql FROM sqlite_master") && s.includes("entries_fts")) {
           return {
             results: [
               { name: "entries_fts", sql: `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')` },
@@ -574,6 +574,33 @@ export class D1Mock {
               })),
             ],
           };
+        }
+        // T-0065's entry_counts analogue of the FTS liveness read directly
+        // above (FIX 1, final review's nightly check). Same "healthy,
+        // migrated brain" stance: all three triggers present with their
+        // exact stored bodies.
+        if (s.startsWith("SELECT name, sql FROM sqlite_master") && s.includes("entry_counts")) {
+          return {
+            results: ["entry_counts_insert", "entry_counts_update", "entry_counts_delete"].map(name => ({
+              name,
+              sql: TRIGGER_DDL.get(name)!.replace(/\bIF NOT EXISTS\s+/i, ""),
+            })),
+          };
+        }
+        // FIX 1's per-workspace parity read: this double is a single-user,
+        // untenanted brain by default (entries seeded without workspace_id
+        // read as "", the pre-tenancy value), and entry_counts is not
+        // separately modelled — the honest "healthy brain" answer for both
+        // the true count and the cached count is the same grouping over
+        // db.entries.
+        if (s.startsWith("SELECT workspace_id, count(*) AS n FROM entries GROUP BY workspace_id")
+          || s === "SELECT workspace_id, n FROM entry_counts") {
+          const byWorkspace = new Map<string, number>();
+          for (const e of db.entries) {
+            const ws = (e as { workspace_id?: string }).workspace_id ?? "";
+            byWorkspace.set(ws, (byWorkspace.get(ws) ?? 0) + 1);
+          }
+          return { results: [...byWorkspace.entries()].map(([workspace_id, n]) => ({ workspace_id, n })) };
         }
         if (s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) {
           // src/db/init.ts's schema probe. This mock stands in for a deployed brain, and

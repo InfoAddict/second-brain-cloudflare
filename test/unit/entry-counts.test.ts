@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { checkFtsIntegrity } from "../../src/db/fts-backfill";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import type { Env } from "../../src/env";
@@ -136,20 +137,47 @@ describe("entry_counts triggers, against real SQLite", () => {
     expect(total.n).toBe(1); // SUM is correct either way
   });
 
-  it("rows_written per capture: measured, not assumed", async () => {
-    // node:sqlite's StatementSync.run().changes reports only the directly
-    // executed statement's own row count — it does NOT include rows an
-    // AFTER trigger writes to a different table (verified here: the entry
-    // genuinely lands in entry_counts, per the other tests in this file, yet
-    // this delta stays flat). Measured value: 1 (no visible increase over a
-    // brain without entry_counts). Real D1's own rows_written accounting may
-    // differ from this test double; this is what this repo's own harness can
-    // measure, reported as asked rather than assumed.
+  it("rows_written per capture: measured, not assumed (MINOR 4a, final review)", async () => {
+    // node:sqlite's StatementSync.run().changes (what D1's meta.rows_written
+    // maps to in this test double) reports only the directly executed
+    // statement's own row count — it does NOT include rows an AFTER trigger
+    // writes to a different table, so it undercounts the real per-capture
+    // cost. total_changes() on the connection counts every row any
+    // statement OR trigger touches since the connection opened, so a delta
+    // across one capture is trigger-aware and reflects the real write count.
+    const before = (await d1.db.prepare(`SELECT total_changes() AS n`).first() as { n: number }).n;
     const result = await d1.db.prepare(
       `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id) VALUES ('x1', 'memory', '[]', 'api', 1, '[]', 'ws-a')`,
     ).run() as { meta: { rows_written: number } };
-    expect(result.meta.rows_written).toBe(1);
+    const after = (await d1.db.prepare(`SELECT total_changes() AS n`).first() as { n: number }).n;
+
+    expect(result.meta.rows_written).toBe(1); // the statement's own count — undercounts on purpose, see above
+    // Measured directly against this brain's real schema.sql, every sync
+    // trigger live: a single INSERT INTO entries writes 9 rows total.
+    // Reconciles with the reviewer's probe (final-review.probe.test.ts):
+    // 8 total_changes with entry_counts' table and triggers dropped, 9 with
+    // them present — this brain has them present, so 9 is the expected value.
+    expect(after - before).toBe(9);
     expect((await d1.db.prepare(`SELECT n FROM entry_counts WHERE workspace_id = 'ws-a'`).first() as { n: number }).n).toBe(1); // the row is really there
+  });
+
+  it("a capsule-tagged capture writes one row more than a plain one (MINOR 4a, final review)", async () => {
+    // The prompt_capsule_entry_insert trigger adds exactly one more row
+    // (prompt_capsule_revisions) on top of the plain-capture cost measured
+    // above. Reconciles with the reviewer's probe: 10 for a capsule capture.
+    const beforePlain = (await d1.db.prepare(`SELECT total_changes() AS n`).first() as { n: number }).n;
+    await d1.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id) VALUES ('plain', 'memory', '[]', 'api', 1, '[]', 'ws-a')`,
+    ).run();
+    const afterPlain = (await d1.db.prepare(`SELECT total_changes() AS n`).first() as { n: number }).n;
+
+    await d1.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, vector_ids, workspace_id) VALUES ('capsule', 'memory', '["capsule:test"]', 'api', 2, '[]', 'ws-a')`,
+    ).run();
+    const afterCapsule = (await d1.db.prepare(`SELECT total_changes() AS n`).first() as { n: number }).n;
+
+    expect(afterPlain - beforePlain).toBe(9);
+    expect(afterCapsule - afterPlain).toBe(10);
   });
 });
 
@@ -209,5 +237,89 @@ describe("entry_counts seed, against real SQLite", () => {
     expect(injected).toBe(true); // the injection point was actually reached
     expect(await countsOf(d1)).toEqual(await trueCountsOf(d1));
     expect((await d1.db.prepare(`SELECT n FROM entry_counts WHERE workspace_id = 'ws-a'`).first() as { n: number }).n).toBe(21);
+  });
+});
+
+describe("T-0065 nightly per-workspace check (FIX 1, final review)", () => {
+  beforeEach(() => { resetDatabaseInit(); });
+  afterEach(() => d1?.close());
+
+  // The reviewer's reproduction: dropping entry_counts_update lets a
+  // cross-workspace move desync the two workspaces' counters while their SUM
+  // stays equal to count(*) — the old global check reported healthy forever.
+  it("repairs a permanent per-workspace drift the old global SUM check could not see", async () => {
+    d1 = makeSqliteD1();
+    insertEntry(d1, "e1", "ws-a");
+    await d1.db.exec(`DROP TRIGGER entry_counts_update`);
+
+    await d1.db.prepare(`UPDATE entries SET workspace_id = 'ws-b' WHERE id = 'e1'`).run();
+
+    // Reproduces the bug: SUM(n) still equals count(*) globally.
+    const totals = await d1.db.prepare(
+      `SELECT (SELECT COALESCE(SUM(n),0) FROM entry_counts) AS cached, (SELECT count(*) FROM entries) AS actual`,
+    ).first() as { cached: number; actual: number };
+    expect(totals.cached).toBe(totals.actual);
+    expect(await countsOf(d1)).toEqual({ "ws-a": 1 }); // stale: ws-b never appears
+
+    expect(await checkFtsIntegrity(envFor(d1))).toEqual({ healthy: true }); // entries_fts itself is fine
+
+    // Reseeded via GROUP BY, the same shape applySchema's own first seed
+    // uses — a workspace with zero current rows gets no row at all, unlike
+    // the trigger's own "kept at 0" convention (see the "team deletion"
+    // test above). SUM is correct either way.
+    expect(await countsOf(d1)).toEqual({ "ws-b": 1 });
+    expect(await d1.db.prepare(
+      `SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name='entry_counts_update'`,
+    ).first()).toEqual({ n: 1 }); // trigger restored, not just the data
+  });
+
+  it("repairs a tampered entry_counts trigger body even when the per-workspace counts still happen to be exact", async () => {
+    d1 = makeSqliteD1();
+    insertEntry(d1, "e1", "ws-a");
+    // Right name, wrong body — the same corruption shape v2.2 guards against
+    // for entries_fts, reproduced here for entry_counts' insert trigger.
+    await d1.db.exec(`DROP TRIGGER entry_counts_insert`);
+    await d1.db.exec(
+      `CREATE TRIGGER entry_counts_insert AFTER INSERT ON entries BEGIN SELECT 1; END`,
+    );
+    expect(await countsOf(d1)).toEqual({}); // tampered body never wrote a row
+
+    expect(await checkFtsIntegrity(envFor(d1))).toEqual({ healthy: true });
+
+    const tamperedGone = await d1.db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='trigger' AND name='entry_counts_insert'`,
+    ).first() as { sql: string };
+    expect(tamperedGone.sql).toContain("INSERT INTO entry_counts");
+    expect(tamperedGone.sql).not.toContain("SELECT 1");
+    // The repair reseeds via GROUP BY, so the one real row still counts.
+    expect(await countsOf(d1)).toEqual({ "ws-a": 1 });
+    insertEntry(d1, "e2", "ws-a");
+    expect(await countsOf(d1)).toEqual({ "ws-a": 2 }); // the restored trigger fires on the next write
+  });
+
+  // Mutation-killer, isolated from the trigger-liveness check: both
+  // entry_counts triggers stay intact and correct here — only the row
+  // VALUES are tampered directly (bypassing the triggers entirely), so a
+  // check that fell back to comparing global totals would see the same
+  // (wrong) sum on both sides and report healthy, while a per-workspace
+  // comparison catches it. This is the piece the first test above cannot
+  // isolate on its own, since dropping entry_counts_update there also
+  // flips the trigger-liveness signal, which alone is enough to trigger a
+  // repair regardless of what the counter comparison finds.
+  it("MUTATION-KILLER: catches per-workspace drift even with every trigger intact and live", async () => {
+    d1 = makeSqliteD1();
+    insertEntry(d1, "e1", "ws-a");
+    // Tamper the row directly: global SUM(n) still equals count(*) (both 1),
+    // but the split across workspaces is wrong — ws-a should be 1, ws-b 0.
+    await d1.db.prepare(`UPDATE entry_counts SET workspace_id = 'ws-b' WHERE workspace_id = 'ws-a'`).run();
+    const totals = await d1.db.prepare(
+      `SELECT (SELECT COALESCE(SUM(n),0) FROM entry_counts) AS cached, (SELECT count(*) FROM entries) AS actual`,
+    ).first() as { cached: number; actual: number };
+    expect(totals.cached).toBe(totals.actual); // a global-only check would call this healthy
+    expect(await countsOf(d1)).toEqual({ "ws-b": 1 }); // provably wrong: e1 is in ws-a
+
+    expect(await checkFtsIntegrity(envFor(d1))).toEqual({ healthy: true });
+
+    expect(await countsOf(d1)).toEqual({ "ws-a": 1 }); // repaired to the true split
   });
 });

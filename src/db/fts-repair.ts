@@ -41,6 +41,21 @@ export function isMissingFtsTable(e: unknown): boolean {
   return MISSING_TABLE_PATTERN.test(ftsErrorMessage(e));
 }
 
+/**
+ * Live equivalent of isMissingFtsTable, for a caller with no caught error to
+ * classify (FIX 3, final review: the write guard's dual-dependency retry,
+ * probing the dependency the caught error does NOT identify). Without this,
+ * repairFtsIndex would be handed an unrelated error (entry_counts', say) and
+ * read it as "not a missing table," taking the safe drop-only branch instead
+ * of actually recreating a genuinely missing entries_fts.
+ */
+export async function ftsTableMissing(env: Env): Promise<boolean> {
+  const { results } = await env.DB.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entries_fts'`,
+  ).all();
+  return results.length === 0;
+}
+
 const FTS_TRIGGER_NAMES = ["entries_fts_insert", "entries_fts_update", "entries_fts_delete"];
 
 function dropFtsTriggers(env: Env): D1PreparedStatement[] {

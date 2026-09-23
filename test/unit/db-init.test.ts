@@ -48,12 +48,15 @@ const PROMPT_CAPSULE_TRIGGERS = [
   "prompt_capsule_entry_delete",
   "prompt_capsule_workspace_delete",
 ];
-// Lexical recall index (FTS5, trigram). entries_fts is a virtual table (SCHEMA_OBJECTS);
-// its sync triggers are post-column like the capsule triggers above.
+// Lexical recall index (FTS5, trigram). entries_fts and its three sync
+// triggers are NOT in SCHEMA_OBJECTS/POST_COLUMN_OBJECTS (ownership v2.2):
+// they are created together, in their own dedicated batch, in applySchema.
 const FTS_TRIGGERS = ["entries_fts_insert", "entries_fts_update", "entries_fts_delete"];
-// Exact per-workspace entry counters (T-0065). Same shape as entries_fts above:
-// entry_counts is a plain table, its three triggers are post-column (they
-// reference entries.workspace_id, which arrives by ALTER on a legacy brain).
+// Exact per-workspace entry counters (T-0065). Same ownership rule as
+// entries_fts above: entry_counts and its three triggers are created
+// together in their own dedicated batch, never via SCHEMA_OBJECTS/
+// POST_COLUMN_OBJECTS (the triggers reference entries.workspace_id, which
+// arrives by ALTER on a legacy brain, so the batch runs after that ALTER).
 const ENTRY_COUNTS_TRIGGERS = ["entry_counts_insert", "entry_counts_update", "entry_counts_delete"];
 const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", "edges", "idx_edges_source", "idx_edges_target", "idx_edges_weight", "insight_candidates", "idx_insight_candidates_queue",
   // Team edition (v3). idx_entries_workspace_created is deliberately last-applied

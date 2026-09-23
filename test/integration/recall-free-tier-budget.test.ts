@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
+import worker from "../../src/index";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
 import { TAG_VOCABULARY_KEY } from "../../src/tags/vocabulary";
@@ -9,6 +10,8 @@ import { makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../helpers/make-en
 import { snapshotRecallBudget } from "../helpers/recall-budget";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 
 describe("recall stays within the Cloudflare Free operation envelope", () => {
   const open: SqliteD1[] = [];
@@ -198,5 +201,58 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     // Matches the first call above exactly (T-0065): entry_counts has no
     // warm/cold distinction left to be cheaper than the first call.
     expect(snapshotRecallBudget(warmDiagnostics, warm).d1Statements).toBe(5);
+  });
+
+  // MINOR 4b (final review): every case above calls recallEntries directly,
+  // in-process, bypassing auth and schema readiness entirely. This one goes
+  // through the real Worker entry point — real token authentication (the
+  // legacy AUTH_TOKEN bootstrapped into a genuine admin row via
+  // ensureTenantBootstrap, resolved through the Authorization header the
+  // same way production does) against a freshly migrated real SQLite brain
+  // (initializeDatabase, not a pre-populated D1 mock) — so the pinned count
+  // reflects an actual request's real cost, not a hand-assembled one.
+  it("a real GET /recall request through worker.fetch pins its D1 subrequest count end to end", async () => {
+    resetDatabaseInit();
+    resetFtsReadyMemo();
+    const sqlite = makeSqliteD1();
+    open.push(sqlite);
+    const kv = makeMemoryKV();
+    const bootEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as D1Database, OAUTH_KV: kv });
+    await initializeDatabase(bootEnv);
+    const roots = await ensureTenantBootstrap(bootEnv);
+    sqlite.seed({ id: "root", content: "atlas ledger changed", createdAt: 1000, tags: ["work"] });
+    await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'root'`)
+      .bind(roots.ownerPersonalWorkspaceId).run();
+    await kv.put(TAG_VOCABULARY_KEY, JSON.stringify({ tags: ["work"], rebuiltAt: Date.now() }));
+    sqlite.issued.length = 0; // setup's own DDL/bootstrap/seed statements are not what this pins
+
+    const vectorQuery = vi.fn().mockResolvedValue({
+      matches: [{ id: "root", score: .9, metadata: { parentId: "root", created_at: 1000 } }],
+    });
+    const env: Env = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as D1Database,
+      OAUTH_KV: kv,
+      VECTORIZE: makeVectorizeMock({ query: vectorQuery }),
+    });
+    const deferred: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (p: Promise<unknown>) => deferred.push(p) } as unknown as ExecutionContext;
+
+    const res = await worker.fetch(
+      new Request("http://localhost/recall?query=why+atlas+ledger+changed&topK=5", {
+        headers: { Authorization: "Bearer test-token" },
+      }),
+      env, ctx,
+    );
+    await Promise.all(deferred);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; results: { id: string }[] };
+    expect(body.ok).toBe(true);
+    expect(body.results.map(m => m.id)).toContain("root");
+    // Exact pin, real end-to-end path (measured, not assumed): identity
+    // resolution, distillation, the keyword and dense arms, candidate
+    // hydration, and the deferred recall_count bump. If this number moves,
+    // say why in the same commit.
+    expect(sqlite.issued.length).toBe(7);
   });
 });

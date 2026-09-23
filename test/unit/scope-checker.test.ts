@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (133 queries, 66 exceptions, 10 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (134 queries, 67 exceptions, 10 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1212,7 +1212,12 @@ describe("the checker over the real source tree", () => {
     // deployment-wide by construction, same exemption shape as the FTS
     // backfill's own seed reads. distill.ts's new SQL-capped per-term FTS
     // count carries the same JS-assembled scope clause as its sibling above it.
-    ).toEqual({ queries: 133, exempt: 66, checked: 10, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt for checkFtsIntegrity's
+    // per-workspace parity read (src/db/fts-backfill.ts, FIX 1, final
+    // review): a per-workspace GROUP BY over entries, replacing the old
+    // global-SUM-only comparison, same deployment-wide exemption shape as
+    // the other nightly parity reads above it.
+    ).toEqual({ queries: 134, exempt: 67, checked: 10, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

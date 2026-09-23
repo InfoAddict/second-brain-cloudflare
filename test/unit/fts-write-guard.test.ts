@@ -12,7 +12,24 @@ vi.mock("../../src/db/fts-repair", async (importOriginal) => {
 });
 import { repairFtsIndex } from "../../src/db/fts-repair";
 
+// FIX 3 (final review): retryOnce now probes the OTHER dependency (the one
+// the caught error does not identify) before its single retry. Mocked the
+// same way as repairFtsIndex above, defaulting to "healthy" so every
+// pre-existing single-dependency test below is unaffected — the probe for
+// the dependency that did not fail returns live, so no second repair fires.
+vi.mock("../../src/db/entry-counts-repair", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/db/entry-counts-repair")>();
+  return { ...actual, repairEntryCounts: vi.fn().mockResolvedValue(undefined), isEntryCountsLive: vi.fn().mockResolvedValue(true) };
+});
+import { repairEntryCounts, isEntryCountsLive } from "../../src/db/entry-counts-repair";
+vi.mock("../../src/recall/fts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/recall/fts")>();
+  return { ...actual, isFtsLive: vi.fn().mockResolvedValue(true) };
+});
+import { isFtsLive } from "../../src/recall/fts";
+
 const FTS_ERROR = "D1_ERROR: no such table: entries_fts: SQLITE_ERROR";
+const ENTRY_COUNTS_ERROR = "D1_ERROR: no such table: entry_counts: SQLITE_ERROR";
 const OTHER_ERROR = "UNIQUE constraint failed: users.email";
 
 /** A minimal D1-shaped fake whose statement/batch calls fail `failTimes` times, then succeed. */
@@ -46,6 +63,12 @@ describe("withFtsWriteGuard", () => {
   beforeEach(() => {
     vi.mocked(repairFtsIndex).mockReset();
     vi.mocked(repairFtsIndex).mockResolvedValue(undefined);
+    vi.mocked(repairEntryCounts).mockReset();
+    vi.mocked(repairEntryCounts).mockResolvedValue(undefined);
+    vi.mocked(isEntryCountsLive).mockReset();
+    vi.mocked(isEntryCountsLive).mockResolvedValue(true);
+    vi.mocked(isFtsLive).mockReset();
+    vi.mocked(isFtsLive).mockResolvedValue(true);
   });
 
   it("passes a successful statement through untouched: no repair, one call", async () => {
@@ -114,6 +137,80 @@ describe("withFtsWriteGuard", () => {
     await expect(env.DB.batch([stmt])).rejects.toThrow(FTS_ERROR);
     expect(batchCalls()).toBe(2);
     expect(repairFtsIndex).toHaveBeenCalledTimes(1);
+  });
+
+  // FIX 3 (final review): the caught error identifies entries_fts; the
+  // OTHER dependency (entry_counts) is probed and found healthy, so its
+  // repair must not fire.
+  it("does not touch entry_counts when only entries_fts is broken", async () => {
+    const { db, runCalls } = makeFakeDB(1);
+    const env = withFtsWriteGuard(makeEnv(db));
+
+    const result = await env.DB.prepare("INSERT INTO entries (id) VALUES (?)").bind("e1").run();
+
+    expect(result).toEqual({ success: true, meta: { rows_written: 1 } });
+    expect(runCalls()).toBe(2);
+    expect(repairFtsIndex).toHaveBeenCalledTimes(1);
+    expect(repairEntryCounts).not.toHaveBeenCalled();
+  });
+
+  // Mirror image: the caught error identifies entry_counts; entries_fts is
+  // probed and found healthy, so repairFtsIndex must not fire.
+  it("repairs entry_counts (not entries_fts) when only the counter table is missing", async () => {
+    const { db, runCalls } = makeFakeDB(1, ENTRY_COUNTS_ERROR);
+    const env = withFtsWriteGuard(makeEnv(db));
+
+    const result = await env.DB.prepare("INSERT INTO entries (id) VALUES (?)").bind("e1").run();
+
+    expect(result).toEqual({ success: true, meta: { rows_written: 1 } });
+    expect(runCalls()).toBe(2);
+    expect(repairEntryCounts).toHaveBeenCalledTimes(1);
+    expect(repairFtsIndex).not.toHaveBeenCalled();
+  });
+
+  // The reviewer's reproduction: with both entries_fts and entry_counts
+  // missing, the entries_fts trigger fires first and its failure is the one
+  // the write throws. The old code repaired only that one and retried once,
+  // so the retry threw again on the still-missing entry_counts with nothing
+  // left to catch it. Real SQLite end to end (unmocked repairs), because the
+  // subject is whether both tables and all six triggers actually come back.
+  it("repairs both entries_fts and entry_counts when both are missing, succeeding on the single retry", async () => {
+    const actualFts = await vi.importActual<typeof import("../../src/db/fts-repair")>("../../src/db/fts-repair");
+    vi.mocked(repairFtsIndex).mockImplementation(actualFts.repairFtsIndex);
+    const actualEntryCounts = await vi.importActual<typeof import("../../src/db/entry-counts-repair")>("../../src/db/entry-counts-repair");
+    vi.mocked(repairEntryCounts).mockImplementation(actualEntryCounts.repairEntryCounts);
+    vi.mocked(isEntryCountsLive).mockImplementation(actualEntryCounts.isEntryCountsLive);
+    const actualRecallFts = await vi.importActual<typeof import("../../src/recall/fts")>("../../src/recall/fts");
+    vi.mocked(isFtsLive).mockImplementation(actualRecallFts.isFtsLive);
+    const s = makeSqliteD1();
+    try {
+      await s.db.exec("DROP TABLE entries_fts; DROP TABLE entry_counts;");
+      const env = withFtsWriteGuard(makeTestEnv(undefined, { DB: s.db as unknown as D1Database, OAUTH_KV: makeMemoryKV() }));
+
+      const result = await env.DB.prepare(
+        "INSERT INTO entries (id,content,tags,source,created_at,vector_ids,workspace_id) VALUES ('e1','hello searchable','[]','api',1,'[]','ws-a')",
+      ).run();
+
+      expect(result.success).toBe(true);
+      expect(s.rows().map(r => r.id)).toEqual(["e1"]);
+      expect(await s.db.prepare(`SELECT id FROM entries_fts WHERE id = 'e1'`).first()).toEqual({ id: "e1" });
+      expect(await s.db.prepare(`SELECT n FROM entry_counts WHERE workspace_id = 'ws-a'`).first()).toEqual({ n: 1 });
+    } finally { s.close(); }
+  });
+
+  // Both repairs run (the probe says entry_counts also needs it), but the
+  // underlying failure persists regardless — the single retry must still
+  // throw rather than loop.
+  it("retries exactly once and then throws when both dependencies need repair but the underlying failure persists", async () => {
+    vi.mocked(isEntryCountsLive).mockResolvedValueOnce(false);
+    const { db, runCalls } = makeFakeDB(Number.POSITIVE_INFINITY);
+    const env = withFtsWriteGuard(makeEnv(db));
+
+    await expect(env.DB.prepare("INSERT INTO entries (id) VALUES (?)").bind("e1").run())
+      .rejects.toThrow(FTS_ERROR);
+    expect(runCalls()).toBe(2);
+    expect(repairFtsIndex).toHaveBeenCalledTimes(1);
+    expect(repairEntryCounts).toHaveBeenCalledTimes(1);
   });
 
   it("reuses the same guarded DB for the same raw binding (tenancy-style memoization stays intact)", () => {

@@ -391,14 +391,15 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
  * Cost is one subrequest and one row read per catalogue entry, flat in the number of
  * entries because neither side of the UNION touches table data — measured on real D1
  * (workerd via Miniflare), not the mock, which is not something that can be re-verified
- * from a laptop. rows_read = 23 was that measurement, but it predates insight_candidates
- * and its index: it was taken when SCHEMA_OBJECTS held seven objects, not the nine it
- * holds now (plus D1's own bookkeeping table, SQLite's implicit autoindexes, and twelve
- * columns), so 23 is stale by two rows and should be re-measured against a live database
- * rather than trusted as today's figure. What the measurement did establish, and what
- * still holds regardless of the exact count: it grows by one row per object added to
- * SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now costs one
- * row here rather than one subrequest on every cold start.
+ * from a laptop. rows_read = 23 was that measurement, taken when SCHEMA_OBJECTS held
+ * seven objects. It holds 26 now (team edition, projects, push subscriptions, and their
+ * indexes all landed since), plus entries_fts, entry_counts, and their six triggers
+ * (created outside SCHEMA_OBJECTS — see the ownership note above — but still read by
+ * this same probe), so 23 is long stale and should be re-measured against a live
+ * database rather than trusted as today's figure. What the measurement did establish,
+ * and what still holds regardless of the exact count: it grows by one row per object
+ * added to SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now
+ * costs one row here rather than one subrequest on every cold start.
  */
 const PROBE_SQL =
   `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +

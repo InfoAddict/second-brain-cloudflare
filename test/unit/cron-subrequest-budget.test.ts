@@ -52,11 +52,13 @@ import { FTS_READY_KV_KEY } from "../../src/constants";
 // pre-FTS rows to index, which this double's rowid SELECT cannot produce
 // (it returns no rows), so the measured ledger shows 4, not the real-D1
 // worst case of 6 — the exact pins below are the tight guard for that.
-// MOVED 57 -> 58 (write-path isolation v2.1): runFtsBackfill now checks for
-// the entries_fts_disabled marker (one D1 SELECT against sqlite_master)
-// before touching entries_fts, so it can skip cleanly instead of throwing
-// into a renamed-away table. That check runs unconditionally, so it adds
-// one D1 statement to every ordinary night, not just a disabled one.
+// MOVED 57 -> 58 (write-path isolation v2.2): runFtsBackfill now checks FTS
+// liveness (isFtsLive: one D1 SELECT against sqlite_master, verifying
+// entries_fts exists AND all three sync triggers exist with their exact
+// bodies) before touching entries_fts, so it can skip cleanly instead of
+// throwing into a table a hot-path repair left not-live. That check runs
+// unconditionally, so it adds one D1 statement to every ordinary night, not
+// just a not-live one.
 // MOVED 58 -> 61 (Task 5, nightly integrity self-heal): runFtsMaintenance now
 // checks liveness itself (one D1 SELECT against sqlite_master, the same
 // query isFtsLive already used inside runFtsBackfill) before deciding
@@ -375,15 +377,20 @@ describe("nightly cron D1 subrequest cost", () => {
     expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
     // Exact pin: the same 15-statement baseline as an ordinary night (11 D1,
     // the night-summary OAUTH_KV.put, when-extraction's 3) plus FTS
-    // maintenance's 8: liveness (1), integrity-check (1), ready GET (1),
-    // then checkFtsIntegrity's count+max-rowid SELECT (1), spot-check SELECT
-    // (1), and the rotating window's content-cursor KV GET (1), one
-    // window-read batch (1; one SELECT — the orphan half moved to count
-    // parity, so the batch shrank by a statement while the count held), and
-    // the cursor-advance KV PUT (1). No re-index batch: the mock is a
-    // healthy brain, so the window finds no drifted rows. If this number
+    // maintenance's 9: liveness (1), integrity-check (1), ready GET (1),
+    // then checkFtsIntegrity's count+max-rowid SELECT (1), the T-0065
+    // per-workspace parity batch (FIX 1, final review: entries GROUP BY +
+    // the entry_counts read + the entry_counts trigger-liveness read, ONE
+    // env.DB.batch so it still costs a single statement here even though it
+    // carries three queries) (1), spot-check SELECT (1), and the rotating
+    // window's content-cursor KV GET (1), one window-read batch (1; one
+    // SELECT — the orphan half moved to count parity, so the batch shrank by
+    // a statement while the count held), and the cursor-advance KV PUT (1).
+    // No re-index batch: the mock is a healthy brain, so the window finds no
+    // drifted rows, and the T-0065 parity batch above finds no per-workspace
+    // drift either, so its own repair batch never fires. If this number
     // moves, say why in the same commit.
-    expect(statements.length).toBe(23);
+    expect(statements.length).toBe(24);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {
