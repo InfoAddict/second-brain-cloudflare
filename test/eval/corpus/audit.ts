@@ -1,4 +1,4 @@
-import { CHUNK_MAX_CHARS, FTS_MIN_TOKEN_LENGTH } from "../../../src/constants";
+import { CHUNK_MAX_CHARS, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../../src/constants";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
 import { tokenizeQuery } from "../../../src/text/tokenize";
 import type { GoldenQuery } from "../types";
@@ -8,16 +8,20 @@ import { ACTORS, EVAL_NOW, IDENTITIES, WORKSPACES, type CorpusEdge, type CorpusE
 export interface AuditFinding { queryId: string; rule: string; detail: string }
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const CJK_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{2,}/gu;
-const RARE_DF = 10;
-const COMMON_DF = 20;
 const IDENTIFIER_DF = 5;
-const auditTokens = (text: string) => tokenizeQuery(text).map(token => token.replace(/[^\p{L}\p{N}]+$/gu, "")).filter(Boolean);
-const isIdentifier = (token: string) => /\p{N}/u.test(token) && (/[\p{L}]/u.test(token) || /[#._-]/u.test(token));
-const hasSharedCjkPair = (query: string, content: string) => {
-  for (const run of query.matchAll(CJK_RUN)) {
-    const chars = [...run[0]];
-    for (let i = 0; i < chars.length - 1; i++) if (content.includes(chars[i] + chars[i + 1])) return true;
+const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual"]);
+const WORD_CHAR = /[\p{L}\p{N}_-]/u;
+// Thresholds scale with the rows the viewer can read: a token in 0.4% of 5k rows is not "common".
+const commonDf = (rows: number) => Math.min(KEYWORD_CANDIDATE_LIMIT, Math.max(20, Math.ceil(rows * 0.02)));
+const rareDf = (rows: number) => Math.max(10, Math.ceil(rows * 0.001));
+// Queries are tokenized exactly as production does (NFKC folding, raw-surface probes, trailing "." and "#" kept).
+const isIdentifier = (token: string) => /\p{N}/u.test(token) && (/\p{L}/u.test(token) || /[#._-]/u.test(token));
+/** True when `token` occurs in `content` (both lowercase) not glued to a longer word or identifier. */
+const containsBounded = (content: string, token: string) => {
+  for (let at = content.indexOf(token); at >= 0; at = content.indexOf(token, at + 1)) {
+    const before = content.slice(0, at).at(-1);
+    const after = content.slice(at + token.length).at(0);
+    if (!(before && WORD_CHAR.test(before)) && !(after && WORD_CHAR.test(after))) return true;
   }
   return false;
 };
@@ -32,12 +36,22 @@ export function auditQueries(spec: {
   const byId = new Map(spec.entries.map(entry => [entry.id, entry] as const));
   const lower = spec.entries.map(entry => ({ entry, content: entry.content.toLowerCase() }));
   const lowerById = new Map(lower.map(row => [row.entry.id, row.content] as const));
-  const tokensById = new Map(spec.entries.map(entry => [entry.id, new Set(auditTokens(entry.content))] as const));
-  const frequency = new Map<string, number>();
-  const df = (token: string) => {
-    const key = token.toLowerCase();
-    if (!frequency.has(key)) frequency.set(key, lower.filter(row => row.content.includes(key)).length);
-    return frequency.get(key)!;
+  // df is per viewer: only rows the viewer can read count, so unreadable decoys never inflate it.
+  const views = new Map<string, { rows: number; df: (token: string) => number }>();
+  const viewOf = (readable: ReadonlySet<string>) => {
+    const key = [...readable].sort().join("|");
+    if (!views.has(key)) {
+      const visible = lower.filter(row => readable.has(row.entry.workspaceId));
+      const cache = new Map<string, number>();
+      views.set(key, {
+        rows: visible.length,
+        df: token => {
+          if (!cache.has(token)) cache.set(token, visible.filter(row => row.content.includes(token)).length);
+          return cache.get(token)!;
+        },
+      });
+    }
+    return views.get(key)!;
   };
   const neighbors = new Map<string, Set<string>>();
   for (const edge of spec.edges) {
@@ -60,29 +74,34 @@ export function auditQueries(spec: {
     }
     if (goldEntries.some(entry => !readable.has(entry!.workspaceId))) add(query.id, "gold-unreadable", "gold is outside the viewer's scope");
     const primary = byId.get((query.gold.find(gold => gold.grade === 2) ?? query.gold[0]).id)!;
-    const contentTokens = tokensById.get(primary.id)!;
     const content = lowerById.get(primary.id)!;
-    const tokens = auditTokens(query.text);
-    const shared = tokens.filter(token => content.includes(token.toLowerCase()));
+    const { rows, df } = viewOf(readable);
+    const common = commonDf(rows);
+    const tokens = tokenizeQuery(query.text);
+    const shared = tokens.filter(token => content.includes(token));
+    const cross = query.tags?.includes("cross-lingual") ?? false;
+    for (const tag of query.tags ?? []) if (!KNOWN_TAGS.has(tag)) add(query.id, "unknown-tag", tag);
+    // The outsider reads no haystack rows, so it only serves tenancy (decoy) queries.
+    if (query.viewer === "outsider" && !query.tags?.includes("tenancy")) add(query.id, "outsider-not-tenancy", "outsider reads no haystack rows");
     let keyToken: string | undefined;
 
     switch (query.category) {
       case "identifier": {
         keyToken = tokens.find(token => isIdentifier(token) && [...token].length >= 3);
         if (!keyToken) add(query.id, "identifier-no-token", query.text);
-        else if (!contentTokens.has(keyToken.toLowerCase())) add(query.id, "identifier-not-in-gold", keyToken);
+        else if (!containsBounded(content, keyToken)) add(query.id, "identifier-not-in-gold", keyToken);
         else if (df(keyToken) > IDENTIFIER_DF) add(query.id, "identifier-too-common", `${keyToken} df=${df(keyToken)}`);
         break;
       }
       case "rare-word": {
-        const rare = tokens.filter(token => df(token) > 0 && df(token) <= RARE_DF && content.includes(token.toLowerCase()));
+        const rare = tokens.filter(token => df(token) <= rareDf(rows) && content.includes(token));
         keyToken = rare[0];
         if (!rare.length) add(query.id, "rare-word-no-rare-token", query.text);
         break;
       }
       case "common-word": {
         if (tokens.length < 2) add(query.id, "common-word-too-short", query.text);
-        const rare = tokens.find(token => df(token) < COMMON_DF);
+        const rare = tokens.find(token => df(token) < common);
         if (rare) add(query.id, "common-word-rare-token", `${rare} df=${df(rare)}`);
         if (shared.length < tokens.length) add(query.id, "common-word-gold-missing-token", query.text);
         break;
@@ -93,14 +112,22 @@ export function auditQueries(spec: {
         break;
       }
       case "paraphrase": {
-        const leaking = shared.filter(token => df(token) < COMMON_DF);
+        const leaking = shared.filter(token => df(token) < common);
         if (leaking.length) add(query.id, "paraphrase-lexical-leak", leaking.join(","));
         break;
       }
       case "cjk": {
-        if (!CJK.test(query.text) && !query.tags?.includes("cross-lingual")) add(query.id, "cjk-no-cjk-text", query.text);
         if (!CJK.test(primary.content)) add(query.id, "cjk-gold-not-cjk", primary.id);
-        if (!query.tags?.includes("cross-lingual") && !hasSharedCjkPair(query.text, primary.content)) add(query.id, "cjk-no-shared-substring", query.text);
+        if (cross) {
+          // Cross-lingual means no CJK in the query, and no shared Latin word rarer than "common".
+          if (CJK.test(query.text)) add(query.id, "cross-lingual-has-cjk", query.text);
+          const leaking = shared.filter(token => df(token) < common);
+          if (leaking.length) add(query.id, "cross-lingual-lexical-leak", leaking.join(","));
+        } else {
+          if (!CJK.test(query.text)) add(query.id, "cjk-no-cjk-text", query.text);
+          // The arm searches whole tokens, so a CJK token must occur in the gold.
+          if (!shared.some(token => CJK.test(token))) add(query.id, "cjk-no-shared-substring", query.text);
+        }
         break;
       }
       case "multi-hop": {
@@ -109,7 +136,7 @@ export function auditQueries(spec: {
         const reachable = [...(neighbors.get(primary.id) ?? [])].some(rootId => {
           const root = byId.get(rootId);
           const rootContent = lowerById.get(rootId);
-          return root && root.id !== primary.id && readable.has(root.workspaceId) && rootContent && tokens.filter(token => rootContent.includes(token.toLowerCase())).length >= Math.min(2, tokens.length);
+          return root && root.id !== primary.id && readable.has(root.workspaceId) && rootContent && tokens.filter(token => rootContent.includes(token)).length >= Math.min(2, tokens.length);
         });
         if (!reachable) add(query.id, "multi-hop-unreachable", primary.id);
         break;
@@ -123,9 +150,8 @@ export function auditQueries(spec: {
     }
 
     if (query.tags?.includes("tenancy")) {
-      const key = keyToken ?? tokens[0];
-      const decoy = lower.some(row => !readable.has(row.entry.workspaceId) && key && row.content.includes(key.toLowerCase()));
-      if (!decoy) add(query.id, "tenancy-no-decoy", key ?? "");
+      if (!keyToken) add(query.id, "tenancy-no-key-token", query.category);
+      else if (!lower.some(row => !readable.has(row.entry.workspaceId) && row.content.includes(keyToken!))) add(query.id, "tenancy-no-decoy", keyToken);
     }
   }
   return findings;
@@ -133,10 +159,10 @@ export function auditQueries(spec: {
 
 export function haystackVocabulary(): Set<string> {
   const rows = generateHaystack({
-    count: 4000, seed: 1, commonRate: 0.5, idPrefix: "v", now: EVAL_NOW, spanDays: 730, cjkRate: 0.2, longRate: 0.05,
+    count: 8000, seed: 1, commonRate: 0.5, idPrefix: "v", now: EVAL_NOW, spanDays: 730, cjkRate: 0.2, longRate: 0.05,
     workspaces: [{ workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 1 }],
   });
-  const vocabulary = new Set(rows.flatMap(row => auditTokens(row.content)));
+  const vocabulary = new Set(rows.flatMap(row => tokenizeQuery(row.content).map(token => token.replace(/[^\p{L}\p{N}]+$/gu, ""))));
   for (const prefix of ["ops", "web", "app"]) {
     for (let number = 1000; number < 8000; number++) vocabulary.add(`${prefix}-${number}`);
   }

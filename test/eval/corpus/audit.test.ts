@@ -82,7 +82,6 @@ describe("auditQueries", () => {
     expect(rules([...filler, gold], [query({ id: "mixed", category: "common-word", text: "budget zylophantine" })])).toContain("mixed:common-word-rare-token");
     expect(rules([...filler, gold], [query({ id: "missing", category: "common-word", text: "budget review notes" })])).toContain("missing:common-word-gold-missing-token");
     expect(rules([...filler, gold], [query({ id: "short", category: "short-word", text: "v2" })])).toEqual([]);
-    expect(rules([...filler, entry("g", "released v2. today")], [query({ id: "short-dot", category: "short-word", text: "v2." })])).toEqual([]);
     expect(rules([...filler, gold], [query({ id: "long", category: "short-word", text: "project" })])).toContain("long:short-word-no-short-token");
   });
 
@@ -127,5 +126,63 @@ describe("auditQueries", () => {
     for (const prefix of ["ops", "web", "app"]) {
       for (let number = 1000; number < 8000; number++) expect(vocabulary.has(`${prefix}-${number}`)).toBe(true);
     }
+  }, 30_000);
+});
+
+describe("auditQueries fidelity and scale", () => {
+  const gold = (content: string, workspace: keyof typeof WORKSPACES = "avery") => entry("g", content, workspace);
+  const many = (count: number, content: (i: number) => string, workspace: keyof typeof WORKSPACES = "avery") =>
+    Array.from({ length: count }, (_, i) => entry(`m${workspace}${i}`, content(i), workspace));
+
+  it("does not let cross-lingual excuse CJK text or a shared Latin word", () => {
+    const ja = gold("来月の予算について話した budget");
+    expect(rules([ja], [query({ id: "cjk-in-xl", category: "cjk", text: "採用計画の見直し", tags: ["cross-lingual"] })])).toContain("cjk-in-xl:cross-lingual-has-cjk");
+    expect(rules([ja], [query({ id: "leak", category: "cjk", text: "budget review", tags: ["cross-lingual"] })])).toContain("leak:cross-lingual-lexical-leak");
+    expect(rules([ja], [query({ id: "ok", category: "cjk", text: "next month plan", tags: ["cross-lingual"] })])).toEqual([]);
+  });
+
+  it("checks CJK linkage on the tokens the arm searches, not on raw character pairs", () => {
+    const ja = gold("来月の予算について話した");
+    expect(rules([ja], [query({ id: "pair", category: "cjk", text: "月の予定" })])).toContain("pair:cjk-no-shared-substring");
+    expect(rules([ja], [query({ id: "whole", category: "cjk", text: "来月の予算" })])).toEqual([]);
+  });
+
+  it("counts df over the rows the viewer can read", () => {
+    const rows = [gold("zorbital flimwatt"), ...many(40, () => "zorbital flimwatt", "blake")];
+    expect(rules(rows, [query({ id: "c", category: "common-word", text: "zorbital flimwatt" })])).toContain("c:common-word-rare-token");
+    const decoys = many(6, () => "Ticket OPS-90210 rollback", "outsider");
+    expect(rules([gold("Ticket OPS-90210 rollback"), ...decoys], [query({ id: "i", category: "identifier", text: "OPS-90210" })])).toEqual([]);
+  });
+
+  it("scales the paraphrase and common thresholds with the corpus", () => {
+    const corpus = (total: number, dense: number) => [
+      gold("zonkfrel appears in the answer"),
+      ...many(dense - 1, i => `zonkfrel filler note ${i}`),
+      ...many(total - dense, i => `plain unrelated note ${i}`),
+    ];
+    const para = query({ id: "p", category: "paraphrase", text: "zonkfrel origin story" });
+    expect(rules(corpus(1000, 25), [para])).toEqual([]);
+    expect(rules(corpus(5000, 30), [para])).toContain("p:paraphrase-lexical-leak");
+    expect(rules(corpus(20_000, 300), [para])).toContain("p:paraphrase-lexical-leak");
+    expect(rules(corpus(20_000, 500), [para])).toEqual([]);
+    const common = query({ id: "c", category: "common-word", text: "zonkfrel appears" });
+    expect(rules(corpus(5000, 30), [common])).toContain("c:common-word-rare-token");
+  });
+
+  it("declares the outsider decoys-only and fails closed on unknown tags", () => {
+    const decoyGold = gold("secret OPS-90210 plan", "outsider");
+    const own = query({ id: "o", category: "identifier", text: "OPS-90210", viewer: "outsider" });
+    expect(rules([decoyGold], [own])).toContain("o:outsider-not-tenancy");
+    expect(rules([decoyGold, entry("d", "secret OPS-90210 plan")], [{ ...own, tags: ["tenancy"] }])).toEqual([]);
+    expect(rules([gold("hello world")], [query({ id: "t", category: "paraphrase", text: "greeting", tags: ["tenency"] })])).toContain("t:unknown-tag");
+  });
+
+  it("requires a key token for tenancy queries instead of guessing one", () => {
+    expect(rules([gold("hello world")], [query({ id: "t", category: "paraphrase", text: "greeting", tags: ["tenancy"] })])).toContain("t:tenancy-no-key-token");
+  });
+
+  it("keeps trailing punctuation the way production tokenizes it", () => {
+    const g = gold("roadmap review scheduled");
+    expect(rules([...filler, g], [query({ id: "dots", category: "common-word", text: "roadmap. review." })])).toContain("dots:common-word-gold-missing-token");
   });
 });

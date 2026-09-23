@@ -7,17 +7,19 @@ export const COMMON_TOKENS = ["roadmap", "standup", "invoice"] as const;
 export interface HaystackOptions {
   count: number;
   seed: number;
+  /** Probability a note mentions each of the three COMMON_TOKENS (company rows get a boost, see below). */
   commonRate: number;
   idPrefix: string;
   now: number;
   spanDays: number;
   cjkRate: number;
+  /** Share of notes long enough to span several chunks (over CHUNK_MAX_CHARS). */
   longRate: number;
   workspaces: { workspaceId: string; actorId: string; weight: number }[];
 }
 
 type Pick = <T>(xs: readonly T[]) => T;
-type Template = (pick: Pick, rand: () => number) => string;
+type Template = (pick: Pick, rand: () => number, words: (n: number) => string) => string;
 
 const PEOPLE = ["Marta", "Devon", "Priya", "Tomas", "Elise", "Ravi", "Noor", "Jonas", "Keiko", "Omar", "Ines", "Callum", "Sana", "Bruno", "Lena", "Hassan", "Mireille", "Dmitri", "Yara", "Felix"];
 const PROJECTS = ["Amber Falcon", "Quiet Harbor", "Copper Lantern", "Northwind Ledger", "Blue Meridian", "Paper Kite", "Granite Loop", "Willow Signal", "Saffron Bridge", "Ember Atlas"];
@@ -44,6 +46,13 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const VERBS = ["tighten", "rewrite", "measure", "document", "simplify"];
 const PREFIXES = ["OPS", "WEB", "APP"];
 
+// Ordinary everyday words, drawn with a skew toward the front so a few are dense and most sit in a long tail.
+const EVERYDAY = ["thing", "time", "people", "work", "day", "week", "home", "good", "new", "first", "last", "long", "little", "great", "small", "big", "high", "young", "old", "important", "different", "bad", "right", "early", "late", "public", "able", "sure", "clear", "free", "full", "real", "hard", "easy", "simple", "quick", "slow", "quiet", "busy", "ready",
+  "make", "take", "come", "give", "look", "want", "need", "feel", "seem", "leave", "keep", "let", "begin", "help", "show", "hear", "play", "run", "move", "live", "believe", "bring", "happen", "write", "sit", "stand", "lose", "pay", "meet", "include", "continue", "set", "learn", "change", "lead", "watch", "follow", "stop", "create", "speak", "read", "spend", "grow", "open", "walk", "win", "offer", "remember", "love", "consider", "appear", "buy", "wait", "serve", "send", "expect", "build", "stay", "fall", "reach", "remain", "suggest", "raise", "pass", "sell", "require", "decide", "pull",
+  "family", "friend", "year", "morning", "evening", "night", "month", "question", "problem", "place", "room", "door", "street", "city", "water", "money", "story", "fact", "hand", "eye", "life", "world", "school", "state", "student", "group", "country", "office", "party", "kitchen", "garden", "window", "table", "paper", "letter", "phone", "message", "answer", "reason", "idea", "plan", "result", "point", "number", "system", "program", "case", "part", "level", "form", "order", "course", "line", "end", "side", "power", "hour", "game", "market", "price", "health", "sleep", "food", "music", "movie", "weather", "season", "summer", "winter", "spring", "autumn", "coffee", "breakfast", "dinner", "lunch", "bread", "cheese", "apple", "river", "mountain", "beach", "forest", "bridge", "road", "train", "car", "bike", "ticket", "bag", "shoes", "coat", "book", "page", "chapter", "picture", "color", "sound", "light", "shadow", "wind", "rain", "snow", "cloud", "sun", "moon", "star", "field", "farm", "animal", "bird", "fish", "dog", "cat", "horse",
+  "again", "always", "never", "often", "maybe", "almost", "enough", "together", "instead", "already", "still", "just", "even", "also", "soon", "later", "today", "tomorrow", "yesterday", "tonight", "around", "before", "after", "between", "through", "during", "without", "within", "against", "toward", "about", "because", "although", "while", "until", "since",
+  "careful", "curious", "gentle", "honest", "patient", "proud", "rough", "sharp", "smooth", "tidy", "warm", "cool", "bright", "dark", "heavy", "soft", "loud", "narrow", "wide", "deep"];
+
 const JA = [["田中", "来月の予算", "資料を共有する"], ["佐藤", "新しい採用計画", "候補者に連絡する"], ["鈴木", "引っ越しの準備", "見積もりを比較する"], ["高橋", "顧客インタビュー", "質問リストを直す"]];
 const ZH = [["小王", "下个季度的计划", "先做一个小版本"], ["李老师", "招聘安排", "本周内联系候选人"], ["陈经理", "供应商合同", "下周再确认价格"], ["小张", "用户访谈", "整理问题清单"]];
 const KO = [["민수", "다음 분기 예산", "자료를 공유하기로 했다"], ["지은", "채용 계획", "후보자에게 연락하기로 했다"], ["도윤", "이사 준비", "견적을 비교하기로 했다"], ["서연", "고객 인터뷰", "질문 목록을 고치기로 했다"]];
@@ -60,6 +69,12 @@ const TEMPLATES: Template[] = [
   p => `Idea: ${p(VERBS)} the ${p(COMPONENTS)} before ${p(PROJECTS)} ships. Worth a weekend prototype.`,
   (p, r) => `Workout: ${p(EXERCISES)} for ${20 + Math.floor(r() * 40)} minutes, felt ${p(MOODS)}.`,
   p => `Decision: we will ${p(DECISIONS)} because ${p(REFLECTIONS)}.`,
+  (_p, _r, w) => `Note to self: ${w(6)}.`,
+  (p, _r, w) => `${p(PEOPLE)} said ${w(7)}, and I agreed.`,
+  (_p, _r, w) => `Quick thought about ${w(4)} and ${w(4)}.`,
+  (_p, _r, w) => `Today I sorted out ${w(5)}; tomorrow ${w(3)}.`,
+  (p, _r, w) => `On ${p(WEEKDAYS)} we talked about ${w(5)}. ${w(4)}.`,
+  (_p, _r, w) => `Remember to ${w(2)} before ${w(3)}, then ${w(4)}.`,
 ];
 
 const TAILS: Record<(typeof COMMON_TOKENS)[number], readonly string[]> = {
@@ -72,6 +87,8 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
   const rand = mulberry32(options.seed);
   const pick: Pick = xs => xs[Math.floor(rand() * xs.length)];
   const totalWeight = options.workspaces.reduce((sum, workspace) => sum + workspace.weight, 0);
+  // Company-layer viewers see far fewer rows than personal ones, so company rows carry up to 1.9x the
+  // common-token rate and the rest are scaled down to keep the overall rate at commonRate.
   const companyWeight = options.workspaces.filter(workspace => workspace.workspaceId === WORKSPACES.company).reduce((sum, workspace) => sum + workspace.weight, 0);
   const companyFactor = companyWeight > 0 && companyWeight < totalWeight ? Math.min(1.9, totalWeight / companyWeight) : 1;
   const otherFactor = companyWeight < totalWeight ? (totalWeight - companyFactor * companyWeight) / (totalWeight - companyWeight) : 1;
@@ -87,7 +104,9 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
     if (pool === ZH) return `今天和${who}讨论了${topic}，决定${action}。`;
     return `${who}와 ${topic}에 대해 이야기했다. ${action}.`;
   };
-  const sentence = () => TEMPLATES[Math.floor(rand() * TEMPLATES.length)](pick, rand);
+  // Multiplying two draws skews picks toward the front of the pool: a few dense words and a long tail.
+  const words = (n: number) => Array.from({ length: n }, () => EVERYDAY[Math.floor(rand() * rand() * EVERYDAY.length)]).join(" ");
+  const sentence = () => TEMPLATES[Math.floor(rand() * TEMPLATES.length)](pick, rand, words);
 
   return Array.from({ length: options.count }, (_, index) => {
     const workspace = pickWorkspace();
@@ -97,7 +116,7 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
     const rate = options.commonRate * (workspace.workspaceId === WORKSPACES.company ? companyFactor : otherFactor);
     for (const token of COMMON_TOKENS) if (rand() < rate) content += ` ${pick(TAILS[token])}`;
     const createdAt = options.now - Math.floor(rand() * options.spanDays * DAY_MS);
-    content += ` Logged ${new Date(createdAt).toISOString().slice(0, 16).replace("T", " at ")} UTC.`;
+    content += ` Logged ${new Date(createdAt).toISOString().slice(0, 16).replace("T", " at ")} UTC (entry ${index + 1}).`;
     return {
       id: `${options.idPrefix}-${String(index + 1).padStart(6, "0")}`,
       content,
