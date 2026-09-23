@@ -34,6 +34,29 @@ export function resetDatabaseInit(): void {
   initPromise = null;
 }
 
+// FTS DDL is shared with src/db/fts-repair.ts (a write-path failure recreates
+// this same table and these same triggers), so each string is a named export
+// rather than an inline literal — one definition, referenced from both places.
+export const ENTRIES_FTS_TABLE_DDL =
+  `CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`;
+export const ENTRIES_FTS_INSERT_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END`;
+export const ENTRIES_FTS_UPDATE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_update
+    AFTER UPDATE ON entries
+    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END`;
+export const ENTRIES_FTS_DELETE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+    END`;
+
 /**
  * Tables, indexes, and triggers, keyed by the name each occupies in sqlite_master.
  * Declaration order is apply order: a table has to exist before its indexes and triggers.
@@ -143,7 +166,7 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // and sync by rowid — an O(1) delete instead of a content-table scan. id rides
   // along UNINDEXED for the read-path join. Shadow tables (entries_fts_data etc.)
   // appear in the probe as ordinary tables; they are ignored by name.
-  entries_fts: `CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`,
+  entries_fts: ENTRIES_FTS_TABLE_DDL,
 };
 
 /**
@@ -289,23 +312,9 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
     BEGIN
       DELETE FROM prompt_capsule_revisions WHERE workspace_id = OLD.id;
     END`,
-  entries_fts_insert: `CREATE TRIGGER IF NOT EXISTS entries_fts_insert
-    AFTER INSERT ON entries
-    BEGIN
-      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
-    END`,
-  entries_fts_update: `CREATE TRIGGER IF NOT EXISTS entries_fts_update
-    AFTER UPDATE ON entries
-    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
-    BEGIN
-      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
-      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
-    END`,
-  entries_fts_delete: `CREATE TRIGGER IF NOT EXISTS entries_fts_delete
-    AFTER DELETE ON entries
-    BEGIN
-      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
-    END`,
+  entries_fts_insert: ENTRIES_FTS_INSERT_TRIGGER_DDL,
+  entries_fts_update: ENTRIES_FTS_UPDATE_TRIGGER_DDL,
+  entries_fts_delete: ENTRIES_FTS_DELETE_TRIGGER_DDL,
 };
 
 /**

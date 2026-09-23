@@ -5,6 +5,7 @@
 
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import type { Env } from "./env";
+import { withFtsWriteGuard } from "./db/fts-write-guard";
 import { runNightlyCompression } from "./compression/nightly";
 import { runGraphPass } from "./graph/pass";
 import { INTEGRATION_SYNC_CRON, runScheduledIntegrationSync } from "./integrations/mirror";
@@ -44,7 +45,13 @@ const oauthProvider = new OAuthProvider({
 });
 
 export default {
-  fetch: async (req: Request, env: Env, ctx: ExecutionContext) => {
+  fetch: async (req: Request, rawEnv: Env, ctx: ExecutionContext) => {
+    // Every entries write in this Worker — capture, MCP remember/append/update/
+    // forget, the dashboard, integration mirroring, import — goes through this
+    // one env.DB, so guarding it here is the single choke point: a write that
+    // fails because entries_fts is missing or broken repairs it and retries
+    // once instead of 500ing (see src/db/fts-write-guard.ts).
+    const env = withFtsWriteGuard(rawEnv);
     const url = new URL(req.url);
     if (url.pathname === "/oauth/register" && req.method === "POST") {
       const augmented = await augmentOAuthRegistrationRequest(req);
@@ -52,7 +59,8 @@ export default {
     }
     return oauthProvider.fetch(req, env as any, ctx);
   },
-  scheduled: async (event: ScheduledEvent, env: Env, ctx: ExecutionContext) => {
+  scheduled: async (event: ScheduledEvent, rawEnv: Env, ctx: ExecutionContext) => {
+    const env = withFtsWriteGuard(rawEnv);
     // The jobs are independent, and each begins by awaiting the shared schema init. One
     // of them failing — including on that init — must not take the others down or surface
     // as an unhandled rejection inside waitUntil.

@@ -196,6 +196,14 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
 
   const issued: string[] = [];
   const batches: string[][] = [];
+  let savepointCounter = 0;
+  // Serializes batch() bodies on this one synchronous connection. Two batches
+  // started concurrently (Promise.all of two request handlers) would otherwise
+  // interleave their SAVEPOINTs out of the strict LIFO order SQLite requires —
+  // releasing an outer one implicitly releases an inner one still in flight,
+  // and the inner caller's own RELEASE then fails with "no such savepoint".
+  // Chained through .then(f, f) so a rejected batch still lets the next one run.
+  let batchQueue: Promise<void> = Promise.resolve();
 
   return {
     issued,
@@ -232,9 +240,36 @@ export function makeSqliteD1({ schema: applySchema = true }: { schema?: boolean 
           if (typeof wrapped.__inner?.sourceSql === "function") return wrapped.__inner.sourceSql();
           return "[wrapped D1 statement]";
         }));
-        const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
-        for (const statement of statements) out.push(await statement.run());
-        return out;
+        // Real D1 documents batch() as one transaction: a failure partway through
+        // leaves no statement's effect behind. Without an explicit transaction here,
+        // node:sqlite commits each statement.run() as it goes, so a caller that
+        // retries a whole failed batch (the entries_fts write-path repair) would
+        // re-apply statements that already landed and hit spurious constraint
+        // errors that could never happen against real D1.
+        //
+        // A SAVEPOINT rather than BEGIN/COMMIT: this facade is one shared
+        // synchronous connection, and some callers run two logical requests
+        // concurrently (Promise.all of two handlers, each batching); BEGIN
+        // would fail the second with "cannot start a transaction within a
+        // transaction". Serialized via batchQueue (above) so two SAVEPOINTs
+        // never nest out of LIFO order in the first place.
+        const runBatch = async () => {
+          const sp = `sqlite_d1_batch_${savepointCounter++}`;
+          raw.exec(`SAVEPOINT ${sp}`);
+          try {
+            const out: { results?: unknown[]; success: true; meta: { rows_written: number } }[] = [];
+            for (const statement of statements) out.push(await statement.run());
+            raw.exec(`RELEASE ${sp}`);
+            return out;
+          } catch (e) {
+            raw.exec(`ROLLBACK TO ${sp}`);
+            raw.exec(`RELEASE ${sp}`);
+            throw e;
+          }
+        };
+        const result = batchQueue.then(runBatch, runBatch);
+        batchQueue = result.then(() => undefined, () => undefined);
+        return result;
       },
     },
     columns() {
