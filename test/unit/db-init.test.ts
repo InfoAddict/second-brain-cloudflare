@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
+import { hashToken, resolveIdentityFromToken } from "../../src/lib/identity";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
@@ -1006,11 +1007,18 @@ describe("initializeDatabase against real SQLite", () => {
       expect(await kv.get(FTS_BACKFILL_CURSOR_KV_KEY)).toBe("0");
     });
 
-    // Test 5 (v2.2 review, init-memo-kv-recovery): a deferred creation must
-    // leave initializeDatabase retryable, not silently memoized as done —
-    // the OLD (v2.1) behavior left a populated brain without FTS forever,
-    // even after KV recovered, because the first call still resolved.
-    it("populated brain, KV failing: defers creation and leaves init retryable", async () => {
+    // Test 5 (v2.2 review, init-memo-kv-recovery) + B1 (v2.2 re-review,
+    // BLOCKER): a deferred creation must leave initializeDatabase retryable,
+    // not silently memoized as done — the OLD (v2.1) behavior left a
+    // populated brain without FTS forever, even after KV recovered, because
+    // the first call still resolved. But rejecting (the FIRST fix) was
+    // itself wrong: initializeDatabase is awaited by authentication and
+    // every other caller (src/lib/identity.ts etc.), so a populated brain
+    // with a missing entries_fts and KV down would fail EVERY authenticated
+    // request — exactly the upgrade-time state every existing brain hits.
+    // Deferral must be NON-FATAL: the call resolves so the request proceeds
+    // (recall uses LIKE, saves work), but is not memoized as fully done.
+    it("populated brain, KV failing: resolves (non-fatal), and a later call retries the deferred creation", async () => {
       d1 = makeSqliteD1(); // schema.sql applied: `entries` already exists
       await d1.db.exec(
         `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
@@ -1022,13 +1030,42 @@ describe("initializeDatabase against real SQLite", () => {
         delete: async () => { throw new Error("KV unavailable"); },
       } as unknown as KVNamespace;
 
-      await expect(initializeDatabase(envWithKv(d1, kv))).rejects.toThrow(/FTS creation deferred/);
+      await expect(initializeDatabase(envWithKv(d1, kv))).resolves.toBeUndefined();
       expect(await ftsObjectNames(d1)).toEqual([]);
 
-      // No resetDatabaseInit(): the rejection above must already have
-      // cleared the memo itself, or this second call would be a no-op.
+      // No resetDatabaseInit(): the first call above must already have left
+      // the memo retryable itself, or this second call would be a no-op.
       await initializeDatabase(envWithKv(d1, makeMemoryKV()));
       expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
+    });
+
+    // B1's exact reviewer scenario: an authenticated request against a
+    // populated, pre-upgrade brain (entries_fts missing) with KV down.
+    it("B1: authentication succeeds through a deferred FTS creation with KV down", async () => {
+      d1 = makeSqliteD1();
+      await d1.db.exec(
+        `DROP TRIGGER IF EXISTS entries_fts_insert; DROP TRIGGER IF EXISTS entries_fts_update;` +
+        `DROP TRIGGER IF EXISTS entries_fts_delete; DROP TABLE IF EXISTS entries_fts;`,
+      );
+      await d1.db.prepare(
+        `INSERT INTO users (id, name, role, token_hash, created_at) VALUES ('u1', 'Owner', 'admin', ?, 1)`,
+      ).bind(await hashToken("test-token")).run();
+      await d1.db.prepare(
+        `INSERT INTO workspaces (id, kind, name, created_at) VALUES ('w1', 'personal', 'Owner', 1)`,
+      ).run();
+      await d1.db.prepare(
+        `INSERT INTO memberships (user_id, workspace_id, role, created_at) VALUES ('u1', 'w1', 'admin', 1)`,
+      ).run();
+      const kv = {
+        get: async () => null,
+        put: async () => { throw new Error("KV unavailable"); },
+        delete: async () => { throw new Error("KV unavailable"); },
+      } as unknown as KVNamespace;
+
+      const identity = await resolveIdentityFromToken("test-token", envWithKv(d1, kv));
+
+      expect(identity?.userId).toBe("u1");
+      expect(await ftsObjectNames(d1)).toEqual([]); // still deferred — but the request succeeded
     });
 
     // Fresh-brain exemption: `entries` did not exist before this pass, so

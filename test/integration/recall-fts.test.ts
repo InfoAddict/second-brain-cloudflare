@@ -210,6 +210,59 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(res.matches.map(m => m.id)).toContain("new");
   });
 
+  // S1 (v2.2 re-review): a trigger present under the RIGHT name but with a
+  // wrong (tampered/drifted) body still "exists" — a names-only liveness
+  // check would call this live, and the MATCH query would still run
+  // successfully (poisoned content is still content), silently serving an
+  // index that stopped syncing correctly. The trigger's exact body — not
+  // just its name — is what the liveness check now compares.
+  it("wrong-body trigger: right name, tampered body — recall discards FTS rows and uses LIKE", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    sqlite.seed({ id: "old", content: "old searchable", createdAt: 1000 });
+    await sqlite.db.exec("DROP TRIGGER entries_fts_insert");
+    await sqlite.db.exec(
+      `CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN
+         INSERT INTO entries_fts (rowid,id,content) VALUES (NEW.rowid,NEW.id,'poisoned');
+       END`,
+    );
+    sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at) VALUES ('new','new searchable','[]','api',1)`,
+    ).run();
+
+    const diagnostics: RecallDiagnostics = {};
+    const res = await recallEntries({ query: "searchable", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(res.matches.map(m => m.id)).toEqual(expect.arrayContaining(["old", "new"]));
+  });
+
+  // S1: an ordinary table named entries_fts, with correctly-NAMED triggers,
+  // still fools a names-only liveness count (4 objects, right names) — the
+  // definition check now catches it directly (wrong table body), and even
+  // if it did not, MATCH against a non-fts5 table throws and the existing
+  // catch falls back to LIKE regardless.
+  it("ordinary table plus named triggers: liveness rejects it on definition, MATCH would have failed anyway", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    await sqlite.db.exec(
+      "DROP TRIGGER entries_fts_insert; DROP TRIGGER entries_fts_update; DROP TRIGGER entries_fts_delete; DROP TABLE entries_fts;",
+    );
+    await sqlite.db.exec(`CREATE TABLE entries_fts (id TEXT, content TEXT)`);
+    await sqlite.db.exec(`CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN INSERT INTO entries_fts VALUES (NEW.id,NEW.content); END`);
+    await sqlite.db.exec(`CREATE TRIGGER entries_fts_update AFTER UPDATE ON entries BEGIN SELECT 1; END`);
+    await sqlite.db.exec(`CREATE TRIGGER entries_fts_delete AFTER DELETE ON entries BEGIN SELECT 1; END`);
+    sqlite.db.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at) VALUES ('ordinary','ordinary searchable','[]','api',1)`,
+    ).run();
+
+    const diagnostics: RecallDiagnostics = {};
+    const res = await recallEntries({ query: "searchable", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsUsed).toBe(false);
+    expect(res.matches.map(m => m.id)).toContain("ordinary");
+  });
+
   it("keys the FTS join on rowid as well as id", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();

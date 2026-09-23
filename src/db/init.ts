@@ -14,15 +14,28 @@ let initPromise: Promise<void> | null = null;
 
 export async function initializeDatabase(env: Env): Promise<void> {
   if (!initPromise) {
-    initPromise = applySchema(env).catch((e) => {
-      // The memo keys on SUCCESS, not on completion. Clearing it here is what makes a
-      // failed or half-applied schema retryable: latching a resolved promise would leave
-      // every later caller in this isolate doing nothing against a database that was
-      // never migrated. Before memoisation each nightly job re-ran the DDL and repaired
-      // the previous one's transient failure; this preserves that.
-      initPromise = null;
-      throw e;
-    });
+    initPromise = applySchema(env).then(
+      (ftsDeferred) => {
+        // The memo keys on FULLY DONE, not on completion. FTS creation can
+        // defer non-fatally (a populated brain whose ready-flag/cursor
+        // invalidation KV calls failed — see applySchema) — the request
+        // this call is part of must still proceed (auth, saves, and every
+        // other awaited caller), so this resolves either way. But a
+        // deferred pass is not memoized as done, or a populated brain stuck
+        // behind a KV outage would go without FTS forever, even after KV
+        // recovers, because no later call would ever retry the creation.
+        if (ftsDeferred) initPromise = null;
+      },
+      (e) => {
+        // The memo keys on SUCCESS, not on completion. Clearing it here is what makes a
+        // failed or half-applied schema retryable: latching a resolved promise would leave
+        // every later caller in this isolate doing nothing against a database that was
+        // never migrated. Before memoisation each nightly job re-ran the DDL and repaired
+        // the previous one's transient failure; this preserves that.
+        initPromise = null;
+        throw e;
+      },
+    );
   }
   return initPromise;
 }
@@ -488,7 +501,12 @@ function isTableAlreadyExists(e: unknown): boolean {
   return /table entries_fts already exists/i.test(String((e as { message?: string })?.message ?? e));
 }
 
-async function applySchema(env: Env): Promise<void> {
+/**
+ * Applies the schema. Returns whether FTS creation was deferred — see
+ * initializeDatabase, which uses that to decide whether this pass may be
+ * memoized as fully done.
+ */
+async function applySchema(env: Env): Promise<boolean> {
   const existing = await probeSchema(env);
 
   for (const [name, ddl] of Object.entries(SCHEMA_OBJECTS)) {
@@ -508,32 +526,47 @@ async function applySchema(env: Env): Promise<void> {
   // Populated-brain creation rule: creating the table on a brain whose
   // `entries` already existed must first invalidate the ready flag and reset
   // the backfill cursor, so a freshly created but not-yet-backfilled index
-  // is never served as ready. If that invalidation fails, DEFER: do not
-  // create the table this pass, and do not resolve this pass as successful
-  // either — throwing here clears initializeDatabase's memo (see its own
-  // comment), so the very next call retries from scratch rather than
-  // silently going without FTS forever. A brand-new brain (entries did not
-  // exist before this pass) is exempt: nothing to invalidate, and the
-  // triggers cover it from row one (see the fresh-brain ready latch below).
+  // is never served as ready. If that invalidation fails, DEFER — do not
+  // create the table this pass — and report it (return true) so
+  // initializeDatabase knows not to memoize this pass as fully done and
+  // retries the creation on the next call.
+  //
+  // Deferral must be NON-FATAL (B1, v2.2 re-review, BLOCKER): throwing here
+  // used to reject initializeDatabase itself, which authentication and every
+  // other caller await — on a populated brain with entries_fts missing and
+  // KV down (every existing brain's first request after this upgrade),
+  // EVERY authenticated request would fail. Recall falls back to LIKE and
+  // saves proceed with no FTS sync regardless; deferring only postpones
+  // when the index catches up, never blocks the request it happened inside.
+  // A brand-new brain (entries did not exist before this pass) is exempt
+  // from all of this: nothing to invalidate, and the triggers cover it from
+  // row one (see the fresh-brain ready latch below).
+  let ftsDeferred = false;
   if (existing?.objects.get("entries_fts") !== "table") {
     const entriesPreexisted = existing !== null && existing.objects.get("entries") === "table";
+    let kvOk = true;
     if (entriesPreexisted) {
       try {
         await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
         await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
       } catch (e) {
-        throw new Error("FTS creation deferred: ready-flag/cursor invalidation failed on a populated brain; retry next pass", { cause: e });
+        kvOk = false;
+        console.error("FTS creation deferred (non-fatal): ready-flag/cursor invalidation failed on a populated brain; will retry next call:", e);
       }
     }
-    try {
-      await env.DB.batch([
-        env.DB.prepare(ENTRIES_FTS_TABLE_DDL),
-        env.DB.prepare(ENTRIES_FTS_INSERT_TRIGGER_DDL),
-        env.DB.prepare(ENTRIES_FTS_UPDATE_TRIGGER_DDL),
-        env.DB.prepare(ENTRIES_FTS_DELETE_TRIGGER_DDL),
-      ]);
-    } catch (e) {
-      if (!isTableAlreadyExists(e)) throw e;
+    if (!kvOk) {
+      ftsDeferred = true;
+    } else {
+      try {
+        await env.DB.batch([
+          env.DB.prepare(ENTRIES_FTS_TABLE_DDL),
+          env.DB.prepare(ENTRIES_FTS_INSERT_TRIGGER_DDL),
+          env.DB.prepare(ENTRIES_FTS_UPDATE_TRIGGER_DDL),
+          env.DB.prepare(ENTRIES_FTS_DELETE_TRIGGER_DDL),
+        ]);
+      } catch (e) {
+        if (!isTableAlreadyExists(e)) throw e;
+      }
     }
   }
 
@@ -641,4 +674,6 @@ async function applySchema(env: Env): Promise<void> {
       console.error("FTS ready latch failed (non-fatal):", e);
     }
   }
+
+  return ftsDeferred;
 }

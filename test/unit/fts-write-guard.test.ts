@@ -304,6 +304,70 @@ describe("withFtsWriteGuard", () => {
       expect(triggers).toEqual([]);
     } finally { s.close(); }
   });
+
+  // M2 (v2.2 re-review): kills the "restore CREATE VIRTUAL TABLE IF NOT
+  // EXISTS" mutant, which survived the whole shipped suite. A stale
+  // MISSING-table startup snapshot, then real recovery (someone else
+  // creates the table+triggers), then a save drops one trigger (the
+  // hot-path corruption branch), then the stale cold start FINALLY runs its
+  // own creation batch. With the table DDL's atomicity intact, that batch's
+  // CREATE VIRTUAL TABLE fails ("table already exists") and the WHOLE batch
+  // rolls back, so the just-dropped trigger stays dropped. With IF NOT
+  // EXISTS restored, the table statement would silently no-op instead of
+  // failing, the batch would continue, and the trigger CREATE (already
+  // "IF NOT EXISTS") would re-arm exactly the trigger the save just removed.
+  it("MUTATION-KILLER: a stale missing-table snapshot cannot re-arm a trigger dropped after real recovery", async () => {
+    const s = makeSqliteD1();
+    try {
+      const kv = makeMemoryKV();
+      resetDatabaseInit();
+      await initializeDatabase(makeTestEnv(undefined, { DB: s.db as unknown as D1Database, OAUTH_KV: kv }));
+      await s.db.exec(
+        "DROP TRIGGER entries_fts_insert; DROP TRIGGER entries_fts_update;" +
+        "DROP TRIGGER entries_fts_delete; DROP TABLE entries_fts;",
+      );
+
+      // A cold start's own probe snapshot, taken while the table is
+      // genuinely missing, paused right after so the events below can play
+      // out first.
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let snapshotTaken!: () => void;
+      const snapped = new Promise<void>(resolve => { snapshotTaken = resolve; });
+      const coldDb = {
+        prepare(sql: string) {
+          const raw = s.db.prepare(sql);
+          if (!sql.startsWith("SELECT type AS kind, name")) return raw;
+          return { all: async () => { const result = await raw.all(); snapshotTaken(); await gate; return result; } };
+        },
+        exec: s.db.exec.bind(s.db),
+        batch: s.db.batch.bind(s.db),
+      } as unknown as D1Database;
+      resetDatabaseInit();
+      const cold = initializeDatabase(makeTestEnv(undefined, { DB: coldDb, OAUTH_KV: kv }));
+      await snapped;
+
+      // Real recovery: someone else (a normal repair) creates the table and
+      // all three triggers for real, while the cold start is still paused.
+      const actual = await vi.importActual<typeof import("../../src/db/fts-repair")>("../../src/db/fts-repair");
+      await actual.repairFtsIndex(
+        makeTestEnv(undefined, { DB: s.db as unknown as D1Database, OAUTH_KV: kv }),
+        new Error("no such table: entries_fts"),
+      );
+      // Then a save's hot-path corruption repair drops one trigger.
+      await s.db.exec("DROP TRIGGER entries_fts_insert");
+
+      // Now let the stale cold start resume and run ITS OWN creation batch,
+      // still believing (from its snapshot) that the table is missing.
+      release();
+      await cold;
+
+      const triggers = (await s.db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='trigger' AND name = 'entries_fts_insert'`,
+      ).all() as { results: unknown[] }).results;
+      expect(triggers).toEqual([]); // must stay dropped — not re-armed
+    } finally { s.close(); }
+  });
 });
 
 describe("ENTRIES_WRITE_SQL classifier (table-driven)", () => {

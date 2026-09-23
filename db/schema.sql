@@ -266,24 +266,30 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscription
 -- with src/db/init.ts.
 CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
 
+-- Indentation below must match src/db/init.ts's ENTRIES_FTS_*_TRIGGER_DDL
+-- constants EXACTLY: SQLite stores a CREATE statement's body verbatim in
+-- sqlite_master.sql (only "IF NOT EXISTS" is stripped), and the v2.2
+-- liveness check (src/recall/fts.ts) compares that stored text against
+-- those same constants byte-for-byte. A brain bootstrapped from this file
+-- must read as live, not just one bootstrapped by applySchema.
 CREATE TRIGGER IF NOT EXISTS entries_fts_insert
-AFTER INSERT ON entries
-BEGIN
-  INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
-END;
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END;
 
 -- The update trigger fires on every UPDATE; its WHEN guard covers exactly the
 -- columns FTS mirrors, so recall's recall_count bumps write nothing here.
 CREATE TRIGGER IF NOT EXISTS entries_fts_update
-AFTER UPDATE ON entries
-WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
-BEGIN
-  DELETE FROM entries_fts WHERE rowid = OLD.rowid;
-  INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
-END;
+    AFTER UPDATE ON entries
+    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END;
 
 CREATE TRIGGER IF NOT EXISTS entries_fts_delete
-AFTER DELETE ON entries
-BEGIN
-  DELETE FROM entries_fts WHERE rowid = OLD.rowid;
-END;
+    AFTER DELETE ON entries
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+    END;

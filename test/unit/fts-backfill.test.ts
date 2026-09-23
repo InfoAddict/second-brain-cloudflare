@@ -68,7 +68,7 @@ describe("runFtsBackfill", () => {
     expect(await shadowOf(d1)).toEqual(await sourceOf(d1));
   });
 
-  it("no-ops once the ready flag is set", async () => {
+  it("no-ops once the ready flag is set on a live index", async () => {
     seed(d1, 3);
     await emptyFts(d1);
     const env = envFor(d1);
@@ -76,8 +76,28 @@ describe("runFtsBackfill", () => {
     d1.issued.length = 0;
 
     expect(await runFtsBackfill(env)).toEqual({ indexed: 0, done: true });
-    expect(d1.issued).toEqual([]);
+    // Liveness (M1: checked FIRST, before the ready flag) costs one D1
+    // statement even on the healthy fast path — the price of never trusting
+    // a flag that a hot-path repair can leave stale with no KV write at all.
+    expect(d1.issued).toHaveLength(1);
     expect(await ftsCount(d1)).toEqual({ n: 0 });
+  });
+
+  // M1 (v2.2 re-review): the OLD order checked ready BEFORE liveness, so a
+  // stale ready="1" left behind by a hot-path repair (which never touches
+  // KV) made the backfill report {done:true} without ever looking at the
+  // index — exactly the "disabled but marked ready" state the liveness
+  // check exists to catch everywhere else.
+  it("checks liveness before the ready flag: a disabled index is not done, even with ready=1", async () => {
+    const env = envFor(d1);
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    await d1.db.exec("DROP TRIGGER entries_fts_insert");
+    const before = d1.issued.length;
+
+    const result = await runFtsBackfill(env);
+
+    expect(result).toEqual({ indexed: 0, done: false });
+    expect(d1.issued.slice(before)).toHaveLength(1); // liveness only — never reached the ready GET
   });
 
   it("indexes every entry exactly once after a repair reset the cursor", async () => {

@@ -407,13 +407,6 @@ export class D1Mock {
         return { meta: {} };
       },
       async first() {
-        // src/recall/fts.ts's FTS_LIVENESS_SQL (write-path isolation v2.2):
-        // this mock represents a migrated, healthy brain (SCHEMA_PROBE_RESULTS
-        // above already lists entries_fts and all three of its triggers), so
-        // the honest answer is "live" — the count of all four.
-        if (s.includes("FROM sqlite_master") && s.includes("entries_fts_insert") && s.includes("count(*)")) {
-          return { n: 4 };
-        }
         // ── ensureTenantBootstrap / resolveIdentity (tenancy) ──
         if (s.startsWith("SELECT id FROM workspaces WHERE kind")) {
           const kind = s.match(/kind = '(\w+)'/)?.[1];
@@ -543,6 +536,23 @@ export class D1Mock {
         return null;
       },
       async all() {
+        // src/recall/fts.ts's FTS_LIVENESS_SQL (write-path isolation v2.2,
+        // S1): this mock represents a migrated, healthy brain, so the
+        // honest answer is all four objects present with their exact
+        // stored definitions — the same TRIGGER_DDL text already used for
+        // SCHEMA_PROBE_RESULTS below, with "IF NOT EXISTS" stripped the way
+        // SQLite itself strips it from sqlite_master.sql.
+        if (s.startsWith("SELECT name, sql FROM sqlite_master")) {
+          return {
+            results: [
+              { name: "entries_fts", sql: `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')` },
+              ...["entries_fts_insert", "entries_fts_update", "entries_fts_delete"].map(name => ({
+                name,
+                sql: TRIGGER_DDL.get(name)!.replace(/\bIF NOT EXISTS\s+/i, ""),
+              })),
+            ],
+          };
+        }
         if (s.startsWith("SELECT type AS kind, name, sql AS definition FROM sqlite_master")) {
           // src/db/init.ts's schema probe. This mock stands in for a deployed brain, and
           // a deployed brain is migrated — its rows carry every ALTER column below — so

@@ -8,19 +8,21 @@ import { isFtsLive } from "../recall/fts";
 // CONFLICT). Keyed on entries.rowid — the same rowid the triggers mirror.
 // Batch size bounds FTS shadow-row writes against the 100k/day cap.
 export async function runFtsBackfill(env: Env): Promise<{ indexed: number; done: boolean }> {
-  if ((await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1") return { indexed: 0, done: true };
   // Write-path isolation v2.2 INVARIANT: FTS is live only if entries_fts
-  // exists AND all three sync triggers exist. A hot-path repair can leave it
-  // not live (table missing, or a trigger dropped) with no KV write at all.
-  // Only rebuildFtsIndex (Task 5, nightly) may recreate it. Without this
-  // check the DELETE+INSERT batch below would throw "no such table:
-  // entries_fts" into src/index.ts's catch every night (or, on a night with
-  // no backlog rows, worse: latch ready="1" over an index that is not live).
-  // Skip cleanly and log once instead.
+  // exists AND all three sync triggers exist, with their exact bodies.
+  // Checked FIRST (M1, v2.2 re-review) — a hot-path repair can leave the
+  // index not live (table missing, a trigger dropped, or a stale body) with
+  // no KV write at all, so a stale ready="1" left over from before that
+  // repair must never short-circuit past this. Only rebuildFtsIndex (Task 5,
+  // nightly) may recreate it. Without this check the DELETE+INSERT batch
+  // below would throw "no such table: entries_fts" into src/index.ts's
+  // catch every night (or, on a night with no backlog rows, worse: latch
+  // ready="1" over an index that is not live). Skip cleanly and log once.
   if (!(await isFtsLive(env))) {
-    console.error("FTS backfill skipped: entries_fts is not live (missing table or a sync trigger), waiting for the nightly rebuild");
+    console.error("FTS backfill skipped: entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body), waiting for the nightly rebuild");
     return { indexed: 0, done: false };
   }
+  if ((await env.OAUTH_KV.get(FTS_READY_KV_KEY)) === "1") return { indexed: 0, done: true };
   const cursor = Number(await env.OAUTH_KV.get(FTS_BACKFILL_CURSOR_KV_KEY) ?? "0");
   // scope-exempt: cron: nightly backfill keyed on rowid — rowids are unravelled
   // throughout (schema comment on similar.) so there is no workspace scope to

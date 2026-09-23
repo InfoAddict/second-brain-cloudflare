@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { FTS_LIVENESS_SQL, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveCount, resetFtsReadyMemo } from "../../src/recall/fts";
+import { FTS_LIVENESS_SQL, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveRows, resetFtsReadyMemo } from "../../src/recall/fts";
 import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
 import { tokenizeQuery } from "../../src/text/tokenize";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -106,14 +106,23 @@ describe("ftsReady", () => {
   });
 });
 
-describe("isFtsLiveCount / isFtsLive — write-path isolation v2.2 invariant", () => {
-  it("is live only when the count is exactly 4 (table plus all three triggers)", () => {
-    expect(isFtsLiveCount({ n: 4 })).toBe(true);
-    expect(isFtsLiveCount({ n: 0 })).toBe(false);
-    expect(isFtsLiveCount({ n: 1 })).toBe(false);
-    expect(isFtsLiveCount({ n: 3 })).toBe(false);
-    expect(isFtsLiveCount(null)).toBe(false);
-    expect(isFtsLiveCount(undefined)).toBe(false);
+describe("isFtsLiveRows / isFtsLive — write-path isolation v2.2 invariant", () => {
+  // S1 (v2.2 re-review): names alone are not enough — an ordinary table or a
+  // right-named, wrong-body trigger must read as NOT live. Definition
+  // matching is also the upgrade path for a future release that changes a
+  // trigger body: the old body reads as not-live and gets rebuilt nightly.
+  it("is live only when all four rows are present with their exact DDL text", () => {
+    const table = { name: "entries_fts", sql: `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')` };
+    const insert = { name: "entries_fts_insert", sql: `CREATE TRIGGER entries_fts_insert\n    AFTER INSERT ON entries\n    BEGIN\n      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);\n    END` };
+    const update = { name: "entries_fts_update", sql: `CREATE TRIGGER entries_fts_update\n    AFTER UPDATE ON entries\n    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content\n    BEGIN\n      DELETE FROM entries_fts WHERE rowid = OLD.rowid;\n      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);\n    END` };
+    const del = { name: "entries_fts_delete", sql: `CREATE TRIGGER entries_fts_delete\n    AFTER DELETE ON entries\n    BEGIN\n      DELETE FROM entries_fts WHERE rowid = OLD.rowid;\n    END` };
+    expect(isFtsLiveRows([table, insert, update, del])).toBe(true);
+    expect(isFtsLiveRows([table, insert, update])).toBe(false); // one missing
+    expect(isFtsLiveRows([table, { ...insert, sql: "CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN SELECT 1; END" }, update, del])).toBe(false); // right name, wrong body
+    expect(isFtsLiveRows([{ ...table, sql: "CREATE TABLE entries_fts (id TEXT, content TEXT)" }, insert, update, del])).toBe(false); // ordinary table, not fts5
+    expect(isFtsLiveRows(null)).toBe(false);
+    expect(isFtsLiveRows(undefined)).toBe(false);
+    expect(isFtsLiveRows([])).toBe(false);
   });
 
   let d1: SqliteD1;
@@ -137,6 +146,36 @@ describe("isFtsLiveCount / isFtsLive — write-path isolation v2.2 invariant", (
   it("reports not live when the table itself is missing", async () => {
     d1 = makeSqliteD1();
     await d1.db.exec("DROP TABLE entries_fts");
+    const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
+
+    expect(await isFtsLive(env)).toBe(false);
+  });
+
+  // S1: a trigger that exists under the right name but with a body that
+  // does not match what we would have created must read as not live, even
+  // though the old (names-only) liveness check would have missed it.
+  it("reports not live when a trigger's body does not match what we create (right name, wrong body)", async () => {
+    d1 = makeSqliteD1();
+    await d1.db.exec("DROP TRIGGER entries_fts_insert");
+    await d1.db.exec(
+      `CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN
+         INSERT INTO entries_fts (rowid,id,content) VALUES (NEW.rowid,NEW.id,'poisoned');
+       END`,
+    );
+    const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
+
+    expect(await isFtsLive(env)).toBe(false);
+  });
+
+  it("reports not live for an ordinary table named entries_fts, even with correctly-named triggers", async () => {
+    d1 = makeSqliteD1();
+    await d1.db.exec(
+      "DROP TRIGGER entries_fts_insert; DROP TRIGGER entries_fts_update; DROP TRIGGER entries_fts_delete; DROP TABLE entries_fts;",
+    );
+    await d1.db.exec(`CREATE TABLE entries_fts (id TEXT, content TEXT)`);
+    await d1.db.exec(`CREATE TRIGGER entries_fts_insert AFTER INSERT ON entries BEGIN INSERT INTO entries_fts VALUES (NEW.id,NEW.content); END`);
+    await d1.db.exec(`CREATE TRIGGER entries_fts_update AFTER UPDATE ON entries BEGIN SELECT 1; END`);
+    await d1.db.exec(`CREATE TRIGGER entries_fts_delete AFTER DELETE ON entries BEGIN SELECT 1; END`);
     const env = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database });
 
     expect(await isFtsLive(env)).toBe(false);

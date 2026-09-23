@@ -34,7 +34,7 @@ import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
-import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveCount } from "./fts";
+import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveRows } from "./fts";
 
 async function keywordSearchLike(
   tokens: string[],
@@ -119,8 +119,8 @@ async function keywordSearchFts(
        ORDER BY bm25(entries_fts) LIMIT ?`
     ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit),
   ]);
-  if (!isFtsLiveCount((livenessResult.results as { n: number }[] | undefined)?.[0])) {
-    throw new Error("entries_fts is not live (missing table or a sync trigger)");
+  if (!isFtsLiveRows(livenessResult.results as { name: string; sql: string | null }[] | undefined)) {
+    throw new Error("entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body)");
   }
   return ftsResult.results as unknown as KeywordRow[];
 }
