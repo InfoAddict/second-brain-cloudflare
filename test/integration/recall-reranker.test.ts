@@ -184,6 +184,41 @@ describe("recall reranker step", () => {
     expect(sent).toEqual(fusedHead); // exactly the fused head: nothing evicted for a "match" on a word half the brain contains
   });
 
+  // 40 dense notes about gardening fill the fused head; `holders` keyword-only notes hold the single term.
+  async function singleTermCorpus(holders: number, others: number, opts: { limit?: number; breakCounts?: boolean } = {}) {
+    const extraVectors = Array.from({ length: 34 }, (_, i) => ({ id: `p${i}`, score: 0.895 - i * 0.001, metadata: { parentId: `p${i}`, created_at: 100 + i } }));
+    const s = await setup({ extraVectors });
+    const text = new Map<string, string>(IDS.map(id => [id, CONTENT[id]]));
+    for (let i = 0; i < 34; i++) { text.set(`p${i}`, `weekly gardening note ${i} about beans`); s.sqlite.seed({ id: `p${i}`, content: text.get(`p${i}`)!, createdAt: 100 + i }); }
+    for (let i = 0; i < holders; i++) { text.set(`h${i}`, `Zorblax report number ${i}, unrelated otherwise.`); s.sqlite.seed({ id: `h${i}`, content: text.get(`h${i}`)!, createdAt: 10 + i }); }
+    for (let i = 0; i < others; i++) s.sqlite.seed({ id: `o${i}`, content: `filler ledger row ${i} with nothing special`, createdAt: 1 });
+    if (opts.breakCounts) {
+      const real = s.env.DB;
+      s.env = { ...s.env, DB: new Proxy(real as object as Record<string, unknown>, { get: (t, k) => k === "prepare" ? (sql: string) => { if (/entry_counts/.test(sql)) throw new Error("entry_counts unavailable"); return (t.prepare as (q: string) => unknown)(sql); } : typeof t[k as string] === "function" ? (t[k as string] as (...a: unknown[]) => unknown).bind(t) : t[k as string] }) as unknown as Env["DB"] };
+    }
+    const off = await recall(s, "off", "zorblax");
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "zorblax", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on", ...(opts.limit && { KEYWORD_CANDIDATE_LIMIT: opts.limit }) }, { diagnostics });
+    await Promise.all(s.deferred);
+    const sent = s.rerankInputs.at(-1)!.contexts.map(c => c.text).sort();
+    const head = (off.diagnostics.candidateIds ?? []).slice(0, 25).map(id => text.get(id)!).sort();
+    return { sent, head, diagnostics };
+  }
+
+  it("a term that fills the keyword window is treated as saturated even when the rows read are a small share of the corpus", async () => {
+    // 60 holders in a 260-note corpus is 23% (under the 0.3 fraction), but the keyword window (50 here) is full, so df is only a lower bound.
+    const r = await singleTermCorpus(60, 160, { limit: 50 });
+    expect(r.sent).toEqual(r.head); // no evidence extras: a common word in a big brain undercounts at the window
+    expect(r.diagnostics.rerankEvidence).toBe("suppressed-saturated");
+  });
+
+  it("a rare single term below the window still earns its seats (the control for the two tests around it)", async () => {
+    const r = await singleTermCorpus(3, 160, { limit: 50 });
+    expect(r.sent).not.toEqual(r.head);
+    expect(r.sent.filter(t => /Zorblax report/.test(t))).toHaveLength(3);
+    expect(r.diagnostics.rerankEvidence).toBeUndefined();
+  });
+
   it("skips exact-identifier queries and too-few candidates", async () => {
     const s = await setup();
     const exact = await recall(s, "on", "release v1.9 launch planning");

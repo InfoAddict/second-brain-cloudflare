@@ -70,6 +70,8 @@ export interface RecallDiagnostics {
   distillSource?: "fts" | "like" | "shortcut";
   /** What the cross-encoder step did on the last recall; "applied" means one model call reordered the candidates. */
   rerankRoute?: RerankRoute;
+  /** Set when single-term keyword evidence was withheld: the term is too common (df over the saturation fraction, or the keyword window filled) or the corpus size was unavailable. */
+  rerankEvidence?: "suppressed-saturated" | "suppressed-no-total";
   /** Wall time of the model call, when one was made. */
   rerankMs?: number;
 }

@@ -538,7 +538,8 @@ export async function recallEntries(
       const outsideHead = holding.some(r => (fusedOrder.get(r.id) ?? Infinity) >= rerankDirectCap(internal.variant?.rerankTuning?.maxCandidates));
       if (!outsideHead) return [];
       const total = await scopedEntryTotal(env, scope);
-      if (total === null || total <= 0 || holding.length >= cfg.KEYWORD_CANDIDATE_LIMIT || holding.length / total > QUERY_SATURATION_FRACTION) return [];
+      if (total === null || total <= 0) { if (internal.diagnostics) internal.diagnostics.rerankEvidence = "suppressed-no-total"; return []; }
+      if (holding.length >= cfg.KEYWORD_CANDIDATE_LIMIT || holding.length / total > QUERY_SATURATION_FRACTION) { if (internal.diagnostics) internal.diagnostics.rerankEvidence = "suppressed-saturated"; return []; }
     }
     return holding.map(r => r.id).sort((a, b) => (fusedOrder.get(a) ?? Infinity) - (fusedOrder.get(b) ?? Infinity));
   };
