@@ -1,4 +1,5 @@
 import { VECTORIZE_TOP_K_MULTIPLIER } from "../constants";
+import { edgeScanBatchSize } from "../graph/traverse";
 import type { EdgeProvenance, EdgeType } from "../graph/types";
 import type { DistilledQuery } from "./distill";
 import { edgeIntentCompatibility, type RecallIntent } from "./query-profile";
@@ -44,14 +45,19 @@ export interface NeighborhoodEvidenceScore {
 }
 
 /**
- * Ceiling on the seeds one recall expands from, whichever arm found them. It is
- * what keeps expandGraph's double-sided edge scan inside a single D1 statement:
- * a batch binds each id twice against D1_MAX_BOUND_PARAMS.
+ * Ceiling on the seeds one recall expands from, whichever arm found them: the
+ * number expandGraph can scan for edges in a single D1 statement.
+ *
+ * It is the edge scan's own batch size, not a constant, because the scan binds
+ * each seed twice and a scoped caller's workspace bindings come out of the same
+ * budget. 50 is right only for an identity-less caller; a member reading their
+ * two workspaces gets 49, and a 50-seed hop would have cost two statements.
  */
-export const GRAPH_SEED_MAX = 50;
+export const graphSeedCeiling = (scopeBindings = 0): number => edgeScanBatchSize(scopeBindings);
 
 /** The dense arm's fetch window, the size this budget has always been. */
-const denseSeedWindow = (topK: number) => Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, GRAPH_SEED_MAX);
+const denseSeedWindow = (topK: number, scopeBindings: number) =>
+  Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, graphSeedCeiling(scopeBindings));
 
 /**
  * The dense arm's graph seats, spent on rows the dense arm returned and on
@@ -65,25 +71,35 @@ const denseSeedWindow = (topK: number) => Math.min(topK * VECTORIZE_TOP_K_MULTIP
  * arm did rank could fall out of the graph entirely. Truncating the dense arm
  * BY ITS OWN RANK is the design; being outbid by the other arm was not.
  */
-export function graphSeedLimit(topK: number, denseCount: number): number {
-  return Math.min(denseCount, denseSeedWindow(topK));
+export function graphSeedLimit(topK: number, denseCount: number, scopeBindings = 0): number {
+  return Math.min(denseCount, denseSeedWindow(topK, scopeBindings));
 }
 
 /**
- * The keyword arm's own graph seats, so it no longer bids for the dense arm's.
+ * The keyword arm's graph seats: an allowance of its own, plus whatever of the
+ * dense arm's window the dense arm did not fill.
  *
- * Deliberately a fraction of the dense window rather than a matching budget:
- * the keyword arm fetches KEYWORD_CANDIDATE_LIMIT rows, far more than anything
- * should expand from, and a row only it returned is a seed on lexical evidence
- * alone. The fraction is the share selectGraphRoots already allots to its
- * lexical view, so lexical evidence keeps about the seats it always had — the
- * dense arm simply stops paying for them.
+ * The allowance is deliberately a fraction of that window rather than a
+ * matching budget: the keyword arm fetches KEYWORD_CANDIDATE_LIMIT rows, far
+ * more than anything should expand from, and a row only it returned is a seed
+ * on lexical evidence alone. The fraction is the share selectGraphRoots already
+ * allots to its lexical view, so lexical evidence keeps about the seats it
+ * always had — the dense arm simply stops paying for them.
+ *
+ * The unused-window term is what keeps a DEGRADED recall whole. With Vectorize
+ * down, with a member whose rows have no vectors, or under the keyword-only
+ * ablation, every root is keyword-only and there is no dense arm to reserve a
+ * window for: on the allowance alone the surviving arm would be seeded from 9
+ * roots at topK 10 where one shared budget seeded 30. The window is reserved
+ * from the keyword arm only while the dense arm is actually using it, so the
+ * TOTAL is the same whichever arm fills it.
  */
-export function lexicalSeedLimit(topK: number, lexicalOnlyCount: number, denseSeats: number): number {
+export function lexicalSeedLimit(topK: number, lexicalOnlyCount: number, denseSeats: number, scopeBindings = 0): number {
+  const window = denseSeedWindow(topK, scopeBindings);
   return Math.max(0, Math.min(
     lexicalOnlyCount,
-    Math.ceil(denseSeedWindow(topK) * VIEW_SHARE.lexical),
-    GRAPH_SEED_MAX - denseSeats,
+    Math.ceil(window * VIEW_SHARE.lexical) + (window - denseSeats),
+    graphSeedCeiling(scopeBindings) - denseSeats,
   ));
 }
 

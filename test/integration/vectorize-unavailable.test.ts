@@ -8,6 +8,8 @@ import { buildMcpServer } from "../../src/mcp/server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { VECTORIZE_GET_BY_IDS_BATCH } from "../../src/constants";
+import { recallEntries } from "../../src/recall/search";
+import type { RecallDiagnostics } from "../../src/recall/types";
 
 function makeCtx() {
   const pending: Promise<any>[] = [];
@@ -97,6 +99,29 @@ describe("Vectorize unavailable — writes degrade to keyword-only (#270)", () =
         expect(body.ok).toBe(true);
         expect(body.results.length).toBeGreaterThan(0);
       });
+    });
+  }
+
+  // The graph seed budget is split per arm (T-0083.6). With Vectorize gone there is
+  // no dense arm to reserve a window for, so the keyword arm has to be allowed to
+  // use it: the arm that is still working must not be seeded more thinly than it
+  // was when both were. At topK 5 that is 15 window + ceil(15 * 0.3) = 20 seats.
+  for (const [label, overrides] of UNAVAILABLE) {
+    it(`seeds the graph from the whole budget when the dense arm is gone — ${label}`, async () => {
+      for (let i = 0; i < 40; i++) await seed(db, `quartz ledger note ${i}`);
+      const env = makeTestEnv(db, overrides());
+      const { ctx, drain } = makeCtx();
+      const diagnostics: RecallDiagnostics = {};
+
+      const result = await recallEntries(
+        { query: "quartz ledger", topK: 5, hops: 1, synthesize: false }, env, ctx, undefined, { diagnostics },
+      );
+      await drain();
+
+      expect(result.semanticUnavailable).toBe(true);
+      expect(diagnostics.rootSelections?.length).toBe(20);
+      // Every seat went to the arm that is still answering.
+      expect(diagnostics.rootSelections?.every(r => (diagnostics.keywordIds ?? []).includes(r.id))).toBe(true);
     });
   }
 

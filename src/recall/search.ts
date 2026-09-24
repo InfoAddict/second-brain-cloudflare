@@ -544,13 +544,23 @@ export async function recallEntries(
     });
     // One selection per arm, against that arm's own budget: a row the dense arm
     // never returned has no semantic rank, so it cannot take a seat — or a seat
-    // in the "semantic" view — from a row that does.
+    // in the "semantic" view — from a row that does. The keyword arm still gets
+    // the window back when the dense arm does not fill it (lexicalSeedLimit), so
+    // a recall with Vectorize down is seeded from as many roots as a healthy one.
+    //
+    // The second pass labels its picks with the same RootView names, so a
+    // keyword-only row can be tagged selectedBy "semantic" — it topped its own
+    // partition's rootScore order, which for these rows IS the keyword order.
+    // Nothing reads the label as proof of a dense rank: the one consumer,
+    // chooseEvidenceSlot's semantic branch, tests semanticRank !== undefined as
+    // well, which no row in this partition has.
     const denseRoots = rootCandidates.filter(root => root.semanticRank !== undefined);
     const lexicalRoots = rootCandidates.filter(root => root.semanticRank === undefined);
-    const denseSeats = graphSeedLimit(topK, denseRoots.length);
+    const scopeBindings = scope?.bindings.length ?? 0;
+    const denseSeats = graphSeedLimit(topK, denseRoots.length, scopeBindings);
     selectedRoots = [
       ...selectGraphRoots(denseRoots, denseSeats, cfg.MMR_LAMBDA),
-      ...selectGraphRoots(lexicalRoots, lexicalSeedLimit(topK, lexicalRoots.length, denseSeats), cfg.MMR_LAMBDA),
+      ...selectGraphRoots(lexicalRoots, lexicalSeedLimit(topK, lexicalRoots.length, denseSeats, scopeBindings), cfg.MMR_LAMBDA),
     ];
   }
   const graphSeedIds = selectedRoots.map(x => x.candidate.parentId);

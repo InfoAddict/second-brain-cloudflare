@@ -85,6 +85,9 @@ const exprDepth = (sql: string) => sql.split(/\s+OR\s+/i).length + 1;
 const keywordStatements = (executed: Executed[]) =>
   executed.filter(e => /FROM entries WHERE \(?content LIKE/.test(e.sql));
 
+const edgeScanStatements = (executed: Executed[]) =>
+  executed.filter(e => /FROM edges WHERE/.test(e.sql));
+
 const hydrationStatements = (executed: Executed[]) =>
   executed.filter(e => e.sql.includes("created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN"));
 
@@ -303,6 +306,38 @@ describe("recall stays inside D1's statement limits", () => {
       expect(hydration.every(h => h.params.includes('%"work"%'))).toBe(true);
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
       expect(executed.length).toBeLessThanOrEqual(30);
+    });
+
+    // expandGraph's edge scan binds every seed TWICE (source_id IN (…) OR target_id
+    // IN (…)), and a scoped caller's workspace bindings come out of the same budget.
+    // A ceiling of 50 is only right for an identity-less caller: scoped, the batch is
+    // floor((100 - bindings) / 2), so a 50-seed hop split into two statements.
+    it("keeps a scoped hop's seeds inside one edge-scan statement", async () => {
+      const identity = {
+        userId: "u-1", role: "member" as const,
+        personalWorkspaceId: "ws-personal", companyWorkspaceIds: ["ws-company"], defaultShare: "" as const,
+      };
+      const ids = Array.from({ length: 60 }, (_, i) => `root-${i}`);
+      for (const [i, id] of ids.entries()) {
+        sqlite.seed({ id, content: `topic0 decision root ${i}`, createdAt: 1000 + i });
+        await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-personal", id).run();
+      }
+      const env = envWith(undefined, {
+        VECTORIZE: makeVectorizeMock({
+          query: vi.fn().mockResolvedValue({
+            matches: ids.map((id, i) => ({ id, score: 1 - i / 200, metadata: { parentId: id, created_at: 1000 + i } })),
+          }),
+        }),
+      });
+
+      executed.length = 0;
+      await recallEntries(
+        { query: "topic0", topK: 20, hops: 1, synthesize: false }, env, ctx, undefined, { identity },
+      );
+
+      const edges = edgeScanStatements(executed);
+      expect(edges).toHaveLength(1);
+      expect(Math.max(...edges.map(e => e.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
   });
 });

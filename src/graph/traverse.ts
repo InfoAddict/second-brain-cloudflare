@@ -86,9 +86,15 @@ export const GRAPH_VIEW_MAX_NODES = 1500;
  */
 const MACHINE_AUTHORED_TAGS = new Set(["auto-pattern", "auto-insight", "synthesized"]);
 export const GRAPH_HOP_DECAY = 0.6;
-// Edge-fetch batches bind each id twice (source and target), so a batch's real
-// cost is 2 ids + any scope bindings against D1_MAX_BOUND_PARAMS — computed at
-// each loop rather than as a fixed constant, because scoping changes the budget.
+/**
+ * Ids one edge-fetch batch can carry. Each binds TWICE (source_id IN (…) OR
+ * target_id IN (…)), and a scoped caller's workspace bindings come out of the
+ * same D1_MAX_BOUND_PARAMS budget, so scoping shrinks it. Exported because it
+ * is also the ceiling on how many seeds recall may hand this function before a
+ * hop costs two statements instead of one (src/recall/neighborhood.ts).
+ */
+export const edgeScanBatchSize = (scopeBindings: number): number =>
+  Math.max(1, Math.floor((D1_MAX_BOUND_PARAMS - scopeBindings) / 2));
 
 /**
  * Two verdicts about a hop's candidate ids, from ONE scoped statement: which of
@@ -167,9 +173,7 @@ export async function expandGraph(
 
   for (let hop = 1; hop <= hops && frontier.length && out.length < maxNodes; hop++) {
     const edgeRows: { source_id: string; target_id: string; type: string; weight: number; provenance: EdgeProvenance; created_at: number }[] = [];
-    // The double-sided IN binds each id twice, so scope bindings eat into the
-    // same bound-parameter budget — shrink the batch rather than overflow it.
-    const edgeTake = Math.max(1, Math.floor((D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0)) / 2));
+    const edgeTake = edgeScanBatchSize(scope?.bindings.length ?? 0);
     for (let i = 0; i < frontier.length; i += edgeTake) {
       const batch = frontier.slice(i, i + edgeTake);
       const ph = batch.map(() => "?").join(", ");
@@ -415,7 +419,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
   const edgeSeen = new Set<string>();
   const edges: GraphView["edges"] = [];
   // Same bound-parameter arithmetic as expandGraph: ids bound twice plus scope.
-  const edgeTake = Math.max(1, Math.floor((D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0)) / 2));
+  const edgeTake = edgeScanBatchSize(scope?.bindings.length ?? 0);
   for (let i = 0; i < presentIds.length; i += edgeTake) {
     const batch = presentIds.slice(i, i + edgeTake);
     const ph = batch.map(() => "?").join(", ");

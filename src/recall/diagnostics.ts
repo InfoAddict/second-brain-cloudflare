@@ -93,6 +93,11 @@ function observeMethods<T extends object>(
   target: T,
   counters: Readonly<Record<string, (...args: unknown[]) => void>>,
 ): T {
+  // VECTORIZE is genuinely absent on a brain whose index was never created, and
+  // recall degrades to keyword-only around that. Proxying it would throw, which
+  // would make observing a recall the thing that broke it — the diagnostics are
+  // for reading exactly this path, not for changing whether it works.
+  if (target === null || typeof target !== "object") return target;
   return new Proxy(target, {
     get(object, property, receiver) {
       const value = Reflect.get(object, property, receiver);

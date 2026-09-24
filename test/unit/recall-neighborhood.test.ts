@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  GRAPH_SEED_MAX,
+  graphSeedCeiling,
   graphSeedLimit,
   lexicalSeedLimit,
   queryCoverage,
@@ -31,8 +31,44 @@ describe("graph-aware recall neighborhood policy", () => {
   });
 
   it("keeps both arms' seats under the edge-scan ceiling", () => {
-    expect(graphSeedLimit(50, 200) + lexicalSeedLimit(50, 200, 50)).toBe(GRAPH_SEED_MAX);
+    expect(graphSeedLimit(50, 200) + lexicalSeedLimit(50, 200, 50)).toBe(graphSeedCeiling(0));
     expect(lexicalSeedLimit(50, 200, 50)).toBe(0);
+  });
+
+  // Review finding 1: with the dense arm empty — Vectorize down, a member with no
+  // vectors, the keyword-only ablation — every root is keyword-only, and an allowance
+  // alone would seat 9 of them at topK 10 where the old shared budget seated 30.
+  it("hands the keyword arm the dense window the dense arm leaves unused", () => {
+    expect(lexicalSeedLimit(10, 400, 0)).toBe(39);  // 30 unused + ceil(30 * 0.3)
+    expect(lexicalSeedLimit(5, 400, 0)).toBe(20);   // 15 unused + ceil(15 * 0.3)
+  });
+
+  it("gives back only the part of the window the dense arm did not fill", () => {
+    expect(lexicalSeedLimit(10, 400, 30)).toBe(9);  // dense filled its window: allowance only
+    expect(lexicalSeedLimit(10, 400, 20)).toBe(19); // 10 unused + 9
+    expect(lexicalSeedLimit(10, 400, 29)).toBe(10); // 1 unused + 9
+  });
+
+  it("keeps the total the same whichever arm fills it", () => {
+    for (const denseCount of [0, 1, 7, 29, 30, 400]) {
+      const dense = graphSeedLimit(10, denseCount);
+      expect(dense + lexicalSeedLimit(10, 400, dense)).toBe(39);
+    }
+  });
+
+  // expandGraph binds each frontier id twice, and a scoped caller's bindings come out
+  // of the same budget, so the ceiling is the edge scan's own batch size.
+  it("sizes the seed ceiling from the bound-parameter budget the edge scan has left", () => {
+    expect(graphSeedCeiling(0)).toBe(50);
+    expect(graphSeedCeiling(2)).toBe(49);
+    expect(graphSeedCeiling(3)).toBe(48);
+  });
+
+  it("keeps a scoped caller's seats inside one edge-scan statement", () => {
+    for (const bindings of [0, 1, 2, 3, 5]) {
+      const dense = graphSeedLimit(20, 200, bindings);
+      expect(dense + lexicalSeedLimit(20, 200, dense, bindings)).toBeLessThanOrEqual(graphSeedCeiling(bindings));
+    }
   });
 
   it("reserves no related slot for tiny result sets and at most two otherwise", () => {
