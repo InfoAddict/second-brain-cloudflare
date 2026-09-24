@@ -2,15 +2,23 @@ import { historyProblems, type Manifest } from "./lock";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
 import { auditQueries, haystackVocabulary, keywordRouteModel, staleRouteGaps } from "./corpus/audit";
-import { CORPUS_PARAMS, buildCorpus, loadCoreData } from "./corpus/build";
+import { CORPUS_PARAMS, buildCorpus as buildCorpusUncached, loadCoreData } from "./corpus/build";
 import { COMMON_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS } from "./corpus/haystack";
 import { IDENTITIES, WORKSPACES } from "./corpus/types";
 import { QUERY_CATEGORIES } from "./types";
+
+// Each corpus is built once for the whole file: the tests only read it, and building one per test (about 25
+// builds, the 20k one the largest) is what pushed single tests past the 5 s default under load.
+const built = new Map<string, ReturnType<typeof buildCorpusUncached>>();
+const buildCorpus: typeof buildCorpusUncached = id => {
+  if (!built.has(id)) built.set(id, buildCorpusUncached(id));
+  return built.get(id)!;
+};
 
 const DATA = resolve(import.meta.dirname, "data/core");
 const MINIMUMS = { identifier: 36, "rare-word": 40, "common-word": 36, "short-word": 30, paraphrase: 48, cjk: 36, "multi-hop": 30, "long-context": 24 } as const;
@@ -19,6 +27,8 @@ const CLUSTER_MINIMUM = 30;
 const CLUSTER_FLOORS = { identifier: 37, "rare-word": 31, "common-word": 38, "short-word": 24, paraphrase: 39, cjk: 29, "multi-hop": 24, "long-context": 20 } as const;
 
 describe("core golden data", () => {
+  beforeAll(() => { for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) buildCorpus(id); }, 60_000);
+
   const { needles, edges, queries } = loadCoreData();
 
   it("matches the manifest hashes, so any edit is deliberate (record it with lock --accept-data-change)", () => {

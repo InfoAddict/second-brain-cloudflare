@@ -258,7 +258,10 @@ export function auditQueries(spec: {
   return findings;
 }
 
-export function haystackVocabulary(): Set<string> {
+let vocabularyMemo: ReadonlySet<string> | undefined;
+/** Fixed seed and size, so it is built once per process; callers only read it. */
+export function haystackVocabulary(): ReadonlySet<string> {
+  if (vocabularyMemo) return vocabularyMemo;
   const rows = generateHaystack({
     count: 8000, seed: 1, commonRate: 0.5, idPrefix: "v", now: EVAL_NOW, spanDays: 730, cjkRate: 0.2, longRate: 0.05, denseRate: 1,
     workspaces: [{ workspaceId: WORKSPACES.avery, actorId: ACTORS.avery, weight: 1 }],
@@ -267,7 +270,7 @@ export function haystackVocabulary(): Set<string> {
   for (const prefix of ["ops", "web", "app"]) {
     for (let number = 1000; number < 8000; number++) vocabulary.add(`${prefix}-${number}`);
   }
-  return vocabulary;
+  return (vocabularyMemo = vocabulary);
 }
 
 /**

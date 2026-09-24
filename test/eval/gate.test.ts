@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, evaluateGate, formatGate, formatLosers, findLosers } from "./gate";
-import { bootstrapStandardError, minimumDetectableEffect } from "./stats";
+import { BOOTSTRAP_DEFAULTS, bootstrapStandardError, minimumDetectableEffect } from "./stats";
 import { QUERY_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
 
 const LOCAL = (repo: string): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision: "abc", dtype: "fp32" });
@@ -22,21 +22,24 @@ function report(name: string, tweak: (i: number, r: QueryResult) => void = () =>
 const shift = (delta: number, upTo: number) => (i: number, r: QueryResult) => {
   if (i < upTo) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = Math.min(1, Math.max(0, r.metrics[k] + delta));
 };
-// Seeded and deterministic at any count; a test that asserts a rule's status, not an interval's width, can resample less.
+// The bootstrap is seeded, so it is deterministic at any count. Tests resample 500 times unless they assert an
+// interval's width, an MDE or the production configuration, which pass PRODUCTION.
 const FEW = { bootstrap: { iterations: 500 } } as const;
+const PRODUCTION = { bootstrap: {} } as const;
+const judge = (b: VariantReport, c: VariantReport, opts: Parameters<typeof evaluateGate>[2] = {}) => evaluateGate(b, c, { ...FEW, ...opts });
 const status = (result: ReturnType<typeof evaluateGate>, rule: string) => result.rules.find(r => r.rule === rule)?.status;
 
 describe("evaluateGate", () => {
   const base = report("baseline");
 
   it("FAILs on a degraded query in the candidate", () => {
-    const result = evaluateGate(base, report("v", (i, r) => { if (i === 3) r.degraded = ["semantic-unavailable"]; }));
+    const result = judge(base, report("v", (i, r) => { if (i === 3) r.degraded = ["semantic-unavailable"]; }));
     expect(result.verdict).toBe("FAIL");
     expect(status(result, "degraded")).toBe("fail");
   });
 
   it("FAILs when the baseline is degraded, so a broken baseline cannot flatter a candidate", () => {
-    const result = evaluateGate(report("baseline", (i, r) => { if (i === 3) r.degraded = ["vectorize-filter-unfiltered"]; }), report("v", shift(0.5, 30)));
+    const result = judge(report("baseline", (i, r) => { if (i === 3) r.degraded = ["vectorize-filter-unfiltered"]; }), report("v", shift(0.5, 30)));
     expect(result.verdict).toBe("FAIL");
     expect(status(result, "degraded")).toBe("fail");
   });
@@ -45,7 +48,7 @@ describe("evaluateGate", () => {
     for (const tweak of [(r: VariantReport) => { r.topK = 5; }, (r: VariantReport) => { r.runnerVersion = RUNNER_VERSION + 1; }]) {
       const cand = report("v");
       tweak(cand);
-      expect(status(evaluateGate(base, cand), "comparable")).toBe("inconclusive");
+      expect(status(judge(base, cand), "comparable")).toBe("inconclusive");
     }
   });
 
@@ -55,7 +58,7 @@ describe("evaluateGate", () => {
     const emb = mk("BAAI/bge-small-en-v1.5"), rr = mk("BAAI/bge-reranker-base");
     const withMap = (name: string, producers?: Record<string, EmbeddingProducer>) => ({ ...report(name), producers });
     const both = { "@cf/baai/bge-small-en-v1.5": emb, "@cf/baai/bge-reranker-base": rr };
-    const detail = (b: VariantReport, c: VariantReport) => evaluateGate(b, c).rules.find(r => r.rule === "comparable");
+    const detail = (b: VariantReport, c: VariantReport) => judge(b, c).rules.find(r => r.rule === "comparable");
     expect(detail(withMap("baseline", both), withMap("v", { ...both }))?.detail ?? "").not.toMatch(/producer/);
     const cases = [
       withMap("v", { ...both, "@cf/baai/bge-reranker-base": mk("BAAI/bge-reranker-base", "def") }),   // reranker differs, embedding same
@@ -74,14 +77,14 @@ describe("evaluateGate", () => {
   it("treats a missing producers map on a core report as unverified provenance", () => {
     const bare = { ...report("v"), producers: undefined, neuronSource: undefined };
     for (const [b, c] of [[report("baseline"), bare], [bare, report("v")]] as const) {
-      const r = evaluateGate(b, c).rules.find(x => x.rule === "comparable");
+      const r = judge(b, c).rules.find(x => x.rule === "comparable");
       expect(r?.status).toBe("inconclusive");
       expect(r?.detail).toMatch(/unverified provenance/);
     }
   });
 
   it("is INCONCLUSIVE when the neuron source differs", () => {
-    const r = evaluateGate({ ...report("baseline"), neuronSource: "projected" }, { ...report("v"), neuronSource: "provider" }).rules.find(x => x.rule === "comparable");
+    const r = judge({ ...report("baseline"), neuronSource: "projected" }, { ...report("v"), neuronSource: "provider" }).rules.find(x => x.rule === "comparable");
     expect(r?.status).toBe("inconclusive");
     expect(r?.detail).toMatch(/neuron source differs/);
   });
@@ -91,7 +94,7 @@ describe("evaluateGate", () => {
       ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision, dtype: "fp32" });
     const a = { ...report("baseline"), producers: { m: mk("a") }, neuronSource: "projected" as const, llmTags: "stand-in" as const };
     const b = { ...report("v"), producers: { m: mk("b") }, neuronSource: "provider" as const, llmTags: "empty" as const };
-    const detail = evaluateGate(a, b).rules.find(x => x.rule === "comparable")?.detail ?? "";
+    const detail = judge(a, b).rules.find(x => x.rule === "comparable")?.detail ?? "";
     expect(detail).toMatch(/model producers differ/);
     expect(detail).toMatch(/neuron source differs/);
     expect(detail).toMatch(/LLM tag arm differs/);
@@ -99,21 +102,21 @@ describe("evaluateGate", () => {
 
   it("is INCONCLUSIVE when the LLM tag arm differs, or is recorded on one side only", () => {
     for (const [a, b] of [["stand-in", "empty"], ["stand-in", undefined]] as const) {
-      const r = evaluateGate({ ...report("baseline"), llmTags: a }, { ...report("v"), llmTags: b }).rules.find(x => x.rule === "comparable");
+      const r = judge({ ...report("baseline"), llmTags: a }, { ...report("v"), llmTags: b }).rules.find(x => x.rule === "comparable");
       expect(r?.status).toBe("inconclusive");
       expect(r?.detail).toMatch(/LLM tag arm differs/);
     }
-    const same = evaluateGate({ ...report("baseline"), llmTags: "empty" }, { ...report("v"), llmTags: "empty" }).rules.find(x => x.rule === "comparable");
+    const same = judge({ ...report("baseline"), llmTags: "empty" }, { ...report("v"), llmTags: "empty" }).rules.find(x => x.rule === "comparable");
     expect(same).toBeUndefined(); // no comparability problem, so no comparable rule is raised
   });
 
   it("PASSes a clear improvement with no regression and no extra cost", () => {
-    const result = evaluateGate(base, report("v", shift(0.5, 30)), { allowUnmeasuredRowsRead: false });
+    const result = judge(base, report("v", shift(0.5, 30)), { allowUnmeasuredRowsRead: false });
     expect(result.verdict).toBe("PASS");
   });
 
   it("FAILs a no-op: nothing improved", () => {
-    const result = evaluateGate(base, report("noop"));
+    const result = judge(base, report("noop"));
     expect(status(result, "improvement")).toBe("fail");
     expect(status(result, "regression")).toBe("pass");
     expect(result.verdict).toBe("FAIL");
@@ -124,14 +127,14 @@ describe("evaluateGate", () => {
       if (i < 12) r.metrics.recall10 -= 0.5; // -0.025 mean
       if (i >= 100 && i < 140) r.metrics.ndcg10 += 0.5; // +0.083 mean
     });
-    const result = evaluateGate(base, cand);
+    const result = judge(base, cand);
     expect(status(result, "regression")).toBe("fail");
     expect(result.verdict).toBe("FAIL");
   });
 
   it("FAILs a significant regression smaller than the tolerance", () => {
     const cand = report("v", (i, r) => { if (i < 200) r.metrics.mrr10 -= 0.004; });
-    expect(status(evaluateGate(base, cand), "regression")).toBe("fail");
+    expect(status(judge(base, cand), "regression")).toBe("fail");
   });
 
   it("FAILs when one category loses more than its tolerance while the overall mean improves", () => {
@@ -139,7 +142,7 @@ describe("evaluateGate", () => {
       if (r.category === "cjk") r.metrics.recall10 -= 0.3;
       else if (i < 120) r.metrics.recall10 += 0.3;
     });
-    const result = evaluateGate(base, cand);
+    const result = judge(base, cand);
     expect(result.rules.find(r => r.rule === "regression")?.detail).toMatch(/cjk/);
     expect(result.verdict).toBe("FAIL");
   });
@@ -147,43 +150,43 @@ describe("evaluateGate", () => {
   it("accepts a targeted gain only when the variant declared that category", () => {
     // +0.06 on 30 paraphrase queries: overall recall@10 moves 0.0075 (under the 0.02 margin).
     const cand = report("v", (_i, r) => { if (r.category === "paraphrase") r.metrics.recall10 += 0.06; });
-    expect(status(evaluateGate(base, cand), "improvement")).toBe("fail");
-    expect(status(evaluateGate(base, cand, { targetCategories: ["paraphrase"] }), "improvement")).toBe("pass");
+    expect(status(judge(base, cand), "improvement")).toBe("fail");
+    expect(status(judge(base, cand, { targetCategories: ["paraphrase"] }), "improvement")).toBe("pass");
   });
 
   it("FAILs any cross-workspace leak, however good the metrics", () => {
     const cand = report("v", (i, r) => { shift(0.5, 30)(i, r); if (i === 5) r.leaked = ["stranger-1"]; });
-    const result = evaluateGate(base, cand);
+    const result = judge(base, cand);
     expect(status(result, "isolation")).toBe("fail");
     expect(result.verdict).toBe("FAIL");
   });
 
   it("FAILs when the candidate errors on more queries than the baseline", () => {
     const cand = report("v", (i, r) => { shift(0.5, 30)(i, r); if (i === 9) r.error = "boom"; });
-    expect(status(evaluateGate(base, cand), "errors")).toBe("fail");
+    expect(status(judge(base, cand), "errors")).toBe("fail");
   });
 
   it("is INCONCLUSIVE below the power floor, and on mismatched corpora or query sets", () => {
-    expect(evaluateGate(report("b", () => {}, 100), report("v", shift(0.5, 30), 100)).verdict).toBe("INCONCLUSIVE");
+    expect(judge(report("b", () => {}, 100), report("v", shift(0.5, 30), 100)).verdict).toBe("INCONCLUSIVE");
     const other = { ...report("v", shift(0.5, 30)), corpus: "scale-5k" };
-    expect(evaluateGate(base, other).verdict).toBe("INCONCLUSIVE");
+    expect(judge(base, other).verdict).toBe("INCONCLUSIVE");
     const shorter = report("v", shift(0.5, 30), 239);
-    expect(evaluateGate(base, shorter).verdict).toBe("INCONCLUSIVE");
+    expect(judge(base, shorter).verdict).toBe("INCONCLUSIVE");
   });
 
   it("enforces the cost budget", () => {
     const heavy = (over: Partial<QueryResult["cost"]>) => report("v", (i, r) => { shift(0.5, 30)(i, r); Object.assign(r.cost, over); });
-    expect(status(evaluateGate(base, heavy({ neurons: 2 + 26 }), FEW), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ neurons: 2 + 25 }), FEW), "cost")).toBe("pass");
-    expect(status(evaluateGate(base, heavy({ d1Statements: 8 + 3 }), FEW), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ aiCalls: 3 }), FEW), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ d1RowsRead: 1400 }), FEW), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ d1Statements: 60 }), FEW), "cost")).toBe("fail"); // p95 ceiling
+    expect(status(judge(base, heavy({ neurons: 2 + 26 }), FEW), "cost")).toBe("fail");
+    expect(status(judge(base, heavy({ neurons: 2 + 25 }), FEW), "cost")).toBe("pass");
+    expect(status(judge(base, heavy({ d1Statements: 8 + 3 }), FEW), "cost")).toBe("fail");
+    expect(status(judge(base, heavy({ aiCalls: 3 }), FEW), "cost")).toBe("fail");
+    expect(status(judge(base, heavy({ d1RowsRead: 1400 }), FEW), "cost")).toBe("fail");
+    expect(status(judge(base, heavy({ d1Statements: 60 }), FEW), "cost")).toBe("fail"); // p95 ceiling
   });
 
   it("does not tell a workerd run to use workerd: it names the queries that reported no rows_read", () => {
     const partial = (v: string, up: number) => ({ ...report(v, (i, r) => { shift(0.5, up)(i, r); if (i % 3 === 0) r.cost.d1RowsRead = null; }), d1Backend: "workerd" as const });
-    const gate = evaluateGate(partial("b", 0), partial("c", 30));
+    const gate = judge(partial("b", 0), partial("c", 30));
     expect(gate.verdict).toBe("INCONCLUSIVE");
     const detail = gate.rules.find(r => r.rule === "cost")!.detail;
     expect(detail).not.toMatch(/--d1 workerd/);
@@ -194,31 +197,31 @@ describe("evaluateGate", () => {
   it("treats unmeasured rows_read as INCONCLUSIVE unless explicitly allowed", () => {
     const unmeasured = (v: string, up: number) => report(v, (i, r) => { shift(0.5, up)(i, r); r.cost.d1RowsRead = null; });
     const b = unmeasured("b", 0), c = unmeasured("c", 30);
-    expect(evaluateGate(b, c).verdict).toBe("INCONCLUSIVE");
-    const detail = evaluateGate(b, c).rules.find(r => r.rule === "cost")!.detail;
+    expect(judge(b, c).verdict).toBe("INCONCLUSIVE");
+    const detail = judge(b, c).rules.find(r => r.rule === "cost")!.detail;
     expect(detail).toMatch(/rows_read is unmeasured on the sqlite backend/);
     expect(detail).toMatch(/--d1 workerd for a full verdict/);
     expect(detail).toMatch(/--allow-unmeasured-rows for a cost-blind comparison/);
-    const allowed = evaluateGate(b, c, { allowUnmeasuredRowsRead: true });
+    const allowed = judge(b, c, { allowUnmeasuredRowsRead: true });
     expect(status(allowed, "cost")).toBe("pass");
     expect(allowed.verdict).toBe("PASS");
   });
 
   it("is direction-sensitive: swapping baseline and candidate flips a PASS into a FAIL", () => {
     const better = report("v", shift(0.5, 30));
-    expect(evaluateGate(base, better).verdict).toBe("PASS");
-    expect(evaluateGate(better, base).verdict).toBe("FAIL");
+    expect(judge(base, better).verdict).toBe("PASS");
+    expect(judge(better, base).verdict).toBe("FAIL");
   });
 
   it("formats a readable summary and freezes the default thresholds", () => {
-    const text = formatGate(evaluateGate(base, report("v", shift(0.5, 30))));
+    const text = formatGate(judge(base, report("v", shift(0.5, 30))));
     expect(text).toMatch(/PASS/);
     expect(text).toMatch(/recall10/);
     expect(Object.isFrozen(DEFAULT_GATE)).toBe(true);
   });
 
   it("reports the minimum detectable effect for each headline metric", () => {
-    const result = evaluateGate(base, report("v", shift(0.5, 30)));
+    const result = judge(base, report("v", shift(0.5, 30)), PRODUCTION);
     const deltas = Array.from({ length: 240 }, (_, i) => (i < 30 ? 0.5 : 0));
     expect(result.mde.recall10).toBeCloseTo(minimumDetectableEffect(deltas), 10);
     expect(Object.keys(result.mde).sort()).toEqual(["mrr10", "ndcg10", "recall10", "recall5"]);
@@ -237,19 +240,19 @@ describe("evaluateGate", () => {
       shift(0.5, 30)(i, r);
       if (i >= 210 && i < 220) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = 1; // a fix the regression rule must not see
     });
-    const result = evaluateGate(b, c);
+    const result = judge(b, c, PRODUCTION);
     const regressionDeltas = Array.from({ length: 240 }, (_, i) => (i < 30 ? 0.5 : 0)).filter((_, i) => i < 210 || i >= 220); // 230 queries
     expect(result.mde.recall10).toBeCloseTo(minimumDetectableEffect(regressionDeltas), 10);
   });
 
   it("still reports the MDE when the cost rule returns early, and reports none when the gate stops before the overall loop", () => {
     const unmeasured = (r: VariantReport) => { for (const x of r.results) x.cost.d1RowsRead = null; return r; };
-    const early = evaluateGate(unmeasured(report("baseline")), unmeasured(report("v", shift(0.5, 30))));
+    const early = judge(unmeasured(report("baseline")), unmeasured(report("v", shift(0.5, 30))));
     expect(status(early, "cost")).toBe("inconclusive"); // rows_read unmeasured returns from the cost block
     expect(Object.keys(early.mde).sort()).toEqual(["mrr10", "ndcg10", "recall10", "recall5"]);
     const cand = report("v");
     cand.topK = 5;
-    expect(evaluateGate(base, cand).mde).toEqual({}); // comparable returns before the loop
+    expect(judge(base, cand).mde).toEqual({}); // comparable returns before the loop
   });
 });
 
@@ -261,7 +264,7 @@ describe("evaluateGate: MDE comes from the same estimator as the interval", () =
   }, 306);
 
   it("a gain confined to two two-query clusters is INCONCLUSIVE (underpowered), not FAIL", () => {
-    const result = evaluateGate(core("baseline", 0), core("v", 1));
+    const result = judge(core("baseline", 0), core("v", 1));
     const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(row.ci.mean).toBeCloseTo(4 / 306, 10); // below the 0.02 margin: no improvement shown
     expect(result.mde.recall10!).toBeGreaterThan(0.02); // query-weighted, as the bootstrap resamples; equal-weight cluster means said 0.0144
@@ -272,7 +275,7 @@ describe("evaluateGate: MDE comes from the same estimator as the interval", () =
 
   it("reports the same figure the bootstrap gives: MDE = 2.8 x the standard error of the replicates", () => {
     const b = core("baseline", 0), c = core("v", 1);
-    const result = evaluateGate(b, c);
+    const result = judge(b, c, PRODUCTION);
     expect(result.mde.recall10!).toBeCloseTo(2.8 * bootstrapStandardError(c.results.map((r, i) => r.metrics.recall10 - b.results[i].metrics.recall10), c.results.map(r => r.clusterKey)), 12);
   });
 });
@@ -290,7 +293,7 @@ describe("findLosers: per-query worsening, outside the verdict", () => {
 
   it("is not fooled by a mean that hides the losers: a gain elsewhere does not remove a loser", () => {
     const cand = report("v", (i, r) => { shift(0.5, 5)(i, r); drop({ 30: 0.2 })(i, r); });
-    const result = evaluateGate(report("baseline"), cand);
+    const result = judge(report("baseline"), cand);
     expect(result.verdict).toBe("FAIL"); // improvement only or better; the loser must still be listed
     expect(findLosers(report("baseline"), cand).map(l => l.queryId)).toEqual(["q30"]);
   });
@@ -314,7 +317,7 @@ describe("findLosers: per-query worsening, outside the verdict", () => {
     expect(text.split("\n").filter(l => /^\s+q\d+/.test(l))).toHaveLength(5);
     expect(text).toMatch(/\+7 more/);
     expect(formatLosers([], 5)).toBe("");
-    expect(evaluateGate(report("baseline"), cand)).not.toHaveProperty("losers"); // the verdict result does not carry them
+    expect(judge(report("baseline"), cand)).not.toHaveProperty("losers"); // the verdict result does not carry them
   });
 
   it("skips queries present on one side only (alignment is by id, never by position)", () => {
@@ -328,14 +331,14 @@ describe("evaluateGate statistical correctness (known outcomes, seeded)", () => 
   const base = report("baseline");
 
   it("identical variants can never PASS", () => {
-    const result = evaluateGate(base, report("same"));
+    const result = judge(base, report("same"));
     expect(result.verdict).toBe("FAIL");
     expect(status(result, "improvement")).toBe("fail");
     expect(result.deltas.every(d => d.ci.lo === 0 && d.ci.hi === 0)).toBe(true);
   });
 
   it("a known large improvement PASSes with a lower bound above zero", () => {
-    const result = evaluateGate(base, report("v", shift(0.5, 60)));
+    const result = judge(base, report("v", shift(0.5, 60)));
     expect(result.verdict).toBe("PASS");
     const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(row.ci.mean).toBeCloseTo(0.125, 10);
@@ -343,7 +346,7 @@ describe("evaluateGate statistical correctness (known outcomes, seeded)", () => 
   });
 
   it("a known regression FAILs", () => {
-    const result = evaluateGate(base, report("v", shift(-0.4, 60)));
+    const result = judge(base, report("v", shift(-0.4, 60)));
     expect(result.verdict).toBe("FAIL");
     expect(status(result, "regression")).toBe("fail");
   });
@@ -351,13 +354,13 @@ describe("evaluateGate statistical correctness (known outcomes, seeded)", () => 
   it("zero-mean paired noise and sub-margin gains never PASS", () => {
     // Deterministic stand-ins for noise; the seeded 300-dataset null test in stats.test.ts covers the rest.
     const swing = report("swing", (i, r) => { r.metrics.recall10 += i % 2 ? 0.2 : -0.2; });
-    expect(evaluateGate(base, swing, FEW).verdict).toBe("FAIL");
+    expect(judge(base, swing, FEW).verdict).toBe("FAIL");
     const small = report("small", (_i, r) => { r.metrics.recall10 += 0.0125; r.metrics.mrr10 += 0.0125; r.metrics.ndcg10 += 0.0125; });
-    const smallResult = evaluateGate(base, small, FEW);
+    const smallResult = judge(base, small, FEW);
     expect(status(smallResult, "improvement")).toBe("fail");
     expect(status(smallResult, "regression")).toBe("pass");
     const mixed = report("mixed", (i, r) => { if (i < 120) r.metrics.recall10 += 0.05; else r.metrics.recall10 -= 0.05; });
-    expect(status(evaluateGate(base, mixed, FEW), "improvement")).toBe("fail");
+    expect(status(judge(base, mixed, FEW), "improvement")).toBe("fail");
   });
 });
 
@@ -372,7 +375,7 @@ describe("evaluateGate pairing and cluster validation", () => {
       r.results.forEach(x => { x.queryId = "q0"; x.clusterKey = "q0"; x.metrics.recall10 += gain; x.metrics.mrr10 += gain; x.metrics.ndcg10 += gain; });
       return r;
     };
-    const result = evaluateGate(dup("b", 0), dup("v", 0.5));
+    const result = judge(dup("b", 0), dup("v", 0.5));
     expect(result.verdict).toBe("INCONCLUSIVE");
     expect(rule(result, "comparable")?.detail).toMatch(/duplicate query IDs.*q0/);
   });
@@ -380,7 +383,7 @@ describe("evaluateGate pairing and cluster validation", () => {
   it("is INCONCLUSIVE when one report holds extra query IDs, naming them", () => {
     const cand = report("v", shift(0.5, 30), 200);
     cand.results[199].queryId = "stray";
-    const detail = rule(evaluateGate(base, cand), "comparable")?.detail ?? "";
+    const detail = rule(judge(base, cand), "comparable")?.detail ?? "";
     expect(detail).toMatch(/q199/);
     expect(detail).toMatch(/stray/);
   });
@@ -389,9 +392,9 @@ describe("evaluateGate pairing and cluster validation", () => {
     const honestBase = report("b", clustered(40), 200);
     const gain = (i: number, r: QueryResult) => { clustered(40)(i, r); if (i % 40 < 2) for (const k of ["recall10", "mrr10", "ndcg10"] as const) r.metrics[k] += 0.5; };
     // a +0.025 gain confined to 2 of 40 clusters is unproven, and too noisy to have been proven: underpowered, not a fail
-    expect(status(evaluateGate(honestBase, report("v", gain, 200)), "improvement")).toBe("inconclusive");
+    expect(status(judge(honestBase, report("v", gain, 200)), "improvement")).toBe("inconclusive");
     const relabeled = report("v", (i, r) => { gain(i, r); r.clusterKey = `q${i}`; }, 200);
-    const result = evaluateGate(honestBase, relabeled);
+    const result = judge(honestBase, relabeled);
     expect(result.verdict).toBe("INCONCLUSIVE");
     expect(rule(result, "comparable")?.detail).toMatch(/cluster.*q0/);
   });
@@ -399,7 +402,7 @@ describe("evaluateGate pairing and cluster validation", () => {
   it("is INCONCLUSIVE when a query changes category between reports", () => {
     const cand = report("v", shift(0.5, 30), 200);
     cand.results[3].category = "cjk";
-    const result = evaluateGate(base, cand);
+    const result = judge(base, cand);
     expect(result.verdict).toBe("INCONCLUSIVE");
     expect(rule(result, "comparable")?.detail).toMatch(/category.*q3/);
   });
@@ -409,7 +412,7 @@ describe("evaluateGate pairing and cluster validation", () => {
     const hetero = (gain: number) => report("h", (i, r) => { r.metrics.recall10 = (i % 2 ? 0.25 : 0.75) + gain; }, 200);
     const cand = hetero(0.03125);
     for (const order of [cand.results, [...cand.results].reverse()]) {
-      const result = evaluateGate(hetero(0), { ...cand, results: order });
+      const result = judge(hetero(0), { ...cand, results: order });
       const ci = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!.ci;
       expect(ci.mean).toBe(0.03125);
       expect(ci.lo).toBe(0.03125);
@@ -421,14 +424,14 @@ describe("evaluateGate pairing and cluster validation", () => {
   it("FAILs a leak or an error row even when the sample is too small to judge", () => {
     const fewBase = report("b", clustered(4), 200);
     const leaky = report("v", (i, r) => { clustered(4)(i, r); if (i === 5) r.leaked = ["stranger-1"]; }, 200);
-    const leakResult = evaluateGate(fewBase, leaky);
+    const leakResult = judge(fewBase, leaky);
     expect(leakResult.verdict).toBe("FAIL");
     expect(status(leakResult, "isolation")).toBe("fail");
     const broken = report("v", (i, r) => { clustered(4)(i, r); if (i === 9) r.error = "boom"; }, 200);
-    const errResult = evaluateGate(fewBase, broken);
+    const errResult = judge(fewBase, broken);
     expect(errResult.verdict).toBe("FAIL");
     expect(status(errResult, "errors")).toBe("fail");
-    const tiny = evaluateGate(report("b", () => {}, 100), report("v", (i, r) => { if (i === 5) r.leaked = ["stranger-1"]; }, 100));
+    const tiny = judge(report("b", () => {}, 100), report("v", (i, r) => { if (i === 5) r.leaked = ["stranger-1"]; }, 100));
     expect(tiny.verdict).toBe("FAIL");
   });
 
@@ -442,7 +445,7 @@ describe("evaluateGate pairing and cluster validation", () => {
       };
       const b = report("b", shape, 210);
       const c = report("v", (i, r) => { shape(i, r); if (i < 14) r.metrics.recall10 += gain; }, 210);
-      return evaluateGate(b, c, { targetCategories: ["paraphrase"] });
+      return judge(b, c, { targetCategories: ["paraphrase"] });
     };
 
     it("cannot PASS on a targeted gain from one cluster; INCONCLUSIVE names the category and cluster count", () => {
@@ -471,10 +474,10 @@ describe("evaluateGate pairing and cluster validation", () => {
   it("is INCONCLUSIVE when the queries fall into too few clusters, even above the query floor", () => {
     const few = (n: number) => report("v", (i, r) => { clustered(n)(i, r); shift(0.5, 60)(i, r); }, 200);
     const fewBase = report("b", clustered(4), 200);
-    const result = evaluateGate(fewBase, few(4));
+    const result = judge(fewBase, few(4));
     expect(result.verdict).toBe("INCONCLUSIVE");
     expect(rule(result, "power")?.detail).toMatch(/4 distinct clusters/);
-    const ok = evaluateGate(report("b", clustered(30), 200), few(30));
+    const ok = judge(report("b", clustered(30), 200), few(30));
     expect(rule(ok, "power")).toBeUndefined();
     expect(ok.verdict).toBe("PASS");
   });
@@ -491,7 +494,7 @@ describe("evaluateGate boundaries", () => {
       else if (i < 100) r.metrics.recall10 -= 0.25;
       else if (i < 104) r.metrics.recall10 -= 0.5;
     }, 200);
-    const result = evaluateGate(base, cand);
+    const result = judge(base, cand);
     const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(row.ci.mean).toBe(-0.01);
     expect(row.ci.hi).toBeGreaterThan(0);
@@ -505,7 +508,7 @@ describe("evaluateGate boundaries", () => {
       if (i % 30 < 2) for (const k of ["recall10", "mrr10", "ndcg10"] as const) r.metrics[k] += 0.5;
     }, 200);
     const baseC = report("b", (i, r) => { r.clusterKey = `c${i % 30}`; }, 200);
-    const result = evaluateGate(baseC, cand);
+    const result = judge(baseC, cand);
     const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(row.ci.mean).toBeGreaterThanOrEqual(0.02);
     expect(row.ci.lo).toBe(0);
@@ -516,8 +519,8 @@ describe("evaluateGate boundaries", () => {
 
   // Gains are dyadic (0.5, 0.25) so the sums are exact and the mean lands on the threshold literal.
   it("an overall gain of exactly +0.0200 passes; just under fails", () => {
-    const at = (top: number) => evaluateGate(report("b", (_i, r) => { r.metrics.recall10 = 0; }, 200),
-      report("v", (i, r) => { r.metrics.recall10 = i < 7 ? 0.5 : i === 7 ? top : 0; }, 200));
+    const at = (top: number) => judge(report("b", (_i, r) => { r.metrics.recall10 = 0; }, 200),
+      report("v", (i, r) => { r.metrics.recall10 = i < 7 ? 0.5 : i === 7 ? top : 0; }, 200), PRODUCTION);
     const exact = at(0.5); // 8 x 0.5 / 200
     expect(exact.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!.ci.mean).toBe(0.02);
     expect(status(exact, "improvement")).toBe("pass");
@@ -528,11 +531,11 @@ describe("evaluateGate boundaries", () => {
     // 25 paraphrase queries out of 200; overall recall@10 moves far less than the 0.02 margin.
     const at = (last: number) => {
       let seen = 0;
-      return evaluateGate(report("b", (_i, r) => { r.metrics.recall10 = 0; }, 200),
+      return judge(report("b", (_i, r) => { r.metrics.recall10 = 0; }, 200),
         report("v", (_i, r) => {
           const hit = r.category === "paraphrase" && seen++ < 5;
           r.metrics.recall10 = hit ? (seen === 5 ? last : 0.25) : 0;
-        }, 200), { targetCategories: ["paraphrase"] });
+        }, 200), { targetCategories: ["paraphrase"], ...PRODUCTION });
     };
     const exact = at(0.25); // 5 x 0.25 / 25
     expect(exact.deltas.find(d => d.scope === "paraphrase (target)" && d.metric === "recall10")!.ci.mean).toBe(0.05);
@@ -541,10 +544,21 @@ describe("evaluateGate boundaries", () => {
   });
 });
 
+describe("evaluateGate at the production configuration", () => {
+  it("resamples 10,000 times by default, and the small seeded input it needs still decides a gain", () => {
+    expect(BOOTSTRAP_DEFAULTS.iterations).toBe(10_000);
+    // The smallest report that clears the 200-query and 30-cluster floors, so the real resample count stays cheap.
+    const small = (name: string, tweak: (i: number, r: QueryResult) => void) => report(name, (i, r) => { r.clusterKey = `c${i % 40}`; tweak(i, r); }, 200);
+    const result = evaluateGate(small("b", () => {}), small("v", (i, r) => { if (i < 60) r.metrics.recall10 = r.metrics.mrr10 = r.metrics.ndcg10 = 1; }));
+    expect(result.verdict).toBe("PASS");
+    expect(result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!.ci.lo).toBeGreaterThan(0);
+  });
+});
+
 describe("evaluateGate: errors on either side", () => {
   it("FAILs when the BASELINE errored, so an all-errored baseline cannot flatter a candidate", () => {
     const brokenBase = report("baseline", (_i, r) => { r.error = "replay cache miss"; r.metrics = { recall5: 0, recall10: 0, mrr10: 0, ndcg10: 0 }; });
-    const result = evaluateGate(brokenBase, report("v", shift(0.5, 30)));
+    const result = judge(brokenBase, report("v", shift(0.5, 30)));
     expect(status(result, "errors")).toBe("fail");
     expect(result.verdict).toBe("FAIL");
   });
@@ -555,52 +569,52 @@ describe("evaluateGate: comparability of golden data and limits", () => {
   const withFp = (name: string, v: string, tweak: (i: number, r: QueryResult) => void = () => {}) => ({ ...report(name, tweak), dataFingerprint: fp(v) });
 
   it("is INCONCLUSIVE when the golden-data fingerprints differ, even if every query id matches", () => {
-    const result = evaluateGate(withFp("b", "h1"), withFp("v", "h2", shift(0.5, 30)));
+    const result = judge(withFp("b", "h1"), withFp("v", "h2", shift(0.5, 30)));
     expect(status(result, "comparable")).toBe("inconclusive");
     expect(result.verdict).toBe("INCONCLUSIVE");
   });
 
   it("is INCONCLUSIVE when only one side carries a fingerprint", () => {
-    expect(evaluateGate(withFp("b", "h1"), report("v", shift(0.5, 30))).verdict).toBe("INCONCLUSIVE");
+    expect(judge(withFp("b", "h1"), report("v", shift(0.5, 30))).verdict).toBe("INCONCLUSIVE");
   });
 
   it("compares equal fingerprints (key order irrelevant) and two fingerprint-less reports", () => {
     const a = withFp("b", "h1");
     const b = { ...withFp("v", "h1", shift(0.5, 30)), dataFingerprint: { "needles.jsonl": "n1", "queries.jsonl": "h1" } };
-    expect(evaluateGate(a, b).verdict).toBe("PASS");
+    expect(judge(a, b).verdict).toBe("PASS");
     const bare = (name: string, tweak?: (i: number, r: QueryResult) => void) => { const { dataFingerprint: _x, ...rest } = { ...report(name, tweak), corpus: "scratch" }; return rest as VariantReport; };
-    expect(evaluateGate(bare("b"), bare("v", shift(0.5, 30))).verdict).toBe("PASS"); // non-core corpus: a fingerprint is optional
+    expect(judge(bare("b"), bare("v", shift(0.5, 30))).verdict).toBe("PASS"); // non-core corpus: a fingerprint is optional
   });
 
   it("requires a fingerprint on both reports for a core corpus, saying which one is missing", () => {
     const strip = (r: VariantReport) => { const { dataFingerprint: _x, ...rest } = r; return rest as VariantReport; };
     const good = report("v", shift(0.5, 30));
-    const neither = evaluateGate(strip(report("b")), strip(good));
+    const neither = judge(strip(report("b")), strip(good));
     expect(neither.verdict).toBe("INCONCLUSIVE");
     const detail = neither.rules.find(r => r.rule === "comparable")!.detail;
     expect(detail).toMatch(/baseline.*fingerprint/i);
     expect(detail).toMatch(/candidate.*fingerprint/i);
-    const one = evaluateGate(report("b"), strip(good)).rules.find(r => r.rule === "comparable")!.detail;
+    const one = judge(report("b"), strip(good)).rules.find(r => r.rule === "comparable")!.detail;
     expect(one).toMatch(/candidate.*fingerprint/i);
     expect(one).not.toMatch(/baseline.*fingerprint/i);
   });
 
   it("is INCONCLUSIVE when both reports came from a stale runner, not just when they disagree", () => {
     const stale = (name: string, tweak?: (i: number, r: QueryResult) => void) => ({ ...report(name, tweak), runnerVersion: RUNNER_VERSION - 1 });
-    const result = evaluateGate(stale("b"), stale("v", shift(0.5, 30)));
+    const result = judge(stale("b"), stale("v", shift(0.5, 30)));
     expect(result.verdict).toBe("INCONCLUSIVE");
     expect(result.rules.find(r => r.rule === "comparable")!.detail).toMatch(/stale/);
   });
 
   it("is INCONCLUSIVE when either report was limited", () => {
     const good = report("v", shift(0.5, 30));
-    expect(status(evaluateGate({ ...report("b"), limit: 250 }, good), "comparable")).toBe("inconclusive");
-    expect(status(evaluateGate(report("b"), { ...good, limit: 250 }), "comparable")).toBe("inconclusive");
+    expect(status(judge({ ...report("b"), limit: 250 }, good), "comparable")).toBe("inconclusive");
+    expect(status(judge(report("b"), { ...good, limit: 250 }), "comparable")).toBe("inconclusive");
   });
 
   it("still FAILs a limited run that leaks: hard invariants come first", () => {
     const leaky = { ...report("v", (i, r) => { if (i === 2) r.leaked = ["x"]; }), limit: 250 };
-    expect(evaluateGate(report("b"), leaky).verdict).toBe("FAIL");
+    expect(judge(report("b"), leaky).verdict).toBe("FAIL");
   });
 });
 
@@ -609,7 +623,7 @@ describe("evaluateGate: public and core reports stay apart", () => {
 
   it("is INCONCLUSIVE comparing a public report with a core report, in either direction", () => {
     for (const [b, c] of [[report("b"), pub("v", shift(0.5, 30))], [pub("b"), report("v", shift(0.5, 30))]] as const) {
-      const result = evaluateGate(b, c);
+      const result = judge(b, c);
       expect(result.verdict).toBe("INCONCLUSIVE");
       expect(result.rules.find(r => r.rule === "comparable")!.detail).toMatch(/corpus differs/);
     }
@@ -617,13 +631,13 @@ describe("evaluateGate: public and core reports stay apart", () => {
 
   it("requires the derived-manifest fingerprint on public reports, like core reports", () => {
     const bare = (r: VariantReport) => { const { dataFingerprint: _x, ...rest } = r; return rest as VariantReport; };
-    const result = evaluateGate(bare(pub("b")), pub("v", shift(0.5, 30)));
+    const result = judge(bare(pub("b")), pub("v", shift(0.5, 30)));
     expect(result.verdict).toBe("INCONCLUSIVE");
     expect(result.rules.find(r => r.rule === "comparable")!.detail).toMatch(/baseline.*fingerprint/);
   });
 
   it("compares two reports over the same public data", () => {
-    expect(evaluateGate(pub("b"), pub("v", shift(0.5, 30))).verdict).toBe("PASS");
+    expect(judge(pub("b"), pub("v", shift(0.5, 30))).verdict).toBe("PASS");
   });
 });
 
@@ -644,13 +658,13 @@ describe("evaluateGate: known gaps", () => {
   });
 
   it("does not let an undeclared gap fix count as an improvement", () => {
-    const result = evaluateGate(gapBase(0), gapCand(1));
+    const result = judge(gapBase(0), gapCand(1));
     expect(status(result, "improvement")).toBe("fail");
     expect(result.deltas.some(d => d.scope.startsWith("gap:"))).toBe(false);
   });
 
   it("PASSes a declared target-gap fix, and reports the gap's own power", () => {
-    const result = evaluateGate(gapBase(0), gapCand(1), { targetGaps: ["T-0072"] });
+    const result = judge(gapBase(0), gapCand(1), { targetGaps: ["T-0072"] });
     expect(result.verdict).toBe("PASS");
     const detail = result.rules.find(r => r.rule === "improvement")!.detail;
     expect(detail).toMatch(/gap:T-0072/);
@@ -659,11 +673,11 @@ describe("evaluateGate: known gaps", () => {
   });
 
   it("does not PASS a declared gap when the gap did not improve", () => {
-    expect(status(evaluateGate(gapBase(0), gapCand(0), { targetGaps: ["T-0072"] }), "improvement")).toBe("fail");
+    expect(status(judge(gapBase(0), gapCand(0), { targetGaps: ["T-0072"] }), "improvement")).toBe("fail");
   });
 
   it("is INCONCLUSIVE, not a silent pass, when a declared gap matches no query", () => {
-    const result = evaluateGate(gapBase(0), gapCand(1), { targetGaps: ["T-9999"] });
+    const result = judge(gapBase(0), gapCand(1), { targetGaps: ["T-9999"] });
     expect(status(result, "target-gaps")).toBe("inconclusive");
     expect(result.verdict).not.toBe("PASS");
   });
@@ -671,20 +685,20 @@ describe("evaluateGate: known gaps", () => {
   it("protects gap queries the baseline already answers: a drop fails regression with or without a declaration", () => {
     // gap queries scored 0.5 in the baseline (e.g. a scale-conditional gap at core-1k); the candidate drops them to 0
     const b = gapBase(0.5), c = gapCand(0);
-    expect(status(evaluateGate(b, c, FEW), "regression")).toBe("fail");
-    expect(status(evaluateGate(b, c, { targetGaps: ["T-0072"], ...FEW }), "regression")).toBe("fail");
+    expect(status(judge(b, c, FEW), "regression")).toBe("fail");
+    expect(status(judge(b, c, { targetGaps: ["T-0072"], ...FEW }), "regression")).toBe("fail");
   });
 
   it("does not count a protected gap query's gain as an overall improvement", () => {
     // gap queries the baseline answers at 0.5 rise to 1; the 220 real queries do not move
-    const result = evaluateGate(gapBase(0.5), gapCand(1));
+    const result = judge(gapBase(0.5), gapCand(1));
     expect(status(result, "regression")).toBe("pass");
     expect(status(result, "improvement")).toBe("fail");
     expect(result.verdict).toBe("FAIL");
   });
 
   it("leaves gap queries the baseline scores 0 out of the regression population, so they cannot dilute it", () => {
-    const result = evaluateGate(gapBase(0), gapCand(0, shift(0.5, 60)));
+    const result = judge(gapBase(0), gapCand(0, shift(0.5, 60)));
     const overall = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(overall.base).toBeCloseTo(0.5); // 220 real queries, not 240 with 20 constant zeros
   });
@@ -699,7 +713,7 @@ describe("evaluateGate: known gaps", () => {
     const b = report("baseline", (i, r) => shape(i, r, false), 300);
     const c = report("v", (i, r) => shape(i, r, true), 300);
     for (const opts of [{}, { targetGaps: ["T-0072"] }]) {
-      const result = evaluateGate(b, c, opts);
+      const result = judge(b, c, opts);
       expect(status(result, "regression"), JSON.stringify(opts)).toBe("fail");
       expect(result.rules.find(r => r.rule === "regression")!.detail).toMatch(/identifier/);
       expect(result.verdict).toBe("FAIL");
@@ -707,14 +721,14 @@ describe("evaluateGate: known gaps", () => {
   });
 
   it("G1b: gap gains are never averaged into the overall or category deltas", () => {
-    const result = evaluateGate(gapBase(0), gapCand(1), { targetGaps: ["T-0072"] });
+    const result = judge(gapBase(0), gapCand(1), { targetGaps: ["T-0072"] });
     const overall = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(overall.ci.mean).toBeCloseTo(0);
   });
 
   it("G2/G3: a declared gap below the category floors is INCONCLUSIVE with the power stated, never a PASS", () => {
     const small = (score: number) => (i: number, r: QueryResult) => { if (i < 8) { r.tags = ["known-gap", "gap:T-0074"]; r.category = "short-word"; set(r, score); } };
-    const result = evaluateGate(report("baseline", small(0)), report("v", small(0.5)), { targetGaps: ["T-0074"] });
+    const result = judge(report("baseline", small(0)), report("v", small(0.5)), { targetGaps: ["T-0074"] });
     expect(status(result, "improvement")).toBe("inconclusive");
     expect(result.verdict).toBe("INCONCLUSIVE");
     const detail = result.rules.find(r => r.rule === "improvement")!.detail;
@@ -725,29 +739,29 @@ describe("evaluateGate: known gaps", () => {
 
   it("holds a declared gap to the same cluster floor as a category: 12 queries in 2 clusters is inconclusive", () => {
     const few = (score: number) => (i: number, r: QueryResult) => { if (i < 12) { r.tags = GAP; r.clusterKey = `k${i % 2}`; set(r, score); } };
-    const result = evaluateGate(report("baseline", few(0)), report("v", few(1)), { targetGaps: ["T-0072"] });
+    const result = judge(report("baseline", few(0)), report("v", few(1)), { targetGaps: ["T-0072"] });
     expect(status(result, "improvement")).toBe("inconclusive");
   });
 
   it("keeps leaks, errors, and degradation in gap queries as hard failures", () => {
-    const leak = evaluateGate(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.leaked = ["x"]; }));
+    const leak = judge(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.leaked = ["x"]; }));
     expect(status(leak, "isolation")).toBe("fail");
-    const err = evaluateGate(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.error = "boom"; }));
+    const err = judge(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.error = "boom"; }));
     expect(status(err, "errors")).toBe("fail");
-    const deg = evaluateGate(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.degraded = ["semantic-unavailable"]; }));
+    const deg = judge(gapBase(0), gapCand(0, (i, r) => { if (i === 1) r.degraded = ["semantic-unavailable"]; }));
     expect(status(deg, "degraded")).toBe("fail");
   });
 
   it("keeps cost across ALL queries: a cost blowup confined to gap queries still fails", () => {
     const heavy = gapCand(0, (i, r) => { if (inGap(i)) r.cost.neurons = 2 + 400; });
-    expect(status(evaluateGate(gapBase(0), heavy), "cost")).toBe("fail");
+    expect(status(judge(gapBase(0), heavy), "cost")).toBe("fail");
   });
 
   it("is INCONCLUSIVE when the two reports disagree about which queries are gaps, including a second gap id", () => {
     const c = report("v", (i, r) => { if (i < 5) r.tags = GAP; });
-    expect(status(evaluateGate(gapBase(0), c), "comparable")).toBe("inconclusive");
+    expect(status(judge(gapBase(0), c), "comparable")).toBe("inconclusive");
     const extraId = report("v", (i, r) => { if (inGap(i)) r.tags = [...GAP, "gap:T-0073"]; });
-    expect(status(evaluateGate(gapBase(0), extraId), "comparable")).toBe("inconclusive");
+    expect(status(judge(gapBase(0), extraId), "comparable")).toBe("inconclusive");
   });
 });
 
@@ -763,14 +777,14 @@ describe("evaluateGate: a category loses strictly more than one query's worth to
 
   it("exactly one query lost passes the regression rule (its delta equals the tolerance), and the losers list still names it", () => {
     const b = report("baseline", perfect), c = report("v", lose(1));
-    const row = evaluateGate(b, c).deltas.find(d => d.scope === category && d.metric === "recall10")!;
+    const row = judge(b, c).deltas.find(d => d.scope === category && d.metric === "recall10")!;
     expect(row.ci.mean).toBeCloseTo(-1 / 30, 12);
-    expect(status(evaluateGate(b, c), "regression")).toBe("pass");
+    expect(status(judge(b, c), "regression")).toBe("pass");
     expect(findLosers(b, c).map(l => l.queryId)).toEqual(["q0"]);
   });
 
   it("two queries lost fail it, naming the category", () => {
-    const result = evaluateGate(report("baseline", perfect), report("v", lose(2)));
+    const result = judge(report("baseline", perfect), report("v", lose(2)));
     expect(status(result, "regression")).toBe("fail");
     expect(result.rules.find(r => r.rule === "regression")!.detail).toContain(category);
   });
@@ -784,7 +798,7 @@ describe("evaluateGate: an underpowered comparison is INCONCLUSIVE for improveme
   };
 
   it("no improvement shown and MDE above the margin: INCONCLUSIVE, with the numbers", () => {
-    const result = evaluateGate(report("baseline"), report("v", noisy));
+    const result = judge(report("baseline"), report("v", noisy));
     expect(status(result, "regression")).toBe("pass");
     expect(status(result, "improvement")).toBe("inconclusive");
     expect(result.rules.find(r => r.rule === "improvement")!.detail).toMatch(/underpowered: MDE 0\.\d{4} > margin 0\.02/);
@@ -792,13 +806,13 @@ describe("evaluateGate: an underpowered comparison is INCONCLUSIVE for improveme
   });
 
   it("a true no-op (MDE about 0) still FAILs improvement", () => {
-    const result = evaluateGate(report("baseline"), report("v"));
+    const result = judge(report("baseline"), report("v"));
     expect(result.mde.recall10).toBe(0);
     expect(status(result, "improvement")).toBe("fail");
     expect(result.verdict).toBe("FAIL");
   });
 
   it("a proven gain still passes however wide the spread", () => {
-    expect(status(evaluateGate(report("baseline"), report("v", shift(0.5, 120))), "improvement")).toBe("pass");
+    expect(status(judge(report("baseline"), report("v", shift(0.5, 120))), "improvement")).toBe("pass");
   });
 });
