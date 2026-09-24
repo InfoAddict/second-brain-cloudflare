@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { COMMON_TOKENS, CORRELATED_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
+import { COMMON_TOKENS, CORRELATED_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS, IMPORTANCE_WEIGHTS, generateHaystack, type HaystackOptions } from "./haystack";
 import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT, QUERY_SATURATION_FRACTION } from "../../../src/constants";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
+import { HAYSTACK_ROWS } from "./build";
 import { ACTORS, DAY_MS, EVAL_NOW, IDENTITIES, WORKSPACES, needleToEntry } from "./types";
 
 const base: HaystackOptions = {
@@ -25,16 +26,15 @@ const base: HaystackOptions = {
   ],
 };
 
-// The real corpus parameters (plan 6c CORPUS_PARAMS; the 20k commonRate is 0.08 so a rare+common query keeps
-// FTS). The haystack is the total minus about 330 authored needles; `TOTAL` sizes are the looser variant.
-const NEEDLES = 330;
+// The real corpus parameters (CORPUS_PARAMS; the 20k commonRate is 0.08 so a rare+common query keeps FTS). The
+// haystack is HAYSTACK_ROWS whatever the needle count; `total` is the looser variant with 344 more rows.
 const REAL = [
-  { scale: "1k", total: 1000, commonRate: 0.25, seed: 1001 },
-  { scale: "5k", total: 5000, commonRate: 0.25, seed: 5001 },
-  { scale: "20k", total: 20_000, commonRate: 0.08, seed: 20_001 },
+  { scale: "1k", total: HAYSTACK_ROWS["core-1k"] + 344, commonRate: 0.25, seed: 1001 },
+  { scale: "5k", total: HAYSTACK_ROWS["scale-5k"] + 344, commonRate: 0.25, seed: 5001 },
+  { scale: "20k", total: HAYSTACK_ROWS["scale-20k"] + 344, commonRate: 0.08, seed: 20_001 },
 ] as const;
 type Real = (typeof REAL)[number];
-const realRows = (config: Real, count = config.total - NEEDLES, seed: number = config.seed) =>
+const realRows = (config: Real, count = config.total - 344, seed: number = config.seed) =>
   generateHaystack({ ...base, count, commonRate: config.commonRate, seed, denseRate: DENSE_RATE_BY_SCALE[config.scale] });
 const SCOPES = {
   avery: readScopeWorkspaces(IDENTITIES.avery, {}),
@@ -44,9 +44,9 @@ const inScope = <T extends { workspaceId: string }>(rows: T[], scope: keyof type
 const TRIPLES = DENSE_TOKENS.flatMap((a, i) => DENSE_TOKENS.slice(i + 1).flatMap((b, j) => DENSE_TOKENS.slice(i + j + 2).map(c => [a, b, c] as const)));
 
 const PINNED_COMMON = {
-  "1k": { roadmap: { avery: 153, blake: 139, company: 136 }, standup: { avery: 169, blake: 153, company: 150 }, invoice: { avery: 166, blake: 150, company: 147 } },
-  "5k": { roadmap: { avery: 1139, blake: 1036, company: 1001 }, standup: { avery: 1101, blake: 1001, company: 971 }, invoice: { avery: 1125, blake: 1029, company: 994 } },
-  "20k": { roadmap: { avery: 1534, blake: 1386, company: 1349 }, standup: { avery: 1521, blake: 1373, company: 1323 }, invoice: { avery: 1501, blake: 1343, company: 1302 } },
+  "1k": { roadmap: { avery: 151, blake: 137, company: 134 }, standup: { avery: 165, blake: 149, company: 146 }, invoice: { avery: 161, blake: 146, company: 143 } },
+  "5k": { roadmap: { avery: 1135, blake: 1032, company: 997 }, standup: { avery: 1098, blake: 998, company: 968 }, invoice: { avery: 1122, blake: 1026, company: 991 } },
+  "20k": { roadmap: { avery: 1534, blake: 1386, company: 1349 }, standup: { avery: 1517, blake: 1369, company: 1319 }, invoice: { avery: 1499, blake: 1341, company: 1300 } },
 };
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -66,12 +66,33 @@ describe("generateHaystack", () => {
     });
   });
 
+  it("carries an authored needle importance onto the entry, and none when unauthored", () => {
+    const row = { id: "n2", content: "Invented note", tags: [], workspace: "avery" as const, ageDays: 1 };
+    expect(needleToEntry(row)).not.toHaveProperty("importanceScore");
+    expect(needleToEntry({ ...row, importance: 4 }).importanceScore).toBe(4);
+  });
+
+  it("draws every haystack row an importance score of 1-5 with the seeded 2-3 skew, without shifting the text", () => {
+    const rows = generateHaystack({ ...base, count: 4000 });
+    const share = (score: number) => rows.filter(row => row.importanceScore === score).length / rows.length;
+    expect(rows.every(row => Number.isInteger(row.importanceScore) && row.importanceScore! >= 1 && row.importanceScore! <= 5)).toBe(true);
+    IMPORTANCE_WEIGHTS.forEach((weight, i) => expect(share(i + 1), `score ${i + 1}`).toBeCloseTo(weight, 1));
+    expect(share(2) + share(3)).toBeGreaterThan(0.6);
+    const mean = rows.reduce((sum, row) => sum + row.importanceScore!, 0) / rows.length;
+    expect(mean).toBeGreaterThan(2.6);
+    expect(mean).toBeLessThan(3.0);
+    // its own stream: flat weights change the scores and nothing else
+    const flat = generateHaystack({ ...base, count: 4000, importanceWeights: [1, 1, 1, 1, 1] });
+    expect(flat.map(row => row.content)).toEqual(rows.map(row => row.content));
+    expect(flat.map(row => row.importanceScore)).not.toEqual(rows.map(row => row.importanceScore));
+  });
+
   it("produces byte-identical output for a seed with pinned digests", () => {
     const first = generateHaystack(base);
     const second = generateHaystack(base);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(digest(first)).toBe("c50e662c4bd0b320e948a04da409083783644c8a32a81ec99cfe2d5504c20eb5");
-    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("a01f0eec4604858f456896fe4875e92fccc02fc94b038bf9e0f6f5b12e4011ef");
+    expect(digest(first)).toBe("7de376a78ce65aacc29655e52372e18cafd9ed3c2322716ad8ce8b07da715051");
+    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("11459c6d97adf1a1a574aff1b40f567ac0768e764d9c192d9023d9740d8c3848");
     expect(first).not.toEqual(generateHaystack({ ...base, seed: 8 }));
   });
 

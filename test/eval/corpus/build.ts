@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { EdgeType } from "../../../src/graph/types";
 import type { GoldenQuery } from "../types";
 import { hashDataDir } from "../lock";
-import { CORRELATED_RATE_BY_SCALE, DENSE_RATE_BY_SCALE, generateHaystack } from "./haystack";
+import { DENSE_RATE_BY_SCALE, generateHaystack } from "./haystack";
 import {
   ACTORS, EVAL_NOW, WORKSPACES, needleToEntry,
   type CorpusEdge, type CorpusEntry, type CorpusSpec, type NeedleRow,
@@ -12,11 +12,17 @@ import {
 export const CORPUS_IDS = ["core-1k", "scale-5k", "scale-20k"] as const;
 export type CoreCorpusId = (typeof CORPUS_IDS)[number];
 
-export const CORPUS_PARAMS: Record<CoreCorpusId, { intent: CorpusSpec["intent"]; total: number; commonRate: number; seed: number; denseRate: (typeof DENSE_RATE_BY_SCALE)[keyof typeof DENSE_RATE_BY_SCALE]; correlatedRate: number }> = {
-  "core-1k": { intent: "tie", total: 1000, commonRate: 0.25, seed: 1001, denseRate: DENSE_RATE_BY_SCALE["1k"], correlatedRate: CORRELATED_RATE_BY_SCALE["1k"] },
-  "scale-5k": { intent: "discriminate", total: 5000, commonRate: 0.25, seed: 5001, denseRate: DENSE_RATE_BY_SCALE["5k"], correlatedRate: CORRELATED_RATE_BY_SCALE["5k"] },
+/**
+ * Haystack rows per scale. The needles come on top, so the golden set can grow without changing the
+ * haystack (and the density bands its rates were solved for). "1k" names the haystack scale, not the total.
+ */
+export const HAYSTACK_ROWS = { "core-1k": 656, "scale-5k": 4656, "scale-20k": 19656 } as const;
+
+export const CORPUS_PARAMS: Record<CoreCorpusId, { intent: CorpusSpec["intent"]; haystack: number; commonRate: number; seed: number; denseRate: (typeof DENSE_RATE_BY_SCALE)[keyof typeof DENSE_RATE_BY_SCALE]; correlatedRate: number }> = {
+  "core-1k": { intent: "tie", haystack: HAYSTACK_ROWS["core-1k"], commonRate: 0.25, seed: 1001, denseRate: DENSE_RATE_BY_SCALE["1k"], correlatedRate: CORRELATED_RATE_BY_SCALE["1k"] },
+  "scale-5k": { intent: "discriminate", haystack: HAYSTACK_ROWS["scale-5k"], commonRate: 0.25, seed: 5001, denseRate: DENSE_RATE_BY_SCALE["5k"], correlatedRate: CORRELATED_RATE_BY_SCALE["5k"] },
   // 0.08 keeps a rare+common query under the router's FTS budget at 20k
-  "scale-20k": { intent: "discriminate", total: 20000, commonRate: 0.08, seed: 20001, denseRate: DENSE_RATE_BY_SCALE["20k"], correlatedRate: CORRELATED_RATE_BY_SCALE["20k"] },
+  "scale-20k": { intent: "discriminate", haystack: HAYSTACK_ROWS["scale-20k"], commonRate: 0.08, seed: 20001, denseRate: DENSE_RATE_BY_SCALE["20k"], correlatedRate: CORRELATED_RATE_BY_SCALE["20k"] },
 };
 
 export interface EdgeRow { source: string; target: string; type: EdgeType; weight: number; provenance: "explicit" | "inferred" | "system" }
@@ -28,7 +34,9 @@ export function readJsonl<T>(path: string): T[] {
   return readFileSync(path, "utf8").split("\n").filter(line => line.trim()).map(line => JSON.parse(line) as T);
 }
 
-export function loadCoreData() {
+export interface CoreData { needles: NeedleRow[]; edges: EdgeRow[]; queries: GoldenQuery[] }
+
+export function loadCoreData(): CoreData {
   return {
     needles: readJsonl<NeedleRow>(resolve(CORE_DATA_DIR, "needles.jsonl")),
     edges: readJsonl<EdgeRow>(resolve(CORE_DATA_DIR, "edges.jsonl")),
@@ -36,12 +44,13 @@ export function loadCoreData() {
   };
 }
 
-export function buildCorpus(id: CoreCorpusId): CorpusSpec {
+/** `data` overrides the committed files (the audit tool and tests build candidate sets this way). */
+export function buildCorpus(id: CoreCorpusId, data: CoreData = loadCoreData()): CorpusSpec {
   const params = CORPUS_PARAMS[id];
-  const { needles, edges, queries } = loadCoreData();
+  const { needles, edges, queries } = data;
   const needleEntries = needles.map(needleToEntry);
   const haystack: CorpusEntry[] = generateHaystack({
-    count: params.total - needleEntries.length,
+    count: params.haystack,
     seed: params.seed,
     commonRate: params.commonRate,
     denseRate: params.denseRate,

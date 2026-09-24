@@ -5,23 +5,28 @@ import { DAY_MS, WORKSPACES, type CorpusEntry } from "./types";
 export const COMMON_TOKENS = ["roadmap", "standup", "invoice"] as const;
 /**
  * Dense tier: everyday words that no other haystack word contains. Every row carries at most two of them,
- * so a query of three dense words matches only its gold (8 words give 56 distinct triples). `denseRate`
+ * so a query of three dense words matches only its gold (9 words give 84 distinct triples per readable
+ * scope: avery reads avery+company, blake reads company+blake). `denseRate`
  * tunes each word's df into the band the keyword arm needs in the default scope of avery and of blake:
  * over KEYWORD_CANDIDATE_LIMIT (LIKE truncates) yet a three-word dfSum under FTS_MATCH_BUDGET (the router
  * keeps FTS), and at most 2 words per row keeps df / rows under QUERY_SATURATION_FRACTION.
  */
-export const DENSE_TOKENS = ["garden", "window", "coffee", "kitchen", "letter", "table", "bread", "cheese"] as const;
+export const DENSE_TOKENS = ["garden", "window", "coffee", "kitchen", "letter", "table", "bread", "cheese", "basket"] as const;
+
+/** Share of haystack rows per classifier score 1-5: the classifier rates most personal notes 2-3 and few 5. */
+export const IMPORTANCE_WEIGHTS = [0.1, 0.3, 0.36, 0.17, 0.07] as const;
 
 /**
- * Mean dense words per row by workspace (0-2), per scale. df of one word = sum(rows x mean) / 8 over the
+ * Mean dense words per row by workspace (0-2), per scale. df of one word = sum(rows x mean) / 9 over the
  * scope, so the three scopes' rates are solved together: avery reads avery+company, blake reads
- * company+blake. Solved for haystacks of about 670 / 4670 / 19670 rows (total minus ~330 needles), which
- * lands each word near 75 / 585 / 585 rows in both default scopes.
+ * company+blake. Solved for haystacks of 656 / 4656 / 19656 rows (HAYSTACK_ROWS in build.ts), which lands
+ * each word near 75 / 575 / 590 rows in both default scopes. At 5k the company and blake rates sit at the
+ * two-per-row cap, which is why nine words is the most that keep 5k above the window with margin.
  */
 export const DENSE_RATE_BY_SCALE = {
-  "1k": { [WORKSPACES.avery]: 0.22, [WORKSPACES.company]: 1.75, [WORKSPACES.blake]: 1 },
-  "5k": { [WORKSPACES.avery]: 0.44, [WORKSPACES.company]: 1.78, [WORKSPACES.blake]: 2 },
-  "20k": { [WORKSPACES.avery]: 0.09, [WORKSPACES.company]: 0.44, [WORKSPACES.blake]: 0.4 },
+  "1k": { [WORKSPACES.avery]: 0.25, [WORKSPACES.company]: 2, [WORKSPACES.blake]: 1.13 },
+  "5k": { [WORKSPACES.avery]: 0.5, [WORKSPACES.company]: 2, [WORKSPACES.blake]: 2 },
+  "20k": { [WORKSPACES.avery]: 0.1, [WORKSPACES.company]: 0.5, [WORKSPACES.blake]: 0.45 },
 } as const;
 
 /**
@@ -47,9 +52,11 @@ export interface HaystackOptions {
   longRate: number;
   /** Mean dense-tier words (0-2) per row: one number for every workspace, or a rate per workspace id (missing = 0). */
   denseRate: number | Readonly<Record<string, number>>;
-  workspaces: { workspaceId: string; actorId: string; weight: number }[];
+  /** Weights for scores 1-5 (default IMPORTANCE_WEIGHTS). Drawn from its own stream, so the text never shifts. */
+  importanceWeights?: readonly number[];
   /** Share of rows that also carry the CORRELATED_TOKENS triple; default 0, which leaves every row byte-identical. */
   correlatedRate?: number;
+  workspaces: { workspaceId: string; actorId: string; weight: number }[];
 }
 
 type Pick = <T>(xs: readonly T[]) => T;
@@ -132,6 +139,15 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
   const correlatedRand = mulberry32(options.seed ^ 0x51ed270b);
   const correlatedClause = () => (options.correlatedRate && correlatedRand() < options.correlatedRate
     ? ` Spring bed plan: ${CORRELATED_TOKENS.join(", ")}.` : "");
+  // Importance draws from a stream of its own with a seed distinct from the correlated tier's.
+  const importanceRand = mulberry32(options.seed ^ 0x2545f491);
+  const importanceWeights = options.importanceWeights ?? IMPORTANCE_WEIGHTS;
+  const importanceTotal = importanceWeights.reduce((sum, weight) => sum + weight, 0);
+  const drawImportance = () => {
+    let remaining = importanceRand() * importanceTotal;
+    for (let score = 0; score < importanceWeights.length; score++) if ((remaining -= importanceWeights[score]) < 0) return score + 1;
+    return importanceWeights.length;
+  };
   // Each workspace deals dense words from its own shuffled deck, so every word gets (almost) the same
   // number of slots in any scope built from whole workspaces; consecutive cards never repeat.
   const decks = new Map<string, string[]>();
@@ -195,6 +211,7 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
       createdAt,
       workspaceId: workspace.workspaceId,
       actorId: workspace.actorId,
+      importanceScore: drawImportance(),
     };
   });
 }
