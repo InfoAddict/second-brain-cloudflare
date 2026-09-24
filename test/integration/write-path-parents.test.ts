@@ -177,3 +177,36 @@ describe("duplicate check on a re-captured long note", () => {
     expect(r.neighbors.length).toBeLessThanOrEqual(5);
   });
 });
+
+describe("ids-only matches carry their note and their isUpdate flag", () => {
+  it("reads the note and the update flag from the vector id: <id>-chunk-<i> and <id>-update-<ms>", async () => {
+    const { parentIdOfVectorId, asParentMatches } = await import("../../src/vectorize/parents");
+    expect(parentIdOfVectorId("e1-chunk-3")).toBe("e1");
+    expect(parentIdOfVectorId("e1-update-1758700000000")).toBe("e1");
+    expect(parentIdOfVectorId("e1")).toBe("e1");
+    expect(parentIdOfVectorId("2f3a-chunk-0-update-17587")).toBe("2f3a-chunk-0");
+    const [chunk, update, whole] = asParentMatches([{ id: "e1-chunk-3", score: 0.9 }, { id: "e2-update-1758700000000", score: 0.8 }, { id: "e3", score: 0.7 }]);
+    expect(chunk.metadata).toEqual({ parentId: "e1", isUpdate: false });
+    expect(update.metadata).toEqual({ parentId: "e2", isUpdate: true });
+    expect(whole.metadata).toEqual({ parentId: "e3", isUpdate: false });
+  });
+
+  it("an appended (update) vector in the deep fill still resolves to its note and is marked as an update", async () => {
+    const { recallEntries } = await import("../../src/recall/search");
+    const { D1Mock } = await import("../helpers/d1-mock");
+    const { makeTestEnv, makeVectorizeMock } = await import("../helpers/make-env");
+    const db = new D1Mock();
+    for (let i = 0; i < 40; i++) db.entries.push({ id: `e${i}`, content: `topic note ${i}`, tags: "[]", source: "api", created_at: 1000 + i, vector_ids: "[]", recall_count: 0, importance_score: 0 });
+    const ids = Array.from({ length: 100 }, (_, i) => (i % 5 === 0 ? `e${Math.floor(i / 5)}-update-${1000 + i}` : `e${Math.floor(i / 5)}-chunk-${i % 5}`));
+    const query = vi.fn(async (_v: unknown, o: { topK?: number; returnMetadata?: string } = {}) => ({
+      matches: ids.slice(0, o.topK ?? 10).map((id, i) => o.returnMetadata === "none" ? { id, score: 0.9 - i * 0.001 } : { id, score: 0.9 - i * 0.001, values: [i, 1, 0, 0, 0, 0], metadata: { parentId: id.replace(/-(chunk|update)-\d+$/, ""), isUpdate: id.includes("-update-") } }),
+    }));
+    const env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ query: query as never }) });
+    const prepare = db.prepare.bind(db);
+    (db as any).prepare = (sql: string) => sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT") ? { bind: () => ({ all: async () => ({ results: [] }) }) } : prepare(sql);
+    const r = await recallEntries({ query: "topic note", topK: 20, hops: 0, synthesize: false }, env, { waitUntil: () => {} } as unknown as ExecutionContext, on);
+    expect(r.matches).toHaveLength(20);
+    expect(new Set(r.matches.map(m => m.id)).size).toBe(20);
+    expect(r.matches.slice(5).some(m => m.isUpdate), "an update hit past the primary list, from the fill").toBe(true);
+  });
+});

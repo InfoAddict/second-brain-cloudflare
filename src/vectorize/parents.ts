@@ -23,10 +23,10 @@ export function nearestParents<T extends Scored>(matches: readonly T[], limit = 
   return [...best.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, limit);
 }
 
-/** The note a vector id belongs to: a chunk id is `<id>-chunk-<i>`, any other id is its own note. */
-export const parentIdOfVectorId = (id: string): string => id.replace(/-chunk-\d+$/, "");
+/** The note a vector id belongs to: `<id>-chunk-<i>` and `<id>-update-<ms>` (an appended addition) are its vectors, any other id is its own note. */
+export const parentIdOfVectorId = (id: string): string => id.replace(/-(?:chunk|update)-\d+$/, "");
 
-/** Ids-only matches (no metadata) as matches a caller that reads `metadata.parentId` can use. */
-export function asParentMatches<T extends { id: string; score: number }>(matches: readonly T[]): (T & { metadata: { parentId: string } })[] {
-  return matches.map(m => ({ ...m, metadata: { parentId: parentIdOfVectorId(m.id) } }));
+/** Ids-only matches (no metadata) as matches a caller that reads `metadata.parentId` and `metadata.isUpdate` can use; both come from the id. */
+export function asParentMatches<T extends { id: string; score: number }>(matches: readonly T[]): (T & { metadata: { parentId: string; isUpdate: boolean } })[] {
+  return matches.map(m => ({ ...m, metadata: { parentId: parentIdOfVectorId(m.id), isUpdate: /-update-\d+$/.test(m.id) } }));
 }
