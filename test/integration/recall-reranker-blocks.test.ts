@@ -102,6 +102,17 @@ describe("reranker with the block layout", () => {
     expect(reordered).toBeGreaterThan(0);
   }, 240_000);
 
+  it("every linked memory finds its root: no expanded node is rejected for want of one", async () => {
+    for (const seed of [3, 4]) {
+      const { env } = await corpus(seed);
+      for (const hops of [1, 2]) {
+        const { diagnostics } = await run(env, RECALL_MAX_TOP_K, hops, "on");
+        expect((diagnostics.rejections ?? []).filter(r => r.reason === "no-root")).toEqual([]);
+        expect(diagnostics.expandedIds?.length ?? 0).toBeGreaterThan(0); // the graph did expand, so this is not vacuous
+      }
+    }
+  });
+
   it("never lists a memory twice and keeps the list within topK", async () => {
     const { env } = await corpus(7);
     for (const k of [5, 10, 20]) {

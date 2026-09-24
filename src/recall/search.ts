@@ -566,8 +566,6 @@ export async function recallEntries(
   // Linked-evidence scoring is calibrated on heuristic root scores; a reranker blend rescales them (best x2, worst x0.25),
   // which would move which linked memories qualify even when the model agrees with the heuristic order. Keep the
   // pre-blend scores for it; the blend still decides the ORDER of the direct picks and of root selection.
-  const heuristicDirectScore = new Map<string, number>();
-  for (const m of directReranked) if (!heuristicDirectScore.has(parentOfMatch(m))) heuristicDirectScore.set(parentOfMatch(m), m.score);
   const heuristicRootScore = new Map<string, number>();
   for (const m of rootReranked) if (!heuristicRootScore.has(parentOfMatch(m))) heuristicRootScore.set(parentOfMatch(m), m.score);
   if (rerank.percentiles) {
@@ -751,8 +749,6 @@ export async function recallEntries(
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
-  const fallbackDirect = directCandidates[Math.min(directCandidates.length, RECALL_BLOCK) - 1];
-  const fallbackRootScore = fallbackDirect ? heuristicDirectScore.get(parentOfMatch(fallbackDirect)) ?? fallbackDirect.score : 0;
   for (const e of expanded) {
     rootIdByNode.set(e.id, rootIdByNode.get(e.viaFrom) ?? e.viaFrom);
   }
@@ -765,7 +761,11 @@ export async function recallEntries(
     const row = d1Map.get(e.id);
     if (!row) return [];
     const root = rootById.get(rootIdByNode.get(e.id) ?? "");
-    const rootScore = root ? evidenceScoreOf(root) / normalizedRootDivisor : fallbackRootScore;
+    // Every expanded node descends from a selected seed (expandGraph walks by hop from graphSeedIds and rootIdByNode is filled
+    // in that order), so a root is always found; there is no made-up parent score to fall back on. Checked by throwing at
+    // this point across the integration, frozen-benchmark and unit suites and both eval variants on core-1k: never reached.
+    if (!root) { internal.diagnostics?.rejections?.push({ id: e.id, reason: "no-root" }); return []; }
+    const rootScore = evidenceScoreOf(root) / normalizedRootDivisor;
     const evidence = scoreLinkedEvidence({
       parentScore: rootScore,
       parentContent: root?.localEvidence ?? "",
