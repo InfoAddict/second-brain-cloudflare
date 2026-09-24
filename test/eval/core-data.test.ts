@@ -89,10 +89,13 @@ describe("core golden data", () => {
       expect(one + five, "extremes are the tails").toBeLessThan(two);
       expect(four).toBeGreaterThan(0.05);
       const mean = rows.reduce((sum, e) => sum + e.importanceScore!, 0) / rows.length;
-      // authored needles must not sit systematically above the haystack they compete with (importance scales the ranking score)
       expect(mean, "mean importance").toBeGreaterThan(2.6);
       expect(mean, "mean importance").toBeLessThan(3.1);
     }
+    // Importance scales the ranking score (0.8 + importance/5 x 0.4), so authored golds must not sit systematically above
+    // the haystack they compete with: bound the difference itself, not just each mean.
+    const meanOf = (rows: typeof spec.entries) => rows.reduce((sum, e) => sum + e.importanceScore!, 0) / rows.length;
+    expect(Math.abs(meanOf(needleRows) - meanOf(haystack)), "needle vs haystack mean importance").toBeLessThan(0.15);
     // authored on the row itself (or its long-context anchor), never left to the loader default
     expect(needles.filter(n => n.importance === undefined).map(n => n.id)).toEqual([]);
     // decisions outrank the reasons behind them
@@ -103,8 +106,11 @@ describe("core golden data", () => {
   // each (float32 embeddings barely compress): 6.8 MB, so 8 MiB leaves 1.6 MB with contextual embeddings off. Contextual
   // rows (T-0042) re-embed chunks: the 682 chunks of the 231 multi-chunk notes are about 1.1 MB and still fit; all 2,743
   // chunks (4.3 MB) do not, so those stay in the local cache, uncommitted. Past the cap, move the layer out of git.
-  it("keeps the committed core replay layer within its size budget", () => {
-    const bytes = statSync(resolve(DATA, `replay.${DEFAULTS.EMBEDDING_MODEL.split("/").pop()}.jsonl.gz`)).size;
+  it("keeps every committed replay layer together within its size budget", () => {
+    // the privacy allowlist admits replay.<model>.jsonl.gz for any model, so the cap is on their sum (a bge-m3 layer counts too)
+    const layers = readdirSync(DATA).filter(name => /^replay\.[\w.-]+\.jsonl\.gz$/.test(name));
+    expect(layers).toContain(`replay.${DEFAULTS.EMBEDDING_MODEL.split("/").pop()}.jsonl.gz`);
+    const bytes = layers.reduce((sum, name) => sum + statSync(resolve(DATA, name)).size, 0);
     expect(bytes).toBeLessThan(8 * 1024 * 1024);
   });
 
