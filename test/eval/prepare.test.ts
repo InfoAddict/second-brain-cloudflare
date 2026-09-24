@@ -69,4 +69,13 @@ describe("prepare", () => {
     const corpus = await (await import("./corpus/loader")).loadCorpus({ spec, backend: "sqlite", replay: makeReplayAi({ store: layer, mode: "replay" }), embeddingModel: MODEL });
     await corpus.close(); // loads with no live provider and no local cache: the gz layer alone is complete
   });
+
+  it("refuses to extend a cache that has rows but no producer record, before any live call", async () => {
+    const { root, file } = scratch();
+    const plain = makeReplayAi({ store: new ReplayStore([], file, { root }), mode: "record", live: { run: live().run } }); // no producer(): unlabeled rows
+    await plain.ai.run(MODEL as never, { text: ["old"] } as never);
+    const l = live();
+    await expect(prepare(args(new ReplayStore([file], file, { root }), l))).rejects.toThrow(/no producer record/);
+    expect(l.run).not.toHaveBeenCalled();
+  });
 });

@@ -537,7 +537,7 @@ describe("producer provenance in the replay cache", () => {
     const live = { ...fakeLive(), producer: vi.fn(() => PRODUCER) };
     const ai = makeReplayAi({ store: s, mode: "record", live });
     await ai.ai.run(MODEL as never, embedInput("a") as never);
-    expect(ai.producer(MODEL)).toEqual(PRODUCER);
+    expect(ai.producers()).toEqual({ [MODEL]: PRODUCER });
     expect(rows(join(cacheOf(root), "p.jsonl")).filter(l => l.includes('"producer"'))).toHaveLength(1);
     const reopened = new ReplayStore([join(cacheOf(root), "p.jsonl")], undefined, { root });
     expect(reopened.producerOf(MODEL)).toEqual(PRODUCER);
@@ -563,5 +563,44 @@ describe("producer provenance in the replay cache", () => {
     const s = new ReplayStore([], undefined, { root: tmp() });
     expect(() => s.recordProducer(MODEL, PRODUCER)).toThrow(/read-only/);
     expect(s.producerOf(MODEL)).toBeUndefined();
+  });
+});
+
+describe("unlabeled caches (rows without a producer record)", () => {
+  const unlabeled = async () => {
+    const root = tmp();
+    const file = join(cacheOf(root), "old.jsonl");
+    const plain = store(root, "old.jsonl");
+    await makeReplayAi({ store: plain, mode: "record", live: fakeLive() }).ai.run(MODEL as never, embedInput("a") as never); // no producer(): rows only
+    return { root, file };
+  };
+
+  it("refuses to record a producer into a cache that already has rows but no producer", async () => {
+    const { root, file } = await unlabeled();
+    const s = new ReplayStore([file], file, { root });
+    expect(() => s.recordProducer(MODEL, PRODUCER)).toThrow(/no producer record.*re-record|migrat/i);
+    const live = { ...fakeLive(), producer: () => PRODUCER };
+    await expect(makeReplayAi({ store: s, mode: "record", live }).ai.run(MODEL as never, embedInput("b") as never)).rejects.toThrow(/no producer record/);
+    expect(live.run).not.toHaveBeenCalled();
+    expect(rows(file).some(l => l.includes('"producer"'))).toBe(false); // nothing was stamped onto the old rows
+  });
+
+  it("refuses to serve those rows to a run whose producer is set, in replay and dry mode too", async () => {
+    const { root, file } = await unlabeled();
+    const s = new ReplayStore([file], undefined, { root });
+    for (const mode of ["replay", "dry"] as const) {
+      const ai = makeReplayAi({ store: s, mode, expectProducer: () => PRODUCER });
+      await expect(ai.ai.run(MODEL as never, embedInput("a") as never), mode).rejects.toThrow(/no producer record/);
+    }
+    // a run that declares no producer (hash smoke, legacy tooling) still reads it
+    await expect(makeReplayAi({ store: s, mode: "replay" }).ai.run(MODEL as never, embedInput("a") as never)).resolves.toBeDefined();
+  });
+
+  it("an empty cache is fine, and a declared producer that differs from the run's is refused on read", async () => {
+    const root = tmp();
+    const empty = store(root, "e.jsonl");
+    expect(() => empty.recordProducer(MODEL, PRODUCER)).not.toThrow();
+    const ai = makeReplayAi({ store: empty, mode: "replay", expectProducer: () => ({ ...PRODUCER, revision: "other" }) });
+    await expect(ai.ai.run(MODEL as never, embedInput("x") as never)).rejects.toThrow(/mixes producers/);
   });
 });

@@ -75,13 +75,26 @@ export interface EmbeddingProducer {
 export const producerKey = (p: EmbeddingProducer | undefined): string =>
   p ? [p.kind, p.library, p.libraryVersion, p.onnxRuntime, p.repo, p.revision, p.dtype].join("|") : "none";
 
+/** Canonical identity of a whole producer map: every model, sorted. A model present on one side only makes the keys differ. */
+export const producersKey = (m: Record<string, EmbeddingProducer> | undefined): string =>
+  Object.entries(m ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([model, p]) => `${model}=${producerKey(p)}`).join(";") || "none";
+
+/**
+ * Where a report's neuron figures come from. "projected": local tokenizer-exact token counts times the published
+ * Workers AI rates, not a billed count (which is why neuronsEstimated can be false: the token counts are exact,
+ * only the rate application is a projection). "provider": usage reported by the provider that served the call.
+ */
+export type NeuronSource = "projected" | "provider";
+
 export interface VariantReport {
   schema: 1;
   variant: string;
   corpus: string;
   embeddingModel: string;
-  /** What produced the vectors behind this run; absent for hash-embedding smoke runs. */
-  embeddingProducer?: EmbeddingProducer;
+  /** Who produced the outputs of every model this run called (embedding, reranker, ...), keyed by model id. Absent for hash smoke runs. */
+  producers?: Record<string, EmbeddingProducer>;
+  /** How the neuron figures were obtained; reports with different sources are not comparable on cost. */
+  neuronSource?: NeuronSource;
   d1Backend: "sqlite" | "workerd";
   isolate: "warm" | "cold";
   /** Result depth every query ran at; reports at different depths are not comparable. */
@@ -95,5 +108,5 @@ export interface VariantReport {
   results: QueryResult[];
 }
 
-/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. */
-export const RUNNER_VERSION = 3;
+/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. */
+export const RUNNER_VERSION = 4;

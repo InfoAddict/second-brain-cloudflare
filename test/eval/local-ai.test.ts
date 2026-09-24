@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  MODEL_PINS, ModelHashMismatch, countTokens, ensureModelFiles, l2normalize, makeLocalAi, poolBatch, producerFor, sigmoid,
+  MODEL_PINS, ModelHashMismatch, countTokens, ensureModelFiles, l2normalize, makeLocalAi, poolBatch, producerFor,
   type EncodedBatch, type EmbedRuntime, type RerankRuntime, type RuntimeLoader,
 } from "./local-ai";
 import { NEURON_RATES, ReplayStore, makeReplayAi } from "./ai-replay";
@@ -42,11 +42,8 @@ describe("pooling and normalization math", () => {
     expect([...l2normalize(new Float32Array([0, 0]))]).toEqual([0, 0]);
   });
 
-  it("counts real tokens and applies a sigmoid", () => {
+  it("counts real tokens, ignoring padding", () => {
     expect(countTokens(batch.attention)).toBe(5);
-    expect(sigmoid(0)).toBe(0.5);
-    expect(sigmoid(20)).toBeGreaterThan(0.999);
-    expect(sigmoid(-20)).toBeLessThan(0.001);
   });
 });
 
@@ -130,12 +127,13 @@ describe("makeLocalAi response shape and semantics (stubbed runtime, no model)",
     expect(peak).toBe(1);
   });
 
-  it("reranks in Workers AI's response shape: {response: [{id, score}]} best first, top_k applied, usage attached", async () => {
+  it("reranks in Workers AI's response shape: {response: [{id, score}]} best first, raw logits, top_k applied, usage attached", async () => {
     const loader = stubLoader();
     const ai = local(loader);
     const res = await ai.run(RERANK, { query: "q", contexts: [{ text: "meh" }, { text: "good one" }, { text: "bad" }], top_k: 2 }) as { response: { id: number; score: number }[]; usage: { prompt_tokens: number } };
     expect(res.response.map(r => r.id)).toEqual([1, 2]);
-    expect(res.response[0].score).toBeCloseTo(sigmoid(4.001), 6);
+    expect(res.response[0].score).toBeCloseTo(4.001, 5); // the raw logit, not a probability
+    expect(res.response.some(r => r.score < 0)).toBe(true);
     expect(res.response[0].score).toBeGreaterThan(res.response[1].score);
     expect(res.usage.prompt_tokens).toBe(21);
     expect((await ai.run(RERANK, { query: "q", contexts: [] }) as { response: unknown[] }).response).toEqual([]);

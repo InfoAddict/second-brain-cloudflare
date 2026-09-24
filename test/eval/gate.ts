@@ -3,7 +3,7 @@ import { CORPUS_IDS } from "./corpus/build";
 import { fingerprintKey } from "./lock";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { pairedBootstrap, type BootstrapCI } from "./stats";
-import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producerKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
+import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
 export interface GateThresholds {
   headlineTolerance: number;
@@ -79,7 +79,8 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   const problems: string[] = [];
   if (base.corpus !== cand.corpus) problems.push(`corpus differs (${base.corpus} vs ${cand.corpus})`);
   if (base.embeddingModel !== cand.embeddingModel) problems.push("embedding model differs");
-  if (producerKey(base.embeddingProducer) !== producerKey(cand.embeddingProducer)) problems.push("embedding producer differs (vectors from different producers are not comparable)");
+  if (producersKey(base.producers) !== producersKey(cand.producers)) problems.push("model producers differ (outputs from different producers, or a model used on one side only, are not comparable)");
+  if ((base.neuronSource ?? "none") !== (cand.neuronSource ?? "none")) problems.push(`neuron source differs (${base.neuronSource ?? "none"} vs ${cand.neuronSource ?? "none"})`);
   if (base.d1Backend !== cand.d1Backend) problems.push("D1 backend differs");
   if (base.isolate !== cand.isolate) problems.push("isolate mode differs");
   if (base.topK !== cand.topK) problems.push(`top-k differs (${base.topK} vs ${cand.topK})`);

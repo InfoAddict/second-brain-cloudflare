@@ -142,6 +142,7 @@ export function formatReport(report: VariantReport): string {
     "  cost per query (all queries):",
     `    D1 statements  ${dist(allQueries.d1Statements)}`,
     allQueries.d1RowsRead ? `    D1 rows_read   ${dist(allQueries.d1RowsRead, 0)}` : "    D1 rows_read: not measured (use --d1 workerd)",
+    ...(report.neuronSource ? [`    neurons source ${report.neuronSource === "projected" ? "projected from local token counts x published rates (not billed)" : "provider-reported usage"}`] : []),
     `    AI calls       mean ${allQueries.aiCalls.mean.toFixed(2)}   neurons mean ${allQueries.neurons.mean.toFixed(1)}${allQueries.estimatedNeuronQueries ? ` (estimated for ${allQueries.estimatedNeuronQueries} quer${allQueries.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,
     `    wall ms        p50 ${allQueries.wallMs.p50.toFixed(0)}  p95 ${allQueries.wallMs.p95.toFixed(0)}  (reported, never gated)`,
     `  leaks ${allQueries.leaks}   errors ${allQueries.errors}   degraded ${allQueries.degraded}`,
@@ -241,7 +242,7 @@ async function runNamed(cmd: Common, spec: CorpusSpec, name: string): Promise<Va
   const variant = getVariant(name);
   const queries = cmd.limit ? spec.queries.slice(0, cmd.limit) : spec.queries;
   const report = await withCorpus(cmd, spec, variant, corpus => runVariant({ corpus, variant, queries, isolate: cmd.isolate, embeddingModel: cmd.model }));
-  return { ...report, ...(cmd.hash && { embeddingModel: HASH_MODEL }), ...(cmd.limit && { limit: cmd.limit }) };
+  return { ...report, ...(cmd.hash && { embeddingModel: HASH_MODEL, producers: undefined, neuronSource: undefined }), ...(cmd.limit && { limit: cmd.limit }) };
 }
 
 function writeJson(path: string, value: unknown): void {

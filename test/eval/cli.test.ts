@@ -167,6 +167,12 @@ describe("main (end to end on a tiny registered corpus)", () => {
     expect(await main(["--compare", `${join(dir, "b.json")},${join(dir, "c.json")}`, "--allow-unmeasured-rows"])).toBe(3);
   });
 
+  it("formatReport states where the neuron figures come from", () => {
+    const base = report([result({ queryId: "a" })]);
+    expect(formatReport({ ...base, neuronSource: "projected" })).toMatch(/neurons.*projected from local token counts/);
+    expect(formatReport({ ...base, neuronSource: "provider" })).toMatch(/neurons.*provider-reported/);
+  });
+
   it("parses export-cache and refuses what it cannot honor", async () => {
     expect(parseCli(["export-cache"])).toMatchObject({ kind: "export-cache", corpus: "core-1k" });
     expect(() => parseCli(["export-cache", "--limit", "5"])).toThrow(UsageError);

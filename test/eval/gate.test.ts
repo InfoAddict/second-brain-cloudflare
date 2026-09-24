@@ -45,16 +45,32 @@ describe("evaluateGate", () => {
     }
   });
 
-  it("is INCONCLUSIVE when the embedding producers differ, or only one report names one", () => {
-    const producer = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" } satisfies EmbeddingProducer as EmbeddingProducer;
-    const withProducer = (name: string, p = producer) => ({ ...report(name), embeddingProducer: p });
-    const same = evaluateGate(withProducer("baseline"), withProducer("v"));
-    expect(same.rules.find(r => r.rule === "comparable")?.detail ?? "").not.toMatch(/producer/);
-    for (const cand of [withProducer("v", { ...producer, revision: "def" }), withProducer("v", { ...producer, libraryVersion: "4.4.0" }), report("v")]) {
-      const result = evaluateGate(withProducer("baseline"), cand);
-      expect(status(result, "comparable")).toBe("inconclusive");
-      expect(result.rules.find(r => r.rule === "comparable")?.detail).toMatch(/embedding producer differs/);
+  it("is INCONCLUSIVE when any model's producer differs, or a model is present on one side only", () => {
+    const mk = (repo: string, revision = "abc", libraryVersion = "4.3.0"): EmbeddingProducer =>
+      ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion, onnxRuntime: "onnxruntime-node@1.30.0", repo, revision, dtype: "fp32" });
+    const emb = mk("BAAI/bge-small-en-v1.5"), rr = mk("BAAI/bge-reranker-base");
+    const withMap = (name: string, producers?: Record<string, EmbeddingProducer>) => ({ ...report(name), ...(producers && { producers }) });
+    const both = { "@cf/baai/bge-small-en-v1.5": emb, "@cf/baai/bge-reranker-base": rr };
+    const detail = (b: VariantReport, c: VariantReport) => evaluateGate(b, c).rules.find(r => r.rule === "comparable");
+    expect(detail(withMap("baseline", both), withMap("v", { ...both }))?.detail ?? "").not.toMatch(/producer/);
+    const cases = [
+      withMap("v", { ...both, "@cf/baai/bge-reranker-base": mk("BAAI/bge-reranker-base", "def") }),   // reranker differs, embedding same
+      withMap("v", { ...both, "@cf/baai/bge-small-en-v1.5": mk("BAAI/bge-small-en-v1.5", "abc", "4.4.0") }),
+      withMap("v", { "@cf/baai/bge-small-en-v1.5": emb }),                                              // reranker missing on one side
+      withMap("v", { ...both, "@cf/baai/bge-m3": mk("Xenova/bge-m3") }),                                // extra model on one side
+      withMap("v"),                                                                                       // no producers at all
+    ];
+    for (const cand of cases) {
+      const r = detail(withMap("baseline", both), cand);
+      expect(r?.status).toBe("inconclusive");
+      expect(r?.detail).toMatch(/model producers differ/);
     }
+  });
+
+  it("is INCONCLUSIVE when the neuron source differs", () => {
+    const r = evaluateGate({ ...report("baseline"), neuronSource: "projected" }, { ...report("v"), neuronSource: "provider" }).rules.find(x => x.rule === "comparable");
+    expect(r?.status).toBe("inconclusive");
+    expect(r?.detail).toMatch(/neuron source differs/);
   });
 
   it("PASSes a clear improvement with no regression and no extra cost", () => {

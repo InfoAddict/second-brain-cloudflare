@@ -230,16 +230,37 @@ export class ReplayStore {
   private adoptProducer(model: string, producer: EmbeddingProducer): boolean {
     const known = this.producers.get(model);
     if (!known) { this.producers.set(model, producer); return true; }
+    this.checkProducer(model, known, producer);
+    return false;
+  }
+
+  private checkProducer(model: string, known: EmbeddingProducer, producer: EmbeddingProducer): void {
     if (producerKey(known) !== producerKey(producer)) {
       throw new Error(`replay cache mixes producers for ${model}: ${producerKey(known)} and ${producerKey(producer)}. Delete the older cache (or record into a fresh one) rather than mixing vectors`);
     }
-    return false;
+  }
+
+  /** Rows with no producer record anywhere: their origin is unknown, so nothing may be attributed to them. */
+  private unlabeled(): boolean { return this.map.size > 0 && this.producers.size === 0; }
+
+  private unlabeledError(model: string): Error {
+    return new Error(`the replay cache has rows but no producer record, so who produced the ${model} vectors is unknown. Re-record into a fresh cache (delete the file), or stamp it deliberately with a migration; the eval will not guess`);
+  }
+
+  /** Throws unless this cache can serve a run whose producer for `model` is `expected`: labeled, and the same producer. */
+  assertProducer(model: string, expected: EmbeddingProducer): void {
+    this.refresh();
+    if (this.unlabeled()) throw this.unlabeledError(model);
+    const known = this.producers.get(model);
+    if (known) this.checkProducer(model, known, expected);
   }
 
   producerOf(model: string): EmbeddingProducer | undefined { return this.producers.get(model); }
 
   /** Registers (and, in a writable store, persists) who produces `model`. Throws if the cache already has a different producer. */
   recordProducer(model: string, producer: EmbeddingProducer): void {
+    this.refresh();
+    if (this.unlabeled()) throw this.unlabeledError(model);
     if (!this.adoptProducer(model, producer)) return;
     const path = this.writeFile;
     if (!path) { this.producers.delete(model); throw new Error("replay store is read-only"); }
@@ -531,8 +552,8 @@ export interface ReplayAi {
   ai: Ai;
   /** Calls since the last drain; the runner drains once per query. */
   drainCalls(): AiCall[];
-  /** Who produced `model`'s cached vectors, if the cache says. */
-  producer(model: string): EmbeddingProducer | undefined;
+  /** Producer of every non-LLM model this ai was asked for (corpus load and queries), as the cache records it. */
+  producers(): Record<string, EmbeddingProducer>;
   /** Cache misses seen in dry mode, keyed by replay key. */
   misses: Map<string, { model: string; preview: string; neurons: number }>;
 }
@@ -571,6 +592,8 @@ export function makeReplayAi(opts: {
   mode: ReplayMode;
   live?: LiveAi;
   budget?: NeuronBudget;
+  /** The producer this run expects for a model (replay and dry runs that must not read foreign vectors). Defaults to the live provider's. */
+  expectProducer?: (model: string) => EmbeddingProducer | undefined;
   /** Record LLM calls too (query-tag inference); off by default because it spends neurons on non-embedding work. */
   recordLlm?: boolean;
   /** Output tokens to reserve against the budget before a live LLM call (reporting always prices the actual output). */
@@ -580,8 +603,15 @@ export function makeReplayAi(opts: {
 }): ReplayAi {
   const calls: AiCall[] = [];
   const misses: ReplayAi["misses"] = new Map();
+  const usedModels = new Set<string>();
   const run = async (model: string, input: AiInput) => {
     const kind = kindOf(input);
+    if (kind !== "llm") {
+      usedModels.add(model);
+      // A run with a declared producer only reads (or extends) a cache that is labeled with that same producer.
+      const expected = opts.expectProducer?.(model) ?? opts.live?.producer?.(model);
+      if (expected) opts.store.assertProducer(model, expected);
+    }
     const key = replayKey(model, input);
     const text = inputText(kind, input);
     const price = (stored?: Stored) => reportedNeurons(model, kind, text, stored);
@@ -632,7 +662,7 @@ export function makeReplayAi(opts: {
   return {
     ai: { run } as unknown as Ai,
     drainCalls: () => calls.splice(0),
-    producer: model => opts.store.producerOf(model),
+    producers: () => Object.fromEntries([...usedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [[m, p]] : []; })),
     misses,
   };
 }

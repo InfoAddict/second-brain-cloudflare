@@ -32,7 +32,9 @@ export async function prepare(o: {
     }
   };
 
-  const dry = makeReplayAi({ store: o.store, mode: "dry" });
+  // every pass must read only a cache labeled with the producer that would fill it
+  const expectProducer = (m: string) => o.live.producer?.(m);
+  const dry = makeReplayAi({ store: o.store, mode: "dry", expectProducer });
   await pass(dry, 1);
   const missing = dry.misses.size;
   const estimatedNeurons = [...dry.misses.values()].reduce((s, m) => s + m.neurons, 0);
@@ -49,7 +51,7 @@ export async function prepare(o: {
     o.log(`recorded; estimated spend ${spentNeurons.toFixed(1)} neurons.`);
   }
 
-  await pass(makeReplayAi({ store: o.store, mode: "replay" }), 1);
+  await pass(makeReplayAi({ store: o.store, mode: "replay", expectProducer }), 1);
   o.log("replay verification passed: the cache is complete for this variant and corpus.");
   return { missing, estimatedNeurons, spentNeurons };
 }

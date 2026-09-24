@@ -115,8 +115,6 @@ export function poolBatch(enc: EncodedBatch, pooling: Pooling): Float32Array[] {
   return rows;
 }
 
-export const sigmoid = (x: number): number => 1 / (1 + Math.exp(-x));
-
 /** Real tokens across the batch: the same count the tokenizer feeds the model, i.e. what a token-metered API would bill. */
 export const countTokens = (attention: number[][]): number => attention.reduce((s, row) => s + row.reduce((a, m) => a + (m ? 1 : 0), 0), 0);
 
@@ -241,7 +239,11 @@ interface RerankInput { query?: string; contexts?: { text?: string }[]; top_k?: 
  * default, and what src/lib/ai.ts gets since it sends none); `pooling: "cls"` selects CLS. bge-m3 is always CLS.
  * Vectors are L2-normalized. Input is truncated at the model's token limit. Responses are {shape, data, usage}, where
  * usage.prompt_tokens is the tokenizer-exact count (special tokens included, truncation applied) for cost accounting.
- * The reranker returns {response: [{id, score}]} sorted best first, score = sigmoid(logit).
+ * The reranker returns {response: [{id, score}]} sorted best first, with the RAW logit as score: Cloudflare's model page
+ * (https://developers.cloudflare.com/workers-ai/models/bge-reranker-base/) says the score "can be mapped to a float
+ * value in [0,1] by sigmoid function", i.e. the API does not apply it. Parity with the live API is UNVERIFIED: no
+ * Cloudflare account may be used here, so this follows the documentation alone. Neuron usage is a projection (local
+ * tokenizer counts times published rates), not a billed figure.
  */
 export function makeLocalAi(opts: { loader?: RuntimeLoader; modelsDir?: string; fetchImpl?: typeof fetch; verify?: boolean; versions?: { library: string; onnxRuntime: string } } = {}): LocalAi {
   const loader = opts.loader ?? transformersLoader;
@@ -296,7 +298,7 @@ export function makeLocalAi(opts: { loader?: RuntimeLoader; modelsDir?: string; 
         const rt = await memo(rerankers, model, async () => loader.rerank(p, await ready(p)));
         if (!contexts.length) return { response: [], usage: { prompt_tokens: 0, total_tokens: 0 } };
         const { logits, tokens } = await rt.score(query, contexts.map(c => c.text as string), p.maxTokens);
-        const scored = logits.map((l, id) => ({ id, score: sigmoid(l) })).sort((a, b) => b.score - a.score || a.id - b.id);
+        const scored = logits.map((l, id) => ({ id, score: l })).sort((a, b) => b.score - a.score || a.id - b.id);
         return { response: typeof top_k === "number" ? scored.slice(0, top_k) : scored, usage: { prompt_tokens: tokens, total_tokens: tokens } };
       });
     },

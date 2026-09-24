@@ -35,6 +35,6 @@ describe.skipIf(!process.env.EVAL_LOCAL_MODELS)("real local models", () => {
     console.log(`bge-reranker-base: ${JSON.stringify(res.response)}`);
     expect(res.response[0].id).toBe(1);
     expect(res.response[0].score).toBeGreaterThan(res.response[1].score);
-    expect(res.response[0].score).toBeGreaterThan(res.response[1].score * 10); // absolute scores are model-specific; the margin is the signal
+    expect(res.response[0].score - res.response[1].score).toBeGreaterThan(2); // raw logits: the margin is the signal
   }, 600_000);
 });
