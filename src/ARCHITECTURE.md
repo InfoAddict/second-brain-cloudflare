@@ -166,6 +166,55 @@ within `FTS_READY_CACHE_MS` (5 minutes) of the flag going live, since each
 instance only checks periodically rather than on every request. No API or
 MCP change.
 
+## Recall cross-encoder reranker
+
+`recall/model-reranker.ts` re-scores a bounded set of already fused candidates
+with `@cf/baai/bge-reranker-base` (one nonstreaming `AI.run`, request
+`{query, contexts: [{text}], top_k}`, answer `{response: [{id, score}]}` with raw
+logits). It sits after `rerankWithTimeDecay` and before `mmrRerank` and graph-root
+selection, so dense and keyword candidate generation, fusion, graph expansion,
+evidence rescue, rendering and synthesis are untouched.
+
+- **Candidates.** Up to 25 direct parents in heuristic order plus up to 5 extra
+  graph-root parents (30 total, one batch). Only parents the scoped
+  candidate-signal read returned are eligible. At hops 0 one extra by-id read
+  fetches their text (at hops above 0 the text is already in hand); it omits the
+  scope clause on purpose, because with it SQLite scans the whole workspace instead
+  of doing 30 primary-key lookups. Vectorize and keyword metadata content never
+  reach the model. Each passage is `queryRelevantWindow(content, ..., 400)`.
+- **Blend.** Model scores become rank percentiles within the batch (ties keep
+  baseline order; all-equal is neutral). A heuristic score is multiplied by
+  `1 + 0.25 * (2p - 1)`, so the model moves a result by at most 25% and never
+  erases age, frequency, importance, contradiction, tag or lexical evidence.
+  The same parent factor scales the direct and the root view.
+- **Routing (no AI).** `RERANK_MODE` is `off`, `on` or `auto` (default `auto`;
+  an unknown stored value reads as `off`). `on` needs at least three parents;
+  `auto` also needs the top two heuristic scores within 15%. An identifier-shaped
+  query token (`#149`, `v1.9`, `a-b`) always skips. `off` returns before any
+  read of the latch.
+- **Readiness.** A model never runs until `reranker:ready:bge-base-v1` says the
+  probe passed. `probeReranker` sends one fixed non-private request and needs the
+  relevant passage to lead two unrelated ones by two logits. The first recall
+  that would have used the model schedules the probe in `waitUntil` (a passing
+  verdict lives a week, a failing one six hours), so the contract is re-proved
+  lazily at no cost to the nightly cron's statement budget. The probe has its own
+  15 s timeout; a recall allows 2.5 s.
+- **Failure.** A thrown error, quota (3036) or capacity (3040) failure, timeout,
+  or malformed, truncated or duplicate-id answer returns the un-reranked matches
+  exactly. `RecallDiagnostics.rerankRoute` records what happened.
+- **Cost.** One AI call, one D1 statement at hops 0 (none above), and one KV read
+  for the latch per reranked recall. At the published 283 neurons per million
+  input tokens the eval projects about 0.37 neurons per reranked recall (the
+  query is counted once per pair, so this is conservative).
+
+The eval's `rerank` variant forces the mode on through the typed
+`variant.rerank` flag (no route can set it); `no-rerank` pins it off, and
+`baseline` is the shipped `auto`. The runner fails a query, instead of scoring
+the fallback order, whenever the reranker was expected and the step did not end
+in a model answer or a legitimate skip, so a replay miss cannot pass as a
+result. `prepare` is the only path that runs the model (locally, pinned open
+weights). Real Workers AI latency and billing are unmeasured: no account is used.
+
 ## Recall eval (developer tooling)
 
 `npm run eval:recall` lets a contributor prove that a retrieval change helps
@@ -251,9 +300,11 @@ redesigning them.
 **Variants.** A change under test is a variant: query-time flags on
 `RecallInternalOptions` (for example `variant.arms`), config overrides, or an
 index-time hook that replaces `storeEntry`. Built in: `baseline` (shipped
-recall), `like` (keyword arm on the LIKE fallback), `fts-orderless`, and the
-ablations `dense-only` and `keyword-only`, which each must lose somewhere or the
-golden set is too easy.
+recall, including the reranker in its shipped `auto` mode), `no-rerank` (the same
+with the reranker off), `rerank` (reranker forced on), `like` (keyword arm on the
+LIKE fallback), `fts-orderless`, and the ablations `dense-only` and
+`keyword-only`, which each must lose somewhere or the golden set is too easy. The
+ablations run with the reranker off so each isolates one factor.
 
 **The gate.** `npm run eval:recall -- --compare baseline,<variant>` ends in
 PASS, FAIL, or INCONCLUSIVE. Rules, in order: the two reports are comparable;

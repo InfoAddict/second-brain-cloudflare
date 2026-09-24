@@ -29,7 +29,7 @@ const RERANK_LEGIT_ROUTES: ReadonlySet<string> = new Set(["too-few", "exact-id",
  */
 export function checkRerankRoute(expected: boolean, route: string | undefined, calls: readonly { model: string }[]): string | undefined {
   const rerankCalls = calls.filter(c => c.model === RERANK_MODEL).length;
-  if (!expected) return route === "off" && !rerankCalls ? undefined : `the reranker is off for this variant but the step reported ${route ?? "no route"} with ${rerankCalls} call(s)`;
+  if (!expected) return (route === "off" || route === undefined) && !rerankCalls ? undefined : `the reranker is off for this variant but the step reported ${route ?? "no route"} with ${rerankCalls} call(s)`;
   if (!route || !RERANK_LEGIT_ROUTES.has(route)) return `the reranker step ended in "${route ?? "no route"}"; a variant that expects it must reach a model answer or a legitimate skip (a replay miss shows up here)`;
   if (route === "applied" && rerankCalls !== 1) return `the reranker applied with ${rerankCalls} recorded model call(s), expected exactly one`;
   if (route !== "applied" && rerankCalls) return `the reranker made ${rerankCalls} model call(s) but ended in "${route}"`;
@@ -155,7 +155,8 @@ export async function runVariant(o: {
         const { result, diagnostics, wallMs, calls, filterDegraded } = await recallOnce(q);
         const rankedIds = result.matches.map(m => m.id);
         const ops = diagnostics.operations!;
-        const rerankProblem = checkRerankRoute(rerankExpected, diagnostics.rerankRoute, calls);
+        // recall returns before the reranker step when it has no candidates at all, so an empty answer carries no route
+        const rerankProblem = diagnostics.rerankRoute === undefined && !rankedIds.length ? undefined : checkRerankRoute(rerankExpected, diagnostics.rerankRoute, calls);
         if (rerankProblem) throw new Error(rerankProblem);
         results.push({
           ...base,

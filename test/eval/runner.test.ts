@@ -494,6 +494,7 @@ describe("the reranker under the runner", () => {
     expect(checkRerankRoute(true, "applied", [call, call])).toMatch(/expected exactly one/);
     expect(checkRerankRoute(true, "clear-leader", [call])).toMatch(/made 1 model call/);
     expect(checkRerankRoute(false, "off", [])).toBeUndefined();
+    expect(checkRerankRoute(false, undefined, [])).toBeUndefined(); // an ablation that returns before the step (keyword-only with no candidates)
     expect(checkRerankRoute(false, "applied", [call])).toMatch(/off for this variant/);
   });
 
