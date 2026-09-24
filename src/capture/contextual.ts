@@ -126,23 +126,35 @@ export function buildDeterministicContext(entry: ContextEntry, chunkIndex: numbe
 }
 
 /**
- * An upper bound on the BERT WordPiece token count of `text`, special tokens
- * included, that holds for any input. Every token consumes at least one
- * character, so charging one token per character is always safe; the only
- * discount is for a run of letters that is a word in COMMON_WORDS, each of which
- * was verified to be exactly one token. So: a listed word costs 1, any other
- * alphanumeric run costs its length, CJK code points and punctuation cost 1
- * each, whitespace is free, and [CLS] and [SEP] add 2.
+ * An estimate of the BGE Small (uncased BERT WordPiece) token count of `text`,
+ * special tokens included, built to sit at or above the real count. It models the
+ * tokenizer's own pipeline: control, format, private-use characters and combining
+ * marks are deleted before words are split, so they cost nothing and the words on
+ * either side are one word; whitespace ends a word; punctuation and unified CJK
+ * ideographs are each a separate token; everything else (letters of every
+ * script, digits, symbols, spacing marks) is part of a word. A word is charged
+ * one token per character it becomes after lowercasing and NFD decomposition
+ * (a Hangul syllable is 3), with one discount: a run of ASCII letters that is a
+ * whole word of the tokenizer's vocabulary is exactly one token and costs 1.
+ * [CLS] and [SEP] add 2.
  *
- * That is deliberately pessimistic for uncommon words (prose measures about 2x
- * high), because a cheaper rule for "short words" was not safe: random short
- * words tokenize at up to 3 tokens for a 3-character word, and a chunk the rule
- * called 407 tokens was 613. The margin against the 512-token window is this
- * bound, held by construction: a chunk is cut or split until its bound is at
- * most CONTEXT_SMALL_TARGET_TOKENS.
+ * What is established, and how (it is not a formal proof): every character
+ * consumes at least one token and the decomposition rule covers the characters
+ * that expand, which a sweep of all 1.1M code points, alone, inside a word,
+ * between two words and repeated, checks against the real tokenizer (no
+ * undercount; run it with CODE_POINT_SWEEP=1, test/unit/contextual-code-point-
+ * sweep.test.ts); the word list is checked word by word against the tokenizer;
+ * and every chunk this file ships from 38 adversarial and per-script notes has
+ * its real count in a committed fixture and is at or under its estimate
+ * (test/unit/contextual-token-guard.test.ts). Prose measures close to exact.
+ * What it does not cover is a tokenizer behavior none of those exercise, such as
+ * an interaction between two rare characters; the margin of 32 tokens under the
+ * window is what would absorb that, and the fixture is where to add a
+ * counterexample.
  *
  * One pass, ASCII decided by character code and only other characters by
- * regex, because this runs over every character of a long note on the write path.
+ * regex (cached per code point), because this runs over every character of a
+ * long note on the write path.
  */
 export function estimateBgeSmallTokens(text: string): number {
   let tokens = 2;
@@ -222,6 +234,9 @@ const classes = new Map<number, number>();
  * spacing marks and letters of every script are word characters, so they glue.
  */
 function classify(cp: number): number {
+  // A lone surrogate (a chunk boundary can split an emoji) is encoded as U+FFFD on the way to the embedder, which BERT deletes.
+  // It is decided here, never by a regex: V8's unicode regexes were seen to answer differently for lone surrogates between runs.
+  if (cp >= 0xd800 && cp <= 0xdfff) return DELETED;
   let k = classes.get(cp);
   if (k !== undefined) return k;
   const ch = String.fromCodePoint(cp);

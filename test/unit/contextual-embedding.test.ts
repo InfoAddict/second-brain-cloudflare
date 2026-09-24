@@ -144,6 +144,15 @@ describe("buildEmbeddingChunks", () => {
 });
 
 describe("estimateBgeSmallTokens on scripts BERT decomposes", () => {
+  it("treats a lone surrogate (a chunk boundary can split an emoji) as deleted, the same answer every time", () => {
+    const answers = new Set<number>();
+    for (let i = 0; i < 4000; i++) {
+      answers.add(estimateBgeSmallTokens(`word${i % 7}\ud83d`) - estimateBgeSmallTokens(`word${i % 7}`));
+      answers.add(estimateBgeSmallTokens(`\udc69\u200d💻 jb ${i % 5}`) - estimateBgeSmallTokens(`\u200d💻 jb ${i % 5}`));
+    }
+    expect([...answers]).toEqual([0]);
+  });
+
   it("charges each Hangul syllable 3 tokens, the most NFD can make of it", () => {
     expect(estimateBgeSmallTokens("한") - 2).toBe(3);
     expect(estimateBgeSmallTokens("한국어") - 2).toBe(9);
@@ -289,6 +298,7 @@ const refEstimate = (text: string): number => {
     run = ""; cost = 0; inVocab = true;
   };
   for (const ch of text) {
+    if (ch.length === 1 && ch >= "\ud800" && ch <= "\udfff") continue; // a lone surrogate reaches the embedder as U+FFFD, which BERT deletes
     const deleted = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Mn}\uFFFD]/u.test(ch) && !/^[\t\n\r]$/.test(ch);
     if (deleted) continue;
     if (/^[\t\n\r ]$/.test(ch) || /\s/u.test(ch)) { flush(); continue; }
