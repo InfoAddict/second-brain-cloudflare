@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { COMMON_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
+import { COMMON_TOKENS, CORRELATED_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack, type HaystackOptions } from "./haystack";
 import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT, QUERY_SATURATION_FRACTION } from "../../../src/constants";
 import { readScopeWorkspaces } from "../../../src/lib/scope";
 import { ACTORS, DAY_MS, EVAL_NOW, IDENTITIES, WORKSPACES, needleToEntry } from "./types";
@@ -250,4 +250,24 @@ describe("generateHaystack", () => {
       }
     }
   }, 30_000);
+});
+
+describe("correlated tier", () => {
+  const withRate = (correlatedRate?: number) => generateHaystack({ ...base, count: 2000, correlatedRate });
+  const carries = (content: string) => CORRELATED_TOKENS.filter(token => content.toLowerCase().includes(token));
+
+  it("leaves every row byte-identical at rate 0 or when unset", () => {
+    expect(withRate(0)).toEqual(withRate());
+  });
+  it("puts all three words together in about the requested share of rows, and never one or two alone", () => {
+    const rows = withRate(0.2);
+    const together = rows.filter(row => carries(row.content).length === CORRELATED_TOKENS.length);
+    expect(rows.filter(row => [1, 2].includes(carries(row.content).length))).toEqual([]);
+    expect(together.length / rows.length).toBeGreaterThan(0.17);
+    expect(together.length / rows.length).toBeLessThan(0.23);
+  });
+  it("only appends to a row: the rest of the corpus is unchanged", () => {
+    const plain = withRate();
+    withRate(0.2).forEach((row, i) => expect(row.content.startsWith(plain[i].content.replace(/ Logged .*$/, ""))).toBe(true));
+  });
 });

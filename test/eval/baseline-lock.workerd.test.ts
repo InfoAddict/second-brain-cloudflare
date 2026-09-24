@@ -35,7 +35,7 @@ describe.skipIf(!process.env.EVAL_WORKERD)("baseline lock on workerd (rankings, 
       const diff = compareToLock(lock, fresh);
       const how = "If intended, re-lock on workerd: npm run eval:recall -- lock --d1 workerd (add --accept-data-change \"<reason>\" if golden data changed).";
       expect(diff.fingerprintMismatch, how).toBe(false);
-      expect([diff.missing, diff.extra, diff.changed], `rankings differ from the lock. ${how}`).toEqual([[], [], []]);
+      expect([diff.missing, diff.extra, diff.changed, diff.keywordGoldChanged], `rankings or keyword-arm gold coverage differ from the lock. ${how}`).toEqual([[], [], [], []]);
       const locked = new Map(lock.results.map(r => [r.queryId, r] as const));
       const statements = fresh.results.filter(r => r.cost.d1Statements !== locked.get(r.queryId)!.cost.d1Statements).map(r => r.queryId);
       expect(statements, `D1 statement counts differ from the lock. ${how}`).toEqual([]);

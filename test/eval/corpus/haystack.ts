@@ -24,6 +24,16 @@ export const DENSE_RATE_BY_SCALE = {
   "20k": { [WORKSPACES.avery]: 0.09, [WORKSPACES.company]: 0.44, [WORKSPACES.blake]: 0.4 },
 } as const;
 
+/**
+ * Correlated tier: three words that only ever appear together, in a share of rows set per scale. Their
+ * per-word df is the same as their co-occurrence, so a query of all three has an AND match as large as
+ * each word's df: the shape that makes an unbounded AND tier as costly as scoring every match.
+ * Rows carry no other word of the tier, and no needle but the guard's does.
+ */
+export const CORRELATED_TOKENS = ["trellis", "compost", "seedling"] as const;
+/** Share of haystack rows that carry the correlated triple: about 800 rows in avery's default scope at 5k and 20k. */
+export const CORRELATED_RATE_BY_SCALE = { "1k": 0, "5k": 0.19, "20k": 0.045 } as const;
+
 export interface HaystackOptions {
   count: number;
   seed: number;
@@ -38,6 +48,8 @@ export interface HaystackOptions {
   /** Mean dense-tier words (0-2) per row: one number for every workspace, or a rate per workspace id (missing = 0). */
   denseRate: number | Readonly<Record<string, number>>;
   workspaces: { workspaceId: string; actorId: string; weight: number }[];
+  /** Share of rows that also carry the CORRELATED_TOKENS triple; default 0, which leaves every row byte-identical. */
+  correlatedRate?: number;
 }
 
 type Pick = <T>(xs: readonly T[]) => T;
@@ -116,6 +128,10 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
   const otherFactor = companyWeight < totalWeight ? (totalWeight - companyFactor * companyWeight) / (totalWeight - companyWeight) : 1;
   // Own stream, so the dense tier never shifts the rest of the corpus.
   const denseRand = mulberry32(options.seed ^ 0x9e3779b9);
+  // Its own stream too, and never drawn from at rate 0.
+  const correlatedRand = mulberry32(options.seed ^ 0x51ed270b);
+  const correlatedClause = () => (options.correlatedRate && correlatedRand() < options.correlatedRate
+    ? ` Spring bed plan: ${CORRELATED_TOKENS.join(", ")}.` : "");
   // Each workspace deals dense words from its own shuffled deck, so every word gets (almost) the same
   // number of slots in any scope built from whole workspaces; consecutive cards never repeat.
   const decks = new Map<string, string[]>();
@@ -168,6 +184,7 @@ export function generateHaystack(options: HaystackOptions): CorpusEntry[] {
     const rate = options.commonRate * (workspace.workspaceId === WORKSPACES.company ? companyFactor : otherFactor);
     for (const token of COMMON_TOKENS) if (rand() < rate) content += ` ${pick(TAILS[token])}`;
     content += denseClause(workspace.workspaceId);
+    content += correlatedClause();
     const createdAt = options.now - Math.floor(rand() * options.spanDays * DAY_MS);
     content += ` Logged ${new Date(createdAt).toISOString().slice(0, 16).replace("T", " at ")} UTC (entry ${index + 1}).`;
     return {

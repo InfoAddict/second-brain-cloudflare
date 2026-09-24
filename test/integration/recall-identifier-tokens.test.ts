@@ -102,16 +102,20 @@ describe("literal identifier tokens in SQLite recall", () => {
     expect(result.df?.get("50%_off")).toBe(1);
   });
 
-  it("routes a high document-frequency sum for underscored terms to LIKE", async () => {
+  it("serves a high document-frequency sum for underscored terms from the bounded FTS plan, matching them literally", async () => {
     for (let i = 0; i < 1050; i++) {
       sqlite.seed({ id: `row-${i}`, content: "ERR_TLS_90412 DATABASE_URL", createdAt: i + 1 });
     }
+    // wildcard look-alikes: a LIKE that read "_" as a wildcard would return these too
+    for (let i = 0; i < 5; i++) sqlite.seed({ id: `decoy-${i}`, content: "ERRXTLSX90412 DATABASEXURL", createdAt: 2000 + i });
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "ERR_TLS_90412 DATABASE_URL", topK: 10, synthesize: false }, env, ctx, undefined, { diagnostics });
-    expect(diagnostics.ftsRoute).toBe("like-match-budget");
-    expect(diagnostics.ftsUsed).toBe(false);
-    expect(diagnostics.keywordIds).toContain("row-1049");
+    // T-0073: both tokens are common (df sum past the budget), yet the index still serves the query
+    expect(diagnostics.ftsRoute).toBe("fts-bounded");
+    expect(diagnostics.ftsUsed).toBe(true);
+    expect(diagnostics.keywordIds!.length).toBeGreaterThan(0);
+    expect(diagnostics.keywordIds!.every(id => id.startsWith("row-"))).toBe(true);
   });
 });

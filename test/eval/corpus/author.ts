@@ -6,19 +6,6 @@ import type { NeedleRow } from "./types";
 /** Needles at least this old get a second, common-token-prefixed query: the shape that exposes LIKE's newest-500 window. */
 export const OLD_NEEDLE_DAYS = 450;
 /**
- * Mechanical queries the production router fails at the discriminating scales (5k, 20k), keyed by query id.
- * T-0073: the "roadmap" prefix pushes the df sum past FTS_MATCH_BUDGET, so keyword search runs as LIKE.
- * T-0074: the key holds a token under 3 characters, and one FTS-ineligible token sends the whole query to LIKE.
- * Both pass at core-1k, where every match fits the LIKE window; the audit checks the ids against the real router model.
- */
-export const ROUTE_GAP_QUERIES: Readonly<Record<string, string>> = {
-  "q-id-007": "gap:T-0074", "q-id-007-c": "gap:T-0074",
-  "q-id-024": "gap:T-0074", "q-id-024-c": "gap:T-0074",
-  "q-id-035": "gap:T-0074", "q-id-035-c": "gap:T-0074",
-  "q-id-023-c": "gap:T-0073", "q-id-030-c": "gap:T-0073",
-};
-
-/**
  * Identifier and rare-word queries, built only from a needle's declared keys.
  * Every keyed needle gets the key alone; old ones also get "roadmap <key>", the only common
  * token dense enough at every scale to push an old needle out of the LIKE window.
@@ -33,10 +20,7 @@ export function mechanicalQueries(needles: readonly NeedleRow[]): GoldenQuery[] 
     const n = ++counters[needle.purpose];
     const id = `${needle.purpose === "identifier" ? "q-id" : "q-rare"}-${String(n).padStart(3, "0")}`;
     const key = needle.keys[0];
-    const tagsFor = (queryId: string) => {
-      const gaps = ROUTE_GAP_QUERIES[queryId] ? [ROUTE_GAP_QUERIES[queryId]] : [];
-      return [...(decoyed.has(needle.id) ? ["tenancy"] : []), ...(gaps.length ? ["known-gap", ...gaps] : [])];
-    };
+    const tagsFor = () => (decoyed.has(needle.id) ? ["tenancy"] : []);
     const byBlake = needle.purpose === "identifier" && needle.workspace === "company" && n % 2 === 1;
     const shared = {
       category: needle.purpose,
@@ -44,10 +28,10 @@ export function mechanicalQueries(needles: readonly NeedleRow[]): GoldenQuery[] 
       viewer: byBlake ? ("blake" as const) : ("avery" as const),
       ...(byBlake ? { layer: "company" as const } : {}),
     };
-    const tagged = (queryId: string) => (tagsFor(queryId).length ? { tags: tagsFor(queryId) } : {});
-    out.push({ id, text: key, ...shared, ...tagged(id) });
+    const tagged = () => (tagsFor().length ? { tags: tagsFor() } : {});
+    out.push({ id, text: key, ...shared, ...tagged() });
     if (needle.ageDays >= OLD_NEEDLE_DAYS) {
-      out.push({ id: `${id}-c`, text: `${COMMON_TOKENS[0]} ${key}`, ...shared, ...tagged(`${id}-c`) });
+      out.push({ id: `${id}-c`, text: `${COMMON_TOKENS[0]} ${key}`, ...shared, ...tagged() });
     }
   }
   return out;

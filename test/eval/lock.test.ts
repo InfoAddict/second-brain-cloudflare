@@ -160,6 +160,24 @@ describe("compareToLock (what the Task 11 tripwire uses)", () => {
     expect(compareToLock(r(["q1"]), r(["q1"])).fingerprintMismatch).toBe(false);
   });
 });
+describe("compareToLock: keyword-arm coverage", () => {
+  const withGold = (gold: Record<string, boolean | undefined>): VariantReport => {
+    const base = report();
+    return { ...base, results: Object.entries(gold).map(([id, keywordGold]) => ({ ...base.results[0], queryId: id, ...(keywordGold === undefined ? {} : { keywordGold }) })) };
+  };
+
+  it("reports a query whose gold left the keyword arm even though its ranking is unchanged", () => {
+    const d = compareToLock(withGold({ s1: true, s2: true, s3: true }), withGold({ s1: false, s2: true, s3: false }));
+    expect(d.changed).toEqual([]);
+    expect(d.keywordGoldChanged).toEqual(["s1", "s3"]);
+  });
+
+  it("is quiet when coverage is unchanged, and treats an absent value as a value (an arm that stopped running is a change)", () => {
+    expect(compareToLock(withGold({ s1: true }), withGold({ s1: true })).keywordGoldChanged).toEqual([]);
+    expect(compareToLock(withGold({ s1: true }), withGold({ s1: undefined })).keywordGoldChanged).toEqual(["s1"]);
+  });
+});
+
 describe("fingerprintKey", () => {
   it("ignores key order and treats a missing fingerprint as empty", async () => {
     const { fingerprintKey } = await import("./lock");

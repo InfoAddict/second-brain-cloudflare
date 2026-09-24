@@ -67,27 +67,73 @@ counted before.
 `keywordSearch` (`recall/search.ts`) routes every query and reports the outcome
 in `internal.diagnostics.ftsUsed` and `ftsRoute`:
 
-- **FTS arm** (`keywordSearchFts`): queries the `entries_fts` virtual table,
-  ordered by `bm25(entries_fts)`. `ftsMatchQuery` (`recall/fts.ts`) double-quotes
-  each token (internal quotes doubled, so user text cannot inject FTS syntax)
-  and joins them with OR. The trigram tokenizer matches substrings, which
-  keeps the LIKE semantics recall has always had, including CJK text and
-  identifier-shaped tokens such as `#149` or `v1.9`. The read joins `entries`
-  on both rowid and id, so a row whose rowid-to-id mapping has drifted is
-  excluded and duplicate FTS rowids cannot consume the LIMIT window.
-- **Cost-aware router**: distillation's document frequencies, when they cover
-  every term, estimate how many rows bm25 would have to score. Past
-  `FTS_MATCH_BUDGET` (2,000) the query routes to the LIKE arm, which stops
-  after `KEYWORD_CANDIDATE_LIMIT` (500) newest hits; bm25 scores every match,
-  LIKE stops early. Single-word queries (no frequencies are computed for them)
-  and queries with an uncounted term keep FTS.
+- **FTS arm** (`keywordSearchFts`): queries the `entries_fts` virtual table.
+  A full plan is ordered by `bm25(entries_fts)`; a bounded plan's AND tier is
+  ordered newest-first by rowid instead (below). `planFtsMatch`
+  (`recall/fts.ts`) builds the MATCH strings: it double-quotes each token
+  (internal quotes doubled, so user text cannot inject FTS syntax) and joins
+  them with OR, or with a space for the AND tier. (`ftsMatchQuery` in the same
+  file builds the single-term counts distillation uses.) The trigram tokenizer
+  matches substrings, which keeps the LIKE semantics recall has always had,
+  including CJK text and identifier-shaped tokens such as `#149` or `v1.9`.
+  The read joins `entries` on both rowid and id, so a row whose rowid-to-id
+  mapping has drifted is excluded and duplicate FTS rowids cannot consume the
+  LIMIT window.
+- **Cost-aware router**: the index serves every query that has at least one
+  FTS-eligible token. Tokens under `FTS_MIN_TOKEN_LENGTH` (3 codepoints: `io`,
+  `k8`, two-character CJK words) cannot be retrieved through a trigram index, so
+  they no longer send the whole query to LIKE (T-0074); they rank instead. The
+  bm25 query orders rows carrying them first, evaluated on rows the MATCH
+  already read, and fusion still weighs them. Distillation's document
+  frequencies, when they cover every eligible term, estimate how many rows bm25
+  would have to score. Within `FTS_MATCH_BUDGET` (2,000) the query is one OR
+  over every eligible token. Past it (T-0073) the plan is bounded, in two tiers
+  merged in this order:
+  1. **AND tier**: every eligible token, so only rows carrying every word. Its
+     size is bounded by the rarest token's df, not by the budget (words that
+     always co-occur match the whole partition), so it runs as
+     `ORDER BY entries_fts.rowid DESC LIMIT ?`: a reverse index scan (rowid
+     follows insertion, so newest first) that stops at the LIMIT with no sort.
+     On workerd at 5k that read 1,111 rows against 2,503 for
+     `ORDER BY created_at DESC`, which also needs a temp b-tree over every
+     match. Insertion follows time on capture, and `POST /import` sorts a
+     payload oldest first before paging (`GET /export` now emits oldest first
+     too, but exports taken earlier are newest first), so a restored brain is
+     chronological too. The one exception is an older archive merged into a
+     brain that already holds newer rows: the archive is inserted after them,
+     so when more than the limit rows carry every word this tier prefers the
+     archived rows. It still returns rows carrying every word. Ordering by
+     `created_at` would fix that at the cost of sorting every match.
+     When the OR tier's matches all fit in the candidate limit the AND tier
+     adds no candidate (its rows carry every token, so they are among the OR
+     tier's) and is left out.
+  2. **OR tier**: the rarest tokens whose df sums within `FTS_MATCH_BUDGET`
+     (greedy), ranked by bm25, so bm25 scores at most the budget and picks the
+     best `KEYWORD_CANDIDATE_LIMIT` of them. The budget is not tied to the
+     limit: measured at 500 and 1,000 it cost fewer rows but lost answers that
+     carry only a moderately common token (0 of 6 and 3 of 6 guard queries
+     reachable, against 6 of 6). A token past the budget cannot join this tier.
+  A token whose df is 0 is in no row, so it drops out of both tiers, and a
+  query left with no plan goes straight to LIKE without an FTS batch. Common
+  words the plan leaves out still weigh in fusion. Both tiers run in the same
+  `DB.batch` as the liveness check, so it costs no extra subrequest.
+  Single-word queries (no frequencies are computed for them) and queries with
+  an uncounted term keep the full OR.
+- **Short-token df**: the index cannot count a short token and the exact LIKE
+  count reads the whole partition, so distillation estimates its df from the
+  newest `FTS_SHORT_TOKEN_SAMPLE` (200) readable rows, Laplace-smoothed
+  (`shortTermSampleStmt`). It feeds fusion's all-or-nothing IDF and the
+  saturation test that keeps a substring like `io` out of the embedded query.
+  The sample sees only recent rows, so it can be wrong about a corpus whose
+  recent rows differ from the rest; that is why `rankAndRebuild` lets a short
+  token fill only the slots the counted terms leave and never outrank one.
 - **LIKE arm** (`keywordSearchLike`): the pre-FTS body, unchanged, ordered
-  newest-first. Serves the query when the readiness flag is not set, when the
-  liveness check fails, when any retrieval token is under
-  `FTS_MIN_TOKEN_LENGTH` (3 codepoints, the trigram floor: a token such as
-  `v1` cannot match through the index, and the whole query routes here so it
-  is not silently dropped), when a token contains NUL (SQLite truncates at `\0`
-  and MATCH throws), or when the FTS query throws. The same fallback serves
+  newest-first. It now serves only a query with no eligible token at all (every
+  token under 3 codepoints, such as a two-word CJK query), a lone eligible token
+  whose own df passes the budget (no bounded plan exists), a bounded plan that
+  found nothing (the recency window is the floor), a token containing NUL
+  (SQLite truncates at `\0` and MATCH throws), the readiness flag not set, the
+  liveness check failing, or an FTS query that throws. The same fallback serves
   every recall until an existing brain's index is built and verified.
 
 Two gates decide whether the FTS arm runs at all. `ftsReady` (`recall/fts.ts`)
@@ -618,11 +664,32 @@ run that skips only the `rows_read` check.
 tracked issue): failures that are documented and measured but not yet fixed. The
 headline `overall` row and the category rows exclude them, because a query no
 variant can answer only dilutes every delta, and the report prints a `known
-gaps:` block and an `all queries` row (so `overall n=318` and `all queries
-n=338` appear together). Cost and the hard invariants always cover all queries.
+gaps:` block and an `all queries` row (so `overall` and `all queries` show different n whenever a gap is tagged;
+the core set currently tags none, T-0072, T-0073 and T-0074 having been fixed). Cost and the hard invariants always cover all queries.
 A gap is corpus-conditional, so the gate decides by score, not by tag alone: a
 gap query the baseline already answers stays in the regression rule. A variant
 that claims to fix a gap declares it with `--target-gaps <id>`.
+
+**Router guards.** Fixed gaps stay in the set as untagged guards for the keyword
+router. `over-budget` queries (ten `q-budget-*`) cross `FTS_MATCH_BUDGET` on
+purpose. One `correlated` query (`q-corr-001`) prices the AND tier: three words
+that only co-occur, in about 800 haystack rows at 5k and 20k, with a gold newer
+than those rows. Six `subset` queries (`q-sub-*`) have a gold carrying only some
+of the query's tokens, each a mid-df one, which is the shape the OR tier exists
+for and which the usual all-tokens rule in the audit would hide. Fusion can bury
+a gold the keyword arm retrieved, so each result also records `keywordGold`
+(whether any gold id was among the arm's candidates); it is a diagnostic for
+router changes and is never gated. The corpus inserts rows oldest first so
+rowids follow time, as on a real brain. That insertion order is set in
+`corpus/build.ts`, which the golden-data fingerprint does not hash, so a change
+there does not trip `--accept-data-change`; the lock's `rankedIds` (and
+`keywordGold`) comparison is what catches it.
+
+The lock only covers core-1k, where no router guard is over budget, so
+`test/eval/router-guards.scale.test.ts` pins `keywordGold` for the guard queries
+at scale-5k and scale-20k against `data/baselines/router-guards.json`. It needs
+the local scale replay caches, so it is opt-in (`npm run
+test:eval:scale-guards`) and CI cannot run it.
 
 **Flags.** `--variant <name>` runs one variant; `--compare <a>,<b>` runs the
 gate (either side may be a saved report `.json`); `--corpus <id>` (default
@@ -658,10 +725,9 @@ comparison, run `lock`, and commit the new lock with the gate output. The lock
 was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
-locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps:
-over the 318 remaining queries, recall@5 is 0.741, recall@10 0.770, MRR@10
-0.758, and nDCG@10 0.707. Over all 338 queries it is 0.756, 0.784, 0.771, and
-0.723.
+locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps;
+with no gap tagged, all 345 queries are in the headline: recall@5 is 0.749,
+recall@10 0.777, MRR@10 0.757, and nDCG@10 0.713.
 
 **How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`
 and about 7 minutes on `workerd`, which runs each query against a real local D1.

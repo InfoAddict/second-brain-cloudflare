@@ -272,6 +272,9 @@ export const FTS_CONTENT_CHECK_WINDOW = 200;
 // Above this many estimated matches, bm25 must score them all while LIKE
 // stops at KEYWORD_CANDIDATE_LIMIT recency-ordered hits, so LIKE is cheaper.
 export const FTS_MATCH_BUDGET = 2000;
+// Newest rows sampled to estimate a too-short token's df: the index cannot
+// count it and the exact LIKE count reads the whole partition.
+export const FTS_SHORT_TOKEN_SAMPLE = 200;
 export const FTS_CONTENT_CHECK_CURSOR_KV_KEY = "fts:content-check-cursor";
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditQueries, haystackVocabulary, staleRouteGaps, type CorpusIntent } from "./audit";
+import { auditQueries, haystackVocabulary, keywordRouteModel, staleRouteGaps, type CorpusIntent } from "./audit";
 import { ACTORS, DAY_MS, EVAL_NOW, WORKSPACES, type CorpusEdge, type CorpusEntry } from "./types";
 import type { GoldenQuery } from "../types";
 
@@ -286,7 +286,7 @@ describe("auditQueries fidelity and scale", () => {
     });
   });
 
-  describe("keyword route gaps (LIKE routes lose an old gold at scale)", () => {
+  describe("keyword route gaps (only the LIKE routes that remain can lose an old gold at scale)", () => {
     const gap73 = ["known-gap", "gap:T-0073"];
     const gap74 = ["known-gap", "gap:T-0074"];
     const scale = (entries: CorpusEntry[], queries: GoldenQuery[]) => rules(entries, queries, [], "discriminate");
@@ -297,58 +297,86 @@ describe("auditQueries fidelity and scale", () => {
       ...Array.from({ length: roadmapRows }, (_, i) => dated(`r${i}`, `roadmap note ${i}`, 1 + (i % 100))),
       ...Array.from({ length: 3000 - 1 - pairRows - roadmapRows }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
     ];
-    const budget = (over: Partial<GoldenQuery> = {}) => query({ id: "b", category: "common-word", text: "garden window coffee roadmap", tags: gap73, ...over });
+    const budget = (over: Partial<GoldenQuery> = {}) => query({ id: "b", category: "common-word", text: "garden window coffee roadmap", tags: ["over-budget"], ...over });
+    // "io" sits inside every "ratio" row, so a query of short tokens only has the recency window to lean on
     const ineligible = (entries = 800) => [
-      dated("g", "io scheduler notes", 300),
+      dated("g", "io id scheduler notes", 300),
       ...Array.from({ length: entries }, (_, i) => dated(`i${i}`, `ratio note ${i}`, 1 + (i % 100))),
       ...Array.from({ length: 3000 - 1 - entries }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
     ];
     const short = (over: Partial<GoldenQuery> = {}) => query({ id: "s", category: "short-word", text: "io scheduler", ...over });
+    const allShort = (over: Partial<GoldenQuery> = {}) => query({ id: "a", category: "short-word", text: "io id", ...over });
+    // a lone eligible token that alone passes the budget, beside a short one
+    const lone = (rows = 2500) => [
+      dated("g", "garden io notes", 300),
+      ...Array.from({ length: rows }, (_, i) => dated(`w${i}`, `garden note ${i}`, 1 + (i % 100))),
+      ...Array.from({ length: 3000 - 1 - rows }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+    ];
+    const loneQuery = (over: Partial<GoldenQuery> = {}) => query({ id: "l", category: "short-word", text: "garden io", ...over });
 
-    it("requires T-0073 on a keyword-solved query the match budget sends to LIKE, and names it in the finding", () => {
+    it("owes no tag for a query the bounded plan serves, however far past the budget", () => {
       expect(scale(corpus(800, 600), [budget()])).toEqual([]);
-      expect(scale(corpus(800, 600), [budget({ tags: [] })])).toContain("b:keyword-route-unflagged-gap");
-      expect(scale(corpus(800, 600), [budget({ tags: ["known-gap", "gap:T-0074"] })])).toContain("b:keyword-route-unflagged-gap");
-      // under budget the route is FTS, so nothing is owed
-      expect(scale(corpus(800, 100), [budget({ tags: [] })])).not.toContain("b:keyword-route-unflagged-gap");
+      expect(scale(corpus(800, 600), [budget({ tags: [] })])).not.toContain("b:keyword-route-unflagged-gap");
+      expect(keywordRouteModel("garden window coffee roadmap", corpus(800, 600).map(entry => ({ entry, content: entry.content.toLowerCase() })), 0).route).toBe("fts-bounded");
     });
 
-    it("requires T-0074 on a query with an FTS-ineligible token that LIKE loses", () => {
-      expect(scale(ineligible(), [short()])).toContain("s:keyword-route-unflagged-gap");
-      expect(scale(ineligible(), [short({ tags: gap74 })])).toEqual([]);
-      expect(scale(ineligible(), [short({ tags: gap73 })])).toContain("s:keyword-route-unflagged-gap");
+    it("requires T-0073 only where a lone eligible token past the budget still sends the query to LIKE", () => {
+      expect(scale(lone(), [loneQuery()])).toContain("l:keyword-route-unflagged-gap");
+      expect(scale(lone(), [loneQuery({ tags: gap73 })])).toEqual([]);
+      expect(scale(lone(), [loneQuery({ tags: gap74 })])).toContain("l:keyword-route-unflagged-gap");
+      // under budget the route is FTS, so nothing is owed
+      expect(scale(lone(1500), [loneQuery()])).not.toContain("l:keyword-route-unflagged-gap");
+    });
+
+    it("owes no T-0074 tag to a query whose short token has an eligible one to retrieve with", () => {
+      expect(scale(ineligible(), [short()])).toEqual([]);
+      expect(keywordRouteModel("io scheduler", ineligible().map(entry => ({ entry, content: entry.content.toLowerCase() })), 0).route).toBe("fts");
+    });
+
+    it("requires T-0074 on a query made only of short tokens that LIKE loses", () => {
+      expect(scale(ineligible(), [allShort()])).toContain("a:keyword-route-unflagged-gap");
+      expect(scale(ineligible(), [allShort({ tags: gap74 })])).toEqual([]);
+      expect(scale(ineligible(), [allShort({ tags: gap73 })])).toContain("a:keyword-route-unflagged-gap");
       // a gold inside the LIKE window is not lost, so no tag is owed
-      expect(scale(ineligible(300), [short()])).not.toContain("s:keyword-route-unflagged-gap");
+      expect(scale(ineligible(300), [allShort()])).not.toContain("a:keyword-route-unflagged-gap");
     });
 
     it("leaves non-lexical categories alone: a keyword loss there is by design", () => {
-      const para = query({ id: "p", category: "paraphrase", text: "io scheduler" });
+      const para = query({ id: "p", category: "paraphrase", text: "io id" });
       expect(scale(ineligible(), [para])).not.toContain("p:keyword-route-unflagged-gap");
     });
 
     it("demands the tie scale lose nothing", () => {
-      expect(rules(ineligible(), [short({ tags: gap74 })])).toContain("s:route-gap-unanswerable-at-tie");
-      expect(rules(ineligible(300), [short()])).toEqual([]);
+      expect(rules(ineligible(), [allShort({ tags: gap74 })])).toContain("a:route-gap-unanswerable-at-tie");
+      expect(rules(ineligible(300), [allShort()])).toEqual([]);
     });
 
     it("flags a route gap tag that no discriminating scale earns, across scales", () => {
-      const corpora = (rows: CorpusEntry[]) => [{ entries: rows, queries: [budget()], intent: "discriminate" as const }, { entries: rows, queries: [budget()], intent: "tie" as const }];
-      expect(staleRouteGaps(corpora(corpus(800, 600)))).toEqual([]);
-      expect(staleRouteGaps(corpora(corpus(800, 100))).map(f => f.rule)).toEqual(["gap-not-reached"]);
-      // T-0074 on a query whose route is the match budget is not reached either
-      const wrong = [{ entries: corpus(800, 600), queries: [budget({ tags: gap74 })], intent: "discriminate" as const }];
+      const corpora = (rows: CorpusEntry[], q: GoldenQuery) => [{ entries: rows, queries: [q], intent: "discriminate" as const }, { entries: rows, queries: [q], intent: "tie" as const }];
+      const tagged = allShort({ tags: gap74 });
+      expect(staleRouteGaps(corpora(ineligible(), tagged))).toEqual([]);
+      expect(staleRouteGaps(corpora(ineligible(300), tagged)).map(f => f.rule)).toEqual(["gap-not-reached"]);
+      // T-0073 on a query whose route is the short-token one is not reached either
+      const wrong = [{ entries: ineligible(), queries: [allShort({ tags: gap73 })], intent: "discriminate" as const }];
       expect(staleRouteGaps(wrong).map(f => f.rule)).toEqual(["gap-not-reached"]);
+      // a tag on a query the index now serves is stale everywhere
+      const fixed = [{ entries: corpus(800, 600), queries: [budget({ tags: gap73 })], intent: "discriminate" as const }];
+      expect(staleRouteGaps(fixed).map(f => f.rule)).toEqual(["gap-not-reached"]);
       // reached at a larger scale is enough: the small corpus alone would not earn it
-      const both = [{ entries: corpus(800, 100), queries: [budget()], intent: "discriminate" as const }, { entries: corpus(800, 600), queries: [budget()], intent: "discriminate" as const }];
+      const both = [{ entries: ineligible(300), queries: [tagged], intent: "discriminate" as const }, { entries: ineligible(), queries: [tagged], intent: "discriminate" as const }];
       expect(staleRouteGaps(both)).toEqual([]);
     });
 
-    it("keeps an ordinary common-word query on FTS, and waives common-word-not-dense only for T-0073 and the three common tokens", () => {
+    it("keeps an ordinary common-word query under the budget, and waives common-word-not-dense only for over-budget queries and the three common tokens", () => {
       const ordinary = query({ id: "o", category: "common-word", text: "garden window coffee" });
       expect(scale(corpus(1500, 0), [ordinary])).toContain("o:common-word-over-fts-budget");
       expect(scale(corpus(800, 0), [ordinary])).toEqual([]);
       expect(scale(corpus(800, 600), [budget({ tags: [] })])).toContain("b:common-word-not-dense");
+      expect(scale(corpus(800, 600), [budget({ tags: [] })])).toContain("b:common-word-over-fts-budget");
       expect(scale(corpus(800, 600), [budget({ text: "garden window coffee budget" })])).toContain("b:common-word-not-dense");
+      // an over-budget tag must be earned: the union has to cross the budget
+      expect(scale(corpus(800, 100), [budget()])).toContain("b:over-budget-under-budget");
+      expect(scale(corpus(800, 600), [query({ id: "i", category: "identifier", text: "garden", tags: ["over-budget"] })])).toContain("i:over-budget-not-common-word");
     });
 
     it("flags the review probe: three words at df 901 each (dfSum 2703) on an ordinary query", () => {
@@ -359,11 +387,72 @@ describe("auditQueries fidelity and scale", () => {
       ];
       const found = auditQueries({ entries: rows, edges: [], queries: [query({ id: "probe", category: "common-word", text: "garden window coffee" })], intent: "discriminate" });
       expect(found.filter(f => f.rule === "common-word-over-fts-budget").map(f => f.detail)).toEqual(["dfSum=2703"]);
-      expect(found.map(f => f.rule)).toContain("keyword-route-unflagged-gap");
+      // the bounded plan serves it, so the keyword route is no longer a gap to board
+      expect(found.map(f => f.rule)).not.toContain("keyword-route-unflagged-gap");
     });
 
     it("no longer accepts the retired router-budget tag", () => {
-      expect(scale(corpus(800, 600), [budget({ tags: ["router-budget", ...gap73] })])).toContain("b:unknown-tag");
+      expect(scale(corpus(800, 600), [budget({ tags: ["router-budget", "over-budget"] })])).toContain("b:unknown-tag");
+    });
+  });
+
+  describe("correlated guard (prices the bounded plan's AND tier)", () => {
+    const rows = (together: number) => [
+      dated("g", "trellis compost seedling notes", 5),
+      ...Array.from({ length: together }, (_, i) => dated(`t${i}`, `trellis compost seedling row ${i}`, 1 + (i % 100))),
+      ...Array.from({ length: 3000 - 1 - together }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+    ];
+    const guard = (over: Partial<GoldenQuery> = {}) => query({ id: "c", category: "common-word", text: "trellis compost seedling", tags: ["over-budget", "correlated"], ...over });
+    const scale = (entries: CorpusEntry[], queries: GoldenQuery[]) => rules(entries, queries, [], "discriminate");
+
+    it("accepts three co-occurring words past both the window and the budget, and skips the dense-triple rules", () => {
+      expect(scale(rows(700), [guard()])).toEqual([]);
+    });
+    it("requires the AND to overflow the window at a discriminating scale, or the guard prices nothing", () => {
+      expect(scale(rows(300), [guard()])).toContain("c:correlated-and-under-window");
+    });
+    it("requires the budget to be crossed, the over-budget tag, and the correlated tokens", () => {
+      expect(scale(rows(600), [guard()])).toContain("c:over-budget-under-budget");
+      expect(scale(rows(700), [guard({ tags: ["correlated"] })])).toContain("c:correlated-not-over-budget");
+      expect(scale(rows(700), [guard({ text: "garden window coffee" })])).toContain("c:correlated-wrong-tokens");
+    });
+  });
+
+  describe("subset guard (covers the bounded plan's OR tier)", () => {
+    // gold carries only "garden" (df 601); roadmap, standup and invoice are past the candidate limit too
+    const rows = (mid: number) => [
+      dated("g", "repotted the garden ferns", 400),
+      ...Array.from({ length: mid }, (_, i) => dated(`m${i}`, `garden note ${i}`, 1 + (i % 100))),
+      ...["roadmap", "standup", "invoice"].flatMap(word => Array.from({ length: 700 }, (_, i) => dated(`${word}${i}`, `${word} note ${i}`, 1 + (i % 100)))),
+      ...Array.from({ length: 800 }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100))),
+    ];
+    const guard = (over: Partial<GoldenQuery> = {}) => query({ id: "s", category: "common-word", text: "roadmap standup invoice garden", tags: ["over-budget", "subset"], ...over });
+    const scale = (entries: CorpusEntry[], queries: GoldenQuery[]) => rules(entries, queries, [], "discriminate");
+
+    it("accepts a gold that carries a strict, mid-df subset of an over-budget query, and skips the all-tokens rules", () => {
+      expect(scale(rows(600), [guard()])).toEqual([]);
+    });
+    it("requires the carried token's df to sit above the candidate limit and within the match budget", () => {
+      expect(scale(rows(300), [guard()])).toContain("s:subset-token-not-mid-df");
+      expect(scale(rows(2100), [guard()])).toContain("s:subset-token-not-mid-df");
+    });
+    it("waives only the all-tokens rule: a subset guard with rivals, or a gold inside the window, is still refused", () => {
+      // rivals: non-gold rows carrying every token make the answer ambiguous
+      const rivals = [...rows(600), dated("rv", "roadmap standup invoice garden all together", 5)];
+      expect(scale(rivals, [guard()])).toContain("s:common-word-ambiguous");
+      // a one-token-carried gold with rivals carrying both tokens
+      const two = [dated("g", "repotted the garden ferns", 400), ...Array.from({ length: 700 }, (_, i) => dated(`b${i}`, `roadmap garden note ${i}`, 1 + (i % 100))), ...Array.from({ length: 800 }, (_, i) => dated(`p${i}`, `plain note ${i}`, 1 + (i % 100)))];
+      expect(scale(two, [guard({ text: "roadmap garden" })])).toContain("s:common-word-ambiguous");
+      // a gold newer than the window edge is found by LIKE anyway
+      const recent = rows(600).map(entry => (entry.id === "g" ? { ...entry, createdAt: EVAL_NOW - DAY_MS } : entry));
+      expect(scale(recent, [guard()])).toContain("s:common-word-gold-in-window");
+      // layer-scoped and non-dense token rules still hold
+      expect(scale(rows(600), [guard({ layer: "company" })])).toContain("s:common-word-layer-scoped");
+      expect(scale(rows(600), [guard({ text: "roadmap standup invoice garden zebra" })])).toContain("s:common-word-not-dense");
+    });
+    it("requires a strict subset, and the over-budget tag", () => {
+      expect(scale(rows(600), [guard({ text: "garden" })])).toContain("s:subset-not-strict");
+      expect(scale(rows(600), [guard({ tags: ["subset"] })])).toContain("s:subset-not-over-budget");
     });
   });
 

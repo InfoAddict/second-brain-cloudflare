@@ -3,12 +3,12 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
+import { FTS_MATCH_BUDGET, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
 import { auditQueries, haystackVocabulary, keywordRouteModel, staleRouteGaps } from "./corpus/audit";
 import { CORPUS_PARAMS, buildCorpus as buildCorpusUncached, loadCoreData } from "./corpus/build";
-import { COMMON_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS } from "./corpus/haystack";
+import { COMMON_TOKENS, CORRELATED_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS } from "./corpus/haystack";
 import { IDENTITIES, WORKSPACES } from "./corpus/types";
 import { QUERY_CATEGORIES } from "./types";
 
@@ -129,15 +129,15 @@ describe("core golden data", () => {
   it("gives each common-word query its own triple of dense words, found in its gold needle and no other", () => {
     const isDense = (word: string) => (DENSE_TOKENS as readonly string[]).includes(word);
     const dense = (text: string) => DENSE_TOKENS.filter(word => text.toLowerCase().includes(word));
-    const common = queries.filter(q => q.category === "common-word");
+    const common = queries.filter(q => q.category === "common-word" && !q.tags?.includes("correlated") && !q.tags?.includes("subset"));
     const triples = new Set<string>();
     for (const q of common) {
       const words = q.text.split(" ");
       const triple = words.filter(isDense).sort();
       expect(triple.length, q.id).toBe(3);
-      // only T-0073 queries carry extra tokens, and those are the ordinary common ones
+      // only over-budget queries carry extra tokens, and those are the ordinary common ones
       const extra = words.filter(word => !isDense(word));
-      if (q.tags?.includes("gap:T-0073")) {
+      if (q.tags?.includes("over-budget")) {
         expect(extra.length, q.id).toBeGreaterThanOrEqual(1);
         expect(extra.every(word => (COMMON_TOKENS as readonly string[]).includes(word)), q.id).toBe(true);
       } else expect(extra, q.id).toEqual([]);
@@ -152,61 +152,84 @@ describe("core golden data", () => {
     for (const n of needles.filter(n => !goldIds.has(n.id))) expect(dense(n.content).length, n.id).toBeLessThanOrEqual(2);
   });
 
-  // T-0073 and T-0074 are scale-dependent: the LIKE window (newest 500 matches) holds every match at core-1k, so
-  // these queries are still answerable there. They lose the gold only at scale-5k and scale-20k, which is where a
-  // router fix is evaluated.
-  it("pins the T-0073 queries (router sends keyword search to LIKE past FTS_MATCH_BUDGET)", () => {
-    const gaps = queries.filter(q => q.tags?.includes("gap:T-0073"));
-    expect(gaps.map(q => q.id)).toEqual(["q-id-023-c", "q-id-030-c", ...Array.from({ length: 10 }, (_, i) => `q-budget-${String(i + 1).padStart(3, "0")}`)]);
-    for (const q of gaps) expect(q.tags, q.id).toContain("known-gap");
-    const budget = gaps.filter(q => q.id.startsWith("q-budget-"));
-    expect(new Set(budget.map(q => q.gold[0].id)).size, "one cluster per deliberate needle").toBe(10);
+  // T-0073 and T-0074 were scale-dependent: the LIKE window (newest 500 matches) holds every match at core-1k, so
+  // these queries lost the gold only at scale-5k and scale-20k. The router now serves them from the index, so they
+  // are ordinary queries (no known-gap tag) that stay in the set as the regression guard for that fix.
+  const specs = new Map<string, ReturnType<typeof buildCorpus>>();
+  const routeAt = (id: "core-1k" | "scale-5k" | "scale-20k", q: (typeof queries)[number]) => {
+    if (!specs.has(id)) specs.set(id, buildCorpus(id));
+    const spec = specs.get(id)!;
+    const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
+    const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
+    return keywordRouteModel(q.text, visible, spec.entries.find(e => e.id === q.gold[0].id)!.createdAt);
+  };
+  const FIXED_BUDGET = ["q-id-023-c", "q-id-030-c"];
+  const FIXED_SHORT = ["q-id-007", "q-id-007-c", "q-id-024", "q-id-024-c", "q-id-035", "q-id-035-c", "q-short-027", "q-short-030"];
+
+  it("keeps the fixed T-0073 queries as untagged regression guards that cross the budget on the bounded plan", () => {
+    expect(queries.filter(q => q.tags?.includes("gap:T-0073") || q.tags?.includes("gap:T-0074")), "no query is a known route gap any more").toEqual([]);
+    const overBudget = queries.filter(q => q.tags?.includes("over-budget") && q.id.startsWith("q-budget-"));
+    expect(overBudget.map(q => q.id)).toEqual(Array.from({ length: 10 }, (_, i) => `q-budget-${String(i + 1).padStart(3, "0")}`));
+    expect(new Set(overBudget.map(q => q.gold[0].id)).size, "one cluster per deliberate needle").toBe(10);
     // the deliberate tier crosses the budget at both scales; the identifier ones only at 20k, where the "roadmap" prefix and the key's variants are dense enough
     for (const id of ["scale-5k", "scale-20k"] as const) {
-      const spec = buildCorpus(id);
-      for (const q of id === "scale-5k" ? budget : gaps) {
-        const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
-        const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
-        // the real retrieval tokens, variants included ("MSA-2026-88031" also counts "2026")
-        const model = keywordRouteModel(q.text, visible, spec.entries.find(e => e.id === q.gold[0].id)!.createdAt);
+      for (const q of id === "scale-5k" ? overBudget : [...overBudget, ...queries.filter(q => FIXED_BUDGET.includes(q.id))]) {
+        const model = routeAt(id, q);
         expect(model.dfSum, `${id} ${q.id} ${q.text}`).toBeGreaterThan(FTS_MATCH_BUDGET);
-        expect(model.route, `${id} ${q.id}`).toBe("like-match-budget");
+        expect(model.route, `${id} ${q.id}`).toBe("fts-bounded");
       }
     }
-  });
+  }, 60_000);
 
-  it("pins the T-0074 queries (one FTS-ineligible token forces the whole query to LIKE)", () => {
-    const gaps = queries.filter(q => q.tags?.includes("gap:T-0074"));
-    expect(gaps.map(q => q.id)).toEqual(["q-id-007", "q-id-007-c", "q-id-024", "q-id-024-c", "q-id-035", "q-id-035-c", "q-short-027", "q-short-030"]);
-    for (const q of gaps) expect(q.tags, q.id).toContain("known-gap");
-    const spec = buildCorpus("scale-20k");
-    for (const q of gaps) {
-      const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
-      const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
-      const gold = spec.entries.find(e => e.id === q.gold[0].id)!;
-      expect(keywordRouteModel(q.text, visible, gold.createdAt).route, q.id).toBe("like-ineligible-token");
+  it("prices the bounded plan's AND tier with a correlated guard: three words that only co-occur, past the window and the budget", () => {
+    const guard = queries.filter(q => q.tags?.includes("correlated"));
+    expect(guard.map(q => q.id)).toEqual(["q-corr-001"]);
+    expect(guard[0].tags).toContain("over-budget");
+    for (const id of ["scale-5k", "scale-20k"] as const) {
+      const model = routeAt(id, guard[0]);
+      expect(model.route, id).toBe("fts-bounded");
+      expect(model.dfSum, id).toBeGreaterThan(FTS_MATCH_BUDGET);
+      const spec = specs.get(id)!;
+      const together = spec.entries.filter(e => CORRELATED_TOKENS.every(t => e.content.toLowerCase().includes(t))).length;
+      expect(together, `${id}: rows carrying all three`).toBeGreaterThan(KEYWORD_CANDIDATE_LIMIT);
     }
-  });
+    // the gold is newer than all but a handful of the correlated rows, so the AND tier's newest-first scan keeps it
+    for (const id of ["scale-5k", "scale-20k"] as const) {
+      const rows = specs.get(id)!.entries;
+      const together = rows.filter(e => CORRELATED_TOKENS.every(t => e.content.toLowerCase().includes(t)));
+      expect(together.findIndex(e => e.id === "n-corr-001"), `${id}: gold's rank among correlated rows by insertion`).toBeGreaterThanOrEqual(together.length - KEYWORD_CANDIDATE_LIMIT);
+    }
+    // core-1k has no correlated rows: the guard is inert there, like every scale-dependent query
+    expect(buildCorpus("core-1k").entries.filter(e => e.content.toLowerCase().includes("trellis")).map(e => e.id)).toEqual(["n-corr-001"]);
+  }, 60_000);
 
-  it("keeps every T-0073 and T-0074 query answerable at core-1k under the route model, and lost at scale", () => {
-    const gaps = queries.filter(q => q.tags?.some(tag => tag === "gap:T-0073" || tag === "gap:T-0074"));
-    expect(gaps.length).toBe(20);
-    const modelAt = (id: "core-1k" | "scale-5k" | "scale-20k", q: (typeof gaps)[number]) => {
-      const spec = buildCorpus(id);
-      const readable = new Set(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }));
-      const visible = spec.entries.filter(e => readable.has(e.workspaceId)).map(entry => ({ entry, content: entry.content.toLowerCase() }));
-      return keywordRouteModel(q.text, visible, spec.entries.find(e => e.id === q.gold[0].id)!.createdAt);
-    };
-    for (const q of gaps) {
-      const tie = modelAt("core-1k", q);
-      // LIKE may be the route, but its window still holds the gold: the gap does not show at the tie scale
-      expect(tie.lost, `${q.id} at core-1k: ${tie.route}, ${tie.newer} newer`).toBe(false);
-      expect(tie.newer, q.id).toBeLessThan(KEYWORD_CANDIDATE_LIMIT);
+  it("guards the OR tier with queries whose gold carries only a mid-df subset of the tokens, past the budget at both scales", () => {
+    const guards = queries.filter(q => q.tags?.includes("subset"));
+    expect(guards.map(q => q.id)).toEqual(Array.from({ length: 6 }, (_, i) => `q-sub-00${i + 1}`));
+    for (const id of ["scale-5k", "scale-20k"] as const) {
+      for (const q of guards) {
+        const model = routeAt(id, q);
+        expect(model.route, `${id} ${q.id}`).toBe("fts-bounded");
+        expect(model.dfSum, `${id} ${q.id}`).toBeGreaterThan(FTS_MATCH_BUDGET);
+      }
     }
-    // and each is really lost at some discriminating scale, on the route it names
-    const stale = staleRouteGaps(["scale-5k", "scale-20k"].map(id => buildCorpus(id as "scale-5k")));
-    expect(stale).toEqual([]);
-  });
+  }, 60_000);
+
+  it("keeps the fixed T-0074 queries as untagged regression guards that carry a short token to the index", () => {
+    expect(queries.filter(q => FIXED_SHORT.includes(q.id)).map(q => q.id)).toEqual(FIXED_SHORT);
+    for (const q of queries.filter(q => FIXED_SHORT.includes(q.id))) {
+      const model = routeAt("scale-20k", q);
+      expect(model.terms.some(t => [...t].length < FTS_MIN_TOKEN_LENGTH), `${q.id} carries a short token`).toBe(true);
+      expect(["fts", "fts-bounded"], `${q.id}: ${model.route}`).toContain(model.route);
+    }
+  }, 60_000);
+
+  it("answers every fixed query under the route model at every scale, and leaves no route gap for the audit to find", () => {
+    for (const q of queries.filter(q => [...FIXED_BUDGET, ...FIXED_SHORT].includes(q.id) || q.tags?.includes("over-budget"))) {
+      for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) expect(routeAt(id, q).lost, `${q.id} at ${id}`).toBe(false);
+    }
+    expect(staleRouteGaps(["scale-5k", "scale-20k"].map(id => buildCorpus(id as "scale-5k")))).toEqual([]);
+  }, 60_000);
 
   it("keeps every rare and identifier key out of the haystack vocabulary", () => {
     const vocab = haystackVocabulary();
