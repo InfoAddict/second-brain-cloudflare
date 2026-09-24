@@ -3432,21 +3432,21 @@
    "clusterKey": "n-rare-018",
    "rankedIds": [
     "f-000592",
-    "f-000616",
     "f-000391",
     "f-000337",
     "f-000510",
+    "n-rare-018",
+    "f-000616",
     "f-000596",
     "f-000452",
     "f-000635",
-    "f-000519",
-    "f-000142"
+    "f-000519"
    ],
    "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
    },
    "cost": {
     "d1Statements": 15,
@@ -3455,7 +3455,7 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.32899500000000004,
+    "neurons": 0.327297,
     "neuronsEstimated": false,
     "wallMs": 0
    },
