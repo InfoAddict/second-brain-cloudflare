@@ -137,4 +137,3 @@ export function checkGate(suite: string, mode: string, m: LegacyMetrics, g: Gate
   if (m[entry.metric] !== entry.value) return `${key} moved from ${entry.value} to ${m[entry.metric]} (${entry.item}); update the KNOWN_GAPS entry and its board item deliberately`;
   return undefined;
 }
-
