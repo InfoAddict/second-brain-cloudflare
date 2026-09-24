@@ -222,8 +222,8 @@ export const RERANK_PROBE_TIMEOUT_MS = 15000;
 export const RERANK_AMBIGUITY_MARGIN = 0.15;
 // A scored parent's heuristic score is scaled by max(floor, 1 + weight * (2p - 1)), p the model's rank percentile
 // (1 = best), so nothing is ever multiplied by zero. Only candidates the model saw are reordered: they stay above
-// every candidate it did not see (see blendRerankerScores). Weight and floor are chosen on core-1k (see the commit
-// that sets them).
+// every candidate it did not see (see blendRerankerScores). Weight and floor were chosen on core-1k from the grid
+// {0.5, 0.75, 1.0} x {0.25, 0.5} pre-registered in the blend commit.
 export const RERANK_BLEND_WEIGHT = 1.0;
 export const RERANK_BLEND_FLOOR = 0.25;
 
