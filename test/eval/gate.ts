@@ -80,6 +80,10 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   if (base.corpus !== cand.corpus) problems.push(`corpus differs (${base.corpus} vs ${cand.corpus})`);
   if (base.embeddingModel !== cand.embeddingModel) problems.push("embedding model differs");
   if (producersKey(base.producers) !== producersKey(cand.producers)) problems.push("model producers differ (outputs from different producers, or a model used on one side only, are not comparable)");
+  const fingerprinted = (id: string) => (CORPUS_IDS as readonly string[]).includes(id) || Object.hasOwn(PUBLIC_CORPORA, id);
+  for (const [label, r] of [["baseline", base], ["candidate", cand]] as const) {
+    if (fingerprinted(r.corpus) && !Object.keys(r.producers ?? {}).length) problems.push(`the ${label} report has no verified model producers (unverified provenance); rerun it against a stamped or freshly recorded cache`);
+  }
   if ((base.neuronSource ?? "none") !== (cand.neuronSource ?? "none")) problems.push(`neuron source differs (${base.neuronSource ?? "none"} vs ${cand.neuronSource ?? "none"})`);
   if (base.d1Backend !== cand.d1Backend) problems.push("D1 backend differs");
   if (base.isolate !== cand.isolate) problems.push("isolate mode differs");
@@ -89,7 +93,6 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
     if (r.runnerVersion !== RUNNER_VERSION) problems.push(`the ${label} was produced by runner version ${r.runnerVersion}, which is stale (current ${RUNNER_VERSION}); rerun it`);
   }
   if (base.limit !== undefined || cand.limit !== undefined) problems.push(`a report was limited to the first N queries (baseline ${base.limit ?? "full"}, candidate ${cand.limit ?? "full"}); rerun without --limit`);
-  const fingerprinted = (id: string) => (CORPUS_IDS as readonly string[]).includes(id) || Object.hasOwn(PUBLIC_CORPORA, id);
   if (fingerprinted(base.corpus) || fingerprinted(cand.corpus)) {
     for (const [label, r] of [["baseline", base], ["candidate", cand]] as const) {
       if (!r.dataFingerprint) problems.push(`the ${label} report has no golden-data fingerprint, which core and public corpus reports must carry; rerun it`);

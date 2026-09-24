@@ -13,6 +13,7 @@ import { LockRefused, applyLock } from "./lock";
 import { summarize, type Summary } from "./metrics";
 import { assertIgnored, isAllowedDataFile } from "./privacy";
 import { makeLocalAi } from "./local-ai";
+import { producerFromCache, stampCache } from "./stamp";
 import { exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
@@ -28,6 +29,7 @@ export type CliCommand =
   | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number } & Common)
   | ({ kind: "lock"; acceptDataChange?: string } & Common)
   | ({ kind: "export-cache" } & Common)
+  | ({ kind: "stamp-cache"; producerFrom: string; layer: "local" | "committed"; assertRecorded: boolean } & Common)
   | { kind: "list" };
 
 const HASH_MODEL = "hash-smoke";
@@ -66,11 +68,11 @@ export function parseCli(argv: string[]): CliCommand {
   if (values.d1 !== "sqlite" && values.d1 !== "workerd") throw new UsageError(`--d1 must be sqlite or workerd, got ${values.d1}`);
   if (values.isolate !== "warm" && values.isolate !== "cold") throw new UsageError(`--isolate must be warm or cold, got ${values.isolate}`);
   const common: Common = {
-    corpus: values.corpus!, d1: values.d1, isolate: values.isolate, model: resolveModel(values.corpus!, values["embedding-model"]),
+    corpus: values.corpus!, d1: values.d1, isolate: values.isolate, model: resolveModel(values.corpus!, values.model ?? values["embedding-model"]),
     hash: values["hash-embeddings"]!, limit: values.limit !== undefined ? positive("limit", values.limit, { integer: true }) : undefined, json: values.json,
   };
   const command = positionals[0];
-  if (command === "lock" || command === "prepare" || command === "export-cache") {
+  if (command === "lock" || command === "prepare" || command === "export-cache" || command === "stamp-cache") {
     // None of these produces a report file, and all need the full query set.
     if (common.limit !== undefined) throw new UsageError(`${command} needs the full query set; --limit does not apply`);
     if (common.json !== undefined) throw new UsageError(`${command} does not write a report; --json does not apply`);
@@ -87,6 +89,12 @@ export function parseCli(argv: string[]): CliCommand {
       concurrency: positive("concurrency", values.concurrency!), ...common,
     };
   }
+  if (command === "stamp-cache") {
+    if (!values["producer-from"]) throw new UsageError("stamp-cache needs --producer-from current|<cache file>");
+    if (values.layer !== "local" && values.layer !== "committed") throw new UsageError(`--layer must be local or committed, got ${values.layer}`);
+    if (values.layer === "committed" && !isCoreCorpus(common.corpus)) throw new UsageError("only core corpora have a committed layer");
+    return { kind: "stamp-cache", producerFrom: values["producer-from"], layer: values.layer, assertRecorded: values["i-recorded-this"]!, ...common };
+  }
   if (command === "export-cache") {
     if (common.corpus !== "core-1k") throw new UsageError("only the core-1k cache is committed; larger caches stay local in .eval-cache/");
     return { kind: "export-cache", ...common };
@@ -101,7 +109,7 @@ export function parseCli(argv: string[]): CliCommand {
     return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, ...common };
   }
   if (values.variant) return { kind: "run", variant: values.variant, ...common };
-  throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, export-cache, or --list");
+  throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, export-cache, stamp-cache, or --list");
 }
 
 function parse(argv: string[]) {
@@ -111,7 +119,7 @@ function parse(argv: string[]) {
     options: {
       variant: { type: "string" }, compare: { type: "string" }, corpus: { type: "string", default: "core-1k" },
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
-      "embedding-model": { type: "string" }, "hash-embeddings": { type: "boolean", default: false },
+      "embedding-model": { type: "string" }, model: { type: "string" }, "producer-from": { type: "string" }, layer: { type: "string", default: "local" }, "i-recorded-this": { type: "boolean", default: false }, "hash-embeddings": { type: "boolean", default: false },
       limit: { type: "string" }, target: { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
       "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
@@ -295,6 +303,19 @@ async function runExportCache(cmd: CliCommand & { kind: "export-cache" }, spec: 
   return 0;
 }
 
+/** Stamps legacy rows of a cache you recorded yourself with its producer; a human assertion, never a check (see stamp.ts). */
+function runStampCache(cmd: CliCommand & { kind: "stamp-cache" }): number {
+  if (!cmd.assertRecorded) {
+    throw new UsageError("stamp-cache asserts, on your word, that YOU recorded every unlabeled row in the file with this producer: legacy rows store only a hash of (model, input), so the claim cannot be verified. Pass --i-recorded-this to make it");
+  }
+  const file = cmd.layer === "committed" ? resolve(CORE_DATA_DIR, `replay.${cmd.model.split("/").pop()}.jsonl.gz`) : replayPaths(cmd.model, cmd.corpus).write;
+  if (!existsSync(file)) throw new UsageError(`${file} does not exist`);
+  const producer = cmd.producerFrom === "current" ? makeLocalAi().producer(cmd.model) : producerFromCache(resolve(cmd.producerFrom), cmd.model);
+  const { stamped, already } = stampCache({ file, model: cmd.model, producer });
+  console.log(`stamped ${stamped} legacy row(s) in ${file} as ${cmd.model} / ${producer.repo}@${producer.revision.slice(0, 12)} (${producer.library} ${producer.libraryVersion}) on the operator's assertion --i-recorded-this; ${already} row(s) were already stamped. The rows could not be verified: inputs are not stored, so keys cannot be recomputed.`);
+  return 0;
+}
+
 /** Rerun the baseline and refresh the committed lock; changed golden data needs --accept-data-change. */
 function checkLockable(cmd: CliCommand & { kind: "lock" }): void {
   if (cmd.hash) throw new UsageError("lock records real rankings; --hash-embeddings does not apply");
@@ -325,6 +346,7 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (cmd.json) assertJsonPathAllowed(cmd.json); // before the slow part, not after
     if (cmd.kind === "prepare") return await runPrepare(cmd);
+    if (cmd.kind === "stamp-cache") return runStampCache(cmd);
     if (cmd.kind === "lock") checkLockable(cmd); // before resolveCorpus, so a public corpus is refused for the right reason
     const spec = await resolveCorpus(cmd.corpus);
     if (cmd.kind === "compare") return await runCompare(cmd, spec);

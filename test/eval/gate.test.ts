@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, evaluateGate, formatGate } from "./gate";
 import { QUERY_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
 
+const LOCAL = (repo: string): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision: "abc", dtype: "fp32" });
 function report(name: string, tweak: (i: number, r: QueryResult) => void = () => {}, n = 240): VariantReport {
   return {
-    schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, dataFingerprint: { "queries.jsonl": "h" },
+    schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", producers: { m: LOCAL("BAAI/bge-small-en-v1.5") }, neuronSource: "projected", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, dataFingerprint: { "queries.jsonl": "h" },
     results: Array.from({ length: n }, (_, i) => {
       const r: QueryResult = {
         queryId: `q${i}`, category: QUERY_CATEGORIES[i % QUERY_CATEGORIES.length], clusterKey: `q${i}`, rankedIds: [],
@@ -49,7 +50,7 @@ describe("evaluateGate", () => {
     const mk = (repo: string, revision = "abc", libraryVersion = "4.3.0"): EmbeddingProducer =>
       ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion, onnxRuntime: "onnxruntime-node@1.30.0", repo, revision, dtype: "fp32" });
     const emb = mk("BAAI/bge-small-en-v1.5"), rr = mk("BAAI/bge-reranker-base");
-    const withMap = (name: string, producers?: Record<string, EmbeddingProducer>) => ({ ...report(name), ...(producers && { producers }) });
+    const withMap = (name: string, producers?: Record<string, EmbeddingProducer>) => ({ ...report(name), producers });
     const both = { "@cf/baai/bge-small-en-v1.5": emb, "@cf/baai/bge-reranker-base": rr };
     const detail = (b: VariantReport, c: VariantReport) => evaluateGate(b, c).rules.find(r => r.rule === "comparable");
     expect(detail(withMap("baseline", both), withMap("v", { ...both }))?.detail ?? "").not.toMatch(/producer/);
@@ -64,6 +65,15 @@ describe("evaluateGate", () => {
       const r = detail(withMap("baseline", both), cand);
       expect(r?.status).toBe("inconclusive");
       expect(r?.detail).toMatch(/model producers differ/);
+    }
+  });
+
+  it("treats a missing producers map on a core report as unverified provenance", () => {
+    const bare = { ...report("v"), producers: undefined, neuronSource: undefined };
+    for (const [b, c] of [[report("baseline"), bare], [bare, report("v")]] as const) {
+      const r = evaluateGate(b, c).rules.find(x => x.rule === "comparable");
+      expect(r?.status).toBe("inconclusive");
+      expect(r?.detail).toMatch(/unverified provenance/);
     }
   });
 

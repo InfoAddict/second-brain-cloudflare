@@ -3,9 +3,10 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readd
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import type { EmbeddingProducer } from "./types";
 import { describe, expect, it, vi } from "vitest";
 import {
-  NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, replayKey, stableStringify,
+  NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, producerId, replayKey, stableStringify,
 } from "./ai-replay";
 
 const MODEL = "@cf/baai/bge-small-en-v1.5";
@@ -23,7 +24,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const embedInput = (t: string) => ({ text: [t] });
 
 function fakeLive(vec = [0.25, -0.5]) {
-  return { run: vi.fn(async () => ({ data: [vec] })) };
+  return { run: vi.fn(async () => ({ data: [vec] })), producer: () => PRODUCER };
 }
 
 describe("replayKey", () => {
@@ -64,7 +65,7 @@ describe("makeReplayAi", () => {
     expect(live.run).toHaveBeenCalledTimes(1);
     await first.ai.run(MODEL as never, embedInput("hello world") as never);
     expect(live.run).toHaveBeenCalledTimes(1); // second call is a cache hit
-    expect(readFileSync(join(dir, "c.jsonl"), "utf8").trim().split("\n")).toHaveLength(1); // written once
+    expect(readFileSync(join(dir, "c.jsonl"), "utf8").trim().split("\n").filter(l => l.includes('"k"'))).toHaveLength(1); // written once
     expect(a.data[0][0]).toBeCloseTo(0.1, 6); // float32 round trip
     expect(budget.spent).toBeGreaterThan(0);
 
@@ -103,7 +104,8 @@ describe("makeReplayAi", () => {
     const dir = cacheOf(root);
     const key = replayKey(MODEL, embedInput("z"));
     const f32 = Buffer.from(new Float32Array([1, 2]).buffer).toString("base64");
-    writeFileSync(join(dir, "c.jsonl.gz"), gzipSync(`${JSON.stringify({ k: key, v: { f32: [f32] } })}\n`));
+    const header = JSON.stringify({ producer: { model: MODEL, ...PRODUCER } });
+    writeFileSync(join(dir, "c.jsonl.gz"), gzipSync(`${header}\n${JSON.stringify({ k: key, v: { f32: [f32] }, m: MODEL, p: producerId(PRODUCER) })}\n`));
     const { ai } = makeReplayAi({ store: new ReplayStore([join(dir, "c.jsonl.gz")], undefined, { root }), mode: "replay" });
     expect(await ai.run(MODEL as never, embedInput("z") as never)).toEqual({ data: [[1, 2]] });
   });
@@ -267,7 +269,7 @@ describe("lock lease and fence", () => {
     const s = new ReplayStore([], join(root, ".eval-cache", "fresh.jsonl"), { root });
     const r = makeReplayAi({ store: s, mode: "record", live: fakeLive() });
     await r.ai.run(MODEL as never, embedInput("x") as never);
-    expect(rows(join(root, ".eval-cache", "fresh.jsonl"))).toHaveLength(1);
+    expect(rows(join(root, ".eval-cache", "fresh.jsonl")).filter(l => l.includes('"k"'))).toHaveLength(1);
   });
 
   it("expires a lock whose JSON has no numeric t by its file mtime", async () => {
@@ -459,14 +461,14 @@ describe("pricing and token estimates", () => {
   it("records provider usage for embeddings and reports its exact neurons in record and replay", async () => {
     const root = tmp();
     const input = embedInput("a".repeat(400));
-    const live = { run: vi.fn(async () => ({ data: [[0.5]], usage: { prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 } })) };
+    const live = { run: vi.fn(async () => ({ data: [[0.5]], usage: { prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 } })), producer: () => PRODUCER };
     const budget = new NeuronBudget(100);
     const record = makeReplayAi({ store: store(root, "usage.jsonl"), mode: "record", live, budget });
     await record.ai.run(MODEL as never, input as never);
     const expected = 7 * 1841 / 1_000_000;
     expect(record.drainCalls()).toMatchObject([{ neurons: expected, neuronsEstimated: false, source: "live" }]);
     expect(budget.spent).toBeCloseTo(expected, 12);
-    const cached = JSON.parse(rows(join(cacheOf(root), "usage.jsonl"))[0]);
+    const cached = JSON.parse(rows(join(cacheOf(root), "usage.jsonl"))[1]); // [0] is the producer record
     expect(cached.v.usage).toEqual({ prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 });
     const replay = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "usage.jsonl")], undefined, { root }), mode: "replay" });
     await replay.ai.run(MODEL as never, input as never);
@@ -528,7 +530,7 @@ describe("replay inputs", () => {
   });
 });
 
-const PRODUCER = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" } as const;
+const PRODUCER: EmbeddingProducer = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" };
 
 describe("producer provenance in the replay cache", () => {
   it("records the producer beside the rows, reloads it, and exports it with the used rows", async () => {
@@ -571,7 +573,7 @@ describe("unlabeled caches (rows without a producer record)", () => {
     const root = tmp();
     const file = join(cacheOf(root), "old.jsonl");
     const plain = store(root, "old.jsonl");
-    await makeReplayAi({ store: plain, mode: "record", live: fakeLive() }).ai.run(MODEL as never, embedInput("a") as never); // no producer(): rows only
+    await makeReplayAi({ store: plain, mode: "record", live: { run: fakeLive().run } }).ai.run(MODEL as never, embedInput("a") as never); // no producer(): rows only
     return { root, file };
   };
 
@@ -592,8 +594,8 @@ describe("unlabeled caches (rows without a producer record)", () => {
       const ai = makeReplayAi({ store: s, mode, expectProducer: () => PRODUCER });
       await expect(ai.ai.run(MODEL as never, embedInput("a") as never), mode).rejects.toThrow(/no producer record/);
     }
-    // a run that declares no producer (hash smoke, legacy tooling) still reads it
-    await expect(makeReplayAi({ store: s, mode: "replay" }).ai.run(MODEL as never, embedInput("a") as never)).resolves.toBeDefined();
+    // even a run that declares nothing cannot be served a row whose origin is unknown
+    await expect(makeReplayAi({ store: s, mode: "replay" }).ai.run(MODEL as never, embedInput("a") as never)).rejects.toThrow(/unverified provenance/);
   });
 
   it("an empty cache is fine, and a declared producer that differs from the run's is refused on read", async () => {
@@ -602,5 +604,97 @@ describe("unlabeled caches (rows without a producer record)", () => {
     expect(() => empty.recordProducer(MODEL, PRODUCER)).not.toThrow();
     const ai = makeReplayAi({ store: empty, mode: "replay", expectProducer: () => ({ ...PRODUCER, revision: "other" }) });
     await expect(ai.ai.run(MODEL as never, embedInput("x") as never)).rejects.toThrow(/mixes producers/);
+  });
+});
+
+describe("row provenance", () => {
+  const lineOf = (o: unknown) => `${JSON.stringify(o)}\n`;
+  const header = (model = MODEL, p: EmbeddingProducer = PRODUCER) => lineOf({ producer: { model, ...p } });
+  const key = (t: string) => replayKey(MODEL, embedInput(t));
+  const f32 = Buffer.from(new Float32Array([1, 2]).buffer).toString("base64");
+  const row = (t: string, extra: object = { m: MODEL, p: producerId(PRODUCER) }) => lineOf({ k: key(t), v: { f32: [f32] }, ...extra });
+
+  it("stamps every new row with its model and producer id, and serves it back as verified", async () => {
+    const root = tmp();
+    const s = store(root, "n.jsonl");
+    const ai = makeReplayAi({ store: s, mode: "record", live: fakeLive() });
+    await ai.ai.run(MODEL as never, embedInput("a") as never);
+    const line = JSON.parse(rows(join(cacheOf(root), "n.jsonl")).at(-1)!);
+    expect(line).toMatchObject({ m: MODEL, p: producerId(PRODUCER) });
+    const reader = new ReplayStore([join(cacheOf(root), "n.jsonl")], undefined, { root });
+    const replay = makeReplayAi({ store: reader, mode: "replay" });
+    await replay.ai.run(MODEL as never, embedInput("a") as never);
+    expect(replay.producers()).toEqual({ [MODEL]: PRODUCER });
+    expect(replay.neuronSource()).toBe("projected");
+  });
+
+  it("refuses to load a file whose row names a model or producer its own producer record does not vouch for", () => {
+    const root = tmp();
+    const other = "@cf/baai/bge-m3";
+    // model-A rows under a model-B producer record
+    writeFileSync(join(cacheOf(root), "a.jsonl"), header(other, { ...PRODUCER, repo: "Xenova/bge-m3" }) + row("x"));
+    expect(() => new ReplayStore([join(cacheOf(root), "a.jsonl")], undefined, { root })).toThrow(/producer record/);
+    // a producer id the file never declared
+    writeFileSync(join(cacheOf(root), "b.jsonl"), header() + row("x", { m: MODEL, p: "deadbeefdeadbeef" }));
+    expect(() => new ReplayStore([join(cacheOf(root), "b.jsonl")], undefined, { root })).toThrow(/producer record/);
+    // half-stamped
+    writeFileSync(join(cacheOf(root), "c.jsonl"), header() + row("x", { m: MODEL }));
+    expect(() => new ReplayStore([join(cacheOf(root), "c.jsonl")], undefined, { root })).toThrow(/both/);
+  });
+
+  it("validates each layer against its own producer records: rows do not borrow another file's", () => {
+    const root = tmp();
+    mkdirSync(join(root, "test/eval/data/core"), { recursive: true });
+    writeFileSync(join(root, "test/eval/data/core/replay.x.jsonl.gz"), gzipSync(header()));
+    writeFileSync(join(cacheOf(root), "local.jsonl"), row("x")); // stamped, but its own file has no record
+    expect(() => new ReplayStore([join(root, "test/eval/data/core/replay.x.jsonl.gz"), join(cacheOf(root), "local.jsonl")], undefined, { root })).toThrow(/producer record/);
+  });
+
+  it("refuses a local row overriding a committed row unless it carries the same producer", () => {
+    const root = tmp();
+    const committed = join(root, "test/eval/data/core/replay.x.jsonl.gz");
+    mkdirSync(join(root, "test/eval/data/core"), { recursive: true });
+    writeFileSync(committed, gzipSync(header() + row("x")));
+    const local = join(cacheOf(root), "local.jsonl");
+    writeFileSync(local, row("x", {})); // legacy row over a verified one
+    expect(() => new ReplayStore([committed, local], undefined, { root })).toThrow(/refusing to override/);
+    const changed = { ...PRODUCER, revision: "other" };
+    writeFileSync(local, header(MODEL, changed) + row("x", { m: MODEL, p: producerId(changed) }));
+    expect(() => new ReplayStore([committed, local], undefined, { root })).toThrow(/mixes producers/);
+    writeFileSync(local, header() + row("x")); // same producer: an idempotent overwrite is fine
+    expect(() => new ReplayStore([committed, local], undefined, { root })).not.toThrow();
+  });
+
+  it("appends a record to the write file even when a read layer already declared the producer", async () => {
+    const root = tmp();
+    const committed = join(root, "test/eval/data/core/replay.x.jsonl.gz");
+    mkdirSync(join(root, "test/eval/data/core"), { recursive: true });
+    writeFileSync(committed, gzipSync(header() + row("x")));
+    const local = join(cacheOf(root), "local.jsonl");
+    const s = new ReplayStore([committed], local, { root });
+    await makeReplayAi({ store: s, mode: "record", live: fakeLive() }).ai.run(MODEL as never, embedInput("new") as never);
+    expect(rows(local)[0]).toContain('"producer"');
+    expect(() => new ReplayStore([committed, local], undefined, { root })).not.toThrow(); // the local file is self-contained
+  });
+
+  it("refuses to serve a legacy row for an embedding call, but a recorded LLM row needs no producer", async () => {
+    const root = tmp();
+    writeFileSync(join(cacheOf(root), "l.jsonl"), header() + row("x", {}));
+    const legacy = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "l.jsonl")], undefined, { root }), mode: "replay" });
+    await expect(legacy.ai.run(MODEL as never, embedInput("x") as never)).rejects.toThrow(/unverified provenance/);
+    const llmKey = replayKey(LLM, { messages: [{ content: "hi" }] });
+    writeFileSync(join(cacheOf(root), "m.jsonl"), lineOf({ k: llmKey, v: { text: "yo" } }));
+    const llm = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "m.jsonl")], undefined, { root }), mode: "replay" });
+    await expect(llm.ai.run(LLM as never, { messages: [{ content: "hi" }] } as never)).resolves.toBeDefined();
+    expect(llm.producers()).toEqual({});
+    expect(llm.neuronSource()).toBeUndefined();
+  });
+
+  it("refuses to export rows that have no provenance", () => {
+    const root = tmp();
+    writeFileSync(join(cacheOf(root), "l.jsonl"), header() + row("x", {}));
+    const s = new ReplayStore([join(cacheOf(root), "l.jsonl")], undefined, { root });
+    s.get(key("x"));
+    expect(() => s.exportUsed(join(cacheOf(root), "out.jsonl.gz"))).toThrow(/stamp/);
   });
 });

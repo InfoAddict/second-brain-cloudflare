@@ -141,8 +141,8 @@ export async function runVariant(o: {
       }
       o.onProgress?.(results.length, o.queries.length);
     }
-    const producers = corpus.replay.producers();
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), neuronSource: Object.keys(producers).length ? "projected" as const : "provider" as const, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
+    const producers = corpus.replay.producers(), neuronSource = corpus.replay.neuronSource();
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
   } finally {
     restoreClock();
   }

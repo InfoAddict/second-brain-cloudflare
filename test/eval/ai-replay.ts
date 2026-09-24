@@ -6,8 +6,11 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { producerKey, type EmbeddingProducer } from "./types";
+import { producerKey, type EmbeddingProducer, type NeuronSource } from "./types";
 import { hashVector } from "./vectors";
+
+/** Short stable id of a producer record; stored in every row so a row names the exact producer that made it. */
+export const producerId = (p: EmbeddingProducer): string => createHash("sha256").update(producerKey(p)).digest("hex").slice(0, 16);
 
 export type ReplayMode = "replay" | "record" | "dry";
 
@@ -170,6 +173,9 @@ const isInside = (child: string, parent: string) => {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 };
 
+/** One cache file's own producer records. Rows are validated per layer, never against another file's records. */
+interface Layer { producers: Map<string, string> }
+
 export interface ReplayStoreOptions {
   /** Repo root that .eval-cache/ and the committed data directory hang off; tests point this at a temp dir. */
   root?: string;
@@ -182,7 +188,10 @@ export interface ReplayStoreOptions {
  * (symlinks included) inside <root>/.eval-cache; read layers may also come from the committed core directory.
  */
 export class ReplayStore {
-  private readonly map = new Map<string, Stored>();
+  /** Each row with the model and producer id it was recorded under (absent on legacy rows, which are unverified). */
+  private readonly map = new Map<string, { v: Stored; m?: string; p?: string }>();
+  /** The write file's own producer records (model to producer id): rows appended there are validated against these. */
+  private readonly writeLayer: Layer = { producers: new Map() };
   /** Who produced each model's vectors, from `{"producer": {...}}` meta lines. One producer per model per cache. */
   private readonly producers = new Map<string, EmbeddingProducer>();
   private readonly cacheDir: string;
@@ -207,23 +216,34 @@ export class ReplayStore {
     };
     const reads = readPaths.map(p => inside(p, [this.cacheDir, this.committedDir]));
     if (writePath) this.writeFile = inside(writePath, [this.cacheDir]);
-    for (const p of reads) this.load(p, false);
+    for (const p of reads) if (p !== this.writeFile) this.load(p, false);
     if (this.writeFile) this.load(this.writeFile, true);
   }
 
-  private apply(path: string, lineNo: number, line: string) {
+  private apply(path: string, lineNo: number, line: string, layer: Layer) {
     try {
-      const rec = JSON.parse(line) as { k?: unknown; v?: unknown; producer?: { model?: unknown } & Partial<EmbeddingProducer> };
+      const rec = JSON.parse(line) as { k?: unknown; v?: unknown; m?: unknown; p?: unknown; stamped?: unknown; producer?: { model?: unknown } & Partial<EmbeddingProducer> };
+      if (rec.stamped !== undefined) return; // audit line written by stamp-cache
       if (rec.producer !== undefined) {
         const { model, ...producer } = rec.producer;
         if (typeof model !== "string" || typeof producer.repo !== "string") throw new Error("expected {producer: {model, ...}}");
         this.adoptProducer(model, producer as EmbeddingProducer);
+        layer.producers.set(model, producerId(producer as EmbeddingProducer));
         return;
       }
       if (typeof rec.k !== "string" || !rec.v || typeof rec.v !== "object") throw new Error("expected {k: string, v: object}");
-      this.map.set(rec.k, rec.v as Stored);
+      if ((rec.m === undefined) !== (rec.p === undefined) || (rec.m !== undefined && (typeof rec.m !== "string" || typeof rec.p !== "string"))) throw new Error("model and producer id must both be strings, or both absent");
+      const m = rec.m as string | undefined, p = rec.p as string | undefined;
+      if (m !== undefined && layer.producers.get(m) !== p) {
+        throw new Error(`row says model ${m} producer ${p}, but this file's producer record for ${m} is ${layer.producers.get(m) ?? "missing"}`);
+      }
+      const known = this.map.get(rec.k);
+      if (known?.p !== undefined && known.p !== p) {
+        throw new Error(`refusing to override a row of producer ${known.p} with ${p === undefined ? "an unlabeled row" : `one of producer ${p}`}`);
+      }
+      this.map.set(rec.k, { v: rec.v as Stored, ...(m !== undefined && { m, p }) });
     } catch (e) {
-      throw new Error(`${path}:${lineNo}: corrupt replay record (${(e as Error).message})`);
+      throw new Error(`${path}:${lineNo}: corrupt or unverifiable replay record (${(e as Error).message})`);
     }
   }
 
@@ -261,19 +281,22 @@ export class ReplayStore {
   recordProducer(model: string, producer: EmbeddingProducer): void {
     this.refresh();
     if (this.unlabeled()) throw this.unlabeledError(model);
-    if (!this.adoptProducer(model, producer)) return;
+    const fresh = this.adoptProducer(model, producer);
     const path = this.writeFile;
-    if (!path) { this.producers.delete(model); throw new Error("replay store is read-only"); }
+    if (!path) { if (fresh) this.producers.delete(model); throw new Error("replay store is read-only"); }
+    if (this.writeLayer.producers.has(model)) return;
+    // Rows appended here are validated against THIS file's records, so the record must live here even if a read layer has it.
     mkdirSync(dirname(path), { recursive: true });
     if (existsSync(path)) {
       const buf = readFileSync(path);
       if (buf.length > 0 && buf[buf.length - 1] !== 10) truncateSync(path, buf.lastIndexOf(10) + 1);
     }
     appendFileSync(path, `${JSON.stringify({ producer: { model, ...producer } })}\n`);
+    this.writeLayer.producers.set(model, producerId(producer));
   }
 
   /** Reads every complete line; returns the bytes consumed. A torn final line is skipped, anything else corrupt throws. */
-  private ingest(path: string, buf: Buffer): number {
+  private ingest(path: string, buf: Buffer, layer: Layer): number {
     const complete = buf.lastIndexOf(10) + 1;
     let pos = 0;
     let lineNo = 0;
@@ -281,12 +304,12 @@ export class ReplayStore {
       const nl = buf.indexOf(10, pos);
       lineNo++;
       const line = buf.toString("utf8", pos, nl);
-      if (line) this.apply(path, lineNo, line);
+      if (line) this.apply(path, lineNo, line, layer);
       pos = nl + 1;
     }
     if (complete === buf.length) return complete;
     try {
-      this.apply(path, lineNo + 1, buf.toString("utf8", complete));
+      this.apply(path, lineNo + 1, buf.toString("utf8", complete), layer);
       return buf.length; // intact record that only lacks its newline
     } catch {
       console.warn(`${path}: ignoring incomplete final record (${buf.length - complete} bytes, likely a torn write)`);
@@ -298,7 +321,7 @@ export class ReplayStore {
     if (!existsSync(path)) return;
     const raw = readFileSync(path);
     const buf = path.endsWith(".gz") ? gunzipSync(raw) : raw;
-    const consumed = this.ingest(path, buf);
+    const consumed = this.ingest(path, buf, writable ? this.writeLayer : { producers: new Map() });
     if (!writable) return;
     // Repair now so the next append cannot concatenate onto the torn tail.
     if (consumed < buf.length) truncateSync(path, consumed);
@@ -317,7 +340,7 @@ export class ReplayStore {
       const buf = Buffer.alloc(size - this.offset);
       readSync(fd, buf, 0, buf.length, this.offset);
       const complete = buf.subarray(0, buf.lastIndexOf(10) + 1);
-      this.ingest(path, complete);
+      this.ingest(path, complete, this.writeLayer);
       this.offset += complete.length;
     } finally {
       closeSync(fd);
@@ -327,9 +350,15 @@ export class ReplayStore {
   /** Keys served since construction; lets a run export exactly the slice it needed. */
   readonly used = new Set<string>();
   get(key: string): Stored | undefined {
-    const value = this.map.get(key);
-    if (value) this.used.add(key);
-    return value;
+    const entry = this.map.get(key);
+    if (entry) this.used.add(key);
+    return entry?.v;
+  }
+
+  /** Which model and producer id recorded this row; undefined for a legacy row (origin unverified). */
+  provenance(key: string): { model: string; producer: string } | undefined {
+    const e = this.map.get(key);
+    return e?.m !== undefined && e.p !== undefined ? { model: e.m, producer: e.p } : undefined;
   }
 
   /**
@@ -344,8 +373,13 @@ export class ReplayStore {
     if (!allowed) {
       throw new Error(`exportUsed may write only inside ${this.cacheDir} or ${join(this.committedDir, "replay.<model>.jsonl.gz")}, not ${path}`);
     }
-    const meta = [...this.producers].sort(([a], [b]) => a.localeCompare(b)).map(([model, p]) => JSON.stringify({ producer: { model, ...p } }));
-    const lines = [...meta, ...[...this.used].sort().map(k => JSON.stringify({ k, v: this.map.get(k) }))];
+    const rows = [...this.used].sort().map(k => ({ k, e: this.map.get(k)! }));
+    // LLM rows carry no producer; every embedding or reranker row must, or the exported layer would be unverifiable.
+    const bare = rows.filter(r => r.e.p === undefined && !("text" in r.e.v));
+    if (bare.length) throw new Error(`${bare.length} exported row(s) have no producer provenance (legacy rows); stamp the cache first: npm run eval:recall -- stamp-cache --model <id> --producer-from current --i-recorded-this`);
+    const models = new Set(rows.flatMap(r => (r.e.m !== undefined ? [r.e.m] : [])));
+    const meta = [...this.producers].filter(([m]) => models.has(m)).sort(([a], [b]) => a.localeCompare(b)).map(([model, p]) => JSON.stringify({ producer: { model, ...p } }));
+    const lines = [...meta, ...rows.map(({ k, e }) => JSON.stringify({ k, v: e.v, ...(e.m !== undefined && { m: e.m, p: e.p }) }))];
     mkdirSync(dirname(abs), { recursive: true });
     const tmp = `${abs}.${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
     try {
@@ -358,16 +392,18 @@ export class ReplayStore {
     return this.used.size;
   }
 
-  put(key: string, value: Stored): void {
+  put(key: string, value: Stored, prov?: { model: string; producer: EmbeddingProducer }): void {
     const path = this.writeFile;
     if (!path) throw new Error("replay store is read-only");
+    const id = prov && producerId(prov.producer);
+    if (prov && this.writeLayer.producers.get(prov.model) !== id) throw new Error(`the write file has no producer record for ${prov.model}; record the producer before its rows`);
     mkdirSync(dirname(path), { recursive: true });
     if (existsSync(path)) {
       const buf = readFileSync(path);
       if (buf.length > 0 && buf[buf.length - 1] !== 10) truncateSync(path, buf.lastIndexOf(10) + 1); // a crashed writer's torn tail
     }
-    appendFileSync(path, `${JSON.stringify({ k: key, v: value })}\n`);
-    this.map.set(key, value);
+    appendFileSync(path, `${JSON.stringify({ k: key, v: value, ...(prov && { m: prov.model, p: id }) })}\n`);
+    this.map.set(key, { v: value, ...(prov && { m: prov.model, p: id }) });
   }
 
   /**
@@ -459,7 +495,7 @@ export class ReplayStore {
    * is appended: the winner's row is returned, waiting up to one stale window for it to land, or this throws if none does. `what` names the
    * request in that error.
    */
-  async fill(key: string, produce: () => Promise<Stored>, what = "request"): Promise<{ stored: Stored; live: boolean }> {
+  async fill(key: string, produce: () => Promise<Stored>, what = "request", prov?: { model: string; producer: EmbeddingProducer }): Promise<{ stored: Stored; live: boolean }> {
     const running = this.inflight.get(key);
     if (running) return { stored: (await running).stored, live: false };
     const flight = this.withLock(key, async stillOwner => {
@@ -476,7 +512,7 @@ export class ReplayStore {
         }
         throw new Error(`replay lock for ${what} (sha256 ${key}) was taken over during a live call and no result was recorded in ${this.writeFile}. Rerun to retry: npm run eval:recall -- prepare --variant <name> --corpus <id>`);
       }
-      this.put(key, stored);
+      this.put(key, stored, prov);
       return { stored, live: true };
     });
     this.inflight.set(key, flight);
@@ -554,6 +590,8 @@ export interface ReplayAi {
   drainCalls(): AiCall[];
   /** Producer of every non-LLM model this ai was asked for (corpus load and queries), as the cache records it. */
   producers(): Record<string, EmbeddingProducer>;
+  /** Where the neuron figures of the calls served so far come from; undefined when no call had verified provenance. */
+  neuronSource(): NeuronSource | undefined;
   /** Cache misses seen in dry mode, keyed by replay key. */
   misses: Map<string, { model: string; preview: string; neurons: number }>;
 }
@@ -603,11 +641,11 @@ export function makeReplayAi(opts: {
 }): ReplayAi {
   const calls: AiCall[] = [];
   const misses: ReplayAi["misses"] = new Map();
-  const usedModels = new Set<string>();
+  /** Models with at least one call served from (or recorded with) verified provenance. */
+  const verifiedModels = new Set<string>();
   const run = async (model: string, input: AiInput) => {
     const kind = kindOf(input);
     if (kind !== "llm") {
-      usedModels.add(model);
       // A run with a declared producer only reads (or extends) a cache that is labeled with that same producer.
       const expected = opts.expectProducer?.(model) ?? opts.live?.producer?.(model);
       if (expected) opts.store.assertProducer(model, expected);
@@ -617,6 +655,13 @@ export function makeReplayAi(opts: {
     const price = (stored?: Stored) => reportedNeurons(model, kind, text, stored);
     const hit = opts.store.get(key);
     if (hit) {
+      if (kind !== "llm") {
+        const prov = opts.store.provenance(key), producer = opts.store.producerOf(model);
+        if (!prov || !producer || prov.model !== model || prov.producer !== producerId(producer)) {
+          throw new Error(`replay row for ${model} (sha256 ${key}) has unverified provenance: ${prov ? `it was recorded for ${prov.model}` : "it predates provenance (legacy row)"}. Re-record it, or stamp a cache you recorded yourself: npm run eval:recall -- stamp-cache --model ${model} --producer-from current --i-recorded-this`);
+        }
+        verifiedModels.add(model);
+      }
       const cost = price(hit);
       calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: "replay" });
       return respond(input, hit);
@@ -654,7 +699,8 @@ export function makeReplayAi(opts: {
       }
       opts.budget?.settle(reserved, price(fresh).neurons);
       return fresh;
-    }, `${model} "${preview}"`);
+    }, `${model} "${preview}"`, live.producer && kind !== "llm" ? { model, producer: live.producer(model) } : undefined);
+    if (live.producer && kind !== "llm") verifiedModels.add(model);
     const cost = price(stored);
     calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
     return respond(input, stored);
@@ -662,7 +708,11 @@ export function makeReplayAi(opts: {
   return {
     ai: { run } as unknown as Ai,
     drainCalls: () => calls.splice(0),
-    producers: () => Object.fromEntries([...usedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [[m, p]] : []; })),
+    producers: () => Object.fromEntries([...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [[m, p]] : []; })),
+    neuronSource: () => {
+      const kinds = [...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [p.kind] : []; });
+      return kinds.length ? (kinds.every(k => k.startsWith("local-")) ? "projected" : "provider") : undefined;
+    },
     misses,
   };
 }

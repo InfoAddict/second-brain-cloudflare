@@ -11,6 +11,7 @@ import { vectorizeFilterState } from "../../src/vectorize/scope";
 import { ExactVectorize } from "./vectorize-emulator";
 import { EVAL_TOP_K, RUNNER_VERSION, findLeaks, freezeClock, readReport, runVariant, writeReport } from "./runner";
 import type { EmbeddingProducer, GoldenQuery } from "./types";
+import { hashVector } from "./vectors";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -271,26 +272,30 @@ describe("report identity", () => {
 
 describe("model producers in the report", () => {
   const mk = (repo: string): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision: "abc", dtype: "fp32" });
+  const RERANK = "@cf/baai/bge-reranker-base";
 
-  it("carries the producer of every model the run used, and labels neurons as projected", async () => {
+  it("carries the producer of every model the run used (verified rows only), and labels neurons as projected", async () => {
     const root = mkdtempSync(join(tmpdir(), "eval-producer-"));
     mkdirSync(join(root, ".eval-cache"), { recursive: true });
-    const store = new ReplayStore([], join(root, ".eval-cache", "p.jsonl"), { root });
-    store.recordProducer(MODEL, mk("BAAI/bge-small-en-v1.5"));
-    store.recordProducer("@cf/baai/bge-reranker-base", mk("BAAI/bge-reranker-base"));
-    const replay = makeReplayAi({ store, mode: "dry", dryOther: () => ({ response: [] }) });
+    const file = join(root, ".eval-cache", "p.jsonl");
+    const live = {
+      run: async (model: string, input: unknown) => model === RERANK ? { response: [], usage: { prompt_tokens: 3, total_tokens: 3 } }
+        : { data: (input as { text: string[] }).text.map(t => hashVector(t, 384)), usage: { prompt_tokens: 3, total_tokens: 3 } },
+      producer: (model: string) => mk(model === RERANK ? "BAAI/bge-reranker-base" : "BAAI/bge-small-en-v1.5"),
+    };
+    const replay = makeReplayAi({ store: new ReplayStore([], file, { root }), mode: "record", live });
     const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries, edges: [], queries }, backend: "sqlite", replay, embeddingModel: MODEL });
     open.push(c);
-    await replay.ai.run("@cf/baai/bge-reranker-base" as never, { query: "q", contexts: [{ text: "x" }] } as never); // a variant that reranks
+    await replay.ai.run(RERANK as never, { query: "q", contexts: [{ text: "x" }] } as never); // a variant that reranks
     const report = await run(c);
-    expect(report.producers).toEqual({ [MODEL]: mk("BAAI/bge-small-en-v1.5"), "@cf/baai/bge-reranker-base": mk("BAAI/bge-reranker-base") });
+    expect(report.producers).toEqual({ [MODEL]: mk("BAAI/bge-small-en-v1.5"), [RERANK]: mk("BAAI/bge-reranker-base") });
     expect(report.neuronSource).toBe("projected");
   });
 
-  it("is empty, with provider-sourced neurons, when the cache names no producer", async () => {
+  it("carries no producers and no neuron source when nothing had verified provenance (hash smoke, dry run)", async () => {
     const report = await run(await corpus());
-    expect(report.producers ?? {}).toEqual({});
-    expect(report.neuronSource).toBe("provider");
+    expect(report.producers).toBeUndefined();
+    expect(report.neuronSource).toBeUndefined();
   });
 });
 
