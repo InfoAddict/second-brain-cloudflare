@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS, type Config } from "../../src/config";
 import { RERANK_MODEL, RERANK_READY_KV_KEY } from "../../src/constants";
 import type { Env } from "../../src/env";
+import type { Identity } from "../../src/lib/identity";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
 import { resetRerankReadyMemo } from "../../src/recall/model-reranker";
 import { recallEntries } from "../../src/recall/search";
@@ -94,7 +95,7 @@ describe("recall reranker step", () => {
     s.sqlite.seed({ id: "foreign", content: "FOREIGN private diary about launch planning tomato", createdAt: 5 });
     for (const id of IDS) s.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-a", id).run();
     s.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-b", "foreign").run();
-    const identity = { userId: "u1", role: "member", personalWorkspaceId: "ws-a", companyWorkspaceIds: [], defaultShare: "" as const };
+    const identity: Identity = { userId: "u1", role: "member", personalWorkspaceId: "ws-a", companyWorkspaceIds: [], defaultShare: "" as const };
     const diagnostics: RecallDiagnostics = {};
     const result = await recallEntries({ query: "launch planning tomato", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, { identity, diagnostics });
     expect(diagnostics.rerankRoute).toBe("applied");

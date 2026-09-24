@@ -1,5 +1,7 @@
 // Opt-in: loads the real pinned ONNX models (downloads on first use, ~3.5 GB, anonymous). EVAL_LOCAL_MODELS=1 npm run test:eval:local-models
 import { describe, expect, it } from "vitest";
+import { probeReranker } from "../../src/recall/model-reranker";
+import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeLocalAi } from "./local-ai";
 
 const cos = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i], 0);
@@ -36,5 +38,13 @@ describe.skipIf(!process.env.EVAL_LOCAL_MODELS)("real local models", () => {
     expect(res.response[0].id).toBe(1);
     expect(res.response[0].score).toBeGreaterThan(res.response[1].score);
     expect(res.response[0].score - res.response[1].score).toBeGreaterThan(2); // raw logits: the margin is the signal
+  }, 600_000);
+
+  it("the production reranker probe passes against the real local model and latches ready", async () => {
+    const kv = makeMemoryKV();
+    const res = await probeReranker(makeTestEnv(undefined, { AI: ai as unknown as Ai, OAUTH_KV: kv }));
+    console.log(`reranker probe: ${JSON.stringify(res)}`);
+    expect(res.ok).toBe(true);
+    expect(await kv.get("reranker:ready:bge-base-v1")).toBe("1");
   }, 600_000);
 });

@@ -81,17 +81,27 @@ export function selectRerankIds(direct: readonly VectorizeMatch[], root: readonl
 
 class RerankTimeout extends Error {}
 
-/** One nonstreaming model call, raced against a timer that is always cleared; a late rejection is absorbed. */
+const TIMED_OUT = Symbol("reranker timed out");
+
+/**
+ * One nonstreaming model call raced against a timer. The guard promise is always settled and the timer always
+ * cleared, so nothing is left pending (the eval tracks per-query async work, and a promise that never resolves
+ * would hold a query open until garbage collection); a late rejection from the model call is absorbed.
+ */
 export async function scoreRerankCandidates(query: string, candidates: readonly RerankCandidate[], env: Env): Promise<number[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let release!: (v: symbol) => void;
+  const guard = new Promise<symbol>(resolve => { release = resolve; timer = setTimeout(() => resolve(TIMED_OUT), RERANK_TIMEOUT_MS); });
   const call = (env.AI as unknown as { run(model: string, input: unknown): Promise<unknown> })
     .run(RERANK_MODEL, { query: query.slice(0, RERANK_QUERY_MAX_CHARS), contexts: candidates.map(c => ({ text: c.text })), top_k: candidates.length });
   call.catch(() => undefined);
   try {
-    const raw = await Promise.race([call, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RerankTimeout("reranker timed out")), RERANK_TIMEOUT_MS); })]);
+    const raw = await Promise.race([call, guard]);
+    if (raw === TIMED_OUT) throw new RerankTimeout("reranker timed out");
     return validateRerankerResponse(raw, candidates.length);
   } finally {
     clearTimeout(timer);
+    release(Symbol("done"));
   }
 }
 
