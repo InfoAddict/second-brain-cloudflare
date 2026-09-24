@@ -31,8 +31,9 @@ export function validateRerankerResponse(raw: unknown, count: number): number[] 
 const parentOf = (m: VectorizeMatch): string => ((m.metadata as { parentId?: string } | undefined)?.parentId ?? m.id) as string;
 
 /**
- * A token that names one thing exactly, which the keyword arm already answers: `#` or `_` anywhere, a digit next
- * to a letter (v1.2, abc123, 40mg), a dotted name (config.yaml), or a dotted-quad style number (10.0.0.1).
+* A token that names one thing exactly, which the keyword arm already answers: `#` or `_` anywhere, a digit next
+ * to a letter (v1.2, abc123, 40mg), a hyphen-joined id or date with a digits-only segment (ENG-1234, 2026-09-24), a dotted
+ * name or version (config.yaml, 2.81.0, 10.0.0.1).
  * Prose is not a lookup: sentence punctuation is not part of the token ("cells."), a plain hyphenated word
  * ("tissue-resident") is a word, and so are a bare year (2026), a plain number or percentage (32%, 1.5), and a
  * dotted abbreviation of short segments (U.S., e.g.).
@@ -41,10 +42,18 @@ export function lookupShaped(token: string): boolean {
   const t = token.replace(/[.,;:!?)\]"']+$/u, "");
   if (/[#_]/.test(t)) return true;
   if (/\p{L}\d|\d\p{L}/u.test(t)) return true;
-  if (/^\d+(\.\d+){2,}$/.test(t)) return true;
-  const segments = t.split(".");
-  if (segments.length > 1 && segments.every(x => /^[\p{L}\p{N}]+$/u.test(x)) && segments.some(x => /\p{L}/u.test(x) && [...x].length > 2)) return true;
-  return false;
+  if (t.includes("-")) {
+    // Hyphen-joined ids (ENG-1234, INV-88213, SN-AX-880415, 20260714-add-ledger-idx, release-2026.09.88) and dates
+    // (2026-09-24): a number-only segment beside another segment. Plain hyphenated words have none.
+    const parts = t.split("-").filter(Boolean);
+    const numeric = parts.filter(x => /^\d+(\.\d+)*$/.test(x)).length;
+    if (parts.length > 1 && (numeric === parts.length || (numeric > 0 && parts.some(x => /\p{L}/u.test(x))))) return true;
+  }
+  // Dotted names and versions (config.yaml, registry.example.com/x:2.81.0, 1.88.4-beta.3, 10.0.0.1): an inner dot with a
+  // three-letter word, or two inner dots. U.S., e.g. and 1.5 have neither.
+  const innerDots = (t.match(/[\p{L}\p{N}]\.(?=[\p{L}\p{N}])/gu) ?? []).length;
+  if (innerDots >= 2) return true;
+  return innerDots === 1 && /\p{L}{3,}\.[\p{L}\p{N}]|[\p{L}\p{N}]\.\p{L}{3,}/u.test(t);
 }
 
 /**

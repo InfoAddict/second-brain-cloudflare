@@ -41,13 +41,13 @@ describe("shouldRerank", () => {
     expect(shouldRerank("on", [1, 0.9], ["alpha"])).toBe("too-few");
   });
   it("skips exact-identifier shapes in every mode", () => {
-    for (const token of ["#149", "v1.9", "v1.2", "abc123", "err_tls_90412", "config.yaml", "10.0.0.1", "40mg/day", "t2d"]) {
+    for (const token of ["#149", "v1.9", "v1.2", "abc123", "err_tls_90412", "config.yaml", "10.0.0.1", "40mg/day", "t2d", "2026-09-24", "eng-1234", "inv-88213", "sn-ax-880415", "err-tls-90412", "pr-42", "20260714-add-ledger-idx", "1999-2005", "registry.example.com/tools/etl:2.81.0", "release-2026.09.88", "1.88.4-beta.3", "billing-88.example.com"]) {
       expect(shouldRerank("on", close, [token])).toBe("exact-id");
       expect(shouldRerank("auto", close, [token])).toBe("exact-id");
     }
   });
   it("does not mistake prose for an identifier: trailing punctuation and plain hyphenated words are words", () => {
-    for (const token of ["cells.", "cancer.", "tissue-resident", "non-infertile", "n-oxide", "apoe", "(cells).", "2026", "1999", "32%", "1.5", "3.14", "42", "u.s.", "e.g.", "i.e", "2024-01-05"]) {
+    for (const token of ["cells.", "cancer.", "tissue-resident", "non-infertile", "n-oxide", "apoe", "(cells).", "2026", "1999", "32%", "1.5", "3.14", "42", "u.s.", "e.g.", "i.e", "state-of-the-art", "well-known", "first-in-class", "u.s.-based"]) {
       expect(shouldRerank("on", close, [token])).toBe("attempted");
     }
   });
