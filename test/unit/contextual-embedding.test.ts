@@ -143,6 +143,14 @@ describe("buildEmbeddingChunks", () => {
   });
 });
 
+describe("estimateBgeSmallTokens on scripts BERT decomposes", () => {
+  it("charges each Hangul syllable 3 tokens, the most NFD can make of it", () => {
+    expect(estimateBgeSmallTokens("한") - 2).toBe(3);
+    expect(estimateBgeSmallTokens("한국어") - 2).toBe(9);
+    expect(estimateBgeSmallTokens("슘".repeat(10)) - 2).toBe(30);
+  });
+});
+
 describe("estimateBgeSmallTokens", () => {
   const samples: Record<string, string> = {
     prose: longText(1500),
@@ -155,6 +163,9 @@ describe("estimateBgeSmallTokens", () => {
     uuids: "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c ".repeat(30),
     base64: "aGVsbG8gd29ybGQgdGhpcyBpcyBhIHRlc3Q9PQ== ".repeat(30),
     camelCase: "getUserAccountBalanceHandler ".repeat(40),
+    // BERT NFD-decomposes each Hangul syllable into 2 or 3 jamo, each its own token: 3.00 per syllable at worst.
+    korean: "오늘 회의에서 논의한 내용은 다음과 같습니다. 예산 검토와 일정 조정이 필요합니다. ".repeat(40),
+    koreanWorstCase: "슘 닭 읊 값 ".repeat(150),
   };
   const fixturePath = resolve(__dirname, "fixtures/bge-small-token-counts.json");
   const modelDir = resolve(__dirname, "../../.eval-cache/models/bge-small-en-v1.5-5c38ec7c405e");
@@ -271,14 +282,19 @@ const refChunk = (text: string, maxChars = 1600, overlapChars = 200): string[] =
 const refEstimate = (text: string): number => {
   let tokens = 2;
   let run = "";
+  let cost = 0;
   const flush = () => {
-    if (run) tokens += /^[a-zA-Z]+$/.test(run) && COMMON_WORDS.has(run.toLowerCase()) ? 1 : run.length;
+    if (run) tokens += /^[a-zA-Z]+$/.test(run) && COMMON_WORDS.has(run.toLowerCase()) ? 1 : cost;
     run = "";
+    cost = 0;
   };
   for (const ch of text) {
-    if (/[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]/u.test(ch)) { flush(); tokens += 1; }
-    else if (/[\p{L}\p{N}]/u.test(ch)) run += ch;
-    else { flush(); if (!/\s/u.test(ch)) tokens += 1; }
+    if (/[\uac00-\ud7a3]/u.test(ch)) { run += ch; cost += 3; }
+    else if (/[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]/u.test(ch)) { flush(); tokens += 1; }
+    else if (/[\p{L}\p{N}]/u.test(ch)) {
+      run += ch;
+      cost += Math.max(1, ch.length, [...ch.toLowerCase().normalize("NFD")].filter(p => !/\p{Mn}/u.test(p)).length);
+    } else { flush(); if (!/\s/u.test(ch)) tokens += 1; }
   }
   flush();
   return tokens;

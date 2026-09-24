@@ -8,5 +8,7 @@
  "accents": 242,
  "uuids": 1082,
  "base64": 932,
- "camelCase": 322
+ "camelCase": 322,
+ "korean": 2602,
+ "koreanWorstCase": 902
 }

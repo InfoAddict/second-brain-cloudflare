@@ -149,13 +149,14 @@ const ALNUM = /[\p{L}\p{N}]/u;
 export function estimateBgeSmallTokens(text: string): number {
   let tokens = 2;
   let runStart = -1;
+  let runCost = 0; // tokens the run costs if it is not a listed word
   let plain = true; // the run so far is ASCII letters only, so it may be a listed word
   const key = new WordKey();
   const flush = (end: number) => {
     if (runStart < 0) return;
-    const len = end - runStart;
-    tokens += plain && len <= COMMON_WORD_MAX_LENGTH && COMMON_WORD_KEYS.has(key.key) ? 1 : len;
+    tokens += plain && end - runStart <= COMMON_WORD_MAX_LENGTH && COMMON_WORD_KEYS.has(key.key) ? 1 : runCost;
     runStart = -1;
+    runCost = 0;
     plain = true;
     key.reset();
   };
@@ -165,13 +166,22 @@ export function estimateBgeSmallTokens(text: string): number {
       if (c >= 97 && c <= 122 || c >= 65 && c <= 90) {
         if (runStart < 0) runStart = i;
         if (plain) key.add(c);
+        runCost++;
       } else if (c >= 48 && c <= 57) {
         if (runStart < 0) runStart = i;
         plain = false;
+        runCost++;
       } else {
         flush(i);
         if (c !== 32 && c !== 10 && c !== 9 && c !== 13 && c !== 11 && c !== 12) tokens++;
       }
+      continue;
+    }
+    // Hangul syllables are letters to BERT, not ideographs: NFD splits each into 2 or 3 jamo, each its own piece.
+    if (c >= HANGUL_FIRST && c <= HANGUL_LAST) {
+      if (runStart < 0) runStart = i;
+      plain = false;
+      runCost += 3;
       continue;
     }
     if (c >= 0x2e80 && c <= 0x9fff || c >= 0xac00 && c <= 0xd7af || c >= 0xf900 && c <= 0xfaff) { flush(i); tokens++; continue; }
@@ -181,11 +191,28 @@ export function estimateBgeSmallTokens(text: string): number {
     if (ALNUM.test(ch)) {
       if (runStart < 0) runStart = i;
       plain = false;
+      runCost += nfdLength(ch);
     } else { flush(i); if (!/\s/u.test(ch)) tokens++; }
     i += width - 1;
   }
   flush(text.length);
   return tokens;
+}
+
+const HANGUL_FIRST = 0xac00;
+const HANGUL_LAST = 0xd7a3;
+
+/** Characters a letter becomes once BERT lowercases and NFD-decomposes it and drops the combining marks (Bengali and Tamil vowel signs split in two); at least its own units. */
+const nfdLengths = new Map<string, number>();
+function nfdLength(ch: string): number {
+  let n = nfdLengths.get(ch);
+  if (n === undefined) {
+    n = 0;
+    for (const part of ch.toLowerCase().normalize("NFD")) if (!/\p{Mn}/u.test(part)) n++;
+    n = Math.max(n, 1, ch.length);
+    nfdLengths.set(ch, n);
+  }
+  return n;
 }
 
 /** Today's chunks, unprefixed: what every entry got before contextual embeddings, and the fallback when building context fails. */
