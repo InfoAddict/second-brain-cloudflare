@@ -2,7 +2,7 @@ import { gapKey, mean, percentile } from "./metrics";
 import { CORPUS_IDS } from "./corpus/build";
 import { fingerprintKey } from "./lock";
 import { PUBLIC_CORPORA } from "./public/neutral";
-import { minimumDetectableEffect, pairedBootstrap, type BootstrapCI } from "./stats";
+import { minimumDetectableEffect, pairedBootstrap, type BootstrapCI, type BootstrapOptions } from "./stats";
 import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
 export interface GateThresholds {
@@ -54,6 +54,8 @@ export interface GateOptions {
   allowUnmeasuredRowsRead?: boolean;
   /** Known gaps (ids like "T-0072") the variant claims to fix. Their queries rejoin the rules and get their own improvement path. */
   targetGaps?: readonly string[];
+  /** Bootstrap iterations, seed and alpha. Only tests that assert a rule's status, not an interval's width, lower these. */
+  bootstrap?: BootstrapOptions;
 }
 
 interface Pair { b: QueryResult; c: QueryResult }
@@ -183,7 +185,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
 
   const delta = (scope: string, subset: Pair[], metric: MetricName): MetricDelta => {
     const d = subset.map(p => p.c.metrics[metric] - p.b.metrics[metric]);
-    const ci = pairedBootstrap(d, subset.map(p => p.c.clusterKey));
+    const ci = pairedBootstrap(d, subset.map(p => p.c.clusterKey), opts.bootstrap);
     const row = { scope, metric, base: mean(subset.map(p => p.b.metrics[metric])), candidate: mean(subset.map(p => p.c.metrics[metric])), ci };
     deltas.push(row);
     return row;
@@ -252,7 +254,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   }
   // No gain shown and the comparison could not have seen one of the margin's size: unproven, not disproven.
   // Measured over the rows the improvement rule judges (the non-gap queries), so a protected gap's gain cannot inflate it.
-  const improvementMde = (m: MetricName) => protectedGaps.length ? minimumDetectableEffect(pairs.map(p => p.c.metrics[m] - p.b.metrics[m]), pairs.map(p => p.c.clusterKey)) : mde[m]!;
+  const improvementMde = (m: MetricName) => protectedGaps.length ? minimumDetectableEffect(pairs.map(p => p.c.metrics[m] - p.b.metrics[m]), pairs.map(p => p.c.clusterKey), opts.bootstrap) : mde[m]!;
   const underpoweredMde = (["recall10", "mrr10", "ndcg10"] as const).map(m => [m, improvementMde(m)] as const)
     .filter(([, v]) => v > t.improvementMargin).map(([m, v]) => `MDE ${v.toFixed(4)} > margin ${t.improvementMargin} (${m})`);
   if (wins.length) add("improvement", "pass", wins.join("; "));

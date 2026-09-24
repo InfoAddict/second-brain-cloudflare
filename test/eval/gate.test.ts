@@ -22,6 +22,8 @@ function report(name: string, tweak: (i: number, r: QueryResult) => void = () =>
 const shift = (delta: number, upTo: number) => (i: number, r: QueryResult) => {
   if (i < upTo) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = Math.min(1, Math.max(0, r.metrics[k] + delta));
 };
+// Seeded and deterministic at any count; a test that asserts a rule's status, not an interval's width, can resample less.
+const FEW = { bootstrap: { iterations: 500 } } as const;
 const status = (result: ReturnType<typeof evaluateGate>, rule: string) => result.rules.find(r => r.rule === rule)?.status;
 
 describe("evaluateGate", () => {
@@ -171,12 +173,12 @@ describe("evaluateGate", () => {
 
   it("enforces the cost budget", () => {
     const heavy = (over: Partial<QueryResult["cost"]>) => report("v", (i, r) => { shift(0.5, 30)(i, r); Object.assign(r.cost, over); });
-    expect(status(evaluateGate(base, heavy({ neurons: 2 + 26 })), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ neurons: 2 + 25 })), "cost")).toBe("pass");
-    expect(status(evaluateGate(base, heavy({ d1Statements: 8 + 3 })), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ aiCalls: 3 })), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ d1RowsRead: 1400 })), "cost")).toBe("fail");
-    expect(status(evaluateGate(base, heavy({ d1Statements: 60 })), "cost")).toBe("fail"); // p95 ceiling
+    expect(status(evaluateGate(base, heavy({ neurons: 2 + 26 }), FEW), "cost")).toBe("fail");
+    expect(status(evaluateGate(base, heavy({ neurons: 2 + 25 }), FEW), "cost")).toBe("pass");
+    expect(status(evaluateGate(base, heavy({ d1Statements: 8 + 3 }), FEW), "cost")).toBe("fail");
+    expect(status(evaluateGate(base, heavy({ aiCalls: 3 }), FEW), "cost")).toBe("fail");
+    expect(status(evaluateGate(base, heavy({ d1RowsRead: 1400 }), FEW), "cost")).toBe("fail");
+    expect(status(evaluateGate(base, heavy({ d1Statements: 60 }), FEW), "cost")).toBe("fail"); // p95 ceiling
   });
 
   it("does not tell a workerd run to use workerd: it names the queries that reported no rows_read", () => {
@@ -349,13 +351,13 @@ describe("evaluateGate statistical correctness (known outcomes, seeded)", () => 
   it("zero-mean paired noise and sub-margin gains never PASS", () => {
     // Deterministic stand-ins for noise; the seeded 300-dataset null test in stats.test.ts covers the rest.
     const swing = report("swing", (i, r) => { r.metrics.recall10 += i % 2 ? 0.2 : -0.2; });
-    expect(evaluateGate(base, swing).verdict).toBe("FAIL");
+    expect(evaluateGate(base, swing, FEW).verdict).toBe("FAIL");
     const small = report("small", (_i, r) => { r.metrics.recall10 += 0.0125; r.metrics.mrr10 += 0.0125; r.metrics.ndcg10 += 0.0125; });
-    const smallResult = evaluateGate(base, small);
+    const smallResult = evaluateGate(base, small, FEW);
     expect(status(smallResult, "improvement")).toBe("fail");
     expect(status(smallResult, "regression")).toBe("pass");
     const mixed = report("mixed", (i, r) => { if (i < 120) r.metrics.recall10 += 0.05; else r.metrics.recall10 -= 0.05; });
-    expect(status(evaluateGate(base, mixed), "improvement")).toBe("fail");
+    expect(status(evaluateGate(base, mixed, FEW), "improvement")).toBe("fail");
   });
 });
 
@@ -669,8 +671,8 @@ describe("evaluateGate: known gaps", () => {
   it("protects gap queries the baseline already answers: a drop fails regression with or without a declaration", () => {
     // gap queries scored 0.5 in the baseline (e.g. a scale-conditional gap at core-1k); the candidate drops them to 0
     const b = gapBase(0.5), c = gapCand(0);
-    expect(status(evaluateGate(b, c), "regression")).toBe("fail");
-    expect(status(evaluateGate(b, c, { targetGaps: ["T-0072"] }), "regression")).toBe("fail");
+    expect(status(evaluateGate(b, c, FEW), "regression")).toBe("fail");
+    expect(status(evaluateGate(b, c, { targetGaps: ["T-0072"], ...FEW }), "regression")).toBe("fail");
   });
 
   it("does not count a protected gap query's gain as an overall improvement", () => {

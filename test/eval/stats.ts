@@ -82,6 +82,6 @@ export function bootstrapStandardError(deltas: readonly number[], clusterKeys: r
  * mean delta, taken from the same bootstrap the gate's interval uses, so the two cannot disagree about the unit
  * (whole clusters) or the weighting (clusters count by their queries). Without keys each delta is its own cluster.
  */
-export function minimumDetectableEffect(deltas: readonly number[], clusterKeys: readonly string[] = deltas.map((_, i) => String(i))): number {
-  return 2.8 * bootstrapStandardError(deltas, clusterKeys);
+export function minimumDetectableEffect(deltas: readonly number[], clusterKeys: readonly string[] = deltas.map((_, i) => String(i)), opts: BootstrapOptions = {}): number {
+  return 2.8 * bootstrapStandardError(deltas, clusterKeys, opts);
 }
