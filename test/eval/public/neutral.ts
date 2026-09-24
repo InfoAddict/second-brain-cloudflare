@@ -2,9 +2,9 @@
 // Nothing here is committed: scripts/eval-fetch-public.mjs downloads and normalizes on demand.
 //
 // Dataset licenses (checked Sep 23, 2026; used locally for evaluation only, never redistributed):
-//  - BEIR SciFact: the BEIR bundle itself carries no license. Sources disagree: the Rahil-supplied
-//    brief says CC BY-NC 2.0; allenai/scifact LICENSE.md says claims CC BY 4.0 and abstracts (S2ORC)
-//    ODC-By 1.0; the BeIR/scifact HF card says CC BY-SA 4.0. Treat as the strictest (non-commercial).
+//  - SciFact (allenai/scifact LICENSE.md): claims and evidence annotations CC BY 4.0; corpus abstracts
+//    (Semantic Scholar S2ORC) ODC-By 1.0. Attribution: Wadden et al., "Fact or Fiction: Verifying
+//    Scientific Claims", EMNLP 2020; abstracts from S2ORC (Lo et al., ACL 2020).
 //  - MIRACL (annotations, miracl/miracl) and miracl-corpus: Apache-2.0 per the HF cards; the passages
 //    are Wikipedia text, so CC BY-SA 4.0 attribution terms apply to the text itself.
 import { createHash } from "node:crypto";
@@ -80,7 +80,7 @@ export interface PublicCorpusConfig {
 }
 
 export const PUBLIC_CORPORA: Record<string, PublicCorpusConfig> = {
-  "beir-scifact": { category: "paraphrase", maxDocs: 5200, maxQueries: 1200, embeddingModel: "@cf/baai/bge-small-en-v1.5" },
+  "scifact": { category: "paraphrase", maxDocs: 5200, maxQueries: 800, embeddingModel: "@cf/baai/bge-small-en-v1.5" },
   "miracl-ja": { category: "cjk", maxDocs: 13_500, maxQueries: 900, embeddingModel: "@cf/baai/bge-m3" },
 };
 

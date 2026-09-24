@@ -1,28 +1,25 @@
 #!/usr/bin/env node
 // Downloads a public retrieval dataset and normalizes it to the neutral layout the eval reads.
-// Usage: node scripts/eval-fetch-public.mjs <beir-scifact|miracl-ja> [--keep-raw]
+// Usage: node scripts/eval-fetch-public.mjs <scifact|miracl-ja> [--keep-raw]
 // Everything lands under the git-ignored .eval-cache/public/; nothing is committed or redistributed.
 // Every download is pinned to an immutable URL and verified against a sha256 before use.
 //
-// Licenses (checked Sep 23, 2026; local evaluation use only):
-//  - BEIR SciFact: sources disagree (brief: CC BY-NC 2.0; allenai/scifact: claims CC BY 4.0, abstracts
-//    ODC-By 1.0; BeIR/scifact HF card: CC BY-SA 4.0). Treat as non-commercial.
+// Licenses (checked Sep 23, 2026; local evaluation use only, never committed or redistributed):
+//  - SciFact (allenai/scifact, LICENSE.md): claims and evidence annotations (claims_*.jsonl) are CC BY 4.0;
+//    corpus abstracts are part of the Semantic Scholar S2ORC dataset, ODC-By 1.0. Attribution is required:
+//    Wadden et al., "Fact or Fiction: Verifying Scientific Claims", EMNLP 2020 (allenai/scifact);
+//    abstracts from S2ORC (Lo et al., ACL 2020, Semantic Scholar). Changes made: title and abstract
+//    sentences joined into one text; claims filtered to those with evidence; ids kept from the release.
 //  - MIRACL annotations and corpus: Apache-2.0 per the HF cards; passages are Wikipedia text (CC BY-SA 4.0).
 //
 // Raw MIRACL shards (~1 GB) are deleted after normalizing unless --keep-raw is passed, so a re-derive
 // downloads them again. The pins make that safe; the normalized files stay in .eval-cache/public/<id>/.
 //
-// The SciFact source is pluggable: PINS["beir-scifact"] names a pinned archive and a `format`, and
-// SCIFACT_PARSERS maps the format to a parser that writes the neutral layout. Switching to the allenai
-// upstream release (https://scifact.s3-us-west-2.amazonaws.com/release/latest/data.tar.gz, license
-// per allenai/scifact LICENSE.md) needs: (1) a new pinned url + sha256 (a .tar.gz, so extract with
-// `tar -xzf` instead of `unzip`); (2) a parser for its layout: corpus.jsonl rows are
-// {doc_id, title, abstract: [sentence, ...], structured}, so text = title + " " + abstract.join(" ");
-// claims_{train,dev}.jsonl rows are {id, claim, evidence: {doc_id: [{sentences, label}]}, cited_doc_ids},
-// so qrels are the evidence doc ids (label SUPPORT or CONTRADICT, score 1); claims_test.jsonl ships
-// without evidence labels and cannot be used, so the judged set is train + dev (~1000 claims, not BEIR's
-// test 300 + train 809). Ids become upstream doc_id/id values, so the derived hashes and any recorded
-// baselines change.
+// SciFact source: the allenai release tarball, pinned by S3 object version id (the "latest" key is
+// overwritten on new releases, the version id is not). Layout: corpus.jsonl rows are
+// {doc_id, title, abstract: [sentence, ...]}; claims_{train,dev}.jsonl rows are
+// {id, claim, evidence: {doc_id: [{sentences, label}]}, cited_doc_ids}. claims_test.jsonl ships without
+// evidence, so the judged set is train + dev. PINS.scifact.format selects the parser in SCIFACT_PARSERS.
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -49,11 +46,11 @@ const SHARD_SHA256 = [
 ];
 
 export const PINS = {
-  "beir-scifact": {
-    url: "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
-    // Measured on first download (Sep 23, 2026); last-modified on the host is 2021-04-20.
-    sha256: "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
-    format: "beir",
+  scifact: {
+    // versionId pins one immutable S3 object version (last modified 2021-01-26, ETag cb7da4d8...).
+    url: "https://scifact.s3-us-west-2.amazonaws.com/release/latest/data.tar.gz?versionId=8LiW3OUBLBvhehDzrRdGD1ibIaXL.6PQ",
+    sha256: "11c621288d41ac144d29b13b0f8503b3820b7d6e8b1f6ff24dff335c196d76be",
+    format: "allenai",
   },
   "miracl-ja": {
     annotationRevision: ANNOTATION_REV,
@@ -120,22 +117,37 @@ const writeLines = (path, rows) => writeAtomic(path, rows.length ? rows.join("\n
 const resetDerived = out => { mkdirSync(out, { recursive: true }); rmSync(resolve(out, "MANIFEST.json"), { force: true }); };
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** BEIR SciFact -> neutral layout: test (300 claims) plus train (~800) qrels over the one 5,183-doc corpus. */
+/**
+ * allenai/scifact release -> neutral layout. Docs: title + " " + abstract sentences joined by " ".
+ * Queries: train + dev claims that have evidence, ids as released. Qrels: the evidence doc ids
+ * (SUPPORT or CONTRADICT, score 1). cited_doc_ids is NOT used: it names the paper a claim was written
+ * from, which stays listed for claims with no evidence (NOT_ENOUGH_INFO) and so is not relevance.
+ * Claims without evidence have no relevant doc and are dropped.
+ */
 export function normalizeScifact({ base, out }) {
   resetDerived(out);
   const docs = readLines(resolve(base, "corpus.jsonl")).map(l => JSON.parse(l));
-  const queries = readLines(resolve(base, "queries.jsonl")).map(l => JSON.parse(l));
-  const qrelRows = ["test", "train"].flatMap(split => readLines(resolve(base, `qrels/${split}.tsv`)).slice(1)); // drop each header
-  // BEIR convention: title + " " + abstract (titles usually end in "." already).
-  writeLines(resolve(out, "corpus.jsonl"), docs.map(d => JSON.stringify({ id: d._id, text: d.title ? `${d.title} ${d.text}` : d.text })));
-  writeLines(resolve(out, "queries.jsonl"), queries.map(q => JSON.stringify({ id: q._id, text: q.text })));
+  const ids = new Set(docs.map(d => String(d.doc_id)));
+  const queries = [], qrelRows = [], seen = new Set();
+  for (const split of ["train", "dev"]) for (const line of readLines(resolve(base, `claims_${split}.jsonl`))) {
+    const c = JSON.parse(line);
+    const gold = Object.keys(c.evidence ?? {}).filter(d => c.evidence[d]?.length);
+    if (!gold.length) continue;
+    const id = String(c.id);
+    if (seen.has(id)) throw new Error(`duplicate claim id ${id} across train/dev`);
+    seen.add(id);
+    for (const d of gold) if (!ids.has(d)) throw new Error(`claim ${id} cites evidence doc ${d} missing from the corpus`);
+    queries.push(JSON.stringify({ id, text: c.claim }));
+    for (const d of gold) qrelRows.push(`${id}\t${d}\t1`);
+  }
+  writeLines(resolve(out, "corpus.jsonl"), docs.map(d => JSON.stringify({ id: String(d.doc_id), text: [d.title, ...d.abstract].filter(Boolean).join(" ") })));
+  writeLines(resolve(out, "queries.jsonl"), queries);
   writeLines(resolve(out, "qrels.tsv"), ["query-id\tcorpus-id\tscore", ...qrelRows]);
-  const judged = new Set(qrelRows.map(l => l.split("\t")).filter(([q, , sc]) => q && Number(sc) > 0).map(([q]) => q));
-  return { docs: docs.length, queries: queries.length, judgedQueries: judged.size };
+  return { docs: docs.length, queries: queries.length, judgedQueries: queries.length, judgments: qrelRows.length };
 }
 
 /** Source format -> parser; a new SciFact source registers a parser here and a pin in PINS. */
-export const SCIFACT_PARSERS = { beir: normalizeScifact };
+export const SCIFACT_PARSERS = { allenai: normalizeScifact };
 
 const rank = (seed, kind, id) => createHash("sha256").update(`${seed}:${kind}:${id}`).digest("hex");
 const BINS = 10;
@@ -244,13 +256,14 @@ async function main(argv) {
   const [dataset, ...flags] = argv;
   const out = resolve(root, ".eval-cache/public", dataset ?? "");
   const raw = resolve(out, "raw");
-  if (dataset === "beir-scifact") {
+  if (dataset === "scifact") {
     mkdirSync(raw, { recursive: true });
-    const zip = resolve(raw, "scifact.zip");
-    await downloadPinned({ url: PINS[dataset].url, dest: zip, sha256: PINS[dataset].sha256 });
-    const unzip = spawnSync("unzip", ["-oq", zip, "-d", raw]);
-    if (unzip.status !== 0) throw new Error("unzip failed (is the unzip binary installed?)");
-    const counts = SCIFACT_PARSERS[PINS[dataset].format]({ base: resolve(raw, "scifact"), out });
+    const tgz = resolve(raw, "data.tar.gz");
+    await downloadPinned({ url: PINS[dataset].url, dest: tgz, sha256: PINS[dataset].sha256 });
+    const files = ["corpus.jsonl", "claims_train.jsonl", "claims_dev.jsonl"].map(f => `data/${f}`);
+    const untar = spawnSync("tar", ["-xzf", tgz, "-C", raw, ...files]);
+    if (untar.status !== 0) throw new Error(`tar failed: ${untar.stderr}`);
+    const counts = SCIFACT_PARSERS[PINS[dataset].format]({ base: resolve(raw, "data"), out });
     writeManifest(out, dataset, PINS[dataset], counts);
     console.log(`wrote ${out}`, counts);
   } else if (dataset === "miracl-ja") {
@@ -272,7 +285,7 @@ async function main(argv) {
     if (!flags.includes("--keep-raw")) for (const p of shardPaths) rmSync(p);
     console.log(`wrote ${out}`, counts);
   } else {
-    console.error("usage: node scripts/eval-fetch-public.mjs <beir-scifact|miracl-ja> [--keep-raw]");
+    console.error("usage: node scripts/eval-fetch-public.mjs <scifact|miracl-ja> [--keep-raw]");
     process.exit(2);
   }
 }

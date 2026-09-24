@@ -47,7 +47,7 @@ beforeAll(async () => {
   mkdirSync(join(root, "test/eval/data/core"), { recursive: true });
   mkdirSync(join(root, "db"), { recursive: true });
   copyFileSync(join(REAL_REPO, "db/schema.sql"), join(root, "db/schema.sql")); // the sqlite backend reads the schema under SB_EVAL_ROOT
-  fixture("beir-scifact");
+  fixture("scifact");
   vi.stubEnv("SB_EVAL_ROOT", root);
   vi.resetModules();
   corpora = await import("./corpora");
@@ -59,20 +59,20 @@ describe("public corpora in the registry", () => {
   it("--list names them", async () => {
     const c = capture();
     try { expect(await cli.main(["--list"])).toBe(0); } finally { c.restore(); }
-    expect(c.out.join("\n")).toMatch(/corpora: .*beir-scifact.*miracl-ja/);
+    expect(c.out.join("\n")).toMatch(/corpora: .*scifact.*miracl-ja/);
   });
 
   it("resolves a fetched corpus and carries the derived-manifest hashes as its fingerprint", async () => {
-    const spec = await corpora.resolveCorpus("beir-scifact");
+    const spec = await corpora.resolveCorpus("scifact");
     expect(spec.intent).toBe("discriminate");
-    expect(spec.dataFingerprint).toEqual(fixture("beir-scifact"));
+    expect(spec.dataFingerprint).toEqual(fixture("scifact"));
   });
 });
 
 describe("embedding model defaults", () => {
   it("defaults from the corpus and leaves core corpora on the shipped model", async () => {
     const { DEFAULTS } = await import("../../src/config");
-    expect(cli.parseCli(["--variant", "baseline", "--corpus", "beir-scifact"])).toMatchObject({ model: "@cf/baai/bge-small-en-v1.5" });
+    expect(cli.parseCli(["--variant", "baseline", "--corpus", "scifact"])).toMatchObject({ model: "@cf/baai/bge-small-en-v1.5" });
     expect(cli.parseCli(["--variant", "baseline", "--corpus", "miracl-ja"])).toMatchObject({ model: "@cf/baai/bge-m3" });
     expect(cli.parseCli(["prepare", "--variant", "baseline", "--corpus", "miracl-ja"])).toMatchObject({ model: "@cf/baai/bge-m3" });
     expect(cli.parseCli(["--variant", "baseline", "--corpus", "core-1k"])).toMatchObject({ model: DEFAULTS.EMBEDDING_MODEL });
@@ -81,7 +81,7 @@ describe("embedding model defaults", () => {
   it("accepts the matching model spelled out and refuses any other one, even explicit", () => {
     expect(cli.parseCli(["--variant", "baseline", "--corpus", "miracl-ja", "--embedding-model", "@cf/baai/bge-m3"])).toMatchObject({ model: "@cf/baai/bge-m3" });
     expect(() => cli.parseCli(["--variant", "baseline", "--corpus", "miracl-ja", "--embedding-model", "@cf/baai/bge-small-en-v1.5"])).toThrow(/miracl-ja.*bge-m3/);
-    expect(() => cli.parseCli(["prepare", "--variant", "baseline", "--corpus", "beir-scifact", "--embedding-model", "@cf/baai/bge-m3"])).toThrow(cli.UsageError);
+    expect(() => cli.parseCli(["prepare", "--variant", "baseline", "--corpus", "scifact", "--embedding-model", "@cf/baai/bge-m3"])).toThrow(cli.UsageError);
   });
 });
 
@@ -89,10 +89,10 @@ describe("running public corpora", () => {
   it("hash-smoke run reports the corpus, its fingerprint, and never claims a real model", async () => {
     const out = scratch();
     const c = capture();
-    try { expect(await cli.main(["--variant", "baseline", "--corpus", "beir-scifact", "--hash-embeddings", "--json", out]), c.err.join("\n")).toBe(0); } finally { c.restore(); }
+    try { expect(await cli.main(["--variant", "baseline", "--corpus", "scifact", "--hash-embeddings", "--json", out]), c.err.join("\n")).toBe(0); } finally { c.restore(); }
     const r = JSON.parse(readFileSync(out, "utf8"));
-    expect(r).toMatchObject({ corpus: "beir-scifact", embeddingModel: "hash-smoke" });
-    expect(r.dataFingerprint).toEqual(fixture("beir-scifact"));
+    expect(r).toMatchObject({ corpus: "scifact", embeddingModel: "hash-smoke" });
+    expect(r.dataFingerprint).toEqual(fixture("scifact"));
     expect(Object.keys(r.dataFingerprint)).not.toContain("needles.jsonl");
   });
 
@@ -116,7 +116,7 @@ describe("running public corpora", () => {
     try {
       // miracl-ja is not downloaded in this fixture: the refusal must not be a fetch hint
       expect(await cli.main(["lock", "--corpus", "miracl-ja"])).toBe(2);
-      expect(await cli.main(["lock", "--corpus", "beir-scifact"])).toBe(2);
+      expect(await cli.main(["lock", "--corpus", "scifact"])).toBe(2);
     } finally { c.restore(); }
     expect(c.err.join("\n")).toMatch(/public corpora are local-only and never locked/);
     expect(c.err.join("\n")).not.toMatch(/eval-fetch-public/);
@@ -129,8 +129,8 @@ describe("replay caches for public corpora", () => {
   const MODEL = "@cf/baai/bge-small-en-v1.5";
 
   it("get their own file under .eval-cache and never read or write the committed core cache", () => {
-    const pub = corpora.replayPaths(MODEL, "beir-scifact");
-    expect(pub.write).toBe(join(root, ".eval-cache/replay/beir-scifact.bge-small-en-v1.5.jsonl"));
+    const pub = corpora.replayPaths(MODEL, "scifact");
+    expect(pub.write).toBe(join(root, ".eval-cache/replay/scifact.bge-small-en-v1.5.jsonl"));
     expect(pub.write).not.toContain("test/eval/data");
     const core = corpora.replayPaths(MODEL, "core-1k");
     expect(core.write).toBe(join(root, ".eval-cache/replay/bge-small-en-v1.5.jsonl"));
@@ -140,7 +140,7 @@ describe("replay caches for public corpora", () => {
     writeFileSync(committed, "");
     try {
       expect(corpora.replayPaths(MODEL, "core-1k").read).toContain(committed);
-      expect(corpora.replayPaths(MODEL, "beir-scifact").read).not.toContain(committed);
+      expect(corpora.replayPaths(MODEL, "scifact").read).not.toContain(committed);
     } finally { rmSync(committed, { force: true }); }
   });
 
@@ -148,10 +148,10 @@ describe("replay caches for public corpora", () => {
     const fetchStub = vi.spyOn(globalThis, "fetch");
     const c = capture();
     try {
-      expect(await cli.main(["prepare", "--variant", "baseline", "--corpus", "beir-scifact"]), c.err.join("\n")).toBe(0);
+      expect(await cli.main(["prepare", "--variant", "baseline", "--corpus", "scifact"]), c.err.join("\n")).toBe(0);
       expect(fetchStub).not.toHaveBeenCalled();
     } finally { c.restore(); fetchStub.mockRestore(); }
-    expect(existsSync(join(root, ".eval-cache/replay/beir-scifact.bge-small-en-v1.5.jsonl"))).toBe(true);
+    expect(existsSync(join(root, ".eval-cache/replay/scifact.bge-small-en-v1.5.jsonl"))).toBe(true);
     expect(existsSync(join(root, ".eval-cache/replay/bge-small-en-v1.5.jsonl"))).toBe(false);
     expect(readdirSync(join(root, "test/eval/data/core")).filter(f => f.startsWith("replay"))).toEqual([]);
   });
@@ -181,9 +181,9 @@ describe("privacy guard on every CLI write", () => {
     const fetchStub = vi.spyOn(globalThis, "fetch");
     const c = capture();
     try {
-      expect(await fresh.main(["prepare", "--variant", "baseline", "--corpus", "beir-scifact"])).toBe(2);
+      expect(await fresh.main(["prepare", "--variant", "baseline", "--corpus", "scifact"])).toBe(2);
       expect(fetchStub).not.toHaveBeenCalled();
-      expect(String(assertIgnored.mock.calls[0]?.[0])).toContain("beir-scifact.bge-small-en-v1.5.jsonl");
+      expect(String(assertIgnored.mock.calls[0]?.[0])).toContain("scifact.bge-small-en-v1.5.jsonl");
     } finally {
       c.restore(); fetchStub.mockRestore(); vi.doUnmock("./privacy");
     }
@@ -194,7 +194,7 @@ describe("privacy guard on every CLI write", () => {
       const target = join(REAL_REPO, rel);
       const before = existsSync(target) ? readFileSync(target, "utf8") : null;
       const c = capture();
-      try { expect(await cli.main(["--variant", "baseline", "--corpus", "beir-scifact", "--hash-embeddings", "--json", target]), rel).toBe(2); } finally { c.restore(); }
+      try { expect(await cli.main(["--variant", "baseline", "--corpus", "scifact", "--hash-embeddings", "--json", target]), rel).toBe(2); } finally { c.restore(); }
       expect(c.err.filter(l => l.startsWith("usage:")), rel).toHaveLength(1);
       expect(c.out, `${rel}: nothing ran`).toEqual([]);
       expect(existsSync(target) ? readFileSync(target, "utf8") : null, rel).toBe(before);

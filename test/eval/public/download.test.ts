@@ -1,4 +1,4 @@
-// Opt-in: downloads the real datasets (SciFact ~3 MB, MIRACL-ja ~1 GB) into .eval-cache/public/.
+// Opt-in: downloads the real datasets (SciFact ~3 MB, allenai release, MIRACL-ja ~1 GB) into .eval-cache/public/.
 // EVAL_PUBLIC_DOWNLOAD=1 npx vitest run test/eval/public/download.test.ts
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -10,9 +10,9 @@ import { loadNeutralCorpus, PUBLIC_CORPORA } from "./neutral";
 const root = resolve(import.meta.dirname, "../../..");
 const sha = (id: string, f: string) => createHash("sha256").update(readFileSync(resolve(root, ".eval-cache/public", id, f))).digest("hex");
 
-// Derived-file hashes pin both the download and the seeded sampling (Sep 23, 2026 run).
+// Derived-file hashes pin both the download and the seeded sampling (Sep 23, 2026 run; scifact re-pinned to the allenai release).
 const EXPECTED = {
-  "beir-scifact": { docs: 5183, queries: 1109, corpus: "94eee201d32b77ddaa3038cb61ca670a6baebba1a60577a97c7450d95e19e10d" },
+  scifact: { docs: 5183, queries: 693, corpus: "98c19f6343a102c7e806c135abb871ce17b9b617c0456c0e4691d64e376282d8" },
   "miracl-ja": { docs: 13498, queries: 860, corpus: "f96cab21f7c9057f618149722f0df3f1749e788a25eb7f2ac0a12be84b8be9b5" },
 } as const;
 

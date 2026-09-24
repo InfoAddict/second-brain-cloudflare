@@ -436,7 +436,7 @@ describe("evaluateGate: comparability of golden data and limits", () => {
 });
 
 describe("evaluateGate: public and core reports stay apart", () => {
-  const pub = (name: string, tweak?: (i: number, r: QueryResult) => void) => ({ ...report(name, tweak), corpus: "beir-scifact", dataFingerprint: { "corpus.jsonl": "a", "queries.jsonl": "b", "qrels.tsv": "c" } });
+  const pub = (name: string, tweak?: (i: number, r: QueryResult) => void) => ({ ...report(name, tweak), corpus: "scifact", dataFingerprint: { "corpus.jsonl": "a", "queries.jsonl": "b", "qrels.tsv": "c" } });
 
   it("is INCONCLUSIVE comparing a public report with a core report, in either direction", () => {
     for (const [b, c] of [[report("b"), pub("v", shift(0.5, 30))], [pub("b"), report("v", shift(0.5, 30))]] as const) {

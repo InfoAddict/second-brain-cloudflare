@@ -26,7 +26,7 @@ function fixture(qrels = "query-id\tcorpus-id\tscore\nq1\td25\t1\nq1\td4\t2\nq2\
 
 describe("loadNeutralCorpus", () => {
   it("builds entries in one workspace, grades gold by score, and drops queries without positive judgments", () => {
-    const spec = loadNeutralCorpus({ id: "beir-scifact", dir: fixture(), category: "paraphrase" });
+    const spec = loadNeutralCorpus({ id: "scifact", dir: fixture(), category: "paraphrase" });
     expect(spec.entries).toHaveLength(30);
     expect(spec.entries.every(e => e.workspaceId === WORKSPACES.avery)).toBe(true);
     expect(spec.queries.map(q => q.id)).toEqual(["q1", "q2"]);
@@ -37,7 +37,7 @@ describe("loadNeutralCorpus", () => {
   it("carries the derived-manifest hashes as the corpus fingerprint", () => {
     const dir = fixture();
     const derived = (JSON.parse(readFileSync(join(dir, "MANIFEST.json"), "utf8")) as { derived: Record<string, string> }).derived;
-    expect(loadNeutralCorpus({ id: "beir-scifact", dir, category: "paraphrase" }).dataFingerprint).toEqual(derived);
+    expect(loadNeutralCorpus({ id: "scifact", dir, category: "paraphrase" }).dataFingerprint).toEqual(derived);
   });
 
   it("is deterministic and keeps every judged document when truncating", () => {
@@ -58,7 +58,7 @@ describe("loadNeutralCorpus", () => {
   });
 
   it("fails with a fetch hint when the neutral files are absent", () => {
-    expect(() => loadNeutralCorpus({ id: "beir-scifact", dir: join(tmpdir(), "no-such-neutral-dir"), category: "paraphrase" })).toThrow(/eval-fetch-public/);
+    expect(() => loadNeutralCorpus({ id: "scifact", dir: join(tmpdir(), "no-such-neutral-dir"), category: "paraphrase" })).toThrow(/eval-fetch-public/);
   });
 
   it("rejects a truncated or edited corpus.jsonl and tells the developer to re-fetch", () => {
@@ -66,9 +66,9 @@ describe("loadNeutralCorpus", () => {
     const file = join(dir, "corpus.jsonl");
     const whole = readFileSync(file, "utf8");
     writeFileSync(file, whole.slice(0, whole.length / 2));
-    expect(() => loadNeutralCorpus({ id: "beir-scifact", dir, category: "paraphrase" })).toThrow(/corpus\.jsonl.*re-run.*eval-fetch-public\.mjs beir-scifact/is);
+    expect(() => loadNeutralCorpus({ id: "scifact", dir, category: "paraphrase" })).toThrow(/corpus\.jsonl.*re-run.*eval-fetch-public\.mjs scifact/is);
     writeFileSync(file, whole.replace("document number 3 ", "document number 3X "));
-    expect(() => loadNeutralCorpus({ id: "beir-scifact", dir, category: "paraphrase" })).toThrow(/corpus\.jsonl/);
+    expect(() => loadNeutralCorpus({ id: "scifact", dir, category: "paraphrase" })).toThrow(/corpus\.jsonl/);
   });
 
   it("rejects an edited qrels.tsv and a missing manifest", () => {
@@ -89,7 +89,7 @@ describe("loadNeutralCorpus", () => {
 describe("publicCorpusProvider", () => {
   it("matches only the two public ids and loads them from the given root", () => {
     const root = mkdtempSync(join(tmpdir(), "neutral-root-"));
-    const dir = join(root, ".eval-cache", "public", "beir-scifact");
+    const dir = join(root, ".eval-cache", "public", "scifact");
     mkdirSync(dir, { recursive: true });
     for (const f of ["corpus.jsonl", "queries.jsonl", "qrels.tsv"]) writeFileSync(join(dir, f), "");
     writeFileSync(join(dir, "corpus.jsonl"), JSON.stringify({ id: "a", text: "alpha" }) + "\n");
@@ -98,22 +98,22 @@ describe("publicCorpusProvider", () => {
     writeManifest(dir);
     const p = publicCorpusProvider(root);
     expect(p.name).toBe("public");
-    expect(Object.keys(PUBLIC_CORPORA).sort()).toEqual(["beir-scifact", "miracl-ja"]);
-    expect(p.match("beir-scifact")).toBe(true);
+    expect(Object.keys(PUBLIC_CORPORA).sort()).toEqual(["miracl-ja", "scifact"]);
+    expect(p.match("scifact")).toBe(true);
     expect(p.match("miracl-ja")).toBe(true);
     expect(p.match("core-1k")).toBe(false);
     expect(p.match("toString")).toBe(false);
-    expect(p.build("beir-scifact").queries).toHaveLength(1);
+    expect(p.build("scifact").queries).toHaveLength(1);
   });
 
   it("keeps each corpus under 15k docs and queries above the power floor", () => {
     for (const c of Object.values(PUBLIC_CORPORA)) expect(c.maxDocs).toBeLessThan(15_000);
     expect(PUBLIC_CORPORA["miracl-ja"].maxQueries).toBeGreaterThanOrEqual(860);
-    expect(PUBLIC_CORPORA["beir-scifact"].maxQueries).toBeGreaterThanOrEqual(1100);
+    expect(PUBLIC_CORPORA["scifact"].maxQueries).toBeGreaterThanOrEqual(693);
   });
 
   it("records the embedding model each corpus needs", () => {
-    expect(PUBLIC_CORPORA["beir-scifact"].embeddingModel).toBe("@cf/baai/bge-small-en-v1.5");
+    expect(PUBLIC_CORPORA["scifact"].embeddingModel).toBe("@cf/baai/bge-small-en-v1.5");
     expect(PUBLIC_CORPORA["miracl-ja"].embeddingModel).toBe("@cf/baai/bge-m3");
   });
 });

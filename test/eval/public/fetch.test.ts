@@ -13,8 +13,8 @@ const lines = (path: string) => readFileSync(path, "utf8").split("\n").filter(Bo
 
 describe("pins", () => {
   it("pins every download to a sha256 and an immutable URL", () => {
-    expect(PINS["beir-scifact"].sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(PINS["beir-scifact"].url).toMatch(/^https:\/\//);
+    expect(PINS["scifact"].sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(PINS["scifact"].url).toMatch(/^https:\/\/.*\?versionId=[\w.]+$/); // an S3 object version, not the overwritable "latest" key
     const m = PINS["miracl-ja"];
     expect(m.corpusRevision).toMatch(/^[0-9a-f]{40}$/);
     expect(m.annotationRevision).toMatch(/^[0-9a-f]{40}$/);
@@ -67,32 +67,47 @@ describe("downloadPinned", () => {
 describe("normalizeScifact", () => {
   function source(title = "Alpha") {
     const base = tmp("scifact-src-");
-    mkdirSync(join(base, "qrels"));
     writeFileSync(join(base, "corpus.jsonl"), [
-      { _id: "1", title, text: "first abstract", metadata: {} },
-      { _id: "2", title: "Beta.", text: "second abstract", metadata: {} },
-      { _id: "3", title: "", text: "untitled abstract", metadata: {} },
+      { doc_id: 1, title, abstract: ["First sentence.", "Second sentence."], structured: false },
+      { doc_id: 2, title: "Beta.", abstract: ["Only one."], structured: false },
+      { doc_id: 3, title: "", abstract: ["Untitled abstract."], structured: false },
     ].map(r => JSON.stringify(r)).join("\n"));
-    writeFileSync(join(base, "queries.jsonl"), [{ _id: "10", text: "claim ten" }, { _id: "11", text: "claim eleven" }, { _id: "12", text: "claim twelve" }].map(r => JSON.stringify(r)).join("\n"));
-    writeFileSync(join(base, "qrels", "test.tsv"), "query-id\tcorpus-id\tscore\n10\t2\t1\n");
-    writeFileSync(join(base, "qrels", "train.tsv"), "query-id\tcorpus-id\tscore\n11\t1\t1\n");
+    writeFileSync(join(base, "claims_train.jsonl"), [
+      { id: 10, claim: "claim ten", evidence: { "2": [{ sentences: [0], label: "SUPPORT" }] }, cited_doc_ids: [2] },
+      { id: 11, claim: "claim eleven", evidence: {}, cited_doc_ids: [1] }, // NOT_ENOUGH_INFO: cited, not relevant
+    ].map(r => JSON.stringify(r)).join("\n"));
+    writeFileSync(join(base, "claims_dev.jsonl"), [
+      { id: 12, claim: "claim twelve", evidence: { "1": [{ sentences: [1], label: "CONTRADICT" }], "3": [{ sentences: [0], label: "SUPPORT" }] }, cited_doc_ids: [1, 3] },
+    ].map(r => JSON.stringify(r)).join("\n"));
     return base;
   }
 
-  it("merges test and train qrels into the neutral layout the loader reads", () => {
+  it("judges train plus dev claims by their evidence docs, dropping claims without evidence", () => {
     const out = tmp("scifact-out-");
     const counts = normalizeScifact({ base: source(), out });
-    expect(counts).toEqual({ docs: 3, queries: 3, judgedQueries: 2 });
-    writeManifest(out, "beir-scifact", {}, counts);
-    const spec = loadNeutralCorpus({ id: "beir-scifact", dir: out, category: "paraphrase" });
-    expect(spec.queries.map(q => [q.id, q.gold])).toEqual([["10", [{ id: "2", grade: 1 }]], ["11", [{ id: "1", grade: 1 }]]]);
+    expect(counts).toEqual({ docs: 3, queries: 2, judgedQueries: 2, judgments: 3 });
+    writeManifest(out, "scifact", {}, counts);
+    const spec = loadNeutralCorpus({ id: "scifact", dir: out, category: "paraphrase" });
+    expect(spec.queries.map(q => [q.id, q.gold])).toEqual([["10", [{ id: "2", grade: 1 }]], ["12", [{ id: "1", grade: 1 }, { id: "3", grade: 1 }]]]);
   });
 
-  it("joins title and abstract with one space (BEIR convention), never doubling a title's period", () => {
+  it("joins title and abstract sentences with single spaces, never doubling a title's period", () => {
     const out = tmp("scifact-out-");
     normalizeScifact({ base: source(), out });
     const text = Object.fromEntries(lines(join(out, "corpus.jsonl")).map(l => JSON.parse(l)).map(d => [d.id, d.text]));
-    expect(text).toEqual({ "1": "Alpha first abstract", "2": "Beta. second abstract", "3": "untitled abstract" });
+    expect(text).toEqual({ "1": "Alpha First sentence. Second sentence.", "2": "Beta. Only one.", "3": "Untitled abstract." });
+  });
+
+  it("rejects evidence that names a doc missing from the corpus", () => {
+    const base = source();
+    writeFileSync(join(base, "claims_dev.jsonl"), JSON.stringify({ id: 12, claim: "c", evidence: { "99": [{ sentences: [0], label: "SUPPORT" }] } }));
+    expect(() => normalizeScifact({ base, out: tmp("scifact-out-") })).toThrow(/99/);
+  });
+
+  it("rejects a claim id repeated across train and dev", () => {
+    const base = source();
+    writeFileSync(join(base, "claims_dev.jsonl"), JSON.stringify({ id: 10, claim: "c", evidence: { "1": [{ sentences: [0], label: "SUPPORT" }] } }));
+    expect(() => normalizeScifact({ base, out: tmp("scifact-out-") })).toThrow(/duplicate/);
   });
 
   it("writes atomically (no .part left) and drops a stale manifest before rewriting", () => {
