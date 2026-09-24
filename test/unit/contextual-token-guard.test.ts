@@ -143,16 +143,26 @@ describe("shipped chunks never exceed the BGE Small window", () => {
     }
   });
 
-  it("caps a Korean brain's migration day at the neuron cap, judged by real billing", async () => {
-    // 200 Korean notes, each rewritten as focus chunks: the estimate the cap runs on must not run below what those tokens bill.
+  it("a day of Korean chunks admitted by the estimate bills no more than the cap, judged by real token counts", () => {
+    // Admit chunks the way runSchemeBatch does: while the running estimate stays within the cap, one chunk after another.
     const recorded = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, number>;
     const texts = chunks.filter(c => c.name === "koreanDominant" && c.mode.startsWith("focus")).map(c => c.text);
-    const perChunkBilled = (texts.reduce((n, t) => n + recorded[hash(t)], 0) * 1841) / 1_000_000 / texts.length;
-    const perChunkEstimated = neuronsFor("@cf/baai/bge-small-en-v1.5", texts) / texts.length;
-    expect(perChunkEstimated).toBeGreaterThanOrEqual(perChunkBilled);
-    // and by construction a day at the cap bills no more than the cap
-    expect(perChunkEstimated * (SCHEME_DAILY_NEURON_CAP / perChunkEstimated)).toBeCloseTo(SCHEME_DAILY_NEURON_CAP, 6);
-    expect((SCHEME_DAILY_NEURON_CAP / perChunkEstimated) * perChunkBilled).toBeLessThanOrEqual(SCHEME_DAILY_NEURON_CAP);
+    let estimated = 0;
+    let billed = 0;
+    let admitted = 0;
+    for (let i = 0; ; i++) {
+      const text = texts[i % texts.length];
+      const next = neuronsFor("@cf/baai/bge-small-en-v1.5", [text]);
+      if (estimated + next > SCHEME_DAILY_NEURON_CAP) break;
+      estimated += next;
+      billed += (recorded[hash(text)] * 1841) / 1_000_000;
+      admitted++;
+    }
+    expect(admitted).toBeGreaterThan(100); // a real day's worth, not a vacuous loop
+    expect(estimated).toBeLessThanOrEqual(SCHEME_DAILY_NEURON_CAP);
+    expect(billed).toBeLessThanOrEqual(SCHEME_DAILY_NEURON_CAP);
+    // and the estimate is not absurdly loose: within 2x of what the tokens bill, so the cap still lets a Korean brain migrate
+    expect(estimated).toBeLessThan(2 * billed);
   });
 
   it.runIf(process.env.SCRIPT_TABLE)("writes the per-script table of largest estimated and real chunk tokens (SCRIPT_TABLE=path)", () => {
