@@ -65,6 +65,7 @@ export async function runVariant(o: {
   queries: readonly GoldenQuery[];
   isolate: "warm" | "cold";
   embeddingModel: string;
+  topK?: number;
   onProgress?: (done: number, total: number) => void;
 }): Promise<VariantReport> {
   const { corpus, variant } = o;
@@ -94,7 +95,7 @@ export async function runVariant(o: {
       let recallError: unknown;
       try {
         result = await corpus.replay.scope(q.id, () => recallEntries(
-          { query: q.text, topK: EVAL_TOP_K, hops: q.hops, synthesize: false },
+          { query: q.text, topK: o.topK ?? EVAL_TOP_K, hops: q.hops, synthesize: false },
           env, ctx, cfg,
           { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
         ));
@@ -156,7 +157,7 @@ export async function runVariant(o: {
       o.onProgress?.(results.length, o.queries.length);
     }
     const producers = corpus.replay.producers(), neuronSource = corpus.replay.neuronSource();
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), llmTags: corpus.replay.llmTags, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), llmTags: corpus.replay.llmTags, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: o.topK ?? EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
   } finally {
     restoreClock();
   }

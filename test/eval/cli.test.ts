@@ -216,7 +216,7 @@ describe("main (end to end on a tiny registered corpus)", () => {
     const base = report([result({ queryId: "a" }), result({ queryId: "b" })]);
     const text = formatReport(base);
     expect(text).toMatch(/caveat: recall@5 and MRR are read from the top-10 prefix/);
-    expect(text).toMatch(/production's topK 5 can rank differently/);
+    expect(text).toMatch(/production's topK 5 is the first 5 of it/);
     expect(text).toMatch(/rows_read: not measured \(use --d1 workerd\)/);
     const partial = formatReport({ ...base, d1Backend: "workerd", results: base.results.map((r, i) => ({ ...r, cost: { ...r.cost, d1RowsRead: i ? null : 5 } })) });
     expect(partial).toMatch(/rows_read: 1 of 2 queries reported no rows_read/);

@@ -137,6 +137,18 @@ export const SEMANTIC_UNAVAILABLE_DETAIL =
 export const VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY = "vectorize:workspace-filter-unsupported";
 
 export const VECTORIZE_TOP_K_MULTIPLIER = 3;
+// Dense candidate pool for every recall, whatever topK is asked for, so a larger
+// topK only extends the ranked list and never reorders its head. It is what a
+// default topK 5 call always used (3 x 5). A weak best match still widens the
+// dense query to 50.
+export const RECALL_POOL_SIZE = 15;
+// The deeper dense list a call draws on when the diversified one is shorter than its topK, and what a weak best
+// match widens to. 50 is the most Vectorize returns with values and metadata (the ceiling this code has always used).
+export const RECALL_DEEP_POOL_SIZE = 50;
+// Results are ordered by score within blocks of this many MMR picks.
+export const RECALL_BLOCK = 5;
+// The most results one recall call can ask for (MCP tool and GET /recall both cap topK here).
+export const RECALL_MAX_TOP_K = 20;
 // getByIds batch size for tag-scoped recall — Vectorize rejects more than 20 IDs
 // per call (VECTOR_GET_ERROR, code 40007)
 export const VECTORIZE_GET_BY_IDS_BATCH = 20;

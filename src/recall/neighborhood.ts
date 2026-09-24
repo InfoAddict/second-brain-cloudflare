@@ -103,6 +103,22 @@ export function lexicalSeedLimit(topK: number, lexicalOnlyCount: number, denseSe
   ));
 }
 
+/**
+ * The result count the arms' graph seat budgets are sized for. graphSeedLimit and lexicalSeedLimit scale with the
+ * topK they are given, so recall always passes this one: seats that followed the caller's topK would let a larger
+ * topK change which roots are seeded and so reorder the head. It is the default call's value, which keeps that call
+ * exactly as it was.
+ */
+export const RECALL_SEED_TOPK = 5;
+
+/**
+ * Result ranks (0-based) the graph may take, one linked memory each. Fixed so
+ * topK never moves them: a call with topK <= 5 has none, and each further
+ * slot appears only once topK reaches it.
+ */
+export const GRAPH_SLOT_INDICES = [4, 9] as const;
+export const GRAPH_SLOT_INDEX = GRAPH_SLOT_INDICES[0];
+
 export function relatedSlotLimit(topK: number): number {
   if (topK < 3) return 0;
   return topK < 6 ? 1 : 2;

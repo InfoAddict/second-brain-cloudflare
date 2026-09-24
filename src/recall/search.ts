@@ -4,7 +4,9 @@ import {
   FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
   VECTORIZE_GET_BY_IDS_BATCH,
-  VECTORIZE_TOP_K_MULTIPLIER,
+  RECALL_BLOCK,
+  RECALL_DEEP_POOL_SIZE,
+  RECALL_POOL_SIZE,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { resolveConfig, type Config } from "../config";
@@ -23,7 +25,7 @@ import { hasStaleAsOf } from "../memory/stale";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import { computeCompoundStale } from "./compound-stale";
-import { exactQueryMatchCount, graphSeedLimit, lexicalSeedLimit, relatedSlotLimit, scoreLinkedEvidence } from "./neighborhood";
+import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLimit, lexicalSeedLimit, RECALL_SEED_TOPK, scoreLinkedEvidence } from "./neighborhood";
 import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
@@ -337,6 +339,8 @@ export async function recallEntries(
   let keywordRows: KeywordRow[] = [];
   let ftsServedKeywords = false; // memberFirst never sets this: tag rows are not bm25-ordered
   let results: { matches: VectorizeMatch[] };
+  // Deeper dense results, fetched only when the diversified list is shorter than topK (see the fill below).
+  let denseFill: (() => Promise<VectorizeMatch[]>) | undefined;
   if (memberFirst) {
     // Tag/project recalls never run keywordSearch (tag rows are not bm25-
     // ordered), so name the route here: ftsRoute is set on every recall path.
@@ -396,7 +400,8 @@ export async function recallEntries(
       })) as VectorizeMatch[],
     };
   } else {
-    const vectorizeTopK = Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, 50);
+    // A fixed pool, so a larger topK only extends the list and never reorders its head.
+    const vectorizeTopK = RECALL_POOL_SIZE;
     // Scoped when an Identity is in play: the workspace filter keeps foreign
     // candidates out of the result slots. queryVectorizeScoped retries
     // unfiltered if Vectorize rejects the filter; hydration below is scoped at
@@ -410,16 +415,19 @@ export async function recallEntries(
       env.OAUTH_KV.put(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, String(Date.now()))
         .catch((e: unknown) => console.error("Vectorize filter-degradation marker write failed (non-fatal):", e)),
     );
+    const denseAt = async (k: number): Promise<{ matches: VectorizeMatch[] }> => {
+      if (wsFilter) {
+        const { matches } = await queryVectorizeScoped<VectorizeMatch>(
+          env.VECTORIZE, values, { topK: k, filter: wsFilter, onDegrade },
+        );
+        return { matches };
+      }
+      return await env.VECTORIZE.query(values, { topK: k, returnMetadata: "all", returnValues: true });
+    };
     const denseQuery = async (): Promise<{ matches: VectorizeMatch[] }> => {
       if (arms === "keyword-only") return { matches: [] as VectorizeMatch[] };
       try {
-        if (wsFilter) {
-          const { matches } = await queryVectorizeScoped<VectorizeMatch>(
-            env.VECTORIZE, values, { topK: vectorizeTopK, filter: wsFilter, onDegrade },
-          );
-          return { matches };
-        }
-        return await env.VECTORIZE.query(values, { topK: vectorizeTopK, returnMetadata: "all", returnValues: true });
+        return await denseAt(vectorizeTopK);
       } catch (e) {
         console.error("Vectorize query failed (degrading to keyword-only):", e);
         semanticUnavailable = true;
@@ -442,17 +450,15 @@ export async function recallEntries(
     // retuned recall widening.
     if (!semanticUnavailable && results.matches.length && results.matches[0].score < cfg.RECALL_WIDEN_THRESHOLD) {
       try {
-        if (wsFilter) {
-          const { matches } = await queryVectorizeScoped<VectorizeMatch>(
-            env.VECTORIZE, values, { topK: 50, filter: wsFilter, onDegrade },
-          );
-          results = { matches };
-        } else {
-          results = await env.VECTORIZE.query(values, { topK: 50, returnMetadata: "all", returnValues: true });
-        }
+        results = await denseAt(RECALL_DEEP_POOL_SIZE);
       } catch (e) {
         console.error("Vectorize widen-query failed (non-fatal, keeping narrow results):", e);
       }
+    }
+    // A full pool means the index has more to give. Already widened: the deep list is in hand.
+    if (!semanticUnavailable && results.matches.length >= vectorizeTopK) {
+      const have = results.matches.length > vectorizeTopK ? results.matches : undefined;
+      denseFill = async () => have ?? (await denseAt(RECALL_DEEP_POOL_SIZE)).matches;
     }
   }
 
@@ -516,7 +522,23 @@ export async function recallEntries(
     seen.add(parentId);
     return true;
   });
-  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, topK);
+  // MMR is greedy, so its first n picks do not depend on how many are asked for. Rounding the depth up to whole
+  // blocks (each ordered by score below) keeps every block a topK cuts the same block a larger topK sees, and a
+  // default topK 5 call diversifies and hydrates exactly the five it always did.
+  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK);
+  // A topK larger than the diversified list draws the rest from a deeper dense list, after everything above. The
+  // fetch happens only then, but what it adds is the same whatever topK is, and it only ever follows the list, so the
+  // head of a smaller topK is a prefix of it.
+  const parentOf = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  let fillCandidates: VectorizeMatch[] = [];
+  if (denseFill && topK > directCandidates.length) {
+    try {
+      const taken = new Set(directCandidates.map(parentOf));
+      fillCandidates = (await denseFill()).filter(m => !taken.has(parentOf(m)) && taken.add(parentOf(m)));
+    } catch (e) {
+      console.error("Vectorize deep query failed (non-fatal, returning the shorter list):", e);
+    }
+  }
   markStage("candidateHydration");
 
   if (!directCandidates.length) return { matches: [], insight: "", semanticUnavailable };
@@ -542,6 +564,8 @@ export async function recallEntries(
         metadataAlignment: Math.min(1, .6 * tagAlignment + .2 * episodicAlignment + .2 * authorityAlignment),
         semanticRank: semanticRankByParent.get(parentId) }];
     });
+    // The seat budgets are sized for RECALL_SEED_TOPK, not the caller's topK, so a larger topK cannot change which
+    // roots are seeded (and with them the head).
     // One selection per arm, against that arm's own budget: a row the dense arm
     // never returned has no semantic rank, so it cannot take a seat — or a seat
     // in the "semantic" view — from a row that does. The keyword arm still gets
@@ -557,10 +581,10 @@ export async function recallEntries(
     const denseRoots = rootCandidates.filter(root => root.semanticRank !== undefined);
     const lexicalRoots = rootCandidates.filter(root => root.semanticRank === undefined);
     const scopeBindings = scope?.bindings.length ?? 0;
-    const denseSeats = graphSeedLimit(topK, denseRoots.length, scopeBindings);
+    const denseSeats = graphSeedLimit(RECALL_SEED_TOPK, denseRoots.length, scopeBindings);
     selectedRoots = [
       ...selectGraphRoots(denseRoots, denseSeats, cfg.MMR_LAMBDA),
-      ...selectGraphRoots(lexicalRoots, lexicalSeedLimit(topK, lexicalRoots.length, denseSeats, scopeBindings), cfg.MMR_LAMBDA),
+      ...selectGraphRoots(lexicalRoots, lexicalSeedLimit(RECALL_SEED_TOPK, lexicalRoots.length, denseSeats, scopeBindings), cfg.MMR_LAMBDA),
     ];
   }
   const graphSeedIds = selectedRoots.map(x => x.candidate.parentId);
@@ -582,6 +606,7 @@ export async function recallEntries(
   // filters consume bindings in every statement.
   const allParentIds = [...new Set([
     ...directParentIds,
+    ...fillCandidates.map(parentOf),
     ...graphSeedIds,
     ...expanded.map(e => e.id),
   ])];
@@ -627,7 +652,11 @@ export async function recallEntries(
   const candidateSignalById = new Map(rcRows.map(row => [row.id, row]));
   markStage("finalHydration");
 
-  const directMatches: RecallMatch[] = directCandidates.flatMap((m) => {
+  // Blocks of five in MMR order, each ordered by score: the first block is what a topK 5 call always returned, and a
+  // later block only depends on the picks before it, so no topK can reorder a block it does not cut.
+  const inBlocks = Array.from({ length: Math.ceil(directCandidates.length / RECALL_BLOCK) }, (_, b) =>
+    directCandidates.slice(b * RECALL_BLOCK, (b + 1) * RECALL_BLOCK).sort((a, c) => c.score - a.score)).flat();
+  const directMatchOf = (m: VectorizeMatch, score: number): RecallMatch[] => {
     const meta = m.metadata as Record<string, any>;
     const parentId = (meta?.parentId ?? m.id) as string;
     const row = d1Map.get(parentId);
@@ -635,7 +664,7 @@ export async function recallEntries(
     return [{
       id: parentId,
       content: row.content as string,
-      score: m.score,
+      score,
       createdAt: row.created_at as number,
       updatedAt: (row.updated_at as number | null) ?? (row.created_at as number),
       tags: JSON.parse(row.tags ?? "[]"),
@@ -645,18 +674,24 @@ export async function recallEntries(
       workspace: layerOf(identity, row.workspace_id),
       staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
     }];
-  }).sort((a, b) => b.score - a.score);
+  };
+  const directMatches: RecallMatch[] = inBlocks.flatMap(m => directMatchOf(m, m.score));
+  // The deeper matches rank below everything above, in dense order, so their scores step down from the lowest.
+  const fillFloor = directMatches.length ? Math.min(...directMatches.map(m => m.score)) : 0;
+  const fillMatches = fillCandidates.flatMap((m, i) => directMatchOf(m, fillFloor * (1 - 0.01 * (i + 1))));
 
+  // Linked memories compete with the leading direct matches only, whatever topK is.
+  const headParentIds = directMatches.slice(0, GRAPH_SLOT_INDEX + 1).map(match => match.id);
+  const leadingParentIds = directMatches.slice(0, GRAPH_SLOT_INDICES[GRAPH_SLOT_INDICES.length - 1] + 1).map(match => match.id);
   const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.rootScore));
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
-  const fallbackRootScore = directCandidates.at(-1)?.score ?? 0;
+  const fallbackRootScore = directMatches[Math.min(directMatches.length, GRAPH_SLOT_INDEX + 1) - 1]?.score ?? 0;
   for (const e of expanded) {
     rootIdByNode.set(e.id, rootIdByNode.get(e.viaFrom) ?? e.viaFrom);
   }
-  const relatedLimit = relatedSlotLimit(topK);
-  const replacement = directMatches[topK - relatedLimit];
+  const replacement = directMatches[GRAPH_SLOT_INDEX];
   const replacementCoverage = replacement ? Math.max(
     queryCoverage(replacement.content, tokens, distilled).score,
     queryCoverage(replacement.content, profile.evidenceTokens, distilled).score,
@@ -716,18 +751,27 @@ export async function recallEntries(
     .sort((a, b) => b.match.score - a.match.score || a.match.id.localeCompare(b.match.id));
   if (internal.diagnostics) {
     internal.diagnostics.eligibleRelatedIds = sortedExpanded
-      .filter(entry => entry.eligible && !directParentIds.includes(entry.match.id))
+      .filter(entry => entry.eligible && !headParentIds.includes(entry.match.id))
       .map(entry => entry.match.id);
   }
-  const selectedRelated = sortedExpanded
-    .filter(e => e.eligible && !directParentIds.includes(e.match.id))
-    .slice(0, relatedLimit)
-    .map(e => e.match);
-  const selectedDirect = directMatches.slice(0, topK - selectedRelated.length);
-  const baselineMatches: RecallMatch[] = [...selectedDirect, ...selectedRelated];
-  let matches = baselineMatches;
-  if (hops > 0 && topK >= 5 && baselineMatches.length >= 5) {
-    const replacementIndex = baselineMatches.length - 1;
+  // The first linked memory must be outside the first five directs; each later
+  // one outside the direct matches up to its own rank.
+  const eligibleRelated = sortedExpanded.filter(e => e.eligible && !headParentIds.includes(e.match.id)).map(e => e.match);
+  // A slot exists once topK reaches its rank; asking for more only adds slots after the ones already there.
+  const slotCount = GRAPH_SLOT_INDICES.filter(index => topK > index).length;
+  const selectedRelated = [
+    ...eligibleRelated.slice(0, Math.min(slotCount, 1)),
+    ...eligibleRelated.slice(1).filter(match => !leadingParentIds.includes(match.id)).slice(0, Math.max(slotCount - 1, 0)),
+  ];
+  // Graph slots sit at fixed ranks. Everything is laid out for the whole pool
+  // and cut to topK at the end, so topK k is always a prefix of topK k+n.
+  const [firstRelated, ...laterRelated] = selectedRelated;
+  const baselineMatches: RecallMatch[] = [...directMatches.slice(0, GRAPH_SLOT_INDEX), ...(firstRelated ? [firstRelated] : directMatches.slice(GRAPH_SLOT_INDEX, GRAPH_SLOT_INDEX + 1))];
+  let window: RecallMatch[] = baselineMatches;
+  // A direct match the evidence slot pushed out, to be shown where the chosen match used to sit if that was further down.
+  let displaced: RecallMatch | undefined;
+  if (hops > 0 && topK > GRAPH_SLOT_INDEX && baselineMatches.length > GRAPH_SLOT_INDEX) {
+    const replacementIndex = GRAPH_SLOT_INDEX;
     const replacementMatch = baselineMatches[replacementIndex];
     const replacementEvidence = queryCoverage(
       replacementMatch.content,
@@ -740,7 +784,7 @@ export async function recallEntries(
 
     const selectedRootIds = new Set(selectedRoots.map(selection => selection.candidate.parentId));
     const omittedChallenger = rootCandidates
-      .filter(root => !selectedRootIds.has(root.parentId) && !directParentIds.includes(root.parentId))
+      .filter(root => !selectedRootIds.has(root.parentId) && !headParentIds.includes(root.parentId))
       .filter(root => root.semanticRank !== undefined)
       .sort((a, b) => a.semanticRank! - b.semanticRank!
         || b.rootScore - a.rootScore
@@ -751,7 +795,7 @@ export async function recallEntries(
     ];
 
     for (const { root, semanticEligible } of rootsForEvidence) {
-      if (directParentIds.includes(root.parentId) || protectedIds.has(root.parentId)) continue;
+      if (headParentIds.includes(root.parentId) || protectedIds.has(root.parentId)) continue;
       const row = d1Map.get(root.parentId) ?? candidateSignalById.get(root.parentId);
       if (!row) continue;
       const rowTags = JSON.parse(row.tags ?? "[]") as string[];
@@ -794,7 +838,7 @@ export async function recallEntries(
     }
 
     for (const entry of sortedExpanded) {
-      if (!entry.eligible || protectedIds.has(entry.match.id) || directParentIds.includes(entry.match.id)) continue;
+      if (!entry.eligible || protectedIds.has(entry.match.id) || headParentIds.includes(entry.match.id)) continue;
       const precision = queryCoverage(entry.evidenceText, profile.evidenceTokens, distilled);
       matchById.set(entry.match.id, entry.match);
       candidates.push({
@@ -814,8 +858,29 @@ export async function recallEntries(
       semanticAllowed: replacementMatch.hop === 0,
     }, candidates);
     const chosenMatch = chosen && matchById.get(chosen.id);
-    if (chosenMatch) matches = [...baselineMatches.slice(0, replacementIndex), chosenMatch];
+    if (chosenMatch) {
+      window = [...baselineMatches.slice(0, replacementIndex), chosenMatch];
+      if (replacementMatch.hop === 0) displaced = replacementMatch;
+    }
   }
+  // Direct matches past the window continue the list, with each later linked
+  // memory at its own rank; the direct match the first slot displaced is only
+  // shown again when that slot was won by a linked memory.
+  const taken = new Set(window.map(match => match.id));
+  const tail = directMatches.slice(firstRelated ? GRAPH_SLOT_INDEX : GRAPH_SLOT_INDEX + 1).flatMap(match => {
+    if (!taken.has(match.id)) return [match];
+    // The chosen match came from further down the list: the one it displaced takes its place, so nothing is lost.
+    return displaced && match.id === window[GRAPH_SLOT_INDEX]?.id && !taken.has(displaced.id) ? [displaced] : [];
+  });
+  for (const [i, related] of laterRelated.entries()) {
+    if (taken.has(related.id)) continue;
+    const at = GRAPH_SLOT_INDICES[i + 1] - window.length;
+    const own = tail.findIndex(match => match.id === related.id);
+    if (own >= 0) tail.splice(own, 1); // already in the list further down: it moves up to its slot
+    tail.splice(Math.min(at, tail.length), 0, related);
+  }
+  const listed = new Set([...window, ...tail].map(match => match.id));
+  const matches = [...window, ...tail, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
   const finalDirectIds = new Set(matches.filter(match => match.hop === 0).map(match => match.id));
   const finalRelated = matches.filter(match => match.hop > 0);
   if (internal.diagnostics) internal.diagnostics.selectedRelatedIds = finalRelated.map(x => x.id);

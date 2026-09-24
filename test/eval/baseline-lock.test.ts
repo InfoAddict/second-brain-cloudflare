@@ -43,4 +43,23 @@ describe("baseline lock (recall tripwire)", () => {
       await corpus.close();
     }
   }, 300_000);
+
+  // The lock ranks the top 10; a topK 5 call must return exactly its first 5. The reverse (a larger topK reordering the
+  // head) is what this catches, whether it comes from the candidate pool, the diversity pass, or the graph slot.
+  it("a topK 5 call returns the first 5 of the locked top 10 on every golden query", async () => {
+    const lock = JSON.parse(readFileSync(LOCK, "utf8")) as VariantReport;
+    const locked = new Map(lock.results.map(r => [r.queryId, r.rankedIds]));
+    const spec = buildCorpus("core-1k");
+    const corpus = await loadCorpus({ spec, backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore(cache), mode: "replay" }), embeddingModel: MODEL });
+    try {
+      const five = await runVariant({ corpus, variant: getVariant("baseline"), queries: spec.queries, isolate: "warm", embeddingModel: MODEL, topK: 5 });
+      expect(five.results).toHaveLength(spec.queries.length);
+      for (const r of five.results) {
+        expect(r.error, r.queryId).toBeUndefined();
+        expect(r.rankedIds, r.queryId).toEqual(locked.get(r.queryId)!.slice(0, 5));
+      }
+    } finally {
+      await corpus.close();
+    }
+  }, 300_000);
 });

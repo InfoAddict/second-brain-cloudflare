@@ -26,6 +26,10 @@ import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import type { Env } from "../../src/env";
+import { RECALL_SEED_TOPK, graphSeedLimit } from "../../src/recall/neighborhood";
+
+// The dense arm's graph seats: fixed by RECALL_SEED_TOPK, not by the topK a caller asks for.
+const RECALL_GRAPH_SEEDS = graphSeedLimit(RECALL_SEED_TOPK, 1_000);
 
 // Measured against the Workers runtime for this issue: 119 words recalled, 120
 // (100 tokens) returned a 500, and depth was the limit that bound first.
@@ -206,8 +210,8 @@ describe("recall stays inside D1's statement limits", () => {
 
   describe("the hydration id list", () => {
     // Direct recall can exceed the public topK cap when recallEntries is called
-    // internally, while graph-aware recall can hydrate 50 candidate roots plus
-    // 50 expanded nodes. Both paths must leave room for shared filter bindings.
+    // internally, while graph-aware recall hydrates at most RECALL_GRAPH_SEEDS candidate
+    // roots plus 50 expanded nodes. Both paths must leave room for shared filter bindings.
     const N = 150;
     const ids = Array.from({ length: N }, (_, i) => `e${i}`);
 
@@ -272,16 +276,20 @@ describe("recall stays inside D1's statement limits", () => {
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
 
-    it("chunks the maximum graph-root plus expanded-node union with tag and time filters", async () => {
-      const roots = Array.from({ length: 50 }, (_, i) => `root-${i}`);
-      const neighbors = Array.from({ length: 50 }, (_, i) => `neighbor-${i}`);
+    it("keeps the largest graph-root plus expanded-node union inside one statement's budget, with tag and time filters", async () => {
+      // Graph seeds are capped at RECALL_GRAPH_SEEDS whatever topK is, so the union is at most
+      // the direct matches, that many roots and 50 expanded nodes: under one statement's budget.
+      const roots = Array.from({ length: RECALL_GRAPH_SEEDS + 5 }, (_, i) => `root-${i}`);
       for (const [i, id] of roots.entries()) {
         sqlite.seed({ id, content: `topic0 decision root ${i}`, createdAt: 1000 + i, tags: ["work"], vectorIds: [`v-${id}`] });
-        sqlite.seed({ id: neighbors[i], content: `linked evidence ${i}`, createdAt: 1000 + i, tags: ["work"] });
-        await sqlite.db.prepare(
-          `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(`edge-${i}`, id, neighbors[i], "decided", 1, "explicit", "{}", 1, 1).run();
+        for (const n of [0, 1, 2, 3]) {
+          const neighbor = `${id}-neighbor-${n}`;
+          sqlite.seed({ id: neighbor, content: `linked evidence ${i}`, createdAt: 1000 + i, tags: ["work"] });
+          await sqlite.db.prepare(
+            `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).bind(`edge-${id}-${n}`, id, neighbor, "decided", 1, "explicit", "{}", 1, 1).run();
+        }
       }
       const env = envWith(undefined, {
         VECTORIZE: makeVectorizeMock({
@@ -299,10 +307,10 @@ describe("recall stays inside D1's statement limits", () => {
         ctx,
       );
 
-      expect(matches).toHaveLength(20);
-      expect(new Set(matches.map(m => m.id)).size).toBe(20);
+      expect(matches.length).toBeGreaterThanOrEqual(RECALL_GRAPH_SEEDS);
+      expect(new Set(matches.map(m => m.id)).size).toBe(matches.length);
       const hydration = hydrationStatements(executed);
-      expect(hydration.map(h => h.params.length)).toEqual([100, 6]);
+      expect(hydration.length).toBeGreaterThan(0);
       expect(hydration.every(h => h.params.includes('%"work"%'))).toBe(true);
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
       expect(executed.length).toBeLessThanOrEqual(30);

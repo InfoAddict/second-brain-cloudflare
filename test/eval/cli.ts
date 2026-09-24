@@ -160,7 +160,7 @@ export function formatReport(report: VariantReport): string {
     "  cost per query (all queries):",
     `    D1 statements  ${dist(allQueries.d1Statements)}`,
     allQueries.d1RowsRead ? `    D1 rows_read   ${dist(allQueries.d1RowsRead, 0)}` : rowsReadMissing(report),
-    "    caveat: recall@5 and MRR are read from the top-10 prefix; production's topK 5 can rank differently (topK changes MMR and the related-slot reservation)",
+    "    caveat: recall@5 and MRR are read from the top-10 prefix; recall ranks from a fixed pool, so production's topK 5 is the first 5 of it",
     ...(report.llmTags ? [`    llm tags       ${report.llmTags}${llmCalled ? (report.llmTags === "stand-in" ? " (embedding-nearest stand-in for the tag-inference LLM call)" : " (empty answer: no query tags, as if the LLM call failed)") : " (inert: no LLM call was made)"}`] : []),
     ...(report.llmTags === "stand-in" && llmCalled ? ["    caveat: agreement with the real model is unmeasured"] : []),
     ...(report.llmTags ? ["    caveat: cost excludes synthesizeInsight (GET /recall's default; off in MCP and in the eval)"] : []),

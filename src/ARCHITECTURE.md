@@ -185,8 +185,13 @@ statements, D1 `rows_read`, AI calls, neurons, and wall-clock (reported, never
 gated). Neurons are projected from local token counts and the published rates,
 not billed. `rows_read` is real only with `--d1 workerd`, which runs wrangler's
 local workerd D1; the default `sqlite` backend cannot measure it. recall@5 is
-read from the top-10 prefix, so it can differ slightly from production's `topK`
-5.
+read from the top-10 prefix, which is what production's `topK` 5 returns:
+recall ranks from a fixed candidate pool (dense 15, graph seat budgets sized
+for `topK` 5), in blocks of five, with graph slots at ranks 5 and 10, so a
+larger `topK` only appends results and never reorders the head. When the
+diversified list is shorter than `topK` the rest comes from a deeper dense query
+(50, the most Vectorize returns with values and metadata), fetched only then and
+appended after everything else.
 
 **Why the numbers can be trusted.** Runs are deterministic and need no network
 and no Cloudflare account. Embeddings (and any reranker scores) come from pinned
@@ -310,8 +315,8 @@ was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps:
-over the 318 remaining queries, recall@5 is 0.734, recall@10 0.769, MRR@10
-0.758, and nDCG@10 0.707. Over all 338 queries it is 0.750, 0.783, 0.771, and
+over the 318 remaining queries, recall@5 is 0.741, recall@10 0.770, MRR@10
+0.758, and nDCG@10 0.707. Over all 338 queries it is 0.756, 0.784, 0.771, and
 0.723.
 
 **How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`

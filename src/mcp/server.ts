@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveConfig } from "../config";
 import { z } from "zod";
 import type { Env } from "../env";
-import { SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
+import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
 import { appendToEntry, updateEntryContent } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
@@ -715,7 +715,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       description: RECALL_DESCRIPTION,
       inputSchema: {
         query: z.string().describe("Natural language search query. Say what the topic is and what you are trying to do with it, and name the subject explicitly — resolve references like \"it\", \"that project\", or \"the last one\" from the conversation before querying"),
-        topK: z.number().int().min(1).max(20).default(5).describe("Number of results. 5 (the default) gives enough candidates to compare before choosing; raise it to survey a topic, lower it only when a single exact hit is all you need"),
+        topK: z.number().int().min(1).max(RECALL_MAX_TOP_K).default(5).describe("Number of results. 5 (the default) gives enough candidates to compare before choosing; raise it to survey a topic, lower it only when a single exact hit is all you need"),
         tag: z.string().optional().describe("Filter by a specific tag. Use a tag the user named or one you saw on a returned memory — a guessed tag that does not exist in this brain returns nothing"),
         after: z.number().int().optional().describe("Only return entries after this Unix ms timestamp. Useful for narrowing a recovery search to a period the conversation identified"),
         before: z.number().int().optional().describe("Only return entries before this Unix ms timestamp. Useful for narrowing a recovery search to a period the conversation identified"),
