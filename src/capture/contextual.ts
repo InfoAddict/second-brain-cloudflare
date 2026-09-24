@@ -125,8 +125,6 @@ export function buildDeterministicContext(entry: ContextEntry, chunkIndex: numbe
   return framing(f, chunkIndex, totalChunks, 2).slice(0, CONTEXT_PREFIX_MAX_CHARS);
 }
 
-const ALNUM = /[\p{L}\p{N}]/u;
-
 /**
  * An upper bound on the BERT WordPiece token count of `text`, special tokens
  * included, that holds for any input. Every token consumes at least one
@@ -171,48 +169,73 @@ export function estimateBgeSmallTokens(text: string): number {
         if (runStart < 0) runStart = i;
         plain = false;
         runCost++;
+      } else if (c === 32 || c === 10 || c === 9 || c === 13) {
+        flush(i);
+      } else if (c < 32 || c === 127) {
+        // BERT deletes control characters before it splits words, so they neither cost a token nor end a run.
       } else {
         flush(i);
-        if (c !== 32 && c !== 10 && c !== 9 && c !== 13 && c !== 11 && c !== 12) tokens++;
+        tokens++;
       }
       continue;
     }
-    // Hangul syllables are letters to BERT, not ideographs: NFD splits each into 2 or 3 jamo, each its own piece.
-    if (c >= HANGUL_FIRST && c <= HANGUL_LAST) {
-      if (runStart < 0) runStart = i;
-      plain = false;
-      runCost += 3;
-      continue;
-    }
-    if (c >= 0x2e80 && c <= 0x9fff || c >= 0xac00 && c <= 0xd7af || c >= 0xf900 && c <= 0xfaff) { flush(i); tokens++; continue; }
     // Astral characters are two UTF-16 units; classify the pair once.
-    const ch = c >= 0xd800 && c <= 0xdbff ? String.fromCodePoint(text.codePointAt(i)!) : String.fromCharCode(c);
-    const width = ch.length;
-    if (ALNUM.test(ch)) {
+    const cp = text.codePointAt(i)!;
+    const width = cp > 0xffff ? 2 : 1;
+    const kind = classify(cp);
+    if (kind === DELETED) {
+      // Removed before splitting, so the words either side are one word to BERT: the run carries on across it.
+    } else if (kind === SPACE) flush(i);
+    else if (kind === SPLIT) { flush(i); tokens++; }
+    else {
       if (runStart < 0) runStart = i;
       plain = false;
-      runCost += nfdLength(ch);
-    } else { flush(i); if (!/\s/u.test(ch)) tokens++; }
+      runCost += kind;
+    }
     i += width - 1;
   }
   flush(text.length);
   return tokens;
 }
 
+const DELETED = -1;
+const SPACE = -2;
+const SPLIT = -3;
+
 const HANGUL_FIRST = 0xac00;
 const HANGUL_LAST = 0xd7a3;
+const REMOVED = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Mn}\uFFFD]/u;
+// The unified ideograph blocks. (The compatibility blocks decompose under NFD, and BERT does not always split them: they are word characters here.)
+const IDEOGRAPH = /[\u3400-\u4dbf\u4e00-\u9fff\u{20000}-\u{2a6df}\u{2a700}-\u{2b81f}\u{2b820}-\u{2ceaf}]/u;
 
-/** Characters a letter becomes once BERT lowercases and NFD-decomposes it and drops the combining marks (Bengali and Tamil vowel signs split in two); at least its own units. */
-const nfdLengths = new Map<string, number>();
-function nfdLength(ch: string): number {
-  let n = nfdLengths.get(ch);
-  if (n === undefined) {
-    n = 0;
-    for (const part of ch.toLowerCase().normalize("NFD")) if (!/\p{Mn}/u.test(part)) n++;
-    n = Math.max(n, 1, ch.length);
-    nfdLengths.set(ch, n);
+const classes = new Map<number, number>();
+
+/**
+ * How BERT's uncased pipeline treats a non-ASCII character, as the estimator
+ * needs it: deleted before words are split (control, format and private-use
+ * characters, combining marks, U+FFFD; unassigned code points are NOT deleted,
+ * measured), whitespace, a separate token
+ * (punctuation, and CJK ideographs, which get spaces put around them), or part of
+ * a word, in which case the number of characters it becomes after lowercasing and
+ * NFD decomposition with the combining marks dropped (a Hangul syllable is 3; a
+ * Bengali vowel sign can be 2), never less than its own UTF-16 units. Symbols,
+ * spacing marks and letters of every script are word characters, so they glue.
+ */
+function classify(cp: number): number {
+  let k = classes.get(cp);
+  if (k !== undefined) return k;
+  const ch = String.fromCodePoint(cp);
+  if (REMOVED.test(ch)) k = DELETED;
+  else if (/\s/u.test(ch)) k = SPACE;
+  else if (IDEOGRAPH.test(ch) || /\p{P}/u.test(ch)) k = SPLIT;
+  else if (cp >= HANGUL_FIRST && cp <= HANGUL_LAST) k = 3;
+  else {
+    let n = 0;
+    for (const part of ch.toLowerCase().normalize("NFD")) if (!REMOVED.test(part)) n++;
+    k = n === 0 ? DELETED : Math.max(n, ch.length);
   }
-  return n;
+  classes.set(cp, k);
+  return k;
 }
 
 /** Today's chunks, unprefixed: what every entry got before contextual embeddings, and the fallback when building context fails. */
