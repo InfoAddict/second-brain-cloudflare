@@ -102,6 +102,16 @@ describe("auditQueries", () => {
     expect(ask([...denseFiller, gold, entry("hidden", "garden window coffee", "blake")])).toEqual([]);
   });
 
+  it("requires a rare-word or identifier key to occur in exactly one readable row, letting unreadable decoys repeat", () => {
+    const rare = (extra: CorpusEntry[]) => rules([...filler, entry("g", "The petrichor after rain was lovely"), ...extra], [query({ id: "r", category: "rare-word", text: "petrichor" })]);
+    expect(rare([])).toEqual([]);
+    expect(rare([entry("twin", "Loved the petrichor smell", "company")])).toContain("r:key-not-unique");
+    expect(rare([entry("decoy", "Another petrichor note", "blake")])).toEqual([]);
+    const id = (extra: CorpusEntry[]) => rules([...filler, entry("g", "Ticket OPS-90210 rollback"), ...extra], [query({ id: "i", category: "identifier", text: "OPS-90210" })]);
+    expect(id([entry("twin", "Also OPS-90210 was mentioned", "company")])).toContain("i:key-not-unique");
+    expect(id([entry("decoy", "OPS-90210 elsewhere", "outsider")])).toEqual([]);
+  });
+
   it("rejects missing, unreadable, or duplicated gold queries and missing tenancy decoys", () => {
     const gold = entry("g", "Ticket OPS-90210 rollback plan");
     const decoy = entry("d", "Ticket OPS-90210 rollback plan", "blake");

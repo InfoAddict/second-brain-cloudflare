@@ -1,13 +1,15 @@
 import { historyProblems, type Manifest } from "./lock";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { DEFAULTS } from "../../src/config";
 import { FTS_MATCH_BUDGET, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
+import { chunkText } from "../../src/text/chunk";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
 import { auditQueries, haystackVocabulary, keywordRouteModel, staleRouteGaps } from "./corpus/audit";
-import { CORPUS_PARAMS, buildCorpus as buildCorpusUncached, loadCoreData } from "./corpus/build";
+import { CORPUS_IDS, CORPUS_PARAMS, HAYSTACK_ROWS, buildCorpus as buildCorpusUncached, loadCoreData } from "./corpus/build";
 import { COMMON_TOKENS, CORRELATED_TOKENS, DENSE_RATE_BY_SCALE, DENSE_TOKENS } from "./corpus/haystack";
 import { IDENTITIES, WORKSPACES } from "./corpus/types";
 import { QUERY_CATEGORIES } from "./types";
@@ -21,15 +23,20 @@ const buildCorpus: typeof buildCorpusUncached = id => {
 };
 
 const DATA = resolve(import.meta.dirname, "data/core");
-const MINIMUMS = { identifier: 36, "rare-word": 40, "common-word": 36, "short-word": 30, paraphrase: 48, cjk: 36, "multi-hop": 30, "long-context": 24 } as const;
-const CLUSTER_MINIMUM = 30;
-// 0.8 x the shipped per-category cluster counts, so a ~35% power cut in any category fails
-const CLUSTER_FLOORS = { identifier: 37, "rare-word": 31, "common-word": 38, "short-word": 24, paraphrase: 39, cjk: 29, "multi-hop": 24, "long-context": 20 } as const;
+// T-0043.6 grew the set from 338 queries / 299 clusters to 1,586 queries / 1,433 clusters (4.8x), weighted to the target
+// categories: paraphrase 9x (48 -> 440), multi-hop 5x (30 -> 150), long-context 9x (24 -> 220). Gate power scales with
+// independent clusters, and a target category needs about +0.05 with a lower bound above zero, so paraphrase (the reranker)
+// and long-context (contextual embeddings) got the most. Minimums and floors are 0.8 x the shipped counts, so a ~35% power
+// cut in any category fails. Common-word clusters are dense triples (84 for 133 queries: the same triple in the two
+// viewer scopes is one cluster), which is why its floor is lower than its query minimum.
+const MINIMUMS = { identifier: 120, "rare-word": 105, "common-word": 105, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248 } as const;
+const CLUSTER_MINIMUM = 1180;
+const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 67, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248 } as const;
 
 describe("core golden data", () => {
   beforeAll(() => { for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) buildCorpus(id); }, 60_000);
 
-  const { needles, edges, queries } = loadCoreData();
+  const { needles, edges, queries, haystack: longHaystack = [] } = loadCoreData();
 
   it("matches the manifest hashes, so any edit is deliberate (record it with lock --accept-data-change)", () => {
     const manifest = JSON.parse(readFileSync(resolve(DATA, "manifest.json"), "utf8")) as Manifest;
@@ -65,8 +72,58 @@ describe("core golden data", () => {
     for (const category of QUERY_CATEGORIES) {
       expect(queries.filter(q => q.category === category).length, category).toBeGreaterThanOrEqual(MINIMUMS[category]);
     }
-    expect(queries.length).toBeGreaterThanOrEqual(280);
-    expect(queries.filter(q => q.tags?.includes("tenancy")).length).toBeGreaterThanOrEqual(14);
+    expect(queries.length).toBeGreaterThanOrEqual(1340);
+    expect(queries.filter(q => q.tags?.includes("tenancy")).length).toBeGreaterThanOrEqual(60);
+  });
+
+  it("authors an importance score (1-5) on every needle and seeds one on every haystack row, skewed to 2-3", () => {
+    const spec = buildCorpus("core-1k");
+    const needleRows = spec.entries.filter(e => e.id.startsWith("n-"));
+    const haystack = spec.entries.filter(e => e.id.startsWith("f-") || e.id.startsWith("h-long-"));
+    expect(needleRows).toHaveLength(needles.length);
+    for (const entry of spec.entries) expect(Number.isInteger(entry.importanceScore) && entry.importanceScore! >= 1 && entry.importanceScore! <= 5, entry.id).toBe(true);
+    const shares = (rows: typeof spec.entries) => [1, 2, 3, 4, 5].map(score => rows.filter(e => e.importanceScore === score).length / rows.length);
+    for (const rows of [needleRows, haystack]) {
+      const [one, two, three, four, five] = shares(rows);
+      expect(two + three, "scores 2-3 dominate").toBeGreaterThan(0.5);
+      expect(five, "5s are rare").toBeLessThan(0.08);
+      expect(one + five, "extremes are the tails").toBeLessThan(two);
+      expect(four).toBeGreaterThan(0.05);
+      const mean = rows.reduce((sum, e) => sum + e.importanceScore!, 0) / rows.length;
+      expect(mean, "mean importance").toBeGreaterThan(2.6);
+      expect(mean, "mean importance").toBeLessThan(3.1);
+    }
+    // Importance scales the ranking score (0.8 + importance/5 x 0.4), so authored golds must not sit systematically above
+    // the haystack they compete with: bound the difference itself, not just each mean.
+    const meanOf = (rows: typeof spec.entries) => rows.reduce((sum, e) => sum + e.importanceScore!, 0) / rows.length;
+    expect(Math.abs(meanOf(needleRows) - meanOf(haystack)), "needle vs haystack mean importance").toBeLessThan(0.15);
+    // authored on the row itself (or its long-context anchor), never left to the loader default
+    expect(needles.filter(n => n.importance === undefined).map(n => n.id)).toEqual([]);
+    // decisions outrank the reasons behind them
+    for (const n of needles.filter(n => n.id.endsWith("-root"))) expect(n.importance!, n.id).toBeGreaterThanOrEqual(needles.find(a => a.id === n.id.replace("-root", "-answer"))!.importance! - 1);
+  });
+
+  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors), then 8 MiB for the expanded set. The baseline now
+  // includes the cross-encoder reranker, whose per-candidate scores are recorded alongside the chunk vectors: 5,842 entries,
+  // 8.15 MiB. The cap is 9 MiB (approved on T-0043.6), which leaves 0.85 MiB; contextual rows (T-0042) stay in the local
+  // cache, uncommitted. Past this, move the layer out of git rather than raise it again.
+  it("keeps every committed replay layer together within its size budget", () => {
+    // the privacy allowlist admits replay.<model>.jsonl.gz for any model, so the cap is on their sum (a bge-m3 layer counts too)
+    const layers = readdirSync(DATA).filter(name => /^replay\.[\w.-]+\.jsonl\.gz$/.test(name));
+    expect(layers).toContain(`replay.${DEFAULTS.EMBEDDING_MODEL.split("/").pop()}.jsonl.gz`);
+    const bytes = layers.reduce((sum, name) => sum + statSync(resolve(DATA, name)).size, 0);
+    expect(bytes).toBeLessThan(9 * 1024 * 1024);
+  });
+
+  it("clusters common-word queries by dense triple, so permutation twins share one cluster", () => {
+    const spec = buildCorpus("core-1k");
+    const byTriple = new Map<string, Set<string>>();
+    for (const q of spec.queries.filter(q => q.category === "common-word")) {
+      const triple = q.text.split(" ").filter(word => (DENSE_TOKENS as readonly string[]).includes(word)).sort().join(",");
+      byTriple.set(triple, (byTriple.get(triple) ?? new Set()).add(q.clusterKey!));
+    }
+    for (const [triple, keys] of byTriple) expect(keys.size, triple).toBe(1);
+    expect(spec.queries.filter(q => q.category === "common-word").length).toBeGreaterThan(byTriple.size);
   });
 
   it("has enough distinct clusters overall and per category for the bootstrap", () => {
@@ -89,7 +146,7 @@ describe("core golden data", () => {
 
   it("regenerates the long-context needles byte-identically and keeps them varied", () => {
     const generated = longContextNeedles();
-    expect(needles.filter(n => n.purpose === "long-context")).toEqual(generated);
+    expect(needles.filter(n => n.id.startsWith("n-long-"))).toEqual(generated);
     const sentences = generated.map(n => new Set(n.content.match(/[^.]+\./g)!.map(sentence => sentence.trim())));
     for (let i = 0; i < sentences.length; i++) {
       for (let j = i + 1; j < sentences.length; j++) {
@@ -97,8 +154,69 @@ describe("core golden data", () => {
         expect(shared, `${generated[i].id} vs ${generated[j].id}`).toBeLessThanOrEqual(3);
       }
     }
-    for (const q of queries.filter(q => q.category === "long-context")) {
+    for (const q of queries.filter(q => q.category === "long-context" && q.gold[0].id.startsWith("n-long-"))) {
       expect(generated.filter(n => n.content.includes(q.answerSpan!)).length, q.id).toBe(1);
+    }
+  });
+
+  it("carries a second, coherent long-context construction: topical notes, answers at varied depths, tagged as a subset", () => {
+    const coherent = needles.filter(n => n.id.startsWith("n-lcoh-"));
+    const subset = queries.filter(q => q.tags?.includes("subset:coherent-padding"));
+    expect(coherent.length).toBeGreaterThanOrEqual(80);
+    expect(subset.map(q => q.gold[0].id).sort()).toEqual(coherent.map(n => n.id).sort());
+    // the legacy 220 keep their construction and stay untagged, so the two subsets can be reported apart
+    expect(queries.filter(q => q.category === "long-context" && q.gold[0].id.startsWith("n-long-") && q.tags?.some(t => t.startsWith("subset:")))).toEqual([]);
+    const chunkOf = (n: (typeof coherent)[number], span: string) => {
+      const at = n.content.indexOf(span);
+      return chunkText(n.content).findIndex(chunk => chunk.includes(span)) + 1 || Math.floor(at / 1600) + 1;
+    };
+    const depth = new Map<number, number>();
+    for (const q of subset) {
+      const note = coherent.find(n => n.id === q.gold[0].id)!;
+      expect(note.content.length, note.id).toBeGreaterThanOrEqual(4500);
+      expect(note.content.indexOf(q.answerSpan!), note.id).toBeGreaterThanOrEqual(1600);
+      expect(note.content.indexOf(q.answerSpan!), `${note.id} continues after its answer`).toBeLessThan(note.content.length - 300);
+      depth.set(chunkOf(note, q.answerSpan!), (depth.get(chunkOf(note, q.answerSpan!)) ?? 0) + 1);
+    }
+    // answers spread over chunks 2, 3 and 4+, never only the second chunk the legacy notes use
+    expect(depth.get(2) ?? 0, "answers in the second chunk").toBeGreaterThanOrEqual(15);
+    expect([...depth].filter(([chunk]) => chunk >= 3).reduce((sum, [, count]) => sum + count, 0), "answers in chunk 3 or later").toBeGreaterThanOrEqual(40);
+    // no filler shared between notes: on-topic throughout means near-disjoint sentences
+    const sentences = coherent.map(n => new Set(n.content.match(/[^.!?]+[.!?]/g)!.map(sentence => sentence.trim())));
+    for (let i = 0; i < sentences.length; i++) for (let j = i + 1; j < sentences.length; j++) {
+      expect([...sentences[i]].filter(sentence => sentences[j].has(sentence)).length, `${coherent[i].id} vs ${coherent[j].id}`).toBeLessThanOrEqual(1);
+    }
+    const spans = subset.map(q => q.answerSpan!);
+    expect(new Set(spans).size).toBe(spans.length);
+    for (const span of spans) expect(needles.filter(n => n.purpose === "long-context" && n.content.includes(span)).length, span).toBe(1);
+  });
+
+  it("balances the long notes: haystack rows match the coherent needles' length profile, so length no longer marks a needle", () => {
+    const coherent = needles.filter(n => n.id.startsWith("n-lcoh-"));
+    const mean = (rows: { content: string }[]) => rows.reduce((sum, r) => sum + r.content.length, 0) / rows.length;
+    expect(longHaystack.length, "long haystack rows").toBeGreaterThanOrEqual(90);
+    expect(new Set(longHaystack.map(r => r.id)).size).toBe(longHaystack.length);
+    for (const row of longHaystack) {
+      expect(row.id, row.id).toMatch(/^h-long-\d{3}$/);
+      expect(row.content.length, row.id).toBeGreaterThanOrEqual(2900); // authored to the 3,000-8,000 band; one lands a hair under
+      expect(row.content.length, row.id).toBeLessThanOrEqual(8000);
+      expect(Number.isInteger(row.importance) && row.importance! >= 1 && row.importance! <= 5, row.id).toBe(true);
+      expect(needles.some(n => n.id === row.id), row.id).toBe(false);
+    }
+    // mean within 10% of the coherent needles', and as many long rows as there are long needles
+    expect(Math.abs(mean(longHaystack) / mean(coherent) - 1)).toBeLessThan(0.1);
+    const band = (rows: { content: string }[]) => rows.filter(r => r.content.length >= 4500).length;
+    // among rows of 4,500+ characters, the coherent needles must not be the overwhelming majority (they are 90 against 66)
+    expect(band(coherent) / (band(coherent) + band(longHaystack)), "needle share of the 4,500+ character rows").toBeLessThan(0.65);
+    // they answer nothing: no query's answer span occurs in any of them
+    for (const q of queries.filter(q => q.answerSpan)) {
+      expect(longHaystack.filter(r => r.content.includes(q.answerSpan!)).map(r => r.id), q.id).toEqual([]);
+    }
+    // and they may not hold a golden key or more than two dense words (a rival for a common-word triple)
+    const keys = needles.flatMap(n => n.keys ?? []).map(k => k.toLowerCase());
+    for (const row of longHaystack) {
+      expect(keys.filter(k => row.content.toLowerCase().includes(k)), row.id).toEqual([]);
+      expect(DENSE_TOKENS.filter(word => row.content.toLowerCase().includes(word)).length, row.id).toBeLessThanOrEqual(2);
     }
   });
 
@@ -130,7 +248,6 @@ describe("core golden data", () => {
     const isDense = (word: string) => (DENSE_TOKENS as readonly string[]).includes(word);
     const dense = (text: string) => DENSE_TOKENS.filter(word => text.toLowerCase().includes(word));
     const common = queries.filter(q => q.category === "common-word" && !q.tags?.includes("correlated") && !q.tags?.includes("subset"));
-    const triples = new Set<string>();
     for (const q of common) {
       const words = q.text.split(" ");
       const triple = words.filter(isDense).sort();
@@ -141,12 +258,19 @@ describe("core golden data", () => {
         expect(extra.length, q.id).toBeGreaterThanOrEqual(1);
         expect(extra.every(word => (COMMON_TOKENS as readonly string[]).includes(word)), q.id).toBe(true);
       } else expect(extra, q.id).toEqual([]);
-      triples.add(triple.join(","));
       const gold = needles.find(n => n.id === q.gold[0].id)!;
       expect(dense(gold.content).sort(), q.id).toEqual(triple);
       expect(gold.ageDays, `${q.id} gold must be old enough to fall outside the LIKE window`).toBeGreaterThanOrEqual(300);
+      expect(readScopeWorkspaces(IDENTITIES[q.viewer], { layer: q.layer }), q.id).toContain(WORKSPACES[gold.workspace]);
     }
-    expect(triples.size, "distinct triples").toBe(common.length);
+    // The triple must be unique among the rows a viewer reads (avery: avery + company, blake: blake + company), not globally:
+    // an avery-workspace note and a blake-workspace note may share one, since no viewer reads both.
+    for (const viewer of ["avery", "blake"] as const) {
+      const readable = new Set(readScopeWorkspaces(IDENTITIES[viewer], {}));
+      const inScope = common.filter(q => readable.has(WORKSPACES[needles.find(n => n.id === q.gold[0].id)!.workspace]));
+      const triples = inScope.map(q => q.text.split(" ").filter(isDense).sort().join(","));
+      expect(new Set(triples).size, `distinct triples for ${viewer}`).toBe(triples.length);
+    }
     const goldIds = new Set(common.map(q => q.gold[0].id));
     // as substrings, so "timetable" or "newsletter" count
     for (const n of needles.filter(n => !goldIds.has(n.id))) expect(dense(n.content).length, n.id).toBeLessThanOrEqual(2);
@@ -249,9 +373,10 @@ describe("core golden data", () => {
   }, 60_000);
 
   it("builds three corpora of the requested sizes with the needles unchanged", () => {
-    const sizes = { "core-1k": 1000, "scale-5k": 5000, "scale-20k": 20000 } as const;
-    for (const [id, total] of Object.entries(sizes)) {
-      const spec = buildCorpus(id as keyof typeof sizes);
+    // the haystack is fixed per scale (HAYSTACK_ROWS), so growing the golden set never resizes it
+    for (const id of CORPUS_IDS) {
+      const total = HAYSTACK_ROWS[id] + needles.length + longHaystack.length;
+      const spec = buildCorpus(id);
       expect(spec.entries).toHaveLength(total);
       expect(new Set(spec.entries.map(e => e.id)).size).toBe(total);
       expect(spec.queries).toEqual(buildCorpus("core-1k").queries);
@@ -263,9 +388,9 @@ describe("core golden data", () => {
     expect(CORPUS_PARAMS["scale-5k"].denseRate).toBe(DENSE_RATE_BY_SCALE["5k"]);
     expect(CORPUS_PARAMS["scale-20k"].denseRate).toBe(DENSE_RATE_BY_SCALE["20k"]);
     expect(CORPUS_PARAMS["scale-20k"].commonRate).toBe(0.08);
-    // the haystack is the total minus the needles, which is what the rates were solved for
+    // the haystack is fixed at the size the rates were solved for, whatever the needle count
     const haystack = buildCorpus("scale-5k").entries.filter(e => e.id.startsWith("f-")).length;
-    expect(haystack).toBe(5000 - needles.length);
+    expect(haystack).toBe(HAYSTACK_ROWS["scale-5k"]);
   });
 
   it("draws the haystack at 45/45/10 across avery, company and blake, with nothing in the outsider tenant", () => {

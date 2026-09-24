@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi, afterEach } from "vitest";
@@ -71,6 +71,20 @@ describe("applyLock", () => {
     expect(m2.history).toHaveLength(3);
     expect(m2.history![2].files["queries.jsonl"].old).toBe(sha("v2\n"));
     expect(historyProblems(m2)).toEqual([]);
+  });
+
+  it("takes a new data file only with an accepted reason, recording it with an empty old hash, and still refuses a vanished one", async () => {
+    const t = setup();
+    writeFileSync(join(t.dir, "haystack.jsonl"), "h1\n");
+    await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, runBaseline: t.run })).rejects.toThrow(/new data file \(haystack.jsonl\) needs --accept-data-change/);
+    const out = await applyLock({ dataDir: t.dir, lockPath: t.lockPath, acceptReason: "added a haystack file", runBaseline: t.run, now: () => new Date("2026-09-24T00:00:00Z") });
+    expect(out.dataChanged).toBe(true);
+    const m = t.read();
+    expect(m.files["haystack.jsonl"]).toBe(sha("h1\n"));
+    expect(m.history![1].files["haystack.jsonl"]).toEqual({ old: "", new: sha("h1\n") });
+    expect(historyProblems(m)).toEqual([]);
+    rmSync(join(t.dir, "haystack.jsonl"));
+    await expect(applyLock({ dataDir: t.dir, lockPath: t.lockPath, acceptReason: "gone", runBaseline: t.run })).rejects.toThrow(/must list exactly/);
   });
 
   it("refuses to lock a broken baseline and writes nothing, even with data accepted", async () => {

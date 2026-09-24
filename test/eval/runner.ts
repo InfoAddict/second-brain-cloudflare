@@ -9,8 +9,8 @@ import type { RecallDiagnostics } from "../../src/recall/types";
 import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vectorize/scope";
 import type { LoadedCorpus } from "./corpus/loader";
 import { EVAL_NOW, IDENTITIES } from "./corpus/types";
-import { scoreQuery } from "./metrics";
-import { QUERY_CATEGORIES, RUNNER_VERSION, type CostSample, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
+import { recallAtK, scoreQuery } from "./metrics";
+import { QUERY_CATEGORIES, RUNNER_VERSION, type CostSample, type GoldenQuery, type PoolDiagnostic, type QueryResult, type VariantReport } from "./types";
 import type { VariantSpec } from "./variants";
 
 /** Metrics need the top 10; recall@5 is read from its first five (Decision 9). */
@@ -77,6 +77,20 @@ export function withoutRecallCountWrites(db: D1Database, onIntercept: () => void
   });
 }
 const ZERO_COST: CostSample = { d1Statements: 0, d1RowsRead: null, aiCalls: 0, embeddingCalls: 0, vectorizeQueries: 0, kvReads: 0, neurons: 0, neuronsEstimated: false, wallMs: 0 };
+
+/** The pool a recall drew its result from, in score order, with duplicates (chunks of one entry) collapsed. */
+export function poolDiagnostic(candidateIds: readonly string[] | undefined, gold: GoldenQuery["gold"]): PoolDiagnostic | undefined {
+  if (!candidateIds) return undefined;
+  const pool = [...new Set(candidateIds)];
+  // Grade-2 golds only, for both fields: a grade-1 gold (a multi-hop root) is context, not the answer being reached.
+  const primary = gold.filter(g => g.grade === 2).map(g => g.id);
+  const head = new Set(pool.slice(0, 30));
+  return {
+    size: pool.length,
+    goldInPool: primary.some(id => pool.includes(id)),
+    recall30: primary.length ? primary.filter(id => head.has(id)).length / primary.length : 0,
+  };
+}
 
 export async function runVariant(o: {
   corpus: LoadedCorpus;
@@ -170,6 +184,7 @@ export async function runVariant(o: {
           ftsRoute: diagnostics.ftsRoute,
           ...(diagnostics.rerankRoute && diagnostics.rerankRoute !== "off" && { rerankRoute: diagnostics.rerankRoute }),
           ...(diagnostics.keywordIds && { keywordGold: q.gold.some(g => diagnostics.keywordIds!.includes(g.id)) }),
+          pool: poolDiagnostic(diagnostics.candidateIds, q.gold),
           degraded: [
             ...(result.semanticUnavailable ? ["semantic-unavailable"] : []),
             ...(filterDegraded ? ["vectorize-filter-unfiltered"] : []),

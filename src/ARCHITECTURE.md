@@ -588,7 +588,7 @@ dependency): bge-small-en-v1.5, bge-m3, and bge-reranker-base, fetched
 anonymously from Hugging Face into `.eval-cache/models/` and verified against
 recorded hashes. They are computed once and stored in a content-addressed replay
 cache; a cache miss during a run fails instead of computing. The committed
-`core-1k` cache means a contributor needs neither an account nor a model
+`core-1k` cache (8.15 MiB gzipped, 5,842 entries: chunk vectors plus the reranker's scores, which the baseline now includes; a test caps the committed layers at 9 MiB, raised from 8 because of those scores, and contextual rows stay local) means a contributor needs neither an account nor a model
 download to run that corpus. Every cached row records which model build produced
 it, and reports from different producers never compare. Vectorize is an
 exact-cosine emulator, the clock is frozen, and `recall_count` writes are
@@ -603,7 +603,13 @@ failed. Both sides of a comparison must use the same arm.
 
 **Corpora** (`npm run eval:recall -- --list` names them). `core-1k`, `scale-5k`,
 and `scale-20k` share one authored, fully synthetic set of golden memories and
-queries inside a growing seeded haystack; the two larger ones push a common
+queries (1,733 memories and 96 long haystack rows, 1,683 queries in 1,475 independent clusters, weighted
+to paraphrase, multi-hop, and long-context, because power scales with clusters;
+long-context has two constructions, 220 legacy notes and 90 coherent-padding
+notes tagged `subset:coherent-padding`, reported apart)
+inside a seeded haystack of 656 / 4,656 / 19,656 rows (the needles come on top;
+haystack rows carry a seeded importance score skewed to 2-3 and every needle an
+authored one); the two larger ones push a common
 token past the 500-row keyword window, which is what lets the eval tell the LIKE
 and FTS keyword arms apart. `scifact` (about 5,200 abstracts, 693 judged claims)
 and `miracl-ja` (about 13,500 Japanese passages, 860 queries) are public sets
@@ -623,6 +629,61 @@ the guards (ignore rules, an allowlist of the only files that may be tracked
 under `test/eval/data/`, a canary scan, and a refusal to write any path git
 would pick up) and documents how a private tier could be added without
 redesigning them.
+
+**What the golden set measures.** Read a category's number for what it counts.
+Multi-hop measures root-finding: each query restates a root memory ("why did we
+replace the chairs") and carries `gold = [answer grade 2, root grade 1]`. In the
+locked baseline the root is in the top 10 for 150 of 150 queries and the answer
+for 7 of 150, so recall@10 0.523 is about 96% "found the note the query
+paraphrases" and MRR@10 0.974 leaves 0.026 of headroom against the 0.05 target
+margin. Multi-hop is therefore not a valid target category for a reranker
+(T-0041's `rerank` and `rerank-auto` variants declare it in `targetCategories`
+and should drop it; that change is applied at integration), and a graph change
+is judged by the answer's rank, not by this recall.
+
+The paraphrase base rate fell when the set grew, in two steps with different
+causes. The original 48 paraphrase queries scored recall@10 0.375. After the 4.8x
+expansion (0f02eff) the 440 scored 0.182: the new paraphrases are harder (no
+content word in common with the gold) and the collection they compete against is
+far larger. It fell to 0.109 when the 90 coherent long-context notes were added,
+and the cause is not on-topic distractors: a sweep of all 44 displaced queries
+found at most two incidental shared words with any coherent note in their new top
+ten. The cause is length. Those notes average 5,337 characters against 485 for
+every other needle, and a dense retriever ranks long, diffuse text into any short
+query's top ten: they held 46.9% of paraphrase top-10 slots and 0% of common-word
+slots, so length itself had become a signal that a note was a needle. A
+cross-encoder rejects such notes trivially, which would have inflated a
+reranker's paraphrase gain. Ninety-six long, coherent haystack rows (`h-long-*`,
+3,000 to 7,000 characters, mean 5,013) now balance them. On the integrated code
+the long notes hold 63% of paraphrase top-10 slots (coherent needles 38.7%, long
+haystack 24.2%, legacy long needles 7.8%; long-context 35.5% / 25.7% / 7.1%),
+and the locked paraphrase recall@10 is 0.102. Long haystack rows are still
+notes a reranker can reject, so a paraphrase gain should be read next to
+`--exclude-needles 'n-lcoh-*,h-long-*'`, which reports it with both families
+absent. Long-context moved for its own reasons: the original 24 notes were already
+at 0.000 at 0f02eff (the 4.8x expansion, before any coherent note existed); the
+220 legacy notes score 0.050 and the 90 coherent ones 0.200. The coherent notes'
+answers sit in chunk 2 for 24 of them, chunk 3 for 39 and chunk 4 or later for 27,
+counted with the real chunker (1,600 characters with a 200-character overlap); an
+earlier report of 27 / 51 / 12 divided offsets by 1,600 and ignored the overlap.
+A target gain in paraphrase is therefore measured from a base near 0.10, not
+0.375, and the +0.05 target margin is a 50% relative gain.
+
+**The overall improvement path is not evidence for T-0041 or T-0042.** The
+0.02 `improvementMargin` was approved when paraphrase was 15% and long-context
+7.5% of the non-gap queries. On the expanded set they are 27% and 19%, and the
+overall path averages by query, so an overall +0.02 now needs an in-category
+gain of about +0.075 in paraphrase and +0.106 in long-context, against +0.133
+and +0.265 before: roughly half the bar for the reranker and 40% of it for
+contextual embeddings. Each of those changes must pass through its target
+category (paraphrase for T-0041, long-context for T-0042) with a bootstrap lower
+bound above zero, and show no regression in any category; T-0042 must also show
+no loss and a positive point estimate on the coherent-padding long-context
+subset, reported apart from the 220 legacy notes. This is pre-registered on
+T-0043.6 (the amended note of Sep 24 2026, written before any candidate ran on
+the expanded set). The candidate-pool diagnostic (gold anywhere in the fused
+pool, recall@30) is printed for every category so a target FAIL can be read as
+"the reranker did not help" or "the gold was never a candidate".
 
 **Variants.** A change under test is a variant: query-time flags on
 `RecallInternalOptions` (for example `variant.arms`), config overrides, or an
@@ -700,7 +761,9 @@ the report or comparison to a git-ignored path (never under `test/eval/data/`);
 `--limit <n>` runs the first n queries and the gate refuses it;
 `--hash-embeddings` uses fake vectors, for harness smoke tests only; `--target
 <categories>` and `--target-gaps <ids>` (comma-separated) declare what a variant
-claims to fix; `--allow-unmeasured-rows`; `--list`.
+claims to fix; `--allow-unmeasured-rows`; `--exclude-needles <glob,...>` (comparison only)
+reruns both variants with the matching needles removed and prints each category's
+delta beside the gate, report only; `--list`.
 
 **Commands.** `prepare --variant <name> [--max-neurons <n>] [--concurrency <n>]`
 computes and caches every missing embedding locally in three passes (dry run for
@@ -726,11 +789,51 @@ was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps;
-with no gap tagged, all 345 queries are in the headline: recall@5 is 0.749,
-recall@10 0.777, MRR@10 0.757, and nDCG@10 0.713.
+with no gap tagged, all 1,683 queries are in the headline: recall@5 is 0.496,
+recall@10 0.535, MRR@10 0.492, and nDCG@10 0.451.
 
-**How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`
-and about 7 minutes on `workerd`, which runs each query against a real local D1.
+**Power.** The MDE belongs to a comparison, not to the query set, so growing the
+set lowers it only as far as the comparison's own spread allows. Recall@10 MDE
+on `core-1k` (1,475 clusters; it was 299), by comparison against baseline:
+
+| comparison | overall | paraphrase | multi-hop | long-context | coherent subset | legacy 220 |
+|---|---|---|---|---|---|---|
+| like | 0.012 | 0.028 | 0 | 0.029 | 0.082 | 0.026 |
+| dense-only | 0.039 | 0.064 | 0.029 | 0.053 | 0.133 | 0.051 |
+| keyword-only | 0.014 | 0.041 | 0.023 | 0.032 | 0.090 | 0.025 |
+| mild MMR change | 0.009 | 0.013 | 0 | 0.009 | 0.031 | 0 |
+
+The sabotage, mild-recency and mild-tags rows of the table are not reported: with the
+reranker in the baseline, a variant that changes candidate order asks for reranker
+scores the cache does not hold (they are recorded per candidate list by `prepare
+--variant <name>`), the circuit breaker opens, and the row then measures the
+fallback order, not the change. Like against baseline is now a delta of -0.019
+overall at core-1k rather than a tie, for the same reason.
+
+(before, on 299 clusters: like 0.000, dense-only 0.057, keyword-only 0.049, sabotage
+0.051 overall). Like against baseline at the discriminating scales was measured
+before the integrated router and reranker (0.027 at `scale-5k`, 0.028 at
+`scale-20k`, were 0.057 and 0.059) and has not been re-measured. The target-category rule needs +0.05
+with a lower bound above zero, so it needs an MDE of 0.05 or less: a change that
+moves part of paraphrase, long-context, or multi-hop clears it, and a whole-arm
+ablation of paraphrase does not. The 90-cluster coherent subset cannot prove
++0.05; it is a no-loss check for T-0042, not a target. `node
+scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints the core-1k table (add
+`--corpus scale-5k --only like` for a scale row).
+
+**FTS against LIKE at scale.** The one calibration that needs the uncommitted
+`scale-5k` and `scale-20k` caches runs only by hand, never in the default suite
+or CI: record the caches with `npm run eval:recall -- prepare --variant baseline
+--corpus scale-5k` (and `scale-20k`; about 30 minutes each), then `EVAL_SCALE=1
+npx vitest run --maxWorkers=2 test/eval/calibration.test.ts`. Measured on 5336d6d, before the
+router fix and the reranker landed (re-run it by hand on the integrated code), baseline
+(FTS) minus like: paraphrase recall@10 -0.0227 at `scale-5k` and at `scale-20k`,
+long-context MRR@10 -0.0122 at `scale-20k`; the regression rule fails on them and
+the lexical categories win by 0.05 to 0.6. The test pins exactly that, so a change
+that closes the gap forces a deliberate re-record.
+
+**How long it takes.** A `core-1k` comparison takes under a minute on `sqlite`
+and several minutes on `workerd` (about 25 on a heavily shared machine), which runs each query against a real local D1.
 A cold `prepare` for `scale-20k` takes about 25 minutes locally. `npm run
 test:eval:workerd` runs the workerd-backed tests (including the workerd lock
 tripwire), which the default suite skips; `npm run test:eval:public-download`

@@ -18,6 +18,7 @@ import { dryReranker, exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
 import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
+import { excludeNeedles } from "./corpus/exclude";
 import { VARIANTS, getVariant, type VariantSpec } from "./variants";
 
 export class UsageError extends Error {}
@@ -25,7 +26,7 @@ export class UsageError extends Error {}
 interface Common { llmTags: LlmTagsArm; corpus: string; d1: "sqlite" | "workerd"; isolate: "warm" | "cold"; model: string; hash: boolean; limit?: number; json?: string }
 export type CliCommand =
   | ({ kind: "run"; variant: string } & Common)
-  | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean } & Common)
+  | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean; excludeNeedles: string[] } & Common)
   | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number } & Common)
   | ({ kind: "lock"; acceptDataChange?: string } & Common)
   | ({ kind: "export-cache" } & Common)
@@ -107,7 +108,9 @@ export function parseCli(argv: string[]): CliCommand {
     const target = (values.target ?? "").split(",").filter(Boolean);
     for (const t of target) if (!(QUERY_CATEGORIES as readonly string[]).includes(t)) throw new UsageError(`--target: unknown category "${t}"`);
     const targetGaps = (values["target-gaps"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
-    return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, ...common };
+    const excludeNeedles = (values["exclude-needles"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
+    if (excludeNeedles.some(pattern => /[^\w*.-]/.test(pattern))) throw new UsageError("--exclude-needles takes comma-separated id globs such as n-lcoh-* (letters, digits, - _ . and *)");
+    return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, excludeNeedles, ...common };
   }
   if (values.variant) return { kind: "run", variant: values.variant, ...common };
   throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, export-cache, stamp-cache, or --list");
@@ -121,7 +124,7 @@ function parse(argv: string[]) {
       variant: { type: "string" }, compare: { type: "string" }, corpus: { type: "string", default: "core-1k" },
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
       "embedding-model": { type: "string" }, "llm-tags": { type: "string", default: "stand-in" }, model: { type: "string" }, "producer-from": { type: "string" }, layer: { type: "string", default: "local" }, "i-recorded-this": { type: "boolean", default: false }, "hash-embeddings": { type: "boolean", default: false },
-      limit: { type: "string" }, target: { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
+      limit: { type: "string" }, target: { type: "string" }, "exclude-needles": { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
       "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
   });
@@ -152,6 +155,13 @@ export function formatReport(report: VariantReport): string {
     ...(gapKeys.length ? ["  (known-gap queries are excluded from the headline, as the gate excludes them; see below)"] : []),
     row("overall", overall),
     ...QUERY_CATEGORIES.filter(c => byCategory[c]).map(c => row(c, byCategory[c]!)),
+    ...(overall.pool ? [
+      "  candidate pool (diagnostic, not gated): share of queries with a gold anywhere in the fused pool, and recall@30; recall@30 minus recall@10 is a reranker's headroom",
+      ...["overall", ...QUERY_CATEGORIES.filter(c => byCategory[c])].map(name => {
+        const s = name === "overall" ? overall : byCategory[name as QueryCategory]!;
+        return `    ${name.padEnd(14)} gold in pool ${f(s.pool?.goldInPool ?? 0)}  recall@30 ${f(s.pool?.recall30 ?? 0)}  headroom ${f((s.pool?.recall30 ?? 0) - s.metrics.recall10)}${name === "multi-hop" ? "  (not reranker headroom: the answer arrives by graph expansion, and recall counts the root too)" : ""}`;
+      }),
+    ] : []),
     ...(gapKeys.length ? [
       "  known gaps:",
       ...gapKeys.map(k => row(k, knownGaps.byGap[k])),
@@ -295,6 +305,28 @@ async function runPrepare(cmd: CliCommand & { kind: "prepare" }): Promise<number
   return 0;
 }
 
+/**
+ * Report only: reruns both variants on the corpus as if the matching needles had never been written and prints each
+ * category's delta there, next to the full-corpus gate above. It answers "how much of this gain is the presence of those
+ * notes" (a family of long notes that crowds a dense top ten, for instance). No rule reads it.
+ */
+async function runWithoutNeedles(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpec): Promise<{ text: string; json: unknown }> {
+  if (cmd.variants.some(name => name.endsWith(".json"))) throw new UsageError("--exclude-needles reruns the variants on a reduced corpus, so it cannot take a saved report");
+  const reduced = excludeNeedles(spec, cmd.excludeNeedles);
+  const base = await runNamed(cmd, reduced.spec, cmd.variants[0]);
+  const cand = await runNamed(cmd, reduced.spec, cmd.variants[1]);
+  const gate = evaluateGate(base, cand, { allowUnmeasuredRowsRead: true });
+  const rows = ["overall", ...QUERY_CATEGORIES].flatMap(scope => (["recall10", "mrr10"] as const).flatMap(metric => {
+    const d = gate.deltas.find(x => x.scope === scope && x.metric === metric);
+    return d ? [`    ${scope.padEnd(14)} ${metric.padEnd(9)} ${f(d.base)} -> ${f(d.candidate)}  ${d.ci.mean >= 0 ? "+" : ""}${d.ci.mean.toFixed(4)}  [${d.ci.lo.toFixed(4)}, ${d.ci.hi.toFixed(4)}]`] : [];
+  }));
+  const text = [
+    `WITHOUT ${cmd.excludeNeedles.join(", ")} (report only, no rule reads it): ${reduced.removedEntries} entries and ${reduced.removedQueries} queries removed; deltas (candidate - baseline, 95% bootstrap CI):`,
+    ...rows,
+  ].join("\n");
+  return { text, json: { patterns: cmd.excludeNeedles, removedEntries: reduced.removedEntries, removedQueries: reduced.removedQueries, deltas: gate.deltas } };
+}
+
 async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpec): Promise<number> {
   const baseline = await runNamed(cmd, spec, cmd.variants[0]);
   const candidate = await runNamed(cmd, spec, cmd.variants[1]);
@@ -307,10 +339,12 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   const targetGaps = cmd.targetGaps.length ? cmd.targetGaps : [...(declared?.targetGaps ?? [])];
   const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
   console.log(`${describeVerdict(gate)}\n${formatGate(gate)}`);
+  const without = cmd.excludeNeedles.length ? await runWithoutNeedles(cmd, spec) : undefined;
+  if (without) console.log(`\n${without.text}`);
   // Per-query view of what the means can hide; printed after the verdict and never part of it.
   const losers = formatLosers(findLosers(baseline, candidate));
   if (losers) console.log(`\n${losers}`);
-  if (cmd.json) writeJson(cmd.json, { baseline, candidate, gate });
+  if (cmd.json) writeJson(cmd.json, { baseline, candidate, gate, ...(without && { withoutNeedles: without.json }) });
   // Hash vectors carry no semantics, so a smoke comparison must never read as a ship signal.
   if (gate.verdict === "PASS" && [baseline, candidate].some(r => r.embeddingModel === HASH_MODEL)) {
     console.log("NOTE: hash-embedding comparison is a smoke test and cannot PASS; reporting INCONCLUSIVE.");

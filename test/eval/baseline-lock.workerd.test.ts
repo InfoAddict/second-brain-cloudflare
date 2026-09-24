@@ -32,6 +32,10 @@ describe.skipIf(!process.env.EVAL_WORKERD)("baseline lock on workerd (rankings, 
     const corpus = await loadCorpus({ spec, backend: "workerd", replay: makeReplayAi({ store: new ReplayStore(replayPaths(MODEL, "core-1k").read), mode: "replay" }), embeddingModel: MODEL });
     try {
       const fresh = await runVariant({ corpus, variant: getVariant("baseline"), queries: spec.queries, isolate: "warm", embeddingModel: MODEL });
+      // rows_read is measured for every query (recall's df probe is a first() that the observer runs as all()), so the cost rule can reach a verdict
+      expect(fresh.results).toHaveLength(spec.queries.length);
+      expect(fresh.results.filter(r => r.cost.d1RowsRead === null).map(r => r.queryId), "queries with no rows_read").toEqual([]);
+      expect(fresh.results.every(r => (r.cost.d1RowsRead as number) > 0)).toBe(true);
       const diff = compareToLock(lock, fresh);
       const how = "If intended, re-lock on workerd: npm run eval:recall -- lock --d1 workerd (add --accept-data-change \"<reason>\" if golden data changed).";
       expect(diff.fingerprintMismatch, how).toBe(false);
@@ -44,5 +48,5 @@ describe.skipIf(!process.env.EVAL_WORKERD)("baseline lock on workerd (rankings, 
     } finally {
       await corpus.close();
     }
-  }, 1_200_000);
+  }, 3_000_000); // 1,683 queries on a real local D1: about 27 minutes when the machine is shared
 });

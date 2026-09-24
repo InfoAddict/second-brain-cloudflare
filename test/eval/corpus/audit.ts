@@ -36,6 +36,8 @@ export type CorpusIntent = "tie" | "discriminate";
  */
 const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "known-gap", "over-budget", "correlated", "subset"]);
 const GAP_REF = /^gap:T-\d+$/;
+/** A subset tag names a second construction inside a category (e.g. subset:coherent-padding); the gate reports it separately. */
+const SUBSET_TAG = /^subset:[a-z][a-z-]*$/;
 const KEYWORD_SOLVED: ReadonlySet<string> = new Set(["identifier", "rare-word", "common-word", "short-word", "cjk"]);
 export type KeywordRoute = "fts" | "fts-bounded" | "like-match-budget" | "like-ineligible-token";
 /** The board reference a query must carry when its keyword arm loses the gold on this LIKE route. */
@@ -155,7 +157,7 @@ export function auditQueries(spec: {
     const tokens = tokenizeQuery(query.text);
     const shared = tokens.filter(token => content.includes(token));
     const cross = query.tags?.includes("cross-lingual") ?? false;
-    for (const tag of query.tags ?? []) if (!KNOWN_TAGS.has(tag) && !GAP_REF.test(tag)) add(query.id, "unknown-tag", tag);
+    for (const tag of query.tags ?? []) if (!KNOWN_TAGS.has(tag) && !GAP_REF.test(tag) && !SUBSET_TAG.test(tag)) add(query.id, "unknown-tag", tag);
     // A known gap must name its board item; the tag waives no audit rule by itself.
     const gapRefs = (query.tags ?? []).filter(tag => GAP_REF.test(tag));
     const knownGap = query.tags?.includes("known-gap") ?? false;
@@ -279,6 +281,14 @@ export function auditQueries(spec: {
         if (!query.answerSpan || primary.content.indexOf(query.answerSpan) < CHUNK_MAX_CHARS) add(query.id, "long-context-answer-in-first-chunk", query.answerSpan ?? "no answerSpan");
         break;
       }
+    }
+
+    // A lexical key names one memory. When a second readable row carries it, the gold is not the unique best answer:
+    // the query scores a hard zero for returning the other note, or MRR splits arbitrarily between the two. Rows the
+    // viewer cannot read (tenancy decoys) are the only allowed repeats.
+    if ((query.category === "identifier" || query.category === "rare-word") && keyToken) {
+      const holders = visible.filter(row => containsBounded(row.content, keyToken!));
+      if (holders.length !== 1) add(query.id, "key-not-unique", `${keyToken} occurs in ${holders.length} readable rows${holders.length > 1 ? `, e.g. ${holders.map(row => row.entry.id).slice(0, 3).join(", ")}` : ""}`);
     }
 
     // If the keyword arm routes to LIKE and loses the gold, the query is a measured production gap. The tie scale

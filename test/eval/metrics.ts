@@ -50,6 +50,8 @@ const dist = (values: readonly number[]): Dist => ({ mean: mean(values), p50: pe
 export interface Summary {
   n: number;
   metrics: QueryMetrics;
+  /** Candidate-pool diagnostic means (not gated); absent when no result carries one. */
+  pool?: { goldInPool: number; recall30: number };
   d1Statements: Dist;
   d1RowsRead: Dist | null;
   aiCalls: Dist;
@@ -63,8 +65,10 @@ export interface Summary {
 
 function summarizeGroup(results: readonly QueryResult[]): Summary {
   const rows = results.map(r => r.cost.d1RowsRead);
+  const pooled = results.filter(r => r.pool);
   return {
     n: results.length,
+    ...(pooled.length && { pool: { goldInPool: mean(pooled.map(r => (r.pool!.goldInPool ? 1 : 0))), recall30: mean(pooled.map(r => r.pool!.recall30)) } }),
     metrics: {
       recall5: mean(results.map(r => r.metrics.recall5)),
       recall10: mean(results.map(r => r.metrics.recall10)),

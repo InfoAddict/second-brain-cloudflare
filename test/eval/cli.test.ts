@@ -25,6 +25,12 @@ const report = (results: QueryResult[], o: Partial<VariantReport> = {}): Variant
 });
 
 describe("parseCli", () => {
+  it("parses --exclude-needles as id globs for a comparison and refuses anything else", () => {
+    expect(parseCli(["--compare", "baseline,rerank", "--exclude-needles", "n-lcoh-*, h-long-*"])).toMatchObject({ kind: "compare", excludeNeedles: ["n-lcoh-*", "h-long-*"] });
+    expect(parseCli(["--compare", "baseline,rerank"])).toMatchObject({ excludeNeedles: [] });
+    expect(() => parseCli(["--compare", "baseline,rerank", "--exclude-needles", "n-lcoh;rm"])).toThrow(/id globs/);
+  });
+
   it("parses the contract forms", () => {
     expect(parseCli(["--variant", "rerank", "--corpus", "scale-20k", "--json", "/tmp/x.json"]))
       .toMatchObject({ kind: "run", variant: "rerank", corpus: "scale-20k", json: "/tmp/x.json", d1: "sqlite", isolate: "warm" });

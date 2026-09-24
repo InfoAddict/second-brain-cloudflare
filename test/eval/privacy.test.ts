@@ -37,6 +37,17 @@ function sandbox(files: Record<string, string | Buffer> = {}) {
 describe("guard 1: ignore rules", () => {
   it("hold in this repo", () => expect(ignoreRuleViolations()).toEqual([]));
 
+  it("hold when .eval-cache/models is a symlink to a shared cache, and still fail closed when the link is not ignored", () => {
+    const { root } = sandbox();
+    const shared = mkdtempSync(join(tmpdir(), "privacy-shared-"));
+    mkdirSync(join(root, ".eval-cache"), { recursive: true });
+    symlinkSync(shared, join(root, ".eval-cache/models"));
+    expect(ignoreRuleViolations(root)).toEqual([]);
+    expect(() => assertIgnored(join(root, ".eval-cache/models/x/onnx/model.onnx"), root)).not.toThrow();
+    writeFileSync(join(root, ".gitignore"), "*.sql\n");
+    expect(ignoreRuleViolations(root)).toContain(".eval-cache/models/x/onnx/model.onnx");
+  });
+
   it("fire when a rule is dropped", () => {
     const { root } = sandbox();
     writeFileSync(join(root, ".gitignore"), "*.sql\n");

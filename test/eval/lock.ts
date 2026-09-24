@@ -116,10 +116,14 @@ export async function applyLock(o: {
   if (trail.length) throw new LockRefused(`manifest history is inconsistent: ${trail.join("; ")}`);
   const onDisk = Object.keys(hashDataDir(o.dataDir));
   const listed = Object.keys(manifest.files).sort();
-  if (JSON.stringify(onDisk) !== JSON.stringify(listed)) {
-    throw new LockRefused(`manifest.files must list exactly the data files on disk (on disk: ${onDisk.join(", ")}; listed: ${listed.join(", ")})`);
+  // A listed file that vanished is always refused. A data file on disk that the manifest does not list yet is a new
+  // file: it needs the same accepted reason as an edit, and enters the history with an empty old hash.
+  const missing = listed.filter(name => !onDisk.includes(name));
+  const added = onDisk.filter(name => !listed.includes(name));
+  if (missing.length || (added.length && !o.acceptReason?.trim())) {
+    throw new LockRefused(`manifest.files must list exactly the data files on disk (on disk: ${onDisk.join(", ")}; listed: ${listed.join(", ")})${added.length ? `; a new data file (${added.join(", ")}) needs --accept-data-change "<reason>"` : ""}`);
   }
-  const now = currentHashes(o.dataDir, manifest);
+  const now = { ...currentHashes(o.dataDir, manifest), ...Object.fromEntries(added.map(name => [name, sha(resolve(o.dataDir, name))])) };
   const changed = Object.keys(now).filter(name => now[name] !== manifest.files[name]);
   const reason = o.acceptReason?.trim();
   if (changed.length && !reason) {
@@ -139,7 +143,7 @@ export async function applyLock(o: {
     const entry: HistoryEntry = {
       date: (o.now?.() ?? new Date()).toISOString(),
       reason: reason!,
-      files: Object.fromEntries(changed.map(name => [name, { old: manifest.files[name], new: now[name] }])),
+      files: Object.fromEntries(changed.map(name => [name, { old: manifest.files[name] ?? "", new: now[name] }])),
       baseline,
     };
     manifest.history = [...(manifest.history ?? []), entry];

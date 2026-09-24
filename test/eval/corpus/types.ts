@@ -46,6 +46,8 @@ export interface NeedleRow {
   source?: string;
   keys?: string[];
   purpose?: QueryCategory;
+  /** Authored classifier score 1-5; absent means the loader default (3). */
+  importance?: number;
 }
 
 export interface CorpusSpec {
@@ -69,5 +71,6 @@ export function needleToEntry(row: NeedleRow): CorpusEntry {
     createdAt: EVAL_NOW - row.ageDays * DAY_MS,
     workspaceId: WORKSPACES[row.workspace],
     actorId: ACTORS[actor],
+    ...(row.importance === undefined ? {} : { importanceScore: row.importance }),
   };
 }
