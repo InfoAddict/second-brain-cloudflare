@@ -3,7 +3,7 @@ import { RERANK_MAX_CANDIDATES, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../
 import type { Env } from "../../src/env";
 import {
   blendRerankerScores, percentilesFromScores, probeReranker, rerankReadiness, resetRerankReadyMemo, scoreRerankCandidates,
-  selectRerankIds, shouldRerank, validateRerankerResponse,
+  rerankDirectCap, selectRerankIds, shouldRerank, validateRerankerResponse,
 } from "../../src/recall/model-reranker";
 import type { VectorizeMatch } from "../../src/recall/math";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
@@ -116,6 +116,18 @@ describe("percentilesFromScores and blendRerankerScores", () => {
   it("uses the parent id, not the chunk id, to look up the percentile", () => {
     const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 0.1)], new Map([["p", 0]]), 0.25);
     expect(out.find(x => x.id === "p-0")!.score).toBeCloseTo(0.75);
+  });
+});
+
+describe("rerankDirectCap", () => {
+  it("is the one head boundary: the seats before the spare five, for any batch size", () => {
+    expect(rerankDirectCap()).toBe(25);
+    expect(rerankDirectCap(20)).toBe(15);
+    // selectRerankIds cuts at the same boundary: with no evidence it keeps exactly that many direct parents
+    for (const max of [30, 20, 12]) {
+      const direct = Array.from({ length: 60 }, (_, i) => m(`d${i}`, 1 - i / 100));
+      expect(selectRerankIds(direct, [], max)).toHaveLength(rerankDirectCap(max));
+    }
   });
 });
 

@@ -4,7 +4,6 @@ import {
   FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
   QUERY_SATURATION_FRACTION,
-  RERANK_MAX_DIRECT,
   VECTORIZE_GET_BY_IDS_BATCH,
   RECALL_BLOCK,
   RECALL_DEEP_POOL_SIZE,
@@ -31,7 +30,7 @@ import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLi
 import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
-import { blendRerankerScores, rerankStep } from "./model-reranker";
+import { blendRerankerScores, rerankDirectCap, rerankStep } from "./model-reranker";
 import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
 import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
@@ -536,7 +535,7 @@ export async function recallEntries(
     // ("budget") must not count as evidence: apply the same rule (df over the corpus <= QUERY_SATURATION_FRACTION) with
     // the keyword rows holding the term as its df and one entry_counts read for the corpus size. Unknown = not evidence.
     if (tokens.length === 1 && !distilled.df) {
-      const outsideHead = holding.some(r => (fusedOrder.get(r.id) ?? Infinity) >= RERANK_MAX_DIRECT);
+      const outsideHead = holding.some(r => (fusedOrder.get(r.id) ?? Infinity) >= rerankDirectCap(internal.variant?.rerankTuning?.maxCandidates));
       if (!outsideHead) return [];
       const total = await scopedEntryTotal(env, scope);
       if (total === null || total <= 0 || holding.length >= cfg.KEYWORD_CANDIDATE_LIMIT || holding.length / total > QUERY_SATURATION_FRACTION) return [];

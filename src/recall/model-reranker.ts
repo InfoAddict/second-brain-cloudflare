@@ -140,9 +140,12 @@ export interface RerankCandidate { parentId: string; text: string }
  * the pool would stay unscored and be ranked below the whole scored block.
  * Ids only: the passage text comes from a scoped D1 read, never from Vectorize or keyword metadata.
  */
+/** How many fused candidates are scored for a batch of `max`: the head the keyword-evidence gate and the selection both cut at. */
+export const rerankDirectCap = (max = RERANK_MAX_CANDIDATES): number => max - (RERANK_MAX_CANDIDATES - RERANK_MAX_DIRECT);
+
 export function selectRerankIds(direct: readonly VectorizeMatch[], root: readonly VectorizeMatch[], max = RERANK_MAX_CANDIDATES, keywordEvidence: readonly string[] = []): string[] {
   const spare = RERANK_MAX_CANDIDATES - RERANK_MAX_DIRECT;
-  const directCap = max - spare;
+  const directCap = rerankDirectCap(max);
   const directParents = [...new Set(direct.map(parentOf))];
   const head = new Set(directParents.slice(0, directCap));
   const extras = keywordEvidence.filter(id => !head.has(id)).slice(0, spare);
