@@ -284,24 +284,40 @@ authority-rank regression where the frozen gate says zero) runs only under
 weights). Real Workers AI latency and billing are unmeasured: no account is used.
 ## Contextual chunk embeddings and the embedding scheme
 
+**Off by default** (`CONTEXTUAL_EMBEDDINGS`). The gate passes on `core-1k` for both
+models but not yet at scale, so it ships off until the expanded golden set clears
+it; off, nothing below reads, writes or runs (no migration, ledger, index-size
+read or second duplicate comparison), and the baseline lock is the plain scheme.
+
 A memory over 1,600 characters is split into chunks and every chunk is its own
 vector. A fact buried in the middle of a long note is a small part of one large
 chunk, so its vector says little about it. `capture/contextual.ts` therefore
-cuts eligible memories (more than one effective chunk, at most 64,000
-characters, not a mirrored source) into **focus chunks** of about 500 characters
+cuts eligible memories (more than one effective chunk, at most 24,000
+characters and 16,000 estimated tokens, not a mirrored source) into **focus chunks** of about 500 characters
 with 50 of overlap, and sends each to the embedder behind a transient prefix
 built from the entry itself: `[Memory: <first line>. Project <p>. Topics <t>.
 Source <s>. Saved <UTC date>. Part i of n.]`, capped at 180 characters. Only the
 embedding input carries the prefix: `entries.content`, FTS, and Vectorize
 `metadata.content` stay raw, so snippets, evidence scoring and lexical recall
-never see it. Single-chunk, mirrored and over-64,000-character entries embed
+never see it. Single-chunk, mirrored and over-limit entries embed
 exactly as before, and a failure building context falls back to plain chunks
-without failing the save. Under bge-small, a conservative token estimate keeps
-prefix plus chunk within 480 of the 512-token window by cutting smaller, never
-by truncating. The builder is linear in the note (frame computed once, one-pass
-estimator): about 0.5 ms for 8 to 16 KB of prose and 1.4 ms for 64 KB, best of
-15 runs on a loaded machine, against 10 ms of CPU per invocation on the free
-plan; `test/unit/contextual-perf.test.ts` pins that.
+without failing the save. Under bge-small, no chunk may exceed the 512-token
+window or the embedder silently drops its tail. `estimateBgeSmallTokens` is an
+upper bound that holds for any text (every token consumes at least a character,
+so a run costs its length, except a run that is a whole word of the tokenizer's
+own 21,745-word vocabulary, which is exactly one token), and chunks are cut and,
+if need be, split until prefix plus chunk is at most 480 by that bound. That is
+checked on what ships: 584 chunks from 19 adversarial shapes (random short
+words, code, ids, base64, CJK, emoji, mixed scripts, ...) all have real
+tokenizer counts in a committed fixture, the largest 453, and the estimate never
+undercounts one (`test/unit/contextual-token-guard.test.ts`). CPU: the builder
+is linear (frame computed once, allocation-free estimator, one estimate per
+chunk), and eligibility is capped on estimated tokens as well as characters,
+because a token-dense note is many more chunks per character. `storeEntry`'s own
+JavaScript is at most 1.5 ms for the worst eligible shape (24 KB of common
+words), 0.5 ms for token-dense text at its limit and 1.0 ms for 24 KB of prose,
+on a quiet machine, against 10 ms per invocation on the free plan; the perf
+test asserts 3.3 ms, a third of the limit.
 
 **What it costs, and how it is bounded.** Focus chunks turn a 2,700-character
 note from 3 vectors into 7, and the write costs one embedding call per chunk
@@ -335,8 +351,8 @@ queries against vectors from another space.
 **In-place migration** (`runSchemeBatch` in `migration/embedding.ts`). Existing
 brains keep plain vectors until the migration rewrites them, an entry at a time
 in the live index, resuming from a ledger (`migration:embedding-scheme`: model,
-target scheme, every scheme a vector may still be in, keyset cursor
-`(created_at, id)`).
+target scheme, every scheme a vector may still be in, keyset cursor,
+the entry's rowid).
 
 - *Safety.* Ids are deterministic (`<id>` / `<id>-chunk-<i>`), so a crash before
   the cursor moves just repeats the entry; chunk ids the new set no longer uses
@@ -346,8 +362,14 @@ target scheme, every scheme a vector may still be in, keyset cursor
   Recall needs no change while it runs: contextual text does not move the vector
   space, so plain and contextual vectors rank against one query vector, and
   chunks of one entry collapse by `parentId`.
-- *Pace.* A change in contextual text only concerns long, non-mirrored entries,
+- *Pace* (with the switch on). A change in contextual text only concerns long, non-mirrored entries,
   so the SQL page selects only those and the cursor jumps over everything else.
+  The page is ordered by rowid, the table's own key: an ORDER BY the created_at index
+  cannot serve (its tiebreak is the id) makes SQLite sort every remaining row, and
+  D1 bills rows read. On workerd's D1 with 20,000 rows and a page of 40 (1 in 29
+  long) a page reads 1,200 rows from the start, 1,176 from the middle and 1,034
+  for the last, against 10,348 for the sorted form; `EXPLAIN QUERY PLAN` shows a
+  range scan with no temp B-tree (`test/eval/scheme-page.workerd.test.ts`).
   The hourly cron (`30 * * * *`, the integration sync's) runs a budget of 80
   chunks and the nightly job 12 (`SCHEME_RUN_CHUNK_BUDGET`,
   `SCHEME_NIGHTLY_CHUNK_BUDGET`), and a UTC day may spend at most 1,500 estimated
@@ -393,10 +415,15 @@ pooling ships.
 check, the graph pass and edge inference ask Vectorize for a window of 20 hits
 and keep the five nearest distinct notes (`vectorize/parents.ts`). The duplicate
 check compares a note that will be stored contextually as its first chunk,
-embedded exactly as capture stores it (a start, middle and end sample scored
-only 0.86 at best against stored focus chunks; the chunk scores 0.97), and
-also as the sample, which is what finds notes stored before contextual
-embeddings; a long capture costs one more embedding call.
+embedded exactly as capture stores it, prefix (source and tags) included (a
+start, middle and end sample scored 0.86 at the median against stored focus
+chunks and 0.87 at worst even for the chunk when the prefix lacked source and
+tags; with them it scores 0.998 or better at 0, 3 and 6 tags, against the 0.95
+block threshold), and also as the sample, which is what finds notes stored
+before contextual embeddings. A long capture therefore costs one more embedding
+call, one more Vectorize query and, at most once per isolate per five minutes,
+a Vectorize `describe`; short notes and everything with the switch off pay
+nothing. `deleteByIds` is batched at the same 1,000 ceiling as upserts.
 
 The optional generated tier (`CONTEXTUAL_EMBEDDING_LLM`, off; model
 `CONTEXTUAL_EMBEDDING_LLM_MODEL`, Granite Micro by default) replaces the

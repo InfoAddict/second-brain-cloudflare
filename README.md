@@ -67,8 +67,6 @@ Second Brain runs as a Cloudflare Worker backed by D1, Vectorize, Workers AI, an
 2. **Organize:** Second Brain classifies it, checks for duplicates and contradictions, creates relationships, and indexes it for semantic search.
 3. **Recall:** Ask in natural language. Second Brain retrieves relevant memories, follows useful connections, and returns source-backed context to the tool you are using.
 
-Answers buried deep inside long notes are found: long memories are indexed in small, labeled pieces, so a detail near the end of a long log no longer hides behind the note's opening.
-
 If Vectorize is unavailable, captures and keyword recall continue working. Your memories remain usable while semantic indexing is restored. The shipped embedding models read English best; the desktop app's Settings can switch a brain to a multilingual reading.
 
 Search now finds the hard things: exact names, ticket numbers, versions, and phrases in any language, even when they sit in old memories, and finding them is dramatically faster and cheaper, staying that way as the brain grows, which keeps the free plan comfortable. It does this with a full-text index that ranks matches by relevance instead of scanning every memory. The upgrade is automatic: new installs use the index immediately, existing brains build it over nightly runs, and no client needs updating.
