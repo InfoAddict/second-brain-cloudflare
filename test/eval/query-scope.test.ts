@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { EVAL_NOW } from "./corpus/types";
+import { freezeClock } from "./runner";
 import { QueryScopes } from "./query-scope";
 
 const tick = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -53,5 +55,51 @@ describe("QueryScopes", () => {
     const forever: Promise<unknown>[] = []; // held, so it is never collected
     await scopes.run("q1", async () => { forever.push(new Promise(() => {})); });
     await expect(scopes.settle("q1")).rejects.toThrow(/did not settle within 60ms/);
+  });
+
+  it("times out under the runner's frozen Date.now", async () => {
+    const scopes = new QueryScopes(60);
+    const forever: Promise<unknown>[] = [];
+    await scopes.run("q1", async () => { forever.push(new Promise(() => {})); });
+    const restore = freezeClock(EVAL_NOW); // runVariant freezes Date.now for the whole run
+    try {
+      const started = performance.now();
+      await expect(scopes.settle("q1")).rejects.toThrow(/did not settle within 60ms/);
+      expect(performance.now() - started).toBeLessThan(2000);
+    } finally { restore(); }
+  });
+
+  it("waits for a timer that has not fired, and for the promise it creates when it does", async () => {
+    const scopes = new QueryScopes();
+    let late = false;
+    await scopes.run("q1", async () => { setTimeout(() => { void Promise.resolve().then(() => tick(10)).then(() => { late = true; }); }, 30); });
+    await scopes.settle("q1");
+    expect(late).toBe(true);
+  });
+
+  it("waits through setImmediate and process.nextTick hops into a later timer", async () => {
+    const scopes = new QueryScopes();
+    const hit: string[] = [];
+    await scopes.run("q1", async () => {
+      setImmediate(() => { setTimeout(() => hit.push("immediate"), 20); });
+      process.nextTick(() => { setTimeout(() => hit.push("tick"), 20); });
+    });
+    await scopes.settle("q1");
+    expect(hit.sort()).toEqual(["immediate", "tick"]);
+  });
+
+  it("does not wait for a timer that was cleared", async () => {
+    const scopes = new QueryScopes(200);
+    await scopes.run("q1", async () => { clearTimeout(setTimeout(() => {}, 5_000)); });
+    const started = performance.now();
+    await scopes.settle("q1");
+    expect(performance.now() - started).toBeLessThan(150);
+  });
+
+  it("gives up on a repeating timer the scope never cleared, rather than waiting forever", async () => {
+    const scopes = new QueryScopes(60);
+    let handle: NodeJS.Timeout | undefined;
+    await scopes.run("q1", async () => { handle = setInterval(() => {}, 10); });
+    try { await expect(scopes.settle("q1")).rejects.toThrow(/did not settle/); } finally { clearInterval(handle); }
   });
 });

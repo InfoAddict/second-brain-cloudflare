@@ -494,6 +494,15 @@ describe("tag stand-in arm", () => {
     expect(replay.drainErrors("q1")).toEqual([]);
   });
 
+  it("settle waits for a stand-in call that a timer starts after the scope's own work is done", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    await replay.scope("q1", async () => {
+      setTimeout(() => { void replay.ai.run(LLM as never, tagPrompt("finance", "q") as never).catch(() => undefined); }, 30);
+    });
+    await replay.settle("q1");
+    expect(replay.drainErrors("q1")).toEqual([expect.stringMatching(/replay cache miss/)]);
+  });
+
   it("records nothing on success, under the empty arm, or for a plain embedding miss", async () => {
     const root = tmp();
     const { s, live } = filled(root);

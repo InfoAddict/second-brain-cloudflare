@@ -4,10 +4,21 @@ import { AsyncLocalStorage, createHook } from "node:async_hooks";
  * Per-query attribution for async work the code under test starts and does not await. recall runs tag inference
  * beside the query embedding (search.ts) and distill.ts swallows its failures, so when the embedding rejects first
  * the tag call can still be running, or not yet started, when the recall promise settles. `run` tags everything a
- * query starts with its id (AsyncLocalStorage); `settle` waits until every promise created under that id has resolved.
+ * query starts with its id (AsyncLocalStorage); `settle` waits until every tracked resource created under that id
+ * has finished: promises (until resolved), and timers, immediates and nextTick callbacks (until they have run or
+ * been cleared), since any of those can create a promise later.
+ *
+ * Limits: work started before the hook was enabled is not seen (enable happens in `run`, before the scope's code
+ * starts, so this only matters for resources created outside a scope); callbacks from native resources (sockets,
+ * fs, child processes) are not tracked, so I/O the scope started and did not await may still be pending; and a
+ * repeating timer the scope never clears keeps `settle` waiting until its timeout, which then throws.
+ * The timeout runs on performance.now(), not Date.now, because runVariant freezes Date.now for the whole run.
  */
 
 interface Store { id: string; open: number }
+
+/** Resource types that can hand control back to the scope's code later; released on resolve (promises) or destroy (the rest). */
+const TRACKED = new Set(["PROMISE", "Timeout", "Immediate", "TickObject"]);
 
 export class QueryScopes {
   private readonly als = new AsyncLocalStorage<Store>();
@@ -15,12 +26,12 @@ export class QueryScopes {
   private readonly live = new Map<string, Set<Store>>();
   private readonly hook = createHook({
     init: (asyncId, type) => {
-      if (type !== "PROMISE") return;
+      if (!TRACKED.has(type)) return;
       const store = this.als.getStore();
       if (store) { store.open++; this.owner.set(asyncId, store); }
     },
     promiseResolve: asyncId => this.release(asyncId),
-    destroy: asyncId => this.release(asyncId), // collected without ever resolving
+    destroy: asyncId => this.release(asyncId), // timers and ticks after they ran or were cleared; a promise collected unresolved
   });
 
   constructor(private readonly timeoutMs = 10_000) {}
@@ -41,10 +52,10 @@ export class QueryScopes {
   async settle(id: string): Promise<void> {
     const stores = this.live.get(id);
     if (!stores) return;
-    const deadline = Date.now() + this.timeoutMs;
+    const deadline = performance.now() + this.timeoutMs; // not Date.now: the runner freezes it
     try {
       while ([...stores].some(s => s.open > 0)) {
-        if (Date.now() > deadline) throw new Error(`async work started for query ${id} did not settle within ${this.timeoutMs}ms`);
+        if (performance.now() > deadline) throw new Error(`async work started for query ${id} did not settle within ${this.timeoutMs}ms`);
         await new Promise<void>(r => setImmediate(r));
       }
     } finally {
