@@ -5,11 +5,13 @@ import {
   // applies no minimum-score cutoff, so surfacing this would imply a recall
   // control that does not exist.
   CANDIDATE_SCORE_THRESHOLD,
+  WRITE_PATH_TOPK,
   CONTRADICTION_MAX_TOKENS,
   SMART_MERGE_MAX_TOKENS,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { embed, readStreamText } from "../lib/ai";
+import { nearestParents } from "../vectorize/parents";
 import { queryVectorizeScoped, singleWorkspaceFilter } from "../vectorize/scope";
 
 type DuplicateResult =
@@ -75,12 +77,15 @@ export async function checkDuplicateAndContradiction(
           )
         : undefined;
       const { matches: filtered } = await queryVectorizeScoped<VectorizeMatch>(
-        env.VECTORIZE, values, { topK: 5, filter: singleWorkspaceFilter(workspaceId).filter, onDegrade },
+        env.VECTORIZE, values, { topK: WRITE_PATH_TOPK, filter: singleWorkspaceFilter(workspaceId).filter, onDegrade },
       );
       matches = filtered;
     } else {
-      ({ matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" }));
+      ({ matches } = await env.VECTORIZE.query(values, { topK: WRITE_PATH_TOPK, returnMetadata: "all" }));
     }
+    // One long note is several vectors and could fill five slots alone: ask for a window, keep the best hit of each of
+    // the five nearest distinct notes.
+    matches = nearestParents(matches);
   } catch (e) {
     console.error("Vectorize query failed (capturing without duplicate/contradiction checks):", e);
   }
