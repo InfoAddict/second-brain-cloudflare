@@ -207,6 +207,35 @@ describe("production-shaped probe request", () => {
   });
 });
 
+describe("probe latency budget", () => {
+  const good = (_: string, input: unknown) => Promise.resolve({ response: (input as { contexts: { text: string }[] }).contexts.map((c, id) => ({ id, score: /reset a forgotten password/.test(c.text) ? 4 : -6 })) });
+  const slowBig = (ms: number) => async (m: string, input: unknown) => {
+    if ((input as { contexts: unknown[] }).contexts.length === 30) await new Promise(r => setTimeout(r, ms));
+    return good(m, input);
+  };
+
+  it("latches not-ready when a full batch takes longer than a recall may wait, even though the probe would wait for it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const kv = makeMemoryKV();
+    const pending = probeReranker(envWith(aiReturning(slowBig(2000)), kv));
+    await vi.advanceTimersByTimeAsync(3000);
+    const res = await pending;
+    expect(res.ok).toBe(false);
+    expect((res as { reason: string }).reason).toMatch(/over the 1500 ms recall budget/);
+    expect(await kv.get(RERANK_READY_KV_KEY)).toBe("0");
+  });
+
+  it("passes a full batch that answers inside the recall budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const kv = makeMemoryKV();
+    const pending = probeReranker(envWith(aiReturning(slowBig(800)), kv));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await pending).ok).toBe(true);
+    expect(await kv.get(RERANK_READY_KV_KEY)).toBe("1");
+  });
+});
+
 describe("probe herd and KV write failure", () => {
   const good = (_: string, input: unknown) => Promise.resolve({ response: (input as { contexts: { text: string }[] }).contexts.map((c, id) => ({ id, score: /reset a forgotten password/.test(c.text) ? 4 : -6 })) });
 

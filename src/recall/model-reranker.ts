@@ -223,7 +223,12 @@ async function runProbe(env: Env): Promise<ProbeResult> {
     if (result.ok) {
       // Any rejection, truncation or wrong length throws here and latches the model off.
       const big = fullBatch();
+      const started = performance.now();
       await scoreRerankCandidates(big.query, big.candidates, env, RERANK_PROBE_TIMEOUT_MS);
+      // The probe may wait longer than a recall, but a service that cannot answer a full batch inside the recall budget
+      // would pass here and then trip the breaker on real traffic, every time it is re-probed.
+      const took = performance.now() - started;
+      if (took > RERANK_TIMEOUT_MS) result = { ok: false, reason: `a full batch took ${Math.round(took)} ms, over the ${RERANK_TIMEOUT_MS} ms recall budget` };
     }
   } catch (e) {
     result = { ok: false, reason: e instanceof Error ? e.message : "probe failed" };
