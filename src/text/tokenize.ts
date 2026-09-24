@@ -5,6 +5,11 @@ import { CJK_STOPWORDS, KEYWORD_MIN_TOKEN_LEN, KEYWORD_STOPWORDS, QUERY_FRAME_WO
 const ASCII_ONLY = /^[\x00-\x7F]*$/;
 const HAN = /\p{Script=Han}/u;
 const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+// A run of text that does not separate words with spaces (ideographs, kana,
+// hangul, and their punctuation such as 。、). Splitting a chunk on these runs
+// hands an adjacent ASCII identifier ("SB-024" in "SB-024の決定") to the ASCII
+// pipeline instead of the word segmenter, which would cut it at the hyphen.
+const CJK_RUN = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}\p{scx=Bopomofo}\u3000-\u303F]+)/u;
 
 let segmenter: Intl.Segmenter | undefined;
 function wordsOf(text: string): string[] {
@@ -55,11 +60,19 @@ function tokenizeTerms(query: string, frame: boolean): string[] {
       if (t) tokens.push(t);
       continue;
     }
-    for (const word of wordsOf(folded)) {
-      const t = word.toLowerCase();
-      if (!HAS_LETTER_OR_DIGIT.test(t) || KEYWORD_STOPWORDS.has(t) || CJK_STOPWORDS.has(t)) continue;
-      if (t.length >= KEYWORD_MIN_TOKEN_LEN) tokens.push(t);
-      else if (HAN.test(t)) singleHan.push(t);
+    for (const run of folded.split(CJK_RUN)) {
+      if (!run) continue;
+      if (ASCII_ONLY.test(run)) {
+        const t = asciiToken(run);
+        if (t) tokens.push(t);
+        continue;
+      }
+      for (const word of wordsOf(run)) {
+        const t = word.toLowerCase();
+        if (!HAS_LETTER_OR_DIGIT.test(t) || KEYWORD_STOPWORDS.has(t) || CJK_STOPWORDS.has(t)) continue;
+        if (t.length >= KEYWORD_MIN_TOKEN_LEN) tokens.push(t);
+        else if (HAN.test(t)) singleHan.push(t);
+      }
     }
   }
   // A query that is nothing but a lone ideograph (夢) still has to reach the
