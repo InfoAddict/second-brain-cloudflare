@@ -259,3 +259,67 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id);
+
+-- Lexical recall index (FTS5, trigram). Plain table, not external-content: entries
+-- has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid and sync
+-- by rowid — an O(1) delete instead of a content-table scan. Must stay in step
+-- with src/db/init.ts.
+CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
+
+-- Indentation below must match src/db/init.ts's ENTRIES_FTS_*_TRIGGER_DDL
+-- constants EXACTLY: SQLite stores a CREATE statement's body verbatim in
+-- sqlite_master.sql (only "IF NOT EXISTS" is stripped), and the v2.2
+-- liveness check (src/recall/fts.ts) compares that stored text against
+-- those same constants byte-for-byte. A brain bootstrapped from this file
+-- must read as live, not just one bootstrapped by applySchema.
+CREATE TRIGGER IF NOT EXISTS entries_fts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END;
+
+-- The update trigger fires on every UPDATE; its WHEN guard covers exactly the
+-- columns FTS mirrors, so recall's recall_count bumps write nothing here.
+CREATE TRIGGER IF NOT EXISTS entries_fts_update
+    AFTER UPDATE ON entries
+    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END;
+
+CREATE TRIGGER IF NOT EXISTS entries_fts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+    END;
+
+-- Exact per-workspace entry counters (T-0065), replacing distillation's scoped
+-- COUNT(*)/cache. Same ownership as entries_fts above: table and its three
+-- triggers created together. Must stay in step with src/db/init.ts.
+-- A row reaching n = 0 is kept, not deleted: SUM(n) is correct either way.
+CREATE TABLE IF NOT EXISTS entry_counts (workspace_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
+
+CREATE TRIGGER IF NOT EXISTS entry_counts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS entry_counts_update
+    AFTER UPDATE OF workspace_id ON entries
+    WHEN OLD.workspace_id IS NOT NEW.workspace_id
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END;
+
+CREATE TRIGGER IF NOT EXISTS entry_counts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+    END;

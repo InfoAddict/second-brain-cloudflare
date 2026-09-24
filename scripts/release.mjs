@@ -203,7 +203,7 @@ function ensurePr(title, body) {
   let existing = "";
   try {
     existing = run(
-      `gh pr view ${branch} --json number,url,state -q '.number+" "+.url+" "+.state'`,
+      `gh pr view ${branch} --json number,url,state -q '(.number|tostring)+" "+.url+" "+.state'`,
       { always: true },
     );
   } catch {

@@ -27,6 +27,7 @@ import { INTEGRATION_PROVIDERS } from "../../src/integrations";
 import { INSIGHT_ACCRUAL_CRON, INSIGHT_TEAM_WEEKLY_CRON, INSIGHT_WEEKLY_CRON } from "../../src/insight/schedule";
 import { CONFIG_KEY } from "../../src/config";
 import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
+import { FTS_READY_KV_KEY } from "../../src/constants";
 
 // This is a self-imposed D1 cost budget, NOT the platform's subrequest
 // ceiling. Cloudflare's actual free-plan subrequest limits per invocation are:
@@ -44,7 +45,53 @@ import { ACCRUAL_CURSOR_KEY } from "../../src/insight/candidates";
 // (config:overrides), its own cursor KV read (when:cursor), and the one
 // prefilter SELECT. Still nowhere near the platform's real 1,000-subrequest
 // ceiling.
-const NIGHTLY_D1_STATEMENT_BUDGET = 53;
+// MOVED 53 -> 57: runFtsMaintenance runs after the when pass and adds four
+// statements on the measured night — the ready-flag KV GET, the cursor KV
+// GET, the rowid-keyset SELECT, and the ready KV PUT. The two-statement
+// delete-then-insert batch and the cursor KV PUT only fire on a night with
+// pre-FTS rows to index, which this double's rowid SELECT cannot produce
+// (it returns no rows), so the measured ledger shows 4, not the real-D1
+// worst case of 6 — the exact pins below are the tight guard for that.
+// MOVED 57 -> 58 (write-path isolation v2.2): runFtsBackfill now checks FTS
+// liveness (isFtsLive: one D1 SELECT against sqlite_master, verifying
+// entries_fts exists AND all three sync triggers exist with their exact
+// bodies) before touching entries_fts, so it can skip cleanly instead of
+// throwing into a table a hot-path repair left not-live. That check runs
+// unconditionally, so it adds one D1 statement to every ordinary night, not
+// just a not-live one.
+// MOVED 58 -> 61 (Task 5, nightly integrity self-heal): runFtsMaintenance now
+// checks liveness itself (one D1 SELECT against sqlite_master, the same
+// query isFtsLive already used inside runFtsBackfill) before deciding
+// whether to rebuild, then on a live index runs FTS5's own integrity-check
+// statement (one D1 statement), then reads the ready flag itself (one KV
+// GET) to decide whether to defer to the backfill or run the count/spot
+// parity checks. On a healthy night with the backfill still in progress —
+// what this suite measures — that is +3 D1/KV statements on top of the 5
+// already counted above (runFtsBackfill's own liveness check, ready GET,
+// cursor GET, rowid SELECT, and ready PUT all still run unchanged; the
+// liveness check and ready GET are paid twice, once by runFtsMaintenance and
+// once by runFtsBackfill, since Task 5 calls the latter as an ordinary
+// caller rather than threading its own answers through). A genuinely
+// unhealthy night costs more still (rebuild's DDL batch, or
+// checkFtsIntegrity's count and spot-check SELECTs) but is not the shape
+// this budget suite exercises.
+// MOVED 61 -> 61 (combined review of Tasks 4-6, FIXes 1, 2, and 4): the
+// duplicated reads go away and two guard batches land, and the measured
+// ordinary night moves 23 -> 22. FIX 4 threads runFtsMaintenance's known
+// live=true / ready=false into the backfill's internal step, so the
+// duplicated liveness query and ready GET disappear (-2 on every
+// backfilling night). FIX 1's ready-latch guard (liveness + both EXCEPT
+// parity probes in ONE env.DB.batch) adds +1 on every night that attempts
+// a latch — the empty page, the final partial batch — so the measured
+// ledger nets -1. FIX 2's rotating content check does not run on a
+// backfilling night at all: it runs only once ready is latched, where it
+// adds a content-cursor KV GET, one window-read batch (two SELECT
+// statements), and the cursor-advance KV PUT every ready night, plus one
+// more re-index batch only on a night that actually finds drifted rows —
+// see the ready-night pin below, which measures exactly that shape. The
+// honest worst case (a rebuild night, or a ready night with drift) stays
+// well inside this ceiling, so the constant itself does not move.
+const NIGHTLY_D1_STATEMENT_BUDGET = 61;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -269,10 +316,20 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin, not just the ceiling: 11 D1 statements (unchanged from before
     // the night-summary recorder) plus the ONE OAUTH_KV.put it adds per
     // maintenance invocation, plus when-extraction's fixed 3-statement
-    // baseline (see NIGHTLY_D1_STATEMENT_BUDGET's comment). If this number
-    // moves, say why in the same commit, see the scope-checker test's
-    // convention for this pattern.
-    expect(statements.length).toBe(15);
+    // baseline, plus FTS maintenance's 7. If this number moves, say why in
+    // the same commit, see the scope-checker test's convention for this
+    // pattern.
+    // MOVED 23 -> 22 (combined review of Tasks 4-6): FIX 4 threads the
+    // maintenance's known live/ready answers into the backfill's internal
+    // step, so the backfill's own liveness query and ready GET are gone
+    // (-2), and FIX 1's ready-latch guard (liveness + both EXCEPT parity
+    // probes in one batch) adds +1 on this latch night. The old
+    // decomposition read "runFtsMaintenance's own liveness check, the
+    // integrity-check statement, and its own ready GET, then
+    // runFtsBackfill's liveness check, ready GET, cursor GET, rowid SELECT,
+    // and ready PUT" (8); it now reads liveness, integrity-check, ready
+    // GET, cursor GET, rowid SELECT, latch-guard batch, ready PUT (7).
+    expect(statements.length).toBe(22);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -290,10 +347,50 @@ describe("nightly cron D1 subrequest cost", () => {
     await runCron(env);
 
     expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
-    // Exact pin: the same 15 as an ordinary night, plus the ONE dangling-edge
+    // Exact pin: the same 22 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(16);
+    expect(statements.length).toBe(23);
+  });
+
+  // The other FTS night shape: ready already latched, so the backfill is
+  // skipped and checkFtsIntegrity's parity checks run instead (count, spot
+  // check, and FIX 2's rotating content window). The ordinary-night pin
+  // above never reaches them, so this is where FIX 2's statements are
+  // actually measured.
+  it("keeps a ready night (the integrity checks and the rotating window run) inside the budget", async () => {
+    clockAt(ORDINARY_NIGHT_UTC);
+    const db = makeTestDb();
+    const old = Date.now() - STALENESS_AGE_MS - 86400000;
+    for (let i = 0; i < 25; i++) {
+      db.entries.push({
+        id: `job-${i}`, content: `Person ${i} works at Company ${i}`, tags: "[]",
+        source: "api", created_at: old + i, updated_at: old + i, vector_ids: "[]",
+      });
+    }
+    const kv = makeMemoryKV();
+    await kv.put(FTS_READY_KV_KEY, "1"); // pre-cron put, outside the measured ledger
+    const { env, statements } = countingEnv(db, { OAUTH_KV: kv });
+
+    await runCron(env);
+
+    expect(statements.length).toBeLessThanOrEqual(NIGHTLY_D1_STATEMENT_BUDGET);
+    // Exact pin: the same 15-statement baseline as an ordinary night (11 D1,
+    // the night-summary OAUTH_KV.put, when-extraction's 3) plus FTS
+    // maintenance's 9: liveness (1), integrity-check (1), ready GET (1),
+    // then checkFtsIntegrity's count+max-rowid SELECT (1), the T-0065
+    // per-workspace parity batch (FIX 1, final review: entries GROUP BY +
+    // the entry_counts read + the entry_counts trigger-liveness read, ONE
+    // env.DB.batch so it still costs a single statement here even though it
+    // carries three queries) (1), spot-check SELECT (1), and the rotating
+    // window's content-cursor KV GET (1), one window-read batch (1; one
+    // SELECT — the orphan half moved to count parity, so the batch shrank by
+    // a statement while the count held), and the cursor-advance KV PUT (1).
+    // No re-index batch: the mock is a healthy brain, so the window finds no
+    // drifted rows, and the T-0065 parity batch above finds no per-workspace
+    // drift either, so its own repair batch never fires. If this number
+    // moves, say why in the same commit.
+    expect(statements.length).toBe(24);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

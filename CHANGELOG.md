@@ -4,6 +4,17 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+## [3.6.0] — Search that finds the exact thing
+
+**Search**
+
+- Search now finds the hard things: exact names, ticket numbers, versions, and phrases in any language, even when they sit in old memories. A rare match buried under years of newer memories used to be cut from the candidate window before ranking ever saw it; matches now rank by relevance.
+- Finding those exact matches is dramatically faster and cheaper, and stays that way as the brain grows, so the free plan's daily limits stay comfortable. Saving a memory costs one extra small row; the savings come on every search.
+- Upgrading is automatic and needs no action. New installs use the index immediately; existing brains build it over nightly runs and keep the previous search until theirs is complete and verified. No API or MCP tool changed, so no client needs updating.
+- Semantic (vector) search is unchanged.
+
+## [3.5.0] — Brief, reminders, and push notifications
+
 **Brief and open loops**
 
 - The resurface card is honest about what it picks now: it excludes memories that were only true in the moment (episodic) and commitments already marked done, prefers whatever shares one of today's top topics, and never repeats the same pick within 30 days. A Dismiss control retires a pick for good instead of only hiding it for the session.

@@ -33,6 +33,7 @@ The desktop app is the easiest way to start. It builds your Second Brain and con
 - **Keeps you in control.** Browse, edit, append, connect, share, export, or permanently remove any memory from the dashboard.
 - **Builds useful context.** Automatic classification, duplicate detection, relationships, time-aware ranking, and optional weekly insights help the brain stay useful as it grows.
 - **Captures from where you already work.** Use MCP clients, the CLI, browser extension, Obsidian, Notion, calendars, email, iOS Shortcuts, or the web dashboard.
+- **Acts on what matters next.** Add dates to memories, review overdue and upcoming commitments, and let the installed PWA proactively push a reminder when something becomes due. See the [Reminders and Push guide](https://github.com/rahilp/second-brain-cloudflare/wiki/Reminders-and-Push).
 - **Stays in your account.** Memories, vectors, credentials, and application resources live in your own Cloudflare account.
 
 ### See it in action
@@ -66,7 +67,9 @@ Second Brain runs as a Cloudflare Worker backed by D1, Vectorize, Workers AI, an
 2. **Organize:** Second Brain classifies it, checks for duplicates and contradictions, creates relationships, and indexes it for semantic search.
 3. **Recall:** Ask in natural language. Second Brain retrieves relevant memories, follows useful connections, and returns source-backed context to the tool you are using.
 
-If Vectorize is unavailable, captures and keyword recall continue working. Your memories remain usable while semantic indexing is restored. Keyword recall works for Japanese, Chinese, and other scripts written without spaces, and for full-width text. The shipped embedding models read English best; the desktop app's Settings can switch a brain to a multilingual reading.
+If Vectorize is unavailable, captures and keyword recall continue working. Your memories remain usable while semantic indexing is restored. The shipped embedding models read English best; the desktop app's Settings can switch a brain to a multilingual reading.
+
+Search now finds the hard things: exact names, ticket numbers, versions, and phrases in any language, even when they sit in old memories, and finding them is dramatically faster and cheaper, staying that way as the brain grows, which keeps the free plan comfortable. It does this with a full-text index that ranks matches by relevance instead of scanning every memory. The upgrade is automatic: new installs use the index immediately, existing brains build it over nightly runs, and no client needs updating.
 
 ### Memory tools
 

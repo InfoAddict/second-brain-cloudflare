@@ -182,6 +182,9 @@ describe("edges schema drift", () => {
             return { meta: { changes: 0 } };
           },
         }),
+        // v2.2 ownership rule: entries_fts and its triggers are created in
+        // one batch (src/db/init.ts).
+        batch: async (stmts: { run(): Promise<unknown> }[]) => Promise.all(stmts.map(s => s.run())),
       } as unknown as D1Database;
       await initializeDatabase(makeTestEnv(undefined, { DB }));
       const fromInit = (raw.prepare(EDGE_INDEXES).all() as { name: string }[]).map(r => r.name);

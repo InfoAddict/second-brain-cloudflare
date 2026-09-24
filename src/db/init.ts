@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../constants";
 
 // The schema work below is idempotent but not free. All four nightly jobs run inside a
 // single scheduled() invocation and therefore share one subrequest budget, and each of
@@ -13,15 +14,28 @@ let initPromise: Promise<void> | null = null;
 
 export async function initializeDatabase(env: Env): Promise<void> {
   if (!initPromise) {
-    initPromise = applySchema(env).catch((e) => {
-      // The memo keys on SUCCESS, not on completion. Clearing it here is what makes a
-      // failed or half-applied schema retryable: latching a resolved promise would leave
-      // every later caller in this isolate doing nothing against a database that was
-      // never migrated. Before memoisation each nightly job re-ran the DDL and repaired
-      // the previous one's transient failure; this preserves that.
-      initPromise = null;
-      throw e;
-    });
+    initPromise = applySchema(env).then(
+      (ftsDeferred) => {
+        // The memo keys on FULLY DONE, not on completion. FTS creation can
+        // defer non-fatally (a populated brain whose ready-flag/cursor
+        // invalidation KV calls failed — see applySchema) — the request
+        // this call is part of must still proceed (auth, saves, and every
+        // other awaited caller), so this resolves either way. But a
+        // deferred pass is not memoized as done, or a populated brain stuck
+        // behind a KV outage would go without FTS forever, even after KV
+        // recovers, because no later call would ever retry the creation.
+        if (ftsDeferred) initPromise = null;
+      },
+      (e) => {
+        // The memo keys on SUCCESS, not on completion. Clearing it here is what makes a
+        // failed or half-applied schema retryable: latching a resolved promise would leave
+        // every later caller in this isolate doing nothing against a database that was
+        // never migrated. Before memoisation each nightly job re-ran the DDL and repaired
+        // the previous one's transient failure; this preserves that.
+        initPromise = null;
+        throw e;
+      },
+    );
   }
   return initPromise;
 }
@@ -33,6 +47,68 @@ export async function initializeDatabase(env: Env): Promise<void> {
 export function resetDatabaseInit(): void {
   initPromise = null;
 }
+
+// FTS DDL is shared with src/db/fts-repair.ts (a write-path failure recreates
+// this same table and these same triggers), so each string is a named export
+// rather than an inline literal — one definition, referenced from both places.
+//
+// Ownership (v2.2): deliberately NOT "IF NOT EXISTS". The table and its three
+// triggers are created only together, in one batch — see applySchema below
+// and src/db/fts-repair.ts's repairFtsIndex — and this is what makes a race
+// between two creators safe: the loser's whole batch fails atomically
+// ("table entries_fts already exists", verified against real node:sqlite),
+// never partially applying, and is treated as a no-op rather than retried.
+export const ENTRIES_FTS_TABLE_DDL =
+  `CREATE VIRTUAL TABLE entries_fts USING fts5(id UNINDEXED, content, tokenize='trigram')`;
+export const ENTRIES_FTS_INSERT_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END`;
+export const ENTRIES_FTS_UPDATE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_update
+    AFTER UPDATE ON entries
+    WHEN OLD.rowid IS NOT NEW.rowid OR OLD.id IS NOT NEW.id OR OLD.content IS NOT NEW.content
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+      INSERT INTO entries_fts (rowid, id, content) VALUES (NEW.rowid, NEW.id, NEW.content);
+    END`;
+export const ENTRIES_FTS_DELETE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entries_fts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      DELETE FROM entries_fts WHERE rowid = OLD.rowid;
+    END`;
+
+// entry_counts (T-0065): exact per-workspace row counts, replacing distillation's
+// scoped COUNT(*)/cache. Same ownership rule as entries_fts above: table and its
+// three triggers created together, in ONE batch, never independently repaired on
+// an existing table. Shared with src/db/entry-counts-repair.ts (the hot-path
+// repair for a manually dropped table), so each string is a named export.
+//
+// A row reaching n = 0 is KEPT, not deleted: SUM(n) is correct either way, and
+// keeping it needs no extra statement in the triggers.
+export const ENTRY_COUNTS_TABLE_DDL =
+  `CREATE TABLE entry_counts (workspace_id TEXT PRIMARY KEY, n INTEGER NOT NULL)`;
+export const ENTRY_COUNTS_INSERT_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entry_counts_insert
+    AFTER INSERT ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END`;
+export const ENTRY_COUNTS_UPDATE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entry_counts_update
+    AFTER UPDATE OF workspace_id ON entries
+    WHEN OLD.workspace_id IS NOT NEW.workspace_id
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+      INSERT INTO entry_counts (workspace_id, n) VALUES (NEW.workspace_id, 1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n + 1;
+    END`;
+export const ENTRY_COUNTS_DELETE_TRIGGER_DDL = `CREATE TRIGGER IF NOT EXISTS entry_counts_delete
+    AFTER DELETE ON entries
+    BEGIN
+      INSERT INTO entry_counts (workspace_id, n) VALUES (OLD.workspace_id, -1)
+      ON CONFLICT(workspace_id) DO UPDATE SET n = n - 1;
+    END`;
 
 /**
  * Tables, indexes, and triggers, keyed by the name each occupies in sqlite_master.
@@ -138,6 +214,12 @@ const SCHEMA_OBJECTS: Record<string, string> = {
   // device replaces rather than duplicates it.
   push_subscriptions: `CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT '', endpoint_hash TEXT NOT NULL, subscription_json TEXT NOT NULL, content_free INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_ok_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0, UNIQUE(endpoint_hash))`,
   idx_push_subscriptions_workspace: `CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id)`,
+  // entries_fts and its three sync triggers are NOT here (v2.2 ownership
+  // rule): they are created together, in one dedicated batch, below in
+  // applySchema — never as independent SCHEMA_OBJECTS/POST_COLUMN_OBJECTS
+  // entries, which would let one be created or repaired without the other.
+  // entry_counts and its three triggers (T-0065) follow the same rule, in
+  // their own dedicated batch below.
 };
 
 /**
@@ -283,6 +365,11 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
     BEGIN
       DELETE FROM prompt_capsule_revisions WHERE workspace_id = OLD.id;
     END`,
+  // entries_fts_insert/update/delete are NOT here (v2.2 ownership rule):
+  // applySchema never creates or repairs an FTS trigger independently of the
+  // table — see the dedicated creation batch below. On an existing table
+  // with a trigger missing, that is "not live" (src/recall/fts.ts), left for
+  // the nightly rebuildFtsIndex, not silently patched back in here.
 };
 
 /**
@@ -304,14 +391,15 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
  * Cost is one subrequest and one row read per catalogue entry, flat in the number of
  * entries because neither side of the UNION touches table data — measured on real D1
  * (workerd via Miniflare), not the mock, which is not something that can be re-verified
- * from a laptop. rows_read = 23 was that measurement, but it predates insight_candidates
- * and its index: it was taken when SCHEMA_OBJECTS held seven objects, not the nine it
- * holds now (plus D1's own bookkeeping table, SQLite's implicit autoindexes, and twelve
- * columns), so 23 is stale by two rows and should be re-measured against a live database
- * rather than trusted as today's figure. What the measurement did establish, and what
- * still holds regardless of the exact count: it grows by one row per object added to
- * SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now costs one
- * row here rather than one subrequest on every cold start.
+ * from a laptop. rows_read = 23 was that measurement, taken when SCHEMA_OBJECTS held
+ * seven objects. It holds 26 now (team edition, projects, push subscriptions, and their
+ * indexes all landed since), plus entries_fts, entry_counts, and their six triggers
+ * (created outside SCHEMA_OBJECTS — see the ownership note above — but still read by
+ * this same probe), so 23 is long stale and should be re-measured against a live
+ * database rather than trusted as today's figure. What the measurement did establish,
+ * and what still holds regardless of the exact count: it grows by one row per object
+ * added to SCHEMA_OBJECTS, which is the cheap direction — adding a statement above now
+ * costs one row here rather than one subrequest on every cold start.
  */
 const PROBE_SQL =
   `SELECT type AS kind, name, sql AS definition FROM sqlite_master WHERE type IN ('table','index','trigger') ` +
@@ -331,7 +419,7 @@ type ExistingSchema = { definitions: Map<string, string>; objects: Map<string, O
 
 /** Which kind of object a CREATE statement makes, so the probe can be asked about it. */
 const kindOf = (ddl: string): ObjectKind => {
-  if (ddl.startsWith("CREATE TABLE")) return "table";
+  if (ddl.startsWith("CREATE TABLE") || ddl.startsWith("CREATE VIRTUAL TABLE")) return "table";
   if (ddl.startsWith("CREATE TRIGGER")) return "trigger";
   return "index";
 };
@@ -436,7 +524,33 @@ function isUniqueViolation(e: unknown): boolean {
 // A fully migrated brain leaves here having issued the probe and nothing else. The DDL
 // keeps its IF NOT EXISTS: it costs nothing to keep and it is the same backstop as the
 // duplicate-column tolerance, for the same concurrent-cold-start race.
-async function applySchema(env: Env): Promise<void> {
+/**
+ * The one CREATE failure that is routine rather than a fault: a racing
+ * isolate's own gated creation batch below already created entries_fts and
+ * its triggers first. ENTRIES_FTS_TABLE_DDL deliberately has no IF NOT
+ * EXISTS, so this collision fails the WHOLE batch atomically (verified
+ * against real node:sqlite: "table entries_fts already exists") rather than
+ * partially applying — nothing here to clean up by hand.
+ */
+function isTableAlreadyExists(e: unknown): boolean {
+  return /table entries_fts already exists/i.test(String((e as { message?: string })?.message ?? e));
+}
+
+/**
+ * The entry_counts analogue of isTableAlreadyExists above: a racing isolate's
+ * own gated creation batch already won. ENTRY_COUNTS_TABLE_DDL also has no
+ * IF NOT EXISTS, for the same atomic-collision reason.
+ */
+function isEntryCountsTableAlreadyExists(e: unknown): boolean {
+  return /table entry_counts already exists/i.test(String((e as { message?: string })?.message ?? e));
+}
+
+/**
+ * Applies the schema. Returns whether FTS creation was deferred — see
+ * initializeDatabase, which uses that to decide whether this pass may be
+ * memoized as fully done.
+ */
+async function applySchema(env: Env): Promise<boolean> {
   const existing = await probeSchema(env);
 
   for (const [name, ddl] of Object.entries(SCHEMA_OBJECTS)) {
@@ -446,6 +560,64 @@ async function applySchema(env: Env): Promise<void> {
     if (existing?.objects.get(name) === kindOf(ddl)) continue;
     await env.DB.exec(ddl);
   }
+
+  // Ownership (v2.2): entries_fts and its three sync triggers are created
+  // together, in ONE batch, only when the table itself is missing — never
+  // independently, and never repaired once the table exists (a trigger
+  // missing on an existing table just reads as "not live" to every other
+  // caller, src/recall/fts.ts, left for the nightly rebuildFtsIndex).
+  //
+  // Populated-brain creation rule: creating the table on a brain whose
+  // `entries` already existed must first invalidate the ready flag and reset
+  // the backfill cursor, so a freshly created but not-yet-backfilled index
+  // is never served as ready. If that invalidation fails, DEFER — do not
+  // create the table this pass — and report it (return true) so
+  // initializeDatabase knows not to memoize this pass as fully done and
+  // retries the creation on the next call.
+  //
+  // Deferral must be NON-FATAL (B1, v2.2 re-review, BLOCKER): throwing here
+  // used to reject initializeDatabase itself, which authentication and every
+  // other caller await — on a populated brain with entries_fts missing and
+  // KV down (every existing brain's first request after this upgrade),
+  // EVERY authenticated request would fail. Recall falls back to LIKE and
+  // saves proceed with no FTS sync regardless; deferring only postpones
+  // when the index catches up, never blocks the request it happened inside.
+  // A brand-new brain (entries did not exist before this pass) is exempt
+  // from all of this: nothing to invalidate, and the triggers cover it from
+  // row one (see the fresh-brain ready latch below).
+  let ftsDeferred = false;
+  if (existing?.objects.get("entries_fts") !== "table") {
+    // A failed probe (existing === null) is populated/unknown, never fresh
+    // (combined review of Tasks 4-6): an unknown corpus must go through the
+    // same KV invalidation as a populated brain, and the fresh-brain ready
+    // latch at the end skips it for the same reason.
+    const entriesPreexisted = existing === null || existing.objects.get("entries") === "table";
+    let kvOk = true;
+    if (entriesPreexisted) {
+      try {
+        await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
+        await env.OAUTH_KV.put(FTS_BACKFILL_CURSOR_KV_KEY, "0");
+      } catch (e) {
+        kvOk = false;
+        console.error("FTS creation deferred (non-fatal): ready-flag/cursor invalidation failed on a populated brain; will retry next call:", e);
+      }
+    }
+    if (!kvOk) {
+      ftsDeferred = true;
+    } else {
+      try {
+        await env.DB.batch([
+          env.DB.prepare(ENTRIES_FTS_TABLE_DDL),
+          env.DB.prepare(ENTRIES_FTS_INSERT_TRIGGER_DDL),
+          env.DB.prepare(ENTRIES_FTS_UPDATE_TRIGGER_DDL),
+          env.DB.prepare(ENTRIES_FTS_DELETE_TRIGGER_DDL),
+        ]);
+      } catch (e) {
+        if (!isTableAlreadyExists(e)) throw e;
+      }
+    }
+  }
+
   for (const [column, ddl] of Object.entries(ENTRIES_COLUMNS)) {
     if (existing?.columns.has(column)) continue;
     try {
@@ -454,6 +626,36 @@ async function applySchema(env: Env): Promise<void> {
       if (!isDuplicateColumn(e)) throw e; // column already exists — anything else is real
     }
   }
+
+  // entry_counts (T-0065): same ownership rule as entries_fts above, but no
+  // KV gate — there is no separate backfill, so the seed rides in the SAME
+  // atomic batch as the triggers. Both the seed and the triggers reference
+  // entries.workspace_id, so this must run AFTER the ENTRIES_COLUMNS loop
+  // above, which ALTERs it in on a legacy pre-tenancy brain — placed any
+  // earlier, the seed's GROUP BY throws "no such column: workspace_id" on
+  // exactly that brain shape. Atomicity is what makes a concurrent entries
+  // write safe to interleave: a write that commits before this batch is
+  // counted by the seed; one that commits after is counted by the trigger
+  // (created in the same batch); D1 batch() is one transaction, so there is
+  // no window where neither counts it.
+  if (existing?.objects.get("entry_counts") !== "table") {
+    try {
+      await env.DB.batch([
+        env.DB.prepare(ENTRY_COUNTS_TABLE_DDL),
+        env.DB.prepare(ENTRY_COUNTS_INSERT_TRIGGER_DDL),
+        env.DB.prepare(ENTRY_COUNTS_UPDATE_TRIGGER_DDL),
+        env.DB.prepare(ENTRY_COUNTS_DELETE_TRIGGER_DDL),
+        // scope-exempt: the one-time seed deliberately covers every workspace
+        // (that is the point of a GROUP BY over the whole table) — the read
+        // never reaches a response, it only populates the exact counter each
+        // scoped read later sums from.
+        env.DB.prepare(`INSERT INTO entry_counts SELECT workspace_id, count(*) FROM entries GROUP BY workspace_id`),
+      ]);
+    } catch (e) {
+      if (!isEntryCountsTableAlreadyExists(e)) throw e;
+    }
+  }
+
   for (const [column, ddl] of Object.entries(EDGES_COLUMNS)) {
     if (existing?.edgeColumns.has(column)) continue;
     try {
@@ -517,12 +719,16 @@ async function applySchema(env: Env): Promise<void> {
         // SQL文字列の空白は意味を持つため、その内部は正規化しない。
         .match(/'(?:''|[^'])*'|"(?:""|[^"])*"|[a-zA-Z_]\w*|\d+|[^\s]/g)?.join(" ") ?? "";
       if (normalize(existing?.definitions.get(name) ?? "") !== normalize(ddl)) {
-        await env.DB.batch([
+        const repair = [
           env.DB.prepare(`DROP TRIGGER IF EXISTS ${name}`),
           env.DB.prepare(ddl),
-          // A repaired invalidator must not reuse payloads from its old body.
-          env.DB.prepare(`UPDATE prompt_capsule_revisions SET revision = lower(hex(randomblob(16)))`),
-        ]);
+        ];
+        // A repaired capsule invalidator must not reuse payloads from its old body;
+        // FTS and other sync triggers change nothing the capsule cache reads.
+        if (name.startsWith("prompt_capsule_")) {
+          repair.push(env.DB.prepare(`UPDATE prompt_capsule_revisions SET revision = lower(hex(randomblob(16)))`));
+        }
+        await env.DB.batch(repair);
       }
       continue;
     }
@@ -533,4 +739,19 @@ async function applySchema(env: Env): Promise<void> {
     if (kindOf(ddl) === "trigger") await env.DB.prepare(ddl).run();
     else await env.DB.exec(ddl);
   }
+
+  // Brand-new brain: entries did not exist before this pass, so there are no
+  // pre-FTS rows and the triggers cover everything from row one. Latch ready
+  // now instead of waiting for the first nightly. A failed put is non-fatal:
+  // the nightly backfill reaches the same latch. Probe-failure (existing ===
+  // null) skips this — an existing corpus must go through the backfill.
+  if (existing !== null && existing.objects.get("entries") !== "table") {
+    try {
+      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    } catch (e) {
+      console.error("FTS ready latch failed (non-fatal):", e);
+    }
+  }
+
+  return ftsDeferred;
 }

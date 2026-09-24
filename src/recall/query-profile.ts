@@ -20,7 +20,7 @@ function identifierShaped(token: string): boolean {
   return /[\d#.]/.test(token) || token.includes("-");
 }
 
-function deterministicVariants(query: string, tokens: string[]): string[] {
+export function deterministicVariants(query: string, tokens: string[]): string[] {
   const variants: string[] = [];
   const add = (value: string) => {
     const normalized = value.toLowerCase().trim();

@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULTS } from "../../src/config";
-import { graphSeedLimit, relatedSlotLimit } from "../../src/recall/neighborhood";
-import { mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "../../src/recall/math";
 import { buildQueryProfile } from "../../src/recall/query-profile";
-import type { RootCandidate } from "../../src/recall/root-selector";
-import { rrfFuse } from "../../src/recall/rrf";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
 import {
@@ -21,6 +16,11 @@ import {
 } from "../fixtures/recall-root-quality";
 import { D1Mock } from "../helpers/d1-mock";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
+import {
+  baselineRecall,
+  directTopFourRegressed,
+  rawCandidates,
+} from "../helpers/recall-benchmark-scoring";
 
 const TOP_K = 5;
 
@@ -57,131 +57,6 @@ interface BenchmarkMetrics {
 }
 
 const caseId = (c: RootQualityCase) => `${c.domain}/${c.failureShape}/${c.query}`;
-const rawCandidates = (c: RootQualityCase) =>
-  c.candidates.filter(candidate => candidate.denseScore !== undefined || candidate.keywordCandidate);
-const directTopFourRegressed = (currentIds: string[], baselineIds: string[]) =>
-  JSON.stringify(currentIds.slice(0, 4)) !== JSON.stringify(baselineIds.slice(0, 4));
-
-function baselineRootIds(candidates: RootCandidate[], topK: number, lambda: number): string[] {
-  return mmrRerank(candidates, lambda, graphSeedLimit(topK, candidates.length))
-    .map(candidate => candidate.parentId);
-}
-
-function baselineLinkedEligible(content: string, tokens: string[]): boolean {
-  const lower = content.toLowerCase();
-  return tokens.some(token => lower.includes(token.toLowerCase()));
-}
-
-const escapeRegExp = (value: string) => value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
-
-function frozenBaselineCorpus(c: RootQualityCase, tokens: string[]) {
-  return c.failureShape === "weak-generic-neighbor" || c.failureShape === "long-parent-pollution"
-    ? { df: null, total: null }
-    : { df: new Map(tokens.map(token => [token, 2])), total: 100 };
-}
-
-function frozenPrePlanFused(c: RootQualityCase, tokens: string[]): VectorizeMatch[] {
-  const dense = c.candidates
-    .filter((candidate): candidate is CandidateFixture & { denseScore: number } => candidate.denseScore !== undefined)
-    .slice()
-    .sort((a, b) => b.denseScore - a.denseScore);
-  const denseById = new Map(dense.map(candidate => [candidate.id, candidate]));
-  const keyword = c.candidates.filter(candidate => candidate.keywordCandidate);
-  const corpus = frozenBaselineCorpus(c, tokens);
-  const hasCorpusIdf = !!corpus.df && !!corpus.total && tokens.every(token => corpus.df!.has(token));
-  const keywordN = keyword.length || 1;
-  const keywordDf = new Map(tokens.map(token => [
-    token,
-    keyword.filter(candidate => candidate.content.toLowerCase().includes(token.toLowerCase())).length,
-  ]));
-  const idf = (token: string) => hasCorpusIdf
-    ? Math.log(1 + corpus.total! / ((corpus.df!.get(token) ?? 0) + 1))
-    : Math.log(1 + keywordN / ((keywordDf.get(token) ?? 0) + 1));
-  const keywordRanked = keyword
-    .map(candidate => {
-      const lower = candidate.content.toLowerCase();
-      const weight = tokens.reduce((sum, token) => {
-        const normalized = token.toLowerCase();
-        if (!lower.includes(normalized)) return sum;
-        const exact = new RegExp(`(?<![\\w])${escapeRegExp(normalized)}(?![\\w])`).test(lower);
-        return sum + idf(token) * (exact ? 1 : DEFAULTS.SUBSTRING_MATCH_WEIGHT);
-      }, 0);
-      return { candidate, weight };
-    })
-    .filter(row => row.weight > 0)
-    .sort((a, b) => b.weight - a.weight
-      || (b.candidate.createdAt ?? 1) - (a.candidate.createdAt ?? 1)
-      || a.candidate.id.localeCompare(b.candidate.id));
-  const fused = rrfFuse(
-    dense.map(candidate => candidate.id),
-    keywordRanked.map(row => ({ id: row.candidate.id, weight: row.weight })),
-  );
-  const byId = new Map(c.candidates.map(candidate => [candidate.id, candidate]));
-  return [...fused].map(([id, score]) => {
-    const candidate = byId.get(id)!;
-    const denseCandidate = denseById.get(id);
-    return {
-      id,
-      score,
-      metadata: denseCandidate
-        ? { parentId: id, content: denseCandidate.vectorContent, created_at: denseCandidate.createdAt ?? 1 }
-        : {
-          parentId: id,
-          content: candidate.content,
-          created_at: candidate.createdAt ?? 1,
-          tags: candidate.tags ?? [],
-        },
-    };
-  });
-}
-
-function baselineRecall(
-  c: RootQualityCase,
-  tokens: string[],
-): { outputIds: string[]; directIds: string[]; rootIds: string[] } {
-  const fixtures = rawCandidates(c);
-  const recallCounts = new Map(fixtures.map(candidate => [candidate.id, candidate.recallCount ?? 0]));
-  const tags = new Map(fixtures.map(candidate => [candidate.id, [...(candidate.tags ?? [])]]));
-  const reranked = rerankWithTimeDecay(
-    frozenPrePlanFused(c, tokens),
-    recallCounts,
-    new Map(),
-    [],
-    new Map(),
-    new Map(),
-    tags,
-    DEFAULTS,
-  );
-  const candidates: RootCandidate[] = reranked.map(match => ({
-    ...match,
-    parentId: match.id,
-    rootScore: match.score,
-    localEvidence: c.candidates.find(candidate => candidate.id === match.id)?.vectorContent ?? "",
-    tags: tags.get(match.id) ?? [],
-    lexicalCoverage: 0,
-    metadataAlignment: 0,
-  }));
-  const roots = new Set(baselineRootIds(candidates, TOP_K, DEFAULTS.MMR_LAMBDA));
-  const directIds = mmrRerank(reranked, DEFAULTS.MMR_LAMBDA, TOP_K).map(candidate => candidate.id);
-  const rows = new Map(c.candidates.map(candidate => [candidate.id, candidate]));
-  const related = c.edges
-    .flatMap(edge => {
-      const linkedId = roots.has(edge.sourceId)
-        ? edge.targetId
-        : roots.has(edge.targetId)
-          ? edge.sourceId
-          : undefined;
-      if (!linkedId || directIds.includes(linkedId)) return [];
-      const linked = rows.get(linkedId);
-      return linked && baselineLinkedEligible(linked.content, tokens) ? [linkedId] : [];
-    })
-    .slice(0, relatedSlotLimit(TOP_K));
-  return {
-    outputIds: [...directIds.slice(0, TOP_K - related.length), ...related],
-    directIds,
-    rootIds: [...roots],
-  };
-}
 
 function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
   const prepare = db.prepare.bind(db);
@@ -281,7 +156,7 @@ async function runCase(c: RootQualityCase): Promise<CaseObservation> {
   const raw = rawCandidates(c);
   const candidateAvailable = raw.some(candidate =>
     acceptableRoots.has(candidate.id) || authoritative.has(candidate.id));
-  const baseline = baselineRecall(c, withGraph.queryTokens ?? []);
+  const baseline = baselineRecall(c, withGraph.queryTokens ?? [], TOP_K);
   const outputIds = withGraph.matches.map(match => match.id);
   const graphAiCalls = (graph.env.AI.run as ReturnType<typeof vi.fn>).mock.calls.length;
   return {
@@ -437,7 +312,7 @@ describe("sealed hidden recall validation regression", () => {
     );
     const funnel = {
       runtimeIntentMismatches: HIDDEN_VALIDATION_CASES.flatMap(c => {
-        const runtime = buildQueryProfile(c.query, { query: c.query, df: null, total: null }).intent;
+        const runtime = buildQueryProfile(c.query, { query: c.query, df: null, total: null, distillSource: "shortcut" }).intent;
         return runtime === c.intent ? [] : [{ id: caseId(c), declared: c.intent, runtime }];
       }),
       candidateGenerationMisses: observations.filter(row => !row.candidateAvailable).map(row => row.id),

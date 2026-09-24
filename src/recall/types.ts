@@ -60,6 +60,12 @@ export interface RecallDiagnostics {
   lexicalArmSkipped?: boolean;
   /** Whether fusion could use corpus-wide DF for every lexical token (false = fetch-window estimate). */
   corpusIdfUsed?: boolean;
+  /** Whether the FTS5 path served the keyword rows (false = LIKE, including any degrade-on-error). */
+  ftsUsed?: boolean;
+  /** Why the keyword arm served FTS or LIKE on the last recall; memberFirst recalls never reach keywordSearch. */
+  ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first";
+  /** T-0059: how df/total were obtained on the last recall's term distillation. */
+  distillSource?: "fts" | "like" | "shortcut";
 }
 
 export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"
@@ -94,6 +100,13 @@ export interface RecallInternalOptions {
   workspaceFilter?: "personal" | "company";
   /** Narrows reads to one company team workspace (validated at the route edge). */
   teamId?: string;
+  /**
+   * Test-only escape hatch: forces fuseDenseAndKeyword's keywordPreRanked
+   * argument regardless of whether FTS served the rows. No route may set this;
+   * it exists so benchmarks can isolate Task 6's fusion-order change from
+   * Task 3's candidate-selection change (FTS-ready but bm25 order disabled).
+   */
+  keywordPreRankedOverride?: boolean;
 }
 
 export interface KeywordRow {

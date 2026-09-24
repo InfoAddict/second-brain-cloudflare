@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
+  FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
   VECTORIZE_GET_BY_IDS_BATCH,
   VECTORIZE_TOP_K_MULTIPLIER,
@@ -26,7 +27,7 @@ import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
 import { selectGraphRoots, type RootCandidate } from "./root-selector";
-import type { KeywordRow, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
+import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
@@ -34,8 +35,9 @@ import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
+import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveRows } from "./fts";
 
-async function keywordSearch(
+async function keywordSearchLike(
   tokens: string[],
   env: Env,
   limit: number,
@@ -76,6 +78,103 @@ async function keywordSearch(
   return results as unknown as KeywordRow[];
 }
 
+async function keywordSearchFts(
+  match: string,
+  env: Env,
+  limit: number,
+  bounds: Readonly<TimeBounds>,
+  identity?: Identity,
+  only?: "personal" | "company",
+  teamId?: string,
+): Promise<KeywordRow[]> {
+  let timeWhere = "";
+  const timeBindings: number[] = [];
+  if (bounds.after !== undefined) { timeWhere += " AND e.created_at >= ?"; timeBindings.push(bounds.after); }
+  if (bounds.before !== undefined) { timeWhere += " AND e.created_at < ?"; timeBindings.push(bounds.before); }
+  const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
+  // workspace_id exists only on entries, not on entries_fts's id/content
+  // columns, so the clause below resolves unambiguously though unqualified.
+  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  // Join on rowid as well as id: rowids are unique, so a stale duplicate FTS
+  // row for one id cannot fill two LIMIT slots, and a drifted row (an FTS id
+  // at a rowid whose entries.id differs) maps to nothing instead of a wrong entry.
+  //
+  // Write-path isolation v2.2 INVARIANT: FTS is live only if entries_fts
+  // exists AND all three sync triggers exist. A hot-path repair can drop a
+  // trigger without ever touching KV, leaving a table that still answers
+  // MATCH queries — successfully, no exception — but has silently stopped
+  // syncing. The liveness check rides in the SAME env.DB.batch() as the FTS
+  // query (one subrequest, one extra statement) so that staleness is caught
+  // structurally instead of relying on an error that never comes. Throwing
+  // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
+  // wiring below, rather than adding a second control path.
+  const [livenessResult, ftsResult] = await env.DB.batch([
+    // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
+    // never entries/edges rows — nothing here to scope by workspace.
+    env.DB.prepare(FTS_LIVENESS_SQL),
+    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+    env.DB.prepare(
+      `SELECT e.id, e.content, e.tags, e.source, e.created_at
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       ORDER BY bm25(entries_fts) LIMIT ?`
+    ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit),
+  ]);
+  if (!isFtsLiveRows(livenessResult.results as { name: string; sql: string | null }[] | undefined)) {
+    throw new Error("entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body)");
+  }
+  return ftsResult.results as unknown as KeywordRow[];
+}
+
+async function keywordSearch(
+  tokens: string[],
+  env: Env,
+  limit: number,
+  bounds: Readonly<TimeBounds> = {},
+  identity?: Identity,
+  only?: "personal" | "company",
+  teamId?: string,
+  // The corpus document frequencies distillToRareTerms already computed.
+  // Absent (or null) on every path that skipped or lost that scan, in which
+  // case the cost estimate below cannot run and routing keeps today's rules.
+  corpus?: Pick<DistilledQuery, "df" | "total">,
+): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"] }> {
+  if (!tokens.length) return { rows: [], fts: false, route: "like-ineligible-token" };
+  const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
+  // ftsEligibleToken is the single source of truth: any token ftsMatchQuery
+  // would drop means the match silently searches only the survivors and hides
+  // entries matching just that one, so the whole query goes to LIKE.
+  const match = ftsMatchQuery(terms);
+  if (match && terms.every(ftsEligibleToken)) {
+    // Cost-aware routing (T-0058): when distillation's frequency scan covers
+    // every term, its df sum estimates exactly how many rows bm25 would have
+    // to score. Past the budget, LIKE wins — it stops after KEYWORD_CANDIDATE_LIMIT
+    // recency-ordered hits while bm25 scores every match. The scan counts the
+    // deterministic variants retrieval appends too, so a plural query
+    // ("widgets gadgets") estimates like its singular. Any term the scan still
+    // lacks (cap-bound) keeps FTS, as does every single-word query: the distill
+    // shortcut computes no df for one-word inputs, so single-word recall stays
+    // on FTS by design.
+    const df = corpus?.df;
+    if (df && terms.every(t => df.has(t))) {
+      const dfSum = terms.reduce((s, t) => s + (df.get(t) ?? 0), 0);
+      if (dfSum > FTS_MATCH_BUDGET) {
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
+      }
+    }
+    if (await ftsReady(env)) {
+      try {
+        return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true, route: "fts" };
+      } catch (e) {
+        console.error("FTS keyword search failed (degrading to LIKE):", e);
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-error" };
+      }
+    }
+    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-not-ready" };
+  }
+  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-ineligible-token" };
+}
+
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function fuseDenseAndKeyword(
@@ -84,7 +183,8 @@ function fuseDenseAndKeyword(
   tokens: string[],
   allowKeywordOnly: boolean,
   corpus: Pick<DistilledQuery, "df" | "total">,
-  substringWeight: number
+  substringWeight: number,
+  keywordPreRanked = false,
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -125,10 +225,19 @@ function fuseDenseAndKeyword(
     return boundary.get(t)!.test(lc) ? idf(t) : idf(t) * substringWeight;
   };
 
-  const keywordRanked = kwLower
+  const keywordScored = kwLower
     .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + tokenWeight(x.lc, t), 0) }))
-    .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)))
-    .sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
+    .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)));
+  // Combined review of Tasks 4-6 (FIX 3): the JS boundary/coverage weight is
+  // the PRIMARY sort key in both paths. In the pre-ranked (FTS) path the
+  // sort is weight-only and stable, so bm25's order survives WITHIN an
+  // equal-weight tier — replacing the old recency tiebreak, which ranked a
+  // long exact multi-token match behind every one-token note. The JS weight
+  // still rides along as the RRF contribution weight — boundary and
+  // coverage quality, which trigram bm25 cannot see.
+  const keywordRanked = keywordPreRanked
+    ? keywordScored.sort((a, b) => b.weight - a.weight)
+    : keywordScored.sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
 
   const fused = rrfFuse(denseRanked, keywordRanked.map(x => ({ id: x.row.id, weight: x.weight })));
   const keywordRowById = new Map(keywordRows.map(r => [r.id, r]));
@@ -208,6 +317,7 @@ export async function recallEntries(
     internal.diagnostics.lexicalArmSkipped = profile.retrievalTokens.length === 0;
     internal.diagnostics.corpusIdfUsed = !!distilled.df && !!distilled.total
       && profile.lexicalTokens.every(t => distilled.df!.has(t));
+    internal.diagnostics.distillSource = distilled.distillSource;
   }
   markStage("setup");
 
@@ -219,8 +329,19 @@ export async function recallEntries(
   markStage("querySignals");
 
   let keywordRows: KeywordRow[] = [];
+  let ftsServedKeywords = false; // memberFirst never sets this: tag rows are not bm25-ordered
   let results: { matches: VectorizeMatch[] };
   if (memberFirst) {
+    // Tag/project recalls never run keywordSearch (tag rows are not bm25-
+    // ordered), so name the route here: ftsRoute is set on every recall path.
+    // Initialized before any early return below (FIX 2, final review), so a
+    // "no member rows at all" return leaves diagnostics in the same shape
+    // every other path does, instead of undefined.
+    if (internal.diagnostics) {
+      internal.diagnostics.ftsRoute = "like-member-first";
+      internal.diagnostics.ftsUsed = false;
+      internal.diagnostics.keywordIds = [];
+    }
     // Escaped: a tag is user data and LIKE reads _ and % as wildcards. This is a read, so
     // the failure is over-broad results rather than the permanent rollup the same bug
     // caused in compressTag — but `?tag=%` silently defeats the filter entirely and
@@ -240,16 +361,24 @@ export async function recallEntries(
     const vectorIds = [...new Set(
       (tagRows as any[]).flatMap(r => JSON.parse((r.vector_ids as string) ?? "[]") as string[])
     )];
-    if (!vectorIds.length) return { matches: [], insight: "", semanticUnavailable };
 
     const vectors: VectorizeVector[] = [];
-    try {
-      for (let i = 0; i < vectorIds.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
-        vectors.push(...await env.VECTORIZE.getByIds(vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH)));
-      }
-    } catch (e) {
-      console.error("Vectorize getByIds failed (degrading to keyword-only):", e);
+    if (!vectorIds.length) {
+      // No member row carries a vector yet. Mirror the non-memberFirst
+      // path's Vectorize-unavailable degrade (FIX 2, final review): continue
+      // with empty dense results and allow keyword-only fusion below,
+      // instead of dropping an exact keyword match that simply has no
+      // embedding.
       semanticUnavailable = true;
+    } else {
+      try {
+        for (let i = 0; i < vectorIds.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
+          vectors.push(...await env.VECTORIZE.getByIds(vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH)));
+        }
+      } catch (e) {
+        console.error("Vectorize getByIds failed (degrading to keyword-only):", e);
+        semanticUnavailable = true;
+      }
     }
 
     results = {
@@ -290,12 +419,14 @@ export async function recallEntries(
         return { matches: [] as VectorizeMatch[] };
       }
     };
-    const [denseResults, kwRows] = await Promise.all([
+    const [denseResults, kw] = await Promise.all([
       denseQuery(),
-      keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId),
+      keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
     ]);
     results = denseResults;
-    keywordRows = kwRows;
+    keywordRows = kw.rows;
+    ftsServedKeywords = kw.fts;
+    if (internal.diagnostics) internal.diagnostics.ftsRoute = kw.route;
 
     // Governed by its own threshold, not the write-path duplicate flag: the two
     // shared a constant until #245, so retuning duplicate detection silently
@@ -319,6 +450,7 @@ export async function recallEntries(
   if (internal.diagnostics) {
     internal.diagnostics.denseIds = [...new Set(results.matches.map(m => ((m.metadata as any)?.parentId ?? m.id) as string))];
     internal.diagnostics.keywordIds = [...new Set(keywordRows.map(row => row.id))];
+    internal.diagnostics.ftsUsed = ftsServedKeywords;
   }
   markStage("candidateGeneration");
 
@@ -330,8 +462,9 @@ export async function recallEntries(
       if (!semanticRankByParent.has(parentId)) semanticRankByParent.set(parentId, semanticRankByParent.size + 1);
     });
 
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT);
+  const keywordPreRanked = internal.keywordPreRankedOverride ?? ftsServedKeywords;
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
