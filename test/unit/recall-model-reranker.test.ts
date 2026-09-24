@@ -103,6 +103,16 @@ describe("percentilesFromScores and blendRerankerScores", () => {
     expect(withEvidence.find(x => x.id === "a")!.score).toBeCloseTo(1);
     expect(without.find(x => x.id === "a")!.score).toBeGreaterThan(100); // the artifact this avoids
   });
+  it("degenerate scores: a negative scored score still ends above every unscored one", () => {
+    const out = blendRerankerScores([m("u", 0.9), m("a", 1), m("b", -5)], new Map([["a", 1], ["b", 0.5]]), 1, 0.25);
+    expect(out.map(x => x.id)).toEqual(["a", "b", "u"]);
+    for (const s of out.filter(x => x.id !== "u")) expect(s.score).toBeGreaterThan(out.find(x => x.id === "u")!.score);
+  });
+  it("degenerate scores: an all-zero scored block keeps the model's order and clears the unscored", () => {
+    const out = blendRerankerScores([m("u", 0.9), m("a", 0), m("b", 0), m("c", 0)], new Map([["a", 0.2], ["b", 1], ["c", 0.6]]), 1, 0.25);
+    expect(out.map(x => x.id)).toEqual(["b", "c", "a", "u"]);
+    expect(out[2].score).toBeGreaterThan(0.9);
+  });
   it("uses the parent id, not the chunk id, to look up the percentile", () => {
     const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 0.1)], new Map([["p", 0]]), 0.25);
     expect(out.find(x => x.id === "p-0")!.score).toBeCloseTo(0.75);

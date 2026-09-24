@@ -116,10 +116,18 @@ export function blendRerankerScores<T extends VectorizeMatch>(
     // MMR's relevance/diversity trade reads, are preserved exactly.
     const lowest = scored[scored.length - 1].score, best = unscored[0].score;
     if (lowest < best) {
-      const factor = lowest > 0 ? (best / lowest) * (1 + 1e-9) : 1;
-      for (const m of scored) m.score = lowest > 0 ? m.score * factor : m.score + best + 1e-9;
+      if (lowest > 0) {
+        const factor = (best / lowest) * (1 + 1e-9);
+        for (const m of scored) m.score *= factor;
+      } else {
+        // Not reachable from rerankWithTimeDecay (positive score times non-negative factors), but a multiplier means nothing
+        // on a non-positive score: shift instead, which puts the minimum just above the best unscored score, and let the
+        // model's percentile break the ties a block of equal (e.g. all-zero) scores would otherwise leave.
+        for (const m of scored) m.score += (best - lowest) + 1e-9 + 1e-12 * (percentiles.get(parentOf(m)) ?? 0);
+      }
     }
   }
+  scored.sort(byScore);
   return [...scored, ...unscored];
 }
 
