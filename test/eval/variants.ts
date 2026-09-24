@@ -35,12 +35,16 @@ export interface VariantSpec {
  * calls the variant needs (rerank scores, or re-embedded chunks), and
  * `npm run eval:recall -- --compare baseline,<name>` gates it.
  */
+// The ablations isolate one retrieval factor each, so they run without the reranker (which ships on in "auto").
+const NO_RERANK: Partial<Config> = { RERANK_MODE: "off" };
 const builtin: VariantSpec[] = [
-  { name: "baseline", description: "Shipped recall with the FTS arm ready and every default." },
-  { name: "like", description: "Keyword arm forced onto the LIKE fallback (fts:ready cleared).", ftsReady: false },
-  { name: "fts-orderless", description: "FTS candidates with bm25 order disabled in fusion (isolates candidate selection from fusion order).", internal: { keywordPreRankedOverride: false } },
-  { name: "dense-only", description: "Ablation: keyword arm skipped. Must lose on identifier and rare-word queries.", internal: { variant: { arms: "dense-only" } } },
-  { name: "keyword-only", description: "Ablation: embedding and Vectorize skipped. Must lose on paraphrase queries.", internal: { variant: { arms: "keyword-only" } } },
+  { name: "baseline", description: "Shipped recall with the FTS arm ready and every default (the reranker in its shipped auto mode)." },
+  { name: "like", description: "Keyword arm forced onto the LIKE fallback (fts:ready cleared).", ftsReady: false, config: NO_RERANK },
+  { name: "fts-orderless", description: "FTS candidates with bm25 order disabled in fusion (isolates candidate selection from fusion order).", internal: { keywordPreRankedOverride: false }, config: NO_RERANK },
+  { name: "no-rerank", description: "Shipped recall with the cross-encoder reranker off (the pre-T-0041 ordering).", config: NO_RERANK },
+  { name: "rerank", description: "Cross-encoder reranking forced on for every eligible recall (auto's ambiguity gate bypassed).", internal: { variant: { rerank: true } }, targetCategories: ["paraphrase", "multi-hop"] },
+  { name: "dense-only", description: "Ablation: keyword arm skipped. Must lose on identifier and rare-word queries.", internal: { variant: { arms: "dense-only" } }, config: NO_RERANK },
+  { name: "keyword-only", description: "Ablation: embedding and Vectorize skipped. Must lose on paraphrase queries.", internal: { variant: { arms: "keyword-only" } }, config: NO_RERANK },
 ];
 
 export const VARIANTS: Record<string, VariantSpec> = Object.fromEntries(builtin.map(v => [v.name, v]));

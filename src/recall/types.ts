@@ -68,7 +68,13 @@ export interface RecallDiagnostics {
   ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first" | "skipped-by-variant";
   /** T-0059: how df/total were obtained on the last recall's term distillation. */
   distillSource?: "fts" | "like" | "shortcut";
+  /** What the cross-encoder step did on the last recall; "applied" means one model call reordered the candidates. */
+  rerankRoute?: RerankRoute;
+  /** Wall time of the model call, when one was made. */
+  rerankMs?: number;
 }
+
+export type RerankRoute = "off" | "not-ready" | "too-few" | "exact-id" | "clear-leader" | "attempted" | "applied" | "error" | "timeout";
 
 export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"
   | "graphExpansion" | "finalHydration" | "selection" | "synthesis" | "total";
@@ -89,6 +95,8 @@ export interface RecallOperationDiagnostics {
 export interface RecallVariantFlags {
   /** Tag and project recalls use both arms regardless of this ablation. */
   arms?: "both" | "dense-only" | "keyword-only";
+  /** true forces the reranker on for the run (still subject to tenancy and the exact-identifier skip); no route sets it. */
+  rerank?: boolean;
 }
 
 export interface RecallInternalOptions {

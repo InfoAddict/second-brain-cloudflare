@@ -195,6 +195,27 @@ export const FTS_MIN_TOKEN_LENGTH = 3;
 // Readiness cache lifetime. Bounds both the KV read rate and how long a warm
 // isolate keeps using FTS after the integrity check clears the flag.
 export const FTS_READY_CACHE_MS = 5 * 60 * 1000;
+// Cross-encoder reranker (src/recall/model-reranker.ts). The readiness latch is
+// written only by the model probe: "1" once the model answers in the documented
+// shape and ranks a known relevant passage first, "0" after a failed probe.
+export const RERANK_MODEL = "@cf/baai/bge-reranker-base";
+export const RERANK_READY_KV_KEY = "reranker:ready:bge-base-v1";
+// A ready verdict is re-proved after a week, a failed one retried after six hours.
+export const RERANK_READY_TTL_S = 7 * 24 * 3600;
+export const RERANK_NOT_READY_TTL_S = 6 * 3600;
+// Warm-isolate cache for the latch, both directions, like FTS_READY_CACHE_MS.
+export const RERANK_READY_CACHE_MS = 5 * 60 * 1000;
+// One batch: up to 25 direct parents plus up to 5 extra graph-root parents.
+export const RERANK_MAX_CANDIDATES = 30;
+export const RERANK_MAX_DIRECT = 25;
+export const RERANK_EXCERPT_CHARS = 400;
+export const RERANK_QUERY_MAX_CHARS = 256;
+export const RERANK_TIMEOUT_MS = 2500;
+// `auto` reranks only when the runner-up is within this fraction of the leader.
+export const RERANK_AMBIGUITY_MARGIN = 0.15;
+// The model moves a heuristic score by at most +/- this fraction.
+export const RERANK_BLEND_WEIGHT = 0.25;
+
 // Rows spot-checked nightly for rowid-mapping drift; newest rows move first.
 export const FTS_INTEGRITY_SPOT_CHECK = 5;
 // Rotating content check: rowid window compared nightly (both directions)
