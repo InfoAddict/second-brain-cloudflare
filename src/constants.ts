@@ -62,6 +62,10 @@ export const CONTRADICTION_IMPORTANCE_STEP = 1.0;
 export const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 
 export const CHUNK_MAX_CHARS = 1600;
+// Vectorize's per-call ceiling for a Worker upsert.
+export const VECTORIZE_UPSERT_BATCH = 1000;
+// A write-path neighbor query asks for this many chunk hits and keeps the 5 best distinct notes: one long note can be up to 7 hits.
+export const WRITE_PATH_TOPK = 20;
 
 // Sources that mirror an external system rather than record a thought.
 //
@@ -100,6 +104,34 @@ export const MIGRATION_CHUNK_BUDGET = 20;
 export const MIGRATION_MAX_ENTRIES_PER_BATCH = 25;
 
 export const CHUNK_OVERLAP_CHARS = 200;
+
+// ── Contextual chunk embeddings (T-0042) ─────────────────────────────────────
+// A short entry-level prefix is sent to the embedder with each chunk of a
+// multi-chunk memory; it is never stored. Bodies are about 500 characters with
+// 50 of overlap: measured on the golden set, 1,200-character bodies did not find
+// a fact buried in filler and 500/50 did, at about 2.6x the vectors of a long
+// note (see ARCHITECTURE). BGE Small's 512-token window keeps 32 tokens of
+// headroom under the 480 target.
+export const CONTEXT_PREFIX_MAX_CHARS = 180;
+export const CONTEXT_SMALL_BODY_START_CHARS = 500;
+export const CONTEXT_OVERLAP_CHARS = 50;
+export const CONTEXT_SMALL_BODY_MIN_CHARS = 300;
+export const CONTEXT_M3_BODY_MAX_CHARS = 500;
+// The head of a note gets at most this many focus chunks; whatever is left is cut at the tail sizes below.
+export const CONTEXT_MAX_FOCUS_CHUNKS = 6;
+// Past this size a note is chunked plain: the builder's CPU grows with the note and the free plan allows 10 ms an invocation.
+export const CONTEXT_MAX_CONTENT_CHARS = 24_000;
+// The same limit in estimated tokens, which is what the CPU cost follows: a token-dense note is many more chunks per
+// character than prose. Calibrated so the worst shape (one token per character) keeps storeEntry's JavaScript at a third
+// of that 10 ms or less (test/unit/contextual-perf.test.ts).
+export const CONTEXT_MAX_CONTENT_TOKENS = 16_000;
+export const CONTEXT_SMALL_TAIL_CHARS = 1200;
+export const CONTEXT_M3_TAIL_CHARS = 1400;
+export const BGE_SMALL_MAX_INPUT_TOKENS = 512;
+export const CONTEXT_SMALL_TARGET_TOKENS = 480;
+export const CONTEXT_LLM_CHUNKS_PER_NIGHT = 20;
+export const CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY = 8;
+export const CONTEXT_LLM_MAX_TOKENS = 32;
 
 export const CLASSIFY_MAX_TOKENS = 80;
 export const CONTRADICTION_MAX_TOKENS = 80;
@@ -143,8 +175,13 @@ export const VECTORIZE_TOP_K_MULTIPLIER = 3;
 // dense query to 50.
 export const RECALL_POOL_SIZE = 15;
 // The deeper dense list a call draws on when the diversified one is shorter than its topK, and what a weak best
-// match widens to. 50 is the most Vectorize returns with values and metadata (the ceiling this code has always used).
+// match widens to. 50 is the most Vectorize returns with values and metadata today (it was 20 until March 2026; this code
+// moved to the ceiling with T-0081).
 export const RECALL_DEEP_POOL_SIZE = 50;
+// With contextual embeddings on one long note is up to seven vectors, so the deep list is sized in distinct notes by
+// asking for ids only: Vectorize returns up to 100 vectors when it returns neither values nor metadata, and the fill
+// only needs each hit's note, which the vector id carries.
+export const RECALL_DEEP_IDS_POOL_SIZE = 100;
 // Results are ordered by score within blocks of this many MMR picks.
 export const RECALL_BLOCK = 5;
 // The most results one recall call can ask for (MCP tool and GET /recall both cap topK here).

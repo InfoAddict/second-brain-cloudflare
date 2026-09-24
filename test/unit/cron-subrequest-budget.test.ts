@@ -91,7 +91,14 @@ import { FTS_READY_KV_KEY } from "../../src/constants";
 // see the ready-night pin below, which measures exactly that shape. The
 // honest worst case (a rebuild night, or a ready night with drift) stays
 // well inside this ceiling, so the constant itself does not move.
-const NIGHTLY_D1_STATEMENT_BUDGET = 61;
+// MOVED 61 -> 62 (T-0042, embedding scheme migration): the nightly job now
+// resolves config once for the contextual-embedding switch. Contextual embeddings
+// ship off, and off the scheme batch and the generated tier return before
+// reading anything, so that one KV GET is the whole cost. With the switch on, a
+// brain with work adds the ledger GET, the model-migration GET, the page SELECT
+// and the ledger PUT (four more, no count: it would scan every later row), and
+// once finished every night is the config GET and the ledger GET.
+const NIGHTLY_D1_STATEMENT_BUDGET = 62;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -329,7 +336,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // runFtsBackfill's liveness check, ready GET, cursor GET, rowid SELECT,
     // and ready PUT" (8); it now reads liveness, integrity-check, ready
     // GET, cursor GET, rowid SELECT, latch-guard batch, ready PUT (7).
-    expect(statements.length).toBe(22);
+    expect(statements.length).toBe(23); // 22 + the config GET the contextual-embedding switch needs (T-0042)
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -350,7 +357,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin: the same 22 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(23);
+    expect(statements.length).toBe(24); // 23 + the config GET the contextual-embedding switch needs (T-0042)
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -390,7 +397,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // drifted rows, and the T-0065 parity batch above finds no per-workspace
     // drift either, so its own repair batch never fires. If this number
     // moves, say why in the same commit.
-    expect(statements.length).toBe(24);
+    expect(statements.length).toBe(25); // 24 + the config GET the contextual-embedding switch needs (T-0042)
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

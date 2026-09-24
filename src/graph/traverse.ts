@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
-import { D1_MAX_BOUND_PARAMS } from "../constants";
+import { D1_MAX_BOUND_PARAMS, WRITE_PATH_TOPK } from "../constants";
+import { nearestParents } from "../vectorize/parents";
 import { getKind } from "../memory/kind";
 import { getStatus } from "../memory/status";
 import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
@@ -442,11 +443,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
 }
 
 export async function neighborsFromVectorQuery(values: number[], env: Env): Promise<{ id: string; score: number }[]> {
-  const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
-  const scores = new Map<string, number>();
-  for (const m of matches) {
-    const pid = (m.metadata as any)?.parentId ?? m.id;
-    scores.set(pid, Math.max(scores.get(pid) ?? 0, m.score));
-  }
-  return [...scores.entries()].map(([id, score]) => ({ id, score }));
+  // A wider window collapsed to five distinct notes: one long note is several vectors and could fill topK 5 alone.
+  const { matches } = await env.VECTORIZE.query(values, { topK: WRITE_PATH_TOPK, returnMetadata: "all" });
+  return nearestParents(matches).map(m => ({ id: ((m.metadata as any)?.parentId ?? m.id) as string, score: m.score }));
 }

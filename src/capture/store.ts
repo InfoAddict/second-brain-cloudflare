@@ -1,10 +1,13 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { CHUNK_MAX_CHARS, MIRRORED_SOURCES } from "../constants";
+import { CHUNK_MAX_CHARS, VECTORIZE_UPSERT_BATCH } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
-import { chunkText } from "../text/chunk";
+import { buildEmbeddingChunks, mayBeContextual, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
+import { focusModeAllowed } from "./focus-budget";
+import { deleteVectorIds } from "../vectorize/batch";
+import { schemeOf, LEGACY_SCHEME } from "../embedding/scheme";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
@@ -37,7 +40,10 @@ export async function storeEntry(
   source: string,
   now: number,
   config: Readonly<Config> = DEFAULTS,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
+  llmContexts?: readonly string[],
+  /** Chunks the caller already built for exactly this entry, config and focus mode (the migration costs them before writing); built once here otherwise. */
+  planned?: readonly EmbeddingChunk[],
 ): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
@@ -51,15 +57,28 @@ export async function storeEntry(
   //
   // Only the INDEX is truncated. entries.content keeps the whole record, so
   // nothing is lost to the reader and keyword search still covers all of it.
-  const allChunks = chunkText(content);
-  const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
+  const entry = { id, content, tags, source, createdAt: now };
+  let chunks: EmbeddingChunk[];
+  try {
+    // The index-size read happens only for a note that would get focus chunks.
+    if (planned) chunks = [...planned];
+    else {
+      const focus = config.CONTEXTUAL_EMBEDDINGS === "on" && mayBeContextual(entry) ? await focusModeAllowed(env, config) : true;
+      chunks = buildEmbeddingChunks(entry, config, llmContexts, focus);
+    }
+  } catch (e) {
+    // Context is an enhancement; a failure building it must not fail the save.
+    console.error("Contextual chunking failed, embedding plain chunks:", e);
+    chunks = plainEmbeddingChunks(entry);
+  }
+  const scheme = schemeOf(config);
 
   const vectors = await Promise.all(
-    chunks.map(async (chunk, i) => {
+    chunks.map(async chunk => {
       const metadata: Record<string, any> = {
-        content: chunk,
+        content: chunk.rawContent,
         parentId: id,
-        chunkIndex: i,
+        chunkIndex: chunk.chunkIndex,
         totalChunks: chunks.length,
         tags,
         source,
@@ -69,20 +88,28 @@ export async function storeEntry(
         // passes query unfiltered.
         workspace_id: writeCtx.workspaceId,
       };
+      // Scheme 1 vectors carry no field, exactly as before schemes existed.
+      if (scheme !== LEGACY_SCHEME) metadata.scheme = scheme;
+      if (chunk.contextualized) {
+        metadata.contextualized = true;
+        metadata.contextSource = chunk.contextSource;
+      }
 
       tags.forEach(t => {
         metadata[`tag_${t.replace(/[."]/g, "_")}`] = true;
       });
 
       return {
-        id: chunks.length === 1 ? id : `${id}-chunk-${i}`,
-        values: await embed(chunk, env, config),
+        id: chunks.length === 1 ? id : `${id}-chunk-${chunk.chunkIndex}`,
+        // The prefix is embedding input only; metadata.content stays raw.
+        values: await embed(chunk.embeddingText, env, config),
         metadata,
       };
     })
   );
 
-  await env.VECTORIZE.upsert(vectors);
+  // Vectorize accepts at most 1,000 vectors per upsert from a Worker.
+  for (let i = 0; i < vectors.length; i += VECTORIZE_UPSERT_BATCH) await env.VECTORIZE.upsert(vectors.slice(i, i + VECTORIZE_UPSERT_BATCH));
 
   const vectorIds = vectors.map(v => v.id);
 
@@ -103,8 +130,9 @@ export async function storeEntry(
 
 export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: string[]): Promise<void> {
   if (!newIds.length) return;
-  const stale = oldIds.filter(v => !newIds.includes(v));
-  if (stale.length) await env.VECTORIZE.deleteByIds(stale);
+  const keep = new Set(newIds);
+  const stale = oldIds.filter(v => !keep.has(v));
+  if (stale.length) await deleteVectorIds(env, stale);
 }
 
 export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS, writeCtx: WriteContext = OWNER_WRITE_CONTEXT): Promise<StoredEntry> {

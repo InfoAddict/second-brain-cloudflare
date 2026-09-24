@@ -1,4 +1,5 @@
 import { hasCapsuleTag } from "../tags/system";
+import { deleteVectorIds } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
@@ -264,7 +265,7 @@ export async function handleAdminRoutes(
       });
       if (result.vectorIds.length) {
         try {
-          await env.VECTORIZE.deleteByIds(result.vectorIds);
+          await deleteVectorIds(env, result.vectorIds);
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -1568,7 +1569,7 @@ export async function handleAdminRoutes(
 
     if (vectorsToDrop.length) {
       try {
-        await env.VECTORIZE.deleteByIds(vectorsToDrop);
+        await deleteVectorIds(env, vectorsToDrop);
       } catch (e) {
         // D1 already says deprecated and recall filters on that, so the entries
         // are out of recall either way; the index just keeps some dead vectors.

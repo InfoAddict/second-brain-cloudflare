@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (135 queries, 68 exceptions, 10 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (139 queries, 72 exceptions, 10 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1222,7 +1222,15 @@ describe("the checker over the real source tree", () => {
     // its <=30 candidate parents, every id of which the scoped candidate-signal
     // read above already returned. The clause is omitted because it makes SQLite
     // scan the whole workspace instead of doing primary-key lookups.
-    ).toEqual({ queries: 135, exempt: 68, checked: 10, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt for the scheme migration's by-id
+    // re-read of the row it just rebuilt (src/migration/embedding.ts, T-0042),
+    // the same admin-driven, deployment-wide exemption as its page query.
+    // Deliberate: +2 queries and +2 scope-exempt for the scheme migration's filtered
+    // page (a rows query and a remaining-count query, since only entries that need
+    // a rewrite are loaded) and estimate()'s paged read of the long entries it
+    // must chunk (src/migration/embedding.ts, T-0042): the same admin/cron-driven,
+    // deployment-wide exemption as the migration's other reads.
+    ).toEqual({ queries: 139, exempt: 72, checked: 10, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

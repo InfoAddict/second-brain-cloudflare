@@ -5,11 +5,15 @@ import {
   // applies no minimum-score cutoff, so surfacing this would imply a recall
   // control that does not exist.
   CANDIDATE_SCORE_THRESHOLD,
+  WRITE_PATH_TOPK,
   CONTRADICTION_MAX_TOKENS,
   SMART_MERGE_MAX_TOKENS,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { embed, readStreamText } from "../lib/ai";
+import { firstChunkEmbeddingText, isContextEligible, mayBeContextual } from "./contextual";
+import { focusModeAllowed } from "./focus-budget";
+import { nearestParents } from "../vectorize/parents";
 import { queryVectorizeScoped, singleWorkspaceFilter } from "../vectorize/scope";
 
 type DuplicateResult =
@@ -49,6 +53,9 @@ export async function checkDuplicateAndContradiction(
   // queryVectorizeScoped a fire-and-forget KV write on filter degradation —
   // src/vectorize/scope.ts itself stays env-free.
   ctx?: { waitUntil(promise: Promise<unknown>): void },
+  // What capture is about to store the note with. The comparison chunk is embedded with the same prefix the stored chunks
+  // carry (source and tags are in it); without them it still matches, just less closely.
+  meta?: { source: string; tags: string[] },
 ): Promise<{
   duplicate: DuplicateResult;
   contradiction: ContradictionResult;
@@ -56,7 +63,20 @@ export async function checkDuplicateAndContradiction(
   neighbors: { id: string; score: number }[];
 }> {
   const sample = getDuplicateCheckSample(content);
-  const values = await embed(sample, env, config);
+  // A long note is stored as small prefixed chunks, and a sample of its start,
+  // middle and end embeds nowhere near any one of them (a re-captured note scored
+  // 0.86 at best, under the block threshold). So a note that will be stored that
+  // way is also compared as its own first chunk, embedded exactly as capture
+  // will store it; the sample still finds notes stored before contextual
+  // embeddings, whose vectors are whole 1,600-character chunks.
+  const probe = { content, source: meta?.source ?? "" };
+  const chunkText0 = config.CONTEXTUAL_EMBEDDINGS === "on" && mayBeContextual(probe) && isContextEligible(probe)
+    ? firstChunkEmbeddingText({ ...probe, tags: meta?.tags ?? [] }, config, await focusModeAllowed(env, config))
+    : null;
+  const [values, chunkValues] = await Promise.all([
+    embed(sample, env, config),
+    chunkText0 ? embed(chunkText0, env, config) : Promise.resolve(null),
+  ]);
 
   // Duplicate detection, contradiction detection and neighbour edges are all
   // advisory — a capture without them is still correct, just less enriched. This
@@ -64,23 +84,27 @@ export async function checkDuplicateAndContradiction(
   // on deployments the read path already serves keyword-only (recall/search.ts).
   let matches: VectorizeMatch[] = [];
   try {
-    if (workspaceId !== undefined) {
-      // Dedupe/contradiction compare against the WRITE TARGET's workspace only:
-      // a private note must not collide with a colleague's shared one, and
-      // vice versa. Falls back to unfiltered when Vectorize rejects the filter.
-      const onDegrade = ctx
-        ? () => ctx.waitUntil(
-            env.OAUTH_KV.put(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, String(Date.now()))
-              .catch((e: unknown) => console.error("Vectorize filter-degradation marker write failed (non-fatal):", e)),
-          )
-        : undefined;
-      const { matches: filtered } = await queryVectorizeScoped<VectorizeMatch>(
-        env.VECTORIZE, values, { topK: 5, filter: singleWorkspaceFilter(workspaceId).filter, onDegrade },
-      );
-      matches = filtered;
-    } else {
-      ({ matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" }));
-    }
+    const queryWith = async (vector: number[]): Promise<VectorizeMatch[]> => {
+      if (workspaceId !== undefined) {
+        // Dedupe/contradiction compare against the WRITE TARGET's workspace only:
+        // a private note must not collide with a colleague's shared one, and
+        // vice versa. Falls back to unfiltered when Vectorize rejects the filter.
+        const onDegrade = ctx
+          ? () => ctx.waitUntil(
+              env.OAUTH_KV.put(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, String(Date.now()))
+                .catch((e: unknown) => console.error("Vectorize filter-degradation marker write failed (non-fatal):", e)),
+            )
+          : undefined;
+        const { matches: filtered } = await queryVectorizeScoped<VectorizeMatch>(
+          env.VECTORIZE, vector, { topK: WRITE_PATH_TOPK, filter: singleWorkspaceFilter(workspaceId).filter, onDegrade },
+        );
+        return filtered;
+      }
+      return (await env.VECTORIZE.query(vector, { topK: WRITE_PATH_TOPK, returnMetadata: "all" })).matches;
+    };
+    const all = await Promise.all([queryWith(values), ...(chunkValues ? [queryWith(chunkValues)] : [])]);
+    // One long note is several vectors; keep the best hit of each of the five nearest distinct notes.
+    matches = nearestParents(all.flat());
   } catch (e) {
     console.error("Vectorize query failed (capturing without duplicate/contradiction checks):", e);
   }

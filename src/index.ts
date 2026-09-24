@@ -13,6 +13,7 @@ import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
+import { SCHEME_NIGHTLY_CHUNK_BUDGET, runLlmContextBatch, runSchemeBatch } from "./migration/embedding";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -81,8 +82,11 @@ export default {
     // cost CPU and D1-cost budget instead of buying it.
     if (event.cron === INTEGRATION_SYNC_CRON) {
       job("integration sync", (async () => {
+        // Read once for the whole run: the sync's writes, the push pass over every workspace and the
+        // embedding scheme batch all take it, instead of each resolving its own (a KV read apiece).
+        const cfg = await resolveConfig(env);
         try {
-          await runScheduledIntegrationSync(env);
+          await runScheduledIntegrationSync(env, cfg);
         } catch (e) {
           console.error("integration sync failed (non-fatal):", e);
         }
@@ -91,9 +95,18 @@ export default {
         // on the mirror sync's health, and a slow or failing sync must not
         // delay notifications past the hour they were due.
         try {
-          await pushDueItemsAllWorkspaces(env);
+          await pushDueItemsAllWorkspaces(env, cfg);
         } catch (e) {
           console.error("push due items failed (non-fatal):", e);
+        }
+        // Moves existing vectors onto the configured embedding scheme, a full
+        // run's budget an hour, so a large brain finishes in days rather than
+        // months. Idle it costs two KV reads. Own try/catch: it must never hide
+        // or delay what the hour is for.
+        try {
+          await runSchemeBatch(env, cfg);
+        } catch (e) {
+          console.error("embedding scheme migration failed (non-fatal):", e);
         }
       })());
       return;
@@ -214,6 +227,19 @@ export default {
         await runFtsMaintenance(env);
       } catch (e) {
         console.error("FTS maintenance failed (non-fatal):", e);
+      }
+
+      // Moves existing vectors onto the configured embedding scheme, one small
+      // batch a night. Idle (one KV read) once every vector is current. Separately
+      // caught: a scheme batch failing must never hide the night summary, and
+      // the admin route (POST /migration/scheme) drives it faster on demand.
+      try {
+        const cfg = await resolveConfig(env);
+        await runSchemeBatch(env, cfg, { chunkBudget: SCHEME_NIGHTLY_CHUNK_BUDGET });
+        // Off by default; returns before touching anything unless both switches are on.
+        await runLlmContextBatch(env, cfg);
+      } catch (e) {
+        console.error("Embedding scheme migration failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing
