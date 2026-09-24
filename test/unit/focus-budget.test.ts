@@ -41,6 +41,49 @@ describe("focusModeAllowed", () => {
     resetFocusBudgetCache();
     expect(await focusModeAllowed(envWith({}), on)).toBe(true);
   });
+  it("remembers a failed read for a minute, so a broken describe is not retried on every long capture", async () => {
+    const env = envWith(new Error("down"));
+    for (let i = 0; i < 5; i++) expect(await focusModeAllowed(env, on)).toBe(true);
+    expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after the failure has been remembered for a minute", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const env = envWith(new Error("down"));
+      await focusModeAllowed(env, on);
+      vi.setSystemTime(1_000_000 + 59_000);
+      await focusModeAllowed(env, on);
+      expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(1_000_000 + 61_000);
+      await focusModeAllowed(env, on);
+      expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one describe between captures that arrive together", async () => {
+    let release!: (v: unknown) => void;
+    const env = makeTestEnv() as Env;
+    (env.VECTORIZE as { describe: unknown }).describe = vi.fn(() => new Promise(r => { release = r; }));
+    const calls = Array.from({ length: 8 }, () => focusModeAllowed(env, on));
+    release({ vectorCount: 10, dimensions: 384 });
+    expect(await Promise.all(calls)).toEqual(Array(8).fill(true));
+    expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(1);
+  });
+
+  it("a read that fails while others wait fails open for all of them, once", async () => {
+    let fail!: (e: Error) => void;
+    const env = makeTestEnv() as Env;
+    (env.VECTORIZE as { describe: unknown }).describe = vi.fn(() => new Promise((_, rej) => { fail = rej; }));
+    const calls = Array.from({ length: 4 }, () => focusModeAllowed(env, on));
+    fail(new Error("down"));
+    expect(await Promise.all(calls)).toEqual(Array(4).fill(true));
+    expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(1);
+  });
+
   it("remembers the size for a few minutes instead of reading it on every write", async () => {
     const env = envWith({ vectorCount: 10, dimensions: 384 });
     await focusModeAllowed(env, on);

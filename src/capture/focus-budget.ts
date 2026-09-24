@@ -16,28 +16,44 @@ import type { Config } from "../config";
 import type { Env } from "../env";
 
 const CACHE_MS = 5 * 60_000;
-let cached: { at: number; dims: number } | null = null;
+const FAILURE_CACHE_MS = 60_000;
+/** The last answer (a size, or null for "could not read it") and when it was given; and the read now in flight, so captures that arrive together share it. */
+let cached: { at: number; dims: number | null } | null = null;
+let inFlight: Promise<number | null> | null = null;
 
 /** For tests: forgets the remembered index size. */
 export function resetFocusBudgetCache(): void {
   cached = null;
+  inFlight = null;
 }
 
-/** Stored dimensions in the index right now, remembered per isolate for a few minutes. Null when it cannot be read. */
-async function storedDimensions(env: Env): Promise<number | null> {
-  const now = Date.now();
-  if (cached && now - cached.at < CACHE_MS) return cached.dims;
+async function readStoredDimensions(env: Env): Promise<number | null> {
   try {
     // V2 indexes report { vectorCount, dimensions }; the generated V1 type says { vectorsCount, config.dimensions }.
     const info = (await env.VECTORIZE.describe()) as unknown as Record<string, any> | undefined;
     const count = info?.vectorCount ?? info?.vectorsCount;
     const dims = info?.dimensions ?? info?.config?.dimensions;
-    if (typeof count !== "number" || typeof dims !== "number") return null;
-    cached = { at: now, dims: count * dims };
-    return cached.dims;
+    return typeof count === "number" && typeof dims === "number" ? count * dims : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Stored dimensions in the index right now, remembered per isolate for five
+ * minutes, and a failed read for one, so a broken `describe` is not retried on
+ * every long capture; concurrent callers share one read. Null when it cannot be read.
+ */
+async function storedDimensions(env: Env): Promise<number | null> {
+  const now = Date.now();
+  if (cached && now - cached.at < (cached.dims === null ? FAILURE_CACHE_MS : CACHE_MS)) return cached.dims;
+  if (!inFlight) {
+    inFlight = readStoredDimensions(env).then(dims => {
+      cached = { at: Date.now(), dims };
+      return dims;
+    }).finally(() => { inFlight = null; });
+  }
+  return inFlight;
 }
 
 /** True when a long note may be cut into focus chunks. Fails open: an unreadable index size never costs a save its quality. */
