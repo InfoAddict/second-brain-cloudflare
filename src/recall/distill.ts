@@ -10,6 +10,7 @@ import { readStreamText } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { tokenizeQuery } from "../text/tokenize";
+import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
 import { extractHashtags } from "../text/hashtags";
 import { isTopicTag } from "../compression/eligibility";
 import { getTagVocabulary } from "../tags/vocabulary";
@@ -326,7 +327,7 @@ export async function distillToRareTerms(
   }
 
   try {
-    const sums = dfTerms.map((_, i) => `SUM(CASE WHEN content LIKE ? THEN 1 ELSE 0 END) AS d${i}`).join(", ");
+    const sums = dfTerms.map((_, i) => `SUM(CASE WHEN content LIKE ? ${CONTENT_LIKE_ESCAPE} THEN 1 ELSE 0 END) AS d${i}`).join(", ");
     let where = "";
     const timeBindings: number[] = [];
     if (bounds.after !== undefined) {
@@ -342,7 +343,7 @@ export async function distillToRareTerms(
     }
     // scope-checked: the caller's clause IS applied when an identity is present — it is appended into `where` above; the lexer cannot see into a JS-assembled fragment
     const row = await env.DB.prepare(`SELECT COUNT(*) AS total, ${sums} FROM entries${where ? ` WHERE${where}` : ""}`)
-      .bind(...dfTerms.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? [])).first() as Record<string, number> | null;
+      .bind(...dfTerms.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? [])).first() as Record<string, number> | null;
     if (!row || !row.total) return { query: content.join(" "), df: null, total: null, distillSource: "like" };
     const total = row.total;
     const df = new Map(dfTerms.map((t, i) => [t, (row[`d${i}`] as number) ?? 0]));

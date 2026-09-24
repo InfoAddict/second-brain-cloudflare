@@ -4,6 +4,10 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Search**
+
+- Searching for identifiers with underscores, such as `DATABASE_URL` and `ERR_TLS_90412`, now finds the matching memories.
+
 ## [3.6.0] — Search that finds the exact thing
 
 **Search**

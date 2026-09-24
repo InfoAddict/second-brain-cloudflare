@@ -17,7 +17,7 @@ export interface QueryProfile {
 }
 
 function identifierShaped(token: string): boolean {
-  return /[\d#.]/.test(token) || token.includes("-");
+  return /[\d#._%-]/.test(token);
 }
 
 export function deterministicVariants(query: string, tokens: string[]): string[] {

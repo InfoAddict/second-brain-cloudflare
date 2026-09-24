@@ -113,7 +113,7 @@ describe("recallEntries with an Identity", () => {
     expect(diagnostics.keywordIds!.some(id => id.startsWith("foreign-"))).toBe(false);
     const keywordSql = sqlite.issued.find(s => s.includes("ORDER BY created_at DESC LIMIT"));
     expect(keywordSql).toContain(
-      "WHERE (content LIKE ? OR content LIKE ?) AND workspace_id IN (?, ?)",
+      "WHERE (content LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') AND workspace_id IN (?, ?)",
     );
   });
 
@@ -122,12 +122,12 @@ describe("recallEntries with an Identity", () => {
     const { ctx } = makeCtx();
     const keywordSql = () => sqlite.issued.find(s => s.includes("ORDER BY created_at DESC LIMIT"));
 
-    // Absent identity: the pre-tenancy string, verbatim. (The hydration
+    // Absent identity: the unscoped statement. (The hydration
     // projection now carries workspace_id so matches can report their layer —
     // what must never appear unscoped is the workspace_id *clause*.)
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx);
     expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?`,
+      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`,
     );
     expect(sqlite.issued.some(s => s.includes("FROM entries") && s.includes("workspace_id IN"))).toBe(false);
 
@@ -136,7 +136,7 @@ describe("recallEntries with an Identity", () => {
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a") });
     expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? AND workspace_id IN (?, ?) ORDER BY created_at DESC LIMIT ?`,
+      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?, ?) ORDER BY created_at DESC LIMIT ?`,
     );
     // Both hydration steps carry the clause too — the candidate-signal read is
     // the leak-catcher for unscoped vectorize hits until namespaces land (P3).
@@ -187,7 +187,7 @@ describe("recallEntries with an Identity", () => {
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a"), workspaceFilter: "personal" });
     expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? AND workspace_id IN (?) ORDER BY created_at DESC LIMIT ?`,
+      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?) ORDER BY created_at DESC LIMIT ?`,
     );
 
     // Team filter: exactly one workspace id, and the result set is that team's row.
@@ -195,7 +195,7 @@ describe("recallEntries with an Identity", () => {
     const res = await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a"), teamId: "ws-co" });
     expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? AND workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
+      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
     );
     expect(res.matches.map(m => m.id)).toEqual(["co"]);
   });

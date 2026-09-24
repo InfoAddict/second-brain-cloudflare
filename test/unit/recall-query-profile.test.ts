@@ -58,6 +58,14 @@ describe("recall query profile", () => {
     expect(tokens).toHaveLength(16);
   });
 
+  it("retains underscored and percent-bearing anchors without fabricating stripped variants", () => {
+    const query = "why ERR_TLS_90412 DATABASE_URL 50%_off "
+      + Array.from({ length: 20 }, (_, index) => `signal${index}`).join(" ");
+    const profile = buildQueryProfile(query, { query: "signal0", df: null, total: null, distillSource: "shortcut" });
+    expect(profile.retrievalTokens.slice(0, 4)).toEqual(["signal0", "err_tls_90412", "database_url", "50%_off"]);
+    expect(profile.retrievalTokens).not.toEqual(expect.arrayContaining(["errtls90412", "databaseurl", "50off"]));
+  });
+
   it("uses bounded deterministic variants without replacing original evidence", () => {
     const tokens = buildQueryProfile(
       "Did North Harbor teams review launch-plans on June 3?",

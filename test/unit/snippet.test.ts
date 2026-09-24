@@ -128,6 +128,11 @@ describe("allowanceFor", () => {
 });
 
 describe("queryRelevantWindow", () => {
+  it("selects the passage containing a literal identifier", () => {
+    const content = "filler ".repeat(70) + "The ERR_TLS_90412 setting applies. " + "tail ".repeat(30);
+    expect(queryRelevantWindow(content, ["err_tls_90412"], 120)).toContain("ERR_TLS_90412");
+  });
+
   it("drops a partial leading word when a nonzero window starts inside it", () => {
     const content = `${"x".repeat(100)} alpha beta ${"noise ".repeat(100)}`;
     const window = queryRelevantWindow(content, ["alpha", "beta"]);

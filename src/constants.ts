@@ -1,6 +1,21 @@
 export const LLM_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 /**
+ * Escape a literal value before placing it inside a SQL LIKE pattern.
+ * Pair the result with LIKE_ESCAPE: without it, backslashes are literal and
+ * the pattern matches nothing instead of too much.
+ */
+export function escapeLikeMeta(value: string): string {
+  return value.replace(/([%_\\])/g, "\\$1");
+}
+
+/**
+ * Pair with every LIKE pattern built using escapeLikeMeta. Without ESCAPE,
+ * backslashes are literal and the pattern matches nothing instead of too much.
+ */
+export const LIKE_ESCAPE = `ESCAPE '\\'`;
+
+/**
  * Model for `reasonOverPair` (src/insight/reason.ts) only — every other call
  * (classification, contradiction detection, smart merge, digests, recall
  * synthesis) keeps using `LLM_MODEL` above. Insight reasoning is a harder

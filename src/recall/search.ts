@@ -16,6 +16,7 @@ import { expandGraph } from "../graph/traverse";
 import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { parseTimePhrase } from "../text/temporal";
+import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
 import { distillToRareTerms, inferQueryTags, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
@@ -53,7 +54,7 @@ async function keywordSearchLike(
   // order is the only ordering available on those paths: they are exactly the
   // paths where the frequencies that would rank the terms are missing.
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
-  const where = terms.map(() => "content LIKE ?").join(" OR ");
+  const where = terms.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
   let timeWhere = "";
   const timeBindings: number[] = [];
   if (bounds.after !== undefined) {
@@ -74,7 +75,7 @@ async function keywordSearchLike(
   const tokenWhere = terms.length > 1 && (timeWhere || scopeSql) ? `(${where})` : where;
   const { results } = await env.DB.prepare(
     `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} ORDER BY created_at DESC LIMIT ?`
-  ).bind(...terms.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? []), limit).all();
+  ).bind(...terms.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), limit).all();
   return results as unknown as KeywordRow[];
 }
 

@@ -22,7 +22,7 @@ describe("tokenizeQuery() beyond ASCII (#326)", () => {
   it("folds full-width Latin to its ASCII token and keeps the typed surface as a probe, after the tokens", () => {
     expect(tokenizeQuery("Ｃｌｏｕｄｆｌａｒｅ")).toEqual(["cloudflare", "Ｃｌｏｕｄｆｌａｒｅ"]);
     expect(tokenizeQuery("Ｖ１．９")).toEqual(["v1.9", "Ｖ１．９"]);
-    expect(tokenizeQuery("５０％ｏｆｆ ＿ｆｏｏ")).toEqual(["50off", "foo", "５０％ｏｆｆ", "＿ｆｏｏ"]);
+    expect(tokenizeQuery("５０％ｏｆｆ ＿ｆｏｏ")).toEqual(["50%off", "_foo", "５０％ｏｆｆ", "＿ｆｏｏ"]);
   });
 
   it("folds half-width katakana and keeps the typed surface as a probe", () => {

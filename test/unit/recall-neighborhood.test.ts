@@ -276,6 +276,13 @@ describe("deterministic linked-evidence scoring", () => {
 });
 
 describe("query coverage details", () => {
+  it("requires literal underscore and percent matches", () => {
+    const corpus = { df: new Map([["err_tls_90412", 1], ["50%_off", 1]]), total: 100 };
+    const tokens = ["err_tls_90412", "50%_off"];
+    expect(queryCoverage("ERR_TLS_90412 has 50%_off", tokens, corpus).score).toBe(1);
+    expect(queryCoverage("ERRXTLSX90412 has 50Xoff", tokens, corpus).score).toBe(0);
+  });
+
   it("labels only exact rare token matches as high-IDF", () => {
     const corpus = { df: new Map([["dotnet", 10]]), total: 100 };
 
