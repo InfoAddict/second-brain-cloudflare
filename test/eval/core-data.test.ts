@@ -26,10 +26,11 @@ const DATA = resolve(import.meta.dirname, "data/core");
 // categories: paraphrase 9x (48 -> 440), multi-hop 5x (30 -> 150), long-context 9x (24 -> 220). Gate power scales with
 // independent clusters, and a target category needs about +0.05 with a lower bound above zero, so paraphrase (the reranker)
 // and long-context (contextual embeddings) got the most. Minimums and floors are 0.8 x the shipped counts, so a ~35% power
-// cut in any category fails.
+// cut in any category fails. Common-word clusters are dense triples (84 for 133 queries: the same triple in the two
+// viewer scopes is one cluster), which is why its floor is lower than its query minimum.
 const MINIMUMS = { identifier: 120, "rare-word": 105, "common-word": 105, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 176 } as const;
 const CLUSTER_MINIMUM = 1140;
-const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 106, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 176 } as const;
+const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 67, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 176 } as const;
 
 describe("core golden data", () => {
   beforeAll(() => { for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) buildCorpus(id); }, 60_000);
@@ -107,6 +108,17 @@ describe("core golden data", () => {
     expect(bytes).toBeLessThan(8 * 1024 * 1024);
   });
 
+  it("clusters common-word queries by dense triple, so permutation twins share one cluster", () => {
+    const spec = buildCorpus("core-1k");
+    const byTriple = new Map<string, Set<string>>();
+    for (const q of spec.queries.filter(q => q.category === "common-word")) {
+      const triple = q.text.split(" ").filter(word => (DENSE_TOKENS as readonly string[]).includes(word)).sort().join(",");
+      byTriple.set(triple, (byTriple.get(triple) ?? new Set()).add(q.clusterKey!));
+    }
+    for (const [triple, keys] of byTriple) expect(keys.size, triple).toBe(1);
+    expect(spec.queries.filter(q => q.category === "common-word").length).toBeGreaterThan(byTriple.size);
+  });
+
   it("has enough distinct clusters overall and per category for the bootstrap", () => {
     const spec = buildCorpus("core-1k");
     expect(new Set(spec.queries.map(q => q.clusterKey)).size).toBeGreaterThanOrEqual(CLUSTER_MINIMUM);
@@ -127,7 +139,7 @@ describe("core golden data", () => {
 
   it("regenerates the long-context needles byte-identically and keeps them varied", () => {
     const generated = longContextNeedles();
-    expect(needles.filter(n => n.purpose === "long-context")).toEqual(generated);
+    expect(needles.filter(n => n.id.startsWith("n-long-"))).toEqual(generated);
     const sentences = generated.map(n => new Set(n.content.match(/[^.]+\./g)!.map(sentence => sentence.trim())));
     for (let i = 0; i < sentences.length; i++) {
       for (let j = i + 1; j < sentences.length; j++) {
@@ -135,7 +147,7 @@ describe("core golden data", () => {
         expect(shared, `${generated[i].id} vs ${generated[j].id}`).toBeLessThanOrEqual(3);
       }
     }
-    for (const q of queries.filter(q => q.category === "long-context")) {
+    for (const q of queries.filter(q => q.category === "long-context" && q.gold[0].id.startsWith("n-long-"))) {
       expect(generated.filter(n => n.content.includes(q.answerSpan!)).length, q.id).toBe(1);
     }
   });

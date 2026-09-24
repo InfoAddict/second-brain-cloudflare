@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { EdgeType } from "../../../src/graph/types";
 import type { GoldenQuery } from "../types";
 import { hashDataDir } from "../lock";
-import { DENSE_RATE_BY_SCALE, generateHaystack } from "./haystack";
+import { DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack } from "./haystack";
 import {
   ACTORS, EVAL_NOW, WORKSPACES, needleToEntry,
   type CorpusEdge, type CorpusEntry, type CorpusSpec, type NeedleRow,
@@ -45,6 +45,19 @@ export function loadCoreData(): CoreData {
 }
 
 /** `data` overrides the committed files (the audit tool and tests build candidate sets this way). */
+/**
+ * Queries that share a source memory resample together. A common-word query is identified by its dense triple, and the
+ * same triple in two viewer scopes is two notes with near-identical embeddings, so a triple is one cluster however
+ * many notes carry it.
+ */
+export function clusterKeyOf(q: GoldenQuery): string {
+  if (q.category === "common-word") {
+    const triple = q.text.split(/\s+/).filter(word => (DENSE_TOKENS as readonly string[]).includes(word)).sort();
+    if (triple.length === 3) return `triple:${triple.join(",")}`;
+  }
+  return q.gold.find(g => g.grade === 2)?.id ?? q.gold[0].id;
+}
+
 export function buildCorpus(id: CoreCorpusId, data: CoreData = loadCoreData()): CorpusSpec {
   const params = CORPUS_PARAMS[id];
   const { needles, edges, queries } = data;
@@ -82,7 +95,7 @@ export function buildCorpus(id: CoreCorpusId, data: CoreData = loadCoreData()): 
     intent: params.intent,
     entries,
     edges: corpusEdges,
-    queries: queries.map(q => ({ ...q, clusterKey: q.clusterKey ?? q.gold.find(g => g.grade === 2)?.id ?? q.gold[0].id })),
+    queries: queries.map(q => ({ ...q, clusterKey: q.clusterKey ?? clusterKeyOf(q) })),
     dataFingerprint: hashDataDir(CORE_DATA_DIR),
   };
 }
