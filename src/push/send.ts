@@ -5,7 +5,7 @@
  * cron (src/index.ts) and by the admin POST /push/run and /push/test routes.
  */
 import type { Env } from "../env";
-import { resolveConfig } from "../config";
+import { resolveConfig, type Config } from "../config";
 import { DUE_SQL } from "../when/input";
 import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
@@ -200,9 +200,9 @@ export interface PushDueItemsResult {
  * batch for whatever subscription-state writes the run produced — three
  * statements at most, regardless of how many notifications are sent.
  */
-export async function pushDueItems(env: Env, workspaceId: string): Promise<PushDueItemsResult> {
+export async function pushDueItems(env: Env, workspaceId: string, resolved?: Readonly<Config>): Promise<PushDueItemsResult> {
   const now = Date.now();
-  const config = await resolveConfig(env);
+  const config = resolved ?? await resolveConfig(env);
   const dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label FROM entries
      WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
@@ -252,14 +252,14 @@ export async function pushDueItems(env: Env, workspaceId: string): Promise<PushD
  * workspace. On the common case — one personal brain, one subscribed
  * workspace — that is four D1 statements total for the whole hourly run.
  */
-export async function pushDueItemsAllWorkspaces(env: Env): Promise<{ sent: number }> {
+export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Config>): Promise<{ sent: number }> {
   const rows = ((await env.DB.prepare(
     `SELECT DISTINCT workspace_id FROM push_subscriptions`,
   ).all()).results ?? []) as { workspace_id: string }[];
 
   let sent = 0;
   for (const row of rows) {
-    const result = await pushDueItems(env, row.workspace_id);
+    const result = await pushDueItems(env, row.workspace_id, resolved);
     sent += result.sent;
   }
   return { sent };

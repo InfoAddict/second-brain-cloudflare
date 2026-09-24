@@ -75,3 +75,19 @@ describe("contextual embeddings off (the shipped default)", () => {
     expect(env.VECTORIZE.describe).not.toHaveBeenCalled();
   });
 });
+
+describe("the hourly cron reads config once", () => {
+  it("resolves config a single time for the sync, the push pass over every workspace and the scheme batch", async () => {
+    const { default: worker } = await import("../../src/index");
+    const { INTEGRATION_SYNC_CRON } = await import("../../src/integrations/mirror");
+    const { env, d1, kv } = makeEnv();
+    // two workspaces with push subscriptions: the push pass used to resolve config once per workspace
+    for (const ws of ["w-a", "w-b"]) d1.db.prepare(`INSERT INTO push_subscriptions (id, workspace_id, endpoint_hash, subscription_json, created_at) VALUES (?, ?, ?, '{}', 1)`).bind(`s-${ws}`, ws, `h-${ws}`).run();
+    const get = vi.spyOn(kv, "get");
+    const waits: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (p: Promise<unknown>) => { waits.push(p); }, passThroughOnException() {} } as unknown as ExecutionContext;
+    await worker.scheduled({ cron: INTEGRATION_SYNC_CRON, scheduledTime: Date.now() } as unknown as ScheduledEvent, env, ctx);
+    await Promise.allSettled(waits);
+    expect(get.mock.calls.filter(c => String(c[0]) === "config:overrides")).toHaveLength(1);
+  });
+});
