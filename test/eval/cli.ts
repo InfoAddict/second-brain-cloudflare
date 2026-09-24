@@ -134,6 +134,13 @@ const dist = (d: { mean: number; p50: number; p95: number }, digits = 1) => `mea
 const metricsLine = (s: Summary) => `recall@5 ${f(s.metrics.recall5)}  recall@10 ${f(s.metrics.recall10)}  MRR@10 ${f(s.metrics.mrr10)}  nDCG@10 ${f(s.metrics.ndcg10)}`;
 const row = (name: string, s: Summary) => `  ${name.padEnd(14)} n=${String(s.n).padEnd(4)} ${metricsLine(s)}`;
 
+/** Why rows_read is absent: an unmeasured backend, or a workerd run where some statements reported none. */
+function rowsReadMissing(report: VariantReport): string {
+  if (report.d1Backend !== "workerd") return "    D1 rows_read: not measured (use --d1 workerd)";
+  const missing = report.results.filter(r => r.cost.d1RowsRead === null).length;
+  return `    D1 rows_read: ${missing} of ${report.results.length} queries reported no rows_read on the workerd backend, so the figure is withheld`;
+}
+
 export function formatReport(report: VariantReport): string {
   const { overall, byCategory, knownGaps, allQueries } = summarize(report.results);
   const gapKeys = Object.keys(knownGaps.byGap);
@@ -150,7 +157,8 @@ export function formatReport(report: VariantReport): string {
     ] : []),
     "  cost per query (all queries):",
     `    D1 statements  ${dist(allQueries.d1Statements)}`,
-    allQueries.d1RowsRead ? `    D1 rows_read   ${dist(allQueries.d1RowsRead, 0)}` : "    D1 rows_read: not measured (use --d1 workerd)",
+    allQueries.d1RowsRead ? `    D1 rows_read   ${dist(allQueries.d1RowsRead, 0)}` : rowsReadMissing(report),
+    "    caveat: recall@5 and MRR are read from the top-10 prefix; production's topK 5 can rank differently (topK changes MMR and the related-slot reservation)",
     ...(report.llmTags ? [`    llm tags       ${report.llmTags}${report.llmTags === "stand-in" ? " (embedding-nearest stand-in for the tag-inference LLM call)" : " (empty answer: no query tags, as if the LLM call failed)"}`] : []),
     ...(report.llmTags === "stand-in" ? ["    caveat: agreement with the real model is unmeasured"] : []),
     ...(report.llmTags ? ["    caveat: cost excludes synthesizeInsight (GET /recall's default; off in MCP and in the eval)"] : []),

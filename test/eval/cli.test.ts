@@ -205,6 +205,17 @@ describe("main (end to end on a tiny registered corpus)", () => {
     expect(empty).toMatch(/excludes synthesizeInsight/);
   });
 
+  it("formatReport says @5 comes from the top-10 prefix, and never suggests --d1 workerd on a workerd run", () => {
+    const base = report([result({ queryId: "a" }), result({ queryId: "b" })]);
+    const text = formatReport(base);
+    expect(text).toMatch(/caveat: recall@5 and MRR are read from the top-10 prefix/);
+    expect(text).toMatch(/production's topK 5 can rank differently/);
+    expect(text).toMatch(/rows_read: not measured \(use --d1 workerd\)/);
+    const partial = formatReport({ ...base, d1Backend: "workerd", results: base.results.map((r, i) => ({ ...r, cost: { ...r.cost, d1RowsRead: i ? null : 5 } })) });
+    expect(partial).toMatch(/rows_read: 1 of 2 queries reported no rows_read/);
+    expect(partial).not.toMatch(/use --d1 workerd/);
+  });
+
   it("formatReport states where the neuron figures come from", () => {
     const base = report([result({ queryId: "a" })]);
     expect(formatReport({ ...base, neuronSource: "projected" })).toMatch(/neurons.*projected from local token counts/);

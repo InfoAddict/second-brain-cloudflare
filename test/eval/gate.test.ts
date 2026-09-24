@@ -179,6 +179,16 @@ describe("evaluateGate", () => {
     expect(status(evaluateGate(base, heavy({ d1Statements: 60 })), "cost")).toBe("fail"); // p95 ceiling
   });
 
+  it("does not tell a workerd run to use workerd: it names the queries that reported no rows_read", () => {
+    const partial = (v: string, up: number) => ({ ...report(v, (i, r) => { shift(0.5, up)(i, r); if (i % 3 === 0) r.cost.d1RowsRead = null; }), d1Backend: "workerd" as const });
+    const gate = evaluateGate(partial("b", 0), partial("c", 30));
+    expect(gate.verdict).toBe("INCONCLUSIVE");
+    const detail = gate.rules.find(r => r.rule === "cost")!.detail;
+    expect(detail).not.toMatch(/--d1 workerd/);
+    expect(detail).toMatch(/80 of 240 queries in the baseline and 80 of 240 in the candidate reported no rows_read on the workerd backend/);
+    expect(detail).toMatch(/--allow-unmeasured-rows/);
+  });
+
   it("treats unmeasured rows_read as INCONCLUSIVE unless explicitly allowed", () => {
     const unmeasured = (v: string, up: number) => report(v, (i, r) => { shift(0.5, up)(i, r); r.cost.d1RowsRead = null; });
     const b = unmeasured("b", 0), c = unmeasured("c", 30);

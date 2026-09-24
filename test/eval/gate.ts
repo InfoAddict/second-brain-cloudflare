@@ -123,6 +123,14 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   return problems;
 }
 
+function unmeasuredRowsRead(base: VariantReport, cand: VariantReport): string {
+  if (base.d1Backend !== "workerd" && cand.d1Backend !== "workerd") {
+    return "rows_read is unmeasured on the sqlite backend: rerun with --d1 workerd for a full verdict, or pass --allow-unmeasured-rows for a cost-blind comparison";
+  }
+  const missing = (r: VariantReport) => `${r.results.filter(x => x.cost.d1RowsRead === null).length} of ${r.results.length}`;
+  return `${missing(base)} queries in the baseline and ${missing(cand)} in the candidate reported no rows_read on the ${base.d1Backend === "workerd" ? "workerd" : cand.d1Backend} backend (a statement whose result carries no meta); pass --allow-unmeasured-rows for a cost-blind comparison`;
+}
+
 export function evaluateGate(base: VariantReport, cand: VariantReport, opts: GateOptions = {}): GateResult {
   const t = { ...DEFAULT_GATE, ...opts.thresholds };
   const rules: RuleResult[] = [];
@@ -271,7 +279,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     rowsNote = "; rows_read unmeasured (allowed)";
   } else {
     add("cost", problemsCost.length ? "fail" : "inconclusive",
-      problemsCost.length ? problemsCost.join("; ") : "rows_read is unmeasured on the sqlite backend: rerun with --d1 workerd for a full verdict, or pass --allow-unmeasured-rows for a cost-blind comparison");
+      problemsCost.length ? problemsCost.join("; ") : unmeasuredRowsRead(base, cand));
     return finish(rules, deltas, mde);
   }
   add("cost", problemsCost.length ? "fail" : "pass", problemsCost.length ? problemsCost.join("; ") : `within budget${rowsNote}`);
