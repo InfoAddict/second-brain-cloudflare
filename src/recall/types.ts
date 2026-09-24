@@ -101,7 +101,7 @@ export interface RecallVariantFlags {
   rerankTuning?: RerankTuning;
 }
 
-export interface RerankTuning { weight?: number; maxCandidates?: number; excerptChars?: number }
+export interface RerankTuning { weight?: number; floor?: number; maxCandidates?: number; excerptChars?: number }
 
 export interface RecallInternalOptions {
   embeddingQueryMode?: EmbeddingQueryMode;

@@ -76,12 +76,23 @@ describe("percentilesFromScores and blendRerankerScores", () => {
     expect(out.find(x => x.id === "z")!.score).toBe(0.5);
     expect(ranked[0].score).toBe(1); // inputs are not mutated
   });
-  it("ships at full weight: the worst-ranked scores zero and the best doubles", () => {
-    const out = blendRerankerScores([m("a", 1), m("b", 1)], new Map([["a", 0], ["b", 1]]));
-    expect(out.map(x => [x.id, x.score])).toEqual([["b", 2], ["a", 0]]);
+  it("never multiplies by zero: the floor bounds the worst-ranked candidate", () => {
+    const out = blendRerankerScores([m("a", 1), m("b", 1)], new Map([["a", 0], ["b", 1]]), 1, 0.25);
+    expect(out.map(x => [x.id, x.score])).toEqual([["b", 2], ["a", 0.25]]);
+    expect(blendRerankerScores([m("a", 1)], new Map([["a", 0]]), 1, 0.5)[0].score).toBe(0.5);
+  });
+  it("a scored candidate can never fall below an unscored one, and unscored keep their order", () => {
+    const ranked = [m("u1", 10), m("u2", 9), m("a", 1), m("b", 1)];
+    const out = blendRerankerScores(ranked, new Map([["a", 0], ["b", 1]]), 1, 0.25);
+    expect(out.map(x => x.id)).toEqual(["b", "a", "u1", "u2"]);
+    expect(out.find(x => x.id === "a")!.score).toBeGreaterThan(out.find(x => x.id === "u1")!.score);
+    expect(out.find(x => x.id === "u1")!.score).toBe(10);
+    expect(out.find(x => x.id === "u2")!.score).toBe(9);
+    // the lift is one amount for the whole scored block, so the model's own spacing survives
+    expect(out.find(x => x.id === "b")!.score - out.find(x => x.id === "a")!.score).toBeCloseTo(1.75);
   });
   it("uses the parent id, not the chunk id, to look up the percentile", () => {
-    const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 1)], new Map([["p", 0]]), 0.25);
+    const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 0.1)], new Map([["p", 0]]), 0.25);
     expect(out.find(x => x.id === "p-0")!.score).toBeCloseTo(0.75);
   });
 });

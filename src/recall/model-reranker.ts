@@ -1,4 +1,4 @@
-import { RERANK_AMBIGUITY_MARGIN, RERANK_BREAKER_FAILURES, RERANK_PROBE_TIMEOUT_MS, RERANK_BLEND_WEIGHT, RERANK_EXCERPT_CHARS, RERANK_MAX_CANDIDATES, RERANK_MAX_DIRECT, RERANK_MODEL, RERANK_NOT_READY_TTL_S, RERANK_QUERY_MAX_CHARS, RERANK_READY_CACHE_MS, RERANK_READY_KV_KEY, RERANK_READY_TTL_S, RERANK_TIMEOUT_MS } from "../constants";
+import { RERANK_AMBIGUITY_MARGIN, RERANK_BREAKER_FAILURES, RERANK_PROBE_TIMEOUT_MS, RERANK_BLEND_FLOOR, RERANK_BLEND_WEIGHT, RERANK_EXCERPT_CHARS, RERANK_MAX_CANDIDATES, RERANK_MAX_DIRECT, RERANK_MODEL, RERANK_NOT_READY_TTL_S, RERANK_QUERY_MAX_CHARS, RERANK_READY_CACHE_MS, RERANK_READY_KV_KEY, RERANK_READY_TTL_S, RERANK_TIMEOUT_MS } from "../constants";
 import type { RerankMode } from "../config";
 import type { Env } from "../env";
 import type { VectorizeMatch } from "./math";
@@ -74,12 +74,29 @@ export function percentilesFromScores(parentIds: readonly string[], scores: read
   return out;
 }
 
-/** Scales each scored parent's heuristic score by 1 + weight * (2p - 1); unscored parents keep theirs. */
-export function blendRerankerScores<T extends VectorizeMatch>(ranked: readonly T[], percentiles: ReadonlyMap<string, number>, weight = RERANK_BLEND_WEIGHT): T[] {
-  return ranked.map(match => {
+/**
+ * Reorders only what the model saw. A scored parent's heuristic score is scaled by max(floor, 1 + weight * (2p - 1));
+ * parents outside the scored batch keep their scores and their order, and every scored parent ends up above every
+ * unscored one (the scored block is lifted, as a whole and by one amount, just clear of the best unscored score), so
+ * the model can never demote a candidate below one it did not rank.
+ */
+export function blendRerankerScores<T extends VectorizeMatch>(
+  ranked: readonly T[], percentiles: ReadonlyMap<string, number>, weight = RERANK_BLEND_WEIGHT, floor = RERANK_BLEND_FLOOR,
+): T[] {
+  const scored: T[] = [], unscored: T[] = [];
+  for (const match of ranked) {
     const p = percentiles.get(parentOf(match));
-    return p === undefined ? { ...match } : { ...match, score: match.score * (1 + weight * (2 * p - 1)) };
-  }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    if (p === undefined) unscored.push({ ...match });
+    else scored.push({ ...match, score: match.score * Math.max(floor, 1 + weight * (2 * p - 1)) });
+  }
+  const byScore = (a: T, b: T) => b.score - a.score || a.id.localeCompare(b.id);
+  scored.sort(byScore);
+  unscored.sort(byScore);
+  if (scored.length && unscored.length) {
+    const lift = Math.max(0, unscored[0].score - scored[scored.length - 1].score);
+    if (lift > 0) for (const m of scored) m.score += lift + 1e-9;
+  }
+  return [...scored, ...unscored];
 }
 
 export interface RerankCandidate { parentId: string; text: string }

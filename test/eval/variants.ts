@@ -62,14 +62,14 @@ export function unregisterVariant(name: string): void {
   delete VARIANTS[name];
 }
 
-/** `rerank:w50k30e400` = rerank forced on with blend weight 0.50, 30 candidates, 400-character excerpts (tuning grid; never a shipped setting). */
-const TUNED = /^rerank:w(\d+)k(\d+)e(\d+)$/;
+/** `rerank:w50f25k30e400` = rerank forced on with blend weight 0.50, floor 0.25 (optional), 30 candidates, 400-character excerpts (tuning grid; never a shipped setting). */
+const TUNED = /^rerank:w(\d+)(?:f(\d+))?k(\d+)e(\d+)$/;
 
 export function getVariant(name: string): VariantSpec {
   const t = TUNED.exec(name);
   if (t) {
-    const [weight, maxCandidates, excerptChars] = [Number(t[1]) / 100, Number(t[2]), Number(t[3])];
-    return { name, description: `Reranker forced on, weight ${weight}, ${maxCandidates} candidates, ${excerptChars}-char excerpts.`, internal: { variant: { rerank: true, rerankTuning: { weight, maxCandidates, excerptChars } } }, targetCategories: ["paraphrase", "multi-hop"] };
+    const [weight, floor, maxCandidates, excerptChars] = [Number(t[1]) / 100, t[2] === undefined ? undefined : Number(t[2]) / 100, Number(t[3]), Number(t[4])];
+    return { name, description: `Reranker forced on, weight ${weight}, ${maxCandidates} candidates, ${excerptChars}-char excerpts.`, internal: { variant: { rerank: true, rerankTuning: { weight, ...(floor !== undefined && { floor }), maxCandidates, excerptChars } } }, targetCategories: ["paraphrase", "multi-hop"] };
   }
   const spec = VARIANTS[name];
   if (!spec) throw new Error(`unknown variant "${name}". Known: ${Object.keys(VARIANTS).join(", ")}`);
