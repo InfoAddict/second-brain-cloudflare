@@ -608,3 +608,48 @@ describe("scheme migration retries an entry whose rewrite failed after its vecto
     expect(h.index.has("a-chunk-99")).toBe(false);
   });
 });
+
+describe("scheme migration keeps retrying leftover deletes after it has finished", () => {
+  const finished = (pendingDelete: string[]): SchemeMigrationState => ({
+    model: DEFAULTS.EMBEDDING_MODEL, target: schemeOf(ctx), sources: [], startedAt: 1, cursorRowid: 5, cursorId: "z",
+    processed: 3, skipped: 0, failed: 1, finishedAt: 2, pendingDelete,
+  });
+
+  it("deletes the pending ids from a finished ledger and clears them", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    h.index.set("a-chunk-98", { metadata: {}, values: [0] });
+    h.index.set("a-chunk-99", { metadata: {}, values: [0] });
+    await h.kv.put(SCHEME_MIGRATION_KEY, JSON.stringify(finished(["a-chunk-98", "a-chunk-99"])));
+    const r = await runSchemeBatch(h.env, ctx);
+    expect(r).toMatchObject({ done: true, processed: 0 });
+    expect(h.env.VECTORIZE.deleteByIds).toHaveBeenCalledWith(["a-chunk-98", "a-chunk-99"]);
+    expect(h.index.size).toBe(0);
+    expect((await readSchemeMigration(h.env))!.pendingDelete).toBeUndefined();
+    expect((await readSchemeMigration(h.env))!.finishedAt).toBe(2);
+  });
+
+  it("keeps them, and stays finished, while the delete still fails; retries on the next run", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    let fail = true;
+    (h.env.VECTORIZE as { deleteByIds: unknown }).deleteByIds = vi.fn(async () => { if (fail) throw new Error("down"); });
+    await h.kv.put(SCHEME_MIGRATION_KEY, JSON.stringify(finished(["x-chunk-1"])));
+    expect(await runSchemeBatch(h.env, ctx)).toMatchObject({ done: true });
+    expect((await readSchemeMigration(h.env))!.pendingDelete).toEqual(["x-chunk-1"]);
+    fail = false;
+    await runSchemeBatch(h.env, ctx);
+    expect((await readSchemeMigration(h.env))!.pendingDelete).toBeUndefined();
+    expect(h.env.VECTORIZE.deleteByIds).toHaveBeenCalledTimes(2);
+  });
+
+  it("does nothing, and writes nothing, for a finished ledger with nothing pending", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await h.kv.put(SCHEME_MIGRATION_KEY, JSON.stringify(finished([])));
+    const put = vi.spyOn(h.kv, "put");
+    await runSchemeBatch(h.env, ctx);
+    expect(put).not.toHaveBeenCalled();
+    expect(h.env.VECTORIZE.deleteByIds).not.toHaveBeenCalled();
+  });
+});

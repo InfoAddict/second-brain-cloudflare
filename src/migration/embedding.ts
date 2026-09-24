@@ -615,7 +615,18 @@ export async function runSchemeBatch(
   let state: SchemeMigrationState;
   if (sameModel && prior!.target === target) {
     state = prior!;
-    if (state.finishedAt) return idle();
+    if (state.finishedAt) {
+      // Finished, but ids a rewrite could not delete may still be waiting: an outage that outlasts the last run must not strand them.
+      if (state.pendingDelete?.length) {
+        try {
+          await deleteVectorIds(env, state.pendingDelete);
+          await writeScheme(env, { ...state, pendingDelete: undefined });
+        } catch (e) {
+          console.error("Scheme migration could not delete leftover vectors (will retry):", e);
+        }
+      }
+      return idle();
+    }
   } else {
     // A new target. Vectors may be at the old target, or (if that run never finished) anywhere in its sources.
     const sources = sameModel
