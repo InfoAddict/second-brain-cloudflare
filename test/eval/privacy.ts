@@ -87,14 +87,31 @@ const inside = (root: string, path: string): string | null => {
 export function assertIgnored(path: string, root: string = REPO_ROOT): void {
   const rel = inside(root, path);
   if (rel === null) return;
-  const ignored = git(root, ["check-ignore", "-q", "--no-index", "--", rel]).status === 0;
+  const ignored = git(root, ["check-ignore", "-q", "--no-index", "--", ignoreProbePath(root, rel)]).status === 0;
   if (!ignored) throw new Error(`refusing to write ${rel}: it is not git-ignored. Eval output belongs under ${CACHE_DIR}/ or docs/, or outside the repo.`);
   if (git(root, ["ls-files", "--error-unmatch", "--", rel]).status === 0) throw new Error(`refusing to write ${rel}: it is tracked by git.`);
 }
 
+/**
+ * What to ask `git check-ignore` about. Git refuses a path that lies beyond a symbolic link (exit 128, "beyond a
+ * symbolic link"), which is how a shared model cache is wired (.eval-cache/models -> another checkout). Git can
+ * never track anything past a symlink, only the link itself, so the link is the path that must be ignored. A
+ * path with no symlink is checked as written, and a link that is not ignored still fails closed.
+ */
+export function ignoreProbePath(root: string, rel: string): string {
+  const parts = rel.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    const prefix = parts.slice(0, i).join("/");
+    try {
+      if (lstatSync(resolve(root, prefix)).isSymbolicLink()) return prefix;
+    } catch { return rel; }
+  }
+  return rel;
+}
+
 /** Probe paths from MUST_BE_IGNORED that git does not ignore (empty when the rules hold). */
 export const ignoreRuleViolations = (root: string = REPO_ROOT): string[] =>
-  MUST_BE_IGNORED.filter(p => git(root, ["check-ignore", "-q", "--no-index", "--", p]).status !== 0);
+  MUST_BE_IGNORED.filter(p => git(root, ["check-ignore", "-q", "--no-index", "--", ignoreProbePath(root, p)]).status !== 0);
 
 /** Tracked files that a current ignore rule also matches (a force-added or pre-rule file). */
 export const trackedButIgnored = (root: string = REPO_ROOT): string[] =>
