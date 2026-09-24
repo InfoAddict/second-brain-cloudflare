@@ -378,3 +378,45 @@ describe("vector deletion", () => {
     expect(calls.flatMap(c => c[0])).toEqual(oldIds.slice(2));
   });
 });
+
+describe("estimate and chunking are deterministic (T-0042)", () => {
+  // The bug this pins: on Node 26.7 (V8), String.prototype.codePointAt returns different values for the same emoji
+  // string as a loop gets hot, so an estimator that walked text with it gave one note different token counts, and
+  // through the fitting loop different chunk boundaries, from one process to the next (the guard flaked about half
+  // the time, only for the emoji note). Minimal repro: a bare codePointAt loop over 40 emoji strings varied for 8 of
+  // them in 20 of 20 processes; decoding the surrogate pair by hand never did.
+  const emojiTexts = (() => {
+    let s = 7;
+    const r = () => (s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+    const p = <T,>(a: readonly T[]): T => a[Math.floor(r() * a.length)];
+    const unit = () => `${p(["👨‍👩‍👧‍👦", "🏳️‍🌈", "👩‍💻", "❤️"])}${Array.from({ length: 1 + Math.floor(r() * 3) }, () => p([..."abcdefghijklmnopqrstuvwxyz"])).join("")}`;
+    return Array.from({ length: 40 }, () => { let t = ""; while (t.length < 500) t += `${unit()} `; return t.slice(0, 500); });
+  })();
+
+  it("gives the same token estimate for the same text on every call, from the first call while the code is still cold through the hot loop", async () => {
+    // A fresh copy of the module, so its functions have not been warmed by the tests above: the variance appears as a
+    // function tiers up, and a warm one hides it.
+    vi.resetModules();
+    const { estimateBgeSmallTokens: cold } = await import("../../src/capture/contextual");
+    const first = emojiTexts.map(t => cold(t));
+    const seen = emojiTexts.map(() => new Set<number>());
+    for (let round = 0; round < 400; round++) emojiTexts.forEach((t, i) => seen[i].add(cold(t)));
+    expect(seen.map((s, i) => [i, first[i], [...s]] as const).filter(([, f, s]) => s.length > 1 || s[0] !== f)).toEqual([]);
+  });
+
+  it("cuts the same emoji note into the same chunks on every call", () => {
+    const content = `Family\n${emojiTexts.join(" ")}`.slice(0, 3400);
+    const cut = () => buildEmbeddingChunks(entry({ content }), on, undefined, false).map(c => c.embeddingText).join("\u0000");
+    const first = cut();
+    for (let i = 0; i < 300; i++) expect(cut()).toBe(first);
+  });
+
+  it("does not walk text with codePointAt anywhere in the embedding path", () => {
+    for (const file of ["contextual.ts", "store.ts", "focus-budget.ts", "duplicate.ts"]) {
+      const source = readFileSync(resolve(__dirname, "../../src/capture", file), "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+      expect(source, `${file} calls codePointAt; decode surrogate pairs by hand (see the comment on this suite)`).not.toContain("codePointAt");
+    }
+    const chunker = readFileSync(resolve(__dirname, "../../src/text/chunk.ts"), "utf8");
+    expect(chunker).not.toContain("codePointAt");
+  });
+});

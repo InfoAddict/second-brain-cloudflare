@@ -192,8 +192,12 @@ export function estimateBgeSmallTokens(text: string): number {
       continue;
     }
     // Astral characters are two UTF-16 units; classify the pair once.
-    const cp = text.codePointAt(i)!;
-    const width = cp > 0xffff ? 2 : 1;
+    let cp = c;
+    let width = 1;
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) { cp = ((c - 0xd800) << 10) + (low - 0xdc00) + 0x10000; width = 2; }
+    }
     const kind = classify(cp);
     if (kind === DELETED) {
       // Removed before splitting, so the words either side are one word to BERT: the run carries on across it.
