@@ -232,6 +232,22 @@ evidence rescue, rendering and synthesis are untouched.
   input tokens the eval projects about 0.35 neurons per reranked recall (the
   query is counted once per pair, so this is conservative).
 
+What the persistent losers show (core-1k `q-para-047/043/028/042`, `q-rare-011-c`,
+`q-long-003`; scale-20k `q-rare-015`; SciFact 169 and 500). For the short notes
+(most of them) the excerpt the model reads is the whole note, so the model simply
+disagrees: it ranks generic filler that shares a word with the query above the
+right memory, and every score in those batches is a low logit (about -6 to -10),
+so the percentile order is close to noise. Two causes are structural rather than
+model disagreement: a note longer than the excerpt is read from its head (or a
+keyword window), so `q-long-003` and SciFact 169 never show the model the sentence
+that answers (it sits about 1,400 characters in); and a keyword-only exact match
+that sits at the tail of the fused pool (`q-rare-032`, `q-rare-015`) is never scored,
+reaches the top 10 without the reranker only through MMR's diversity term, and is
+displaced when the scored block is ranked above it. Anchoring the excerpt at the
+dense arm's best chunk was tried for the first and did not move core-1k (paraphrase
+mrr@10 +0.097 either way, overall recall@10 +0.012 against +0.015), because the
+answer still sits inside a 1,600-character chunk; it was not shipped.
+
 The eval's `rerank` variant forces the mode on through the typed
 `variant.rerank` flag (no route can set it); `no-rerank` pins it off,
 `baseline` and `rerank-auto` are the shipped `auto`, and `rerank-auto` carries the
