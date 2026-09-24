@@ -23,7 +23,8 @@ export function mergeData(base: CoreData, partDirs: readonly string[]): CoreData
     others.push(...rd<GoldenQuery>(dir, "queries.jsonl").filter(q => !MECHANICAL.test(q.id)));
   }
   const long = longContextNeedles();
-  const merged = [...needles.filter(n => n.purpose !== "long-context"), ...long];
+  // only the generated n-long-* notes are regenerated; hand-authored long-context needles (other ids) are kept as data
+  const merged = [...needles.filter(n => !n.id.startsWith("n-long-")), ...long];
   return { needles: merged, edges, queries: [...mechanicalQueries(merged), ...others] };
 }
 

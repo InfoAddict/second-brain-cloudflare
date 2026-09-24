@@ -38,6 +38,17 @@ describe("evaluateGate", () => {
     expect(status(result, "degraded")).toBe("fail");
   });
 
+  it("reports a subset:<name> split of a category as extra rows that no rule reads", () => {
+    const tagLong = (i: number, r: QueryResult) => { if (r.category === "long-context" && i % 16 === 7) r.tags = ["subset:coherent-padding"]; };
+    const plain = judge(base, report("v", shift(0.5, 30)));
+    const split = judge(report("baseline", tagLong), report("v", (i, r) => { tagLong(i, r); shift(0.5, 30)(i, r); }));
+    const scopes = new Set(split.deltas.map(d => d.scope));
+    expect(scopes.has("long-context [subset:coherent-padding]")).toBe(true);
+    expect(scopes.has("long-context [rest]")).toBe(true);
+    expect(new Set(plain.deltas.map(d => d.scope)).has("long-context [rest]")).toBe(false);
+    expect(split.rules.map(r => `${r.rule}:${r.status}`)).toEqual(plain.rules.map(r => `${r.rule}:${r.status}`));
+  });
+
   it("FAILs when the baseline is degraded, so a broken baseline cannot flatter a candidate", () => {
     const result = judge(report("baseline", (i, r) => { if (i === 3) r.degraded = ["vectorize-filter-unfiltered"]; }), report("v", shift(0.5, 30)));
     expect(result.verdict).toBe("FAIL");
