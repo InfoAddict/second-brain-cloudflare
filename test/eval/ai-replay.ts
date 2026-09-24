@@ -6,6 +6,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { producerKey, type EmbeddingProducer } from "./types";
 import { hashVector } from "./vectors";
 
 export type ReplayMode = "replay" | "record" | "dry";
@@ -182,6 +183,8 @@ export interface ReplayStoreOptions {
  */
 export class ReplayStore {
   private readonly map = new Map<string, Stored>();
+  /** Who produced each model's vectors, from `{"producer": {...}}` meta lines. One producer per model per cache. */
+  private readonly producers = new Map<string, EmbeddingProducer>();
   private readonly cacheDir: string;
   private readonly committedDir: string;
   private readonly lockStaleMs: number;
@@ -210,12 +213,42 @@ export class ReplayStore {
 
   private apply(path: string, lineNo: number, line: string) {
     try {
-      const rec = JSON.parse(line) as { k?: unknown; v?: unknown };
+      const rec = JSON.parse(line) as { k?: unknown; v?: unknown; producer?: { model?: unknown } & Partial<EmbeddingProducer> };
+      if (rec.producer !== undefined) {
+        const { model, ...producer } = rec.producer;
+        if (typeof model !== "string" || typeof producer.repo !== "string") throw new Error("expected {producer: {model, ...}}");
+        this.adoptProducer(model, producer as EmbeddingProducer);
+        return;
+      }
       if (typeof rec.k !== "string" || !rec.v || typeof rec.v !== "object") throw new Error("expected {k: string, v: object}");
       this.map.set(rec.k, rec.v as Stored);
     } catch (e) {
       throw new Error(`${path}:${lineNo}: corrupt replay record (${(e as Error).message})`);
     }
+  }
+
+  private adoptProducer(model: string, producer: EmbeddingProducer): boolean {
+    const known = this.producers.get(model);
+    if (!known) { this.producers.set(model, producer); return true; }
+    if (producerKey(known) !== producerKey(producer)) {
+      throw new Error(`replay cache mixes producers for ${model}: ${producerKey(known)} and ${producerKey(producer)}. Delete the older cache (or record into a fresh one) rather than mixing vectors`);
+    }
+    return false;
+  }
+
+  producerOf(model: string): EmbeddingProducer | undefined { return this.producers.get(model); }
+
+  /** Registers (and, in a writable store, persists) who produces `model`. Throws if the cache already has a different producer. */
+  recordProducer(model: string, producer: EmbeddingProducer): void {
+    if (!this.adoptProducer(model, producer)) return;
+    const path = this.writeFile;
+    if (!path) { this.producers.delete(model); throw new Error("replay store is read-only"); }
+    mkdirSync(dirname(path), { recursive: true });
+    if (existsSync(path)) {
+      const buf = readFileSync(path);
+      if (buf.length > 0 && buf[buf.length - 1] !== 10) truncateSync(path, buf.lastIndexOf(10) + 1);
+    }
+    appendFileSync(path, `${JSON.stringify({ producer: { model, ...producer } })}\n`);
   }
 
   /** Reads every complete line; returns the bytes consumed. A torn final line is skipped, anything else corrupt throws. */
@@ -290,7 +323,8 @@ export class ReplayStore {
     if (!allowed) {
       throw new Error(`exportUsed may write only inside ${this.cacheDir} or ${join(this.committedDir, "replay.<model>.jsonl.gz")}, not ${path}`);
     }
-    const lines = [...this.used].sort().map(k => JSON.stringify({ k, v: this.map.get(k) }));
+    const meta = [...this.producers].sort(([a], [b]) => a.localeCompare(b)).map(([model, p]) => JSON.stringify({ producer: { model, ...p } }));
+    const lines = [...meta, ...[...this.used].sort().map(k => JSON.stringify({ k, v: this.map.get(k) }))];
     mkdirSync(dirname(abs), { recursive: true });
     const tmp = `${abs}.${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
     try {
@@ -300,7 +334,7 @@ export class ReplayStore {
       try { unlinkSync(tmp); } catch { /* temp may not exist */ }
       throw e;
     }
-    return lines.length;
+    return this.used.size;
   }
 
   put(key: string, value: Stored): void {
@@ -434,31 +468,10 @@ export class ReplayStore {
   get size() { return this.map.size; }
 }
 
-export interface LiveAi { run(model: string, input: unknown): Promise<unknown> }
-
-/** Workers AI over REST: compute only, no bindings to any production resource. */
-export function makeRestAi(opts: { accountId: string; apiToken: string; fetchImpl?: typeof fetch; maxRetries?: number }): LiveAi {
-  const doFetch = opts.fetchImpl ?? fetch;
-  return {
-    async run(model, input) {
-      for (let attempt = 0; ; attempt++) {
-        const res = await doFetch(`https://api.cloudflare.com/client/v4/accounts/${opts.accountId}/ai/run/${model}`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${opts.apiToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify(input),
-        });
-        if ((res.status === 429 || res.status >= 500) && attempt < (opts.maxRetries ?? 5)) {
-          await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
-          continue;
-        }
-        const body = await res.json() as { success?: boolean; result?: unknown; errors?: { message: string }[] };
-        if (!res.ok || body.success === false) {
-          throw new Error(`Workers AI ${model} failed (${res.status}): ${(body.errors ?? []).map(e => e.message).join("; ")}`);
-        }
-        return body.result;
-      }
-    },
-  };
+export interface LiveAi {
+  run(model: string, input: unknown): Promise<unknown>;
+  /** Who produces this model's outputs; the store records it beside the rows and refuses to mix producers. */
+  producer?(model: string): EmbeddingProducer;
 }
 
 export class NeuronBudget {
@@ -518,6 +531,8 @@ export interface ReplayAi {
   ai: Ai;
   /** Calls since the last drain; the runner drains once per query. */
   drainCalls(): AiCall[];
+  /** Who produced `model`'s cached vectors, if the cache says. */
+  producer(model: string): EmbeddingProducer | undefined;
   /** Cache misses seen in dry mode, keyed by replay key. */
   misses: Map<string, { model: string; preview: string; neurons: number }>;
 }
@@ -594,6 +609,7 @@ export function makeReplayAi(opts: {
     }
     if (opts.mode === "replay" || !opts.live) throw new ReplayMissError(model, key, preview);
     const live = opts.live;
+    if (live.producer) opts.store.recordProducer(model, live.producer(model));
     const { stored, live: ranLive } = await opts.store.fill(key, async () => {
       const maxOut = typeof (input as { max_tokens?: unknown }).max_tokens === "number"
         ? (input as { max_tokens: number }).max_tokens : opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
@@ -616,6 +632,7 @@ export function makeReplayAi(opts: {
   return {
     ai: { run } as unknown as Ai,
     drainCalls: () => calls.splice(0),
+    producer: model => opts.store.producerOf(model),
     misses,
   };
 }

@@ -12,7 +12,7 @@ import { ExactVectorize } from "./vectorize-emulator";
 import { EVAL_TOP_K, RUNNER_VERSION, findLeaks, freezeClock, readReport, runVariant, writeReport } from "./runner";
 import type { GoldenQuery } from "./types";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -266,6 +266,20 @@ describe("report identity", () => {
   it("records the top-k and runner version so reports from different harnesses are not compared", async () => {
     const report = await run(await corpus());
     expect(report).toMatchObject({ topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION });
+  });
+});
+
+describe("embedding producer in the report", () => {
+  it("is copied from the cache the run replayed, and absent when the cache names none", async () => {
+    const producer = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" } as const;
+    const root = mkdtempSync(join(tmpdir(), "eval-producer-"));
+    mkdirSync(join(root, ".eval-cache"), { recursive: true });
+    const store = new ReplayStore([], join(root, ".eval-cache", "p.jsonl"), { root });
+    store.recordProducer(MODEL, producer);
+    const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries, edges: [], queries }, backend: "sqlite", replay: makeReplayAi({ store, mode: "dry" }), embeddingModel: MODEL });
+    open.push(c);
+    expect((await run(c)).embeddingProducer).toEqual(producer);
+    expect((await run(await corpus())).embeddingProducer).toBeUndefined();
   });
 });
 

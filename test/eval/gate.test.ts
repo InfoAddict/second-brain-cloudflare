@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, evaluateGate, formatGate } from "./gate";
-import { QUERY_CATEGORIES, RUNNER_VERSION, type QueryResult, type VariantReport } from "./types";
+import { QUERY_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
 
 function report(name: string, tweak: (i: number, r: QueryResult) => void = () => {}, n = 240): VariantReport {
   return {
@@ -42,6 +42,18 @@ describe("evaluateGate", () => {
       const cand = report("v");
       tweak(cand);
       expect(status(evaluateGate(base, cand), "comparable")).toBe("inconclusive");
+    }
+  });
+
+  it("is INCONCLUSIVE when the embedding producers differ, or only one report names one", () => {
+    const producer = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" } satisfies EmbeddingProducer as EmbeddingProducer;
+    const withProducer = (name: string, p = producer) => ({ ...report(name), embeddingProducer: p });
+    const same = evaluateGate(withProducer("baseline"), withProducer("v"));
+    expect(same.rules.find(r => r.rule === "comparable")?.detail ?? "").not.toMatch(/producer/);
+    for (const cand of [withProducer("v", { ...producer, revision: "def" }), withProducer("v", { ...producer, libraryVersion: "4.4.0" }), report("v")]) {
+      const result = evaluateGate(withProducer("baseline"), cand);
+      expect(status(result, "comparable")).toBe("inconclusive");
+      expect(result.rules.find(r => r.rule === "comparable")?.detail).toMatch(/embedding producer differs/);
     }
   });
 

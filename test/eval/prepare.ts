@@ -5,7 +5,8 @@ import { runVariant } from "./runner";
 import type { VariantSpec } from "./variants";
 
 /**
- * The only path that may reach Workers AI. Three passes:
+ * The only path that runs live inference, and it is local (makeLocalAi: pinned open weights, no account, no
+ * network beyond anonymous Hugging Face downloads). Three passes:
  *  1. dry: learn which texts are missing and what recording them would cost;
  *  2. record: only if the estimate fits --max-neurons, embed each missing text once;
  *  3. replay: prove the cache is now complete (throws on any miss).
@@ -40,7 +41,7 @@ export async function prepare(o: {
   let spentNeurons = 0;
   if (missing > 0) {
     if (estimatedNeurons > o.maxNeurons) {
-      throw new Error(`estimated ${estimatedNeurons.toFixed(1)} neurons exceeds --max-neurons ${o.maxNeurons}; raise it deliberately (the free tier is 10,000 neurons per day and the product shares it)`);
+      throw new Error(`estimated ${estimatedNeurons.toFixed(1)} neurons exceeds --max-neurons ${o.maxNeurons}; raise it deliberately (the estimate is a byte-count upper bound in production-equivalent neurons)`);
     }
     const budget = new NeuronBudget(o.maxNeurons);
     await pass(makeReplayAi({ store: o.store, mode: "record", live: o.live, budget }), o.concurrency);
@@ -51,4 +52,25 @@ export async function prepare(o: {
   await pass(makeReplayAi({ store: o.store, mode: "replay" }), 1);
   o.log("replay verification passed: the cache is complete for this variant and corpus.");
   return { missing, estimatedNeurons, spentNeurons };
+}
+
+/** Writes exactly the cache rows a baseline replay of this corpus uses, plus the producer records, as a gzipped layer. */
+export async function exportCache(o: {
+  spec: CorpusSpec;
+  variant: VariantSpec;
+  backend: "sqlite" | "workerd";
+  model: string;
+  readPaths: string[];
+  outPath: string;
+  /** Repo root for the store's path containment; tests point this at a temp dir. */
+  root?: string;
+}): Promise<number> {
+  const store = new ReplayStore(o.readPaths, undefined, { root: o.root });
+  const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay: makeReplayAi({ store, mode: "replay" }), embeddingModel: o.model, index: o.variant.index });
+  try {
+    await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
+  } finally {
+    await corpus.close();
+  }
+  return store.exportUsed(o.outPath);
 }

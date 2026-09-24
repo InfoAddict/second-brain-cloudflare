@@ -24,7 +24,8 @@ await build({
   target: "node24",
   sourcemap: "inline",
   logLevel: "error",
-  external: ["wrangler", "node:*"],
+  // The local embedding runtime is native (onnxruntime-node) and loads from node_modules at run time.
+  external: ["wrangler", "node:*", "@huggingface/transformers", "onnxruntime-*", "sharp"],
   banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
 });
 const run = spawnSync(process.execPath, ["--enable-source-maps", outfile, ...args], {

@@ -5,6 +5,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+// Local inference is replaced by a stub: no model is downloaded or run here.
+vi.mock("./local-ai", async orig => ({
+  ...(await orig<typeof import("./local-ai")>()),
+  makeLocalAi: () => ({
+    run: async (_model: string, input: unknown) => {
+      const { text } = input as { text: string[] };
+      return { shape: [text.length, 384], data: text.map(() => Array.from({ length: 384 }, (_, i) => (i % 7) / 7)), usage: { prompt_tokens: 4, total_tokens: 4 } };
+    },
+    producer: () => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "0", onnxRuntime: "onnxruntime-node@0", repo: "stub/stub", revision: "0", dtype: "fp32" }),
+  }),
+}));
+
 const REAL_REPO = resolve(import.meta.dirname, "../..");
 let root: string;
 let cli: typeof import("./cli");
@@ -132,19 +144,13 @@ describe("replay caches for public corpora", () => {
     } finally { rmSync(committed, { force: true }); }
   });
 
-  it("prepare records into the per-corpus .eval-cache file only, through a stubbed Workers AI (no network)", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct");
-    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
-    const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
-      const { text } = JSON.parse(String((init as RequestInit).body)) as { text: string[] };
-      return new Response(JSON.stringify({ success: true, result: { data: text.map(() => Array.from({ length: 384 }, (_, i) => (i % 7) / 7)), usage: { prompt_tokens: 4, total_tokens: 4 } } }), { status: 200 });
-    });
+  it("prepare records into the per-corpus .eval-cache file only, through a stubbed local model (no download, no account)", async () => {
+    const fetchStub = vi.spyOn(globalThis, "fetch");
     const c = capture();
     try {
       expect(await cli.main(["prepare", "--variant", "baseline", "--corpus", "beir-scifact"]), c.err.join("\n")).toBe(0);
-      expect(fetchStub).toHaveBeenCalled();
-      for (const [url] of fetchStub.mock.calls) expect(String(url)).toMatch(/^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/acct\/ai\/run\//);
-    } finally { c.restore(); fetchStub.mockRestore(); vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", ""); vi.stubEnv("CLOUDFLARE_API_TOKEN", ""); }
+      expect(fetchStub).not.toHaveBeenCalled();
+    } finally { c.restore(); fetchStub.mockRestore(); }
     expect(existsSync(join(root, ".eval-cache/replay/beir-scifact.bge-small-en-v1.5.jsonl"))).toBe(true);
     expect(existsSync(join(root, ".eval-cache/replay/bge-small-en-v1.5.jsonl"))).toBe(false);
     expect(readdirSync(join(root, "test/eval/data/core")).filter(f => f.startsWith("replay"))).toEqual([]);
@@ -172,8 +178,6 @@ describe("privacy guard on every CLI write", () => {
     vi.doMock("./privacy", async orig => ({ ...(await orig<typeof import("./privacy")>()), assertIgnored }));
     vi.resetModules();
     const fresh = await import("./cli");
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct");
-    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
     const fetchStub = vi.spyOn(globalThis, "fetch");
     const c = capture();
     try {
@@ -182,7 +186,6 @@ describe("privacy guard on every CLI write", () => {
       expect(String(assertIgnored.mock.calls[0]?.[0])).toContain("beir-scifact.bge-small-en-v1.5.jsonl");
     } finally {
       c.restore(); fetchStub.mockRestore(); vi.doUnmock("./privacy");
-      vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", ""); vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
     }
   });
 

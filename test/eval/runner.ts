@@ -141,7 +141,8 @@ export async function runVariant(o: {
       }
       o.onProgress?.(results.length, o.queries.length);
     }
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
+    const producer = corpus.replay.producer(o.embeddingModel);
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(producer && { embeddingProducer: producer }), d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
   } finally {
     restoreClock();
   }
@@ -162,6 +163,10 @@ function validateReport(raw: unknown, path: string): VariantReport {
   const r = raw as Record<string, unknown>;
   if (r.schema !== 1) throw new Error(`${path}: unsupported report schema ${String(r.schema)}`);
   for (const f of ["variant", "corpus", "embeddingModel"]) if (!isStr(r[f])) fail(f, "a string");
+  if (r.embeddingProducer !== undefined) {
+    const p = r.embeddingProducer as Record<string, unknown> | null;
+    if (!p || typeof p !== "object" || !["kind", "library", "libraryVersion", "onnxRuntime", "repo", "revision", "dtype"].every(k => isStr(p[k]))) fail("embeddingProducer", "a producer record");
+  }
   if (r.d1Backend !== "sqlite" && r.d1Backend !== "workerd") fail("d1Backend", "sqlite or workerd");
   if (r.isolate !== "warm" && r.isolate !== "cold") fail("isolate", "warm or cold");
   if (!isNum(r.topK)) fail("topK", "a number");

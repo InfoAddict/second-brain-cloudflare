@@ -13,7 +13,8 @@
 //   - A private corpus would use the id `private:<name>`, with its files under PRIVATE_DIR and its
 //     replay cache under .eval-cache/private/ (both ignored). Neither path is on the allowlist.
 //   - `prepare` on a `private:` corpus would refuse unless --allow-private-embed is passed, because
-//     embedding sends real memory text to Workers AI (own account, compute only). The refusal names
+//     embedding sends real memory text to the embedding provider (today a local model, so nothing leaves
+//     the machine; the flag exists so a future remote provider cannot be used silently). The refusal names
 //     what would leave the machine. Without the flag a private corpus stays lexical-only.
 //   - Every private artifact write (--json, exports, labels) goes through assertIgnored().
 //   - The private corpus would be seeded with a CANARY_RE marker entry; the scan already fails on
@@ -34,6 +35,7 @@ export const PRIVATE_DIR = "docs/superpowers/eval-private";
 /** Probe paths that must stay ignored: caches, public downloads, results, and the reserved private dir. */
 export const MUST_BE_IGNORED = [
   `${CACHE_DIR}/replay/x.jsonl`,
+  `${CACHE_DIR}/models/x/onnx/model.onnx`,
   `${CACHE_DIR}/public/scifact/corpus.jsonl`,
   `${CACHE_DIR}/private/x/corpus.jsonl`,
   `${PRIVATE_DIR}/x/corpus.jsonl`,

@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { DEFAULTS } from "../../src/config";
-import { ReplayStore, makeReplayAi, makeRestAi } from "./ai-replay";
+import { ReplayStore, makeReplayAi } from "./ai-replay";
 import { isCoreCorpus, listCorpora, replayPaths, resolveCorpus } from "./corpora";
 import { CORE_DATA_DIR, CORPUS_IDS } from "./corpus/build";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
@@ -12,7 +12,8 @@ import { evaluateGate, formatGate, type GateResult, type Verdict } from "./gate"
 import { LockRefused, applyLock } from "./lock";
 import { summarize, type Summary } from "./metrics";
 import { assertIgnored, isAllowedDataFile } from "./privacy";
-import { prepare } from "./prepare";
+import { makeLocalAi } from "./local-ai";
+import { exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
 import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
@@ -26,6 +27,7 @@ export type CliCommand =
   | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean } & Common)
   | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number } & Common)
   | ({ kind: "lock"; acceptDataChange?: string } & Common)
+  | ({ kind: "export-cache" } & Common)
   | { kind: "list" };
 
 const HASH_MODEL = "hash-smoke";
@@ -68,8 +70,8 @@ export function parseCli(argv: string[]): CliCommand {
     hash: values["hash-embeddings"]!, limit: values.limit !== undefined ? positive("limit", values.limit, { integer: true }) : undefined, json: values.json,
   };
   const command = positionals[0];
-  if (command === "lock" || command === "prepare") {
-    // Neither command produces a report file, and both need the full query set.
+  if (command === "lock" || command === "prepare" || command === "export-cache") {
+    // None of these produces a report file, and all need the full query set.
     if (common.limit !== undefined) throw new UsageError(`${command} needs the full query set; --limit does not apply`);
     if (common.json !== undefined) throw new UsageError(`${command} does not write a report; --json does not apply`);
   }
@@ -85,6 +87,10 @@ export function parseCli(argv: string[]): CliCommand {
       concurrency: positive("concurrency", values.concurrency!), ...common,
     };
   }
+  if (command === "export-cache") {
+    if (common.corpus !== "core-1k") throw new UsageError("only the core-1k cache is committed; larger caches stay local in .eval-cache/");
+    return { kind: "export-cache", ...common };
+  }
   if (command) throw new UsageError(`unknown command "${command}"`);
   if (values.compare) {
     const parts = values.compare.split(",").map(s => s.trim()).filter(Boolean);
@@ -95,7 +101,7 @@ export function parseCli(argv: string[]): CliCommand {
     return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, ...common };
   }
   if (values.variant) return { kind: "run", variant: values.variant, ...common };
-  throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, or --list");
+  throw new UsageError("nothing to do: pass --variant, --compare, prepare, lock, export-cache, or --list");
 }
 
 function parse(argv: string[]) {
@@ -246,14 +252,12 @@ function writeJson(path: string, value: unknown): void {
 
 async function runPrepare(cmd: CliCommand & { kind: "prepare" }): Promise<number> {
   if (cmd.hash) throw new UsageError("prepare records real embeddings; --hash-embeddings does not apply");
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID, apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  if (!accountId || !apiToken) throw new UsageError("prepare needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the environment (Workers AI, compute only)");
   const spec = await resolveCorpus(cmd.corpus);
   const paths = replayPaths(cmd.model, cmd.corpus);
   guardWrite(paths.write); // the cache is the one thing prepare writes
   await prepare({
     spec, variant: getVariant(cmd.variant), backend: cmd.d1, model: cmd.model,
-    store: new ReplayStore(paths.read, paths.write), live: makeRestAi({ accountId, apiToken }),
+    store: new ReplayStore(paths.read, paths.write), live: makeLocalAi(),
     maxNeurons: cmd.maxNeurons, concurrency: cmd.concurrency, log: line => console.log(line),
   });
   return 0;
@@ -276,6 +280,18 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
     return exitCodeFor("INCONCLUSIVE");
   }
   return exitCodeFor(gate.verdict);
+}
+
+/** Writes the committed core replay layer from the recorded cache; like lock, it may write only its allowlisted file. */
+async function runExportCache(cmd: CliCommand & { kind: "export-cache" }, spec: CorpusSpec): Promise<number> {
+  if (cmd.hash) throw new UsageError("export-cache exports recorded embeddings; --hash-embeddings does not apply");
+  const out = resolve(CORE_DATA_DIR, `replay.${cmd.model.split("/").pop()}.jsonl.gz`);
+  if (!isAllowedDataFile(`test/eval/data/core/${basename(out)}`)) throw new UsageError(`${basename(out)} is not an allowlisted replay file name`);
+  // read already lists only files that exist and already includes the local write cache
+  const { read } = replayPaths(cmd.model, cmd.corpus);
+  const n = await exportCache({ spec, variant: getVariant("baseline"), backend: cmd.d1, model: cmd.model, readPaths: read, outPath: out });
+  console.log(`exported ${n} cache entries to ${out}`);
+  return 0;
 }
 
 /** Rerun the baseline and refresh the committed lock; changed golden data needs --accept-data-change. */
@@ -312,6 +328,7 @@ export async function main(argv: string[]): Promise<number> {
     const spec = await resolveCorpus(cmd.corpus);
     if (cmd.kind === "compare") return await runCompare(cmd, spec);
     if (cmd.kind === "lock") return await runLock(cmd, spec);
+    if (cmd.kind === "export-cache") return await runExportCache(cmd, spec);
     const report = await runNamed(cmd, spec, cmd.variant);
     console.log(formatReport(report));
     if (cmd.json) writeJson(cmd.json, report);

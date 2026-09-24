@@ -167,17 +167,13 @@ describe("main (end to end on a tiny registered corpus)", () => {
     expect(await main(["--compare", `${join(dir, "b.json")},${join(dir, "c.json")}`, "--allow-unmeasured-rows"])).toBe(3);
   });
 
-  it("prepare without credentials exits 2 before any live call", async () => {
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-    vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      expect(await main(["prepare", "--variant", "baseline", "--corpus", "tiny-cli"])).toBe(2);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-      vi.unstubAllEnvs();
-    }
+  it("parses export-cache and refuses what it cannot honor", async () => {
+    expect(parseCli(["export-cache"])).toMatchObject({ kind: "export-cache", corpus: "core-1k" });
+    expect(() => parseCli(["export-cache", "--limit", "5"])).toThrow(UsageError);
+    expect(() => parseCli(["export-cache", "--json", "x.json"])).toThrow(UsageError);
+    expect(() => parseCli(["export-cache", "--corpus", "scale-5k"])).toThrow(/only the core-1k cache is committed/);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try { expect(await main(["export-cache", "--hash-embeddings"])).toBe(2); } finally { err.mockRestore(); }
   });
 
   it("--list prints variants and corpora", async () => {

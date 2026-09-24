@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
-  NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, makeRestAi, replayKey, stableStringify,
+  NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, replayKey, stableStringify,
 } from "./ai-replay";
 
 const MODEL = "@cf/baai/bge-small-en-v1.5";
@@ -43,10 +43,10 @@ describe("replayKey", () => {
 });
 
 describe("makeReplayAi", () => {
-  it("replay mode fails closed on an embedding miss and never touches the network", async () => {
-    const fetchImpl = vi.fn(() => { throw new Error("network must not be used"); });
+  it("replay mode fails closed on an embedding miss and never runs live inference", async () => {
+    const fetchImpl = vi.fn(() => { throw new Error("live inference must not be used"); });
     const store = new ReplayStore([], undefined);
-    const { ai } = makeReplayAi({ store, mode: "replay", live: makeRestAi({ accountId: "a", apiToken: "t", fetchImpl: fetchImpl as never }) });
+    const { ai } = makeReplayAi({ store, mode: "replay", live: { run: fetchImpl as never } });
     await expect(ai.run(MODEL as never, embedInput("nope") as never)).rejects.toBeInstanceOf(ReplayMissError);
     await expect(ai.run(MODEL as never, embedInput("nope") as never)).rejects.toThrow(
       new RegExp(`${MODEL}.*${replayKey(MODEL, embedInput("nope"))}`),
@@ -528,33 +528,40 @@ describe("replay inputs", () => {
   });
 });
 
-describe("makeRestAi", () => {
-  it("returns the provider's result.usage from REST", async () => {
-    const expected = { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 };
-    const rest = makeRestAi({ accountId: "acct", apiToken: "token", maxRetries: 0,
-      fetchImpl: (async () => new Response(JSON.stringify({ success: true, result: { response: "ok", usage: expected } }))) as never });
-    expect(await rest.run(LLM, { messages: [{ content: "hi" }] })).toMatchObject({ usage: expected });
+const PRODUCER = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" } as const;
+
+describe("producer provenance in the replay cache", () => {
+  it("records the producer beside the rows, reloads it, and exports it with the used rows", async () => {
+    const root = tmp();
+    const s = store(root, "p.jsonl");
+    const live = { ...fakeLive(), producer: vi.fn(() => PRODUCER) };
+    const ai = makeReplayAi({ store: s, mode: "record", live });
+    await ai.ai.run(MODEL as never, embedInput("a") as never);
+    expect(ai.producer(MODEL)).toEqual(PRODUCER);
+    expect(rows(join(cacheOf(root), "p.jsonl")).filter(l => l.includes('"producer"'))).toHaveLength(1);
+    const reopened = new ReplayStore([join(cacheOf(root), "p.jsonl")], undefined, { root });
+    expect(reopened.producerOf(MODEL)).toEqual(PRODUCER);
+    reopened.get(replayKey(MODEL, embedInput("a")));
+    const out = join(cacheOf(root), "out.jsonl.gz");
+    expect(reopened.exportUsed(out)).toBe(1);
+    expect(new ReplayStore([out], undefined, { root }).producerOf(MODEL)).toEqual(PRODUCER);
   });
 
-  it("retries 429 with backoff, sends the token only in the header, and never echoes it in errors", async () => {
-    const calls: RequestInit[] = [];
-    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
-      calls.push(init);
-      if (calls.length === 1) return new Response("{}", { status: 429 });
-      return new Response(JSON.stringify({ success: true, result: { data: [[1]] } }), { status: 200 });
-    });
-    const live = makeRestAi({ accountId: "acct", apiToken: "SECRET-TOKEN", fetchImpl: fetchImpl as never });
-    vi.useFakeTimers();
-    const pending = live.run(MODEL, embedInput("x"));
-    await vi.advanceTimersByTimeAsync(600);
-    expect(await pending).toEqual({ data: [[1]] });
-    vi.useRealTimers();
-    expect(fetchImpl.mock.calls[0][0]).toContain("/accounts/acct/ai/run/@cf/baai/bge-small-en-v1.5");
-    expect((calls[0].headers as Record<string, string>).Authorization).toBe("Bearer SECRET-TOKEN");
+  it("refuses to record a different producer into a cache that already has one, and to load two layers that disagree", async () => {
+    const root = tmp();
+    const s = store(root, "p.jsonl");
+    s.recordProducer(MODEL, PRODUCER);
+    s.recordProducer(MODEL, { ...PRODUCER }); // same producer: idempotent, no second line
+    expect(rows(join(cacheOf(root), "p.jsonl"))).toHaveLength(1);
+    expect(() => s.recordProducer(MODEL, { ...PRODUCER, revision: "def" })).toThrow(/mixes producers/);
+    const other = store(root, "q.jsonl");
+    other.recordProducer(MODEL, { ...PRODUCER, dtype: "fp32", libraryVersion: "9.9.9" });
+    expect(() => new ReplayStore([join(cacheOf(root), "p.jsonl"), join(cacheOf(root), "q.jsonl")], undefined, { root })).toThrow(/mixes producers/);
+  });
 
-    const failing = makeRestAi({ accountId: "acct", apiToken: "SECRET-TOKEN", maxRetries: 0,
-      fetchImpl: (async () => new Response(JSON.stringify({ success: false, errors: [{ message: "bad" }] }), { status: 400 })) as never });
-    await expect(failing.run(MODEL, embedInput("x"))).rejects.toThrow(/bad/);
-    await expect(failing.run(MODEL, embedInput("x"))).rejects.not.toThrow(/SECRET-TOKEN/);
+  it("a read-only store cannot record a producer, and leaves none behind", () => {
+    const s = new ReplayStore([], undefined, { root: tmp() });
+    expect(() => s.recordProducer(MODEL, PRODUCER)).toThrow(/read-only/);
+    expect(s.producerOf(MODEL)).toBeUndefined();
   });
 });

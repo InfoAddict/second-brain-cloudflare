@@ -59,11 +59,29 @@ export interface QueryResult {
   error?: string;
 }
 
+/** Who produced the embeddings a cache holds. Vectors from different producers are never comparable, even for the same model id. */
+export interface EmbeddingProducer {
+  kind: "local-transformers-js";
+  library: string;
+  libraryVersion: string;
+  onnxRuntime: string;
+  /** Hugging Face repo and exact commit the ONNX weights came from. */
+  repo: string;
+  revision: string;
+  dtype: "fp32";
+}
+
+/** Canonical identity of a producer for equality checks; undefined (unknown or hash smoke) has its own key. */
+export const producerKey = (p: EmbeddingProducer | undefined): string =>
+  p ? [p.kind, p.library, p.libraryVersion, p.onnxRuntime, p.repo, p.revision, p.dtype].join("|") : "none";
+
 export interface VariantReport {
   schema: 1;
   variant: string;
   corpus: string;
   embeddingModel: string;
+  /** What produced the vectors behind this run; absent for hash-embedding smoke runs. */
+  embeddingProducer?: EmbeddingProducer;
   d1Backend: "sqlite" | "workerd";
   isolate: "warm" | "cold";
   /** Result depth every query ran at; reports at different depths are not comparable. */
@@ -77,5 +95,5 @@ export interface VariantReport {
   results: QueryResult[];
 }
 
-/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. */
-export const RUNNER_VERSION = 2;
+/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. */
+export const RUNNER_VERSION = 3;
