@@ -287,25 +287,41 @@ weights). Real Workers AI latency and billing are unmeasured: no account is used
 A memory over 1,600 characters is split into chunks and every chunk is its own
 vector. A fact buried in the middle of a long note is a small part of one large
 chunk, so its vector says little about it. `capture/contextual.ts` therefore
-cuts eligible memories (more than one effective chunk, not a mirrored source)
-into focus chunks of about 500 characters with 50 of overlap, and sends each
-to the embedder behind a transient prefix built from the entry itself:
-`[Memory: <first line>. Project <p>. Topics <t>. Source <s>. Saved <UTC date>.
-Part i of n.]`, capped at 180 characters. Only the embedding input carries the
-prefix: `entries.content`, FTS, and Vectorize `metadata.content` stay raw, so
-snippets, evidence scoring and lexical recall never see it. Single-chunk and
-mirrored entries embed exactly as before, and a failure building context falls
-back to plain chunks without failing the save. Under bge-small, a conservative
-token estimate keeps prefix plus chunk within 480 of the 512-token window by
-splitting further, never by truncating.
+cuts eligible memories (more than one effective chunk, at most 64,000
+characters, not a mirrored source) into **focus chunks** of about 500 characters
+with 50 of overlap, and sends each to the embedder behind a transient prefix
+built from the entry itself: `[Memory: <first line>. Project <p>. Topics <t>.
+Source <s>. Saved <UTC date>. Part i of n.]`, capped at 180 characters. Only the
+embedding input carries the prefix: `entries.content`, FTS, and Vectorize
+`metadata.content` stay raw, so snippets, evidence scoring and lexical recall
+never see it. Single-chunk, mirrored and over-64,000-character entries embed
+exactly as before, and a failure building context falls back to plain chunks
+without failing the save. Under bge-small, a conservative token estimate keeps
+prefix plus chunk within 480 of the 512-token window by cutting smaller, never
+by truncating. The builder is linear in the note (frame computed once, one-pass
+estimator): about 0.5 ms for 8 to 16 KB of prose and 1.4 ms for 64 KB, best of
+15 runs on a loaded machine, against 10 ms of CPU per invocation on the free
+plan; `test/unit/contextual-perf.test.ts` pins that.
 
-Cost: a long note yields about 2.6 times as many vectors as before (7.1
-against 2.7 per long note on `core-1k`), so free-tier Vectorize capacity (5M
-stored dimensions, about 13,000 bge-small vectors) falls by roughly 12 percent
-at 3.5 percent long notes and by more as the share of long notes grows.
-Write-time cost is one embedding call per chunk, at bge-small rates about 0.74
-neurons per 400-token chunk. Switches: `CONTEXTUAL_EMBEDDINGS`
-(on by default), and `CONTEXTUAL_EMBEDDING_LLM` (off; see below).
+**What it costs, and how it is bounded.** Focus chunks turn a 2,700-character
+note from 3 vectors into 7, and the write costs one embedding call per chunk
+(2.7 to 7.1 calls and about 1.2 to 1.6 neurons for a note that size; a
+short note is unchanged). Two bounds keep that from eating the free plan's
+Vectorize storage (5M dimensions, about 13,000 bge-small vectors):
+
+- A note gets at most 6 focus chunks from its head, the rest cut at the larger
+  tail size (`CONTEXT_MAX_FOCUS_CHUNKS`; 6 is the smallest that still passes the
+  long-context gate, 5 and 4 do not).
+- Focus chunking is a budget (`capture/focus-budget.ts`). While the index holds
+  fewer than `CONTEXTUAL_FOCUS_DIMENSION_BUDGET` stored dimensions (2,500,000,
+  half the free allowance; read from Vectorize `describe`, remembered five
+  minutes, failing open; 0 removes the limit) long notes get focus chunks; past
+  it they are cut at the tail size and grow the index as plain chunking always
+  did. So the loss depends on how much of a brain is long notes, and it is
+  capped: simulated to a full index of 13,020 vectors with 2,700-character
+  notes, capacity against plain chunking falls 5.8% with 3.5% long notes, 7.7%
+  with 5%, 12.5% with 10%, 18.2% with 20% and 23.5% with 40% (11.6%, 15.4%,
+  25.0%, 36.4% and 47.1% with the per-note cap alone).
 
 **Scheme versioning.** `embedding/scheme.ts` derives a scheme id from config
 (1 is the pre-T-0042 raw chunk with mean pooling; contextual adds 1, cls
@@ -317,23 +333,70 @@ the vector space and a brain that flipped it without migrating would rank
 queries against vectors from another space.
 
 **In-place migration** (`runSchemeBatch` in `migration/embedding.ts`). Existing
-brains keep plain vectors until the nightly job (12 chunks a night; two KV
-reads once idle) or `POST /migration/scheme` (loop until `done`; `GET` shows the
-ledger) rewrites them. The ledger `migration:embedding-scheme` records the model,
-the target scheme, every scheme a vector may still be in, and a keyset cursor
-`(created_at, id)`, so it resumes from where it stopped and reuses the model
-migration's page query, chunk budget, quota recognition and no-progress stop.
-Each entry is rewritten with deterministic ids (`<id>` / `<id>-chunk-<i>`), so a
-crash before the cursor moves just repeats it; chunk ids the new set no longer
-uses are deleted only afterwards; and the row is re-read by content and tags
-afterwards, rebuilding it if a user edit landed in between. Recall needs no
-change while it runs: contextual text does not move the vector space, so plain
-and contextual vectors rank against one query vector, and a chunk of the same
-entry is collapsed by `parentId`. Switching contextual embeddings off stops new
-contextual vectors and pauses the backfill; it never rewrites. A model
-migration pauses this one and settles its ledger when it finishes. The
-ledger's pooling branch (`queryPoolings`) is the design for a future pooling
-change; recall does not use it yet because nothing that changes pooling ships.
+brains keep plain vectors until the migration rewrites them, an entry at a time
+in the live index, resuming from a ledger (`migration:embedding-scheme`: model,
+target scheme, every scheme a vector may still be in, keyset cursor
+`(created_at, id)`).
+
+- *Safety.* Ids are deterministic (`<id>` / `<id>-chunk-<i>`), so a crash before
+  the cursor moves just repeats the entry; chunk ids the new set no longer uses
+  are deleted only afterwards; the row is re-read by content, tags, workspace
+  and actor afterwards and rebuilt from the fresh row if a user edit or a share
+  landed in between. Vectors are always stamped with the row's own workspace.
+  Recall needs no change while it runs: contextual text does not move the vector
+  space, so plain and contextual vectors rank against one query vector, and
+  chunks of one entry collapse by `parentId`.
+- *Pace.* A change in contextual text only concerns long, non-mirrored entries,
+  so the SQL page selects only those and the cursor jumps over everything else.
+  The hourly cron (`30 * * * *`, the integration sync's) runs a budget of 80
+  chunks and the nightly job 12 (`SCHEME_RUN_CHUNK_BUDGET`,
+  `SCHEME_NIGHTLY_CHUNK_BUDGET`), and a UTC day may spend at most 1,500 estimated
+  neurons (`SCHEME_DAILY_NEURON_CAP`, 15% of the 10,000 allowance, counted from a
+  high token estimate). An idle run costs the config read and one ledger read.
+  An entry that fails for its own reasons three runs in a row is stepped past;
+  a quota failure never counts against it. A model migration pauses this one and
+  settles its ledger when it finishes.
+- *Time to finish* (6.3 vectors per long note, 12 notes a run, 289 notes a day
+  from 24 hourly runs and the nightly one; about 500 neurons and 1,800 vector
+  writes a day, at most 1,500 neurons):
+
+  | Brain size | 3.5% long notes | 20% long notes |
+  | --- | --- | --- |
+  | 1,000 | 3 hours | 17 hours |
+  | 5,000 | 15 hours | 3.5 days |
+  | 20,000 | 2.4 days | 13.8 days |
+
+  Each run is about 80 embedding calls plus four storage calls per rewritten
+  note, well inside the free plan's 1,000 internal subrequests, and its own
+  JavaScript measures 3 to 5 ms of CPU (builder plus write path, node, loaded
+  machine). D1 rows read total about one pass over the table.
+- *Switches.* Turning `CONTEXTUAL_EMBEDDINGS` off stops new contextual vectors
+  and pauses the backfill; turning it on again resumes the same ledger without
+  re-embedding what is already contextual.
+
+`POST /migration/scheme` (bearer `AUTH_TOKEN`) runs one bounded batch on demand
+and returns `{ ok, processed, skipped, failed, chunks, remaining, done, stalled,
+stalledReason?, neurons, capped, paused? }`. `remaining` counts the entries still
+to rewrite (the crons skip that count because it scans every later row, so it is
+null there); `done` is true once every vector is current; `stalled` means the
+batch achieved nothing (a quota or a failing entry) and kept its cursor;
+`capped` means the day's neuron cap ended it; `paused` is `"model-migration"`
+while a model migration is in flight. It is idempotent: call it in a loop until
+`done`, or leave it to the crons. `GET /migration/scheme` returns the ledger
+(`null` when nothing has ever needed moving). `GET /migration/estimate` counts
+the chunks a rebuild would write exactly, with the same builder `storeEntry`
+uses. The ledger's pooling branch (`queryPoolings`) is the design for a future
+pooling change; recall does not use it yet because nothing that changes
+pooling ships.
+
+**Write-path neighbors.** One long note is up to seven vectors, so the duplicate
+check, the graph pass and edge inference ask Vectorize for a window of 20 hits
+and keep the five nearest distinct notes (`vectorize/parents.ts`). The duplicate
+check compares a note that will be stored contextually as its first chunk,
+embedded exactly as capture stores it (a start, middle and end sample scored
+only 0.86 at best against stored focus chunks; the chunk scores 0.97), and
+also as the sample, which is what finds notes stored before contextual
+embeddings; a long capture costs one more embedding call.
 
 The optional generated tier (`CONTEXTUAL_EMBEDDING_LLM`, off; model
 `CONTEXTUAL_EMBEDDING_LLM_MODEL`, Granite Micro by default) replaces the
