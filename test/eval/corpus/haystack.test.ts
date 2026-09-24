@@ -91,8 +91,8 @@ describe("generateHaystack", () => {
     const first = generateHaystack(base);
     const second = generateHaystack(base);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    expect(digest(first)).toBe("7de376a78ce65aacc29655e52372e18cafd9ed3c2322716ad8ce8b07da715051");
-    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("11459c6d97adf1a1a574aff1b40f567ac0768e764d9c192d9023d9740d8c3848");
+    expect(digest(first)).toBe("64006eab4db1f3dfe6131d1327ec9e2de57a4f161339cf56c06ebd6688e2099b");
+    expect(digest(generateHaystack({ ...base, seed: 8 }))).toBe("644d027c32e34c48f93875b5922d2a43063b6370faaf51412c2e41accc3a6bcf");
     expect(first).not.toEqual(generateHaystack({ ...base, seed: 8 }));
   });
 

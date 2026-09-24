@@ -28,7 +28,8 @@ async function main() {
   const isDense = (text: string) => DENSE_TOKENS.filter(word => text.toLowerCase().includes(word));
   for (const n of data.needles) if (!goldIds.has(n.id) && isDense(n.content).length > 2) problems.push(`${n.id}: ${isDense(n.content).length} dense words (${isDense(n.content).join(",")}), at most 2 outside common-word golds`);
   const dense = (text: string) => DENSE_TOKENS.filter(word => text.toLowerCase().includes(word)).sort().join(",");
-  for (const q of data.queries.filter(q => q.category === "common-word")) {
+  // the router guards (tags correlated, subset) deliberately carry other words; they are not dense-triple queries
+  for (const q of data.queries.filter(q => q.category === "common-word" && !q.tags?.includes("correlated") && !q.tags?.includes("subset"))) {
     const gold = data.needles.find(n => n.id === q.gold[0].id);
     const triple = q.text.split(/\s+/).filter(word => (DENSE_TOKENS as readonly string[]).includes(word)).sort().join(",");
     if (!gold || dense(gold.content) !== triple) problems.push(`${q.id}: gold dense words (${gold ? dense(gold.content) : "missing"}) differ from the query triple (${triple})`);

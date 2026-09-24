@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { EdgeType } from "../../../src/graph/types";
 import type { GoldenQuery } from "../types";
 import { hashDataDir } from "../lock";
-import { DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack } from "./haystack";
+import { CORRELATED_RATE_BY_SCALE, DENSE_RATE_BY_SCALE, DENSE_TOKENS, generateHaystack } from "./haystack";
 import {
   ACTORS, EVAL_NOW, WORKSPACES, needleToEntry,
   type CorpusEdge, type CorpusEntry, type CorpusSpec, type NeedleRow,
