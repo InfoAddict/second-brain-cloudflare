@@ -455,6 +455,28 @@ call, one more Vectorize query and, at most once per isolate per five minutes,
 a Vectorize `describe`; short notes and everything with the switch off pay
 nothing. `deleteByIds` is batched at the same 1,000 ceiling as upserts.
 
+**A recurring loser, explained (q-long-024).** "What is the policy on recovering
+costs after journeys" (answer: "the reimbursement form wants original receipts
+within thirty days", at character 1,812 of a 3,186-character note titled
+"Conference travel debrief") is a win on `core-1k` (recall@10 0.0 to 1.0) and a
+loser at `scale-5k` and `scale-20k` (1.0 to 0.0), and it is not a chunking
+artifact. The chunk holding the answer is one of ten small chunks and sits in
+the dense arm's top five either way: dense rank 5 to 4 at scale-5k (0 to 4 of
+50 candidates on core-1k), and its best-chunk cosine with the query rises from
+0.603 to 0.627 with the prefix. What changes is the final cut, which is fed by
+the graph and keyword arms and reshuffles near ties: at scale-5k the gold note
+is 8th of the final ten without contextual chunks and drops out with them,
+because the prefix also lifts another long note, "Trip planning session: the
+northern island" (its best-chunk cosine with the query 0.541 to 0.554), and the
+golden set's long notes share filler, so three of them (n-long-002, -015, -017)
+now fill dense slots ahead of the haystack: the dense list holds 40 distinct
+parents against 50, and n-long-002 takes a final slot the gold note held. One
+query in twenty-four moving across the tenth place is what a paired bootstrap
+over 24 long-context queries is too small to separate, which is why the scale
+gates are inconclusive rather than negative; the expanded long-context set is
+what settles it. The trace is `test/eval` diagnostics (`denseIds`, `fusedIds`,
+`finalIds`) on `scale-5k`, baseline against `contextual-embed`.
+
 The optional generated tier (`CONTEXTUAL_EMBEDDING_LLM`, off; model
 `CONTEXTUAL_EMBEDDING_LLM_MODEL`, Granite Micro by default) replaces the
 deterministic prefix with one model sentence per chunk. `runLlmContextBatch`
