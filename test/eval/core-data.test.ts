@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { DEFAULTS } from "../../src/config";
 import { FTS_MATCH_BUDGET, FTS_MIN_TOKEN_LENGTH, KEYWORD_CANDIDATE_LIMIT } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
+import { chunkText } from "../../src/text/chunk";
 import { longContextNeedles, mechanicalQueries } from "./corpus/author";
 import { auditQueries, haystackVocabulary, keywordRouteModel, staleRouteGaps } from "./corpus/audit";
 import { CORPUS_IDS, CORPUS_PARAMS, HAYSTACK_ROWS, buildCorpus as buildCorpusUncached, loadCoreData } from "./corpus/build";
@@ -28,9 +29,9 @@ const DATA = resolve(import.meta.dirname, "data/core");
 // and long-context (contextual embeddings) got the most. Minimums and floors are 0.8 x the shipped counts, so a ~35% power
 // cut in any category fails. Common-word clusters are dense triples (84 for 133 queries: the same triple in the two
 // viewer scopes is one cluster), which is why its floor is lower than its query minimum.
-const MINIMUMS = { identifier: 120, "rare-word": 105, "common-word": 105, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 176 } as const;
-const CLUSTER_MINIMUM = 1140;
-const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 67, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 176 } as const;
+const MINIMUMS = { identifier: 120, "rare-word": 105, "common-word": 105, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248 } as const;
+const CLUSTER_MINIMUM = 1180;
+const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 67, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248 } as const;
 
 describe("core golden data", () => {
   beforeAll(() => { for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) buildCorpus(id); }, 60_000);
@@ -71,7 +72,7 @@ describe("core golden data", () => {
     for (const category of QUERY_CATEGORIES) {
       expect(queries.filter(q => q.category === category).length, category).toBeGreaterThanOrEqual(MINIMUMS[category]);
     }
-    expect(queries.length).toBeGreaterThanOrEqual(1268);
+    expect(queries.length).toBeGreaterThanOrEqual(1340);
     expect(queries.filter(q => q.tags?.includes("tenancy")).length).toBeGreaterThanOrEqual(60);
   });
 
@@ -156,6 +157,38 @@ describe("core golden data", () => {
     for (const q of queries.filter(q => q.category === "long-context" && q.gold[0].id.startsWith("n-long-"))) {
       expect(generated.filter(n => n.content.includes(q.answerSpan!)).length, q.id).toBe(1);
     }
+  });
+
+  it("carries a second, coherent long-context construction: topical notes, answers at varied depths, tagged as a subset", () => {
+    const coherent = needles.filter(n => n.id.startsWith("n-lcoh-"));
+    const subset = queries.filter(q => q.tags?.includes("subset:coherent-padding"));
+    expect(coherent.length).toBeGreaterThanOrEqual(80);
+    expect(subset.map(q => q.gold[0].id).sort()).toEqual(coherent.map(n => n.id).sort());
+    // the legacy 220 keep their construction and stay untagged, so the two subsets can be reported apart
+    expect(queries.filter(q => q.category === "long-context" && q.gold[0].id.startsWith("n-long-") && q.tags?.some(t => t.startsWith("subset:")))).toEqual([]);
+    const chunkOf = (n: (typeof coherent)[number], span: string) => {
+      const at = n.content.indexOf(span);
+      return chunkText(n.content).findIndex(chunk => chunk.includes(span)) + 1 || Math.floor(at / 1600) + 1;
+    };
+    const depth = new Map<number, number>();
+    for (const q of subset) {
+      const note = coherent.find(n => n.id === q.gold[0].id)!;
+      expect(note.content.length, note.id).toBeGreaterThanOrEqual(4500);
+      expect(note.content.indexOf(q.answerSpan!), note.id).toBeGreaterThanOrEqual(1600);
+      expect(note.content.indexOf(q.answerSpan!), `${note.id} continues after its answer`).toBeLessThan(note.content.length - 300);
+      depth.set(chunkOf(note, q.answerSpan!), (depth.get(chunkOf(note, q.answerSpan!)) ?? 0) + 1);
+    }
+    // answers spread over chunks 2, 3 and 4+, never only the second chunk the legacy notes use
+    expect(depth.get(2) ?? 0, "answers in the second chunk").toBeGreaterThanOrEqual(15);
+    expect([...depth].filter(([chunk]) => chunk >= 3).reduce((sum, [, count]) => sum + count, 0), "answers in chunk 3 or later").toBeGreaterThanOrEqual(40);
+    // no filler shared between notes: on-topic throughout means near-disjoint sentences
+    const sentences = coherent.map(n => new Set(n.content.match(/[^.!?]+[.!?]/g)!.map(sentence => sentence.trim())));
+    for (let i = 0; i < sentences.length; i++) for (let j = i + 1; j < sentences.length; j++) {
+      expect([...sentences[i]].filter(sentence => sentences[j].has(sentence)).length, `${coherent[i].id} vs ${coherent[j].id}`).toBeLessThanOrEqual(1);
+    }
+    const spans = subset.map(q => q.answerSpan!);
+    expect(new Set(spans).size).toBe(spans.length);
+    for (const span of spans) expect(needles.filter(n => n.purpose === "long-context" && n.content.includes(span)).length, span).toBe(1);
   });
 
   it("keeps the mechanical identifier and rare-word queries identical to their generator output", () => {
