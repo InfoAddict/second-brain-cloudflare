@@ -6,6 +6,7 @@ import {
   QUERY_SATURATION_FRACTION,
   VECTORIZE_GET_BY_IDS_BATCH,
   RECALL_BLOCK,
+  RECALL_DEEP_IDS_POOL_SIZE,
   RECALL_DEEP_POOL_SIZE,
   RECALL_POOL_SIZE,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
@@ -37,6 +38,7 @@ import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
+import { asParentMatches } from "../vectorize/parents";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
@@ -426,6 +428,13 @@ export async function recallEntries(
       }
       return await env.VECTORIZE.query(values, { topK: k, returnMetadata: "all", returnValues: true });
     };
+    const denseIdsAt = async (k: number): Promise<{ matches: { id: string; score: number }[] }> => {
+      if (wsFilter) {
+        const { matches } = await queryVectorizeScoped<{ id: string; score: number }>(env.VECTORIZE, values, { topK: k, filter: wsFilter, onDegrade, idsOnly: true });
+        return { matches };
+      }
+      return { matches: (await env.VECTORIZE.query(values, { topK: k, returnMetadata: "none" })).matches };
+    };
     const denseQuery = async (): Promise<{ matches: VectorizeMatch[] }> => {
       if (arms === "keyword-only") return { matches: [] as VectorizeMatch[] };
       try {
@@ -460,7 +469,10 @@ export async function recallEntries(
     // A full pool means the index has more to give. Already widened: the deep list is in hand.
     if (!semanticUnavailable && results.matches.length >= vectorizeTopK) {
       const have = results.matches.length > vectorizeTopK ? results.matches : undefined;
-      denseFill = async () => have ?? (await denseAt(RECALL_DEEP_POOL_SIZE)).matches;
+      denseFill = cfg.CONTEXTUAL_EMBEDDINGS === "on"
+        // Sized in distinct notes: ids only, up to 100 vectors, the note read from each id (see RECALL_DEEP_IDS_POOL_SIZE).
+        ? async () => asParentMatches((await denseIdsAt(RECALL_DEEP_IDS_POOL_SIZE)).matches) as unknown as VectorizeMatch[]
+        : async () => have ?? (await denseAt(RECALL_DEEP_POOL_SIZE)).matches;
     }
   }
 

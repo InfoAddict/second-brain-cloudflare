@@ -177,6 +177,10 @@ export const RECALL_POOL_SIZE = 15;
 // The deeper dense list a call draws on when the diversified one is shorter than its topK, and what a weak best
 // match widens to. 50 is the most Vectorize returns with values and metadata (the ceiling this code has always used).
 export const RECALL_DEEP_POOL_SIZE = 50;
+// With contextual embeddings on one long note is up to seven vectors, so the deep list is sized in distinct notes by
+// asking for ids only: Vectorize returns up to 100 vectors when it returns neither values nor metadata, and the fill
+// only needs each hit's note, which the vector id carries.
+export const RECALL_DEEP_IDS_POOL_SIZE = 100;
 // Results are ordered by score within blocks of this many MMR picks.
 export const RECALL_BLOCK = 5;
 // The most results one recall call can ask for (MCP tool and GET /recall both cap topK here).
