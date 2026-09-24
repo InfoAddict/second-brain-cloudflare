@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import type { VectorizeMatch } from "./math";
 import { identifierShaped } from "./query-profile";
 import { queryRelevantWindow } from "./snippet";
-import type { RerankRoute } from "./types";
+import type { RerankRoute, RerankTuning } from "./types";
 
 /** Workers AI's documented bge-reranker-base output: `id` indexes the submitted contexts, `score` is a raw logit. */
 export type RerankerResponse = { response: { id: number; score: number }[] };
@@ -59,10 +59,10 @@ export function percentilesFromScores(parentIds: readonly string[], scores: read
 }
 
 /** Bounded multiplier: the model can move a heuristic score by at most +/-RERANK_BLEND_WEIGHT, never erase it. */
-export function blendRerankerScores<T extends VectorizeMatch>(ranked: readonly T[], percentiles: ReadonlyMap<string, number>): T[] {
+export function blendRerankerScores<T extends VectorizeMatch>(ranked: readonly T[], percentiles: ReadonlyMap<string, number>, weight = RERANK_BLEND_WEIGHT): T[] {
   return ranked.map(match => {
     const p = percentiles.get(parentOf(match));
-    return p === undefined ? { ...match } : { ...match, score: match.score * (1 + RERANK_BLEND_WEIGHT * (2 * p - 1)) };
+    return p === undefined ? { ...match } : { ...match, score: match.score * (1 + weight * (2 * p - 1)) };
   }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 }
 
@@ -72,10 +72,11 @@ export interface RerankCandidate { parentId: string; text: string }
  * Up to RERANK_MAX_DIRECT direct parents (heuristic order), then extra graph-root parents up to RERANK_MAX_CANDIDATES.
  * Ids only: the passage text comes from a scoped D1 read, never from Vectorize or keyword metadata.
  */
-export function selectRerankIds(direct: readonly VectorizeMatch[], root: readonly VectorizeMatch[]): string[] {
+export function selectRerankIds(direct: readonly VectorizeMatch[], root: readonly VectorizeMatch[], max = RERANK_MAX_CANDIDATES): string[] {
   const ids = new Set<string>();
-  for (const m of direct) { if (ids.size >= RERANK_MAX_DIRECT) break; ids.add(parentOf(m)); }
-  for (const m of root) { if (ids.size >= RERANK_MAX_CANDIDATES) break; ids.add(parentOf(m)); }
+  const directCap = max - (RERANK_MAX_CANDIDATES - RERANK_MAX_DIRECT);
+  for (const m of direct) { if (ids.size >= directCap) break; ids.add(parentOf(m)); }
+  for (const m of root) { if (ids.size >= max) break; ids.add(parentOf(m)); }
   return [...ids];
 }
 
@@ -174,6 +175,8 @@ export interface RerankStepInput {
   evidenceTokens: readonly string[];
   direct: readonly VectorizeMatch[];
   root: readonly VectorizeMatch[];
+  /** Eval-only overrides (RecallVariantFlags.rerankTuning); production passes none. */
+  tuning?: RerankTuning;
   /** Scoped D1 passage text for ids not already in hand; the caller applies the tenant clause. */
   loadContent(ids: string[]): Promise<Map<string, string>>;
 }
@@ -196,10 +199,10 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
   }
   const started = performance.now();
   try {
-    const ids = selectRerankIds(o.direct, o.root);
+    const ids = selectRerankIds(o.direct, o.root, o.tuning?.maxCandidates);
     const content = await o.loadContent(ids);
     const candidates = ids.flatMap(id => {
-      const text = queryRelevantWindow(content.get(id) ?? "", [...o.evidenceTokens], RERANK_EXCERPT_CHARS).trim();
+      const text = queryRelevantWindow(content.get(id) ?? "", [...o.evidenceTokens], o.tuning?.excerptChars ?? RERANK_EXCERPT_CHARS).trim();
       return text ? [{ parentId: id, text }] : [];
     });
     if (candidates.length < 3) return { route: "too-few", ms: performance.now() - started };

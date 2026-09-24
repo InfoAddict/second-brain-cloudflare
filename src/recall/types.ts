@@ -97,7 +97,11 @@ export interface RecallVariantFlags {
   arms?: "both" | "dense-only" | "keyword-only";
   /** true forces the reranker on for the run (still subject to tenancy and the exact-identifier skip); no route sets it. */
   rerank?: boolean;
+  /** Eval-only overrides of the reranker's blend weight, batch size and excerpt length; absent means the shipped values. */
+  rerankTuning?: RerankTuning;
 }
+
+export interface RerankTuning { weight?: number; maxCandidates?: number; excerptChars?: number }
 
 export interface RecallInternalOptions {
   embeddingQueryMode?: EmbeddingQueryMode;

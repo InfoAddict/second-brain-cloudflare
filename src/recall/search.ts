@@ -523,7 +523,7 @@ export async function recallEntries(
   const scopedParents = new Set(rcRows.map(r => r.id));
   const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
   const rerank = await rerankStep({
-    mode: rerankMode, forced: internal.variant?.rerank === true, env, ctx, query: semanticQuery,
+    mode: rerankMode, forced: internal.variant?.rerank === true, tuning: internal.variant?.rerankTuning, env, ctx, query: semanticQuery,
     queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
     loadContent: async ids => {
       const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
@@ -543,8 +543,8 @@ export async function recallEntries(
     if (rerank.ms !== undefined) internal.diagnostics.rerankMs = rerank.ms;
   }
   if (rerank.percentiles) {
-    directReranked = blendRerankerScores(directReranked, rerank.percentiles);
-    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles);
+    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight);
+    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight);
   }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 
