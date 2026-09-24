@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { ReplayStore, makeReplayAi, type LiveAi } from "./ai-replay";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry, type CorpusSpec } from "./corpus/types";
-import { exportCache, prepare } from "./prepare";
+import { RECORD_RERANK_TIMEOUT_MS, exportCache, prepare, withRecordTimeout } from "./prepare";
+import { RERANK_MODEL, RERANK_TIMEOUT_MS } from "../../src/constants";
 import { hashVector } from "./vectors";
-import { getVariant } from "./variants";
+import { getVariant, registerVariant, unregisterVariant } from "./variants";
 import { cleanTemp } from "../helpers/tmp";
 
 afterEach(cleanTemp);
@@ -96,5 +97,67 @@ describe("prepare", () => {
     const l = live();
     await expect(prepare(args(new ReplayStore([file], file, { root }), l))).rejects.toThrow(/no producer record/);
     expect(l.run).not.toHaveBeenCalled();
+  });
+
+  describe("a reranker slower than the production budget", () => {
+    /** A live model whose reranker takes `ms` (local CPU inference on a busy machine); embeddings are instant. */
+    const slowLive = (ms: number): LiveAi & { run: ReturnType<typeof vi.fn> } => ({
+      producer: () => PRODUCER,
+      run: vi.fn(async (model: string, input: unknown) => {
+        if (model === RERANK_MODEL) {
+          await new Promise(r => setTimeout(r, ms));
+          const n = (input as { contexts: unknown[] }).contexts.length;
+          return { response: Array.from({ length: n }, (_, id) => ({ id, score: n - id })), usage: { prompt_tokens: 12, total_tokens: 12 } };
+        }
+        return { data: (input as { text: string[] }).text.map(t => hashVector(t, 384)), usage: { prompt_tokens: 4, total_tokens: 4 } };
+      }),
+    });
+
+    // A variant that reranks in "on" mode but, like baseline, goes through the readiness latch and the circuit breaker
+    // (the forced `rerank` variant skips both, which is why prepare only failed for baseline).
+    const AUTO_LIKE = "tmp-auto-like";
+    const queries5 = ["xylo alpha", "beta gardening", "gamma tomato", "alpha beta", "plan note"].map((text, i) => ({ id: `q${i}`, category: "rare-word" as const, text, gold: [{ id: "a", grade: 2 as const }], viewer: "avery" as const }));
+
+    it(`is still recorded by prepare although it takes longer than RERANK_TIMEOUT_MS (${RERANK_TIMEOUT_MS} ms)`, async () => {
+      registerVariant({ name: AUTO_LIKE, description: "test", config: { RERANK_MODE: "on" } });
+      try {
+        const { root, file } = scratch();
+        const l = slowLive(RERANK_TIMEOUT_MS + 300);
+        const many = { ...spec, queries: queries5 };
+        const res = await prepare({ ...args(new ReplayStore([], file, { root }), l), spec: many, variant: getVariant(AUTO_LIKE) });
+        expect(res.missing).toBeGreaterThan(0);
+        expect(l.run.mock.calls.filter(c => c[0] === RERANK_MODEL).length).toBeGreaterThanOrEqual(queries5.length);
+        // the verification pass replays with the PRODUCTION timeout and found the cache complete: prepare would have thrown otherwise
+        const again = await prepare({ ...args(new ReplayStore([file], file, { root }), l), spec: many, variant: getVariant(AUTO_LIKE) });
+        expect(again.missing).toBe(0);
+      } finally { unregisterVariant(AUTO_LIKE); }
+    }, 120_000);
+
+    it("does not record under the production timeout alone (the failure the override exists for)", async () => {
+      const { root, file } = scratch();
+      const l = slowLive(RERANK_TIMEOUT_MS + 1500);
+      // the same record pass without the override: the recall times out and falls back, so the reranker's row is never asked for
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { loadCorpus } = await import("./corpus/loader");
+      const { runVariant } = await import("./runner");
+      const { NeuronBudget } = await import("./ai-replay");
+      const replay = makeReplayAi({ store: new ReplayStore([], file, { root }), mode: "record", live: l, budget: new NeuronBudget(1000) });
+      const corpus = await loadCorpus({ spec, backend: "sqlite", replay, embeddingModel: MODEL });
+      try {
+        // cold: no warm-up query, whose timed-out call would still finish in the background and record the row for the scored one
+        const report = await runVariant({ corpus, variant: getVariant("rerank"), queries: spec.queries, isolate: "cold", embeddingModel: MODEL });
+        expect(report.results[0].error).toMatch(/reranker step ended in "timeout"/);
+      } finally { await corpus.close(); spy.mockRestore(); }
+    }, 60_000);
+
+    it("the override is a record-pass variant only: it raises the timeout, keeps every other flag, and does not touch the registry", () => {
+      const base = getVariant("rerank");
+      const rec = withRecordTimeout(base);
+      expect(rec.internal?.variant?.rerank).toBe(true);
+      expect(rec.internal?.variant?.rerankTuning?.timeoutMs).toBe(RECORD_RERANK_TIMEOUT_MS);
+      expect(RECORD_RERANK_TIMEOUT_MS).toBeGreaterThan(RERANK_TIMEOUT_MS);
+      expect(getVariant("rerank").internal?.variant?.rerankTuning).toBeUndefined();
+      expect(withRecordTimeout(getVariant("baseline")).internal?.variant?.rerank).toBeUndefined(); // a non-forced variant stays non-forced
+    });
   });
 });

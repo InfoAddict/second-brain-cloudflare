@@ -12,6 +12,19 @@ export function dryReranker(model: string, input: unknown): unknown {
   return { response: contexts.map((_, id) => ({ id, score: contexts.length - id })) };
 }
 
+/** How long the record pass lets one local reranker call run. Production allows RERANK_TIMEOUT_MS (a Workers AI budget); local CPU inference on a busy machine can exceed it, and a fallback would record nothing. */
+export const RECORD_RERANK_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * The variant for the RECORD pass only: same flags, plus the eval-only reranker timeout. Dry, replay-verification and every
+ * gate run keep the production timeout. The override rides on the typed variant flags (RecallVariantFlags.rerankTuning),
+ * which no route or MCP path can set.
+ */
+export function withRecordTimeout(v: VariantSpec): VariantSpec {
+  const flags = v.internal?.variant ?? {};
+  return { ...v, internal: { ...v.internal, variant: { ...flags, rerankTuning: { ...flags.rerankTuning, timeoutMs: RECORD_RERANK_TIMEOUT_MS } } } };
+}
+
 /** Times the real reranker calls only; latency of embedding and tag calls is not what a recall pays for ranking. */
 function timeReranker(live: LiveAi, ms: number[]): LiveAi {
   return { ...live, run: async (model, input) => {
@@ -43,10 +56,10 @@ export async function prepare(o: {
   concurrency: number;
   log: (line: string) => void;
 }): Promise<{ missing: number; estimatedNeurons: number; spentNeurons: number }> {
-  const pass = async (replay: ReturnType<typeof makeReplayAi>, concurrency: number, strict = false) => {
+  const pass = async (replay: ReturnType<typeof makeReplayAi>, concurrency: number, strict = false, variant: VariantSpec = o.variant) => {
     const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay, embeddingModel: o.model, index: o.variant.index, concurrency });
     try {
-      const report = await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
+      const report = await runVariant({ corpus, variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
       // a swallowed miss (a stand-in's) shows up only as a query error, so the verification pass must read them
       const failed = report.results.filter(r => r.error);
       if (strict && failed.length) throw new Error(`replay verification failed on ${failed.length} query(ies), first: ${failed[0].queryId}: ${failed[0].error}`);
@@ -70,7 +83,7 @@ export async function prepare(o: {
     }
     const budget = new NeuronBudget(o.maxNeurons);
     const rerankMs: number[] = [];
-    await pass(makeReplayAi({ store: o.store, mode: "record", live: timeReranker(o.live, rerankMs), budget, llmTags: o.llmTags }), o.concurrency);
+    await pass(makeReplayAi({ store: o.store, mode: "record", live: timeReranker(o.live, rerankMs), budget, llmTags: o.llmTags }), o.concurrency, false, withRecordTimeout(o.variant));
     spentNeurons = budget.spent;
     o.log(`recorded; estimated spend ${spentNeurons.toFixed(1)} neurons.`);
     if (rerankMs.length) o.log(`reranker: ${rerankMs.length} local model call(s), p50 ${pct(rerankMs, 0.5).toFixed(0)} ms, p95 ${pct(rerankMs, 0.95).toFixed(0)} ms (local CPU inference, NOT Workers AI latency, which is unmeasured).`);
