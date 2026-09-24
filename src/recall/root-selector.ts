@@ -17,7 +17,7 @@ export interface SelectedRoot {
   selectedBy: RootView;
 }
 
-const VIEW_SHARE: Record<RootView, number> = {
+export const VIEW_SHARE: Record<RootView, number> = {
   semantic: 0.4,
   lexical: 0.3,
   metadata: 0.15,

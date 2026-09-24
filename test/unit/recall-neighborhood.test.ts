@@ -1,16 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
+  GRAPH_SEED_MAX,
   graphSeedLimit,
+  lexicalSeedLimit,
   queryCoverage,
   relatedSlotLimit,
   scoreLinkedEvidence,
 } from "../../src/recall/neighborhood";
 
 describe("graph-aware recall neighborhood policy", () => {
-  it("bounds graph seeds at the existing overfetch scale and Vectorize ceiling", () => {
+  it("bounds the dense arm's graph seeds at its overfetch scale and the Vectorize ceiling", () => {
     expect(graphSeedLimit(5, 40)).toBe(15);
     expect(graphSeedLimit(20, 90)).toBe(50);
     expect(graphSeedLimit(5, 8)).toBe(8);
+  });
+
+  // T-0083.6: one budget over the fused pool let keyword-only rows outbid the bottom of
+  // the dense fetch, because fusion pays a keyword hit its matched IDF and a dense hit
+  // only 1/(k + rank). The arms are counted separately now.
+  it("does not spend the dense arm's seats on rows the dense arm never returned", () => {
+    // 40 dense rows and 400 keyword-only ones: the dense arm still seats its whole window.
+    expect(graphSeedLimit(5, 40)).toBe(15);
+    expect(lexicalSeedLimit(5, 400, 15)).toBe(5);
+  });
+
+  it("gives the keyword arm the lexical view's share of the dense window, not a matching budget", () => {
+    expect(lexicalSeedLimit(5, 400, 15)).toBe(5);   // ceil(15 * 0.3)
+    expect(lexicalSeedLimit(10, 400, 30)).toBe(9);  // ceil(30 * 0.3)
+    expect(lexicalSeedLimit(5, 2, 15)).toBe(2);     // never more than exist
+  });
+
+  it("keeps both arms' seats under the edge-scan ceiling", () => {
+    expect(graphSeedLimit(50, 200) + lexicalSeedLimit(50, 200, 50)).toBe(GRAPH_SEED_MAX);
+    expect(lexicalSeedLimit(50, 200, 50)).toBe(0);
   });
 
   it("reserves no related slot for tiny result sets and at most two otherwise", () => {

@@ -126,23 +126,27 @@ export const GRAPH_REACH_GATES = {
  */
 export const KNOWN_GAPS: GapTable = {};
 
+/**
+ * Records one decided gap across all three modes. Unreferenced while the table
+ * is empty and kept anyway: adding an entry is a decision, and this is the shape
+ * it has to take -- one key per mode, or a gap recorded in `like` would go
+ * unratcheted in `fts`.
+ */
 function gap(suite: string, gateName: string, metric: keyof LegacyMetrics, item: string, value: number | null): void {
   for (const mode of ["like", "fts-orderless", "fts"] as const) {
     KNOWN_GAPS[`${suite}/${mode}/${gateName}`] = { metric, value, item };
   }
 }
 
-// The one gap left. The two dev misses are enterprise/popular-broad-summary and
-// architecture/popular-broad-summary, where the acceptable root is dense rank 14 of 15
-// and the fused root pool is 17 rows against a seed budget of topK * 3 = 15
-// (graphSeedLimit). The budget is sized for the DENSE arm's fetch and then applied to
-// the fused pool, so every keyword-only row the real SQL adds costs one dense row its
-// seat: here the answer and the keyword leader take the top two, and the root and the
-// popular summary fall off the end. The pipeline still answers both cases, and the
-// graph still reaches their roots (from the answer, in the other direction), so raising
-// the budget would buy this metric at the cost of every recall's graph expansion.
-// T-0083.6 owns that trade; until it is taken the number stands as measured.
-gap("root-quality/development", "seedHits >= 7", "seedHits", "T-0057.4", 6);
+// Empty, and it is meant to stay that way: an entry is a gap someone decided to
+// live with, not a way to make a run green. The last one was root-quality
+// development seedHits = 6, where the acceptable root of
+// enterprise/popular-broad-summary and architecture/popular-broad-summary is
+// dense rank 14 of 15 and the fused root pool is 17 rows against one seed
+// budget of topK * 3 = 15. The two arms bid for that budget, so the two
+// keyword-only rows the real SQL adds cost the bottom of the dense fetch its
+// seats. Fixed in T-0083.6 by giving each arm its own seats (graphSeedLimit and
+// lexicalSeedLimit): seedHits is 8 of 8 in all three modes.
 
 /** A failure message for one gate under one suite and mode, or undefined when it behaves as recorded. */
 export function checkGate(suite: string, mode: string, m: LegacyMetrics, g: Gate, gaps: GapTable = KNOWN_GAPS): string | undefined {

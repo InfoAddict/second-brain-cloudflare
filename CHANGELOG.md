@@ -10,6 +10,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Searches read far fewer database rows when loading candidate memories, so growing brains stay within the D1 free tier much longer. Workspace visibility remains enforced.
 - Searches no longer spend AI calls guessing topic tags. They return faster and use far less of the Workers AI allowance.
 - A thin, generic memory that happens to share two words with your question can no longer take the last result slot from a strong answer. Recall keeps one slot for a memory linked to (or sitting just behind) the ones it found; a memory that reached that slot on keyword matching alone now has to cover most of what you asked for, not a word or two of boilerplate. Memories the semantic search itself ranked, and memories reached through a link, are judged as before.
+- The search that follows links between memories now starts from the memories the semantic search actually ranked. It used to share one fixed number of starting points between semantic and keyword matches, and keyword matches won nearly all of them, so a memory the semantic search had found could be left out of the link search entirely. Each side now gets its own starting points. Only questions that follow links do any extra work, and they read about half a percent more rows to do it.
 
 ## [3.6.0] — Search that finds the exact thing
 

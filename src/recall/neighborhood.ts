@@ -2,6 +2,7 @@ import { VECTORIZE_TOP_K_MULTIPLIER } from "../constants";
 import type { EdgeProvenance, EdgeType } from "../graph/types";
 import type { DistilledQuery } from "./distill";
 import { edgeIntentCompatibility, type RecallIntent } from "./query-profile";
+import { VIEW_SHARE } from "./root-selector";
 import { queryRelevantWindow } from "./snippet";
 
 const SUBSTRING_WEIGHT = 0.25;
@@ -42,8 +43,48 @@ export interface NeighborhoodEvidenceScore {
   rejection?: "no-linked-evidence" | "weak-neighborhood" | "no-evidence-gain";
 }
 
-export function graphSeedLimit(topK: number, candidateCount: number): number {
-  return Math.min(candidateCount, topK * VECTORIZE_TOP_K_MULTIPLIER, 50);
+/**
+ * Ceiling on the seeds one recall expands from, whichever arm found them. It is
+ * what keeps expandGraph's double-sided edge scan inside a single D1 statement:
+ * a batch binds each id twice against D1_MAX_BOUND_PARAMS.
+ */
+export const GRAPH_SEED_MAX = 50;
+
+/** The dense arm's fetch window, the size this budget has always been. */
+const denseSeedWindow = (topK: number) => Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, GRAPH_SEED_MAX);
+
+/**
+ * The dense arm's graph seats, spent on rows the dense arm returned and on
+ * nothing else.
+ *
+ * This number always meant "the dense arm's fetch window", but it used to be
+ * handed the whole FUSED pool, so the two arms bid for one budget. Fusion gives
+ * a keyword hit the sum of its matched IDF and a dense hit only 1/(k + rank),
+ * so keyword-only rows outscore most of the dense arm: every one the real SQL
+ * added took a seat from the bottom of the dense fetch, and a root the vector
+ * arm did rank could fall out of the graph entirely. Truncating the dense arm
+ * BY ITS OWN RANK is the design; being outbid by the other arm was not.
+ */
+export function graphSeedLimit(topK: number, denseCount: number): number {
+  return Math.min(denseCount, denseSeedWindow(topK));
+}
+
+/**
+ * The keyword arm's own graph seats, so it no longer bids for the dense arm's.
+ *
+ * Deliberately a fraction of the dense window rather than a matching budget:
+ * the keyword arm fetches KEYWORD_CANDIDATE_LIMIT rows, far more than anything
+ * should expand from, and a row only it returned is a seed on lexical evidence
+ * alone. The fraction is the share selectGraphRoots already allots to its
+ * lexical view, so lexical evidence keeps about the seats it always had — the
+ * dense arm simply stops paying for them.
+ */
+export function lexicalSeedLimit(topK: number, lexicalOnlyCount: number, denseSeats: number): number {
+  return Math.max(0, Math.min(
+    lexicalOnlyCount,
+    Math.ceil(denseSeedWindow(topK) * VIEW_SHARE.lexical),
+    GRAPH_SEED_MAX - denseSeats,
+  ));
 }
 
 export function relatedSlotLimit(topK: number): number {

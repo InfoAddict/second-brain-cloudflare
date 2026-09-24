@@ -23,7 +23,7 @@ import { hasStaleAsOf } from "../memory/stale";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import { computeCompoundStale } from "./compound-stale";
-import { exactQueryMatchCount, graphSeedLimit, relatedSlotLimit, scoreLinkedEvidence } from "./neighborhood";
+import { exactQueryMatchCount, graphSeedLimit, lexicalSeedLimit, relatedSlotLimit, scoreLinkedEvidence } from "./neighborhood";
 import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
@@ -542,7 +542,16 @@ export async function recallEntries(
         metadataAlignment: Math.min(1, .6 * tagAlignment + .2 * episodicAlignment + .2 * authorityAlignment),
         semanticRank: semanticRankByParent.get(parentId) }];
     });
-    selectedRoots = selectGraphRoots(rootCandidates, graphSeedLimit(topK, rootCandidates.length), cfg.MMR_LAMBDA);
+    // One selection per arm, against that arm's own budget: a row the dense arm
+    // never returned has no semantic rank, so it cannot take a seat — or a seat
+    // in the "semantic" view — from a row that does.
+    const denseRoots = rootCandidates.filter(root => root.semanticRank !== undefined);
+    const lexicalRoots = rootCandidates.filter(root => root.semanticRank === undefined);
+    const denseSeats = graphSeedLimit(topK, denseRoots.length);
+    selectedRoots = [
+      ...selectGraphRoots(denseRoots, denseSeats, cfg.MMR_LAMBDA),
+      ...selectGraphRoots(lexicalRoots, lexicalSeedLimit(topK, lexicalRoots.length, denseSeats), cfg.MMR_LAMBDA),
+    ];
   }
   const graphSeedIds = selectedRoots.map(x => x.candidate.parentId);
   if (internal.diagnostics && hops > 0) {
