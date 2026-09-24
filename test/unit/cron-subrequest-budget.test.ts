@@ -91,7 +91,16 @@ import { FTS_READY_KV_KEY } from "../../src/constants";
 // see the ready-night pin below, which measures exactly that shape. The
 // honest worst case (a rebuild night, or a ready night with drift) stays
 // well inside this ceiling, so the constant itself does not move.
-const NIGHTLY_D1_STATEMENT_BUDGET = 61;
+// MOVED 61 -> 64 (T-0042, embedding scheme migration): runSchemeBatch runs
+// after FTS maintenance. On a brain with no ledger yet, the measured night is
+// three KV operations: resolveConfig's config:overrides GET, the scheme
+// ledger GET, and the PUT that settles a brain with nothing to migrate. Every
+// later idle night is two (the PUT is once per scheme change). A night with
+// work adds the model-migration GET, the page and count SELECTs, and per
+// rewritten entry one re-read plus one vector_ids UPDATE; the batch chunk
+// budget (SCHEME_BATCH_CHUNK_BUDGET) bounds that to well under the headroom
+// this constant keeps, and the D1 statements are not the platform ceiling.
+const NIGHTLY_D1_STATEMENT_BUDGET = 64;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -329,7 +338,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // runFtsBackfill's liveness check, ready GET, cursor GET, rowid SELECT,
     // and ready PUT" (8); it now reads liveness, integrity-check, ready
     // GET, cursor GET, rowid SELECT, latch-guard batch, ready PUT (7).
-    expect(statements.length).toBe(22);
+    expect(statements.length).toBe(25); // 22 + 3 scheme-ledger KV ops (T-0042)
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -350,7 +359,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin: the same 22 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(23);
+    expect(statements.length).toBe(26); // 23 + 3 scheme-ledger KV ops (T-0042)
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -390,7 +399,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // drifted rows, and the T-0065 parity batch above finds no per-workspace
     // drift either, so its own repair batch never fires. If this number
     // moves, say why in the same commit.
-    expect(statements.length).toBe(24);
+    expect(statements.length).toBe(27); // 24 + 3 scheme-ledger KV ops (T-0042)
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

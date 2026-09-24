@@ -21,7 +21,9 @@ import {
   clearMigration,
   estimate,
   readMigration,
+  readSchemeMigration,
   runBatch,
+  runSchemeBatch,
 } from "../migration/embedding";
 
 export async function handleMigrationRoutes(
@@ -86,6 +88,27 @@ export async function handleMigrationRoutes(
 
     await clearMigration(env);
     return json({ ok: true });
+  }
+
+  // GET /migration/scheme — where the in-place move to the configured embedding
+  // scheme (contextual chunk text, pooling) has got to. null means every vector
+  // is as old as the brain: nothing has ever needed moving.
+  if (url.pathname === "/migration/scheme" && request.method === "GET") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    return json({ ok: true, state: await readSchemeMigration(env) });
+  }
+
+  // POST /migration/scheme — one bounded batch of that move. The nightly job
+  // runs one a night; a caller in a hurry loops this until `done`. Resumable and
+  // idempotent at every point, and recall works throughout (see runSchemeBatch).
+  if (url.pathname === "/migration/scheme" && request.method === "POST") {
+    const authErr = requireAuth(request, env);
+    if (authErr) return authErr;
+
+    const cfg = await resolveConfig(env);
+    return json({ ok: true, ...(await runSchemeBatch(env, cfg)) });
   }
 
   return null;

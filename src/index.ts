@@ -13,6 +13,7 @@ import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
+import { runSchemeBatch } from "./migration/embedding";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -214,6 +215,16 @@ export default {
         await runFtsMaintenance(env);
       } catch (e) {
         console.error("FTS maintenance failed (non-fatal):", e);
+      }
+
+      // Moves existing vectors onto the configured embedding scheme, one small
+      // batch a night. Idle (one KV read) once every vector is current. Separately
+      // caught: a scheme batch failing must never hide the night summary, and
+      // the admin route (POST /migration/scheme) drives it faster on demand.
+      try {
+        await runSchemeBatch(env, await resolveConfig(env));
+      } catch (e) {
+        console.error("Embedding scheme migration failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing

@@ -39,9 +39,11 @@
  */
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
-import { storeEntry } from "../capture/store";
+import { deleteStaleVectors, storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { chunkText } from "../text/chunk";
+import { buildEmbeddingChunks, isContextEligible } from "../capture/contextual";
+import { LEGACY_SCHEME, poolingOf, schemeOf } from "../embedding/scheme";
 import {
   MIGRATION_CHUNK_BUDGET,
   MIGRATION_MAX_ENTRIES_PER_BATCH,
@@ -170,7 +172,7 @@ function pageSql(hasCursor: boolean): string {
     ? `AND (created_at > ? OR (created_at = ? AND id > ?))`
     : "";
   // scope-exempt: one-time re-embed migration: admin-triggered and deployment-wide; the rows it selects go to the embedder, and only counts reach the response
-  return `SELECT id, content, tags, source, created_at, workspace_id, actor_id
+  return `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id
             FROM entries
            WHERE ${NOT_DEPRECATED} ${after}
            ORDER BY created_at ASC, id ASC
@@ -348,6 +350,17 @@ export async function runBatch(
     env,
     done ? { ...next, finishedAt: Date.now() } : next,
   );
+  // Every vector was just written under the current config, so the scheme
+  // ledger has nothing left to migrate.
+  if (done) {
+    await env.OAUTH_KV.put(
+      SCHEME_MIGRATION_KEY,
+      JSON.stringify({
+        model: config.EMBEDDING_MODEL, target: schemeOf(config), sources: [], startedAt: state.startedAt,
+        cursorCreatedAt: null, cursorId: null, processed: 0, skipped: 0, failed: 0, finishedAt: Date.now(),
+      } satisfies SchemeMigrationState),
+    );
+  }
 
   return {
     processed,
@@ -358,4 +371,264 @@ export async function runBatch(
     stalled,
     ...(stalled ? { stalledReason: stalledReason ?? "failing" } : {}),
   };
+}
+
+
+// ── Embedding scheme migration (T-0042, T-0077) ──────────────────────────────
+//
+// A scheme change (contextual chunk text, pooling) keeps the model and the
+// dimensions, so it happens in place, in the current index, one entry at a time,
+// instead of into a new index the way a model change does. The batch machinery
+// above is reused: the same keyset page, chunk budget, quota recognition and
+// no-progress stop. Only the per-entry step differs.
+//
+// Why in place is safe:
+//  - Vector ids are deterministic (`<id>` or `<id>-chunk-<i>`), so rewriting an
+//    entry overwrites its vectors. A crash before the cursor moves just repeats
+//    the entry; nothing is half-committed that a repeat does not finish.
+//  - Old chunk ids the new set no longer uses are deleted only after the new set
+//    and `entries.vector_ids` are written.
+//  - Contextual text does not move the vector space, so mixed old and new
+//    vectors rank against one query vector. Pooling does, so recall embeds the
+//    query under every pooling still present (see `queryPoolings`).
+//  - A user edit that lands while an entry is being rebuilt is detected by
+//    re-reading its content and tags, and the entry is rebuilt again from the fresh row.
+
+export const SCHEME_MIGRATION_KEY = "migration:embedding-scheme";
+
+/** Chunk budget for one scheme batch. Smaller than MIGRATION_CHUNK_BUDGET so a nightly slice stays well inside the D1 statement budget. */
+export const SCHEME_BATCH_CHUNK_BUDGET = 12;
+/** A row edited while it is rebuilt is rebuilt again, this many times at most, before the batch gives up on it for now. */
+const SCHEME_MAX_REBUILDS = 3;
+
+export interface SchemeMigrationState {
+  model: string;
+  /** The scheme being migrated to. */
+  target: number;
+  /** Every scheme a vector may still be in. A run that starts over a half-finished one keeps the old sources. */
+  sources: number[];
+  startedAt: number;
+  cursorCreatedAt: number | null;
+  cursorId: string | null;
+  processed: number;
+  skipped: number;
+  failed: number;
+  /** Set when every vector is at `target`; the ledger then says what a brain's vectors are. */
+  finishedAt?: number;
+}
+
+export interface SchemeBatchResult {
+  processed: number;
+  skipped: number;
+  failed: number;
+  chunks: number;
+  remaining: number;
+  done: boolean;
+  stalled: boolean;
+  stalledReason?: string;
+  /** Nothing to do this run: a model migration is in flight, or the switch that would need a rewrite is off. */
+  paused?: "model-migration";
+}
+
+export async function readSchemeMigration(env: Env): Promise<SchemeMigrationState | null> {
+  try {
+    const raw = await env.OAUTH_KV.get(SCHEME_MIGRATION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SchemeMigrationState;
+    if (typeof parsed?.model !== "string" || typeof parsed.target !== "number" || !Array.isArray(parsed.sources)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+const writeScheme = (env: Env, state: SchemeMigrationState) => env.OAUTH_KV.put(SCHEME_MIGRATION_KEY, JSON.stringify(state));
+
+export const clearSchemeMigration = (env: Env) => env.OAUTH_KV.delete(SCHEME_MIGRATION_KEY);
+
+const contextualOf = (scheme: number): boolean => scheme === 2 || scheme === 4;
+
+/**
+ * Does a vector written under `from` need rewriting to reach `to`? Pooling
+ * always does. Contextual text does only when it is being gained: switching it
+ * off stops new contextual vectors and leaves the old ones (the kill switch
+ * never rewrites).
+ */
+function needsRewrite(from: number, to: number, ctxEligible: boolean): boolean {
+  if (from === to) return false;
+  if (poolingOf(from) !== poolingOf(to)) return true;
+  return contextualOf(to) && !contextualOf(from) && ctxEligible;
+}
+
+/**
+ * The poolings a query must be embedded under to reach every vector the brain
+ * may hold right now. One entry (the overwhelmingly common case) when every
+ * possible vector shares the configured pooling; two while a pooling change is
+ * still being migrated.
+ *
+ * Mean-pooling brains that never enabled cls have no ledger and answer without
+ * reading KV: `poolingOf(target)` is "mean" and so is every legacy vector.
+ */
+export function queryPoolings(state: SchemeMigrationState | null, config: Readonly<Config>): ("mean" | "cls")[] {
+  const target = schemeOf(config);
+  const want = poolingOf(target);
+  const present = new Set<"mean" | "cls">([want]);
+  if (state && state.model === config.EMBEDDING_MODEL) {
+    if (!(state.target === target && state.finishedAt)) {
+      present.add(poolingOf(state.target));
+      for (const s of state.sources) present.add(poolingOf(s));
+    }
+  } else if (want !== "mean") {
+    // No usable ledger under a non-default pooling: the brain may still hold legacy mean vectors.
+    present.add("mean");
+  }
+  return [...present];
+}
+
+/** True when a query needs the ledger at all: only a pooling other than the legacy one can put two spaces in one index. */
+export const schemeLedgerMatters = (config: Readonly<Config>): boolean => poolingOf(schemeOf(config)) !== poolingOf(LEGACY_SCHEME);
+
+/**
+ * One bounded batch of the in-place scheme migration. Safe to call any number
+ * of times, from the nightly job and from the admin route: an idle call reads
+ * one KV key and returns.
+ */
+export async function runSchemeBatch(
+  env: Env,
+  config: Readonly<Config> = DEFAULTS,
+  opts: { chunkBudget?: number } = {},
+): Promise<SchemeBatchResult> {
+  const idle = (extra: Partial<SchemeBatchResult> = {}): SchemeBatchResult =>
+    ({ processed: 0, skipped: 0, failed: 0, chunks: 0, remaining: 0, done: true, stalled: false, ...extra });
+
+  const target = schemeOf(config);
+  const prior = await readSchemeMigration(env);
+  let state: SchemeMigrationState;
+  if (prior && prior.model === config.EMBEDDING_MODEL && prior.target === target) {
+    state = prior;
+    if (state.finishedAt) return idle();
+  } else {
+    // A new target. Vectors may be at the old target, or (if that run never finished) anywhere in its sources.
+    const sources = prior && prior.model === config.EMBEDDING_MODEL
+      ? [...new Set([...(prior.finishedAt ? [] : prior.sources), prior.target])]
+      : [LEGACY_SCHEME];
+    state = {
+      model: config.EMBEDDING_MODEL, target, sources: sources.filter(s => s !== target), startedAt: Date.now(),
+      cursorCreatedAt: null, cursorId: null, processed: 0, skipped: 0, failed: 0,
+    };
+    if (state.sources.length === 0) {
+      await writeScheme(env, { ...state, finishedAt: Date.now() });
+      return idle();
+    }
+  }
+
+  // Nothing any vector needs: the only differences are switches that never rewrite.
+  if (!state.sources.some(s => needsRewrite(s, target, true))) {
+    await writeScheme(env, { ...state, finishedAt: Date.now() });
+    return idle();
+  }
+
+  // A model migration rebuilds every vector into a new index with the current
+  // config; running both would rewrite the abandoned index. Checked only once
+  // there is work, so an idle night does not pay for it.
+  const model = await readMigration(env);
+  if (model && !model.finishedAt && model.model === config.EMBEDDING_MODEL) return idle({ done: false, paused: "model-migration" });
+
+  const page = state.cursorCreatedAt === null
+    ? await env.DB.prepare(pageSql(false)).all()
+    : await env.DB.prepare(pageSql(true)).bind(state.cursorCreatedAt, state.cursorCreatedAt, state.cursorId).all();
+  const rows = (page.results ?? []) as Record<string, unknown>[];
+
+  let processed = 0;
+  let skipped = 0;
+  let failed = 0;
+  let chunks = 0;
+  const budget = opts.chunkBudget ?? SCHEME_BATCH_CHUNK_BUDGET;
+  let reached: { created_at: number; id: string } | null = null;
+  let stalledReason: string | undefined;
+
+  for (const row of rows) {
+    const id = row.id as string;
+    const source = row.source as string;
+    const content = row.content as string;
+    const eligible = isContextEligible({ content, source });
+    const mark = { created_at: row.created_at as number, id };
+
+    if (!state.sources.some(s => needsRewrite(s, target, eligible))) {
+      skipped++;
+      reached = mark;
+      continue;
+    }
+
+    const tags = JSON.parse((row.tags as string) ?? "[]") as string[];
+    const cost = buildEmbeddingChunks({ id, content, tags, source, createdAt: row.created_at as number }, config).length;
+    // The first rewrite always goes ahead, or one very long memory would wedge the cursor.
+    if (chunks > 0 && chunks + cost > budget) break;
+    chunks += cost;
+
+    try {
+      await rewriteEntry(env, row, config);
+      processed++;
+      reached = mark;
+    } catch (e) {
+      failed++;
+      console.error("Scheme migration failed for entry", id, e);
+      if (looksLikeBudgetError(e)) stalledReason = "budget";
+      break;
+    }
+    if (chunks >= budget) break;
+  }
+
+  const next: SchemeMigrationState = {
+    ...state,
+    cursorCreatedAt: reached?.created_at ?? state.cursorCreatedAt,
+    cursorId: reached?.id ?? state.cursorId,
+    processed: state.processed + processed,
+    skipped: state.skipped + skipped,
+    failed: state.failed + failed,
+  };
+  const remaining = await countRemaining(env, next.cursorCreatedAt, next.cursorId);
+  const stalled = processed === 0 && failed > 0;
+  const done = remaining === 0 && !stalled;
+  await writeScheme(env, done ? { ...next, finishedAt: Date.now() } : next);
+  return { processed, skipped, failed, chunks, remaining, done, stalled, ...(stalled ? { stalledReason: stalledReason ?? "failing" } : {}) };
+}
+
+/**
+ * Rebuilds one entry's vectors under `config`, then drops the chunk ids the new
+ * set no longer uses. If the row's content or tags changed meanwhile, the edit's
+ * own write may have been overwritten by this one's older content, so it is
+ * rebuilt from the fresh row until it holds still. (Compared by value: updated_at
+ * is nullable and never backfilled, so it cannot be relied on.)
+ */
+async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Readonly<Config>): Promise<void> {
+  let row = first;
+  for (let attempt = 0; attempt < SCHEME_MAX_REBUILDS; attempt++) {
+    const oldIds = JSON.parse((row.vector_ids as string) ?? "[]") as string[];
+    const stored = await storeEntry(
+      env,
+      row.id as string,
+      row.content as string,
+      JSON.parse((row.tags as string) ?? "[]"),
+      row.source as string,
+      row.created_at as number,
+      config,
+      { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
+    );
+    const fresh = (await env.DB.prepare(
+      // scope-exempt: one-time re-embed migration: by-id re-read of the row being rebuilt
+      `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id FROM entries WHERE id = ?`,
+    ).bind(row.id).first()) as Record<string, unknown> | null;
+    // Deleted while rebuilding: its own delete already removed the ids it knew; remove what this write added.
+    if (!fresh) {
+      await env.VECTORIZE.deleteByIds(stored.vectorIds);
+      return;
+    }
+    if (fresh.content === row.content && fresh.tags === row.tags) {
+      await deleteStaleVectors(env, oldIds, stored.vectorIds);
+      return;
+    }
+    row = fresh;
+  }
+  throw new Error(`entry ${String(row.id)} kept changing while it was rebuilt`);
 }
