@@ -14,7 +14,7 @@ import { summarize, type Summary } from "./metrics";
 import { assertIgnored, isAllowedDataFile } from "./privacy";
 import { makeLocalAi } from "./local-ai";
 import { producerFromCache, stampCache } from "./stamp";
-import { dryReranker, exportCache, prepare } from "./prepare";
+import { COMMITTED_LAYER_VARIANTS, dryReranker, exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
 import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
@@ -360,7 +360,7 @@ async function runExportCache(cmd: CliCommand & { kind: "export-cache" }, spec: 
   if (!isAllowedDataFile(`test/eval/data/core/${basename(out)}`)) throw new UsageError(`${basename(out)} is not an allowlisted replay file name`);
   // read already lists only files that exist and already includes the local write cache
   const { read } = replayPaths(cmd.model, cmd.corpus);
-  const n = await exportCache({ spec, variant: getVariant("baseline"), backend: cmd.d1, model: cmd.model, readPaths: read, outPath: out, llmTags: "stand-in" });
+  const n = await exportCache({ spec, variant: COMMITTED_LAYER_VARIANTS.map(name => getVariant(name)), backend: cmd.d1, model: cmd.model, readPaths: read, outPath: out, llmTags: "stand-in" });
   console.log(`exported ${n} cache entries to ${out}`);
   return 0;
 }
