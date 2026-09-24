@@ -250,6 +250,21 @@ describe("degraded recalls", () => {
     expect(report.results.every(r => r.degraded?.includes("fts-error"))).toBe(true);
   });
 
+  it("records a first() statement that returns more than one row as degraded (the observer would fetch them all)", async () => {
+    const c = await corpus();
+    const real = c.env.DB;
+    const doubled = (st: any): any => new Proxy(st, {
+      get: (t, p) => p === "bind" ? (...a: unknown[]) => doubled(t.bind(...a))
+        : p === "all" ? async () => { const r = await t.all(); return { ...r, results: [...r.results, ...r.results] }; }
+        : typeof t[p] === "function" ? t[p].bind(t) : t[p],
+    });
+    (c.env as { DB: unknown }).DB = new Proxy(real, {
+      get: (t, p) => p === "prepare" ? (sql: string) => (sql.includes("SELECT COUNT(*) AS total") ? doubled(t.prepare(sql)) : t.prepare(sql)) : typeof (t as any)[p] === "function" ? (t as any)[p].bind(t) : (t as any)[p],
+    });
+    const report = await run(c, "like"); // the LIKE document-frequency probe is the recall first() statement
+    expect(report.results.some(r => r.degraded?.includes("first-returned-many-rows"))).toBe(true);
+  });
+
   it("leaves a healthy run with no degradation", async () => {
     const report = await run(await corpus());
     expect(report.results.map(r => r.degraded)).toEqual([[], [], []]);

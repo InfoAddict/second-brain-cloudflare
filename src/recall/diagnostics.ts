@@ -20,7 +20,7 @@ function initializeOperations(diagnostics: RecallDiagnostics): RecallOperationDi
   };
 }
 
-function observeD1(database: D1Database, operations: RecallOperationDiagnostics): D1Database {
+function observeD1(database: D1Database, operations: RecallOperationDiagnostics, diagnostics: RecallDiagnostics): D1Database {
   const rawStatements = new WeakMap<object, object>();
 
   const recordMeta = (result: unknown) => {
@@ -46,6 +46,8 @@ function observeD1(database: D1Database, operations: RecallOperationDiagnostics)
             operations.d1Statements += 1;
             const result = await (target as unknown as { all: () => Promise<{ results?: Record<string, unknown>[] }> }).all();
             recordMeta(result);
+            // Only single-row statements are safe to run as all(); flag any that would now fetch more than one row.
+            if ((result.results?.length ?? 0) > 1) (diagnostics.warnings ??= []).push(`first() statement returned ${result.results!.length} rows: it fetches them all when observed`);
             const row = result.results?.[0] ?? null;
             return column === undefined || row === null ? row : (row[column] ?? null);
           };
@@ -126,7 +128,7 @@ export function observeRecallEnv(env: Env, diagnostics: RecallDiagnostics): Env 
       query: () => { operations.vectorizeQueries += 1; },
       getByIds: () => { operations.vectorizeGets += 1; },
     }),
-    DB: observeD1(env.DB, operations),
+    DB: observeD1(env.DB, operations, diagnostics),
     OAUTH_KV: observeMethods(env.OAUTH_KV, {
       get: () => { operations.kvReads += 1; },
       getWithMetadata: () => { operations.kvReads += 1; },

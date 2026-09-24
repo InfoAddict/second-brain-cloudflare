@@ -251,6 +251,22 @@ describe("evaluateGate", () => {
   });
 });
 
+describe("evaluateGate: MDE is measured in clusters, the unit the interval resamples", () => {
+  it("a comparison whose 240 queries move in 30 lock-step clusters reports the cluster-level MDE, and is underpowered by it", () => {
+    const clustered = (name: string, tweak: (i: number, r: QueryResult) => void = () => {}) => report(name, (i, r) => { r.clusterKey = `c${i % 30}`; tweak(i, r); });
+    const moves = (i: number, r: QueryResult) => {
+      const g = i % 30;
+      for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] += g < 5 ? 0.5 : g >= 15 && g < 20 ? -0.5 : 0;
+    };
+    const result = evaluateGate(clustered("baseline"), clustered("v", moves));
+    const clusterMeans = Array.from({ length: 30 }, (_, g) => (g < 5 ? 0.5 : g >= 15 && g < 20 ? -0.5 : 0));
+    expect(result.mde.recall10).toBeCloseTo(minimumDetectableEffect(clusterMeans), 10);
+    // per-query would have said sqrt(8) times smaller
+    expect(result.mde.recall10!).toBeGreaterThan(2.5 * minimumDetectableEffect(Array.from({ length: 240 }, (_, i) => clusterMeans[i % 30])));
+    expect(status(result, "improvement")).toBe("inconclusive");
+  });
+});
+
 describe("findLosers: per-query worsening, outside the verdict", () => {
   const drop = (ids: Record<number, number>) => (i: number, r: QueryResult) => {
     if (i in ids) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = Math.max(0, r.metrics[k] - ids[i]);

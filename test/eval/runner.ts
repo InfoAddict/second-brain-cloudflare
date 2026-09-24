@@ -41,7 +41,7 @@ const RECALL_COUNT_BUMP = /^\s*UPDATE\s+entries\s+SET\s+recall_count\s*=\s*recal
  * recallEntries builds the recall_count UPDATE eagerly (search.ts), so a no-op waitUntil alone does not
  * stop it. Answer that one statement with an inert result priced like the real PK update; it stays visible to the cost counters.
  */
-function withoutRecallCountWrites(db: D1Database, onIntercept: () => void): D1Database {
+export function withoutRecallCountWrites(db: D1Database, onIntercept: () => void): D1Database {
   return new Proxy(db, {
     get(target, prop, receiver) {
       if (prop !== "prepare") {
@@ -145,6 +145,7 @@ export async function runVariant(o: {
             ...(result.semanticUnavailable ? ["semantic-unavailable"] : []),
             ...(filterDegraded ? ["vectorize-filter-unfiltered"] : []),
             ...(diagnostics.ftsRoute === "like-error" ? ["fts-error"] : []),
+            ...(diagnostics.warnings?.length ? ["first-returned-many-rows"] : []),
           ],
         });
         // Presented direct results always bump recall_count; none seen means the write drifted past the guard.

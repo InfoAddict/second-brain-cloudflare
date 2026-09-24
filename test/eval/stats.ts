@@ -57,11 +57,24 @@ export function pairedBootstrap(
   };
 }
 
-/** Smallest true mean delta detectable at 80% power, two-sided 95% (z = 1.96 + 0.84). */
-export function minimumDetectableEffect(deltas: readonly number[]): number {
-  const n = deltas.length;
+/**
+ * Smallest true mean delta detectable at 80% power, two-sided 95% (z = 1.96 + 0.84), in the unit the gate's interval
+ * resamples: whole clusters. Deltas are averaged within each cluster, and the sd over those cluster means is divided by
+ * sqrt(clusters). Without keys every delta is its own cluster.
+ */
+export function minimumDetectableEffect(deltas: readonly number[], clusterKeys?: readonly string[]): number {
+  const byCluster = new Map<string, { sum: number; count: number }>();
+  deltas.forEach((d, i) => {
+    const key = clusterKeys ? clusterKeys[i] : String(i);
+    const c = byCluster.get(key) ?? { sum: 0, count: 0 };
+    c.sum += d;
+    c.count += 1;
+    byCluster.set(key, c);
+  });
+  const means = [...byCluster.values()].map(c => c.sum / c.count);
+  const n = means.length;
   if (n < 2) return 0;
-  const m = deltas.reduce((s, d) => s + d, 0) / n;
-  const variance = deltas.reduce((s, d) => s + (d - m) ** 2, 0) / (n - 1);
+  const m = means.reduce((s, d) => s + d, 0) / n;
+  const variance = means.reduce((s, d) => s + (d - m) ** 2, 0) / (n - 1);
   return 2.8 * Math.sqrt(variance) / Math.sqrt(n);
 }

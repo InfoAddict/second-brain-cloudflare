@@ -54,6 +54,8 @@ export interface RecallDiagnostics {
   finalIds?: string[];
   rejections?: { id: string; reason: string }[];
   operations?: RecallOperationDiagnostics;
+  /** Observation anomalies, e.g. a first() statement that returned more than one row. Absent when there are none. */
+  warnings?: string[];
   stageMs?: Partial<Record<RecallStage, number>>;
   /** #326 visibility: how many tokens reached keywordSearch, and whether it was skipped for want of any. */
   retrievalTokenCount?: number;

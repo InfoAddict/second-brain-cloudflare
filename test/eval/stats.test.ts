@@ -56,6 +56,30 @@ describe("minimumDetectableEffect", () => {
     expect(minimumDetectableEffect(deltas)).toBeCloseTo(2.8 * sd / 2, 10);
     expect(minimumDetectableEffect([0.1])).toBe(0);
   });
+
+  it("uses the interval's unit: per-cluster mean deltas, sd over clusters, sqrt(clusters)", () => {
+    // 20 clusters of 10 queries; every query in a cluster moves together, so 200 queries carry only 20 independent draws.
+    const keys = Array.from({ length: 200 }, (_, i) => `c${Math.floor(i / 10)}`);
+    const deltas = Array.from({ length: 200 }, (_, i) => (Math.floor(i / 10) % 2 ? 0.5 : -0.5));
+    const clusterSd = Math.sqrt(20 * 0.25 / 19);
+    expect(minimumDetectableEffect(deltas, keys)).toBeCloseTo(2.8 * clusterSd / Math.sqrt(20), 10);
+    // treating the 200 queries as independent would understate it by about sqrt(10)
+    expect(minimumDetectableEffect(deltas, keys)).toBeGreaterThan(2.5 * minimumDetectableEffect(deltas));
+  });
+
+  it("agrees with the bootstrap interval's width when clusters are the unit (95% half-width = 1.96 se; MDE = 2.8 se)", () => {
+    const keys = Array.from({ length: 300 }, (_, i) => `c${i % 60}`);
+    const rand = mulberry32(3);
+    const perCluster = Array.from({ length: 60 }, () => rand() - 0.4);
+    const deltas = keys.map(k => perCluster[Number(k.slice(1))]);
+    const ci = pairedBootstrap(deltas, keys);
+    expect(minimumDetectableEffect(deltas, keys) / 2.8).toBeCloseTo((ci.hi - ci.lo) / 2 / 1.96, 2);
+  });
+
+  it("with no keys each delta is its own cluster", () => {
+    const deltas = [0.5, -0.5, 0.25, 0, 0.1];
+    expect(minimumDetectableEffect(deltas)).toBeCloseTo(minimumDetectableEffect(deltas, deltas.map((_, i) => `k${i}`)), 12);
+  });
 });
 
 describe("pairedBootstrap statistical correctness (known answers, seeded)", () => {
