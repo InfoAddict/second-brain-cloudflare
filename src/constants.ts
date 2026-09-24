@@ -215,8 +215,10 @@ export const RERANK_TIMEOUT_MS = 2500;
 export const RERANK_PROBE_TIMEOUT_MS = 15000;
 // `auto` reranks only when the runner-up is within this fraction of the leader.
 export const RERANK_AMBIGUITY_MARGIN = 0.15;
-// The model moves a heuristic score by at most +/- this fraction.
-export const RERANK_BLEND_WEIGHT = 0.25;
+// A heuristic score is scaled by 1 + weight * (2p - 1), p the model's rank percentile (1 = best). Chosen on
+// core-1k from {0.25, 0.5, 0.75, 1.0} (pre-registered); at 1.0 the model's order dominates: the worst-ranked
+// candidate scores 0 and the best doubles.
+export const RERANK_BLEND_WEIGHT = 1.0;
 
 // Rows spot-checked nightly for rowid-mapping drift; newest rows move first.
 export const FTS_INTEGRITY_SPOT_CHECK = 5;

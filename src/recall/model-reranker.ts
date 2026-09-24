@@ -67,7 +67,7 @@ export function percentilesFromScores(parentIds: readonly string[], scores: read
   return out;
 }
 
-/** Bounded multiplier: the model can move a heuristic score by at most +/-RERANK_BLEND_WEIGHT, never erase it. */
+/** Scales each scored parent's heuristic score by 1 + weight * (2p - 1); unscored parents keep theirs. */
 export function blendRerankerScores<T extends VectorizeMatch>(ranked: readonly T[], percentiles: ReadonlyMap<string, number>, weight = RERANK_BLEND_WEIGHT): T[] {
   return ranked.map(match => {
     const p = percentiles.get(parentOf(match));

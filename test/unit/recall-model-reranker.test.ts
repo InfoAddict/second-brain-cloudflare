@@ -67,17 +67,21 @@ describe("percentilesFromScores and blendRerankerScores", () => {
   it("is neutral when every score ties", () => {
     expect([...percentilesFromScores(["a", "b"], [2, 2]).values()]).toEqual([0.5, 0.5]);
   });
-  it("moves a heuristic score by at most 25% either way and leaves unscored parents alone", () => {
+  it("scales a heuristic score by 1 +/- weight and leaves unscored parents alone", () => {
     const ranked = [m("a", 1), m("b", 0.9), m("z", 0.5)];
-    const out = blendRerankerScores(ranked, new Map([["a", 0], ["b", 1]]));
+    const out = blendRerankerScores(ranked, new Map([["a", 0], ["b", 1]]), 0.25);
     expect(out.map(x => x.id)).toEqual(["b", "a", "z"]);
     expect(out.find(x => x.id === "a")!.score).toBeCloseTo(0.75);
     expect(out.find(x => x.id === "b")!.score).toBeCloseTo(1.125);
     expect(out.find(x => x.id === "z")!.score).toBe(0.5);
     expect(ranked[0].score).toBe(1); // inputs are not mutated
   });
+  it("ships at full weight: the worst-ranked scores zero and the best doubles", () => {
+    const out = blendRerankerScores([m("a", 1), m("b", 1)], new Map([["a", 0], ["b", 1]]));
+    expect(out.map(x => [x.id, x.score])).toEqual([["b", 2], ["a", 0]]);
+  });
   it("uses the parent id, not the chunk id, to look up the percentile", () => {
-    const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 1)], new Map([["p", 0]]));
+    const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 1)], new Map([["p", 0]]), 0.25);
     expect(out.find(x => x.id === "p-0")!.score).toBeCloseTo(0.75);
   });
 });

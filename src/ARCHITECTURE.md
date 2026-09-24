@@ -184,13 +184,18 @@ evidence rescue, rendering and synthesis are untouched.
   reach the model. Each passage is `queryRelevantWindow(content, ..., 400)`.
 - **Blend.** Model scores become rank percentiles within the batch (ties keep
   baseline order; all-equal is neutral). A heuristic score is multiplied by
-  `1 + 0.25 * (2p - 1)`, so the model moves a result by at most 25% and never
-  erases age, frequency, importance, contradiction, tag or lexical evidence.
+  `1 + w * (2p - 1)` with `w = 1.0`: the model's order dominates (the worst-ranked
+  candidate scores 0, the best doubles) while the heuristic score still sets the
+  spacing between neighbours and every parent outside the batch keeps its own.
+  `w` was chosen on core-1k from {0.25, 0.5, 0.75, 1.0} (pre-registered rule: best
+  paraphrase mrr@10 among configs with no regression and cost within budget) and
+  validated once on scale-20k and SciFact.
   The same parent factor scales the direct and the root view.
 - **Routing (no AI).** `RERANK_MODE` is `off`, `on` or `auto` (default `auto`;
   an unknown stored value reads as `off`). `on` needs at least three parents;
-  `auto` also needs the top two heuristic scores within 15%. An identifier-shaped
-  query token (`#149`, `v1.9`, `a-b`) always skips. `off` returns before any
+  `auto` also needs the top two heuristic scores within 15%. A lookup-shaped
+  query token (a digit, `#`, `_` or an inner dot: `#149`, `v1.9`, `ERR_TLS_90412`)
+  always skips; a sentence-final period or a plain hyphenated word is prose. `off` returns before any
   read of the latch.
 - **Readiness.** A model never runs until `reranker:ready:bge-base-v1` says the
   probe passed. `probeReranker` sends one fixed non-private request and needs the
