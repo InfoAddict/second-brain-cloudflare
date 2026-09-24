@@ -92,7 +92,7 @@ describe("evidenceScoreOf", () => {
   it("every evidence consumer in search.ts goes through it: the omitted-root candidate, the normalizer and the linked parent score", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../../src/recall/search.ts", import.meta.url).pathname, "utf8");
-    expect(src.match(/evidenceScoreOf\(/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(src.match(/evidenceScoreOf\(/g)?.length).toBe(3);
     // the only direct read of a root's blended score left is the displayed match score of an omitted root
     expect(src.match(/score: root\.rootScore/g)?.length).toBe(1);
     expect(src).toMatch(/score: evidenceScoreOf\(root\),[^\n]*\n\s+source: "omitted-root"/);
