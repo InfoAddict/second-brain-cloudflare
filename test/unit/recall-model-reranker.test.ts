@@ -169,3 +169,24 @@ describe("readiness latch and probe", () => {
     expect(await kv.get(RERANK_READY_KV_KEY)).toBe("0");
   });
 });
+
+describe("probe herd and KV write failure", () => {
+  const good = (_: string, input: unknown) => Promise.resolve({ response: (input as { contexts: { text: string }[] }).contexts.map((c, id) => ({ id, score: /reset a forgotten password/.test(c.text) ? 4 : -6 })) });
+
+  it("concurrent probes share one model call", async () => {
+    const ai = aiReturning(good);
+    const env = envWith(ai);
+    const results = await Promise.all([probeReranker(env), probeReranker(env), probeReranker(env)]);
+    expect(results.every(r => r.ok)).toBe(true);
+    expect(ai.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed KV put does not make the next readiness read re-probe", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const kv = makeMemoryKV();
+    const broken = { ...kv, get: kv.get.bind(kv), put: vi.fn().mockRejectedValue(new Error("kv down")) } as unknown as KVNamespace;
+    const env = envWith(aiReturning(good), broken);
+    expect((await probeReranker(env)).ok).toBe(true);
+    expect(await rerankReadiness(env)).toBe(true); // KV never got the verdict; this isolate remembers it
+  });
+});

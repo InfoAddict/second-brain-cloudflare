@@ -118,7 +118,16 @@ export async function scoreRerankCandidates(query: string, candidates: readonly 
 
 // Readiness latch, cached in both directions like ftsReady; a KV failure reads not-ready and is not cached.
 let readyCache: { ready: boolean | null; at: number } | null = null;
-export function resetRerankReadyMemo(): void { readyCache = null; }
+// This isolate's own record of the last verdict, kept for as long as the KV latch would live, so a KV write that
+// failed (or has not propagated) can never turn into a re-probe on every recall.
+let localLatch: { ready: boolean; until: number } | null = null;
+let probeInFlight: Promise<ProbeResult> | null = null;
+export function resetRerankReadyMemo(): void { readyCache = null; localLatch = null; probeInFlight = null; }
+
+const rememberVerdict = (ready: boolean): void => {
+  localLatch = { ready, until: Date.now() + (ready ? RERANK_READY_TTL_S : RERANK_NOT_READY_TTL_S) * 1000 };
+  readyCache = null;
+};
 
 /** true = probe passed, false = probe failed, null = never probed. */
 export async function rerankReadiness(env: Env): Promise<boolean | null> {
@@ -126,7 +135,7 @@ export async function rerankReadiness(env: Env): Promise<boolean | null> {
   if (readyCache && now - readyCache.at < RERANK_READY_CACHE_MS) return readyCache.ready;
   try {
     const raw = await env.OAUTH_KV.get(RERANK_READY_KV_KEY);
-    const ready = raw === "1" ? true : raw === "0" ? false : null;
+    const ready = raw === "1" ? true : raw === "0" ? false : localLatch && localLatch.until > now ? localLatch.ready : null;
     readyCache = { ready, at: now };
     return ready;
   } catch (e) {
@@ -154,7 +163,13 @@ export type ProbeResult = { ok: true; margin: number } | { ok: false; reason: st
  * documented shape and the relevant passage must lead the others by PROBE.margin logits. Writes the readiness latch
  * either way ("1" for a week, "0" for six hours) so recall never runs an unverified model. Never throws.
  */
-export async function probeReranker(env: Env): Promise<ProbeResult> {
+export function probeReranker(env: Env): Promise<ProbeResult> {
+  // One probe per isolate at a time: concurrent recalls that read "never probed" share it instead of each spending a call.
+  probeInFlight ??= runProbe(env).finally(() => { probeInFlight = null; });
+  return probeInFlight;
+}
+
+async function runProbe(env: Env): Promise<ProbeResult> {
   let result: ProbeResult;
   try {
     const scores = await scoreRerankCandidates(PROBE.query, PROBE.contexts.map((c, i) => ({ parentId: String(i), text: c.text })), env, RERANK_PROBE_TIMEOUT_MS);
@@ -165,8 +180,8 @@ export async function probeReranker(env: Env): Promise<ProbeResult> {
     result = { ok: false, reason: e instanceof Error ? e.message : "probe failed" };
   }
   try {
+    rememberVerdict(result.ok);
     await env.OAUTH_KV.put(RERANK_READY_KV_KEY, result.ok ? "1" : "0", { expirationTtl: result.ok ? RERANK_READY_TTL_S : RERANK_NOT_READY_TTL_S });
-    readyCache = null;
   } catch (e) {
     console.error("Reranker ready latch write failed (non-fatal):", e);
   }
@@ -203,7 +218,7 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
     const ready = await rerankReadiness(o.env);
     if (ready !== true) {
       // Never probed: prove the model once, off the hot path, so the next recall can use it.
-      if (ready === null) o.ctx.waitUntil(probeReranker(o.env));
+      if (ready === null && !probeInFlight) o.ctx.waitUntil(probeReranker(o.env));
       return { route: "not-ready" };
     }
   }
