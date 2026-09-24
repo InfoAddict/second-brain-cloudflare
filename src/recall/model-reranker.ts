@@ -91,12 +91,22 @@ export function percentilesFromScores(parentIds: readonly string[], scores: read
  */
 export function blendRerankerScores<T extends VectorizeMatch>(
   ranked: readonly T[], percentiles: ReadonlyMap<string, number>, weight = RERANK_BLEND_WEIGHT, floor = RERANK_BLEND_FLOOR,
+  keywordEvidence: ReadonlySet<string> = new Set(),
 ): T[] {
+  // A keyword-evidence parent enters the block at the edge of the fused candidates (the lowest heuristic score among the
+  // scored ones that are not evidence), where the model's percentile then moves it. Its own fused score is a tail rank
+  // from a different arm, and left as is it would both bury a match the model rated well and, as the block's minimum,
+  // force a huge scale on every other scored score.
+  const edge = Math.min(...ranked.filter(m => percentiles.has(parentOf(m)) && !keywordEvidence.has(parentOf(m))).map(m => m.score));
   const scored: T[] = [], unscored: T[] = [];
   for (const match of ranked) {
-    const p = percentiles.get(parentOf(match));
+    const id = parentOf(match);
+    const p = percentiles.get(id);
     if (p === undefined) unscored.push({ ...match });
-    else scored.push({ ...match, score: match.score * Math.max(floor, 1 + weight * (2 * p - 1)) });
+    else {
+      const base = keywordEvidence.has(id) && Number.isFinite(edge) ? Math.max(match.score, edge) : match.score;
+      scored.push({ ...match, score: base * Math.max(floor, 1 + weight * (2 * p - 1)) });
+    }
   }
   const byScore = (a: T, b: T) => b.score - a.score || a.id.localeCompare(b.id);
   scored.sort(byScore);
@@ -116,13 +126,21 @@ export function blendRerankerScores<T extends VectorizeMatch>(
 export interface RerankCandidate { parentId: string; text: string }
 
 /**
- * Up to RERANK_MAX_DIRECT direct parents (heuristic order), then extra graph-root parents up to RERANK_MAX_CANDIDATES.
+ * The scored set: up to `max` parents (RERANK_MAX_CANDIDATES). Extra graph-root parents fill the seats after the direct
+ * ones. A parent the keyword arm found with every distilled query term in its text ("keyword evidence", already ordered
+ * by fused rank) is always scored, up to the batch's five spare seats, and each takes the seat of the lowest-ranked
+ * fused candidate, so the batch never grows. Without this, an exact rare-term match that fusion left at the tail of
+ * the pool would stay unscored and be ranked below the whole scored block.
  * Ids only: the passage text comes from a scoped D1 read, never from Vectorize or keyword metadata.
  */
-export function selectRerankIds(direct: readonly VectorizeMatch[], root: readonly VectorizeMatch[], max = RERANK_MAX_CANDIDATES): string[] {
-  const ids = new Set<string>();
-  const directCap = max - (RERANK_MAX_CANDIDATES - RERANK_MAX_DIRECT);
-  for (const m of direct) { if (ids.size >= directCap) break; ids.add(parentOf(m)); }
+export function selectRerankIds(direct: readonly VectorizeMatch[], root: readonly VectorizeMatch[], max = RERANK_MAX_CANDIDATES, keywordEvidence: readonly string[] = []): string[] {
+  const spare = RERANK_MAX_CANDIDATES - RERANK_MAX_DIRECT;
+  const directCap = max - spare;
+  const directParents = [...new Set(direct.map(parentOf))];
+  const head = new Set(directParents.slice(0, directCap));
+  const extras = keywordEvidence.filter(id => !head.has(id)).slice(0, spare);
+  const ids = new Set<string>(directParents.slice(0, directCap - extras.length));
+  for (const id of extras) ids.add(id);
   for (const m of root) { if (ids.size >= max) break; ids.add(parentOf(m)); }
   return [...ids];
 }
@@ -268,6 +286,8 @@ export interface RerankStepInput {
   evidenceTokens: readonly string[];
   direct: readonly VectorizeMatch[];
   root: readonly VectorizeMatch[];
+  /** Parents the keyword arm found with every distilled query term in their text, best fused rank first. */
+  keywordEvidence?: readonly string[];
   /** Eval-only overrides (RecallVariantFlags.rerankTuning); production passes none. */
   tuning?: RerankTuning;
   /** Scoped D1 passage text for ids not already in hand; the caller applies the tenant clause. */
@@ -292,7 +312,7 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
   }
   const started = performance.now();
   try {
-    const ids = selectRerankIds(o.direct, o.root, o.tuning?.maxCandidates);
+    const ids = selectRerankIds(o.direct, o.root, o.tuning?.maxCandidates, o.keywordEvidence);
     const content = await o.loadContent(ids);
     const candidates = ids.flatMap(id => {
       const text = queryRelevantWindow(content.get(id) ?? "", [...o.evidenceTokens], o.tuning?.excerptChars ?? RERANK_EXCERPT_CHARS).trim();

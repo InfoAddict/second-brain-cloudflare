@@ -152,6 +152,22 @@ describe("recall reranker step", () => {
     expect(await s.kv.get(RERANK_READY_KV_KEY)).toBe("1"); // 2 + success + 2 never reaches 3 in a row
   });
 
+  it("an exact rare-term match the fused pool left at its tail is scored, and is not displaced by the scored block", async () => {
+    // 40 dense candidates about something else, plus one keyword-only note holding the rare term (no vector): fusion ranks it last.
+    const extraVectors = Array.from({ length: 34 }, (_, i) => ({ id: `p${i}`, score: 0.895 - i * 0.001, metadata: { parentId: `p${i}`, created_at: 100 + i } }));
+    const s = await setup({ extraVectors, scorer: (c: { text: string }[]) => ({ response: c.map((x, id) => ({ id, score: /glisteria/i.test(x.text) ? 6 : -5 + (id % 7) * 0.1 })) }) });
+    for (let i = 0; i < 34; i++) s.sqlite.seed({ id: `p${i}`, content: `weekly gardening note ${i} about tomatoes`, createdAt: 100 + i });
+    s.sqlite.seed({ id: "rare", content: "Glisteria Labs demoed their sensor; accuracy looked great.", createdAt: 5 });
+    const diagnostics: RecallDiagnostics = {};
+    const result = await recallEntries({ query: "glisteria", topK: 10, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, { diagnostics });
+    await Promise.all(s.deferred);
+    expect(diagnostics.rerankRoute).toBe("applied");
+    const sent = s.rerankInputs[0].contexts.map(c => c.text);
+    expect(sent.some(t => /Glisteria Labs/.test(t))).toBe(true); // scored although fusion left it far outside the top 25
+    expect(sent).toHaveLength(25); // hops 0: the extra took the seat of the lowest fused candidate, so the batch did not grow
+    expect(result.matches.map(m => m.id)).toContain("rare"); // still in the top 10 with the model on
+  });
+
   it("skips exact-identifier queries and too-few candidates", async () => {
     const s = await setup();
     const exact = await recall(s, "on", "release v1.9 launch planning");

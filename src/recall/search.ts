@@ -522,8 +522,17 @@ export async function recallEntries(
   // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
   const scopedParents = new Set(rcRows.map(r => r.id));
   const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
+  const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  // Keyword evidence: rows the keyword arm returned that hold every distilled query term, in fused order. Scoped like
+  // everything else here (inScope), and used only to choose ids: the model reads D1 text.
+  const fusedOrder = new Map<string, number>();
+  directReranked.forEach((m, i) => { const id = parentOfMatch(m); if (!fusedOrder.has(id)) fusedOrder.set(id, i); });
+  const keywordEvidence = tokens.length
+    ? keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => r.content.toLowerCase().includes(t.toLowerCase())))
+        .map(r => r.id).sort((a, b) => (fusedOrder.get(a) ?? Infinity) - (fusedOrder.get(b) ?? Infinity))
+    : [];
   const rerank = await rerankStep({
-    mode: rerankMode, forced: internal.variant?.rerank === true, tuning: internal.variant?.rerankTuning, env, ctx, query: semanticQuery,
+    mode: rerankMode, forced: internal.variant?.rerank === true, tuning: internal.variant?.rerankTuning, keywordEvidence, env, ctx, query: semanticQuery,
     queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
     loadContent: async ids => {
       const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
@@ -545,14 +554,13 @@ export async function recallEntries(
   // Linked-evidence scoring is calibrated on heuristic root scores; a reranker blend rescales them (best x2, worst x0.25),
   // which would move which linked memories qualify even when the model agrees with the heuristic order. Keep the
   // pre-blend scores for it; the blend still decides the ORDER of the direct picks and of root selection.
-  const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
   const heuristicDirectScore = new Map<string, number>();
   for (const m of directReranked) if (!heuristicDirectScore.has(parentOfMatch(m))) heuristicDirectScore.set(parentOfMatch(m), m.score);
   const heuristicRootScore = new Map<string, number>();
   for (const m of rootReranked) if (!heuristicRootScore.has(parentOfMatch(m))) heuristicRootScore.set(parentOfMatch(m), m.score);
   if (rerank.percentiles) {
-    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor);
-    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor);
+    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(keywordEvidence));
+    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(keywordEvidence));
   }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 

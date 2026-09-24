@@ -91,6 +91,18 @@ describe("percentilesFromScores and blendRerankerScores", () => {
     // one factor for the whole scored block, so the ratios inside it (what MMR reads) survive: 2 / 0.25 stays 8
     expect(out.find(x => x.id === "b")!.score / out.find(x => x.id === "a")!.score).toBeCloseTo(8, 6);
   });
+  it("a keyword-evidence parent enters the block at the edge of the fused candidates, so it neither sinks nor inflates the block", () => {
+    const ranked = [m("a", 1), m("b", 0.9), m("c", 0.8), m("kw", 0.001), m("u", 0.5)];
+    const pct = new Map([["a", 0.5], ["b", 0.5], ["c", 0.5], ["kw", 1]]);
+    const withEvidence = blendRerankerScores(ranked, pct, 1, 0.25, new Set(["kw"]));
+    const without = blendRerankerScores(ranked, pct, 1, 0.25);
+    // evidence: its base becomes the lowest core score (0.8), doubled by percentile 1 -> the top of the block
+    expect(withEvidence.map(x => x.id)).toEqual(["kw", "a", "b", "c", "u"]);
+    expect(withEvidence.find(x => x.id === "u")!.score).toBe(0.5); // unscored untouched
+    // and the block is not inflated: a's score is its own (multiplier 1), not scaled by best/0.001
+    expect(withEvidence.find(x => x.id === "a")!.score).toBeCloseTo(1);
+    expect(without.find(x => x.id === "a")!.score).toBeGreaterThan(100); // the artifact this avoids
+  });
   it("uses the parent id, not the chunk id, to look up the percentile", () => {
     const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 0.1)], new Map([["p", 0]]), 0.25);
     expect(out.find(x => x.id === "p-0")!.score).toBeCloseTo(0.75);
@@ -120,6 +132,22 @@ describe("selectRerankIds", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.slice(0, 25)).toEqual(direct.slice(0, 25).map(x => x.id));
     expect(ids.slice(25)).toEqual(["r0", "r1", "r2", "r3", "r4"]);
+  });
+  it("always scores keyword evidence, each extra taking the seat of the lowest fused candidate", () => {
+    const direct = Array.from({ length: 40 }, (_, i) => m(`d${i}`, 1 - i / 100));
+    const ids = selectRerankIds(direct, [], RERANK_MAX_CANDIDATES, ["d33", "d38", "d1"]);
+    expect(ids).toHaveLength(2 + 23); // d1 is already in the head, so two extras replace the two lowest of 25
+    expect(ids.slice(0, 23)).toEqual(direct.slice(0, 23).map(x => x.id));
+    expect(ids.slice(23)).toEqual(["d33", "d38"]);
+  });
+  it("never grows the batch: extras and roots together stay within 30, extras capped at five", () => {
+    const direct = Array.from({ length: 60 }, (_, i) => m(`d${i}`, 1 - i / 100));
+    const root = Array.from({ length: 10 }, (_, i) => m(`r${i}`, 0.5));
+    const many = Array.from({ length: 9 }, (_, i) => `d${40 + i}`);
+    const ids = selectRerankIds(direct, root, RERANK_MAX_CANDIDATES, many);
+    expect(ids).toHaveLength(30);
+    expect(ids.filter(id => many.includes(id))).toHaveLength(5);
+    expect(new Set(ids).size).toBe(30);
   });
   it("collapses chunks of one parent", () => {
     expect(selectRerankIds([m("a-0", 1, "a"), m("a-1", 0.9, "a"), m("b", 0.8)], [])).toEqual(["a", "b"]);
