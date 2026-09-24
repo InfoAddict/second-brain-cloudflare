@@ -219,6 +219,12 @@ describe("recall reranker step", () => {
     expect(r.diagnostics.rerankEvidence).toBeUndefined();
   });
 
+  it("an unavailable corpus total means not evidence, and says so in the diagnostics", async () => {
+    const r = await singleTermCorpus(3, 160, { limit: 50, breakCounts: true });
+    expect(r.sent).toEqual(r.head);
+    expect(r.diagnostics.rerankEvidence).toBe("suppressed-no-total");
+  });
+
   it("skips exact-identifier queries and too-few candidates", async () => {
     const s = await setup();
     const exact = await recall(s, "on", "release v1.9 launch planning");
