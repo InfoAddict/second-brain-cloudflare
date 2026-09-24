@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildEmbeddingChunks, estimateBgeSmallTokens } from "../../src/capture/contextual";
 import { DEFAULTS, type Config } from "../../src/config";
+import { SCHEME_DAILY_NEURON_CAP, neuronsFor } from "../../src/migration/embedding";
 import { COMMON_WORD_LIST } from "../../src/capture/common-words";
 import { BGE_SMALL_MAX_INPUT_TOKENS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
 
@@ -131,6 +132,27 @@ describe("shipped chunks never exceed the BGE Small window", () => {
       expect(real, `${c.name} ${c.mode}`).toBeLessThanOrEqual(BGE_SMALL_MAX_INPUT_TOKENS);
       expect(recorded[hash(c.text)], `${c.name} ${c.mode}`).toBe(real);
     }
+  });
+
+  it("the migration's neuron accounting never undercounts a script BERT expands: Korean chunks cost at least what their real tokens bill", () => {
+    const recorded = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, number>;
+    for (const name of ["koreanDominant", "nfdKorean", "koreanNoSpaces", "japanese", "arabic", "vietnamese"]) {
+      const texts = chunks.filter(c => c.name === name).map(c => c.text);
+      const billed = (texts.reduce((n, t) => n + recorded[hash(t)], 0) * 1841) / 1_000_000;
+      expect(neuronsFor("@cf/baai/bge-small-en-v1.5", texts), name).toBeGreaterThanOrEqual(billed);
+    }
+  });
+
+  it("caps a Korean brain's migration day at the neuron cap, judged by real billing", async () => {
+    // 200 Korean notes, each rewritten as focus chunks: the estimate the cap runs on must not run below what those tokens bill.
+    const recorded = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, number>;
+    const texts = chunks.filter(c => c.name === "koreanDominant" && c.mode.startsWith("focus")).map(c => c.text);
+    const perChunkBilled = (texts.reduce((n, t) => n + recorded[hash(t)], 0) * 1841) / 1_000_000 / texts.length;
+    const perChunkEstimated = neuronsFor("@cf/baai/bge-small-en-v1.5", texts) / texts.length;
+    expect(perChunkEstimated).toBeGreaterThanOrEqual(perChunkBilled);
+    // and by construction a day at the cap bills no more than the cap
+    expect(perChunkEstimated * (SCHEME_DAILY_NEURON_CAP / perChunkEstimated)).toBeCloseTo(SCHEME_DAILY_NEURON_CAP, 6);
+    expect((SCHEME_DAILY_NEURON_CAP / perChunkEstimated) * perChunkBilled).toBeLessThanOrEqual(SCHEME_DAILY_NEURON_CAP);
   });
 
   it.runIf(process.env.SCRIPT_TABLE)("writes the per-script table of largest estimated and real chunk tokens (SCRIPT_TABLE=path)", () => {

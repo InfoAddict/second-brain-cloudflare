@@ -2,8 +2,8 @@
  * Whole words in the BGE Small (uncased BERT WordPiece) vocabulary: every
  * alphabetic entry of the pinned tokenizer (BAAI/bge-small-en-v1.5 at revision
  * 5c38ec7c405e), which WordPiece emits as exactly one token. The token estimator
- * charges these 1 and everything else one token per character, so its bound is
- * tight for prose and still holds for any text.
+ * charges these 1 and everything else by character, which keeps it close to
+ * exact for prose (see estimateBgeSmallTokens for what is checked and how).
  * test/unit/contextual-token-guard.test.ts re-checks the list against the
  * tokenizer when the model cache is present.
  */

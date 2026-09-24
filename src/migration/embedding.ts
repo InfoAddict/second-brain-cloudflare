@@ -577,7 +577,7 @@ export const schemePageQuery = schemePageSql;
 const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
 /** Neurons for embedding these inputs, from a token estimate that runs high. */
-function neuronsFor(model: string, texts: string[]): number {
+export function neuronsFor(model: string, texts: string[]): number {
   const rate = NEURONS_PER_MTOK[model] ?? NEURONS_PER_MTOK["@cf/baai/bge-small-en-v1.5"];
   let tokens = 0;
   for (const t of texts) tokens += estimateBgeSmallTokens(t);

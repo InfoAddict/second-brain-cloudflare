@@ -302,15 +302,45 @@ embedding input carries the prefix: `entries.content`, FTS, and Vectorize
 never see it. Single-chunk, mirrored and over-limit entries embed
 exactly as before, and a failure building context falls back to plain chunks
 without failing the save. Under bge-small, no chunk may exceed the 512-token
-window or the embedder silently drops its tail. `estimateBgeSmallTokens` is an
-upper bound that holds for any text (every token consumes at least a character,
-so a run costs its length, except a run that is a whole word of the tokenizer's
-own 21,745-word vocabulary, which is exactly one token), and chunks are cut and,
-if need be, split until prefix plus chunk is at most 480 by that bound. That is
-checked on what ships: 584 chunks from 19 adversarial shapes (random short
-words, code, ids, base64, CJK, emoji, mixed scripts, ...) all have real
-tokenizer counts in a committed fixture, the largest 453, and the estimate never
-undercounts one (`test/unit/contextual-token-guard.test.ts`). CPU: the builder
+window or the embedder silently drops its tail, so `estimateBgeSmallTokens`
+models BERT's own pipeline and chunks are cut and, if need be, split until prefix
+plus chunk is at most 480 by that estimate (32 tokens under the window). The
+model: control, format and private-use characters, combining marks and U+FFFD
+are deleted before words are split (so they cost nothing and glue the words
+either side, which soft hyphens and zero-width spaces make routine in pasted
+text); whitespace ends a word; punctuation and unified CJK ideographs are one
+token each; everything else (letters of every script, digits, symbols, spacing
+marks) is part of a word, charged one token per character it becomes after
+lowercasing and NFD decomposition, which is 3 for a Hangul syllable and 2 for
+some Bengali and Tamil vowel signs; and a run of ASCII letters that is a whole
+word of the tokenizer's own vocabulary (21,745 words) is exactly one token.
+Prose therefore measures close to exact.
+
+*What is established, and how* (this is evidence, not a proof): (1) a sweep of
+every Unicode code point, alone, inside a word, between two vocabulary words and
+repeated, against the real tokenizer finds no undercount
+(`npm run test:token-sweep`, about 90 seconds, needs the model cache; an earlier
+version undercounted 1,260 Hangul syllables, two vowel signs and 141,000 code
+points between words); (2) every vocabulary word is checked to be one token;
+(3) 300 random vocabulary-word pairs joined by each of ten deleted characters
+have real counts in a committed fixture and never undercount; and (4) every
+chunk shipped from 38 adversarial and per-script notes has its real count in a
+committed fixture: 1,014 chunks, the largest 474 real tokens, and the estimate
+is at or above the real count for every one
+(`test/unit/contextual-token-guard.test.ts`). Largest estimated / largest real
+chunk tokens by script: Korean 478 / 331, NFD Korean 467 / 322, Japanese
+458 / 452, Chinese 458 / 452, Arabic 465 / 452, Hebrew 479 / 474, Cyrillic
+462 / 446, Greek 464 / 441, Devanagari 468 / 422, Thai 474 / 36, Bengali and
+Tamil 465 / 310, Vietnamese (NFD) 462 / 344, NFD Latin 475 / 232, soft hyphens
+470 / 141, zero-width and control characters 458 / 126, emoji ZWJ 465 / 104,
+astral math 457 / 95, fullwidth 460 / 210, random short words 476 / 361, hex
+ids 457 / 352, base64 458 / 356. What it does not cover is a tokenizer behavior
+none of those exercise (an interaction between two rare characters, say); the
+32-token margin is what would absorb that, and the fixture is where to add a
+counterexample. The migration's neuron cap is counted from the same estimate,
+so it cannot run below billed tokens for these scripts (tested for Korean); for
+bge-m3, whose tokenizer is not in the fixture, the same estimate is a
+conservative proxy for an accounting bound, not a billing figure. CPU: the builder
 is linear (frame computed once, allocation-free estimator, one estimate per
 chunk), and eligibility is capped on estimated tokens as well as characters,
 because a token-dense note is many more chunks per character. `storeEntry`'s own

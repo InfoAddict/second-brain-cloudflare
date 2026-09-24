@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage",
     "test:eval:local-models": "EVAL_LOCAL_MODELS=1 vitest run test/eval/local-ai.smoke.test.ts test/eval/legacy-rerank.test.ts",
     "test:eval:workerd": "EVAL_WORKERD=1 vitest run test/eval/d1.workerd.test.ts test/eval/rows-read.workerd.test.ts test/eval/baseline-lock.workerd.test.ts test/eval/scheme-page.workerd.test.ts test/eval/runner.test.ts",
+    "test:token-sweep": "CODE_POINT_SWEEP=1 vitest run test/unit/contextual-code-point-sweep.test.ts",
     "test:eval:public-download": "EVAL_PUBLIC_DOWNLOAD=1 vitest run test/eval/public/download.test.ts",
     "eval:recall": "node scripts/eval-run-ts.mjs test/eval/cli.ts",
     "cf-typegen": "wrangler types",
