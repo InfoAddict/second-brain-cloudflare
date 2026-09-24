@@ -310,7 +310,7 @@ describe("parseAndExpand", () => {
   // (its window opens a month earlier), which is the property that actually
   // matters: the skip must never change the result, whatever minute the window
   // happens to open on. A bound short by any amount fails here.
-  it("stays exact minute by minute across a DST transition", () => {
+  it("stays exact whichever instant the window opens on around a DST transition", () => {
     const ics = calendar(
       NEW_YORK_VTIMEZONE,
       vevent([
@@ -339,10 +339,18 @@ describe("parseAndExpand", () => {
     const reference = parseAndExpand(ics, ms("2024-10-01T00:00:00Z"), windowEnd);
     expect(reference.length).toBeGreaterThan(0);
 
-    // Two-minute steps either side of the 06:00Z transition. The error this
-    // guards against is an offset change, so it is never finer than the
-    // half-hour Lord Howe shifts by, let alone the hour everywhere else.
-    for (let t = ms("2024-11-03T02:00:00Z"); t <= ms("2024-11-03T08:00:00Z"); t += 120_000) {
+    // A skip bound fails only where an occurrence still running at the window's
+    // start is written off, so the sharp instants are each occurrence's start
+    // and the moment just before and at its end, plus the 06:00Z transition
+    // itself. Sweeping every minute between them re-parses the calendar ~180
+    // times for no extra coverage.
+    const nearTransition = reference.filter(o => o.end >= ms("2024-10-27T00:00:00Z"));
+    expect(nearTransition.length).toBeGreaterThan(0);
+    const opens = new Set([
+      ...nearTransition.flatMap(o => [o.start, o.end - 1, o.end, o.end + 1]),
+      ms("2024-11-03T06:00:00Z") - 1, ms("2024-11-03T06:00:00Z"), ms("2024-11-03T06:00:00Z") + 1,
+    ]);
+    for (const t of opens) {
       // parseAndExpand keeps an occurrence when it has not yet ended at the
       // window's start, so the reference filtered by that rule is the answer.
       const expected = reference.filter(o => o.end >= t).map(o => o.key).sort();
