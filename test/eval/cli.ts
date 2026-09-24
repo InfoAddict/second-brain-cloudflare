@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { DEFAULTS } from "../../src/config";
-import { ReplayStore, makeReplayAi } from "./ai-replay";
+import { LLM_TAGS_ARMS, ReplayStore, makeReplayAi, type LlmTagsArm } from "./ai-replay";
 import { isCoreCorpus, listCorpora, replayPaths, resolveCorpus } from "./corpora";
 import { CORE_DATA_DIR, CORPUS_IDS } from "./corpus/build";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
@@ -22,7 +22,7 @@ import { VARIANTS, getVariant, type VariantSpec } from "./variants";
 
 export class UsageError extends Error {}
 
-interface Common { corpus: string; d1: "sqlite" | "workerd"; isolate: "warm" | "cold"; model: string; hash: boolean; limit?: number; json?: string }
+interface Common { llmTags: LlmTagsArm; corpus: string; d1: "sqlite" | "workerd"; isolate: "warm" | "cold"; model: string; hash: boolean; limit?: number; json?: string }
 export type CliCommand =
   | ({ kind: "run"; variant: string } & Common)
   | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean } & Common)
@@ -67,8 +67,9 @@ export function parseCli(argv: string[]): CliCommand {
   if (values.list) return { kind: "list" };
   if (values.d1 !== "sqlite" && values.d1 !== "workerd") throw new UsageError(`--d1 must be sqlite or workerd, got ${values.d1}`);
   if (values.isolate !== "warm" && values.isolate !== "cold") throw new UsageError(`--isolate must be warm or cold, got ${values.isolate}`);
+  if (!(LLM_TAGS_ARMS as readonly string[]).includes(values["llm-tags"]!)) throw new UsageError(`--llm-tags must be ${LLM_TAGS_ARMS.join(" or ")}, got ${values["llm-tags"]}`);
   const common: Common = {
-    corpus: values.corpus!, d1: values.d1, isolate: values.isolate, model: resolveModel(values.corpus!, values.model ?? values["embedding-model"]),
+    llmTags: values["llm-tags"] as LlmTagsArm, corpus: values.corpus!, d1: values.d1, isolate: values.isolate, model: resolveModel(values.corpus!, values.model ?? values["embedding-model"]),
     hash: values["hash-embeddings"]!, limit: values.limit !== undefined ? positive("limit", values.limit, { integer: true }) : undefined, json: values.json,
   };
   const command = positionals[0];
@@ -119,7 +120,7 @@ function parse(argv: string[]) {
     options: {
       variant: { type: "string" }, compare: { type: "string" }, corpus: { type: "string", default: "core-1k" },
       json: { type: "string" }, d1: { type: "string", default: "sqlite" }, isolate: { type: "string", default: "warm" },
-      "embedding-model": { type: "string" }, model: { type: "string" }, "producer-from": { type: "string" }, layer: { type: "string", default: "local" }, "i-recorded-this": { type: "boolean", default: false }, "hash-embeddings": { type: "boolean", default: false },
+      "embedding-model": { type: "string" }, "llm-tags": { type: "string", default: "stand-in" }, model: { type: "string" }, "producer-from": { type: "string" }, layer: { type: "string", default: "local" }, "i-recorded-this": { type: "boolean", default: false }, "hash-embeddings": { type: "boolean", default: false },
       limit: { type: "string" }, target: { type: "string" }, "target-gaps": { type: "string" }, "allow-unmeasured-rows": { type: "boolean", default: false },
       "max-neurons": { type: "string", default: "4000" }, concurrency: { type: "string", default: "8" }, list: { type: "boolean", default: false }, "accept-data-change": { type: "string" },
     },
@@ -150,6 +151,9 @@ export function formatReport(report: VariantReport): string {
     "  cost per query (all queries):",
     `    D1 statements  ${dist(allQueries.d1Statements)}`,
     allQueries.d1RowsRead ? `    D1 rows_read   ${dist(allQueries.d1RowsRead, 0)}` : "    D1 rows_read: not measured (use --d1 workerd)",
+    ...(report.llmTags ? [`    llm tags       ${report.llmTags}${report.llmTags === "stand-in" ? " (embedding-nearest stand-in for the tag-inference LLM call)" : " (empty answer: no query tags, as if the LLM call failed)"}`] : []),
+    ...(report.llmTags === "stand-in" ? ["    caveat: agreement with the real model is unmeasured"] : []),
+    ...(report.llmTags ? ["    caveat: cost excludes synthesizeInsight (GET /recall's default; off in MCP and in the eval)"] : []),
     ...(report.neuronSource ? [`    neurons source ${report.neuronSource === "projected" ? "projected from local token counts x published rates (not billed)" : "provider-reported usage"}`] : []),
     `    AI calls       mean ${allQueries.aiCalls.mean.toFixed(2)}   neurons mean ${allQueries.neurons.mean.toFixed(1)}${allQueries.estimatedNeuronQueries ? ` (estimated for ${allQueries.estimatedNeuronQueries} quer${allQueries.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,
     `    wall ms        p50 ${allQueries.wallMs.p50.toFixed(0)}  p95 ${allQueries.wallMs.p95.toFixed(0)}  (reported, never gated)`,
@@ -239,8 +243,8 @@ async function withCorpus<T>(cmd: Common, spec: CorpusSpec, variant: VariantSpec
   const paths = replayPaths(cmd.model, cmd.corpus);
   // Hash smoke: an empty in-memory store, so no recorded vector is mixed in and nothing is read from disk.
   const replay = cmd.hash
-    ? makeReplayAi({ store: new ReplayStore([]), mode: "dry" })
-    : makeReplayAi({ store: new ReplayStore(paths.read), mode: "replay" });
+    ? makeReplayAi({ store: new ReplayStore([]), mode: "dry", llmTags: cmd.llmTags })
+    : makeReplayAi({ store: new ReplayStore(paths.read), mode: "replay", llmTags: cmd.llmTags });
   const corpus = await loadCorpus({ spec, backend: cmd.d1, replay, embeddingModel: cmd.model, index: variant.index });
   try { return await fn(corpus); } finally { await corpus.close(); }
 }
@@ -267,7 +271,7 @@ async function runPrepare(cmd: CliCommand & { kind: "prepare" }): Promise<number
   await prepare({
     spec, variant: getVariant(cmd.variant), backend: cmd.d1, model: cmd.model,
     store: new ReplayStore(paths.read, paths.write), live: makeLocalAi(),
-    maxNeurons: cmd.maxNeurons, concurrency: cmd.concurrency, log: line => console.log(line),
+    llmTags: cmd.llmTags, maxNeurons: cmd.maxNeurons, concurrency: cmd.concurrency, log: line => console.log(line),
   });
   return 0;
 }
@@ -298,7 +302,7 @@ async function runExportCache(cmd: CliCommand & { kind: "export-cache" }, spec: 
   if (!isAllowedDataFile(`test/eval/data/core/${basename(out)}`)) throw new UsageError(`${basename(out)} is not an allowlisted replay file name`);
   // read already lists only files that exist and already includes the local write cache
   const { read } = replayPaths(cmd.model, cmd.corpus);
-  const n = await exportCache({ spec, variant: getVariant("baseline"), backend: cmd.d1, model: cmd.model, readPaths: read, outPath: out });
+  const n = await exportCache({ spec, variant: getVariant("baseline"), backend: cmd.d1, model: cmd.model, readPaths: read, outPath: out, llmTags: "stand-in" });
   console.log(`exported ${n} cache entries to ${out}`);
   return 0;
 }

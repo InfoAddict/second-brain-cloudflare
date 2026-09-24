@@ -95,6 +95,8 @@ export interface VariantReport {
   producers?: Record<string, EmbeddingProducer>;
   /** How the neuron figures were obtained; reports with different sources are not comparable on cost. */
   neuronSource?: NeuronSource;
+  /** What answered the query-tag LLM call; reports with different arms are not comparable. */
+  llmTags?: "stand-in" | "empty";
   d1Backend: "sqlite" | "workerd";
   isolate: "warm" | "cold";
   /** Result depth every query ran at; reports at different depths are not comparable. */
@@ -108,5 +110,5 @@ export interface VariantReport {
   results: QueryResult[];
 }
 
-/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. */
-export const RUNNER_VERSION = 4;
+/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). */
+export const RUNNER_VERSION = 6;

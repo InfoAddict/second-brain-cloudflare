@@ -83,6 +83,16 @@ describe("evaluateGate", () => {
     expect(r?.detail).toMatch(/neuron source differs/);
   });
 
+  it("is INCONCLUSIVE when the LLM tag arm differs, or is recorded on one side only", () => {
+    for (const [a, b] of [["stand-in", "empty"], ["stand-in", undefined]] as const) {
+      const r = evaluateGate({ ...report("baseline"), llmTags: a }, { ...report("v"), llmTags: b }).rules.find(x => x.rule === "comparable");
+      expect(r?.status).toBe("inconclusive");
+      expect(r?.detail).toMatch(/LLM tag arm differs/);
+    }
+    const same = evaluateGate({ ...report("baseline"), llmTags: "empty" }, { ...report("v"), llmTags: "empty" }).rules.find(x => x.rule === "comparable");
+    expect(same).toBeUndefined(); // no comparability problem, so no comparable rule is raised
+  });
+
   it("PASSes a clear improvement with no regression and no extra cost", () => {
     const result = evaluateGate(base, report("v", shift(0.5, 30)), { allowUnmeasuredRowsRead: false });
     expect(result.verdict).toBe("PASS");

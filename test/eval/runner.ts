@@ -142,7 +142,7 @@ export async function runVariant(o: {
       o.onProgress?.(results.length, o.queries.length);
     }
     const producers = corpus.replay.producers(), neuronSource = corpus.replay.neuronSource();
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), llmTags: corpus.replay.llmTags, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
   } finally {
     restoreClock();
   }
@@ -171,6 +171,7 @@ function validateReport(raw: unknown, path: string): VariantReport {
     }
   }
   if (r.neuronSource !== undefined && r.neuronSource !== "projected" && r.neuronSource !== "provider") fail("neuronSource", "projected or provider");
+  if (r.llmTags !== undefined && r.llmTags !== "stand-in" && r.llmTags !== "empty") fail("llmTags", "stand-in or empty");
   if (r.d1Backend !== "sqlite" && r.d1Backend !== "workerd") fail("d1Backend", "sqlite or workerd");
   if (r.isolate !== "warm" && r.isolate !== "cold") fail("isolate", "warm or cold");
   if (!isNum(r.topK)) fail("topK", "a number");

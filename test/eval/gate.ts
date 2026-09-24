@@ -85,6 +85,7 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
     if (fingerprinted(r.corpus) && !Object.keys(r.producers ?? {}).length) problems.push(`the ${label} report has no verified model producers (unverified provenance); rerun it against a stamped or freshly recorded cache`);
   }
   if ((base.neuronSource ?? "none") !== (cand.neuronSource ?? "none")) problems.push(`neuron source differs (${base.neuronSource ?? "none"} vs ${cand.neuronSource ?? "none"})`);
+  if ((base.llmTags ?? "none") !== (cand.llmTags ?? "none")) problems.push(`LLM tag arm differs (${base.llmTags ?? "none"} vs ${cand.llmTags ?? "none"}); the arms answer query-tag inference differently, so rankings and cost are not comparable`);
   if (base.d1Backend !== cand.d1Backend) problems.push("D1 backend differs");
   if (base.isolate !== cand.isolate) problems.push("isolate mode differs");
   if (base.topK !== cand.topK) problems.push(`top-k differs (${base.topK} vs ${cand.topK})`);

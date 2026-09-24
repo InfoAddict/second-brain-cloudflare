@@ -10,7 +10,7 @@ import { readScopeWorkspaces } from "../../src/lib/scope";
 import { vectorizeFilterState } from "../../src/vectorize/scope";
 import { ExactVectorize } from "./vectorize-emulator";
 import { EVAL_TOP_K, RUNNER_VERSION, findLeaks, freezeClock, readReport, runVariant, writeReport } from "./runner";
-import type { EmbeddingProducer, GoldenQuery } from "./types";
+import type { EmbeddingProducer, GoldenQuery, VariantReport } from "./types";
 import { hashVector } from "./vectors";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
 import { mkdirSync, mkdtempSync } from "node:fs";
@@ -290,6 +290,20 @@ describe("model producers in the report", () => {
     const report = await run(c);
     expect(report.producers).toEqual({ [MODEL]: mk("BAAI/bge-small-en-v1.5"), [RERANK]: mk("BAAI/bge-reranker-base") });
     expect(report.neuronSource).toBe("projected");
+  });
+
+  it("records which tag arm answered the LLM calls", async () => {
+    const stand = await run(await corpus());
+    expect(stand.llmTags).toBe("stand-in");
+    const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries, edges: [], queries }, backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry", llmTags: "empty" }), embeddingModel: MODEL });
+    open.push(c);
+    expect((await run(c)).llmTags).toBe("empty");
+  });
+
+  it("rejects a report whose llmTags is not a known arm", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "eval-arm-")), "r.json");
+    writeReport(path, { ...({ schema: 1, variant: "v", corpus: "c", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, results: [] } as VariantReport), llmTags: "oracle" as never });
+    expect(() => readReport(path)).toThrow(/llmTags/);
   });
 
   it("carries no producers and no neuron source when nothing had verified provenance (hash smoke, dry run)", async () => {

@@ -167,6 +167,25 @@ describe("main (end to end on a tiny registered corpus)", () => {
     expect(await main(["--compare", `${join(dir, "b.json")},${join(dir, "c.json")}`, "--allow-unmeasured-rows"])).toBe(3);
   });
 
+  it("parses --llm-tags, defaulting to the stand-in, and refuses anything else", () => {
+    expect(parseCli(["--variant", "baseline"])).toMatchObject({ llmTags: "stand-in" });
+    expect(parseCli(["--variant", "baseline", "--llm-tags", "empty"])).toMatchObject({ llmTags: "empty" });
+    expect(parseCli(["prepare", "--variant", "baseline", "--llm-tags", "empty"])).toMatchObject({ kind: "prepare", llmTags: "empty" });
+    expect(() => parseCli(["--variant", "baseline", "--llm-tags", "oracle"])).toThrow(/--llm-tags must be stand-in or empty/);
+  });
+
+  it("formatReport names the tag arm and the caveats that go with it", () => {
+    const base = report([result({ queryId: "a" })]);
+    const stand = formatReport({ ...base, llmTags: "stand-in" });
+    expect(stand).toMatch(/llm tags\s+stand-in/);
+    expect(stand).toMatch(/agreement with the real model is unmeasured/);
+    expect(stand).toMatch(/excludes synthesizeInsight/);
+    const empty = formatReport({ ...base, llmTags: "empty" });
+    expect(empty).toMatch(/llm tags\s+empty/);
+    expect(empty).not.toMatch(/agreement with the real model/);
+    expect(empty).toMatch(/excludes synthesizeInsight/);
+  });
+
   it("formatReport states where the neuron figures come from", () => {
     const base = report([result({ queryId: "a" })]);
     expect(formatReport({ ...base, neuronSource: "projected" })).toMatch(/neurons.*projected from local token counts/);
