@@ -458,11 +458,13 @@ nothing. `deleteByIds` is batched at the same 1,000 ceiling as upserts.
 **A recurring loser, explained (q-long-024).** "What is the policy on recovering
 costs after journeys" (answer: "the reimbursement form wants original receipts
 within thirty days", at character 1,812 of a 3,186-character note titled
-"Conference travel debrief") is fine on `core-1k` (final rank 8th to 6th) and a
-loser at `scale-5k` and `scale-20k` (recall@10 1.0 to 0.0), and it is not a
+"Conference travel debrief") moves across the tenth place with the base it is run
+on: on integration/recall 0adb4e8 it stayed inside the final ten on `core-1k`
+(8th to 6th) and lost at `scale-5k` and `scale-20k`, and on 5336d6d (T-0081's
+block layout) it loses on `core-1k` too (recall@10 1.0 to 0.0). It is not a
 chunking artifact. The chunk holding the answer is one of ten small chunks and sits in
 the dense arm's top five either way: dense rank 5 to 4 at scale-5k (4 to 0 on
-core-1k), and its best-chunk cosine with the query rises from
+core-1k at 0adb4e8), and its best-chunk cosine with the query rises from
 0.603 to 0.627 with the prefix. What changes is the final cut, which is fed by
 the graph and keyword arms and reshuffles near ties: at scale-5k the gold note
 is 8th of the final ten without contextual chunks and drops out with them,
