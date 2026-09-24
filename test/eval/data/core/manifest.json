@@ -3,42 +3,43 @@
   "persona": "Avery Lindqvist (fictional)",
   "authoredBy": "Claude Sonnet 5 (claude-sonnet-5), 2026-09-23",
   "files": {
-    "needles.jsonl": "8f47b5c5c05d06a6e5de0e13ee6ea3aad2fff8e43d95560e62a1882e1f65ee62",
-    "edges.jsonl": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
-    "queries.jsonl": "6c32e122a8afb0f715dde49d47d6792268c34e27fbb50e26ec2da039c2d52385"
+    "needles.jsonl": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c",
+    "edges.jsonl": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f",
+    "queries.jsonl": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5",
+    "haystack.jsonl": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc"
   },
   "counts": {
-    "needles": 351,
-    "queries": 345,
+    "needles": 1733,
+    "queries": 1683,
     "needlesByPurpose": {
-      "identifier": 55,
-      "rare-word": 44,
-      "common-word": 54,
-      "short-word": 30,
-      "paraphrase": 48,
-      "cjk": 36,
-      "multi-hop": 60,
-      "long-context": 24
+      "identifier": 179,
+      "rare-word": 154,
+      "common-word": 140,
+      "short-word": 100,
+      "paraphrase": 440,
+      "cjk": 110,
+      "multi-hop": 300,
+      "long-context": 310
     },
     "byCategory": {
-      "identifier": 58,
-      "rare-word": 61,
-      "common-word": 54,
-      "short-word": 30,
-      "paraphrase": 48,
-      "cjk": 40,
-      "multi-hop": 30,
-      "long-context": 24
+      "identifier": 214,
+      "rare-word": 199,
+      "common-word": 140,
+      "short-word": 100,
+      "paraphrase": 440,
+      "cjk": 130,
+      "multi-hop": 150,
+      "long-context": 310
     },
     "clustersByCategory": {
-      "identifier": 46,
-      "rare-word": 38,
-      "common-word": 54,
-      "short-word": 30,
-      "paraphrase": 48,
-      "cjk": 36,
-      "multi-hop": 30,
-      "long-context": 24
+      "identifier": 150,
+      "rare-word": 130,
+      "common-word": 85,
+      "short-word": 100,
+      "paraphrase": 440,
+      "cjk": 110,
+      "multi-hop": 150,
+      "long-context": 310
     }
   },
   "history": [
@@ -132,6 +133,41 @@
         "recall10": 0.7768115942028986,
         "mrr10": 0.7571612606395214,
         "ndcg10": 0.712665873623376,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-24T21:51:47.904Z",
+      "reason": "expanded golden set (T-0043.6)",
+      "files": {
+        "needles.jsonl": {
+          "old": "8f47b5c5c05d06a6e5de0e13ee6ea3aad2fff8e43d95560e62a1882e1f65ee62",
+          "new": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c"
+        },
+        "edges.jsonl": {
+          "old": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
+          "new": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f"
+        },
+        "queries.jsonl": {
+          "old": "6c32e122a8afb0f715dde49d47d6792268c34e27fbb50e26ec2da039c2d52385",
+          "new": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5"
+        },
+        "haystack.jsonl": {
+          "old": "",
+          "new": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 1683,
+        "recall5": 0.49554367201426025,
+        "recall10": 0.5353535353535354,
+        "mrr10": 0.4922330211545894,
+        "ndcg10": 0.45076027132811625,
         "errors": 0,
         "degraded": 0,
         "leaks": 0
