@@ -85,20 +85,30 @@ export async function runVariant(o: {
     const recallOnce = async (q: GoldenQuery) => {
       const diagnostics: RecallDiagnostics = {};
       corpus.replay.drainCalls();
-      corpus.replay.drainErrors();
+      corpus.replay.drainErrors(q.id);
       const degradedBefore = vectorizeFilterState().degradedQueries;
       intercepted = 0;
       const started = performance.now();
-      const result = await recallEntries(
-        { query: q.text, topK: EVAL_TOP_K, hops: q.hops, synthesize: false },
-        env, ctx, cfg,
-        { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
-      );
-      // distill.ts swallows a failed tag-inference call, so a stand-in failure is surfaced here or the run would be the empty arm unannounced
-      const standInFailures = corpus.replay.drainErrors();
-      if (standInFailures.length) throw new Error(`query-tag stand-in failed: ${standInFailures.join("; ")}`);
+      // Tag inference runs beside the query embedding (search.ts) and distill.ts swallows its failures, so it can outlive a
+      // failed recall. Scope its calls to this query and wait for them, or a late failure would be charged to the next one.
+      let result: Awaited<ReturnType<typeof recallEntries>> | undefined;
+      let recallError: unknown;
+      try {
+        result = await corpus.replay.scope(q.id, () => recallEntries(
+          { query: q.text, topK: EVAL_TOP_K, hops: q.hops, synthesize: false },
+          env, ctx, cfg,
+          { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
+        ));
+      } catch (e) {
+        recallError = e;
+      }
+      await corpus.replay.settle(q.id);
+      const standInFailures = corpus.replay.drainErrors(q.id);
+      const standInMessage = standInFailures.length ? `query-tag stand-in failed: ${standInFailures.join("; ")}` : "";
+      if (recallError) throw standInMessage ? new Error(`${recallError instanceof Error ? recallError.message : String(recallError)}; ${standInMessage}`) : recallError;
+      if (standInMessage) throw new Error(standInMessage);
       return {
-        result, diagnostics, wallMs: performance.now() - started, calls: corpus.replay.drainCalls(),
+        result: result!, diagnostics, wallMs: performance.now() - started, calls: corpus.replay.drainCalls(),
         filterDegraded: vectorizeFilterState().degradedQueries > degradedBefore,
       };
     };

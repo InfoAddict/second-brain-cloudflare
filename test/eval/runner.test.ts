@@ -351,6 +351,31 @@ describe("stand-in failures fail closed", () => {
     expect(report.results[0].error).toMatch(/query-tag stand-in failed.*inferQueryTags prompt/);
   });
 
+  it("an embedding failure plus a slower failing stand-in charges the same query, never the next", async () => {
+    const recorded = mkdtempSync(join(tmpdir(), "eval-standin-"));
+    mkdirSync(join(recorded, ".eval-cache"), { recursive: true });
+    let armed = false;
+    const timing = { producer: () => producer, run: async (_m: string, input: unknown) => {
+      const t = (input as { text: string[] }).text[0];
+      if (armed && (t === "gardening" || t === "planning")) { await new Promise(r => setTimeout(r, 80)); throw new Error("tag boom"); } // the stand-in fails later
+      if (armed && t === "advice") throw new Error("embedding boom"); // the first query's main embedding (of its distilled text) fails at once
+      return { data: [hashVector(t, 384)] };
+    } };
+    const replay = makeReplayAi({ store: new ReplayStore([], join(recorded, ".eval-cache", "t.jsonl"), { root: recorded }), mode: "record", live: timing, budget: new NeuronBudget(1e6) });
+    const two: GoldenQuery[] = [
+      { id: "t1", category: "paraphrase", text: "tomato advice", gold: [{ id: "f1", grade: 2 }], viewer: "avery" }, // no tag word: reaches the stand-in
+      { id: "t2", category: "paraphrase", text: "#gardening notes", gold: [{ id: "f1", grade: 2 }], viewer: "avery" }, // a hashtag: never calls the LLM
+    ];
+    const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: two }, backend: "sqlite", replay, embeddingModel: MODEL });
+    open.push(c);
+    armed = true;
+    const report = await runVariant({ corpus: c, variant: getVariant("baseline"), queries: two, isolate: "cold", embeddingModel: MODEL });
+    const [t1, t2] = report.results;
+    expect(t1.error).toMatch(/embedding boom/);
+    expect(t1.error).toMatch(/query-tag stand-in failed.*tag boom/); // its own late failure, waited for
+    expect(t2.error).toBeUndefined(); // and not billed to the query that follows
+  });
+
   it("the empty arm still runs clean", async () => {
     const report = await replayRun(makeReplayAi({ store: new ReplayStore([]), mode: "dry", llmTags: "empty" }));
     expect(report.llmTags).toBe("empty");

@@ -475,6 +475,25 @@ describe("tag stand-in arm", () => {
     expect(replay.drainErrors()).toEqual([expect.stringMatching(/inferQueryTags prompt/)]);
   });
 
+  it("records a failure in pricing or formatting, not only in parsing and embedding", async () => {
+    const root = tmp();
+    const { s, live } = filled(root);
+    const rec = makeReplayAi({ store: s, mode: "record", live, budget: new NeuronBudget(1000) });
+    // every embedding succeeds; only the priced answer fails, because this model has no published rate
+    await expect(rec.ai.run("@cf/meta/no-rate-llm" as never, tagPrompt("finance, travel, vendor", "the freight dispute") as never)).rejects.toThrow(/no neuron rate/);
+    expect(rec.drainErrors()).toEqual([expect.stringMatching(/no neuron rate/)]);
+  });
+
+  it("keys failures by query scope, and settle waits for a call still running when its query ended", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    const started = replay.scope("q1", () => replay.ai.run(LLM as never, tagPrompt("finance", "q") as never).catch(() => undefined));
+    void started;
+    await replay.settle("q1");
+    expect(replay.drainErrors("q2")).toEqual([]);
+    expect(replay.drainErrors("q1")).toEqual([expect.stringMatching(/replay cache miss/)]);
+    expect(replay.drainErrors("q1")).toEqual([]);
+  });
+
   it("records nothing on success, under the empty arm, or for a plain embedding miss", async () => {
     const root = tmp();
     const { s, live } = filled(root);

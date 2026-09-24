@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { producerKey, type EmbeddingProducer, type NeuronSource } from "./types";
+import { QueryScopes } from "./query-scope";
 import { STAND_IN_EMBEDDING_MODEL, STAND_IN_MAX_TAGS, STAND_IN_TAG_THRESHOLD, formatTags, parseTagPrompt, pickTags } from "./tag-standin";
 import { hashVector } from "./vectors";
 
@@ -596,11 +597,15 @@ export interface ReplayAi {
   /** Calls since the last drain; the runner drains once per query. */
   drainCalls(): AiCall[];
   /**
-   * Stand-in failures since the last drain. distill.ts swallows any error from the LLM call and returns no tags,
-   * which would silently turn the stand-in into the empty arm, so the failure is also recorded here and the runner
-   * turns it into that query's error.
+   * Stand-in failures recorded under `scope` since its last drain ("" when a call ran outside any scope). distill.ts
+   * swallows any error from the LLM call and returns no tags, which would silently turn the stand-in into the empty
+   * arm, so the failure is also recorded here and the runner turns it into that query's error.
    */
-  drainErrors(): string[];
+  drainErrors(scope?: string): string[];
+  /** Runs `fn` with every AI call it starts, awaited or not, attributed to `scope` (one query). */
+  scope<T>(scope: string, fn: () => Promise<T>): Promise<T>;
+  /** Resolves once everything started under `scope` has finished (throws if it never does), so a stand-in failure is on record before the query is closed. */
+  settle(scope: string): Promise<void>;
   /** Producer of every non-LLM model this ai was asked for (corpus load and queries), as the cache records it. */
   producers(): Record<string, EmbeddingProducer>;
   /** Where the neuron figures of the calls served so far come from; undefined when no call had verified provenance. */
@@ -655,7 +660,8 @@ export function makeReplayAi(opts: {
   dryOther?: (model: string, input: unknown) => unknown;
 }): ReplayAi {
   const calls: AiCall[] = [];
-  const errors: string[] = [];
+  const scopes = new QueryScopes();
+  const errors = new Map<string, string[]>();
   const misses: ReplayAi["misses"] = new Map();
   /** Models with at least one call served from (or recorded with) verified provenance. */
   const verifiedModels = new Set<string>();
@@ -691,23 +697,28 @@ export function makeReplayAi(opts: {
     }
     const preview = text.slice(0, 60).replace(/\s+/g, " ");
     if (kind === "llm" && (opts.mode === "replay" || !opts.recordLlm)) {
-      let answer = "";
-      if (arm === "stand-in") {
+      // The output is priced at the published rate whatever produced it, so an answered call is not free.
+      const answered = (answer: string) => {
+        const cost = reportedNeurons(model, kind, text, { text: answer });
+        record({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: arm === "stand-in" ? "stand-in" : "stub" });
+        return input.stream ? sseStream(answer) : { response: answer };
+      };
+      if (arm === "empty") return answered("");
+      // The whole stand-in path is one recorded unit: whatever throws (parse, embed, select, price, format) reaches
+      // the caller, which swallows it, and is also on record for the runner under its query's scope.
+      const scope = scopes.id() ?? "";
+      return (async () => {
         try {
           const { tags, query } = parseTagPrompt(input as Parameters<typeof parseTagPrompt>[0]);
           const embed = async (t: string) => ((await exec(STAND_IN_EMBEDDING_MODEL, { text: [t] }, true)) as { data: number[][] }).data[0];
           const vectors = new Map<string, number[]>();
           for (const t of tags) vectors.set(t, await embed(t));
-          answer = formatTags(pickTags(await embed(query), tags, vectors, STAND_IN_TAG_THRESHOLD, STAND_IN_MAX_TAGS));
+          return answered(formatTags(pickTags(await embed(query), tags, vectors, STAND_IN_TAG_THRESHOLD, STAND_IN_MAX_TAGS)));
         } catch (e) {
-          errors.push(e instanceof Error ? e.message : String(e));
+          errors.set(scope, [...(errors.get(scope) ?? []), e instanceof Error ? e.message : String(e)]);
           throw e;
         }
-      }
-      // The output is priced at the published rate whatever produced it, so an answered call is not free.
-      const cost = reportedNeurons(model, kind, text, { text: answer });
-      record({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: arm === "stand-in" ? "stand-in" : "stub" });
-      return input.stream ? sseStream(answer) : { response: answer };
+      })();
     }
     if (opts.mode === "dry") {
       const neurons = estimateNeurons(model, text);
@@ -752,7 +763,9 @@ export function makeReplayAi(opts: {
     ai: { run } as unknown as Ai,
     llmTags: arm,
     drainCalls: () => calls.splice(0),
-    drainErrors: () => errors.splice(0),
+    drainErrors: (scope = "") => { const out = errors.get(scope) ?? []; errors.delete(scope); return out; },
+    scope: (scope, fn) => scopes.run(scope, fn),
+    settle: scope => scopes.settle(scope),
     producers: () => Object.fromEntries([...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [[m, p]] : []; })),
     neuronSource: () => {
       const kinds = [...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [p.kind] : []; });
