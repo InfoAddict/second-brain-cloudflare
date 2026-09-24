@@ -98,10 +98,10 @@ describe("core golden data", () => {
     for (const n of needles.filter(n => n.id.endsWith("-root"))) expect(n.importance!, n.id).toBeGreaterThanOrEqual(needles.find(a => a.id === n.id.replace("-root", "-answer"))!.importance! - 1);
   });
 
-  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors). The expansion holds 4,365 vectors at about 1.6 KB
-  // each (float32 embeddings barely compress): 6.9 MB. 8 MB leaves about 1 MB: room for a reranker's scores, but contextual
-  // embeddings re-embed the long-context chunks, so T-0042 must revisit this cap (or shrink the haystack) before committing
-  // its rows. Past the cap, move the layer out of git rather than raise it again.
+  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors). The expansion holds 4,304 vectors at about 1.6 KB
+  // each (float32 embeddings barely compress): 6.8 MB, so 8 MiB leaves 1.6 MB with contextual embeddings off. Contextual
+  // rows (T-0042) re-embed chunks: the 682 chunks of the 231 multi-chunk notes are about 1.1 MB and still fit; all 2,743
+  // chunks (4.3 MB) do not, so those stay in the local cache, uncommitted. Past the cap, move the layer out of git.
   it("keeps the committed core replay layer within its size budget", () => {
     const bytes = statSync(resolve(DATA, `replay.${DEFAULTS.EMBEDDING_MODEL.split("/").pop()}.jsonl.gz`)).size;
     expect(bytes).toBeLessThan(8 * 1024 * 1024);

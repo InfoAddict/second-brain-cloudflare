@@ -588,7 +588,7 @@ dependency): bge-small-en-v1.5, bge-m3, and bge-reranker-base, fetched
 anonymously from Hugging Face into `.eval-cache/models/` and verified against
 recorded hashes. They are computed once and stored in a content-addressed replay
 cache; a cache miss during a run fails instead of computing. The committed
-`core-1k` cache (about 6.9 MB gzipped, 4,365 vectors; a test caps it at 8 MB) means a contributor needs neither an account nor a model
+`core-1k` cache (about 6.8 MB gzipped, 4,304 vectors; a test caps it at 8 MiB, which leaves room for contextual rows of the multi-chunk notes but not for every chunk) means a contributor needs neither an account nor a model
 download to run that corpus. Every cached row records which model build produced
 it, and reports from different producers never compare. Vectorize is an
 exact-cosine emulator, the clock is frozen, and `recall_count` writes are
