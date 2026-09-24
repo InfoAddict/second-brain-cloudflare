@@ -281,6 +281,14 @@ export function auditQueries(spec: {
       }
     }
 
+    // A lexical key names one memory. When a second readable row carries it, the gold is not the unique best answer:
+    // the query scores a hard zero for returning the other note, or MRR splits arbitrarily between the two. Rows the
+    // viewer cannot read (tenancy decoys) are the only allowed repeats.
+    if ((query.category === "identifier" || query.category === "rare-word") && keyToken) {
+      const holders = visible.filter(row => containsBounded(row.content, keyToken!));
+      if (holders.length !== 1) add(query.id, "key-not-unique", `${keyToken} occurs in ${holders.length} readable rows${holders.length > 1 ? `, e.g. ${holders.map(row => row.entry.id).slice(0, 3).join(", ")}` : ""}`);
+    }
+
     // If the keyword arm routes to LIKE and loses the gold, the query is a measured production gap. The tie scale
     // must not lose anything; at the discriminating scales the gap must be named where the keyword arm is the
     // intended solver. Paraphrase, multi-hop, long-context and cross-lingual queries are non-lexical by
