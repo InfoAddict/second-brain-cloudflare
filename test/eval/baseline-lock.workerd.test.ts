@@ -48,5 +48,5 @@ describe.skipIf(!process.env.EVAL_WORKERD)("baseline lock on workerd (rankings, 
     } finally {
       await corpus.close();
     }
-  }, 1_200_000);
+  }, 3_000_000); // 1,683 queries on a real local D1: about 27 minutes when the machine is shared
 });
