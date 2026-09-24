@@ -7,7 +7,8 @@ import {
 import { storeEntry } from "../../src/capture/store";
 import { DEFAULTS, type Config } from "../../src/config";
 import { CHUNK_MAX_CHARS, CONTEXT_PREFIX_MAX_CHARS, CONTEXT_MAX_FOCUS_CHUNKS, CONTEXT_SMALL_BODY_START_CHARS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
-import { COMMON_WORDS } from "../../src/capture/common-words";
+import { COMMON_WORD_LIST } from "../../src/capture/common-words";
+const COMMON_WORDS = new Set(COMMON_WORD_LIST.split(/\s+/).filter(Boolean));
 import { chunkText } from "../../src/text/chunk";
 import { makeTestEnv } from "../helpers/make-env";
 

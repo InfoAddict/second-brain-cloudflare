@@ -109,12 +109,14 @@ describe("shipped chunks never exceed the BGE Small window", () => {
     }
   });
 
-  it.skipIf(!haveModel)("every listed common word is exactly one real token, and the list has no duplicates or non-letters (skipped: model cache not present)", async () => {
-    const { COMMON_WORDS } = await import("../../src/capture/common-words");
+  it.skipIf(!haveModel)("every listed vocabulary word is exactly one real token, and the list has no duplicates or non-letters (skipped: model cache not present)", async () => {
+    const { COMMON_WORD_LIST } = await import("../../src/capture/common-words");
+    const words = COMMON_WORD_LIST.split(/\s+/).filter(Boolean);
     const tok = await loadTokenizer();
-    const bad = [...COMMON_WORDS].filter(w => !/^[a-z]+$/.test(w) || realCount(tok, w) !== 3);
-    expect(bad).toEqual([]);
-    expect(COMMON_WORDS.size).toBeGreaterThan(400);
+    const bad = words.filter(w => !/^[a-z]+$/.test(w) || realCount(tok, w) !== 3);
+    expect(bad.slice(0, 10)).toEqual([]);
+    expect(new Set(words).size).toBe(words.length);
+    expect(words.length).toBeGreaterThan(20_000);
   });
 
   it.skipIf(!haveModel || !process.env.UPDATE_TOKEN_FIXTURE)("rewrites the fixture from the pinned tokenizer (UPDATE_TOKEN_FIXTURE=1)", async () => {
