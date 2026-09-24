@@ -592,7 +592,10 @@ export async function runSchemeBatch(
     ({ processed: 0, skipped: 0, failed: 0, chunks: 0, remaining: 0 as number | null, done: true, stalled: false, neurons: 0, capped: false, ...extra });
   const now = opts.now ?? Date.now();
 
+  // The legacy scheme is the target while contextual embeddings are off: nothing to migrate to, and nothing
+  // to read. An existing ledger is left untouched, so turning the switch on again resumes it.
   const target = schemeOf(config);
+  if (target === LEGACY_SCHEME) return idle();
   const prior = await readSchemeMigration(env);
   const sameModel = !!prior && prior.model === config.EMBEDDING_MODEL;
   let state: SchemeMigrationState;

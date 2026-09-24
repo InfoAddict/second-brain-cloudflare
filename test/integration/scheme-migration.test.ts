@@ -255,17 +255,13 @@ describe("in-place scheme migration: pooling", () => {
     expect(queryPoolings(null, ctx)).toEqual(["mean"]);
   });
 
-  it("migrates back when cls is switched off: a change of target starts a new run over the old sources", async () => {
+  it("a brain on the legacy scheme (contextual off, mean pooling) does nothing and reads nothing, even with a ledger", async () => {
     await drain(h.env, cls);
+    const get = vi.spyOn(h.kv, "get");
     h.embeds.length = 0;
-    const back = await runSchemeBatch(h.env, legacy, { chunkBudget: 1 });
-    expect(back.processed).toBe(1);
-    const mid = (await readSchemeMigration(h.env))!;
-    expect(mid.sources).toEqual([schemeOf(cls)]);
-    expect(queryPoolings(mid, legacy).sort()).toEqual(["cls", "mean"]);
-    await drain(h.env, legacy);
-    expect(queryPoolings(await readSchemeMigration(h.env), legacy)).toEqual(["mean"]);
-    expect(h.embeds.every(e => e.pooling === undefined)).toBe(true);
+    expect(await runSchemeBatch(h.env, legacy)).toMatchObject({ done: true, processed: 0 });
+    expect(get).not.toHaveBeenCalled();
+    expect(h.embeds).toHaveLength(0);
   });
 
   it("a new target over an unfinished run remembers every scheme a vector may still be in", async () => {
@@ -278,7 +274,7 @@ describe("in-place scheme migration: pooling", () => {
 });
 
 describe("in-place scheme migration: idle cost", () => {
-  it("a brain on the legacy scheme costs one KV read of the ledger and no D1 statement", async () => {
+  it("a brain on the legacy scheme (the shipped default) reads and writes nothing", async () => {
     const d1 = makeSqliteD1();
     const h = harness(d1);
     const prepare = vi.spyOn(d1.db, "prepare");
@@ -286,7 +282,7 @@ describe("in-place scheme migration: idle cost", () => {
     const r = await runSchemeBatch(h.env, legacy);
     expect(r).toMatchObject({ done: true, processed: 0 });
     expect(prepare).not.toHaveBeenCalled();
-    expect(get.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(get).not.toHaveBeenCalled();
   });
 });
 
@@ -460,6 +456,7 @@ describe("scheme migration schedule", () => {
     h.embeds.length = 0;
     const waits: Promise<unknown>[] = [];
     const ctxStub = { waitUntil: (p: Promise<unknown>) => { waits.push(p); }, passThroughOnException() {} } as unknown as ExecutionContext;
+    await h.kv.put("config:overrides", JSON.stringify({ CONTEXTUAL_EMBEDDINGS: "on" })); // shipped off
     const env = { ...h.env, AUTH_TOKEN: "t", VECTORIZE_GRACE_MS: "0" } as Env;
     await worker.scheduled({ cron: INTEGRATION_SYNC_CRON, scheduledTime: Date.now() } as unknown as ScheduledEvent, env, ctxStub);
     await Promise.allSettled(waits);

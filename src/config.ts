@@ -83,10 +83,11 @@ export const DEFAULTS = {
   // vectors from another space. cls was measured and rejected (T-0077); the
   // key exists so the eval can build a cls index.
   EMBEDDING_POOLING: "mean",
-  // Whether each chunk of a multi-chunk memory is embedded with a transient
+  // Off until measured at scale (T-0042): with it off nothing below runs, reads
+  // or writes anything. Whether each chunk of a multi-chunk memory is embedded with a transient
   // entry-level prefix (src/capture/contextual.ts). Off stops new contextual
   // vectors and pauses the backfill; existing vectors are left as they are.
-  CONTEXTUAL_EMBEDDINGS: "on",
+  CONTEXTUAL_EMBEDDINGS: "off",
   // Stored vector dimensions below which long notes get focus chunks (about 2.4x
   // the vectors of plain chunking); past it they are chunked at the larger tail
   // size. 2,500,000 is 50% of the free plan's 5M stored dimensions. 0 removes
