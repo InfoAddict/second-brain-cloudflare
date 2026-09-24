@@ -1,8 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { DEFAULTS, type Config } from "../../src/config";
-import { FTS_READY_KV_KEY } from "../../src/constants";
+import { FTS_READY_KV_KEY, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../src/constants";
 import { readScopeWorkspaces } from "../../src/lib/scope";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { resetRerankReadyMemo } from "../../src/recall/model-reranker";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
 import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vectorize/scope";
@@ -16,6 +17,24 @@ import type { VariantSpec } from "./variants";
 export const EVAL_TOP_K = 10;
 
 export { RUNNER_VERSION };
+
+/** Outcomes a healthy reranker step may end in; anything else means the model did not run when it should have. */
+const RERANK_LEGIT_ROUTES: ReadonlySet<string> = new Set(["too-few", "exact-id", "clear-leader", "applied"]);
+
+/**
+ * Production fails open on a model error, which in an eval would silently score the un-reranked order as if it were
+ * the reranked one. So a run that expects the reranker (forced by the variant, or the shipped mode is not off) fails
+ * the query unless the step reached a legitimate route, and an "applied" route must have exactly one reranker call.
+ * A run that expects it off must not have touched it.
+ */
+export function checkRerankRoute(expected: boolean, route: string | undefined, calls: readonly { model: string }[]): string | undefined {
+  const rerankCalls = calls.filter(c => c.model === RERANK_MODEL).length;
+  if (!expected) return route === "off" && !rerankCalls ? undefined : `the reranker is off for this variant but the step reported ${route ?? "no route"} with ${rerankCalls} call(s)`;
+  if (!route || !RERANK_LEGIT_ROUTES.has(route)) return `the reranker step ended in "${route ?? "no route"}"; a variant that expects it must reach a model answer or a legitimate skip (a replay miss shows up here)`;
+  if (route === "applied" && rerankCalls !== 1) return `the reranker applied with ${rerankCalls} recorded model call(s), expected exactly one`;
+  if (route !== "applied" && rerankCalls) return `the reranker made ${rerankCalls} model call(s) but ended in "${route}"`;
+  return undefined;
+}
 
 export function freezeClock(fixed: number): () => void {
   const real = Date.now;
@@ -79,7 +98,12 @@ export async function runVariant(o: {
     if (variant.ftsReady === false) await corpus.env.OAUTH_KV.delete(FTS_READY_KV_KEY);
     else await corpus.env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
+    // The local fixture has no probe: the latch is set as production's would be after a passing probe.
+    await corpus.env.OAUTH_KV.put(RERANK_READY_KV_KEY, "1");
+    resetRerankReadyMemo();
     resetVectorizeFilterState(); // module-level latch: every run starts from a fresh isolate
+    const rerankFlag = variant.internal?.variant?.rerank;
+    const rerankExpected = rerankFlag === true || (rerankFlag !== false && cfg.RERANK_MODE !== "off");
 
     let intercepted = 0;
     const env = { ...corpus.env, DB: withoutRecallCountWrites(corpus.env.DB, () => { intercepted++; }) } as typeof corpus.env;
@@ -131,6 +155,8 @@ export async function runVariant(o: {
         const { result, diagnostics, wallMs, calls, filterDegraded } = await recallOnce(q);
         const rankedIds = result.matches.map(m => m.id);
         const ops = diagnostics.operations!;
+        const rerankProblem = checkRerankRoute(rerankExpected, diagnostics.rerankRoute, calls);
+        if (rerankProblem) throw new Error(rerankProblem);
         results.push({
           ...base,
           rankedIds,
@@ -141,6 +167,7 @@ export async function runVariant(o: {
           },
           leaked: findLeaks(rankedIds, readable, corpus.workspaceOf),
           ftsRoute: diagnostics.ftsRoute,
+          ...(diagnostics.rerankRoute && diagnostics.rerankRoute !== "off" && { rerankRoute: diagnostics.rerankRoute }),
           degraded: [
             ...(result.semanticUnavailable ? ["semantic-unavailable"] : []),
             ...(filterDegraded ? ["vectorize-filter-unfiltered"] : []),

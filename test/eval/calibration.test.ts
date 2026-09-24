@@ -53,7 +53,7 @@ const SABOTAGE = "sabotage";
 describe("gate calibration on core-1k (offline)", () => {
   const reports: Record<string, VariantReport> = {};
 
-  registerVariant({ name: SABOTAGE, description: "Calibration only: KEYWORD_CANDIDATE_LIMIT 1 and MMR_LAMBDA 0.", config: { KEYWORD_CANDIDATE_LIMIT: 1, MMR_LAMBDA: 0 } });
+  registerVariant({ name: SABOTAGE, description: "Calibration only: KEYWORD_CANDIDATE_LIMIT 1 and MMR_LAMBDA 0.", config: { KEYWORD_CANDIDATE_LIMIT: 1, MMR_LAMBDA: 0, RERANK_MODE: "off" } });
   afterAll(() => unregisterVariant(SABOTAGE));
 
   beforeAll(async () => {
@@ -61,7 +61,7 @@ describe("gate calibration on core-1k (offline)", () => {
     const corpus = await loadCorpus({ spec, backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore(cache), mode: "replay" }), embeddingModel: MODEL });
     try {
       for (const name of ["baseline", "baseline-again", "like", "dense-only", "keyword-only", SABOTAGE]) {
-        const variant = getVariant(name === "baseline-again" ? "baseline" : name);
+        const variant = getVariant(name === "baseline" || name === "baseline-again" ? "no-rerank" : name);
         reports[name] = await runVariant({ corpus, variant, queries: spec.queries, isolate: "warm", embeddingModel: MODEL });
       }
     } finally {

@@ -54,6 +54,8 @@ export interface QueryResult {
   /** Returned ids whose workspace the viewer cannot read. Must always be empty. */
   leaked: string[];
   ftsRoute?: string;
+  /** What the cross-encoder step did for this query (see RecallDiagnostics.rerankRoute). */
+  rerankRoute?: string;
   /** Degradation recall reported for this query (dense arm down, filter rejected, FTS error). Any entry is a hard-invariant problem. */
   degraded?: string[];
   error?: string;
@@ -70,6 +72,9 @@ export interface EmbeddingProducer {
   revision: string;
   dtype: "fp32";
 }
+
+/** Models a variant may add on top of the baseline's (a reranker); the gate does not read their one-sided presence as a provenance mismatch. */
+export const VARIANT_ADDED_MODELS: readonly string[] = ["@cf/baai/bge-reranker-base"];
 
 /** Canonical identity of a producer for equality checks; undefined (unknown or hash smoke) has its own key. */
 export const producerKey = (p: EmbeddingProducer | undefined): string =>

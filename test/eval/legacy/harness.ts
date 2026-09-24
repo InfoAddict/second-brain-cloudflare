@@ -6,6 +6,7 @@
  * same keyword pool (see `pool` in test/helpers/recall-benchmark-scoring.ts).
  */
 import { vi } from "vitest";
+import { DEFAULTS } from "../../../src/config";
 import { FTS_READY_KV_KEY } from "../../../src/constants";
 import { initializeDatabase, resetDatabaseInit } from "../../../src/db/init";
 import type { Env } from "../../../src/env";
@@ -147,6 +148,9 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
   return { env, ctx, query, sqlite, internal, pendingWaits };
 }
 
+// The legacy benchmarks pin the pre-reranker pipeline: their mock AI cannot rank passages, and a reranker probe would count as an extra AI call.
+const LEGACY_CONFIG = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
+
 async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyOptions): Promise<LegacyObservation> {
   const fixture = await buildFixture(c, mode, opts.idOf);
   const variant = opts.arms ? { variant: { arms: opts.arms } } : {};
@@ -156,7 +160,7 @@ async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyO
       { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
       fixture.env,
       fixture.ctx,
-      undefined,
+      LEGACY_CONFIG,
       { diagnostics, ...fixture.internal, ...variant },
     );
     const acceptableRoots = new Set(c.acceptableRootIds);

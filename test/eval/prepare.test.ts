@@ -37,7 +37,7 @@ const scratch = () => {
 
 describe("prepare", () => {
   const args = (store: ReplayStore, l: LiveAi, maxNeurons = 1000) => ({
-    spec, variant: getVariant("baseline"), backend: "sqlite" as const, model: MODEL, store, live: l, maxNeurons, concurrency: 2, log: () => {},
+    spec, variant: getVariant("no-rerank"), backend: "sqlite" as const, model: MODEL, store, live: l, maxNeurons, concurrency: 2, log: () => {},
   });
 
   it("records every missing text once, verifies a clean replay, and is a no-op the second time", async () => {
@@ -81,7 +81,7 @@ describe("prepare", () => {
     const store = new ReplayStore([], file, { root });
     const { missing } = await prepare(args(store, live()));
     const out = join(root, ".eval-cache", "core.jsonl.gz");
-    const n = await exportCache({ spec, variant: getVariant("baseline"), backend: "sqlite", model: MODEL, readPaths: [file], outPath: out, root });
+    const n = await exportCache({ spec, variant: getVariant("no-rerank"), backend: "sqlite", model: MODEL, readPaths: [file], outPath: out, root });
     expect(n).toBe(missing);
     const layer = new ReplayStore([out], undefined, { root });
     expect(layer.producerOf(MODEL)).toEqual(PRODUCER);
