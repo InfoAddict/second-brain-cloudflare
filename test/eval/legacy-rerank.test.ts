@@ -41,6 +41,20 @@ describe("root quality with the reranker on (fts mode, real SQL)", () => {
     expect(r.all.extraVectorizeQueries).toBe(0);
   }, 120_000);
 
+  it("does not move a graph slot: linked memories stay on their slots (dense-only, where the graph is the only route)", async () => {
+    const base = { idOf: rootId, pool: "like" as const, arms: "dense-only" as const };
+    const off = await evaluateLegacy(ROOT_QUALITY_CASES, "fts", base);
+    const positions = (x: { outputIds: string[]; selectedRelatedIds: string[] }) => x.outputIds.map((id, k) => (x.selectedRelatedIds.includes(id) ? k : -1)).filter(k => k >= 0);
+    expect(off.observations.filter(o => positions(o).length).length).toBeGreaterThanOrEqual(6); // the graph does surface linked memories here, so this is not vacuous
+    // A model that agrees with the heuristic order changes nothing: linked memories sit exactly where they sat.
+    const keep = await evaluateLegacy(ROOT_QUALITY_CASES, "fts", { ...base, rerank: true, rerankModel: heuristicOrderModel });
+    off.observations.forEach((o, i) => expect(positions(keep.observations[i]), o.id).toEqual(positions(o)));
+    // A model that reorders may change WHICH linked memory qualifies (its evidence rides on the reranked root score), but
+    // whatever is linked still occupies a graph slot, never a direct rank: the block layout is untouched.
+    const moved = await evaluateLegacy(ROOT_QUALITY_CASES, "fts", { ...base, rerank: true });
+    for (const o of moved.observations) for (const k of positions(o)) expect([4, 9], `${o.id} linked at rank ${k + 1}`).toContain(k);
+  }, 240_000);
+
   it.skipIf(!process.env.EVAL_LOCAL_MODELS)("the real local bge-reranker-base keeps root quality: no fewer authoritative answers, at most one authority-rank regression", async () => {
     const r = await measure(makeLocalAi());
     expect(r.all.authoritativeAnswers).toBeGreaterThanOrEqual(14); // the frozen absolute floor
