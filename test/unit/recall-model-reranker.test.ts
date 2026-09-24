@@ -97,6 +97,20 @@ describe("percentilesFromScores and blendRerankerScores", () => {
   });
 });
 
+describe("shipped blend constants", () => {
+  it("are pinned here, so a change fails locally and not only through the baseline lock", async () => {
+    const c = await import("../../src/constants");
+    expect(c.RERANK_BLEND_WEIGHT).toBe(1.0);
+    expect(c.RERANK_BLEND_FLOOR).toBe(0.25);
+    expect(c.RERANK_MAX_CANDIDATES).toBe(30);
+    expect(c.RERANK_EXCERPT_CHARS).toBe(400);
+    expect(c.RERANK_TIMEOUT_MS).toBe(1500);
+    // the defaults really are what an unparameterised blend applies
+    const out = blendRerankerScores([m("a", 1), m("b", 1)], new Map([["a", 0], ["b", 1]]));
+    expect(out.map(x => [x.id, x.score])).toEqual([["b", 2], ["a", 0.25]]);
+  });
+});
+
 describe("selectRerankIds", () => {
   it("takes 25 direct parents then extra roots up to 30, unique", () => {
     const direct = Array.from({ length: 40 }, (_, i) => m(`d${i}`, 1 - i / 100));
