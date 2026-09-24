@@ -3,6 +3,8 @@ import {
   D1_MAX_BOUND_PARAMS,
   FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
+  QUERY_SATURATION_FRACTION,
+  RERANK_MAX_DIRECT,
   VECTORIZE_GET_BY_IDS_BATCH,
   RECALL_BLOCK,
   RECALL_DEEP_POOL_SIZE,
@@ -19,7 +21,7 @@ import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { parseTimePhrase } from "../text/temporal";
 import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
-import { distillToRareTerms, inferQueryTags, type DistilledQuery, type TimeBounds } from "./distill";
+import { distillToRareTerms, inferQueryTags, scopedEntryTotal, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
@@ -527,10 +529,20 @@ export async function recallEntries(
   // everything else here (inScope), and used only to choose ids: the model reads D1 text.
   const fusedOrder = new Map<string, number>();
   directReranked.forEach((m, i) => { const id = parentOfMatch(m); if (!fusedOrder.has(id)) fusedOrder.set(id, i); });
-  const keywordEvidence = tokens.length
-    ? keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => r.content.toLowerCase().includes(t.toLowerCase())))
-        .map(r => r.id).sort((a, b) => (fusedOrder.get(a) ?? Infinity) - (fusedOrder.get(b) ?? Infinity))
-    : [];
+  const keywordEvidence = async (): Promise<string[]> => {
+    if (!tokens.length) return [];
+    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => r.content.toLowerCase().includes(t.toLowerCase())));
+    // Several terms were already through distillation's saturation filter. One term has no df there, so a common word
+    // ("budget") must not count as evidence: apply the same rule (df over the corpus <= QUERY_SATURATION_FRACTION) with
+    // the keyword rows holding the term as its df and one entry_counts read for the corpus size. Unknown = not evidence.
+    if (tokens.length === 1 && !distilled.df) {
+      const outsideHead = holding.some(r => (fusedOrder.get(r.id) ?? Infinity) >= RERANK_MAX_DIRECT);
+      if (!outsideHead) return [];
+      const total = await scopedEntryTotal(env, scope);
+      if (total === null || total <= 0 || holding.length >= cfg.KEYWORD_CANDIDATE_LIMIT || holding.length / total > QUERY_SATURATION_FRACTION) return [];
+    }
+    return holding.map(r => r.id).sort((a, b) => (fusedOrder.get(a) ?? Infinity) - (fusedOrder.get(b) ?? Infinity));
+  };
   const rerank = await rerankStep({
     mode: rerankMode, forced: internal.variant?.rerank === true, tuning: internal.variant?.rerankTuning, keywordEvidence, env, ctx, query: semanticQuery,
     queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
@@ -559,8 +571,8 @@ export async function recallEntries(
   const heuristicRootScore = new Map<string, number>();
   for (const m of rootReranked) if (!heuristicRootScore.has(parentOfMatch(m))) heuristicRootScore.set(parentOfMatch(m), m.score);
   if (rerank.percentiles) {
-    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(keywordEvidence));
-    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(keywordEvidence));
+    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
+    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
   }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 

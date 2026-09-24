@@ -286,15 +286,15 @@ export interface RerankStepInput {
   evidenceTokens: readonly string[];
   direct: readonly VectorizeMatch[];
   root: readonly VectorizeMatch[];
-  /** Parents the keyword arm found with every distilled query term in their text, best fused rank first. */
-  keywordEvidence?: readonly string[];
+  /** Parents the keyword arm found with every distilled query term in their text, best fused rank first; resolved only once the model is going to be called, because a single common word may need one df read. */
+  keywordEvidence?: () => Promise<readonly string[]>;
   /** Eval-only overrides (RecallVariantFlags.rerankTuning); production passes none. */
   tuning?: RerankTuning;
   /** Scoped D1 passage text for ids not already in hand; the caller applies the tenant clause. */
   loadContent(ids: string[]): Promise<Map<string, string>>;
 }
 
-export interface RerankStepResult { route: RerankRoute; percentiles?: Map<string, number>; ms?: number }
+export interface RerankStepResult { route: RerankRoute; percentiles?: Map<string, number>; ms?: number; evidence?: string[] }
 
 /** Decides, scores once, and returns parent percentiles; any failure returns a route and no percentiles, leaving the baseline order. */
 export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> {
@@ -312,7 +312,8 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
   }
   const started = performance.now();
   try {
-    const ids = selectRerankIds(o.direct, o.root, o.tuning?.maxCandidates, o.keywordEvidence);
+    const evidence = o.keywordEvidence ? [...await o.keywordEvidence()] : [];
+    const ids = selectRerankIds(o.direct, o.root, o.tuning?.maxCandidates, evidence);
     const content = await o.loadContent(ids);
     const candidates = ids.flatMap(id => {
       const text = queryRelevantWindow(content.get(id) ?? "", [...o.evidenceTokens], o.tuning?.excerptChars ?? RERANK_EXCERPT_CHARS).trim();
@@ -324,7 +325,7 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
     const ms = performance.now() - started;
     // The first real deploy measures Workers AI latency from these lines (wrangler tail / Workers Logs).
     console.info(JSON.stringify({ rerank: "applied", ms: Math.round(ms), n: candidates.length }));
-    return { route: "applied", percentiles: percentilesFromScores(candidates.map(c => c.parentId), scores), ms };
+    return { route: "applied", percentiles: percentilesFromScores(candidates.map(c => c.parentId), scores), ms, evidence };
   } catch (e) {
     const route = e instanceof RerankTimeout ? "timeout" : "error";
     const ms = performance.now() - started;

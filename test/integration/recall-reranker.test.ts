@@ -168,6 +168,22 @@ describe("recall reranker step", () => {
     expect(result.matches.map(m => m.id)).toContain("rare"); // still in the top 10 with the model on
   });
 
+  it("a single COMMON word is not keyword evidence: no note outside the fused head takes a seat", async () => {
+    // "tomatoes" is in 35 of ~41 notes, far over the saturation fraction; the keyword arm still returns them all.
+    const extraVectors = Array.from({ length: 34 }, (_, i) => ({ id: `p${i}`, score: 0.895 - i * 0.001, metadata: { parentId: `p${i}`, created_at: 100 + i } }));
+    const s = await setup({ extraVectors });
+    const text = new Map<string, string>(IDS.map(id => [id, CONTENT[id]]));
+    for (let i = 0; i < 34; i++) { text.set(`p${i}`, `weekly gardening note ${i} about tomatoes`); s.sqlite.seed({ id: `p${i}`, content: text.get(`p${i}`)!, createdAt: 100 + i }); }
+    text.set("tail", "A keyword-only note that also mentions tomatoes in passing.");
+    s.sqlite.seed({ id: "tail", content: text.get("tail")!, createdAt: 5 });
+    const off = await recall(s, "off", "tomatoes"); // candidateIds with the model off is the heuristic order the batch is cut from
+    const { diagnostics } = await recall(s, "on", "tomatoes");
+    expect(diagnostics.rerankRoute).toBe("applied");
+    const sent = s.rerankInputs[0].contexts.map(c => c.text).sort();
+    const fusedHead = (off.diagnostics.candidateIds ?? []).slice(0, 25).map(id => text.get(id)!).sort();
+    expect(sent).toEqual(fusedHead); // exactly the fused head: nothing evicted for a "match" on a word half the brain contains
+  });
+
   it("skips exact-identifier queries and too-few candidates", async () => {
     const s = await setup();
     const exact = await recall(s, "on", "release v1.9 launch planning");
