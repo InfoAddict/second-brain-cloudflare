@@ -542,6 +542,14 @@ export async function recallEntries(
     internal.diagnostics.rerankRoute = rerank.route;
     if (rerank.ms !== undefined) internal.diagnostics.rerankMs = rerank.ms;
   }
+  // Linked-evidence scoring is calibrated on heuristic root scores; a reranker blend rescales them (best x2, worst x0.25),
+  // which would move which linked memories qualify even when the model agrees with the heuristic order. Keep the
+  // pre-blend scores for it; the blend still decides the ORDER of the direct picks and of root selection.
+  const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  const heuristicDirectScore = new Map<string, number>();
+  for (const m of directReranked) if (!heuristicDirectScore.has(parentOfMatch(m))) heuristicDirectScore.set(parentOfMatch(m), m.score);
+  const heuristicRootScore = new Map<string, number>();
+  for (const m of rootReranked) if (!heuristicRootScore.has(parentOfMatch(m))) heuristicRootScore.set(parentOfMatch(m), m.score);
   if (rerank.percentiles) {
     directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor);
     rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor);
@@ -591,7 +599,7 @@ export async function recallEntries(
       const tagAlignment = queryTags.length ? tags.filter(value => queryTags.includes(value)).length / queryTags.length : 0;
       const episodicAlignment = ["causal", "chronology"].includes(profile.intent) && tags.includes("kind:episodic") ? 1 : 0;
       const authorityAlignment = ["current", "direct"].includes(profile.intent) && tags.includes("status:canonical") ? 1 : 0;
-      return [{ ...match, parentId, rootScore: match.score, localEvidence, tags,
+      return [{ ...match, parentId, rootScore: match.score, evidenceScore: heuristicRootScore.get(parentId) ?? match.score, localEvidence, tags,
         lexicalCoverage: queryCoverage(localEvidence, tokens, distilled).score,
         metadataAlignment: Math.min(1, .6 * tagAlignment + .2 * episodicAlignment + .2 * authorityAlignment),
         semanticRank: semanticRankByParent.get(parentId) }];
@@ -719,11 +727,12 @@ export async function recallEntries(
   // is. They are the picks, not the survivors: a pick that did not hydrate cannot be a linked memory either.
   const headParentIds = directParentIds.slice(0, RECALL_BLOCK);
   const leadingParentIds = directParentIds.slice(0, 2 * RECALL_BLOCK);
-  const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.rootScore));
+  const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.evidenceScore ?? x.candidate.rootScore));
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
-  const fallbackRootScore = directCandidates[Math.min(directCandidates.length, RECALL_BLOCK) - 1]?.score ?? 0;
+  const fallbackDirect = directCandidates[Math.min(directCandidates.length, RECALL_BLOCK) - 1];
+  const fallbackRootScore = fallbackDirect ? heuristicDirectScore.get(parentOfMatch(fallbackDirect)) ?? fallbackDirect.score : 0;
   for (const e of expanded) {
     rootIdByNode.set(e.id, rootIdByNode.get(e.viaFrom) ?? e.viaFrom);
   }
@@ -736,7 +745,7 @@ export async function recallEntries(
     const row = d1Map.get(e.id);
     if (!row) return [];
     const root = rootById.get(rootIdByNode.get(e.id) ?? "");
-    const rootScore = root ? root.rootScore / normalizedRootDivisor : fallbackRootScore;
+    const rootScore = root ? (root.evidenceScore ?? root.rootScore) / normalizedRootDivisor : fallbackRootScore;
     const evidence = scoreLinkedEvidence({
       parentScore: rootScore,
       parentContent: root?.localEvidence ?? "",

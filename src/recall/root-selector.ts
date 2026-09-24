@@ -5,6 +5,8 @@ export type RootView = "semantic" | "lexical" | "metadata" | "diversity";
 export interface RootCandidate extends VectorizeMatch {
   parentId: string;
   rootScore: number;
+  /** The root's heuristic score before any reranker blend: the scale the linked-evidence rules were calibrated on. */
+  evidenceScore?: number;
   localEvidence: string;
   tags: string[];
   lexicalCoverage: number;
