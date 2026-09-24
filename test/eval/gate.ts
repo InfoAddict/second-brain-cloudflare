@@ -2,7 +2,7 @@ import { gapKey, mean, percentile } from "./metrics";
 import { CORPUS_IDS } from "./corpus/build";
 import { fingerprintKey } from "./lock";
 import { PUBLIC_CORPORA } from "./public/neutral";
-import { pairedBootstrap, type BootstrapCI } from "./stats";
+import { minimumDetectableEffect, pairedBootstrap, type BootstrapCI } from "./stats";
 import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
 export interface GateThresholds {
@@ -46,7 +46,7 @@ export type RuleStatus = "pass" | "fail" | "inconclusive" | "skipped";
 export type Verdict = "PASS" | "FAIL" | "INCONCLUSIVE";
 export interface RuleResult { rule: string; status: RuleStatus; detail: string }
 export interface MetricDelta { scope: string; metric: MetricName; base: number; candidate: number; ci: BootstrapCI }
-export interface GateResult { verdict: Verdict; rules: RuleResult[]; deltas: MetricDelta[] }
+export interface GateResult { verdict: Verdict; rules: RuleResult[]; deltas: MetricDelta[]; mde: Partial<Record<MetricName, number>> }
 export interface GateOptions {
   thresholds?: Partial<GateThresholds>;
   /** Categories the variant claims to help; enables the targeted-gain path. */
@@ -58,10 +58,10 @@ export interface GateOptions {
 
 interface Pair { b: QueryResult; c: QueryResult }
 
-function finish(rules: RuleResult[], deltas: MetricDelta[]): GateResult {
+function finish(rules: RuleResult[], deltas: MetricDelta[], mde: GateResult["mde"] = {}): GateResult {
   const verdict: Verdict = rules.some(r => r.status === "fail") ? "FAIL"
     : rules.some(r => r.status === "inconclusive") ? "INCONCLUSIVE" : "PASS";
-  return { verdict, rules, deltas };
+  return { verdict, rules, deltas, mde };
 }
 
 /** Every gap marker on a query, sorted, so a second or swapped gap id is drift too. */
@@ -127,6 +127,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   const t = { ...DEFAULT_GATE, ...opts.thresholds };
   const rules: RuleResult[] = [];
   const deltas: MetricDelta[] = [];
+  const mde: GateResult["mde"] = {};
   const add = (rule: string, status: RuleStatus, detail: string) => rules.push({ rule, status, detail });
 
   // Hard invariants come first: a violation is a FAIL however small or incomparable the sample.
@@ -184,6 +185,8 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   const regressions: string[] = [];
   for (const metric of METRIC_NAMES) {
     const row = delta("overall", regressionPairs, metric);
+    // Same rows the regression rule judges: how small a loss could it have seen.
+    mde[metric] = minimumDetectableEffect(regressionPairs.map(p => p.c.metrics[metric] - p.b.metrics[metric]));
     if (row.ci.mean <= -t.headlineTolerance || row.ci.hi < 0) regressions.push(`overall ${metric} ${row.ci.mean.toFixed(4)}`);
   }
   const skipped: string[] = [];
@@ -269,18 +272,48 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   } else {
     add("cost", problemsCost.length ? "fail" : "inconclusive",
       problemsCost.length ? problemsCost.join("; ") : "rows_read is unmeasured on the sqlite backend: rerun with --d1 workerd for a full verdict, or pass --allow-unmeasured-rows for a cost-blind comparison");
-    return finish(rules, deltas);
+    return finish(rules, deltas, mde);
   }
   add("cost", problemsCost.length ? "fail" : "pass", problemsCost.length ? problemsCost.join("; ") : `within budget${rowsNote}`);
-  return finish(rules, deltas);
+  return finish(rules, deltas, mde);
 }
 
 export function formatGate(result: GateResult): string {
   const lines = [`GATE: ${result.verdict}`];
   for (const r of result.rules) lines.push(`  [${r.status.toUpperCase().padEnd(12)}] ${r.rule}: ${r.detail}`);
+  const mdeText = Object.entries(result.mde).map(([m, v]) => `${m} ${v!.toFixed(4)}`).join("  ");
+  if (mdeText) lines.push(`  minimum detectable effect (80% power): ${mdeText}`);
   lines.push("  deltas (candidate - baseline, 95% bootstrap CI):");
   for (const d of result.deltas) {
     lines.push(`    ${d.scope.padEnd(24)} ${d.metric.padEnd(8)} ${d.base.toFixed(3)} -> ${d.candidate.toFixed(3)}  ${d.ci.mean >= 0 ? "+" : ""}${d.ci.mean.toFixed(4)}  [${d.ci.lo.toFixed(4)}, ${d.ci.hi.toFixed(4)}]`);
   }
+  return lines.join("\n");
+}
+
+export interface Loser { queryId: string; category: QueryCategory; base: QueryResult["metrics"]; candidate: QueryResult["metrics"]; drop: number }
+
+/**
+ * Queries whose score or rank worsened on any headline metric (MRR falls when the first hit ranks lower), worst
+ * first. Not part of the verdict: category means can hide a few losers behind a few larger winners. Aligns by
+ * queryId and skips queries on one side only (comparability is the gate's job).
+ */
+export function findLosers(base: VariantReport, cand: VariantReport): Loser[] {
+  const baseById = new Map(base.results.map(r => [r.queryId, r] as const));
+  const losers: Loser[] = [];
+  for (const c of cand.results) {
+    const b = baseById.get(c.queryId);
+    if (!b) continue;
+    const drop = METRIC_NAMES.reduce((s, m) => s + Math.max(0, b.metrics[m] - c.metrics[m]), 0);
+    if (drop > 1e-9) losers.push({ queryId: c.queryId, category: c.category, base: b.metrics, candidate: c.metrics, drop });
+  }
+  return losers.sort((x, y) => y.drop - x.drop || x.queryId.localeCompare(y.queryId));
+}
+
+export function formatLosers(losers: Loser[], limit = 10): string {
+  if (!losers.length) return "";
+  const cell = (l: Loser, m: MetricName) => l.candidate[m] < l.base[m] ? `${m} ${l.base[m].toFixed(3)}->${l.candidate[m].toFixed(3)}` : "";
+  const lines = [`losers: ${losers.length} quer${losers.length === 1 ? "y" : "ies"} worsened (per-query view, outside the verdict; a mean can hide losers behind winners):`];
+  for (const l of losers.slice(0, limit)) lines.push(`  ${l.queryId.padEnd(12)} ${l.category.padEnd(12)} ${METRIC_NAMES.map(m => cell(l, m)).filter(Boolean).join("  ")}`);
+  if (losers.length > limit) lines.push(`  (+${losers.length - limit} more)`);
   return lines.join("\n");
 }

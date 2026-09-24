@@ -97,11 +97,11 @@ describe("exit codes and formatting", () => {
 
   it("names the rule behind a verdict", () => {
     const rule = (r: string, status: "pass" | "fail" | "inconclusive") => ({ rule: r, status, detail: "" });
-    expect(describeVerdict({ verdict: "FAIL", deltas: [], rules: [rule("regression", "pass"), rule("improvement", "fail")] })).toMatch(/improvement only; no regression/);
-    expect(describeVerdict({ verdict: "FAIL", deltas: [], rules: [rule("isolation", "fail"), rule("improvement", "fail")] })).toBe("FAIL (failed: isolation, improvement)");
-    expect(describeVerdict({ verdict: "INCONCLUSIVE", deltas: [], rules: [{ rule: "power", status: "inconclusive", detail: "100 queries is below the 200-query floor" }] }))
+    expect(describeVerdict({ verdict: "FAIL", deltas: [], mde: {}, rules: [rule("regression", "pass"), rule("improvement", "fail")] })).toMatch(/improvement only; no regression/);
+    expect(describeVerdict({ verdict: "FAIL", deltas: [], mde: {}, rules: [rule("isolation", "fail"), rule("improvement", "fail")] })).toBe("FAIL (failed: isolation, improvement)");
+    expect(describeVerdict({ verdict: "INCONCLUSIVE", deltas: [], mde: {}, rules: [{ rule: "power", status: "inconclusive", detail: "100 queries is below the 200-query floor" }] }))
       .toBe("INCONCLUSIVE (power: 100 queries is below the 200-query floor)");
-    expect(describeVerdict({ verdict: "PASS", deltas: [], rules: [] })).toBe("PASS");
+    expect(describeVerdict({ verdict: "PASS", deltas: [], mde: {}, rules: [] })).toBe("PASS");
   });
 
   it("prints no known-gap block or all-queries line when no query is tagged", () => {
@@ -156,6 +156,25 @@ describe("main (end to end on a tiny registered corpus)", () => {
     writeFileSync(join(dir, "b.json"), JSON.stringify(good));
     writeFileSync(join(dir, "c.json"), JSON.stringify(leaky));
     expect(await main(["--compare", `${join(dir, "b.json")},${join(dir, "c.json")}`, "--allow-unmeasured-rows"])).toBe(1);
+  });
+
+  it("compare prints the per-query losers, outside the verdict, even when winners outweigh them", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "eval-cli-"));
+    const many = report(Array.from({ length: 240 }, (_, i) => result({ queryId: `q${i}`, category: "paraphrase", clusterKey: `c${i % 40}` })));
+    const better = { ...many, variant: "better", results: many.results.map((r, i) => ({ ...r, metrics: i === 5 ? { recall5: 0, recall10: 0, mrr10: 0, ndcg10: 0 } : { recall5: 1, recall10: 1, mrr10: 1, ndcg10: 1 } })) };
+    writeFileSync(join(dir, "b.json"), JSON.stringify(many));
+    writeFileSync(join(dir, "c.json"), JSON.stringify(better));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await main(["--compare", `${join(dir, "b.json")},${join(dir, "c.json")}`, "--allow-unmeasured-rows"]);
+      const out = log.mock.calls.map(c => String(c[0])).join("\n");
+      expect(out).toMatch(/losers: 1 query worsened/);
+      expect(out).toMatch(/q5\s+paraphrase/);
+      // the list sits after the verdict block, so it never reads as part of the ruling
+      expect(out.indexOf("losers:")).toBeGreaterThan(out.indexOf("GATE:"));
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("a hash-embedding comparison can never PASS", async () => {

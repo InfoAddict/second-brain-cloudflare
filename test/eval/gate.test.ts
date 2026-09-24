@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_GATE, evaluateGate, formatGate } from "./gate";
+import { DEFAULT_GATE, evaluateGate, formatGate, formatLosers, findLosers } from "./gate";
+import { minimumDetectableEffect } from "./stats";
 import { QUERY_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
 
 const LOCAL = (repo: string): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision: "abc", dtype: "fp32" });
@@ -202,6 +203,88 @@ describe("evaluateGate", () => {
     expect(text).toMatch(/PASS/);
     expect(text).toMatch(/recall10/);
     expect(Object.isFrozen(DEFAULT_GATE)).toBe(true);
+  });
+
+  it("reports the minimum detectable effect for each headline metric", () => {
+    const result = evaluateGate(base, report("v", shift(0.5, 30)));
+    const deltas = Array.from({ length: 240 }, (_, i) => (i < 30 ? 0.5 : 0));
+    expect(result.mde.recall10).toBeCloseTo(minimumDetectableEffect(deltas), 10);
+    expect(Object.keys(result.mde).sort()).toEqual(["mrr10", "ndcg10", "recall10", "recall5"]);
+    expect(formatGate(result)).toMatch(/minimum detectable effect/);
+  });
+
+  it("computes the MDE over the regression population: non-gap queries plus gap queries the baseline already answers", () => {
+    const GAP = ["known-gap", "gap:T-0072"];
+    const zeroed = (i: number, r: QueryResult) => {
+      if (i >= 200 && i < 220) r.tags = GAP;
+      if (i >= 210 && i < 220) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = 0; // unanswered at baseline
+    };
+    const b = report("baseline", zeroed);
+    const c = report("v", (i, r) => {
+      zeroed(i, r);
+      shift(0.5, 30)(i, r);
+      if (i >= 210 && i < 220) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = 1; // a fix the regression rule must not see
+    });
+    const result = evaluateGate(b, c);
+    const regressionDeltas = Array.from({ length: 240 }, (_, i) => (i < 30 ? 0.5 : 0)).filter((_, i) => i < 210 || i >= 220); // 230 queries
+    expect(result.mde.recall10).toBeCloseTo(minimumDetectableEffect(regressionDeltas), 10);
+  });
+
+  it("still reports the MDE when the cost rule returns early, and reports none when the gate stops before the overall loop", () => {
+    const unmeasured = (r: VariantReport) => { for (const x of r.results) x.cost.d1RowsRead = null; return r; };
+    const early = evaluateGate(unmeasured(report("baseline")), unmeasured(report("v", shift(0.5, 30))));
+    expect(status(early, "cost")).toBe("inconclusive"); // rows_read unmeasured returns from the cost block
+    expect(Object.keys(early.mde).sort()).toEqual(["mrr10", "ndcg10", "recall10", "recall5"]);
+    const cand = report("v");
+    cand.topK = 5;
+    expect(evaluateGate(base, cand).mde).toEqual({}); // comparable returns before the loop
+  });
+});
+
+describe("findLosers: per-query worsening, outside the verdict", () => {
+  const drop = (ids: Record<number, number>) => (i: number, r: QueryResult) => {
+    if (i in ids) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = Math.max(0, r.metrics[k] - ids[i]);
+  };
+
+  it("lists every query whose score worsened, worst first, with baseline and candidate scores", () => {
+    const losers = findLosers(report("baseline"), report("v", drop({ 3: 0.1, 7: 0.5, 9: 0.3 })));
+    expect(losers.map(l => l.queryId)).toEqual(["q7", "q9", "q3"]);
+    expect(losers[0]).toMatchObject({ category: QUERY_CATEGORIES[7 % QUERY_CATEGORIES.length], base: { recall10: 0.5, mrr10: 0.5 }, candidate: { recall10: 0, mrr10: 0 } });
+  });
+
+  it("is not fooled by a mean that hides the losers: a gain elsewhere does not remove a loser", () => {
+    const cand = report("v", (i, r) => { shift(0.5, 5)(i, r); drop({ 30: 0.2 })(i, r); });
+    const result = evaluateGate(report("baseline"), cand);
+    expect(result.verdict).toBe("FAIL"); // improvement only or better; the loser must still be listed
+    expect(findLosers(report("baseline"), cand).map(l => l.queryId)).toEqual(["q30"]);
+  });
+
+  it("lists nothing when no query worsened, and ignores queries that only improved or ranked deeper without losing score", () => {
+    expect(findLosers(report("baseline"), report("v", shift(0.5, 30)))).toEqual([]);
+    expect(findLosers(report("baseline"), report("v"))).toEqual([]);
+  });
+
+  it("counts a rank loss that recall@10 cannot see (MRR falls, recall holds)", () => {
+    const cand = report("v", (i, r) => { if (i === 4) r.metrics.mrr10 = 0.25; });
+    expect(findLosers(report("baseline"), cand).map(l => l.queryId)).toEqual(["q4"]);
+  });
+
+  it("formats a capped list and never changes the verdict", () => {
+    const cand = report("v", drop(Object.fromEntries(Array.from({ length: 12 }, (_, i) => [i, 0.1 + i / 100]))));
+    const losers = findLosers(report("baseline"), cand);
+    expect(losers).toHaveLength(12);
+    const text = formatLosers(losers, 5);
+    expect(text).toMatch(/12 quer(y|ies) worsened/);
+    expect(text.split("\n").filter(l => /^\s+q\d+/.test(l))).toHaveLength(5);
+    expect(text).toMatch(/\+7 more/);
+    expect(formatLosers([], 5)).toBe("");
+    expect(evaluateGate(report("baseline"), cand)).not.toHaveProperty("losers"); // the verdict result does not carry them
+  });
+
+  it("skips queries present on one side only (alignment is by id, never by position)", () => {
+    const cand = report("v", drop({ 2: 0.5 }));
+    cand.results.shift();
+    expect(findLosers(report("baseline"), cand).map(l => l.queryId)).toEqual(["q2"]);
   });
 });
 

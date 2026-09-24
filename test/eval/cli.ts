@@ -8,7 +8,7 @@ import { isCoreCorpus, listCorpora, replayPaths, resolveCorpus } from "./corpora
 import { CORE_DATA_DIR, CORPUS_IDS } from "./corpus/build";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
 import type { CorpusSpec } from "./corpus/types";
-import { evaluateGate, formatGate, type GateResult, type Verdict } from "./gate";
+import { evaluateGate, findLosers, formatGate, formatLosers, type GateResult, type Verdict } from "./gate";
 import { LockRefused, applyLock } from "./lock";
 import { summarize, type Summary } from "./metrics";
 import { assertIgnored, isAllowedDataFile } from "./privacy";
@@ -286,6 +286,9 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   const targetGaps = cmd.targetGaps.length ? cmd.targetGaps : [...(VARIANTS[candidate.variant]?.targetGaps ?? [])];
   const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
   console.log(`${describeVerdict(gate)}\n${formatGate(gate)}`);
+  // Per-query view of what the means can hide; printed after the verdict and never part of it.
+  const losers = formatLosers(findLosers(baseline, candidate));
+  if (losers) console.log(`\n${losers}`);
   if (cmd.json) writeJson(cmd.json, { baseline, candidate, gate });
   // Hash vectors carry no semantics, so a smoke comparison must never read as a ship signal.
   if (gate.verdict === "PASS" && [baseline, candidate].some(r => r.embeddingModel === HASH_MODEL)) {
