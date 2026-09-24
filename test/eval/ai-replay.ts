@@ -643,6 +643,13 @@ export function makeReplayAi(opts: {
   const misses: ReplayAi["misses"] = new Map();
   /** Models with at least one call served from (or recorded with) verified provenance. */
   const verifiedModels = new Set<string>();
+  /** Fails closed unless the row under `key` was recorded for `model` by the producer the store declares for it. */
+  const requireVerified = (key: string, model: string) => {
+    const prov = opts.store.provenance(key), producer = opts.store.producerOf(model);
+    if (!prov || !producer || prov.model !== model || prov.producer !== producerId(producer)) {
+      throw new Error(`replay row for ${model} (sha256 ${key}) has unverified provenance: ${prov ? `it was recorded for ${prov.model}` : "it predates provenance (legacy row)"}. Re-record it, or stamp a cache you recorded yourself: npm run eval:recall -- stamp-cache --model ${model} --producer-from current --i-recorded-this`);
+    }
+  };
   const run = async (model: string, input: AiInput) => {
     const kind = kindOf(input);
     if (kind !== "llm") {
@@ -656,10 +663,7 @@ export function makeReplayAi(opts: {
     const hit = opts.store.get(key);
     if (hit) {
       if (kind !== "llm") {
-        const prov = opts.store.provenance(key), producer = opts.store.producerOf(model);
-        if (!prov || !producer || prov.model !== model || prov.producer !== producerId(producer)) {
-          throw new Error(`replay row for ${model} (sha256 ${key}) has unverified provenance: ${prov ? `it was recorded for ${prov.model}` : "it predates provenance (legacy row)"}. Re-record it, or stamp a cache you recorded yourself: npm run eval:recall -- stamp-cache --model ${model} --producer-from current --i-recorded-this`);
-        }
+        requireVerified(key, model);
         verifiedModels.add(model);
       }
       const cost = price(hit);
@@ -700,7 +704,12 @@ export function makeReplayAi(opts: {
       opts.budget?.settle(reserved, price(fresh).neurons);
       return fresh;
     }, `${model} "${preview}"`, live.producer && kind !== "llm" ? { model, producer: live.producer(model) } : undefined);
-    if (live.producer && kind !== "llm") verifiedModels.add(model);
+    if (live.producer && kind !== "llm") {
+      // fill() may hand back a row another process wrote while we waited for the lock: check that row, not just our own write.
+      requireVerified(key, model);
+      if (opts.store.provenance(key)?.producer !== producerId(live.producer(model))) throw new Error(`replay row for ${model} (sha256 ${key}) was recorded by a different producer than this run's`);
+      verifiedModels.add(model);
+    }
     const cost = price(stored);
     calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
     return respond(input, stored);

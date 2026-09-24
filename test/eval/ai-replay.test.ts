@@ -698,3 +698,36 @@ describe("row provenance", () => {
     expect(() => s.exportUsed(join(cacheOf(root), "out.jsonl.gz"))).toThrow(/stamp/);
   });
 });
+
+describe("record-mode rows another process wrote", () => {
+  const legacyRow = (t: string) => `${JSON.stringify({ k: replayKey(MODEL, embedInput(t)), v: { f32: [Buffer.from(new Float32Array([1, 2]).buffer).toString("base64")] } })}\n`;
+
+  it("fails closed when fill() returns a legacy row written concurrently, and does not mark the model verified", async () => {
+    const root = tmp();
+    const file = join(cacheOf(root), "race.jsonl");
+    const s = new ReplayStore([], file, { root });
+    let calls = 0;
+    const live = {
+      run: vi.fn(async () => ({ data: [[9, 9]] })),
+      // another process (an older writer) appends the producer record and an unlabeled row for this very key just before we record
+      producer: vi.fn(() => { if (++calls === 2) appendFileSync(file, `${JSON.stringify({ producer: { model: MODEL, ...PRODUCER } })}\n${legacyRow("raced")}`); return PRODUCER; }), // call 1 is the pre-lookup check; call 2 is just before recording, after the cache miss
+    };
+    const ai = makeReplayAi({ store: s, mode: "record", live });
+    await expect(ai.ai.run(MODEL as never, embedInput("raced") as never)).rejects.toThrow(/unverified provenance/);
+    expect(ai.producers()).toEqual({});
+    expect(ai.neuronSource()).toBeUndefined();
+    expect(live.run).not.toHaveBeenCalled(); // the cached row won the race, so nothing was recorded over it
+  });
+
+  it("a row another process recorded with the same producer is accepted", async () => {
+    const root = tmp();
+    const file = join(cacheOf(root), "ok.jsonl");
+    const s = new ReplayStore([], file, { root });
+    const stamped = `${JSON.stringify({ k: replayKey(MODEL, embedInput("shared")), v: { f32: [Buffer.from(new Float32Array([1, 2]).buffer).toString("base64")] }, m: MODEL, p: producerId(PRODUCER) })}\n`;
+    let calls = 0;
+    const live = { run: vi.fn(async () => ({ data: [[9, 9]] })), producer: vi.fn(() => { if (++calls === 2) appendFileSync(file, `${JSON.stringify({ producer: { model: MODEL, ...PRODUCER } })}\n${stamped}`); return PRODUCER; }) };
+    const ai = makeReplayAi({ store: s, mode: "record", live });
+    await expect(ai.ai.run(MODEL as never, embedInput("shared") as never)).resolves.toEqual({ data: [[1, 2]] });
+    expect(ai.producers()).toEqual({ [MODEL]: PRODUCER });
+  });
+});
