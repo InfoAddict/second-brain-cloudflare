@@ -2,7 +2,6 @@ import { RERANK_AMBIGUITY_MARGIN, RERANK_PROBE_TIMEOUT_MS, RERANK_BLEND_WEIGHT, 
 import type { RerankMode } from "../config";
 import type { Env } from "../env";
 import type { VectorizeMatch } from "./math";
-import { identifierShaped } from "./query-profile";
 import { queryRelevantWindow } from "./snippet";
 import type { RerankRoute, RerankTuning } from "./types";
 
@@ -32,6 +31,16 @@ export function validateRerankerResponse(raw: unknown, count: number): number[] 
 const parentOf = (m: VectorizeMatch): string => ((m.metadata as { parentId?: string } | undefined)?.parentId ?? m.id) as string;
 
 /**
+ * A token that names one thing exactly: a digit, `#` or `_` anywhere, or a dot between alphanumerics (v1.9, a.b).
+ * Sentence punctuation is not part of the token ("cells." is a word) and a hyphen between plain words
+ * ("tissue-resident") is prose, so a natural-language question is never mistaken for an identifier lookup.
+ */
+export function lookupShaped(token: string): boolean {
+  const t = token.replace(/[.,;:!?)\]"']+$/u, "");
+  return /[\d#_]/.test(t) || /[\p{L}\p{N}]\.[\p{L}\p{N}]/u.test(t);
+}
+
+/**
  * Cheap, AI-free routing. `on` reranks anything with at least three parents; `auto` also needs the top two
  * heuristic scores within the ambiguity margin. An identifier-shaped query token (#149, v1.9, a-b) is a lexical
  * lookup the keyword arm already answers, so it never pays for a model call.
@@ -39,7 +48,7 @@ const parentOf = (m: VectorizeMatch): string => ((m.metadata as { parentId?: str
 export function shouldRerank(mode: RerankMode, scores: readonly number[], queryTokens: readonly string[]): Exclude<RerankRoute, "applied" | "error" | "timeout" | "not-ready"> {
   if (mode === "off") return "off";
   if (scores.length < 3) return "too-few";
-  if (queryTokens.some(identifierShaped)) return "exact-id";
+  if (queryTokens.some(lookupShaped)) return "exact-id";
   if (mode === "on") return "attempted";
   const leader = scores[0];
   return leader > 0 && (leader - scores[1]) / leader <= RERANK_AMBIGUITY_MARGIN ? "attempted" : "clear-leader";

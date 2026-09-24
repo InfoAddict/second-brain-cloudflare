@@ -41,9 +41,14 @@ describe("shouldRerank", () => {
     expect(shouldRerank("on", [1, 0.9], ["alpha"])).toBe("too-few");
   });
   it("skips exact-identifier shapes in every mode", () => {
-    for (const token of ["#149", "v1.9", "a-b", "2024"]) {
+    for (const token of ["#149", "v1.9", "2024", "err_tls_90412", "40mg/day", "32%"]) {
       expect(shouldRerank("on", close, [token])).toBe("exact-id");
       expect(shouldRerank("auto", close, [token])).toBe("exact-id");
+    }
+  });
+  it("does not mistake prose for an identifier: trailing punctuation and plain hyphenated words are words", () => {
+    for (const token of ["cells.", "cancer.", "tissue-resident", "non-infertile", "n-oxide", "apoe", "(cells)."]) {
+      expect(shouldRerank("on", close, [token])).toBe("attempted");
     }
   });
   it("on always attempts; auto only when the runner-up is within 15% of the leader", () => {
