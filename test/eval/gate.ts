@@ -27,6 +27,10 @@ export const DEFAULT_GATE: Readonly<GateThresholds> = Object.freeze({
   headlineTolerance: 0.01,
   categoryToleranceFloor: 0.03,
   minCategoryQueries: 10,
+  // Overall improvement is a query-weighted mean. Approved when paraphrase was 15% and long-context 7.5% of the non-gap
+  // queries; on the expanded core set (27% and 19%) it needs about half the in-category gain (+0.075 / +0.106, was +0.133 /
+  // +0.265), so it is NOT valid evidence for T-0041 or T-0042: they must pass their target-category rule (pre-registered on
+  // T-0043.6, ARCHITECTURE "The overall improvement path").
   improvementMargin: 0.02,
   targetMargin: 0.05,
   minQueries: 200,

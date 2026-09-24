@@ -639,6 +639,22 @@ margin. Multi-hop is therefore not a valid target category for a reranker
 and should drop it; that change is applied at integration), and a graph change
 is judged by the answer's rank, not by this recall.
 
+**The overall improvement path is not evidence for T-0041 or T-0042.** The
+0.02 `improvementMargin` was approved when paraphrase was 15% and long-context
+7.5% of the non-gap queries. On the expanded set they are 27% and 19%, and the
+overall path averages by query, so an overall +0.02 now needs an in-category
+gain of about +0.075 in paraphrase and +0.106 in long-context, against +0.133
+and +0.265 before: roughly half the bar for the reranker and 40% of it for
+contextual embeddings. Each of those changes must pass through its target
+category (paraphrase for T-0041, long-context for T-0042) with a bootstrap lower
+bound above zero, and show no regression in any category; T-0042 must also show
+no loss and a positive point estimate on the coherent-padding long-context
+subset, reported apart from the 220 legacy notes. This is pre-registered on
+T-0043.6 (the amended note of Sep 24 2026, written before any candidate ran on
+the expanded set). The candidate-pool diagnostic (gold anywhere in the fused
+pool, recall@30) is printed for every category so a target FAIL can be read as
+"the reranker did not help" or "the gold was never a candidate".
+
 **Variants.** A change under test is a variant: query-time flags on
 `RecallInternalOptions` (for example `variant.arms`), config overrides, or an
 index-time hook that replaces `storeEntry`. Built in: `baseline` (shipped
