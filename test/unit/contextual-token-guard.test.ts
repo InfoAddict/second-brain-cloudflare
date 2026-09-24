@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildEmbeddingChunks, estimateBgeSmallTokens } from "../../src/capture/contextual";
 import { DEFAULTS, type Config } from "../../src/config";
+import { COMMON_WORD_LIST } from "../../src/capture/common-words";
 import { BGE_SMALL_MAX_INPUT_TOKENS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
 
 const on: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" };
@@ -28,6 +29,8 @@ const randWord = (min: number, max: number) => Array.from({ length: min + Math.f
 const syll = ["ka", "mo", "ti", "ra", "shu", "ven", "lor", "pex", "dul", "quo", "zin", "bre"];
 const fill = (n: number, unit: () => string, sep = " ") => { let s = ""; while (s.length < n) s += unit() + sep; return s.slice(0, n); };
 const withTitle = (title: string, body: string) => `${title}\n${body}`;
+
+const LONG_WORDS = COMMON_WORD_LIST.split(/\s+/).filter(w => w.length >= 11);
 
 /** Notes shaped to defeat a token estimate: short random words, random letters, syllables, code, ids, CJK, punctuation, accents. */
 const NOTES: Record<string, string> = {
@@ -50,6 +53,27 @@ const NOTES: Record<string, string> = {
   digitsAndWords: withTitle("Log", fill(6000, () => `${randWord(2, 5)}${Math.floor(rnd() * 99)} ${Math.floor(rnd() * 1e5)}`)),
   emoji: withTitle("Fun", fill(5000, () => `${pick(["😀", "🚀", "🎉", "🔥"])}${randWord(1, 3)}`)),
   mixedScripts: withTitle("Mixed", fill(6000, () => `${randWord(2, 4)}${pick(["設", "計", "한", "글", "я", "ж"])}${randWord(1, 3)}`)),
+  // Scripts BERT decomposes or deletes into: each sized to stay under the token limit, so it is contextualized and its chunks are measured.
+  koreanDominant: withTitle("회의록", fill(3400, () => pick(["오늘", "회의에서", "논의한", "내용은", "다음과", "같습니다.", "예산", "검토와", "일정", "조정이", "필요합니다.", "슘", "닭", "값"]) + (rnd() < 0.05 ? ` ${randWord(2, 5)}` : ""))),
+  koreanNoSpaces: withTitle("메모", fill(3400, () => pick(["회의내용", "예산검토", "일정조정", "닭값읊다"]), "")),
+  nfdLatin: withTitle("Café résumé", fill(6000, () => pick(["naïve", "café", "résumé", "Zoë", "jalapeño", "über", "façade", "Ångström", "crème", "brûlée", "São", "Łódź"]).normalize("NFD"))),
+  nfdKorean: withTitle("회의록", fill(3400, () => pick(["오늘", "회의에서", "논의한", "내용은", "다음과", "같습니다."]).normalize("NFD"))),
+  vietnamese: withTitle("Ghi chú", fill(6000, () => pick(["Việt", "Nam", "cộng", "hòa", "xã", "hội", "chủ", "nghĩa", "độc", "lập"]).normalize("NFD"))),
+  softHyphens: withTitle("Notes", fill(6000, () => pick(["analysis", "entrepreneurship", "organization", "neighborhood", "programme", "reimbursement"]).replace(/(.{3})/g, "$1\u00ad"))),
+  // Two long vocabulary words with a deleted character between them are one long unknown word to BERT: many pieces where two words were counted.
+  zeroWidth: withTitle("Notes", fill(6000, () => `${pick(LONG_WORDS)}${pick(["\u200b", "\u200c", "\u200d", "\ufe0f", "\ufeff", "\u0001", "\u00ad"])}${pick(LONG_WORDS)}`, " ")),
+  japanese: withTitle("会議", fill(3400, () => pick(["今日の会議で", "議論した内容は", "次のとおりです。", "予算の見直しと", "日程の調整が必要です。", "がぎぐげご", "ぱぴぷぺぽ"]), "")),
+  chinese: withTitle("会议", fill(3400, () => pick(["今天的会议讨论了", "以下内容。", "预算审查和", "日程安排需要调整。", "繁體中文測試"]), "")),
+  arabic: withTitle("اجتماع", fill(5000, () => pick(["اجتماع", "اليوم", "ناقشنا", "الميزانية", "والجدول", "الزمني", "مُحَمَّد", "كِتَابٌ"]))),
+  hebrew: withTitle("פגישה", fill(5000, () => pick(["פגישה", "היום", "דנו", "בתקציב", "ובלוח", "הזמנים", "שָׁלוֹם", "סֵפֶר"]))),
+  cyrillic: withTitle("Совещание", fill(5000, () => pick(["сегодня", "обсудили", "бюджет", "и", "график", "работ", "Ёжик", "Щука"]))),
+  greek: withTitle("Συνάντηση", fill(5000, () => pick(["σήμερα", "συζητήσαμε", "τον", "προϋπολογισμό", "και", "το", "χρονοδιάγραμμα", "ᾳδω"]))),
+  devanagari: withTitle("बैठक", fill(4000, () => pick(["आज", "की", "बैठक", "में", "बजट", "पर", "चर्चा", "हुई", "क़ख़ग़"]))),
+  thai: withTitle("ประชุม", fill(4000, () => pick(["วันนี้", "ประชุม", "เรื่อง", "งบประมาณ", "และ", "ตารางเวลา"]), "")),
+  bengaliTamil: withTitle("সভা", fill(3400, () => pick(["কোনো", "বেশ", "কোকিল", "கொண்டு", "சோறு", "பொருள்"]))),
+  emojiZwj: withTitle("Family", fill(3400, () => `${pick(["👨\u200d👩\u200d👧\u200d👦", "🏳\ufe0f\u200d🌈", "👩\u200d💻", "❤\ufe0f"])}${randWord(1, 3)}`)),
+  astralMath: withTitle("Math", fill(3400, () => pick(["𝐀𝐁𝐂", "𝟘𝟙𝟚", "𝔘𝔫𝔦", "𝒜𝓑", "𝕏𝕐"]) + randWord(1, 3))),
+  fullwidth: withTitle("Ｆｕｌｌ", fill(3400, () => pick(["ＡＢＣ", "ｄｅｆ", "１２３", "！？", "ｶﾀｶﾅ"]))),
 };
 
 interface Shipped { name: string; mode: string; text: string }
@@ -107,6 +131,15 @@ describe("shipped chunks never exceed the BGE Small window", () => {
       expect(real, `${c.name} ${c.mode}`).toBeLessThanOrEqual(BGE_SMALL_MAX_INPUT_TOKENS);
       expect(recorded[hash(c.text)], `${c.name} ${c.mode}`).toBe(real);
     }
+  });
+
+  it.runIf(process.env.SCRIPT_TABLE)("writes the per-script table of largest estimated and real chunk tokens (SCRIPT_TABLE=path)", () => {
+    const recorded = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, number>;
+    const rows = Object.keys(NOTES).map(name => {
+      const mine = chunks.filter(c => c.name === name);
+      return `${name.padEnd(24)} chunks ${String(mine.length).padStart(3)}  max estimated ${String(Math.max(...mine.map(c => estimateBgeSmallTokens(c.text)))).padStart(3)}  max real ${String(Math.max(...mine.map(c => recorded[hash(c.text)]))).padStart(3)}`;
+    });
+    writeFileSync(process.env.SCRIPT_TABLE!, rows.join("\n"));
   });
 
   it.skipIf(!haveModel)("every listed vocabulary word is exactly one real token, and the list has no duplicates or non-letters (skipped: model cache not present)", async () => {
