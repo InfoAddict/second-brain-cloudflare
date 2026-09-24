@@ -472,8 +472,8 @@ export interface SchemeBatchResult {
   skipped: number;
   failed: number;
   chunks: number;
-  /** Entries still to rewrite (not every later row). */
-  remaining: number;
+  /** Entries still to rewrite (not every later row); null when the run did not count them (only `count: true` does, since counting scans every later row). */
+  remaining: number | null;
   done: boolean;
   stalled: boolean;
   stalledReason?: string;
@@ -586,10 +586,10 @@ function neuronsFor(model: string, texts: string[]): number {
 export async function runSchemeBatch(
   env: Env,
   config: Readonly<Config> = DEFAULTS,
-  opts: { chunkBudget?: number; neuronCap?: number; now?: number } = {},
+  opts: { chunkBudget?: number; neuronCap?: number; now?: number; count?: boolean } = {},
 ): Promise<SchemeBatchResult> {
   const idle = (extra: Partial<SchemeBatchResult> = {}): SchemeBatchResult =>
-    ({ processed: 0, skipped: 0, failed: 0, chunks: 0, remaining: 0, done: true, stalled: false, neurons: 0, capped: false, ...extra });
+    ({ processed: 0, skipped: 0, failed: 0, chunks: 0, remaining: 0 as number | null, done: true, stalled: false, neurons: 0, capped: false, ...extra });
   const now = opts.now ?? Date.now();
 
   const target = schemeOf(config);
@@ -704,11 +704,18 @@ export async function runSchemeBatch(
     failedId, failedRuns,
     day, neuronsToday: neuronsToday + neurons,
   };
-  const countQuery = schemePageSql(next.cursorCreatedAt !== null, contextualOnly, true);
-  const countBinds = next.cursorCreatedAt === null ? [] : [next.cursorCreatedAt, next.cursorCreatedAt, next.cursorId];
-  const counted = (await env.DB.prepare(countQuery.sql).bind(...countBinds, ...countQuery.extra).first()) as Record<string, number> | null;
-  const remaining = Number(counted?.count ?? 0);
   const stalled = processed === 0 && failed > 0;
+  // A page shorter than its limit held every remaining row, so once it is all handled the migration is done. A full
+  // page may have more behind it: counting that scans every later row (D1 bills rows read), so only a caller that asks does it.
+  const exhausted = rows.length < SCHEME_RUN_MAX_ENTRIES && reached?.id === (rows[rows.length - 1]?.id ?? reached?.id);
+  let remaining: number | null;
+  if (exhausted && !stalled) remaining = 0;
+  else if (opts.count) {
+    const countQuery = schemePageSql(next.cursorCreatedAt !== null, contextualOnly, true);
+    const countBinds = next.cursorCreatedAt === null ? [] : [next.cursorCreatedAt, next.cursorCreatedAt, next.cursorId];
+    const counted = (await env.DB.prepare(countQuery.sql).bind(...countBinds, ...countQuery.extra).first()) as Record<string, number> | null;
+    remaining = Number(counted?.count ?? 0);
+  } else remaining = null;
   const done = remaining === 0 && !stalled;
   await writeScheme(env, done ? { ...next, finishedAt: now } : next);
   return {
@@ -790,6 +797,8 @@ export async function runLlmContextBatch(env: Env, config: Readonly<Config> = DE
   const scheme = await readSchemeMigration(env);
   if (!scheme?.finishedAt || scheme.target !== schemeOf(config) || scheme.model !== config.EMBEDDING_MODEL) return result;
 
+  // The same chunking storeEntry will use, so the generated sentences line up with the chunks.
+  const focus = await focusModeAllowed(env, config);
   let state: LlmBackfillState = { cursorCreatedAt: null, cursorId: null, upgraded: 0, skipped: 0, failedNights: 0 };
   try {
     const raw = await env.OAUTH_KV.get(CONTEXT_LLM_BACKFILL_KV_KEY);
@@ -805,7 +814,7 @@ export async function runLlmContextBatch(env: Env, config: Readonly<Config> = DE
     const id = row.id as string;
     const mark = { cursorCreatedAt: row.created_at as number, cursorId: id };
     const entry = { id, content: row.content as string, tags: JSON.parse((row.tags as string) ?? "[]") as string[], source: row.source as string, createdAt: row.created_at as number };
-    const chunks = isContextEligible(entry) ? buildEmbeddingChunks(entry, config) : [];
+    const chunks = isContextEligible(entry) ? buildEmbeddingChunks(entry, config, undefined, focus) : [];
     if (chunks.length < 2 || chunks.length > CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY) {
       state = { ...state, ...mark, failedNights: 0 };
       continue;

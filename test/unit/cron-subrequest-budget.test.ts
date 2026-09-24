@@ -91,15 +91,15 @@ import { FTS_READY_KV_KEY } from "../../src/constants";
 // see the ready-night pin below, which measures exactly that shape. The
 // honest worst case (a rebuild night, or a ready night with drift) stays
 // well inside this ceiling, so the constant itself does not move.
-// MOVED 61 -> 67 (T-0042, embedding scheme migration): runSchemeBatch runs
+// MOVED 61 -> 66 (T-0042, embedding scheme migration): runSchemeBatch runs
 // after FTS maintenance. Contextual embeddings ship on, so a brain upgraded
-// from before them has work: the measured night is six operations, the
+// from before them has work: the measured night is five operations, the
 // resolveConfig GET, the scheme ledger GET, the model-migration GET, the page
-// and count SELECTs, and the ledger PUT (an empty brain, so no entry is
+// SELECT (no count: it would scan every later row), and the ledger PUT (an empty brain, so no entry is
 // rewritten). A night with entries adds, per rewritten entry, one re-read and
 // one vector_ids UPDATE, bounded by SCHEME_BATCH_CHUNK_BUDGET. Once the ledger
 // is finished every night is two: the config GET and the ledger GET.
-const NIGHTLY_D1_STATEMENT_BUDGET = 67;
+const NIGHTLY_D1_STATEMENT_BUDGET = 66;
 // The weekly dangling-edge sweep (GRAPH_SWEEP_WEEKDAY_UTC in src/graph/pass.ts)
 // adds exactly one DELETE on top of an ordinary night. That is still nowhere
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
@@ -337,7 +337,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // runFtsBackfill's liveness check, ready GET, cursor GET, rowid SELECT,
     // and ready PUT" (8); it now reads liveness, integrity-check, ready
     // GET, cursor GET, rowid SELECT, latch-guard batch, ready PUT (7).
-    expect(statements.length).toBe(28); // 22 + 6 scheme-migration ops on a brain with work (T-0042)
+    expect(statements.length).toBe(27); // 22 + 5 scheme-migration ops on a brain with work (T-0042)
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -358,7 +358,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin: the same 22 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(29); // 23 + 6 scheme-migration ops on a brain with work (T-0042)
+    expect(statements.length).toBe(28); // 23 + 5 scheme-migration ops on a brain with work (T-0042)
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -398,7 +398,7 @@ describe("nightly cron D1 subrequest cost", () => {
     // drifted rows, and the T-0065 parity batch above finds no per-workspace
     // drift either, so its own repair batch never fires. If this number
     // moves, say why in the same commit.
-    expect(statements.length).toBe(30); // 24 + 6 scheme-migration ops on a brain with work (T-0042)
+    expect(statements.length).toBe(29); // 24 + 5 scheme-migration ops on a brain with work (T-0042)
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

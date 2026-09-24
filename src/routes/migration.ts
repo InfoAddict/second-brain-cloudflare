@@ -108,7 +108,7 @@ export async function handleMigrationRoutes(
     if (authErr) return authErr;
 
     const cfg = await resolveConfig(env);
-    return json({ ok: true, ...(await runSchemeBatch(env, cfg)) });
+    return json({ ok: true, ...(await runSchemeBatch(env, cfg, { count: true })) });
   }
 
   return null;

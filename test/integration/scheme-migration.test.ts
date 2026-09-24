@@ -140,7 +140,7 @@ describe("in-place scheme migration: contextual text", () => {
   });
 
   it("stays inside the chunk budget per batch, always taking the first entry", async () => {
-    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1 });
+    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1, count: true });
     expect(r.processed).toBe(1);
     expect(r.done).toBe(false);
     expect(r.remaining).toBeGreaterThan(0);
@@ -419,8 +419,18 @@ describe("in-place scheme migration: pace", () => {
     const h = harness(d1);
     for (let i = 0; i < 30; i++) d1.seed({ id: `s${i}`, content: `short ${i}`, createdAt: i });
     for (let i = 0; i < 4; i++) await seedIndexed(d1, h, `l${i}`, long(`T${i}`), 100 + i);
-    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1 });
+    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1, count: true });
     expect(r.remaining).toBe(3);
+  });
+
+  it("does not scan every later row to count what remains unless asked", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 4; i++) await seedIndexed(d1, h, `l${i}`, long(`T${i}`), 100 + i);
+    const prepare = vi.spyOn(d1.db, "prepare");
+    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1 });
+    expect(r).toMatchObject({ done: false, remaining: null });
+    expect(prepare.mock.calls.map(c => String(c[0])).filter(sql => /COUNT\(/i.test(sql))).toEqual([]);
   });
 
   it("stops at the daily neuron cap and picks up the next UTC day", async () => {
@@ -456,5 +466,25 @@ describe("scheme migration schedule", () => {
     const hourly = h.embeds.length;
     expect(hourly).toBeGreaterThan(SCHEME_NIGHTLY_CHUNK_BUDGET);
     expect(hourly).toBeLessThanOrEqual(SCHEME_RUN_CHUNK_BUDGET + 10);
+  });
+});
+
+describe("scheme migration run cost", () => {
+  it("a full run's own JavaScript stays a small part of the free plan's 10 ms CPU", async () => {
+    const { SCHEME_RUN_CHUNK_BUDGET } = await import("../../src/migration/embedding");
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 30; i++) await seedIndexed(d1, h, `e${String(i).padStart(2, "0")}`, long(`T${i}`, 2700), i + 1);
+    await runSchemeBatch(h.env, ctx, { chunkBudget: 5 }); // warm the code paths
+    const before = process.cpuUsage();
+    const r = await runSchemeBatch(h.env, ctx);
+    const cpu = process.cpuUsage(before);
+    const ms = (cpu.user + cpu.system) / 1000;
+    expect(r.chunks).toBeLessThanOrEqual(SCHEME_RUN_CHUNK_BUDGET + 8);
+    expect(r.chunks).toBeGreaterThan(SCHEME_RUN_CHUNK_BUDGET - 8);
+    // In-process SQLite and the test doubles are included here, which the Worker does not pay for (its D1, KV, Vectorize and AI
+    // calls are I/O); the bound is generous and exists to catch a run whose own computation grows.
+    expect(ms, `one ${r.chunks}-chunk run took ${ms.toFixed(1)} ms of CPU in this test`).toBeLessThan(60);
+    process.stdout.write(`SCHEME_RUN_CPU ${ms.toFixed(1)}ms for ${r.chunks} chunks, ${r.processed} notes\n`);
   });
 });

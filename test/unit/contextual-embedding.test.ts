@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   buildDeterministicContext, buildEmbeddingChunks, estimateBgeSmallTokens, isContextEligible, type ContextEntry,
@@ -142,20 +142,43 @@ describe("buildEmbeddingChunks", () => {
 });
 
 describe("estimateBgeSmallTokens", () => {
-  it("never undercounts the real BGE Small tokenizer", async () => {
-    const dir = resolve(__dirname, "../../.eval-cache/models/bge-small-en-v1.5-5c38ec7c405e");
-    if (!existsSync(resolve(dir, "tokenizer.json"))) return; // models are fetched on demand; skipped when absent
+  const samples: Record<string, string> = {
+    prose: longText(1500),
+    japanese: "設計のレビュー".repeat(120),
+    hexIds: Array.from({ length: 300 }, (_, i) => `id${i}:0x${(i * 7919).toString(16)};`).join(" "),
+    urls: "https://example.com/a/b?c=d&e=f#g ".repeat(40),
+    unbroken: "x".repeat(1500),
+    punctuation: "a, b; c! d? ".repeat(150),
+    accents: "naïve café résumé ".repeat(80),
+    uuids: "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c ".repeat(30),
+    base64: "aGVsbG8gd29ybGQgdGhpcyBpcyBhIHRlc3Q9PQ== ".repeat(30),
+    camelCase: "getUserAccountBalanceHandler ".repeat(40),
+  };
+  const fixturePath = resolve(__dirname, "fixtures/bge-small-token-counts.json");
+  const modelDir = resolve(__dirname, "../../.eval-cache/models/bge-small-en-v1.5-5c38ec7c405e");
+  const haveModel = existsSync(resolve(modelDir, "tokenizer.json"));
+  const load = async () => {
     const tf = await import("@huggingface/transformers");
-    const tok = await tf.AutoTokenizer.from_pretrained(dir, { local_files_only: true });
-    const samples = [
-      longText(1500), "設計のレビュー".repeat(120), Array.from({ length: 300 }, (_, i) => `id${i}:0x${(i * 7919).toString(16)};`).join(" "),
-      "https://example.com/a/b?c=d&e=f#g ".repeat(40), "x".repeat(1500), "a, b; c! d? ".repeat(150), "naïve café résumé ".repeat(80),
-      "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c ".repeat(30), "aGVsbG8gd29ybGQgdGhpcyBpcyBhIHRlc3Q9PQ== ".repeat(30), "getUserAccountBalanceHandler ".repeat(40),
-    ];
-    for (const s of samples) {
-      const actual = (tok(s, { truncation: false }).input_ids.tolist() as number[][])[0].length;
-      expect(estimateBgeSmallTokens(s), s.slice(0, 30)).toBeGreaterThanOrEqual(actual);
-    }
+    return tf.AutoTokenizer.from_pretrained(modelDir, { local_files_only: true });
+  };
+  const count = (tok: Awaited<ReturnType<typeof load>>, s: string) => (tok(s, { truncation: false }).input_ids.tolist() as number[][])[0].length;
+
+  // The evidence lives in a committed fixture of real tokenizer counts, so this check does not depend on the model cache.
+  it("never undercounts the recorded real BGE Small token counts", () => {
+    const recorded = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, number>;
+    expect(Object.keys(recorded).sort()).toEqual(Object.keys(samples).sort());
+    for (const [name, text] of Object.entries(samples)) expect(estimateBgeSmallTokens(text), name).toBeGreaterThanOrEqual(recorded[name]);
+  });
+
+  it.skipIf(!haveModel)("the fixture still matches the pinned tokenizer (skipped: .eval-cache/models is not present; run npm run test:eval:local-models to fetch it)", async () => {
+    const tok = await load();
+    const recorded = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, number>;
+    for (const [name, text] of Object.entries(samples)) expect(recorded[name], name).toBe(count(tok, text));
+  });
+
+  it.skipIf(!haveModel || !process.env.UPDATE_TOKEN_FIXTURE)("rewrites the fixture from the pinned tokenizer (UPDATE_TOKEN_FIXTURE=1)", async () => {
+    const tok = await load();
+    writeFileSync(fixturePath, `${JSON.stringify(Object.fromEntries(Object.entries(samples).map(([n, t]) => [n, count(tok, t)])), null, 1)}\n`);
   });
 });
 
