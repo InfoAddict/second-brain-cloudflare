@@ -18,12 +18,13 @@
 // Golden-set expansion (T-0043.6): 299 -> 1,433 clusters (338 -> 1,586 queries), weighted to the target categories:
 // paraphrase 48 -> 440, multi-hop 30 -> 150, long-context 24 -> 220. Recall@10 MDE on the regression population, core-1k,
 // old (299 clusters) -> new (`node scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints every category):
-//   like->baseline 0.0000 -> 0.0018 (a true tie);  baseline->dense-only 0.0568 -> 0.0351;  ->keyword-only 0.0486 -> 0.0195;
-//   ->sabotage 0.0513 -> 0.0297; like->baseline at scale-5k 0.0568 -> 0.0240 and at scale-20k 0.0587 -> 0.0248; mild changes (MMR_LAMBDA 0.6, RECENCY_FLOOR 0.5), the ~0.02-sized effects a reranker or
-//   contextual embeddings are expected to have: 0.0202 -> 0.0150 and 0.0083 -> 0.0129.
+//   like->baseline 0.0000 -> 0.0022 (a true tie);  baseline->dense-only 0.0568 -> 0.0351;  ->keyword-only 0.0486 -> 0.0189;
+//   ->sabotage 0.0513 -> 0.0299; like->baseline at scale-5k 0.0568 -> 0.0240 and at scale-20k 0.0587 -> 0.0248;
+//   mild changes (MMR_LAMBDA 0.6, RECENCY_FLOOR 0.5), the ~0.02-sized effects a reranker or contextual embeddings are
+//   expected to have: 0.0202 -> 0.0144 and 0.0083 -> 0.0127.
 // Per category (the target-category rule asks for +0.05 with a lower bound above zero, so it needs MDE <= 0.05 there):
-//   paraphrase 0.180 (dense-only, old) -> 0.055 / 0.053 (dense-only / keyword-only) and 0.033, 0.029, 0.014 on mild changes;
-//   long-context 0.230 -> 0.054 / 0.038 and 0.013-0.018 on mild changes; multi-hop 0.021 / 0.013 and about 0.009.
+//   paraphrase 0.180 (dense-only, old) -> 0.055 / 0.051 (dense-only / keyword-only) and 0.030, 0.029 on mild changes;
+//   long-context 0.230 -> 0.054 / 0.038 and 0.013-0.018 on mild changes; multi-hop 0.024 / 0.023 and about 0.009.
 // The MDE belongs to the comparison (the spread of its paired deltas), not to the query set, so it did not fall by
 // sqrt(clusters): the large ablations move many more lexical queries now, which raises their own spread. Honest limit: a
 // comparison that moves nearly every paraphrase query (an ablation of a whole arm) sits at about 0.05 in that category, so a
@@ -118,7 +119,7 @@ describe("gate calibration on core-1k (offline)", () => {
     expect(overall.ci.clusters).toBeGreaterThanOrEqual(1400);
     // measured 0.0195 (was 0.0486 on the 299-cluster set)
     expect(gate.mde.recall10!).toBeLessThan(0.025);
-    // the target categories can prove a +0.05 gain (MDE at most 0.05) when a variant moves part of them; measured 0.0527 and 0.0379
+    // the target categories can prove a +0.05 gain (MDE at most 0.05) when a variant moves part of them; measured 0.0514 and 0.0379
     const categoryMde = (scope: string) => 2.8 * gate.deltas.find(d => d.scope === scope && d.metric === "recall10")!.ci.se;
     expect(categoryMde("multi-hop")).toBeLessThan(0.05);
     expect(categoryMde("long-context")).toBeLessThan(0.05);
