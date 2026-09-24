@@ -1321,7 +1321,7 @@
 {"id":"q-hop-105","category":"multi-hop","text":"why did we remove sugar from the office snack order","gold":[{"id":"n-hop-105-answer","grade":2},{"id":"n-hop-105-root","grade":1}],"viewer":"avery","hops":1}
 {"id":"q-hop-106","category":"multi-hop","text":"why did I leave the running club after two seasons","gold":[{"id":"n-hop-106-answer","grade":2},{"id":"n-hop-106-root","grade":1}],"viewer":"avery","hops":1}
 {"id":"q-hop-107","category":"multi-hop","text":"why did we switch the newsletter tool to a cheaper provider","gold":[{"id":"n-hop-107-answer","grade":2},{"id":"n-hop-107-root","grade":1}],"viewer":"avery","hops":1}
-{"id":"q-hop-108","category":"multi-hop","text":"why did I take the day off before the marathon","gold":[{"id":"n-hop-108-answer","grade":2},{"id":"n-hop-108-root","grade":1}],"viewer":"avery","hops":1}
+{"id":"q-hop-108","category":"multi-hop","text":"why did I stay home before the marathon","gold":[{"id":"n-hop-108-answer","grade":2},{"id":"n-hop-108-root","grade":1}],"viewer":"avery","hops":1}
 {"id":"q-hop-109","category":"multi-hop","text":"what made us scrap the beta waitlist","gold":[{"id":"n-hop-109-answer","grade":2},{"id":"n-hop-109-root","grade":1}],"viewer":"blake","hops":1}
 {"id":"q-hop-110","category":"multi-hop","text":"why did I start keeping receipts in a scanner folder","gold":[{"id":"n-hop-110-answer","grade":2},{"id":"n-hop-110-root","grade":1}],"viewer":"avery","hops":1}
 {"id":"q-hop-111","category":"multi-hop","text":"why did I choose the west-facing desk in the new office","gold":[{"id":"n-hop-111-answer","grade":2},{"id":"n-hop-111-root","grade":1}],"viewer":"avery","hops":1}

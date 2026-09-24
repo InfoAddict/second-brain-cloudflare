@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { EdgeType } from "../../../src/graph/types";
 import type { GoldenQuery } from "../types";
@@ -34,13 +34,21 @@ export function readJsonl<T>(path: string): T[] {
   return readFileSync(path, "utf8").split("\n").filter(line => line.trim()).map(line => JSON.parse(line) as T);
 }
 
-export interface CoreData { needles: NeedleRow[]; edges: EdgeRow[]; queries: GoldenQuery[] }
+/**
+ * A long, topically coherent haystack row (ids h-long-NNN). They exist so that note length does not identify a needle:
+ * the coherent long-context needles are far longer than every other needle, and a dense retriever ranks long,
+ * diffuse text into short queries' top ten. No query asks for anything in these rows.
+ */
+export type LongHaystackRow = Pick<NeedleRow, "id" | "content" | "workspace" | "actor" | "ageDays" | "importance">;
+
+export interface CoreData { needles: NeedleRow[]; edges: EdgeRow[]; queries: GoldenQuery[]; haystack?: LongHaystackRow[] }
 
 export function loadCoreData(): CoreData {
   return {
     needles: readJsonl<NeedleRow>(resolve(CORE_DATA_DIR, "needles.jsonl")),
     edges: readJsonl<EdgeRow>(resolve(CORE_DATA_DIR, "edges.jsonl")),
     queries: readJsonl<GoldenQuery>(resolve(CORE_DATA_DIR, "queries.jsonl")),
+    haystack: existsSync(resolve(CORE_DATA_DIR, "haystack.jsonl")) ? readJsonl<LongHaystackRow>(resolve(CORE_DATA_DIR, "haystack.jsonl")) : [],
   };
 }
 
@@ -79,9 +87,10 @@ export function buildCorpus(id: CoreCorpusId, data: CoreData = loadCoreData()): 
       { workspaceId: WORKSPACES.blake, actorId: ACTORS.blake, weight: 10 },
     ],
   });
+  const longHaystack = (data.haystack ?? []).map(row => needleToEntry({ ...row, tags: [] }));
   // Inserted oldest first, so rowids follow time as they do on a real brain (the keyword AND tier scans the
   // index newest-first by rowid); ties keep authored order.
-  const entries = [...needleEntries, ...haystack]
+  const entries = [...needleEntries, ...haystack, ...longHaystack]
     .map((entry, order) => ({ entry, order }))
     .sort((a, b) => a.entry.createdAt - b.entry.createdAt || a.order - b.order)
     .map(({ entry }) => entry);

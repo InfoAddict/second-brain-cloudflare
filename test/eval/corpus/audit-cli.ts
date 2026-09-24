@@ -34,6 +34,13 @@ async function main() {
     if (!gold || dense(gold.content) !== triple) problems.push(`${q.id}: gold dense words (${gold ? dense(gold.content) : "missing"}) differ from the query triple (${triple})`);
     if (gold && gold.ageDays < 300) problems.push(`${q.id}: gold is ${gold.ageDays} days old, needs 300+`);
   }
+  const spans = data.queries.map(q => q.answerSpan).filter((span): span is string => !!span);
+  for (const row of data.haystack ?? []) {
+    if (needleIds.has(row.id)) problems.push(`${row.id}: haystack id collides with a needle`);
+    if (isDense(row.content).length > 2) problems.push(`${row.id}: ${isDense(row.content).length} dense words (${isDense(row.content).join(",")}), at most 2`);
+    const hit = spans.find(span => row.content.includes(span));
+    if (hit) problems.push(`${row.id}: contains the answer span "${hit}"`);
+  }
   const vocab = haystackVocabulary();
   for (const n of data.needles.filter(n => n.purpose === "rare-word" || n.purpose === "identifier")) for (const key of n.keys ?? []) if (vocab.has(key.toLowerCase())) problems.push(`${n.id}: key ${key} is in the haystack vocabulary`);
   for (const n of data.needles) if (n.content.match(/[\w.+-]+@[\w-]+\.[\w.]+/g)?.some(m => !m.endsWith("@example.com"))) problems.push(`${n.id}: non-example.com email`);

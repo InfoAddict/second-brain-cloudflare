@@ -45,7 +45,7 @@ export const MUST_BE_IGNORED = [
 
 /** Exactly the committed eval files: golden data, manifest, committed replay cache, baselines. */
 export const DATA_ALLOWLIST: readonly RegExp[] = [
-  /^test\/eval\/data\/core\/(?:needles|edges|queries)\.jsonl$/,
+  /^test\/eval\/data\/core\/(?:needles|edges|queries|haystack)\.jsonl$/,
   /^test\/eval\/data\/core\/manifest\.json$/,
   /^test\/eval\/data\/core\/replay\.[\w.-]+\.jsonl\.gz$/,
   /^test\/eval\/data\/baselines\/[\w.-]+\.json$/,
