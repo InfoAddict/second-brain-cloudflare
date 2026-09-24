@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (134 queries, 67 exceptions, 10 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (135 queries, 67 exceptions, 11 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1217,7 +1217,11 @@ describe("the checker over the real source tree", () => {
     // review): a per-workspace GROUP BY over entries, replacing the old
     // global-SUM-only comparison, same deployment-wide exemption shape as
     // the other nightly parity reads above it.
-    ).toEqual({ queries: 134, exempt: 67, checked: 10, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-checked for T-0041 (src/recall/search.ts):
+    // at hops 0 the reranker fetches the passage text of its <=30 candidate
+    // parents in one read that appends the caller's scope clause exactly as
+    // the candidate-signal read above it does.
+    ).toEqual({ queries: 135, exempt: 67, checked: 11, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

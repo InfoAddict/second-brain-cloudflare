@@ -9,7 +9,7 @@ import {
   RECALL_POOL_SIZE,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
-import { resolveConfig, type Config } from "../config";
+import { isRerankMode, resolveConfig, type Config, type RerankMode } from "../config";
 import { embed } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
@@ -29,6 +29,7 @@ import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLi
 import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
+import { blendRerankerScores, rerankStep } from "./model-reranker";
 import { selectGraphRoots, type RootCandidate } from "./root-selector";
 import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
@@ -512,7 +513,39 @@ export async function recallEntries(
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
 
-  const directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  let directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  // The root view is computed here, beside the direct one, so a single model batch can cover both.
+  let rootReranked = hops > 0
+    ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
+    : [];
+  const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
+  // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
+  const scopedParents = new Set(rcRows.map(r => r.id));
+  const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
+  const rerank = await rerankStep({
+    mode: rerankMode, forced: internal.variant?.rerank === true, env, ctx, query: semanticQuery,
+    queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
+    loadContent: async ids => {
+      const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
+      const need = ids.filter(id => !known.has(id));
+      if (need.length) {
+        // scope-checked: ` AND ${scope.clause}` is appended exactly as in the candidate-signal read above; only D1 rows the caller may read reach the model
+        const { results } = await env.DB.prepare(
+          `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})${rcScopeSql}`
+        ).bind(...need, ...(scope?.bindings ?? [])).all() as { results: { id: string; content: string }[] };
+        for (const r of results) known.set(r.id, r.content);
+      }
+      return known;
+    },
+  });
+  if (internal.diagnostics) {
+    internal.diagnostics.rerankRoute = rerank.route;
+    if (rerank.ms !== undefined) internal.diagnostics.rerankMs = rerank.ms;
+  }
+  if (rerank.percentiles) {
+    directReranked = blendRerankerScores(directReranked, rerank.percentiles);
+    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles);
+  }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 
   const seen = new Set<string>();
@@ -548,7 +581,6 @@ export async function recallEntries(
   let rootCandidates: RootCandidate[] = [];
   if (hops > 0) {
     const candidateContent = new Map(rcRows.map(r => [r.id, r.content ?? ""]));
-    const rootReranked = rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false });
     const rootSeen = new Set<string>();
     rootCandidates = rootReranked.flatMap(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
