@@ -41,8 +41,9 @@ import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import { focusModeAllowed } from "../capture/focus-budget";
 import { deleteStaleVectors, storeEntry } from "../capture/store";
+import { deleteVectorIds } from "../vectorize/batch";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
-import { buildEmbeddingChunks, estimateBgeSmallTokens, generateChunkContext, isContextEligible } from "../capture/contextual";
+import { buildEmbeddingChunks, estimateBgeSmallTokens, generateChunkContext, isContextEligible, type EmbeddingChunk } from "../capture/contextual";
 import { LEGACY_SCHEME, poolingOf, schemeOf } from "../embedding/scheme";
 import {
   CHUNK_MAX_CHARS,
@@ -381,7 +382,7 @@ export async function runBatch(
       SCHEME_MIGRATION_KEY,
       JSON.stringify({
         model: config.EMBEDDING_MODEL, target: schemeOf(config), sources: [], startedAt: state.startedAt,
-        cursorCreatedAt: null, cursorId: null, processed: 0, skipped: 0, failed: 0, finishedAt: Date.now(),
+        cursorRowid: 0, cursorId: null, processed: 0, skipped: 0, failed: 0, finishedAt: Date.now(),
       } satisfies SchemeMigrationState),
     );
   }
@@ -452,7 +453,9 @@ export interface SchemeMigrationState {
   /** Every scheme a vector may still be in. A run that starts over a half-finished one keeps the old sources. */
   sources: number[];
   startedAt: number;
-  cursorCreatedAt: number | null;
+  /** Last entry rowid handled; 0 before the first run. The cursor is the table's own key, so a page is served in key order with no sort. */
+  cursorRowid: number;
+  /** The id at the cursor, for display and for the operator; never used to page. */
   cursorId: string | null;
   processed: number;
   skipped: number;
@@ -490,7 +493,8 @@ export async function readSchemeMigration(env: Env): Promise<SchemeMigrationStat
     if (!raw) return null;
     const parsed = JSON.parse(raw) as SchemeMigrationState;
     if (typeof parsed?.model !== "string" || typeof parsed.target !== "number" || !Array.isArray(parsed.sources)) return null;
-    return parsed;
+    // A ledger from before the rowid cursor restarts its scan; entries already rewritten are recognized and cost nothing to revisit.
+    return { ...parsed, cursorRowid: typeof parsed.cursorRowid === "number" ? parsed.cursorRowid : 0 };
   } catch {
     return null;
   }
@@ -542,25 +546,33 @@ export function queryPoolings(state: SchemeMigrationState | null, config: Readon
 /** True when a query needs the ledger at all: only a pooling other than the legacy one can put two spaces in one index. */
 export const schemeLedgerMatters = (config: Readonly<Config>): boolean => poolingOf(schemeOf(config)) !== poolingOf(LEGACY_SCHEME);
 
-/** Rows that could need a rewrite: for a change in contextual text alone, only long, non-mirrored ones. */
+/**
+ * Rows that could need a rewrite, in rowid order after `hasCursor`'s rowid: for a change in contextual text
+ * alone, only long, non-mirrored ones. Paged by rowid, the table's own key, so the plan is a range scan
+ * that stops at the page limit with no sort: D1 bills rows read, and an ORDER BY the created_at index
+ * cannot serve (its tiebreak is the id, which it does not hold) reads every row after the cursor to sort them.
+ */
 function schemePageSql(hasCursor: boolean, contextualOnly: boolean, count: boolean): { sql: string; extra: string[] } {
   const mirrored = [...MIRRORED_SOURCES];
   const filter = contextualOnly
     // LENGTH counts characters and JS counts UTF-16 units, so the SQL bound is a little under the limit and JS decides exactly.
     ? `AND LENGTH(content) > ${CHUNK_MAX_CHARS - 100} AND source NOT IN (${mirrored.map(() => "?").join(",")})`
     : "";
-  const after = hasCursor ? `AND (created_at > ? OR (created_at = ? AND id > ?))` : "";
+  const after = hasCursor ? `AND rowid > ?` : "";
   // scope-exempt: one-time re-embed migration: admin/cron-driven and deployment-wide; returns a count only
   const countSql = `SELECT COUNT(*) AS count FROM entries WHERE ${NOT_DEPRECATED} ${after} ${filter}`;
   // scope-exempt: one-time re-embed migration: admin/cron-driven and deployment-wide; the rows it selects go to the embedder, and only counts reach the response
-  const rowsSql = `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id
+  const rowsSql = `SELECT rowid AS rid, id, content, tags, source, created_at, vector_ids, workspace_id, actor_id
          FROM entries
         WHERE ${NOT_DEPRECATED} ${after} ${filter}
-        ORDER BY created_at ASC, id ASC
+        ORDER BY rowid ASC
         LIMIT ${SCHEME_RUN_MAX_ENTRIES}`;
   const sql = count ? countSql : rowsSql;
   return { sql, extra: contextualOnly ? mirrored : [] };
 }
+
+/** The statement `runSchemeBatch` pages with, for tests that inspect its plan and cost. */
+export const schemePageQuery = schemePageSql;
 
 const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
@@ -609,7 +621,7 @@ export async function runSchemeBatch(
       : [LEGACY_SCHEME];
     state = {
       model: config.EMBEDDING_MODEL, target, sources: sources.filter(s => s !== target), startedAt: now,
-      cursorCreatedAt: null, cursorId: null, processed: 0, skipped: 0, failed: 0,
+      cursorRowid: 0, cursorId: null, processed: 0, skipped: 0, failed: 0,
     };
     // Nothing any vector needs: the only differences are switches that never rewrite. A ledger that already
     // exists is left exactly as it is, so switching contextual embeddings off and on again resumes where it was.
@@ -631,8 +643,8 @@ export async function runSchemeBatch(
   const neuronsToday = state.day === day ? state.neuronsToday ?? 0 : 0;
 
   const focus = await focusModeAllowed(env, config);
-  const pageQuery = schemePageSql(state.cursorCreatedAt !== null, contextualOnly, false);
-  const cursorBinds = state.cursorCreatedAt === null ? [] : [state.cursorCreatedAt, state.cursorCreatedAt, state.cursorId];
+  const pageQuery = schemePageSql(state.cursorRowid > 0, contextualOnly, false);
+  const cursorBinds = state.cursorRowid > 0 ? [state.cursorRowid] : [];
   const page = await env.DB.prepare(pageQuery.sql).bind(...cursorBinds, ...pageQuery.extra).all();
   const rows = (page.results ?? []) as Record<string, unknown>[];
 
@@ -643,7 +655,7 @@ export async function runSchemeBatch(
   let neurons = 0;
   let capped = false;
   const budget = opts.chunkBudget ?? SCHEME_RUN_CHUNK_BUDGET;
-  let reached: { created_at: number; id: string } | null = null;
+  let reached: { rid: number; id: string } | null = null;
   let stalledReason: string | undefined;
   let failedId = state.failedId;
   let failedRuns = state.failedRuns ?? 0;
@@ -653,7 +665,7 @@ export async function runSchemeBatch(
     const source = row.source as string;
     const content = row.content as string;
     const eligible = isContextEligible({ content, source });
-    const mark = { created_at: row.created_at as number, id };
+    const mark = { rid: row.rid as number, id };
 
     if (!state.sources.some(s => needsRewrite(s, target, eligible))) {
       skipped++;
@@ -674,7 +686,7 @@ export async function runSchemeBatch(
     neurons += cents;
 
     try {
-      await rewriteEntry(env, row, config);
+      await rewriteEntry(env, row, config, undefined, planned);
       processed++;
       reached = mark;
       if (failedId === id) { failedId = undefined; failedRuns = 0; }
@@ -699,7 +711,7 @@ export async function runSchemeBatch(
 
   const next: SchemeMigrationState = {
     ...state,
-    cursorCreatedAt: reached?.created_at ?? state.cursorCreatedAt,
+    cursorRowid: reached?.rid ?? state.cursorRowid,
     cursorId: reached?.id ?? state.cursorId,
     processed: state.processed + processed,
     skipped: state.skipped + skipped,
@@ -714,8 +726,8 @@ export async function runSchemeBatch(
   let remaining: number | null;
   if (exhausted && !stalled) remaining = 0;
   else if (opts.count) {
-    const countQuery = schemePageSql(next.cursorCreatedAt !== null, contextualOnly, true);
-    const countBinds = next.cursorCreatedAt === null ? [] : [next.cursorCreatedAt, next.cursorCreatedAt, next.cursorId];
+    const countQuery = schemePageSql(next.cursorRowid > 0, contextualOnly, true);
+    const countBinds = next.cursorRowid > 0 ? [next.cursorRowid] : [];
     const counted = (await env.DB.prepare(countQuery.sql).bind(...countBinds, ...countQuery.extra).first()) as Record<string, number> | null;
     remaining = Number(counted?.count ?? 0);
   } else remaining = null;
@@ -735,7 +747,13 @@ export async function runSchemeBatch(
  * is rebuilt from the fresh row until it holds still. (Compared by value:
  * updated_at is nullable and never backfilled, so it cannot be relied on.)
  */
-async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Readonly<Config>, llmContexts?: readonly string[]): Promise<void> {
+async function rewriteEntry(
+  env: Env,
+  first: Record<string, unknown>,
+  config: Readonly<Config>,
+  llmContexts?: readonly string[],
+  planned?: readonly EmbeddingChunk[],
+): Promise<void> {
   let row = first;
   for (let attempt = 0; attempt < SCHEME_MAX_REBUILDS; attempt++) {
     const oldIds = JSON.parse((row.vector_ids as string) ?? "[]") as string[];
@@ -750,6 +768,8 @@ async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Re
       { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
       // Generated sentences describe the row as first read; a rebuild after an edit falls back to the deterministic prefix.
       attempt === 0 ? llmContexts : undefined,
+      // Built for the row as first read; a rebuild after an edit builds its own.
+      attempt === 0 ? planned : undefined,
     );
     const fresh = (await env.DB.prepare(
       // scope-exempt: one-time re-embed migration: by-id re-read of the row being rebuilt
@@ -757,7 +777,7 @@ async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Re
     ).bind(row.id).first()) as Record<string, unknown> | null;
     // Deleted while rebuilding: its own delete already removed the ids it knew; remove what this write added.
     if (!fresh) {
-      await env.VECTORIZE.deleteByIds(stored.vectorIds);
+      await deleteVectorIds(env, stored.vectorIds);
       return;
     }
     if (fresh.content === row.content && fresh.tags === row.tags && fresh.workspace_id === row.workspace_id && fresh.actor_id === row.actor_id) {
@@ -783,7 +803,7 @@ export const CONTEXT_LLM_BACKFILL_KV_KEY = "contextual-embedding:v1:llm-backfill
 const LLM_MAX_FAILED_NIGHTS = 3;
 
 interface LlmBackfillState {
-  cursorCreatedAt: number | null;
+  cursorRowid: number;
   cursorId: string | null;
   upgraded: number;
   skipped: number;
@@ -802,20 +822,19 @@ export async function runLlmContextBatch(env: Env, config: Readonly<Config> = DE
 
   // The same chunking storeEntry will use, so the generated sentences line up with the chunks.
   const focus = await focusModeAllowed(env, config);
-  let state: LlmBackfillState = { cursorCreatedAt: null, cursorId: null, upgraded: 0, skipped: 0, failedNights: 0 };
+  let state: LlmBackfillState = { cursorRowid: 0, cursorId: null, upgraded: 0, skipped: 0, failedNights: 0 };
   try {
     const raw = await env.OAUTH_KV.get(CONTEXT_LLM_BACKFILL_KV_KEY);
     if (raw) state = { ...state, ...(JSON.parse(raw) as Partial<LlmBackfillState>) };
   } catch { /* unreadable cursor restarts the backfill; an upgraded entry is simply upgraded again */ }
 
-  const page = state.cursorCreatedAt === null
-    ? await env.DB.prepare(pageSql(false)).all()
-    : await env.DB.prepare(pageSql(true)).bind(state.cursorCreatedAt, state.cursorCreatedAt, state.cursorId).all();
+  const llmPage = schemePageSql(state.cursorRowid > 0, true, false);
+  const page = await env.DB.prepare(llmPage.sql).bind(...(state.cursorRowid > 0 ? [state.cursorRowid] : []), ...llmPage.extra).all();
   const rows = (page.results ?? []) as Record<string, unknown>[];
 
   for (const row of rows) {
     const id = row.id as string;
-    const mark = { cursorCreatedAt: row.created_at as number, cursorId: id };
+    const mark = { cursorRowid: row.rid as number, cursorId: id };
     const entry = { id, content: row.content as string, tags: JSON.parse((row.tags as string) ?? "[]") as string[], source: row.source as string, createdAt: row.created_at as number };
     const chunks = isContextEligible(entry) ? buildEmbeddingChunks(entry, config, undefined, focus) : [];
     if (chunks.length < 2 || chunks.length > CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY) {

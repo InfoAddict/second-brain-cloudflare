@@ -111,9 +111,10 @@ describe("migration estimate", () => {
     d1.seed({ id: "b", content: long, createdAt: 2 });
     const ai = makeAI();
     const { env } = makeEnv(d1, ai);
-    const per = buildEmbeddingChunks({ id: "a", content: long, tags: [], source: "api", createdAt: 1 }, cfg).length;
+    const onCfg = { ...cfg, CONTEXTUAL_EMBEDDINGS: "on" as const }; // shipped off
+    const per = buildEmbeddingChunks({ id: "a", content: long, tags: [], source: "api", createdAt: 1 }, onCfg).length;
     expect(per).toBeGreaterThan(chunkText(long).length);
-    const r = await runBatch(env, cfg);
+    const r = await runBatch(env, onCfg);
     // MIGRATION_CHUNK_BUDGET is 20: the second entry only fits if both really cost less than 20
     expect(r.processed).toBe(per * 2 <= 20 ? 2 : 1);
     expect(ai.calls).toHaveLength(r.processed * per);

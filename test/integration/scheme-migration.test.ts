@@ -114,11 +114,11 @@ describe("in-place scheme migration: contextual text", () => {
 
   it("deletes an old chunk id the new set no longer uses, after the new set is written", async () => {
     // an id left in vector_ids by an earlier, longer version of the entry
-    h.index.set("long-1-chunk-9", { metadata: { parentId: "long-1" }, values: [0] });
-    d1.db.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify([...idsOf(d1, "long-1"), "long-1-chunk-9"]), "long-1").run();
+    h.index.set("long-1-chunk-99", { metadata: { parentId: "long-1" }, values: [0] });
+    d1.db.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify([...idsOf(d1, "long-1"), "long-1-chunk-99"]), "long-1").run();
     await drain(h.env, ctx);
-    expect(h.index.has("long-1-chunk-9")).toBe(false);
-    expect(idsOf(d1, "long-1")).not.toContain("long-1-chunk-9");
+    expect(h.index.has("long-1-chunk-99")).toBe(false);
+    expect(idsOf(d1, "long-1")).not.toContain("long-1-chunk-99");
   });
 
   it("stores raw chunk content and leaves entries.content untouched", async () => {
@@ -483,5 +483,40 @@ describe("scheme migration run cost", () => {
     // calls are I/O); the bound is generous and exists to catch a run whose own computation grows.
     expect(ms, `one ${r.chunks}-chunk run took ${ms.toFixed(1)} ms of CPU in this test`).toBeLessThan(60);
     process.stdout.write(`SCHEME_RUN_CPU ${ms.toFixed(1)}ms for ${r.chunks} chunks, ${r.processed} notes\n`);
+  });
+});
+
+describe("scheme migration page query plan", () => {
+  it("is served in rowid order with no sort, with and without a cursor", async () => {
+    const { schemePageQuery } = await import("../../src/migration/embedding");
+    const d1 = makeSqliteD1();
+    for (const [hasCursor, contextualOnly] of [[false, true], [true, true], [false, false], [true, false]] as const) {
+      const q = schemePageQuery(hasCursor, contextualOnly, false);
+      const plan = (await d1.db.prepare(`EXPLAIN QUERY PLAN ${q.sql}`).bind(...(hasCursor ? [1] : []), ...q.extra).all()).results
+        .map(r => String((r as { detail: string }).detail)).join(" | ");
+      expect(plan, plan).not.toMatch(/TEMP B-TREE/i);
+      expect(plan, plan).toMatch(hasCursor ? /SEARCH entries USING INTEGER PRIMARY KEY \(rowid>\?\)/i : /SCAN entries/i);
+    }
+  });
+
+  it("the statement it replaced did sort", async () => {
+    const d1 = makeSqliteD1();
+    const old = `SELECT id FROM entries WHERE tags NOT LIKE '%x%' AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC LIMIT 40`;
+    const plan = (await d1.db.prepare(`EXPLAIN QUERY PLAN ${old}`).bind(1, 1, "a").all()).results.map(r => String((r as { detail: string }).detail)).join(" | ");
+    expect(plan).toMatch(/TEMP B-TREE/i);
+  });
+});
+
+describe("scheme migration builds each entry's chunks once", () => {
+  it("costs, budgets and writes from one built set", async () => {
+    const mod = await import("../../src/capture/contextual");
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 3; i++) await seedIndexed(d1, h, `e${i}`, long(`T${i}`), i + 1);
+    const spy = vi.spyOn(mod, "buildEmbeddingChunks");
+    await drain(h.env, ctx);
+    const forEntries = spy.mock.calls.filter(c => (c[0] as { id: string }).id.startsWith("e")).length;
+    spy.mockRestore();
+    expect(forEntries).toBe(3);
   });
 });
