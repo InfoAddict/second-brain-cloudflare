@@ -10,7 +10,7 @@
  */
 import type { Config } from "../config";
 import {
-  CHUNK_OVERLAP_CHARS,
+  CONTEXT_OVERLAP_CHARS,
   CONTEXT_M3_BODY_MAX_CHARS,
   CONTEXT_PREFIX_MAX_CHARS,
   CONTEXT_SMALL_BODY_MIN_CHARS,
@@ -148,12 +148,12 @@ export function buildEmbeddingChunks(
 
   if (config.EMBEDDING_MODEL === M3) {
     // bge-m3's window is far larger than any chunk, so no fitting.
-    raw = chunkText(entry.content, CONTEXT_M3_BODY_MAX_CHARS, CHUNK_OVERLAP_CHARS);
+    raw = chunkText(entry.content, CONTEXT_M3_BODY_MAX_CHARS, CONTEXT_OVERLAP_CHARS);
   } else {
     // Shrink the body uniformly until the worst prefixed chunk fits; the whole text stays covered by extra chunks.
     let body = CONTEXT_SMALL_BODY_START_CHARS;
     for (;;) {
-      raw = chunkText(entry.content, body, CHUNK_OVERLAP_CHARS);
+      raw = chunkText(entry.content, body, CONTEXT_OVERLAP_CHARS);
       const n = raw.length;
       const worst = Math.max(...raw.map((c, i) => estimateBgeSmallTokens(`${prefixFor(i, Math.max(n, 99), 0)}\n${c}`)));
       if (worst <= CONTEXT_SMALL_TARGET_TOKENS || body <= CONTEXT_SMALL_BODY_MIN_CHARS) break;

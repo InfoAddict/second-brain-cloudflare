@@ -282,6 +282,62 @@ authoritative answers and no fewer than without the reranker, at most one
 authority-rank regression where the frozen gate says zero) runs only under
 `EVAL_LOCAL_MODELS=1` (`npm run test:eval:local-models`). `prepare` is the only path that runs the model (locally, pinned open
 weights). Real Workers AI latency and billing are unmeasured: no account is used.
+## Contextual chunk embeddings and the embedding scheme
+
+A memory over 1,600 characters is split into chunks and every chunk is its own
+vector. A fact buried in the middle of a long note is a small part of one large
+chunk, so its vector says little about it. `capture/contextual.ts` therefore
+cuts eligible memories (more than one effective chunk, not a mirrored source)
+into focus chunks of about 500 characters with 50 of overlap, and sends each
+to the embedder behind a transient prefix built from the entry itself:
+`[Memory: <first line>. Project <p>. Topics <t>. Source <s>. Saved <UTC date>.
+Part i of n.]`, capped at 180 characters. Only the embedding input carries the
+prefix: `entries.content`, FTS, and Vectorize `metadata.content` stay raw, so
+snippets, evidence scoring and lexical recall never see it. Single-chunk and
+mirrored entries embed exactly as before, and a failure building context falls
+back to plain chunks without failing the save. Under bge-small, a conservative
+token estimate keeps prefix plus chunk within 480 of the 512-token window by
+splitting further, never by truncating.
+
+Cost: a long note yields about 2.6 times as many vectors as before (7.1
+against 2.7 per long note on `core-1k`), so free-tier Vectorize capacity (5M
+stored dimensions, about 13,000 bge-small vectors) falls by roughly 12 percent
+at 3.5 percent long notes and by more as the share of long notes grows.
+Write-time cost is one embedding call per chunk, at bge-small rates about 0.74
+neurons per 400-token chunk. Switches: `CONTEXTUAL_EMBEDDINGS`
+(on by default), and `CONTEXTUAL_EMBEDDING_LLM` (off; see below).
+
+**Scheme versioning.** `embedding/scheme.ts` derives a scheme id from config
+(1 is the pre-T-0042 raw chunk with mean pooling; contextual adds 1, cls
+pooling adds 2). Vectors written under any other scheme carry `metadata.scheme`,
+plus `contextualized` and `contextSource` for contextual ones. `EMBEDDING_POOLING`
+exists for the eval only: cls pooling was measured and rejected (see the eval
+section), and it is not settable from KV or PATCH /config, because it changes
+the vector space and a brain that flipped it without migrating would rank
+queries against vectors from another space.
+
+**In-place migration** (`runSchemeBatch` in `migration/embedding.ts`). Existing
+brains keep plain vectors until the nightly job (12 chunks a night; two KV
+reads once idle) or `POST /migration/scheme` (loop until `done`; `GET` shows the
+ledger) rewrites them. The ledger `migration:embedding-scheme` records the model,
+the target scheme, every scheme a vector may still be in, and a keyset cursor
+`(created_at, id)`, so it resumes from where it stopped and reuses the model
+migration's page query, chunk budget, quota recognition and no-progress stop.
+Each entry is rewritten with deterministic ids (`<id>` / `<id>-chunk-<i>`), so a
+crash before the cursor moves just repeats it; chunk ids the new set no longer
+uses are deleted only afterwards; and the row is re-read by content and tags
+afterwards, rebuilding it if a user edit landed in between. Recall needs no
+change while it runs: contextual text does not move the vector space, so plain
+and contextual vectors rank against one query vector, and a chunk of the same
+entry is collapsed by `parentId`. Switching contextual embeddings off stops new
+contextual vectors and pauses the backfill; it never rewrites. A model
+migration pauses this one and settles its ledger when it finishes. The
+ledger's pooling branch (`queryPoolings`) is the design for a future pooling
+change; recall does not use it yet because nothing that changes pooling ships.
+
+The optional generated tier (`CONTEXTUAL_EMBEDDING_LLM`, off) replaces the
+deterministic prefix with one model sentence per chunk. It has no eval variant
+yet because the eval records no generation calls; it stays off until one does.
 
 ## Recall eval (developer tooling)
 

@@ -25,9 +25,9 @@ import { schemeOf } from "../../src/embedding/scheme";
 import { chunkText } from "../../src/text/chunk";
 import type { Env } from "../../src/env";
 
-const legacy: Config = { ...DEFAULTS };
+const legacy: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "off" };
 const ctx: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" };
-const cls: Config = { ...DEFAULTS, EMBEDDING_POOLING: "cls" };
+const cls: Config = { ...legacy, EMBEDDING_POOLING: "cls" };
 
 const para = (i: number) => `Rollout step ${i} is owned by team ${i * 7} and reviewed weekly.`;
 const long = (tag: string, n = 3600) => `${tag} programme notes. ${Array.from({ length: 200 }, (_, i) => para(i)).join(" ")}`.slice(0, n);

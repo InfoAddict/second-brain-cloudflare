@@ -189,3 +189,39 @@ describe("resolveConfig() validation", () => {
     expect(Object.isFrozen(config)).toBe(true);
   });
 });
+
+describe("embedding scheme switches (T-0042, T-0077)", () => {
+  it("ships contextual embeddings on, the generated tier off, and mean pooling", () => {
+    expect(DEFAULTS.CONTEXTUAL_EMBEDDINGS).toBe("on");
+    expect(DEFAULTS.CONTEXTUAL_EMBEDDING_LLM).toBe("off");
+    expect(DEFAULTS.EMBEDDING_POOLING).toBe("mean");
+  });
+
+  it("degrades a malformed switch to its default instead of trusting it", async () => {
+    const { env, seed } = envWithKV();
+    await seed({ CONTEXTUAL_EMBEDDINGS: "yes", CONTEXTUAL_EMBEDDING_LLM: "true" });
+    const config = await resolveConfig(env);
+    expect(config.CONTEXTUAL_EMBEDDINGS).toBe("on");
+    expect(config.CONTEXTUAL_EMBEDDING_LLM).toBe("off");
+  });
+
+  it("honors an explicit off", async () => {
+    const { env, seed } = envWithKV();
+    await seed({ CONTEXTUAL_EMBEDDINGS: "off" });
+    expect((await resolveConfig(env)).CONTEXTUAL_EMBEDDINGS).toBe("off");
+  });
+
+  it("never reads pooling from KV: it changes the vector space", async () => {
+    const { env, seed } = envWithKV();
+    await seed({ EMBEDDING_POOLING: "cls" });
+    expect((await resolveConfig(env)).EMBEDDING_POOLING).toBe("mean");
+  });
+
+  it("refuses to write pooling or a malformed switch", async () => {
+    const { writeOverrides } = await import("../../src/config");
+    const { env } = envWithKV();
+    expect(await writeOverrides(env, { EMBEDDING_POOLING: "cls" })).toMatchObject({ ok: false });
+    expect(await writeOverrides(env, { CONTEXTUAL_EMBEDDINGS: "maybe" })).toMatchObject({ ok: false });
+    expect(await writeOverrides(env, { CONTEXTUAL_EMBEDDINGS: "off" })).toEqual({ ok: true });
+  });
+});

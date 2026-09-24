@@ -78,12 +78,15 @@ export const DEFAULTS = {
   INSIGHT_LLM_MODEL: "@cf/openai/gpt-oss-120b",
   // Pooling sent to the bge-en embedders ("mean" sends no field, Workers AI's
   // default). It changes the vector space, so it is part of the embedding
-  // scheme (src/embedding/scheme.ts): changing it re-embeds the brain.
+  // scheme (src/embedding/scheme.ts) and NOT settable from KV or PATCH /config:
+  // a brain that flipped it without re-embedding would rank queries against
+  // vectors from another space. cls was measured and rejected (T-0077); the
+  // key exists so the eval can build a cls index.
   EMBEDDING_POOLING: "mean",
   // Whether each chunk of a multi-chunk memory is embedded with a transient
   // entry-level prefix (src/capture/contextual.ts). Off stops new contextual
   // vectors and pauses the backfill; existing vectors are left as they are.
-  CONTEXTUAL_EMBEDDINGS: "off",
+  CONTEXTUAL_EMBEDDINGS: "on",
   // Optional nightly tier that swaps the deterministic prefix for one
   // model-written sentence per chunk. Capped at CONTEXT_LLM_CHUNKS_PER_NIGHT.
   CONTEXTUAL_EMBEDDING_LLM: "off",
@@ -226,6 +229,9 @@ export const RULES: Record<ConfigKey, Rule> = {
   PUSH_CONTACT: { kind: "string" },
 };
 
+/** Keys the shipped value of which is fixed: not read from KV and refused on write. */
+const LOCKED_KEYS: ReadonlySet<ConfigKey> = new Set<ConfigKey>(["EMBEDDING_POOLING"]);
+
 /** String settings that accept only these values. Anything else degrades to the default (resolve) or is refused (write). */
 const ENUM_VALUES: Partial<Record<ConfigKey, readonly string[]>> = {
   EMBEDDING_POOLING: ["mean", "cls"],
@@ -357,6 +363,7 @@ export async function resolveConfig(env: Env): Promise<Readonly<Config>> {
     // Unknown keys are ignored rather than carried through: they may be a
     // setting removed in a later release, or a typo in a hand-edited blob.
     if (!(key in DEFAULTS)) continue;
+    if (LOCKED_KEYS.has(key as ConfigKey)) continue;
     const { value: safe, note } = coerce(key as ConfigKey, value);
     (resolved as Record<string, unknown>)[key] = safe;
     if (note) notes.push(note);
@@ -406,6 +413,7 @@ export async function readOverrides(env: Env): Promise<Partial<Config>> {
 /** Strict per-key check. Returns an error message, or null when acceptable. */
 function validateStrict(key: string, value: unknown): string | null {
   if (!(key in DEFAULTS)) return `${key} is not a known setting`;
+  if (LOCKED_KEYS.has(key as ConfigKey)) return `${key} is not settable: it changes the vector space and needs a re-embed`;
   const rule = RULES[key as ConfigKey];
 
   if (rule.kind === "string") {

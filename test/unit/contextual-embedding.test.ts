@@ -6,11 +6,12 @@ import {
 } from "../../src/capture/contextual";
 import { storeEntry } from "../../src/capture/store";
 import { DEFAULTS, type Config } from "../../src/config";
-import { CHUNK_MAX_CHARS, CONTEXT_PREFIX_MAX_CHARS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
+import { CHUNK_MAX_CHARS, CONTEXT_PREFIX_MAX_CHARS, CONTEXT_SMALL_BODY_START_CHARS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
 import { chunkText } from "../../src/text/chunk";
 import { makeTestEnv } from "../helpers/make-env";
 
 const on: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" };
+const off: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "off" };
 const M3 = "@cf/baai/bge-m3";
 const CREATED = Date.UTC(2026, 8, 23, 23, 59);
 
@@ -57,7 +58,7 @@ describe("buildDeterministicContext", () => {
 describe("buildEmbeddingChunks", () => {
   it("returns today's chunks byte for byte when the switch is off", () => {
     const e = entry();
-    const chunks = buildEmbeddingChunks(e, DEFAULTS);
+    const chunks = buildEmbeddingChunks(e, off);
     expect(chunks.map(c => c.embeddingText)).toEqual(chunkText(e.content));
     expect(chunks.every(c => !c.contextualized && c.contextSource === "none")).toBe(true);
   });
@@ -99,12 +100,17 @@ describe("buildEmbeddingChunks", () => {
     }
   });
 
-  it("re-chunks bge-m3 at the larger body and skips token fitting", () => {
-    const e = entry({ content: longText(5000) });
-    const small = buildEmbeddingChunks(e, on);
-    const m3 = buildEmbeddingChunks(e, { ...on, EMBEDDING_MODEL: M3 });
-    expect(m3.length).toBeLessThan(small.length);
-    expect(Math.max(...m3.map(c => c.rawContent.length))).toBeGreaterThan(1200);
+  it("cuts both models into focus chunks well under the plain 1,600 characters", () => {
+    const e = entry({ content: longText(3200) });
+    for (const model of [DEFAULTS.EMBEDDING_MODEL, M3]) {
+      const chunks = buildEmbeddingChunks(e, { ...on, EMBEDDING_MODEL: model });
+      expect(Math.max(...chunks.map(c => c.rawContent.length))).toBeLessThanOrEqual(CONTEXT_SMALL_BODY_START_CHARS);
+      expect(chunks.length).toBeGreaterThan(chunkText(e.content).length);
+    }
+  });
+
+  it("keeps vector growth for a long note bounded: at most 8 vectors for 3,200 characters", () => {
+    expect(buildEmbeddingChunks(entry({ content: longText(3200) }), on).length).toBeLessThanOrEqual(8);
   });
 
   it("fits token-dense text under the BGE Small target by splitting, never truncating", () => {
@@ -173,7 +179,7 @@ describe("storeEntry with contextual embeddings", () => {
 
   it("writes single-chunk entries exactly as before, with no scheme fields when the config is legacy", async () => {
     const short = entry({ content: "a short note" });
-    const { vectors } = await run(DEFAULTS, short);
+    const { vectors } = await run(off, short);
     expect(vectors).toHaveLength(1);
     expect(vectors[0].id).toBe("e1");
     expect(vectors[0].metadata).not.toHaveProperty("scheme");
@@ -209,11 +215,11 @@ describe("storeEntry with contextual embeddings", () => {
   });
 
   it("sends the cls pooling field only when configured, and never to bge-m3", async () => {
-    const cls = await run({ ...DEFAULTS, EMBEDDING_POOLING: "cls" }, entry({ content: "hello" }));
+    const cls = await run({ ...off, EMBEDDING_POOLING: "cls" }, entry({ content: "hello" }));
     expect((cls.embed.mock.calls[0][1] as any).pooling).toBe("cls");
-    const mean = await run(DEFAULTS, entry({ content: "hello" }));
+    const mean = await run(off, entry({ content: "hello" }));
     expect(mean.embed.mock.calls[0][1]).toEqual({ text: ["hello"] });
-    const m3 = await run({ ...DEFAULTS, EMBEDDING_MODEL: M3, EMBEDDING_POOLING: "cls" }, entry({ content: "hello" }));
+    const m3 = await run({ ...off, EMBEDDING_MODEL: M3, EMBEDDING_POOLING: "cls" }, entry({ content: "hello" }));
     expect(m3.embed.mock.calls[0][1]).toEqual({ text: ["hello"], truncate_inputs: true });
   });
 });
