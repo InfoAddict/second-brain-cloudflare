@@ -59,6 +59,7 @@ function harness(d1: SqliteD1, opts: { failFrom?: number; onUpsert?: (n: number)
         return { count: vs.length };
       }),
       deleteByIds: vi.fn(async (ids: string[]) => { for (const id of ids) index.delete(id); }),
+      getByIds: vi.fn(async (ids: string[]) => ids.filter(id => index.has(id)).map(id => ({ id, values: index.get(id)!.values, metadata: index.get(id)!.metadata }))),
     },
   } as unknown as Env;
   return { env, index, embeds, kv };
@@ -518,5 +519,49 @@ describe("scheme migration builds each entry's chunks once", () => {
     const forEntries = spy.mock.calls.filter(c => (c[0] as { id: string }).id.startsWith("e")).length;
     spy.mockRestore();
     expect(forEntries).toBe(3);
+  });
+});
+
+describe("scheme migration skips entries already at the target scheme", () => {
+  it("does not rewrite an entry a live write already stored contextually while the migration was running", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "old-1", long("Old1"), 1);
+    // written after the switch was turned on: the live write path already used the target scheme
+    d1.seed({ id: "live", content: long("Live"), createdAt: 2 });
+    await storeEntry(h.env, "live", long("Live"), [], "api", 2, ctx, { workspaceId: "", actorId: "" });
+    await seedIndexed(d1, h, "old-2", long("Old2"), 3);
+    h.embeds.length = 0;
+    const liveVectors = new Map([...h.index].filter(([k]) => k.startsWith("live")));
+    const r = await runSchemeBatch(h.env, ctx);
+    expect(r).toMatchObject({ processed: 2, skipped: 1, done: true });
+    expect(h.embeds.some(e => e.text.includes("Live programme"))).toBe(false);
+    for (const [k, v] of liveVectors) expect(h.index.get(k)).toBe(v);
+    for (const id of ["old-1", "old-2"]) for (const v of idsOf(d1, id)) expect(h.index.get(v)?.metadata.scheme).toBe(2);
+  });
+
+  it("still rewrites an entry whose vectors are missing, unreadable or at another scheme", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "a", long("Alpha"), 1);
+    await seedIndexed(d1, h, "b", long("Beta"), 2);
+    // a's first vector vanished; b's lookup throws
+    h.index.delete(idsOf(d1, "a")[0]);
+    (h.env.VECTORIZE as { getByIds: unknown }).getByIds = vi.fn(async (ids: string[]) => { if (ids[0].startsWith("b")) throw new Error("down"); return []; });
+    h.embeds.length = 0;
+    const r = await runSchemeBatch(h.env, ctx);
+    expect(r).toMatchObject({ processed: 2, skipped: 0 });
+  });
+
+  it("checks with one lookup per candidate entry, and spends no chunk budget on a skipped one", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    d1.seed({ id: "live", content: long("Live"), createdAt: 1 });
+    await storeEntry(h.env, "live", long("Live"), [], "api", 1, ctx, { workspaceId: "", actorId: "" });
+    await seedIndexed(d1, h, "old", long("Old"), 2);
+    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1 });
+    expect(r.processed).toBe(1);
+    expect(r.skipped).toBe(1);
+    expect((h.env.VECTORIZE as unknown as { getByIds: ReturnType<typeof vi.fn> }).getByIds).toHaveBeenCalledTimes(2);
   });
 });

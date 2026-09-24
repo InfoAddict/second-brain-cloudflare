@@ -44,7 +44,7 @@ import { deleteStaleVectors, storeEntry } from "../capture/store";
 import { deleteVectorIds } from "../vectorize/batch";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { buildEmbeddingChunks, estimateBgeSmallTokens, generateChunkContext, isContextEligible, type EmbeddingChunk } from "../capture/contextual";
-import { LEGACY_SCHEME, poolingOf, schemeOf } from "../embedding/scheme";
+import { LEGACY_SCHEME, poolingOf, schemeOf, vectorScheme } from "../embedding/scheme";
 import {
   CHUNK_MAX_CHARS,
   CONTEXT_LLM_CHUNKS_PER_NIGHT,
@@ -673,6 +673,14 @@ export async function runSchemeBatch(
       continue;
     }
 
+    // A live write since the switch went on already stored this entry under the target scheme: rewriting it
+    // would repeat the embeds it just paid for. One lookup of its first vector says so.
+    if (await vectorsAtScheme(env, row, target)) {
+      skipped++;
+      reached = mark;
+      continue;
+    }
+
     const tags = JSON.parse((row.tags as string) ?? "[]") as string[];
     const planned = buildEmbeddingChunks({ id, content, tags, source, createdAt: row.created_at as number }, config, undefined, focus);
     const cost = planned.length;
@@ -737,6 +745,22 @@ export async function runSchemeBatch(
     processed, skipped, failed, chunks, remaining, done, stalled, neurons, capped,
     ...(stalled ? { stalledReason: stalledReason ?? "failing" } : {}),
   };
+}
+
+/**
+ * Whether an entry's vectors are already at `scheme`, judged by its first vector's
+ * metadata (a write stores every chunk of an entry together, so one says it for all).
+ * Missing, unreadable or unstamped vectors count as not: the entry is rewritten.
+ */
+async function vectorsAtScheme(env: Env, row: Record<string, unknown>, scheme: number): Promise<boolean> {
+  try {
+    const first = (JSON.parse((row.vector_ids as string) ?? "[]") as string[])[0];
+    if (!first) return false;
+    const [vector] = await env.VECTORIZE.getByIds([first]);
+    return vectorScheme(vector?.metadata as Record<string, unknown> | undefined) === scheme && !!vector;
+  } catch {
+    return false;
+  }
 }
 
 /**
