@@ -43,6 +43,12 @@ describe("the eval variants", () => {
     expect(v.targetCategories).toEqual(["paraphrase", "multi-hop"]);
     expect(v.config).toBeUndefined();
   });
+  it("rerank-auto is the shipped mode with pre-registered targets, so the ship gate needs no --target flag", () => {
+    const v = getVariant("rerank-auto");
+    expect(v.config).toBeUndefined();
+    expect(v.internal).toBeUndefined();
+    expect(v.targetCategories).toEqual(["paraphrase", "multi-hop"]);
+  });
   it("baseline is the shipped default; no-rerank and the ablations pin the mode off", () => {
     expect(getVariant("baseline").config).toBeUndefined();
     for (const name of ["no-rerank", "like", "fts-orderless", "dense-only", "keyword-only"]) expect(getVariant(name).config?.RERANK_MODE).toBe("off");
