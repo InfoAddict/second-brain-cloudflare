@@ -83,6 +83,17 @@ describe("evaluateGate", () => {
     expect(r?.detail).toMatch(/neuron source differs/);
   });
 
+  it("reports producers, neuron source and tag arm together when all three differ", () => {
+    const mk = (revision: string): EmbeddingProducer =>
+      ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision, dtype: "fp32" });
+    const a = { ...report("baseline"), producers: { m: mk("a") }, neuronSource: "projected" as const, llmTags: "stand-in" as const };
+    const b = { ...report("v"), producers: { m: mk("b") }, neuronSource: "provider" as const, llmTags: "empty" as const };
+    const detail = evaluateGate(a, b).rules.find(x => x.rule === "comparable")?.detail ?? "";
+    expect(detail).toMatch(/model producers differ/);
+    expect(detail).toMatch(/neuron source differs/);
+    expect(detail).toMatch(/LLM tag arm differs/);
+  });
+
   it("is INCONCLUSIVE when the LLM tag arm differs, or is recorded on one side only", () => {
     for (const [a, b] of [["stand-in", "empty"], ["stand-in", undefined]] as const) {
       const r = evaluateGate({ ...report("baseline"), llmTags: a }, { ...report("v"), llmTags: b }).rules.find(x => x.rule === "comparable");
