@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { SCHEME_RUN_MAX_ENTRIES, schemePageQuery } from "../../src/migration/embedding";
 import { openD1 } from "./d1";
@@ -43,6 +45,9 @@ describe.skipIf(!process.env.EVAL_WORKERD)("scheme migration page query on worke
       expect(stmt.meta.rows_read as number, "the old page read").toBeGreaterThan(mid.read * 3);
     } finally {
       await d1.close();
+      // miniflare removes its own temp directory after dispose returns; a big database takes a moment, and the suite's
+      // leak check runs right after the file, so wait for it to go.
+      for (let i = 0; i < 100 && readdirSync(tmpdir()).some(n => n.startsWith("miniflare-")); i++) await new Promise(r => setTimeout(r, 100));
     }
   }, 300_000);
 });
