@@ -82,6 +82,7 @@ export async function sha256File(path) {
 export async function downloadPinned({ url, dest, sha256, fetchImpl = fetch }) {
   if (existsSync(dest) && (await sha256File(dest)) === sha256) return;
   const part = `${dest}.part`;
+  rmSync(dest, { force: true }); // unverified: a failed fetch must not leave a usable-looking file
   const res = await fetchImpl(url, { redirect: "follow" });
   if (!res.ok || !res.body) throw new Error(`download failed: ${res.status} ${url}`);
   const h = createHash("sha256");
@@ -127,7 +128,12 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 export function normalizeScifact({ base, out }) {
   resetDerived(out);
   const docs = readLines(resolve(base, "corpus.jsonl")).map(l => JSON.parse(l));
-  const ids = new Set(docs.map(d => String(d.doc_id)));
+  const ids = new Set();
+  for (const d of docs) {
+    const id = String(d.doc_id);
+    if (ids.has(id)) throw new Error(`duplicate corpus doc id ${id}`);
+    ids.add(id);
+  }
   const queries = [], qrelRows = [], seen = new Set();
   for (const split of ["train", "dev"]) for (const line of readLines(resolve(base, `claims_${split}.jsonl`))) {
     const c = JSON.parse(line);
@@ -195,7 +201,10 @@ export async function normalizeMiracl({ topicsPath, qrelsPath, shardPaths, out, 
   for (const shard of shardPaths) for await (const line of gzipLines(shard)) {
     if (!line) continue;
     const d = JSON.parse(line);
-    if (judgedIds.has(d.docid)) judgedDocs.set(d.docid, `${d.title}. ${d.text}`);
+    if (judgedIds.has(d.docid)) {
+      if (judgedDocs.has(d.docid)) throw new Error(`duplicate passage id ${d.docid} in the corpus shards`);
+      judgedDocs.set(d.docid, `${d.title}. ${d.text}`);
+    }
   }
   for (const q of chosen) for (const j of judgments.get(q)) {
     if (j.score > 0 && !judgedDocs.has(j.docid)) throw new Error(`positive passage ${j.docid} for query ${q} not found in the corpus shards`);

@@ -58,6 +58,21 @@ describe("downloadPinned", () => {
     expect(readFileSync(dest)).toEqual(body);
   });
 
+  it("removes a stale destination and the .part file when the re-download also mismatches", async () => {
+    const dest = join(tmp("dl-"), "f.bin");
+    writeFileSync(dest, "corrupt");
+    await expect(downloadPinned({ url: "https://example.test/f", dest, sha256: sha(body), fetchImpl: async () => new Response("still wrong", { status: 200 }) })).rejects.toThrow(/checksum/i);
+    expect(existsSync(dest)).toBe(false);
+    expect(existsSync(`${dest}.part`)).toBe(false);
+  });
+
+  it("removes a stale destination when the re-download fails outright", async () => {
+    const dest = join(tmp("dl-"), "f.bin");
+    writeFileSync(dest, "corrupt");
+    await expect(downloadPinned({ url: "https://example.test/f", dest, sha256: sha(body), fetchImpl: async () => new Response("no", { status: 503 }) })).rejects.toThrow(/503/);
+    expect(existsSync(dest)).toBe(false);
+  });
+
   it("fails on a non-200 response", async () => {
     const dest = join(tmp("dl-"), "f.bin");
     await expect(downloadPinned({ url: "https://example.test/f", dest, sha256: sha(body), fetchImpl: async () => new Response("no", { status: 404 }) })).rejects.toThrow(/404/);
@@ -104,6 +119,12 @@ describe("normalizeScifact", () => {
     expect(() => normalizeScifact({ base, out: tmp("scifact-out-") })).toThrow(/99/);
   });
 
+  it("rejects duplicate corpus doc ids", () => {
+    const base = source();
+    writeFileSync(join(base, "corpus.jsonl"), [1, 2, 1].map(doc_id => JSON.stringify({ doc_id, title: "T", abstract: ["a"] })).join("\n"));
+    expect(() => normalizeScifact({ base, out: tmp("scifact-out-") })).toThrow(/duplicate.*doc.*1/i);
+  });
+
   it("rejects a claim id repeated across train and dev", () => {
     const base = source();
     writeFileSync(join(base, "claims_dev.jsonl"), JSON.stringify({ id: 10, claim: "c", evidence: { "1": [{ sentences: [0], label: "SUPPORT" }] } }));
@@ -142,6 +163,10 @@ describe("normalizeMiracl", () => {
       .then((counts: { docs: number; queries: number; judgedDocs: number; distractors: number; lengthAuc: number }) => ({ out, counts }));
   };
   const corpus = (out: string) => lines(join(out, "corpus.jsonl")).map(l => JSON.parse(l) as { id: string; text: string });
+
+  it("rejects a judged passage id that appears twice in the shards", async () => {
+    await expect(run(fixture([{ docid: "1003#0", title: "T", text: "あ".repeat(12) }]))).rejects.toThrow(/duplicate.*1003#0/i);
+  });
 
   it("keeps positives-bearing queries, every judged passage, and fills up to maxDocs with distractors", async () => {
     const { out, counts } = await run(fixture());
