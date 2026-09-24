@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
 import {
   FTS_MATCH_BUDGET,
+  FTS_SHORT_TOKEN_SAMPLE,
   KEYWORD_MAX_TOKENS,
   MAX_QUERY_TERMS,
   QUERY_SATURATION_FRACTION,
@@ -14,7 +15,7 @@ import { extractHashtags } from "../text/hashtags";
 import { isTopicTag } from "../compression/eligibility";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { deterministicVariants } from "./query-profile";
-import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveRows } from "./fts";
+import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsEligibleToken, ftsMatchQuery, ftsReady, ftsShortToken, isFtsLiveRows } from "./fts";
 
 /**
  * `ctx` is optional only so this stays callable from tests and any future internal
@@ -68,11 +69,17 @@ function rankAndRebuild(
   tokensOf: Map<string, string[]>,
   df: Map<string, number>,
   total: number,
+  // Terms whose df is a sampled guess, not a count (T-0074's short-token sample). They fill
+  // slots the counted terms leave, never take one from them: a sample of the
+  // newest rows can be wrong about the whole corpus in either direction.
+  estimated: ReadonlySet<string> = new Set(),
 ): string {
   let candidates = uniq.filter(t => (df.get(t) ?? 0) / total <= QUERY_SATURATION_FRACTION);
   if (!candidates.length) candidates = uniq;
   const keep = new Set(
-    [...candidates].sort((a, b) => (df.get(a) ?? 0) - (df.get(b) ?? 0)).slice(0, MAX_QUERY_TERMS)
+    [...candidates]
+      .sort((a, b) => Number(estimated.has(a)) - Number(estimated.has(b)) || (df.get(a) ?? 0) - (df.get(b) ?? 0))
+      .slice(0, MAX_QUERY_TERMS)
   );
   const rebuilt = [...new Set(content.filter(w => tokensOf.get(w)!.some(t => keep.has(t))))];
   return rebuilt.length ? rebuilt.join(" ") : content.join(" ");
@@ -193,6 +200,28 @@ function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | nul
 }
 
 /**
+ * T-0074: a too-short token's df, estimated from the newest
+ * FTS_SHORT_TOKEN_SAMPLE readable rows. The index cannot count it and the
+ * exact count reads the whole partition. The sample is a bounded read that
+ * usually tells a saturated substring ("io", "am") from a specific word ("ox",
+ * a two-character CJK word), but it sees only recent rows, so on a corpus whose
+ * recent rows differ from the rest it can be wrong either way. That is why
+ * rankAndRebuild never lets it outrank a counted term.
+ */
+function shortTermSampleStmt(env: Env, terms: string[], bounds: Readonly<TimeBounds>, scope: ScopeClause | null) {
+  const conds: string[] = [];
+  const timeBindings: number[] = [];
+  if (bounds.after !== undefined) { conds.push("created_at >= ?"); timeBindings.push(bounds.after); }
+  if (bounds.before !== undefined) { conds.push("created_at < ?"); timeBindings.push(bounds.before); }
+  if (scope) conds.push(scope.clause);
+  const sums = terms.map((_, i) => `COALESCE(SUM(CASE WHEN content LIKE ? ${CONTENT_LIKE_ESCAPE} THEN 1 ELSE 0 END), 0) AS d${i}`).join(", ");
+  // scope-checked: the caller's clause IS applied when an identity is present — it is pushed into `conds` above; the lexer cannot see into a JS-assembled fragment
+  return env.DB.prepare(
+    `SELECT COUNT(*) AS n, ${sums} FROM (SELECT content FROM entries${conds.length ? ` WHERE ${conds.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?)`
+  ).bind(...terms.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), FTS_SHORT_TOKEN_SAMPLE);
+}
+
+/**
  * T-0059/T-0065: df/total via the FTS index instead of a full LIKE scan.
  * No time bounds (the common case): entry_counts' total is exact and O(1),
  * so total, every per-term count, and the liveness check ride in ONE batch
@@ -205,6 +234,7 @@ function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | nul
  */
 async function distillViaFts(
   dfTerms: string[],
+  shortTerms: string[],
   env: Env,
   bounds: Readonly<TimeBounds>,
   scope: ScopeClause | null,
@@ -220,6 +250,7 @@ async function distillViaFts(
       env.DB.prepare(FTS_LIVENESS_SQL),
       entryCountsTotalStmt(env, scope),
       ...dfTerms.map(t => ftsTermCountStmtSqlCap(env, t, scope)),
+      ...(shortTerms.length ? [shortTermSampleStmt(env, shortTerms, bounds, scope)] : []),
     ]);
     liveness = results[0].results as { name: string; sql: string | null }[] | undefined;
     const totalRow = results[1].results?.[0] as Record<string, number> | undefined;
@@ -231,7 +262,10 @@ async function distillViaFts(
     total = scoped.total;
     if (!isFtsLiveRows(liveness) || !total) return null;
     const cap = saturationCap(total);
-    countResults = await env.DB.batch(dfTerms.map(t => ftsTermCountStmt(env, t, bounds, scope, cap)));
+    countResults = await env.DB.batch([
+      ...dfTerms.map(t => ftsTermCountStmt(env, t, bounds, scope, cap)),
+      ...(shortTerms.length ? [shortTermSampleStmt(env, shortTerms, bounds, scope)] : []),
+    ]);
   }
 
   if (!isFtsLiveRows(liveness) || !total) return null;
@@ -239,6 +273,12 @@ async function distillViaFts(
     const row = countResults[i].results?.[0] as Record<string, number> | undefined;
     return [t, (row?.n as number) ?? 0];
   }));
+  if (shortTerms.length) {
+    const sample = countResults[dfTerms.length].results?.[0] as Record<string, number> | undefined;
+    const n = sample?.n ?? 0;
+    // Laplace-smoothed so an unseen token reads as rare-but-possible, not as absent from the corpus (which would inflate its IDF past any counted term's).
+    shortTerms.forEach((t, i) => df.set(t, Math.min(total, Math.ceil((((sample?.[`d${i}`] ?? 0) + 1) * total) / (n + 2)))));
+  }
   return { df, total };
 }
 
@@ -287,22 +327,29 @@ export async function distillToRareTerms(
   // T-0059: prefer the FTS index over the full LIKE scan when it is live and
   // every term can be counted through it with no risk of a different answer
   // than LIKE would give (ftsCountSafeToken — LIKE folds ASCII case only,
-  // trigram folds Unicode case). Any disqualifier, or a thrown error, falls
-  // through to the existing LIKE statement below, unchanged.
-  if (dfTerms.every(t => ftsEligibleToken(t) && ftsCountSafeToken(t)) && await ftsReady(env)) {
+  // trigram folds Unicode case). T-0074: a term too short for the index is not
+  // a disqualifier when other terms can be counted; the scan it would force
+  // reads the whole partition, so its df is sampled from the newest rows instead
+  // (shortTermSampleStmt).
+  // Any other disqualifier, or a thrown error, falls through to the existing
+  // LIKE statement below, unchanged.
+  const shortTerms = dfTerms.filter(ftsShortToken);
+  const countTerms = dfTerms.filter(t => !ftsShortToken(t));
+  if (countTerms.length && countTerms.every(t => ftsEligibleToken(t) && ftsCountSafeToken(t)) && await ftsReady(env)) {
     try {
-      const viaFts = await distillViaFts(dfTerms, env, bounds, scope);
+      const viaFts = await distillViaFts(countTerms, shortTerms, env, bounds, scope);
       // Every original term saturated and at least one count hit its LIMIT
       // cap: the capped counts can no longer order the terms against each
       // other, so the FTS ranking could differ from LIKE's. Discard them and
       // count exactly through the LIKE fallback — the byte-identical
       // statement below.
+      const counted = uniq.filter(t => !ftsShortToken(t));
       const unrankable = !!viaFts
-        && uniq.every(t => (viaFts.df.get(t) ?? 0) / viaFts.total > QUERY_SATURATION_FRACTION)
-        && uniq.some(t => (viaFts.df.get(t) ?? 0) === saturationCap(viaFts.total));
+        && counted.every(t => (viaFts.df.get(t) ?? 0) / viaFts.total > QUERY_SATURATION_FRACTION)
+        && counted.some(t => (viaFts.df.get(t) ?? 0) === saturationCap(viaFts.total));
       if (viaFts && !unrankable) {
         const { df, total } = viaFts;
-        return { query: rankAndRebuild(uniq, content, tokensOf, df, total), df, total, distillSource: "fts" };
+        return { query: rankAndRebuild(uniq, content, tokensOf, df, total, new Set(shortTerms)), df, total, distillSource: "fts" };
       }
     } catch (e) {
       console.error("FTS distillation count failed (degrading to LIKE):", e);
@@ -310,6 +357,10 @@ export async function distillToRareTerms(
   }
 
   try {
+    // LIKE folds ASCII case only while the trigram index folds all of Unicode, so on this path a df can
+    // undercount rows that differ only by non-ASCII case. An undercount could make planFtsMatch treat the OR
+    // tier as holding every match (and leave out its AND tier) when it would truncate, but only for a query
+    // whose matches differ from the counted ones by non-ASCII case in hundreds of rows.
     const sums = dfTerms.map((_, i) => `SUM(CASE WHEN content LIKE ? ${CONTENT_LIKE_ESCAPE} THEN 1 ELSE 0 END) AS d${i}`).join(", ");
     let where = "";
     const timeBindings: number[] = [];

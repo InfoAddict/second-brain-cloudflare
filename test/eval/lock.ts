@@ -79,6 +79,8 @@ export interface LockDiff {
   missing: string[];
   /** Present now, absent from the lock. */
   extra: string[];
+  /** Queries whose keyword-arm gold coverage differs from the lock (keywordGold), which fusion can hide from rankedIds. */
+  keywordGoldChanged: string[];
 }
 
 /** Order-independent identity of a fingerprint; a missing one equals an empty one. */
@@ -91,6 +93,7 @@ export function compareToLock(lock: VariantReport, current: VariantReport): Lock
   return {
     fingerprintMismatch: fingerprintKey(lock.dataFingerprint) !== fingerprintKey(current.dataFingerprint),
     changed: [...now].filter(([id, r]) => locked.has(id) && JSON.stringify(locked.get(id)!.rankedIds) !== JSON.stringify(r.rankedIds)).map(([id]) => id),
+    keywordGoldChanged: [...now].filter(([id, r]) => locked.has(id) && locked.get(id)!.keywordGold !== r.keywordGold).map(([id]) => id),
     missing: [...locked.keys()].filter(id => !now.has(id)),
     extra: [...now.keys()].filter(id => !locked.has(id)),
   };

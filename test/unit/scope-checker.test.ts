@@ -1230,7 +1230,7 @@ describe("the checker over the real source tree", () => {
     // a rewrite are loaded) and estimate()'s paged read of the long entries it
     // must chunk (src/migration/embedding.ts, T-0042): the same admin/cron-driven,
     // deployment-wide exemption as the migration's other reads.
-    ).toEqual({ queries: 139, exempt: 72, checked: 10, outerJoin: 1 });
+    ).toEqual({ queries: 140, exempt: 72, checked: 11, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

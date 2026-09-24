@@ -31,8 +31,8 @@
  "runnerVersion": 7,
  "dataFingerprint": {
   "edges.jsonl": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
-  "needles.jsonl": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af",
-  "queries.jsonl": "1b44f8385717e98b74c3e649d2c77137605eecb6dbfb8748fa9126499abb3637"
+  "needles.jsonl": "8f47b5c5c05d06a6e5de0e13ee6ea3aad2fff8e43d95560e62a1882e1f65ee62",
+  "queries.jsonl": "6c32e122a8afb0f715dde49d47d6792268c34e27fbb50e26ec2da039c2d52385"
  },
  "results": [
   {
@@ -62,7 +62,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 936,
+    "d1RowsRead": 916,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -74,6 +74,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -112,6 +113,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -121,14 +123,14 @@
    "rankedIds": [
     "n-id-002",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000570",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -138,7 +140,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1503,
+    "d1RowsRead": 1535,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -150,6 +152,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -188,6 +191,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -226,6 +230,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -235,14 +240,14 @@
    "rankedIds": [
     "n-id-004",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000420",
-    "f-000118"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -252,7 +257,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1457,
+    "d1RowsRead": 1489,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -264,6 +269,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -305,6 +311,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -343,6 +350,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -350,9 +358,7 @@
    "category": "identifier",
    "clusterKey": "n-id-007",
    "tags": [
-    "tenancy",
-    "known-gap",
-    "gap:T-0074"
+    "tenancy"
    ],
    "rankedIds": [
     "n-id-007",
@@ -373,8 +379,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 1138,
+    "d1Statements": 14,
+    "d1RowsRead": 200,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -384,8 +390,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -393,9 +400,7 @@
    "category": "identifier",
    "clusterKey": "n-id-007",
    "tags": [
-    "tenancy",
-    "known-gap",
-    "gap:T-0074"
+    "tenancy"
    ],
    "rankedIds": [
     "n-id-007",
@@ -416,8 +421,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 1590,
+    "d1Statements": 16,
+    "d1RowsRead": 1511,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -427,8 +432,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -470,6 +476,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -508,6 +515,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -546,6 +554,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -584,6 +593,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -593,14 +603,14 @@
    "rankedIds": [
     "n-id-011",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000118",
-    "f-000061"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -610,7 +620,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1451,
+    "d1RowsRead": 1483,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -622,6 +632,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -660,6 +671,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -673,10 +685,10 @@
     "n-id-013",
     "n-id-029",
     "n-id-036",
-    "f-000404",
+    "f-000385",
+    "n-id-031",
     "f-000477",
     "f-000299",
-    "n-id-030",
     "n-id-015",
     "n-id-009",
     "n-id-025"
@@ -689,7 +701,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 1179,
+    "d1RowsRead": 260,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -699,8 +711,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -739,6 +752,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -777,6 +791,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -806,7 +821,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 694,
+    "d1RowsRead": 691,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -818,6 +833,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -826,13 +842,13 @@
    "clusterKey": "n-id-017",
    "rankedIds": [
     "n-id-017",
+    "n-corr-001",
     "f-000630",
     "f-000488",
     "f-000306",
     "f-000268",
     "f-000341",
     "f-000206",
-    "f-000205",
     "f-000635",
     "n-para-034"
    ],
@@ -844,7 +860,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 384,
+    "d1RowsRead": 387,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -856,6 +872,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -867,12 +884,12 @@
     "f-000630",
     "n-budget-008",
     "n-long-014",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
     "f-000540",
-    "n-budget-005",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000420"
+    "n-sub-003",
+    "n-sub-004"
    ],
    "metrics": {
     "recall5": 1,
@@ -882,7 +899,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1673,
+    "d1RowsRead": 1715,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -894,6 +911,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -919,8 +937,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2342,
+    "d1Statements": 16,
+    "d1RowsRead": 1420,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -930,8 +948,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -970,6 +989,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -981,12 +1001,12 @@
     "f-000404",
     "f-000060",
     "n-cjk-015",
-    "n-id-036",
-    "f-000609",
-    "f-000306",
+    "n-id-024",
     "f-000053",
     "f-000266",
-    "n-id-024"
+    "n-id-036",
+    "f-000350",
+    "f-000327"
    ],
    "metrics": {
     "recall5": 1,
@@ -996,7 +1016,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 1113,
+    "d1RowsRead": 264,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1006,8 +1026,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1025,9 +1046,9 @@
     "f-000365",
     "f-000463",
     "f-000627",
-    "f-000072",
-    "f-000465",
-    "f-000065"
+    "f-000065",
+    "f-000407",
+    "f-000030"
    ],
    "metrics": {
     "recall5": 1,
@@ -1037,7 +1058,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 618,
+    "d1RowsRead": 207,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1047,8 +1068,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1087,6 +1109,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1113,7 +1136,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 923,
+    "d1RowsRead": 916,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1125,16 +1148,13 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-id-023-c",
    "category": "identifier",
    "clusterKey": "n-id-023",
-   "tags": [
-    "known-gap",
-    "gap:T-0073"
-   ],
    "rankedIds": [
     "n-id-023",
     "n-id-032",
@@ -1155,7 +1175,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2256,
+    "d1RowsRead": 2263,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1167,27 +1187,24 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-id-024",
    "category": "identifier",
    "clusterKey": "n-id-024",
-   "tags": [
-    "known-gap",
-    "gap:T-0074"
-   ],
    "rankedIds": [
     "n-id-024",
     "f-000306",
-    "f-000404",
     "f-000060",
     "n-id-032",
-    "f-000341",
-    "f-000266",
+    "n-id-017",
+    "f-000404",
     "f-000046",
     "n-id-030",
-    "n-id-017"
+    "f-000063",
+    "n-cjk-011"
    ],
    "metrics": {
     "recall5": 1,
@@ -1196,8 +1213,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 1329,
+    "d1Statements": 14,
+    "d1RowsRead": 256,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1207,29 +1224,26 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-id-024-c",
    "category": "identifier",
    "clusterKey": "n-id-024",
-   "tags": [
-    "known-gap",
-    "gap:T-0074"
-   ],
    "rankedIds": [
     "n-id-024",
-    "f-000214",
-    "f-000540",
-    "f-000637",
-    "f-000630",
-    "f-000448",
-    "f-000052",
-    "f-000610",
-    "f-000412",
-    "f-000513"
+    "f-000491",
+    "f-000100",
+    "f-000269",
+    "f-000015",
+    "f-000351",
+    "f-000145",
+    "f-000490",
+    "f-000140",
+    "f-000234"
    ],
    "metrics": {
     "recall5": 1,
@@ -1238,8 +1252,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2668,
+    "d1Statements": 16,
+    "d1RowsRead": 2123,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1249,8 +1263,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1264,10 +1279,10 @@
     "n-id-036",
     "n-id-031",
     "n-id-009",
-    "n-short-026",
     "n-cjk-025",
-    "f-000552",
-    "n-hop-012-root"
+    "f-000398",
+    "n-hop-012-root",
+    "n-id-035"
    ],
    "metrics": {
     "recall5": 1,
@@ -1277,7 +1292,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 608,
+    "d1RowsRead": 209,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1287,8 +1302,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1330,6 +1346,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1368,6 +1385,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1394,7 +1412,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 1216,
+    "d1RowsRead": 261,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1404,8 +1422,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1444,6 +1463,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1470,7 +1490,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1669,
+    "d1RowsRead": 1657,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1482,16 +1502,13 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-id-030-c",
    "category": "identifier",
    "clusterKey": "n-id-030",
-   "tags": [
-    "known-gap",
-    "gap:T-0073"
-   ],
    "rankedIds": [
     "n-id-030",
     "f-000214",
@@ -1512,7 +1529,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3169,
+    "d1RowsRead": 3197,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1524,6 +1541,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1565,6 +1583,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1580,8 +1599,8 @@
     "f-000266",
     "f-000482",
     "f-000019",
-    "f-000268",
-    "f-000053"
+    "f-000341",
+    "f-000268"
    ],
    "metrics": {
     "recall5": 1,
@@ -1591,7 +1610,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 330,
+    "d1RowsRead": 327,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1603,6 +1622,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1641,6 +1661,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1667,7 +1688,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1448,
+    "d1RowsRead": 1461,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1679,6 +1700,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1692,10 +1714,10 @@
     "n-id-028",
     "n-id-011",
     "f-000063",
-    "f-000041",
-    "n-cjk-011",
     "f-000046",
-    "n-cjk-036"
+    "n-id-030",
+    "n-cjk-036",
+    "n-id-035"
    ],
    "metrics": {
     "recall5": 1,
@@ -1704,8 +1726,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 1348,
+    "d1Statements": 14,
+    "d1RowsRead": 258,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1715,60 +1737,15 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-id-035",
    "category": "identifier",
    "clusterKey": "n-id-035",
-   "tags": [
-    "known-gap",
-    "gap:T-0074"
-   ],
-   "rankedIds": [
-    "n-id-035",
-    "n-id-032",
-    "f-000408",
-    "f-000494",
-    "f-000350",
-    "f-000266",
-    "f-000579",
-    "f-000473",
-    "n-short-030",
-    "n-id-023"
-   ],
-   "metrics": {
-    "recall5": 1,
-    "recall10": 1,
-    "mrr10": 1,
-    "ndcg10": 1
-   },
-   "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 730,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 2,
-    "neurons": 0.016569,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "like-ineligible-token",
-   "rerankRoute": "exact-id",
-   "degraded": []
-  },
-  {
-   "queryId": "q-id-035-c",
-   "category": "identifier",
-   "clusterKey": "n-id-035",
-   "tags": [
-    "known-gap",
-    "gap:T-0074"
-   ],
    "rankedIds": [
     "n-id-035",
     "n-id-032",
@@ -1788,8 +1765,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 1398,
+    "d1Statements": 14,
+    "d1RowsRead": 198,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1799,8 +1776,48 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-id-035-c",
+   "category": "identifier",
+   "clusterKey": "n-id-035",
+   "rankedIds": [
+    "n-id-035",
+    "n-id-032",
+    "f-000350",
+    "f-000473",
+    "n-id-023",
+    "f-000408",
+    "f-000494",
+    "f-000579",
+    "n-id-036",
+    "n-short-030"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 1515,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 2,
+    "neurons": 0.016569,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1839,6 +1856,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1877,6 +1895,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1915,6 +1934,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1924,14 +1944,14 @@
    "rankedIds": [
     "n-id-047",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-003",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000276",
-    "f-000570",
-    "f-000639",
-    "f-000094"
+    "n-sub-001",
+    "n-budget-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -1941,7 +1961,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1522,
+    "d1RowsRead": 1554,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -1953,6 +1973,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -1991,6 +2012,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2029,6 +2051,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2038,14 +2061,14 @@
    "rankedIds": [
     "n-id-049",
     "f-000448",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-003",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000276",
-    "f-000570",
-    "f-000639",
-    "f-000136",
-    "f-000522"
+    "n-sub-001",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -2055,7 +2078,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1519,
+    "d1RowsRead": 1551,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2067,6 +2090,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2105,6 +2129,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2143,6 +2168,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2181,6 +2207,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2219,6 +2246,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2257,6 +2285,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2295,6 +2324,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2336,6 +2366,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2348,14 +2379,14 @@
    "rankedIds": [
     "n-rare-001",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650",
-    "f-000118"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -2365,7 +2396,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1461,
+    "d1RowsRead": 1493,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2377,6 +2408,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2415,6 +2447,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2423,15 +2456,15 @@
    "clusterKey": "n-rare-002",
    "rankedIds": [
     "n-rare-002",
-    "f-000094",
+    "n-sub-003",
     "f-000448",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
+    "f-000540",
     "n-budget-008",
     "n-budget-005",
-    "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -2441,7 +2474,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1453,
+    "d1RowsRead": 1482,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2453,6 +2486,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2491,6 +2525,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2500,14 +2535,14 @@
    "rankedIds": [
     "n-rare-003",
     "f-000448",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000136",
-    "f-000522",
-    "f-000650",
-    "f-000632"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005",
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -2517,7 +2552,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1457,
+    "d1RowsRead": 1489,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2529,6 +2564,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2537,13 +2573,13 @@
    "clusterKey": "n-rare-004",
    "rankedIds": [
     "n-rare-004",
+    "n-corr-001",
     "f-000088",
     "f-000369",
-    "f-000060",
     "n-cjk-004",
     "f-000111",
+    "f-000060",
     "f-000036",
-    "f-000607",
     "f-000496",
     "f-000367"
    ],
@@ -2560,13 +2596,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 4,
-    "neurons": 0.40682,
+    "neurons": 0.392953,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2608,6 +2645,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2619,15 +2657,15 @@
    ],
    "rankedIds": [
     "n-rare-005",
+    "n-sub-003",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000650",
-    "f-000420",
-    "f-000118"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -2637,7 +2675,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1472,
+    "d1RowsRead": 1504,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2649,6 +2687,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2657,15 +2696,15 @@
    "clusterKey": "n-rare-006",
    "rankedIds": [
     "n-rare-006",
+    "n-corr-001",
     "n-short-010",
-    "f-000481",
+    "n-id-054",
     "n-long-003",
-    "n-cjk-008",
+    "n-rare-035",
     "f-000086",
-    "f-000623",
-    "n-rare-001",
     "f-000196",
-    "n-id-054"
+    "f-000111",
+    "n-cjk-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -2674,19 +2713,20 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.313856,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "clear-leader",
+   "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2696,14 +2736,14 @@
    "rankedIds": [
     "n-rare-006",
     "f-000448",
-    "n-budget-005",
     "f-000540",
+    "n-budget-005",
     "n-budget-001",
     "f-000276",
     "f-000570",
+    "f-000136",
     "f-000639",
-    "f-000522",
-    "f-000650"
+    "f-000522"
    ],
    "metrics": {
     "recall5": 1,
@@ -2713,7 +2753,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1451,
+    "d1RowsRead": 1483,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2725,6 +2765,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2763,6 +2804,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2801,6 +2843,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2810,14 +2853,14 @@
    "rankedIds": [
     "n-rare-008",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-003",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000185",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -2827,7 +2870,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1471,
+    "d1RowsRead": 1503,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2839,6 +2882,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2880,6 +2924,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2891,15 +2936,15 @@
    ],
    "rankedIds": [
     "n-rare-009",
-    "f-000570",
+    "n-sub-003",
     "f-000448",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650",
-    "f-000118"
+    "n-sub-001",
+    "n-budget-005",
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -2909,7 +2954,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1466,
+    "d1RowsRead": 1498,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -2921,6 +2966,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -2959,6 +3005,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3000,6 +3047,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3012,14 +3060,14 @@
    "rankedIds": [
     "n-rare-011",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000276",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -3029,7 +3077,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1475,
+    "d1RowsRead": 1507,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3041,6 +3089,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3050,13 +3099,13 @@
    "rankedIds": [
     "n-rare-012",
     "n-cjk-010",
-    "f-000635",
-    "n-cjk-009",
-    "n-para-010",
+    "n-corr-001",
     "f-000031",
+    "n-cjk-009",
+    "f-000635",
     "n-cjk-003",
     "n-cjk-007",
-    "f-000044",
+    "n-para-010",
     "n-rare-035"
    ],
    "metrics": {
@@ -3066,7 +3115,7 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
+    "d1Statements": 13,
     "d1RowsRead": 256,
     "aiCalls": 1,
     "embeddingCalls": 1,
@@ -3079,6 +3128,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3089,13 +3139,13 @@
     "n-rare-012",
     "f-000570",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
     "f-000540",
-    "n-budget-001",
-    "f-000276",
-    "f-000639",
-    "f-000136"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -3105,7 +3155,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1469,
+    "d1RowsRead": 1501,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3117,6 +3167,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3155,6 +3206,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3186,13 +3238,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.38899100000000003,
+    "neurons": 0.37286,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3202,14 +3255,14 @@
    "rankedIds": [
     "n-rare-014",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000185",
-    "f-000276",
-    "f-000639",
-    "f-000136"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -3219,7 +3272,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1475,
+    "d1RowsRead": 1507,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3231,6 +3284,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3238,37 +3292,38 @@
    "category": "rare-word",
    "clusterKey": "n-rare-015",
    "rankedIds": [
-    "f-000044",
-    "f-000615",
-    "f-000190",
-    "f-000152",
-    "n-cjk-014",
-    "f-000391",
-    "f-000596",
+    "n-corr-001",
+    "f-000341",
     "f-000384",
-    "n-cjk-009",
-    "f-000249"
+    "f-000596",
+    "n-rare-015",
+    "f-000508",
+    "f-000616",
+    "f-000190",
+    "f-000329",
+    "n-cjk-014"
    ],
    "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 259,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 314,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.347673,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "clear-leader",
+   "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3277,15 +3332,15 @@
    "clusterKey": "n-rare-015",
    "rankedIds": [
     "n-rare-015",
-    "f-000185",
+    "n-sub-003",
     "f-000448",
-    "n-budget-005",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650",
-    "f-000118"
+    "n-sub-001",
+    "n-budget-005",
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -3295,7 +3350,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1454,
+    "d1RowsRead": 1483,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3307,6 +3362,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3318,15 +3374,15 @@
    ],
    "rankedIds": [
     "n-rare-016",
-    "f-000060",
+    "n-corr-001",
     "f-000635",
-    "n-cjk-029",
-    "f-000528",
-    "f-000408",
+    "f-000337",
+    "n-hop-017-root",
+    "f-000596",
+    "f-000060",
     "f-000047",
-    "n-id-032",
-    "n-cjk-007",
-    "n-hop-017-root"
+    "f-000088",
+    "f-000266"
    ],
    "metrics": {
     "recall5": 1,
@@ -3335,19 +3391,20 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.29786500000000005,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "clear-leader",
+   "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3386,6 +3443,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3395,14 +3453,14 @@
    "rankedIds": [
     "n-rare-017",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000185",
-    "f-000639",
-    "f-000522",
-    "f-000118"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -3412,7 +3470,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1477,
+    "d1RowsRead": 1509,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3424,6 +3482,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3434,19 +3493,19 @@
     "f-000592",
     "f-000391",
     "f-000337",
-    "f-000510",
     "n-rare-018",
+    "f-000510",
     "f-000616",
     "f-000596",
     "f-000452",
-    "f-000635",
-    "f-000519"
+    "f-000519",
+    "n-corr-001"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.2,
-    "ndcg10": 0.38685280723454163
+    "mrr10": 0.25,
+    "ndcg10": 0.4306765580733931
    },
    "cost": {
     "d1Statements": 16,
@@ -3455,13 +3514,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.327297,
+    "neurons": 0.31767500000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3500,6 +3560,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3508,15 +3569,15 @@
    "clusterKey": "n-rare-019",
    "rankedIds": [
     "n-rare-019",
+    "n-sub-006",
+    "n-sub-002",
+    "n-sub-004",
+    "f-000540",
     "f-000448",
+    "n-sub-001",
     "n-budget-008",
     "n-budget-005",
-    "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650",
-    "f-000118"
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -3526,7 +3587,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1457,
+    "d1RowsRead": 1489,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3538,6 +3599,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3576,6 +3638,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3584,15 +3647,15 @@
    "clusterKey": "n-rare-020",
    "rankedIds": [
     "n-rare-020",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
     "f-000540",
-    "n-budget-001",
-    "f-000276",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -3602,7 +3665,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1478,
+    "d1RowsRead": 1510,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3614,6 +3677,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3652,6 +3716,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3690,6 +3755,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3728,6 +3794,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3738,13 +3805,13 @@
     "n-rare-023",
     "f-000570",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-sub-001",
+    "n-budget-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -3754,7 +3821,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1474,
+    "d1RowsRead": 1506,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3766,6 +3833,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3776,11 +3844,11 @@
     "n-rare-024",
     "f-000408",
     "f-000031",
+    "n-corr-001",
     "f-000454",
     "f-000635",
     "f-000113",
     "f-000029",
-    "f-000164",
     "f-000064",
     "f-000417"
    ],
@@ -3797,13 +3865,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.39238700000000004,
+    "neurons": 0.386444,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3812,15 +3881,15 @@
    "clusterKey": "n-rare-025",
    "rankedIds": [
     "n-rare-025",
+    "n-corr-001",
     "n-cjk-005",
     "n-cjk-010",
-    "n-cjk-008",
     "f-000635",
     "n-cjk-009",
+    "n-cjk-008",
     "n-cjk-007",
     "n-cjk-001",
-    "n-cjk-004",
-    "n-cjk-013"
+    "n-cjk-004"
    ],
    "metrics": {
     "recall5": 1,
@@ -3842,6 +3911,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3851,14 +3921,14 @@
    "rankedIds": [
     "n-rare-025",
     "f-000448",
-    "n-budget-005",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
+    "n-sub-001",
+    "n-budget-005",
     "n-budget-001",
-    "f-000276",
-    "f-000639",
-    "f-000522",
-    "f-000650",
-    "f-000118"
+    "f-000276"
    ],
    "metrics": {
     "recall5": 1,
@@ -3868,7 +3938,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1445,
+    "d1RowsRead": 1477,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3880,6 +3950,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3918,6 +3989,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3928,13 +4000,13 @@
     "n-rare-026",
     "f-000185",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000136",
-    "f-000522"
+    "n-sub-001",
+    "n-budget-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -3944,7 +4016,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1475,
+    "d1RowsRead": 1507,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -3956,6 +4028,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -3965,13 +4038,13 @@
    "rankedIds": [
     "n-rare-027",
     "f-000419",
-    "f-000417",
     "f-000152",
+    "n-corr-001",
     "f-000622",
+    "f-000417",
     "f-000569",
     "f-000453",
     "f-000313",
-    "f-000205",
     "f-000365"
    ],
    "metrics": {
@@ -3994,6 +4067,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4032,6 +4106,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4041,14 +4116,14 @@
    "rankedIds": [
     "n-rare-028",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000185",
-    "f-000639",
-    "f-000136",
-    "f-000650"
+    "n-sub-001",
+    "n-budget-008",
+    "n-budget-005"
    ],
    "metrics": {
     "recall5": 1,
@@ -4058,7 +4133,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1484,
+    "d1RowsRead": 1513,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4070,6 +4145,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4079,12 +4155,12 @@
    "rankedIds": [
     "n-rare-029",
     "n-cjk-010",
+    "n-corr-001",
     "f-000612",
     "n-cjk-022",
-    "n-cjk-014",
     "f-000105",
     "f-000317",
-    "f-000341",
+    "n-cjk-014",
     "f-000270",
     "n-cjk-001"
    ],
@@ -4101,13 +4177,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.276357,
+    "neurons": 0.265037,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4117,14 +4194,14 @@
    "rankedIds": [
     "n-rare-029",
     "f-000448",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
+    "f-000540",
     "n-budget-008",
     "n-budget-005",
-    "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000522",
-    "f-000650",
-    "f-000420"
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -4134,7 +4211,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1462,
+    "d1RowsRead": 1494,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4146,6 +4223,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4184,6 +4262,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4222,6 +4301,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4230,15 +4310,15 @@
    "clusterKey": "n-rare-031",
    "rankedIds": [
     "n-rare-031",
-    "f-000136",
+    "n-sub-003",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000276",
-    "f-000570",
-    "f-000639"
+    "n-sub-001",
+    "n-budget-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -4248,7 +4328,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1472,
+    "d1RowsRead": 1504,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4260,6 +4340,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4298,6 +4379,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4336,6 +4418,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4344,15 +4427,15 @@
    "clusterKey": "n-rare-033",
    "rankedIds": [
     "n-rare-033",
-    "f-000094",
+    "n-sub-005",
     "f-000448",
+    "n-sub-006",
+    "n-sub-004",
+    "f-000540",
+    "n-sub-001",
     "n-budget-008",
     "n-budget-005",
-    "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000136",
-    "f-000522"
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -4362,7 +4445,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1490,
+    "d1RowsRead": 1522,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4374,6 +4457,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4382,15 +4466,15 @@
    "clusterKey": "n-rare-034",
    "rankedIds": [
     "n-rare-034",
+    "n-corr-001",
     "f-000419",
-    "f-000489",
-    "n-hop-002-root",
+    "f-000097",
     "n-id-010",
-    "f-000065",
-    "f-000224",
-    "f-000142",
-    "f-000446",
-    "f-000097"
+    "f-000635",
+    "f-000486",
+    "n-hop-002-root",
+    "f-000236",
+    "f-000446"
    ],
    "metrics": {
     "recall5": 1,
@@ -4399,19 +4483,20 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.335504,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "clear-leader",
+   "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4420,15 +4505,15 @@
    "clusterKey": "n-rare-035",
    "rankedIds": [
     "n-rare-035",
+    "n-corr-001",
     "f-000635",
     "n-id-012",
-    "n-cjk-036",
     "n-rare-025",
     "f-000088",
+    "n-cjk-036",
     "n-id-016",
     "n-long-013",
-    "n-rare-010",
-    "n-hop-027-answer"
+    "n-rare-010"
    ],
    "metrics": {
     "recall5": 1,
@@ -4450,6 +4535,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4491,6 +4577,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4502,15 +4589,15 @@
    ],
    "rankedIds": [
     "n-rare-036",
-    "f-000094",
+    "n-sub-003",
     "f-000448",
-    "n-budget-008",
-    "n-budget-005",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
     "f-000540",
-    "n-budget-001",
-    "f-000639",
-    "f-000650",
-    "f-000632"
+    "n-sub-001",
+    "n-budget-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -4520,7 +4607,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1494,
+    "d1RowsRead": 1526,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4532,6 +4619,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4563,13 +4651,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.326448,
+    "neurons": 0.325599,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4579,14 +4668,14 @@
    "rankedIds": [
     "n-rare-037",
     "f-000448",
+    "n-sub-006",
+    "n-sub-005",
+    "n-sub-002",
+    "n-sub-004",
+    "f-000540",
     "n-budget-008",
     "n-budget-005",
-    "f-000540",
-    "n-budget-001",
-    "f-000185",
-    "f-000639",
-    "f-000522",
-    "f-000650"
+    "n-budget-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -4596,7 +4685,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1474,
+    "d1RowsRead": 1506,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4608,6 +4697,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4646,6 +4736,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4672,7 +4763,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2289,
+    "d1RowsRead": 2300,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4684,6 +4775,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4692,15 +4784,15 @@
    "clusterKey": "n-common-002",
    "rankedIds": [
     "n-common-002",
-    "f-000350",
+    "f-000062",
     "n-common-005",
+    "f-000350",
     "f-000104",
     "f-000126",
+    "f-000305",
     "f-000594",
-    "f-000015",
-    "f-000387",
-    "f-000244",
-    "f-000305"
+    "f-000029",
+    "f-000147"
    ],
    "metrics": {
     "recall5": 1,
@@ -4710,7 +4802,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2314,
+    "d1RowsRead": 2330,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4722,6 +4814,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4730,15 +4823,15 @@
    "clusterKey": "n-common-003",
    "rankedIds": [
     "n-common-003",
-    "f-000150",
     "f-000380",
     "f-000200",
     "f-000075",
-    "n-common-034",
-    "n-common-036",
     "f-000638",
+    "n-common-034",
+    "f-000496",
     "f-000092",
-    "f-000569"
+    "f-000569",
+    "f-000150"
    ],
    "metrics": {
     "recall5": 1,
@@ -4748,7 +4841,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2004,
+    "d1RowsRead": 1995,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4760,6 +4853,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4769,14 +4863,14 @@
    "rankedIds": [
     "n-common-004",
     "f-000373",
+    "f-000290",
+    "f-000313",
     "f-000566",
-    "f-000266",
-    "f-000454",
     "n-common-036",
-    "f-000097",
-    "f-000622",
-    "f-000399",
-    "f-000290"
+    "f-000541",
+    "f-000319",
+    "f-000442",
+    "f-000125"
    ],
    "metrics": {
     "recall5": 1,
@@ -4786,7 +4880,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2002,
+    "d1RowsRead": 2006,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4798,6 +4892,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4810,8 +4905,8 @@
     "f-000165",
     "f-000421",
     "f-000096",
-    "f-000350",
     "f-000370",
+    "f-000350",
     "f-000308",
     "f-000634",
     "n-budget-001"
@@ -4824,7 +4919,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2277,
+    "d1RowsRead": 2301,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4836,6 +4931,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4844,14 +4940,14 @@
    "clusterKey": "n-common-006",
    "rankedIds": [
     "n-common-006",
-    "f-000064",
     "n-budget-010",
     "f-000020",
     "f-000282",
-    "f-000174",
-    "f-000592",
     "f-000586",
+    "n-common-021",
+    "f-000592",
     "f-000603",
+    "f-000064",
     "f-000156"
    ],
    "metrics": {
@@ -4862,7 +4958,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2336,
+    "d1RowsRead": 2330,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4874,6 +4970,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4888,8 +4985,8 @@
     "f-000104",
     "f-000632",
     "f-000594",
-    "f-000015",
     "f-000387",
+    "f-000015",
     "f-000244"
    ],
    "metrics": {
@@ -4900,7 +4997,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2061,
+    "d1RowsRead": 2054,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4912,6 +5009,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4923,12 +5021,12 @@
     "n-common-020",
     "f-000196",
     "f-000642",
-    "f-000138",
-    "f-000369",
     "f-000370",
-    "f-000308",
+    "n-common-018",
     "f-000634",
-    "f-000492"
+    "f-000308",
+    "f-000492",
+    "f-000138"
    ],
    "metrics": {
     "recall5": 1,
@@ -4938,7 +5036,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2023,
+    "d1RowsRead": 2036,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4950,6 +5048,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -4963,10 +5062,10 @@
     "f-000265",
     "f-000182",
     "f-000132",
-    "n-budget-004",
-    "f-000400",
-    "f-000167",
-    "n-common-028"
+    "n-common-028",
+    "n-budget-006",
+    "f-000380",
+    "f-000200"
    ],
    "metrics": {
     "recall5": 1,
@@ -4976,7 +5075,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2268,
+    "d1RowsRead": 2260,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -4988,6 +5087,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5001,7 +5101,7 @@
     "f-000148",
     "f-000598",
     "n-common-020",
-    "f-000044",
+    "n-sub-004",
     "f-000267",
     "f-000554",
     "f-000475"
@@ -5014,7 +5114,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2316,
+    "d1RowsRead": 2310,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5026,6 +5126,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5041,8 +5142,8 @@
     "n-common-032",
     "n-budget-006",
     "f-000438",
-    "f-000501",
-    "f-000577"
+    "f-000234",
+    "f-000501"
    ],
    "metrics": {
     "recall5": 1,
@@ -5052,7 +5153,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2049,
+    "d1RowsRead": 2044,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5064,6 +5165,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5072,15 +5174,15 @@
    "clusterKey": "n-common-012",
    "rankedIds": [
     "n-common-012",
+    "f-000062",
     "f-000637",
     "f-000571",
-    "f-000107",
-    "f-000497",
-    "f-000062",
-    "f-000284",
-    "f-000487",
     "f-000305",
-    "f-000110"
+    "f-000107",
+    "f-000110",
+    "f-000497",
+    "f-000284",
+    "f-000487"
    ],
    "metrics": {
     "recall5": 1,
@@ -5090,7 +5192,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2018,
+    "d1RowsRead": 2025,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5102,6 +5204,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5112,9 +5215,9 @@
     "n-common-013",
     "f-000408",
     "f-000028",
+    "f-000457",
     "f-000165",
     "f-000421",
-    "f-000457",
     "f-000096",
     "f-000082",
     "f-000593",
@@ -5128,7 +5231,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2236,
+    "d1RowsRead": 2263,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5140,6 +5243,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5151,12 +5255,12 @@
     "f-000150",
     "f-000294",
     "f-000438",
-    "f-000651",
+    "f-000234",
     "n-common-036",
     "n-common-017",
-    "f-000234",
     "f-000161",
-    "f-000589"
+    "f-000589",
+    "f-000145"
    ],
    "metrics": {
     "recall5": 1,
@@ -5166,7 +5270,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2320,
+    "d1RowsRead": 2330,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5178,6 +5282,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5204,7 +5309,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2054,
+    "d1RowsRead": 2043,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5216,6 +5321,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5224,15 +5330,15 @@
    "clusterKey": "n-common-016",
    "rankedIds": [
     "n-common-016",
+    "f-000625",
     "f-000346",
-    "f-000652",
     "f-000489",
     "f-000396",
-    "f-000625",
+    "n-budget-006",
+    "f-000466",
+    "f-000061",
     "f-000501",
-    "f-000577",
-    "f-000135",
-    "f-000034"
+    "f-000288"
    ],
    "metrics": {
     "recall5": 1,
@@ -5242,7 +5348,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2065,
+    "d1RowsRead": 2060,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5254,6 +5360,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5268,9 +5375,9 @@
     "f-000057",
     "f-000102",
     "f-000619",
-    "f-000196",
     "f-000608",
-    "f-000513"
+    "f-000196",
+    "n-common-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -5280,7 +5387,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2280,
+    "d1RowsRead": 2290,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5292,6 +5399,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5300,13 +5408,13 @@
    "clusterKey": "n-common-018",
    "rankedIds": [
     "n-common-018",
+    "n-common-010",
+    "f-000475",
     "f-000370",
     "f-000308",
     "f-000634",
-    "f-000492",
-    "n-common-010",
-    "f-000475",
     "f-000495",
+    "f-000492",
     "n-budget-010",
     "n-common-002"
    ],
@@ -5318,7 +5426,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2323,
+    "d1RowsRead": 2339,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5330,6 +5438,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5356,7 +5465,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2007,
+    "d1RowsRead": 2020,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5368,6 +5477,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5376,15 +5486,15 @@
    "clusterKey": "n-common-020",
    "rankedIds": [
     "n-common-020",
-    "f-000196",
     "n-common-010",
     "f-000221",
-    "f-000369",
-    "f-000642",
-    "f-000513",
     "f-000525",
     "f-000148",
-    "f-000576"
+    "f-000576",
+    "f-000598",
+    "f-000196",
+    "f-000267",
+    "f-000554"
    ],
    "metrics": {
     "recall5": 1,
@@ -5406,6 +5516,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5432,7 +5543,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2264,
+    "d1RowsRead": 2269,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5444,6 +5555,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5457,10 +5569,10 @@
     "f-000107",
     "f-000497",
     "f-000487",
+    "n-sub-002",
     "n-budget-004",
     "f-000400",
-    "f-000167",
-    "n-common-026"
+    "f-000167"
    ],
    "metrics": {
     "recall5": 1,
@@ -5470,7 +5582,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2304,
+    "d1RowsRead": 2312,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5482,6 +5594,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5498,7 +5611,7 @@
     "f-000102",
     "f-000619",
     "f-000608",
-    "f-000245"
+    "f-000370"
    ],
    "metrics": {
     "recall5": 1,
@@ -5520,6 +5633,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5528,15 +5642,15 @@
    "clusterKey": "n-common-024",
    "rankedIds": [
     "n-common-024",
-    "f-000373",
-    "f-000566",
-    "f-000266",
-    "f-000479",
     "n-common-036",
-    "f-000235",
-    "f-000454",
-    "f-000399",
-    "f-000501"
+    "f-000566",
+    "f-000501",
+    "f-000577",
+    "n-common-011",
+    "n-common-016",
+    "f-000194",
+    "f-000266",
+    "f-000235"
    ],
    "metrics": {
     "recall5": 1,
@@ -5546,7 +5660,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2010,
+    "d1RowsRead": 2016,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5558,6 +5672,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5566,15 +5681,15 @@
    "clusterKey": "n-common-025",
    "rankedIds": [
     "n-common-025",
-    "f-000062",
     "f-000431",
+    "f-000062",
     "f-000182",
     "f-000132",
-    "f-000305",
-    "f-000110",
-    "f-000203",
     "n-budget-010",
-    "f-000282"
+    "f-000282",
+    "f-000586",
+    "f-000603",
+    "f-000305"
    ],
    "metrics": {
     "recall5": 1,
@@ -5596,6 +5711,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5622,7 +5738,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2291,
+    "d1RowsRead": 2316,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5634,6 +5750,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5642,8 +5759,8 @@
    "clusterKey": "n-common-027",
    "rankedIds": [
     "n-common-027",
-    "f-000421",
     "f-000165",
+    "f-000421",
     "f-000096",
     "n-common-010",
     "f-000028",
@@ -5660,7 +5777,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2029,
+    "d1RowsRead": 2034,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5672,6 +5789,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5698,7 +5816,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2010,
+    "d1RowsRead": 2003,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5710,6 +5828,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5719,14 +5838,14 @@
    "rankedIds": [
     "n-common-029",
     "f-000408",
-    "n-common-013",
-    "n-common-001",
+    "n-common-010",
+    "f-000475",
+    "f-000344",
+    "f-000082",
     "f-000593",
-    "f-000012",
-    "n-common-021",
-    "n-budget-002",
+    "f-000495",
     "f-000139",
-    "f-000082"
+    "f-000449"
    ],
    "metrics": {
     "recall5": 1,
@@ -5735,19 +5854,20 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 2362,
-    "aiCalls": 2,
+    "d1Statements": 17,
+    "d1RowsRead": 2319,
+    "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.32192000000000004,
+    "neurons": 0.009205,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "applied",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5756,15 +5876,15 @@
    "clusterKey": "n-common-030",
    "rankedIds": [
     "n-common-030",
-    "f-000589",
-    "f-000145",
-    "f-000333",
-    "f-000407",
-    "f-000518",
-    "f-000381",
     "f-000467",
+    "f-000589",
     "f-000456",
-    "f-000491"
+    "f-000491",
+    "f-000355",
+    "f-000145",
+    "f-000220",
+    "f-000067",
+    "f-000333"
    ],
    "metrics": {
     "recall5": 1,
@@ -5774,7 +5894,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2296,
+    "d1RowsRead": 2311,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5786,6 +5906,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5794,15 +5915,15 @@
    "clusterKey": "n-common-031",
    "rankedIds": [
     "n-common-031",
-    "f-000028",
-    "f-000421",
-    "f-000165",
-    "f-000457",
-    "f-000351",
-    "f-000096",
     "n-common-023",
     "f-000534",
-    "f-000050"
+    "f-000050",
+    "f-000457",
+    "f-000028",
+    "f-000421",
+    "f-000557",
+    "f-000057",
+    "f-000165"
    ],
    "metrics": {
     "recall5": 1,
@@ -5812,7 +5933,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 1981,
+    "d1RowsRead": 1979,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5824,6 +5945,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5832,15 +5954,15 @@
    "clusterKey": "n-common-032",
    "rankedIds": [
     "n-common-032",
-    "n-common-019",
-    "n-common-011",
-    "n-common-031",
+    "f-000270",
     "f-000543",
-    "f-000205",
-    "n-common-006",
-    "f-000374",
-    "n-common-036",
-    "f-000431"
+    "f-000431",
+    "f-000132",
+    "n-common-031",
+    "f-000122",
+    "f-000581",
+    "f-000336",
+    "f-000516"
    ],
    "metrics": {
     "recall5": 1,
@@ -5849,19 +5971,20 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 2055,
-    "aiCalls": 2,
+    "d1Statements": 17,
+    "d1RowsRead": 2000,
+    "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 2,
-    "neurons": 0.330976,
+    "neurons": 0.009205,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "applied",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5871,10 +5994,10 @@
    "rankedIds": [
     "n-common-033",
     "f-000028",
+    "f-000457",
     "f-000165",
     "f-000421",
     "f-000351",
-    "n-common-013",
     "f-000096",
     "n-common-010",
     "f-000267",
@@ -5888,7 +6011,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2287,
+    "d1RowsRead": 2283,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5900,6 +6023,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5926,7 +6050,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2305,
+    "d1RowsRead": 2295,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5938,6 +6062,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5964,7 +6089,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2025,
+    "d1RowsRead": 2029,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -5976,6 +6101,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -5985,14 +6111,14 @@
    "rankedIds": [
     "n-common-036",
     "n-common-011",
-    "f-000373",
     "f-000064",
-    "f-000023",
-    "n-common-032",
-    "n-budget-006",
+    "f-000373",
     "f-000150",
-    "f-000566",
-    "f-000231"
+    "n-common-032",
+    "f-000174",
+    "n-budget-006",
+    "f-000294",
+    "f-000023"
    ],
    "metrics": {
     "recall5": 1,
@@ -6002,7 +6128,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2009,
+    "d1RowsRead": 2006,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6014,6 +6140,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6023,10 +6150,10 @@
    "rankedIds": [
     "n-common-037",
     "n-common-026",
+    "f-000537",
     "f-000129",
     "f-000437",
     "f-000101",
-    "n-common-022",
     "f-000590",
     "f-000310",
     "f-000051",
@@ -6040,7 +6167,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2342,
+    "d1RowsRead": 2350,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6052,6 +6179,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6059,8 +6187,7 @@
    "category": "common-word",
    "clusterKey": "n-budget-001",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-001",
@@ -6082,7 +6209,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3104,
+    "d1RowsRead": 3133,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6094,6 +6221,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6101,20 +6229,19 @@
    "category": "common-word",
    "clusterKey": "n-budget-002",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-002",
     "f-000501",
-    "f-000135",
-    "f-000034",
-    "f-000577",
-    "n-common-016",
-    "f-000194",
     "f-000348",
     "f-000056",
-    "n-budget-010"
+    "n-budget-010",
+    "f-000105",
+    "n-common-030",
+    "f-000640",
+    "f-000135",
+    "f-000034"
    ],
    "metrics": {
     "recall5": 1,
@@ -6124,7 +6251,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3226,
+    "d1RowsRead": 3225,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6136,6 +6263,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6143,8 +6271,7 @@
    "category": "common-word",
    "clusterKey": "n-budget-003",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-003",
@@ -6166,7 +6293,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2727,
+    "d1RowsRead": 2717,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6178,6 +6305,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6185,20 +6313,19 @@
    "category": "common-word",
    "clusterKey": "n-budget-004",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-004",
-    "n-common-032",
+    "f-000270",
     "f-000516",
     "f-000465",
-    "n-common-026",
-    "n-common-019",
-    "f-000040",
-    "f-000652",
-    "n-common-016",
-    "f-000581"
+    "f-000122",
+    "n-common-032",
+    "f-000400",
+    "f-000581",
+    "f-000357",
+    "f-000336"
    ],
    "metrics": {
     "recall5": 1,
@@ -6207,19 +6334,20 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 19,
-    "d1RowsRead": 2792,
-    "aiCalls": 2,
+    "d1Statements": 17,
+    "d1RowsRead": 2720,
+    "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 2,
-    "neurons": 0.36437,
+    "neurons": 0.009205,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "applied",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6227,20 +6355,19 @@
    "category": "common-word",
    "clusterKey": "n-budget-005",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-005",
-    "f-000346",
-    "f-000489",
-    "n-common-026",
-    "f-000652",
     "f-000044",
-    "f-000396",
     "f-000183",
     "f-000559",
-    "f-000371"
+    "f-000489",
+    "f-000371",
+    "f-000346",
+    "n-common-026",
+    "n-common-010",
+    "f-000168"
    ],
    "metrics": {
     "recall5": 1,
@@ -6250,7 +6377,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3093,
+    "d1RowsRead": 3110,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6262,6 +6389,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6269,8 +6397,7 @@
    "category": "common-word",
    "clusterKey": "n-budget-006",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-006",
@@ -6292,7 +6419,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3131,
+    "d1RowsRead": 3136,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6304,6 +6431,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6311,8 +6439,7 @@
    "category": "common-word",
    "clusterKey": "n-budget-007",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-007",
@@ -6334,7 +6461,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3229,
+    "d1RowsRead": 3225,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6346,6 +6473,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6353,8 +6481,7 @@
    "category": "common-word",
    "clusterKey": "n-budget-008",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-008",
@@ -6363,10 +6490,10 @@
     "f-000371",
     "f-000485",
     "f-000168",
-    "f-000061",
     "f-000466",
+    "f-000061",
     "f-000183",
-    "f-000238"
+    "f-000610"
    ],
    "metrics": {
     "recall5": 1,
@@ -6376,7 +6503,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3232,
+    "d1RowsRead": 3220,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6388,6 +6515,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6395,8 +6523,7 @@
    "category": "common-word",
    "clusterKey": "n-budget-009",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-009",
@@ -6418,7 +6545,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3167,
+    "d1RowsRead": 3175,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6430,6 +6557,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6437,20 +6565,19 @@
    "category": "common-word",
    "clusterKey": "n-budget-010",
    "tags": [
-    "known-gap",
-    "gap:T-0073"
+    "over-budget"
    ],
    "rankedIds": [
     "n-budget-010",
-    "f-000438",
-    "f-000651",
-    "f-000234",
-    "f-000108",
-    "n-common-028",
     "f-000282",
+    "f-000438",
     "f-000592",
+    "f-000234",
+    "n-common-034",
     "f-000156",
-    "f-000586"
+    "f-000108",
+    "f-000586",
+    "f-000603"
    ],
    "metrics": {
     "recall5": 1,
@@ -6460,7 +6587,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 3194,
+    "d1RowsRead": 3186,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6472,6 +6599,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6480,15 +6608,15 @@
    "clusterKey": "n-short-001",
    "rankedIds": [
     "n-short-001",
-    "n-long-001",
-    "n-long-002",
-    "n-long-003",
-    "n-long-005",
-    "n-long-009",
-    "n-long-010",
-    "n-long-011",
-    "n-long-013",
-    "n-long-015"
+    "f-000419",
+    "n-cjk-024",
+    "n-rare-001",
+    "n-cjk-013",
+    "f-000488",
+    "n-cjk-023",
+    "n-long-024",
+    "n-short-016",
+    "n-id-024"
    ],
    "metrics": {
     "recall5": 1,
@@ -6498,7 +6626,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2092,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6508,8 +6636,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6536,7 +6665,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2030,
+    "d1RowsRead": 957,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6546,8 +6675,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6557,14 +6687,14 @@
    "rankedIds": [
     "n-short-003",
     "n-para-044",
-    "f-000408",
-    "n-para-018",
-    "f-000500",
-    "f-000649",
-    "n-short-007",
-    "f-000063",
-    "f-000630",
-    "n-id-029"
+    "f-000214",
+    "n-cjk-027",
+    "n-hop-001-root",
+    "n-sub-003",
+    "n-hop-020-root",
+    "n-hop-006-root",
+    "n-id-002",
+    "n-id-012"
    ],
    "metrics": {
     "recall5": 1,
@@ -6573,8 +6703,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2865,
+    "d1Statements": 15,
+    "d1RowsRead": 957,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6584,8 +6714,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6594,15 +6725,15 @@
    "clusterKey": "n-short-004",
    "rankedIds": [
     "n-short-004",
-    "n-para-041",
-    "n-para-023",
-    "n-rare-027",
-    "n-long-021",
-    "n-id-028",
-    "n-long-001",
-    "n-rare-022",
-    "n-long-002",
-    "n-long-003"
+    "f-000419",
+    "f-000448",
+    "f-000396",
+    "n-cjk-023",
+    "f-000226",
+    "f-000599",
+    "f-000251",
+    "f-000052",
+    "f-000047"
    ],
    "metrics": {
     "recall5": 1,
@@ -6611,8 +6742,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2265,
+    "d1Statements": 15,
+    "d1RowsRead": 949,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6622,8 +6753,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6634,13 +6766,13 @@
     "n-short-005",
     "n-id-012",
     "n-long-020",
-    "f-000419",
-    "n-para-018",
-    "n-long-002",
-    "n-id-031",
-    "n-long-003",
-    "n-para-022",
-    "n-long-007"
+    "n-cjk-027",
+    "n-short-021",
+    "f-000489",
+    "n-cjk-014",
+    "n-cjk-019",
+    "n-short-025",
+    "f-000291"
    ],
    "metrics": {
     "recall5": 1,
@@ -6650,7 +6782,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2184,
+    "d1RowsRead": 965,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6660,8 +6792,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6688,7 +6821,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2026,
+    "d1RowsRead": 949,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6698,8 +6831,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6708,15 +6842,15 @@
    "clusterKey": "n-short-007",
    "rankedIds": [
     "n-short-007",
-    "f-000214",
-    "f-000637",
-    "n-long-001",
-    "f-000373",
-    "n-id-048",
-    "f-000610",
-    "f-000097",
-    "f-000258",
-    "f-000184"
+    "f-000129",
+    "f-000111",
+    "n-long-016",
+    "n-cjk-029",
+    "n-cjk-025",
+    "n-cjk-018",
+    "f-000060",
+    "n-cjk-002",
+    "n-short-004"
    ],
    "metrics": {
     "recall5": 1,
@@ -6725,8 +6859,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2372,
+    "d1Statements": 15,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6736,8 +6870,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6752,8 +6887,8 @@
     "n-cjk-027",
     "n-id-012",
     "n-long-017",
+    "f-000185",
     "n-cjk-017",
-    "f-000132",
     "n-para-044"
    ],
    "metrics": {
@@ -6764,7 +6899,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2029,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6774,8 +6909,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6802,7 +6938,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2029,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6812,8 +6948,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6822,15 +6959,15 @@
    "clusterKey": "n-short-010",
    "rankedIds": [
     "n-short-010",
-    "f-000133",
-    "f-000214",
-    "n-short-025",
-    "n-short-007",
-    "f-000630",
-    "n-long-001",
-    "f-000504",
-    "f-000052",
-    "n-long-002"
+    "n-cjk-027",
+    "n-hop-012-root",
+    "n-cjk-021",
+    "n-id-036",
+    "n-rare-035",
+    "n-id-054",
+    "n-cjk-009",
+    "f-000175",
+    "n-para-034"
    ],
    "metrics": {
     "recall5": 1,
@@ -6839,8 +6976,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2493,
+    "d1Statements": 15,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6850,8 +6987,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6862,12 +7000,12 @@
     "n-short-011",
     "f-000346",
     "f-000506",
-    "f-000172",
+    "f-000207",
     "f-000484",
+    "f-000405",
+    "f-000172",
     "f-000034",
     "f-000048",
-    "f-000207",
-    "f-000405",
     "n-short-010"
    ],
    "metrics": {
@@ -6878,7 +7016,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2032,
+    "d1RowsRead": 1014,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6888,8 +7026,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6899,14 +7038,14 @@
    "rankedIds": [
     "n-short-012",
     "f-000133",
-    "f-000154",
-    "f-000564",
+    "f-000396",
     "f-000128",
-    "f-000513",
-    "n-long-003",
+    "f-000564",
     "n-id-020",
     "f-000008",
-    "f-000396"
+    "f-000513",
+    "n-long-003",
+    "f-000154"
    ],
    "metrics": {
     "recall5": 1,
@@ -6916,7 +7055,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2054,
+    "d1RowsRead": 1029,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6926,8 +7065,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6937,14 +7077,14 @@
    "rankedIds": [
     "n-short-013",
     "n-id-020",
-    "f-000407",
-    "f-000064",
     "f-000542",
-    "f-000381",
+    "f-000003",
     "f-000623",
-    "f-000102",
+    "f-000006",
+    "f-000407",
+    "f-000381",
     "f-000294",
-    "f-000003"
+    "f-000102"
    ],
    "metrics": {
     "recall5": 1,
@@ -6954,7 +7094,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2184,
+    "d1RowsRead": 1047,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -6964,8 +7104,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -6975,14 +7116,14 @@
    "rankedIds": [
     "n-short-014",
     "n-long-002",
-    "n-long-003",
-    "n-long-004",
-    "n-long-006",
-    "n-long-001",
-    "n-long-008",
-    "n-long-009",
+    "n-long-019",
     "n-long-010",
-    "n-long-013"
+    "n-long-013",
+    "n-long-001",
+    "n-long-004",
+    "n-long-020",
+    "n-long-003",
+    "n-long-006"
    ],
    "metrics": {
     "recall5": 1,
@@ -6992,7 +7133,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2078,
+    "d1RowsRead": 1064,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7002,8 +7143,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7012,15 +7154,15 @@
    "clusterKey": "n-short-015",
    "rankedIds": [
     "n-short-015",
-    "n-id-025",
-    "n-hop-012-root",
-    "f-000226",
-    "n-hop-021-answer",
-    "n-short-026",
+    "n-short-025",
     "n-short-005",
-    "f-000218",
     "n-id-028",
-    "n-cjk-027"
+    "n-cjk-029",
+    "n-short-026",
+    "f-000564",
+    "n-id-036",
+    "n-hop-012-root",
+    "n-hop-021-answer"
    ],
    "metrics": {
     "recall5": 1,
@@ -7030,7 +7172,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2030,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7040,8 +7182,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7056,9 +7199,9 @@
     "n-cjk-027",
     "f-000533",
     "n-short-004",
+    "n-cjk-011",
     "n-long-009",
-    "n-id-013",
-    "n-cjk-007"
+    "n-id-013"
    ],
    "metrics": {
     "recall5": 1,
@@ -7068,7 +7211,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2030,
+    "d1RowsRead": 957,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7078,8 +7221,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "exact-id",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7106,7 +7250,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2029,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7116,8 +7260,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7126,15 +7271,15 @@
    "clusterKey": "n-short-018",
    "rankedIds": [
     "n-short-018",
-    "f-000214",
-    "n-short-025",
-    "f-000649",
-    "f-000630",
-    "n-long-001",
-    "f-000226",
-    "f-000494",
-    "n-id-016",
-    "n-long-003"
+    "f-000060",
+    "n-para-021",
+    "n-para-035",
+    "n-cjk-004",
+    "n-id-019",
+    "n-id-036",
+    "n-id-017",
+    "n-cjk-027",
+    "n-hop-021-answer"
    ],
    "metrics": {
     "recall5": 1,
@@ -7143,8 +7288,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2594,
+    "d1Statements": 15,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7154,8 +7299,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7164,14 +7310,14 @@
    "clusterKey": "n-short-019",
    "rankedIds": [
     "n-short-019",
+    "n-sub-005",
     "f-000369",
-    "f-000383",
-    "f-000197",
+    "f-000353",
     "f-000128",
+    "f-000197",
+    "f-000383",
     "f-000319",
     "f-000564",
-    "f-000353",
-    "n-id-019",
     "n-rare-035"
    ],
    "metrics": {
@@ -7182,7 +7328,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2041,
+    "d1RowsRead": 1005,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7192,8 +7338,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7204,13 +7351,13 @@
     "n-short-020",
     "n-short-025",
     "n-id-016",
-    "f-000154",
     "n-rare-002",
-    "f-000541",
+    "f-000154",
+    "f-000441",
     "f-000584",
+    "f-000021",
     "n-id-034",
-    "f-000591",
-    "n-long-013"
+    "n-short-008"
    ],
    "metrics": {
     "recall5": 1,
@@ -7220,7 +7367,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2093,
+    "d1RowsRead": 1128,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7230,8 +7377,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7241,14 +7389,14 @@
    "rankedIds": [
     "n-short-021",
     "f-000133",
-    "f-000258",
-    "f-000351",
-    "f-000591",
-    "f-000637",
-    "f-000444",
-    "n-long-012",
     "n-para-001",
-    "f-000132"
+    "f-000152",
+    "f-000616",
+    "f-000087",
+    "f-000067",
+    "f-000597",
+    "f-000258",
+    "f-000420"
    ],
    "metrics": {
     "recall5": 1,
@@ -7258,7 +7406,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2667,
+    "d1RowsRead": 2573,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7268,8 +7416,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7278,15 +7427,15 @@
    "clusterKey": "n-short-022",
    "rankedIds": [
     "n-short-022",
-    "f-000060",
-    "f-000388",
-    "f-000427",
-    "f-000132",
-    "f-000572",
-    "f-000109",
-    "f-000625",
-    "f-000174",
-    "f-000522"
+    "f-000408",
+    "f-000494",
+    "n-id-011",
+    "n-para-005",
+    "f-000609",
+    "f-000086",
+    "f-000114",
+    "f-000065",
+    "f-000367"
    ],
    "metrics": {
     "recall5": 1,
@@ -7296,7 +7445,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2089,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7306,8 +7455,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7319,12 +7469,12 @@
     "n-long-004",
     "n-hop-017-root",
     "n-id-014",
-    "f-000350",
-    "n-long-006",
-    "f-000057",
-    "n-long-016",
-    "f-000132",
-    "f-000154"
+    "f-000060",
+    "f-000414",
+    "n-id-032",
+    "n-id-031",
+    "n-cjk-005",
+    "n-hop-021-answer"
    ],
    "metrics": {
     "recall5": 1,
@@ -7334,7 +7484,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2145,
+    "d1RowsRead": 976,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7344,8 +7494,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7354,13 +7505,13 @@
    "clusterKey": "n-short-024",
    "rankedIds": [
     "n-short-024",
-    "f-000387",
-    "f-000621",
     "n-hop-029-answer",
+    "f-000621",
+    "f-000387",
     "f-000511",
+    "n-sub-002",
     "n-budget-002",
     "n-short-020",
-    "n-budget-008",
     "f-000341",
     "n-id-054"
    ],
@@ -7372,7 +7523,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2045,
+    "d1RowsRead": 988,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7382,8 +7533,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7394,13 +7546,13 @@
     "n-short-025",
     "n-para-039",
     "n-hop-016-answer",
-    "f-000649",
-    "n-short-007",
-    "n-long-001",
-    "n-long-002",
-    "n-para-007",
-    "n-long-003",
-    "f-000412"
+    "n-id-036",
+    "n-cjk-027",
+    "n-id-022",
+    "n-short-010",
+    "n-id-051",
+    "n-id-053",
+    "n-hop-012-root"
    ],
    "metrics": {
     "recall5": 1,
@@ -7409,8 +7561,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2279,
+    "d1Statements": 15,
+    "d1RowsRead": 968,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7420,8 +7572,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7430,15 +7583,15 @@
    "clusterKey": "n-short-026",
    "rankedIds": [
     "n-short-026",
-    "f-000408",
-    "f-000540",
-    "n-id-028",
-    "f-000633",
-    "f-000448",
-    "n-para-015",
-    "f-000364",
-    "n-long-002",
-    "f-000196"
+    "f-000133",
+    "f-000350",
+    "n-rare-035",
+    "n-cjk-017",
+    "n-id-024",
+    "n-id-009",
+    "n-id-020",
+    "n-cjk-025",
+    "n-hop-012-root"
    ],
    "metrics": {
     "recall5": 1,
@@ -7447,8 +7600,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2569,
+    "d1Statements": 15,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7458,29 +7611,26 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-short-027",
    "category": "short-word",
    "clusterKey": "n-short-027",
-   "tags": [
-    "known-gap",
-    "gap:T-0074"
-   ],
    "rankedIds": [
     "n-short-027",
-    "f-000408",
-    "f-000214",
-    "f-000419",
-    "n-id-018",
-    "f-000633",
-    "n-id-005",
-    "n-long-001",
-    "n-short-010",
-    "f-000346"
+    "f-000488",
+    "f-000334",
+    "f-000395",
+    "f-000018",
+    "f-000529",
+    "f-000312",
+    "f-000041",
+    "f-000398",
+    "f-000385"
    ],
    "metrics": {
     "recall5": 1,
@@ -7489,8 +7639,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2843,
+    "d1Statements": 15,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7500,8 +7650,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7528,7 +7679,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2029,
+    "d1RowsRead": 959,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7538,8 +7689,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7566,7 +7718,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2029,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7576,29 +7728,26 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
    "queryId": "q-short-030",
    "category": "short-word",
    "clusterKey": "n-short-030",
-   "tags": [
-    "known-gap",
-    "gap:T-0074"
-   ],
    "rankedIds": [
     "n-short-030",
+    "f-000419",
     "n-rare-031",
-    "f-000133",
-    "f-000408",
-    "f-000540",
-    "n-id-018",
-    "n-short-007",
-    "f-000630",
-    "n-id-010",
-    "f-000448"
+    "n-id-020",
+    "n-cjk-018",
+    "n-id-034",
+    "n-id-024",
+    "n-cjk-024",
+    "f-000175",
+    "f-000568"
    ],
    "metrics": {
     "recall5": 1,
@@ -7607,8 +7756,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2853,
+    "d1Statements": 15,
+    "d1RowsRead": 952,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7618,8 +7767,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7646,7 +7796,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2101,
+    "d1RowsRead": 2085,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7658,6 +7808,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7696,6 +7847,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7722,7 +7874,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1928,
+    "d1RowsRead": 1912,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7734,6 +7886,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -7747,16 +7900,16 @@
     "n-short-025",
     "n-budget-004",
     "n-rare-011",
-    "n-para-004",
+    "n-corr-001",
     "n-id-036",
     "n-hop-017-root",
     "n-id-019"
    ],
    "metrics": {
     "recall5": 0,
-    "recall10": 1,
-    "mrr10": 0.14285714285714285,
-    "ndcg10": 0.3333333333333333
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
    },
    "cost": {
     "d1Statements": 15,
@@ -7772,6 +7925,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7798,7 +7952,7 @@
    },
    "cost": {
     "d1Statements": 21,
-    "d1RowsRead": 4706,
+    "d1RowsRead": 4681,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7810,6 +7964,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7836,7 +7991,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2437,
+    "d1RowsRead": 2421,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -7848,6 +8003,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7855,13 +8011,13 @@
    "category": "paraphrase",
    "clusterKey": "n-para-007",
    "rankedIds": [
-    "f-000653",
     "f-000251",
     "f-000213",
     "f-000567",
     "f-000361",
-    "n-para-007",
     "f-000283",
+    "f-000069",
+    "n-para-007",
     "f-000154",
     "f-000387",
     "n-hop-004-answer"
@@ -7869,23 +8025,24 @@
    "metrics": {
     "recall5": 0,
     "recall10": 1,
-    "mrr10": 0.16666666666666666,
-    "ndcg10": 0.3562071871080222
+    "mrr10": 0.14285714285714285,
+    "ndcg10": 0.3333333333333333
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 718,
+    "d1RowsRead": 708,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.374275,
+    "neurons": 0.37286,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7924,6 +8081,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -7962,6 +8120,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8000,6 +8159,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8026,7 +8186,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 892,
+    "d1RowsRead": 884,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8038,6 +8198,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8064,7 +8225,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2122,
+    "d1RowsRead": 2138,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8076,6 +8237,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8102,7 +8264,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 659,
+    "d1RowsRead": 651,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8114,6 +8276,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8139,8 +8302,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 860,
+    "d1Statements": 16,
+    "d1RowsRead": 845,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8152,6 +8315,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8190,6 +8354,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8216,7 +8381,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 1432,
+    "d1RowsRead": 1448,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8228,6 +8393,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8238,8 +8404,8 @@
     "n-hop-027-root",
     "n-id-022",
     "f-000612",
-    "n-id-018",
     "f-000621",
+    "n-id-018",
     "f-000404",
     "f-000499",
     "f-000306",
@@ -8254,7 +8420,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 1990,
+    "d1RowsRead": 1977,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8266,6 +8432,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8273,15 +8440,15 @@
    "category": "paraphrase",
    "clusterKey": "n-para-018",
    "rankedIds": [
-    "f-000375",
     "f-000221",
+    "f-000375",
     "n-hop-025-answer",
     "f-000396",
     "f-000391",
     "f-000247",
     "f-000643",
-    "f-000251",
     "f-000591",
+    "f-000251",
     "f-000109"
    ],
    "metrics": {
@@ -8291,19 +8458,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 3037,
+    "d1Statements": 17,
+    "d1RowsRead": 2132,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.525397,
+    "neurons": 0.497663,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8316,11 +8484,11 @@
     "n-rare-035",
     "n-budget-004",
     "f-000044",
+    "n-corr-001",
     "n-common-028",
     "n-common-030",
     "n-common-020",
-    "n-common-016",
-    "n-budget-008"
+    "n-common-016"
    ],
    "metrics": {
     "recall5": 0,
@@ -8330,18 +8498,19 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 1258,
+    "d1RowsRead": 1250,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.31003400000000003,
+    "neurons": 0.298997,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8368,7 +8537,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2666,
+    "d1RowsRead": 2634,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8380,6 +8549,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8418,6 +8588,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8425,8 +8596,8 @@
    "category": "paraphrase",
    "clusterKey": "n-para-022",
    "rankedIds": [
-    "n-long-010",
     "f-000588",
+    "n-long-010",
     "f-000014",
     "f-000583",
     "f-000154",
@@ -8444,7 +8615,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 782,
+    "d1RowsRead": 779,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8456,6 +8627,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8482,7 +8654,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 1186,
+    "d1RowsRead": 1183,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8494,6 +8666,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8501,37 +8674,38 @@
    "category": "paraphrase",
    "clusterKey": "n-para-024",
    "rankedIds": [
+    "n-corr-001",
+    "f-000044",
     "n-para-024",
-    "f-000527",
-    "f-000388",
-    "n-para-010",
+    "n-rare-033",
     "n-common-020",
-    "f-000572",
-    "f-000427",
-    "f-000098",
-    "f-000636",
-    "n-common-017"
+    "f-000527",
+    "f-000625",
+    "f-000060",
+    "n-para-010",
+    "n-cjk-002"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 1,
-    "ndcg10": 1
+    "mrr10": 0.3333333333333333,
+    "ndcg10": 0.5
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 1372,
-    "aiCalls": 2,
+    "d1Statements": 16,
+    "d1RowsRead": 1335,
+    "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.367206,
+    "neurons": 0.016569,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "applied",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8558,7 +8732,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2492,
+    "d1RowsRead": 2474,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8570,6 +8744,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8584,9 +8759,9 @@
     "n-para-044",
     "f-000226",
     "f-000576",
-    "f-000656",
     "f-000151",
-    "f-000007"
+    "f-000007",
+    "n-hop-029-answer"
    ],
    "metrics": {
     "recall5": 1,
@@ -8601,13 +8776,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.400594,
+    "neurons": 0.402575,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8646,6 +8822,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8660,9 +8837,9 @@
     "n-cjk-023",
     "n-para-028",
     "f-000040",
-    "f-000512",
     "f-000283",
-    "f-000046"
+    "f-000046",
+    "f-000130"
    ],
    "metrics": {
     "recall5": 0,
@@ -8671,8 +8848,8 @@
     "ndcg10": 0.3562071871080222
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2734,
+    "d1Statements": 15,
+    "d1RowsRead": 1292,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8682,8 +8859,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8691,16 +8869,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-029",
    "rankedIds": [
-    "f-000570",
-    "f-000653",
     "n-long-021",
+    "f-000570",
     "f-000430",
     "f-000396",
+    "n-rare-031",
     "f-000369",
     "f-000251",
-    "n-rare-031",
     "f-000580",
-    "n-long-017"
+    "n-long-017",
+    "n-hop-010-root"
    ],
    "metrics": {
     "recall5": 0,
@@ -8709,19 +8887,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 19,
-    "d1RowsRead": 3452,
+    "d1Statements": 17,
+    "d1RowsRead": 1964,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.447855,
+    "neurons": 0.45776,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8748,7 +8927,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 868,
+    "d1RowsRead": 876,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8760,6 +8939,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8768,15 +8948,15 @@
    "clusterKey": "n-para-031",
    "rankedIds": [
     "n-long-006",
-    "n-rare-020",
-    "n-rare-012",
     "n-long-003",
-    "n-long-008",
-    "n-long-013",
-    "n-long-020",
     "n-rare-028",
+    "n-long-013",
+    "n-long-008",
+    "n-long-020",
     "f-000649",
-    "n-rare-035"
+    "f-000452",
+    "n-para-007",
+    "f-000621"
    ],
    "metrics": {
     "recall5": 0,
@@ -8785,8 +8965,8 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2708,
+    "d1Statements": 15,
+    "d1RowsRead": 1038,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8796,8 +8976,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8824,7 +9005,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 659,
+    "d1RowsRead": 649,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8836,6 +9017,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8844,15 +9026,15 @@
    "clusterKey": "n-para-033",
    "rankedIds": [
     "n-budget-005",
+    "n-corr-001",
     "n-short-003",
     "n-hop-012-answer",
     "f-000443",
-    "n-rare-030",
     "n-long-006",
     "n-id-049",
     "n-short-010",
     "f-000373",
-    "n-id-032"
+    "n-rare-030"
    ],
    "metrics": {
     "recall5": 0,
@@ -8862,7 +9044,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 762,
+    "d1RowsRead": 770,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8874,6 +9056,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8899,8 +9082,8 @@
     "ndcg10": 0.6309297535714574
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 2736,
+    "d1Statements": 16,
+    "d1RowsRead": 1023,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -8910,8 +9093,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8950,6 +9134,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -8988,6 +9173,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9026,6 +9212,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9052,7 +9239,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2414,
+    "d1RowsRead": 2390,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9064,6 +9251,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9076,8 +9264,8 @@
     "f-000159",
     "n-hop-006-answer",
     "f-000109",
-    "f-000591",
     "f-000396",
+    "f-000591",
     "f-000128",
     "f-000132",
     "n-rare-029"
@@ -9089,19 +9277,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 2899,
+    "d1Statements": 17,
+    "d1RowsRead": 2330,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.450119,
+    "neurons": 0.447572,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9112,13 +9301,13 @@
     "n-short-013",
     "n-long-014",
     "f-000419",
-    "n-rare-038",
     "n-para-015",
-    "n-rare-016",
-    "f-000321",
+    "n-rare-038",
+    "f-000251",
     "n-hop-003-root",
+    "n-rare-016",
     "n-id-003",
-    "f-000065"
+    "n-hop-028-answer"
    ],
    "metrics": {
     "recall5": 0,
@@ -9127,8 +9316,8 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 3416,
+    "d1Statements": 16,
+    "d1RowsRead": 1773,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9138,8 +9327,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9178,6 +9368,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9216,6 +9407,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9254,6 +9446,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9264,13 +9457,13 @@
     "f-000610",
     "n-long-006",
     "f-000159",
-    "f-000545",
-    "f-000455",
     "f-000476",
-    "f-000330",
-    "f-000324",
+    "f-000455",
+    "f-000545",
+    "f-000626",
     "f-000109",
-    "f-000626"
+    "f-000340",
+    "f-000324"
    ],
    "metrics": {
     "recall5": 0,
@@ -9279,19 +9472,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 2858,
+    "d1Statements": 17,
+    "d1RowsRead": 2198,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.527944,
+    "neurons": 0.533321,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9330,6 +9524,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9368,6 +9563,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9378,12 +9574,12 @@
     "n-id-013",
     "f-000040",
     "n-para-047",
+    "n-corr-001",
     "n-id-007",
     "f-000496",
     "f-000205",
     "f-000004",
     "f-000579",
-    "f-000267",
     "n-hop-001-root"
    ],
    "metrics": {
@@ -9399,13 +9595,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.423234,
+    "neurons": 0.411631,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9420,8 +9617,8 @@
     "n-short-019",
     "f-000140",
     "f-000044",
-    "f-000656",
     "f-000262",
+    "f-000142",
     "n-para-042"
    ],
    "metrics": {
@@ -9432,18 +9629,19 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 990,
+    "d1RowsRead": 995,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.447572,
+    "neurons": 0.441346,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9453,14 +9651,14 @@
    "rankedIds": [
     "n-cjk-001",
     "n-cjk-010",
+    "f-000341",
     "n-cjk-012",
     "n-cjk-002",
-    "f-000053",
     "f-000612",
     "n-cjk-022",
-    "f-000190",
-    "f-000105",
-    "n-cjk-008"
+    "n-cjk-008",
+    "f-000053",
+    "f-000356"
    ],
    "metrics": {
     "recall5": 1,
@@ -9470,7 +9668,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 1922,
+    "d1RowsRead": 845,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -9480,8 +9678,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9523,6 +9722,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9561,6 +9761,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9590,7 +9791,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1478,
+    "d1RowsRead": 1470,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9602,6 +9803,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -9628,7 +9830,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9638,8 +9840,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9678,6 +9881,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9704,7 +9908,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 957,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9714,8 +9918,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9754,6 +9959,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9762,15 +9968,15 @@
    "clusterKey": "n-cjk-007",
    "rankedIds": [
     "n-cjk-007",
+    "n-cjk-010",
     "f-000306",
     "n-cjk-002",
     "n-cjk-030",
-    "n-cjk-026",
-    "n-cjk-010",
+    "f-000612",
     "n-cjk-008",
     "n-cjk-001",
     "n-cjk-005",
-    "n-cjk-013"
+    "n-cjk-012"
    ],
    "metrics": {
     "recall5": 1,
@@ -9780,7 +9986,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9790,8 +9996,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9801,11 +10008,11 @@
    "rankedIds": [
     "n-cjk-008",
     "n-cjk-025",
-    "n-cjk-036",
-    "n-cjk-021",
-    "f-000614",
     "f-000062",
+    "n-cjk-036",
+    "f-000614",
     "n-cjk-019",
+    "n-cjk-021",
     "n-cjk-014",
     "n-cjk-020",
     "n-para-034"
@@ -9818,7 +10025,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9828,8 +10035,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9868,6 +10076,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9894,7 +10103,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9904,8 +10113,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9918,10 +10128,10 @@
     "n-cjk-025",
     "n-cjk-027",
     "n-cjk-014",
+    "f-000306",
     "n-cjk-012",
     "n-cjk-007",
     "n-cjk-008",
-    "n-cjk-022",
     "f-000178"
    ],
    "metrics": {
@@ -9932,7 +10142,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -9942,8 +10152,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -9982,6 +10193,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10008,7 +10220,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 1174,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10020,6 +10232,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10046,7 +10259,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10056,8 +10269,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10096,6 +10310,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10134,6 +10349,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10175,6 +10391,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -10213,6 +10430,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10251,6 +10469,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10289,6 +10508,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10297,12 +10517,12 @@
    "clusterKey": "n-cjk-020",
    "rankedIds": [
     "n-cjk-020",
+    "n-cjk-010",
     "n-cjk-025",
     "f-000306",
     "n-cjk-005",
-    "n-cjk-001",
-    "n-cjk-010",
     "n-cjk-016",
+    "n-cjk-002",
     "n-cjk-015",
     "n-cjk-032",
     "n-cjk-018"
@@ -10315,7 +10535,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10325,8 +10545,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10365,6 +10586,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10403,6 +10625,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10441,6 +10664,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10479,6 +10703,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10517,6 +10742,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10555,6 +10781,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10593,6 +10820,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10631,6 +10859,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10669,6 +10898,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10698,7 +10928,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 815,
+    "d1RowsRead": 810,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10710,6 +10940,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -10736,7 +10967,7 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 1922,
+    "d1RowsRead": 845,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -10746,8 +10977,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10774,7 +11006,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 1922,
+    "d1RowsRead": 845,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -10784,8 +11016,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10795,14 +11028,14 @@
    "rankedIds": [
     "n-cjk-032",
     "f-000306",
+    "n-cjk-034",
     "n-cjk-012",
     "n-cjk-031",
-    "n-cjk-006",
-    "n-cjk-034",
     "n-cjk-027",
     "f-000270",
     "n-cjk-029",
-    "n-cjk-030"
+    "n-cjk-030",
+    "n-cjk-006"
    ],
    "metrics": {
     "recall5": 1,
@@ -10812,7 +11045,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 1922,
+    "d1RowsRead": 845,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -10822,8 +11055,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10862,6 +11096,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10870,14 +11105,14 @@
    "clusterKey": "n-cjk-034",
    "rankedIds": [
     "n-cjk-034",
+    "f-000306",
     "n-cjk-025",
-    "n-cjk-005",
-    "n-cjk-021",
-    "f-000274",
-    "f-000404",
     "n-cjk-013",
+    "n-cjk-021",
     "n-cjk-008",
+    "n-cjk-005",
     "n-cjk-012",
+    "n-cjk-022",
     "n-cjk-020"
    ],
    "metrics": {
@@ -10888,7 +11123,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 2027,
+    "d1RowsRead": 950,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10898,8 +11133,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10938,6 +11174,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -10976,6 +11213,7 @@
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11014,6 +11252,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11052,6 +11291,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11090,6 +11330,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11116,7 +11357,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 889,
+    "d1RowsRead": 899,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11128,6 +11369,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11154,7 +11396,7 @@
    },
    "cost": {
     "d1Statements": 19,
-    "d1RowsRead": 2461,
+    "d1RowsRead": 2432,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11166,6 +11408,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11204,6 +11447,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11242,6 +11486,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11280,6 +11525,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11290,13 +11536,13 @@
     "n-hop-009-root",
     "n-long-001",
     "n-long-002",
-    "n-long-005",
+    "n-long-012",
     "n-para-046",
     "n-long-008",
-    "n-long-009",
+    "n-long-017",
+    "n-long-007",
     "n-long-011",
-    "n-long-012",
-    "n-long-013"
+    "n-long-018"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11306,7 +11552,7 @@
    },
    "cost": {
     "d1Statements": 22,
-    "d1RowsRead": 4032,
+    "d1RowsRead": 6869,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11316,8 +11562,9 @@
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11344,7 +11591,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 859,
+    "d1RowsRead": 850,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11356,6 +11603,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11394,6 +11642,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11432,6 +11681,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11470,6 +11720,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11483,8 +11734,8 @@
     "n-long-003",
     "f-000565",
     "f-000198",
-    "f-000629",
     "f-000408",
+    "f-000629",
     "n-id-018",
     "n-id-010"
    ],
@@ -11496,7 +11747,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 577,
+    "d1RowsRead": 569,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11508,6 +11759,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11546,6 +11798,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11572,7 +11825,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 862,
+    "d1RowsRead": 854,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11584,6 +11837,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11593,14 +11847,14 @@
    "rankedIds": [
     "n-hop-017-root",
     "n-long-004",
-    "f-000270",
     "n-common-036",
+    "f-000270",
     "f-000231",
     "n-common-013",
-    "n-common-016",
+    "n-common-004",
     "n-common-021",
-    "n-common-029",
-    "n-common-032"
+    "n-common-016",
+    "n-common-029"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11610,7 +11864,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1261,
+    "d1RowsRead": 1272,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11622,6 +11876,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11637,8 +11892,8 @@
     "n-budget-006",
     "f-000287",
     "f-000137",
-    "f-000274",
-    "f-000323"
+    "f-000323",
+    "f-000274"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11648,7 +11903,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1667,
+    "d1RowsRead": 1659,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11660,6 +11915,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11698,6 +11954,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11714,7 +11971,7 @@
     "n-short-020",
     "n-hop-005-answer",
     "n-hop-017-answer",
-    "n-id-015"
+    "n-long-001"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11724,7 +11981,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 970,
+    "d1RowsRead": 962,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11736,6 +11993,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11774,6 +12032,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11800,7 +12059,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1137,
+    "d1RowsRead": 1129,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11812,6 +12071,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11823,11 +12083,11 @@
     "f-000328",
     "f-000091",
     "f-000132",
-    "f-000226",
+    "n-corr-001",
+    "n-cjk-021",
     "f-000097",
     "n-id-030",
     "n-para-034",
-    "n-para-017",
     "f-000533"
    ],
    "metrics": {
@@ -11850,6 +12110,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11888,6 +12149,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11926,6 +12188,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -11964,6 +12227,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12002,6 +12266,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12040,6 +12305,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12066,7 +12332,7 @@
    },
    "cost": {
     "d1Statements": 19,
-    "d1RowsRead": 1979,
+    "d1RowsRead": 2003,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -12078,6 +12344,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12116,6 +12383,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12154,6 +12422,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12180,7 +12449,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 734,
+    "d1RowsRead": 729,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -12192,6 +12461,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12230,6 +12500,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12239,14 +12510,14 @@
    "rankedIds": [
     "n-para-030",
     "n-cjk-026",
+    "n-corr-001",
     "f-000179",
     "n-hop-017-root",
-    "f-000636",
     "n-cjk-022",
+    "f-000636",
     "f-000625",
     "f-000127",
-    "n-cjk-014",
-    "f-000241"
+    "n-cjk-014"
    ],
    "metrics": {
     "recall5": 0,
@@ -12261,13 +12532,14 @@
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.379369,
+    "neurons": 0.37286,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12275,16 +12547,16 @@
    "category": "long-context",
    "clusterKey": "n-long-005",
    "rankedIds": [
+    "n-corr-001",
+    "f-000226",
+    "f-000062",
+    "n-hop-007-answer",
     "n-hop-020-root",
-    "n-para-047",
-    "f-000654",
-    "f-000454",
+    "f-000040",
     "f-000179",
-    "f-000143",
-    "f-000605",
-    "f-000283",
-    "f-000453",
-    "f-000040"
+    "f-000393",
+    "f-000602",
+    "n-para-047"
    ],
    "metrics": {
     "recall5": 0,
@@ -12293,19 +12565,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 964,
-    "aiCalls": 2,
+    "d1Statements": 16,
+    "d1RowsRead": 906,
+    "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.42125599999999996,
+    "neurons": 0.012887,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "applied",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12344,6 +12617,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12351,16 +12625,16 @@
    "category": "long-context",
    "clusterKey": "n-long-007",
    "rankedIds": [
-    "f-000052",
-    "f-000591",
-    "f-000654",
-    "f-000402",
-    "f-000154",
+    "f-000519",
+    "f-000065",
+    "f-000391",
     "f-000145",
-    "f-000109",
     "f-000374",
+    "f-000465",
     "f-000128",
-    "f-000391"
+    "f-000402",
+    "f-000591",
+    "f-000154"
    ],
    "metrics": {
     "recall5": 0,
@@ -12369,19 +12643,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 2618,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 1975,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.447855,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
-   "rerankRoute": "clear-leader",
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12420,6 +12695,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12446,7 +12722,7 @@
    },
    "cost": {
     "d1Statements": 20,
-    "d1RowsRead": 4413,
+    "d1RowsRead": 4373,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -12458,6 +12734,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12496,6 +12773,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12506,10 +12784,10 @@
     "n-para-004",
     "f-000371",
     "n-cjk-011",
-    "f-000523",
     "f-000123",
-    "f-000618",
+    "f-000523",
     "f-000548",
+    "f-000191",
     "n-short-025",
     "n-para-046",
     "n-id-020"
@@ -12521,19 +12799,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 19,
-    "d1RowsRead": 3365,
+    "d1Statements": 17,
+    "d1RowsRead": 1595,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.328712,
+    "neurons": 0.322486,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
-   "ftsRoute": "like-ineligible-token",
+   "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12572,6 +12851,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12610,6 +12890,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12648,6 +12929,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12686,6 +12968,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12724,6 +13007,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12731,16 +13015,16 @@
    "category": "long-context",
    "clusterKey": "n-long-017",
    "rankedIds": [
-    "f-000529",
-    "f-000650",
     "f-000259",
-    "f-000268",
+    "f-000529",
     "f-000468",
-    "f-000519",
     "f-000019",
-    "f-000140",
+    "f-000519",
+    "f-000268",
     "f-000322",
-    "f-000396"
+    "f-000140",
+    "f-000396",
+    "f-000564"
    ],
    "metrics": {
     "recall5": 0,
@@ -12749,19 +13033,20 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 1334,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 1376,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.34795600000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
-   "rerankRoute": "clear-leader",
+   "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12788,7 +13073,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 865,
+    "d1RowsRead": 857,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -12800,6 +13085,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12826,7 +13112,7 @@
    },
    "cost": {
     "d1Statements": 21,
-    "d1RowsRead": 5228,
+    "d1RowsRead": 5187,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -12838,6 +13124,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12876,6 +13163,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12902,7 +13190,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 2734,
+    "d1RowsRead": 2710,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -12914,6 +13202,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   },
   {
@@ -12952,6 +13241,7 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -12968,7 +13258,7 @@
     "n-long-001",
     "n-short-029",
     "n-hop-022-answer",
-    "n-budget-002"
+    "n-sub-003"
    ],
    "metrics": {
     "recall5": 0,
@@ -12978,18 +13268,19 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 794,
+    "d1RowsRead": 786,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.410642,
+    "neurons": 0.404699,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "applied",
+   "keywordGold": false,
    "degraded": []
   },
   {
@@ -13006,7 +13297,7 @@
     "n-id-010",
     "n-long-024",
     "n-hop-020-root",
-    "n-hop-017-root"
+    "n-hop-007-root"
    ],
    "metrics": {
     "recall5": 0,
@@ -13016,7 +13307,7 @@
    },
    "cost": {
     "d1Statements": 15,
-    "d1RowsRead": 773,
+    "d1RowsRead": 776,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -13028,6 +13319,308 @@
    "leaked": [],
    "ftsRoute": "fts",
    "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-corr-001",
+   "category": "common-word",
+   "clusterKey": "n-corr-001",
+   "tags": [
+    "over-budget",
+    "correlated"
+   ],
+   "rankedIds": [
+    "n-corr-001",
+    "n-rare-028",
+    "n-hop-017-root",
+    "f-000151",
+    "n-budget-004",
+    "f-000133",
+    "f-000489",
+    "n-common-032",
+    "n-sub-005",
+    "f-000225"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 15,
+    "d1RowsRead": 356,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.014728,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-sub-001",
+   "category": "common-word",
+   "clusterKey": "n-sub-001",
+   "tags": [
+    "over-budget",
+    "subset"
+   ],
+   "rankedIds": [
+    "n-common-013",
+    "f-000259",
+    "f-000593",
+    "f-000308",
+    "f-000139",
+    "f-000177",
+    "f-000106",
+    "n-common-005",
+    "n-common-018",
+    "f-000408"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 3188,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.348239,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-sub-002",
+   "category": "common-word",
+   "clusterKey": "n-sub-002",
+   "tags": [
+    "over-budget",
+    "subset"
+   ],
+   "rankedIds": [
+    "n-sub-002",
+    "n-budget-008",
+    "f-000167",
+    "f-000536",
+    "n-common-012",
+    "f-000233",
+    "n-common-009",
+    "n-budget-005",
+    "f-000203",
+    "f-000400"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 3189,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.321071,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-sub-003",
+   "category": "common-word",
+   "clusterKey": "n-sub-003",
+   "tags": [
+    "over-budget",
+    "subset"
+   ],
+   "rankedIds": [
+    "n-common-036",
+    "n-common-017",
+    "f-000349",
+    "f-000294",
+    "f-000150",
+    "f-000064",
+    "f-000373",
+    "f-000566",
+    "f-000479",
+    "f-000235"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 3089,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-sub-004",
+   "category": "common-word",
+   "clusterKey": "n-sub-004",
+   "tags": [
+    "over-budget",
+    "subset"
+   ],
+   "rankedIds": [
+    "n-sub-004",
+    "n-common-005",
+    "f-000308",
+    "f-000330",
+    "f-000131",
+    "n-budget-008",
+    "f-000259",
+    "n-common-018",
+    "n-common-033",
+    "n-common-016"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 3150,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.338617,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-sub-005",
+   "category": "common-word",
+   "clusterKey": "n-sub-005",
+   "tags": [
+    "over-budget",
+    "subset"
+   ],
+   "rankedIds": [
+    "n-budget-001",
+    "f-000384",
+    "n-budget-005",
+    "f-000122",
+    "f-000336",
+    "f-000465",
+    "f-000536",
+    "n-sub-005",
+    "n-common-013",
+    "f-000203"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 1,
+    "mrr10": 0.125,
+    "ndcg10": 0.3154648767857287
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 3125,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.341164,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "degraded": []
+  },
+  {
+   "queryId": "q-sub-006",
+   "category": "common-word",
+   "clusterKey": "n-sub-006",
+   "tags": [
+    "over-budget",
+    "subset"
+   ],
+   "rankedIds": [
+    "n-common-014",
+    "f-000294",
+    "f-000150",
+    "f-000234",
+    "f-000438",
+    "n-common-017",
+    "f-000243",
+    "f-000145",
+    "f-000333",
+    "f-000518"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 3123,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
    "degraded": []
   }
  ]

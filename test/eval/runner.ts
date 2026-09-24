@@ -169,6 +169,7 @@ export async function runVariant(o: {
           leaked: findLeaks(rankedIds, readable, corpus.workspaceOf),
           ftsRoute: diagnostics.ftsRoute,
           ...(diagnostics.rerankRoute && diagnostics.rerankRoute !== "off" && { rerankRoute: diagnostics.rerankRoute }),
+          ...(diagnostics.keywordIds && { keywordGold: q.gold.some(g => diagnostics.keywordIds!.includes(g.id)) }),
           degraded: [
             ...(result.semanticUnavailable ? ["semantic-unavailable"] : []),
             ...(filterDegraded ? ["vectorize-filter-unfiltered"] : []),

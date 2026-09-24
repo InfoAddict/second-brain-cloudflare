@@ -1,7 +1,6 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
-  FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
   QUERY_SATURATION_FRACTION,
   VECTORIZE_GET_BY_IDS_BATCH,
@@ -42,7 +41,7 @@ import { asParentMatches } from "../vectorize/parents";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
-import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveRows } from "./fts";
+import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 
 async function keywordSearchLike(
   tokens: string[],
@@ -86,14 +85,23 @@ async function keywordSearchLike(
 }
 
 async function keywordSearchFts(
-  match: string,
+  matches: string[],
+  // matches[0] is the plan's AND tier: newest-first by FTS rowid with no bm25
+  // sort, so its LIMIT stops the scan instead of scoring every co-occurring row
+  // (see planFtsMatch).
+  andTier: boolean,
+  // Tokens too short for the index. They cannot retrieve, but they rank: rows
+  // carrying them come first, so the word that makes the query specific ("io"
+  // in "io scheduler") still decides which of the index's matches survive the
+  // LIMIT. Evaluated on rows the MATCH already read, never a scan.
+  shortTerms: string[],
   env: Env,
   limit: number,
   bounds: Readonly<TimeBounds>,
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
-): Promise<KeywordRow[]> {
+): Promise<KeywordRow[][]> {
   let timeWhere = "";
   const timeBindings: number[] = [];
   if (bounds.after !== undefined) { timeWhere += " AND e.created_at >= ?"; timeBindings.push(bounds.after); }
@@ -102,6 +110,16 @@ async function keywordSearchFts(
   // workspace_id exists only on entries, not on entries_fts's id/content
   // columns, so the clause below resolves unambiguously though unqualified.
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const shortHits = shortTerms.map(() => `(e.content LIKE ? ${CONTENT_LIKE_ESCAPE})`).join(" + ");
+  const shortOrder = shortHits ? `${shortHits} DESC, ` : "";
+  const shortBindings = shortTerms.map(contentLikePattern);
+  // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+  const sqlFor = (order: string) => `SELECT e.id, e.content, e.tags, e.source, e.created_at
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       ${order}LIMIT ?`;
+  const rankedSql = sqlFor(`ORDER BY ${shortOrder}bm25(entries_fts) `);
+  const andTierSql = sqlFor("ORDER BY entries_fts.rowid DESC ");
   // Join on rowid as well as id: rowids are unique, so a stale duplicate FTS
   // row for one id cannot fill two LIMIT slots, and a drifted row (an FTS id
   // at a rowid whose entries.id differs) maps to nothing instead of a wrong entry.
@@ -111,29 +129,26 @@ async function keywordSearchFts(
   // trigger without ever touching KV, leaving a table that still answers
   // MATCH queries — successfully, no exception — but has silently stopped
   // syncing. The liveness check rides in the SAME env.DB.batch() as the FTS
-  // query (one subrequest, one extra statement) so that staleness is caught
+  // queries (one subrequest, one extra statement) so that staleness is caught
   // structurally instead of relying on an error that never comes. Throwing
   // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
   // wiring below, rather than adding a second control path.
-  const [livenessResult, ftsResult] = await env.DB.batch([
+  const [livenessResult, ...ftsResults] = await env.DB.batch([
     // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
     // never entries/edges rows — nothing here to scope by workspace.
     env.DB.prepare(FTS_LIVENESS_SQL),
-    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
-    env.DB.prepare(
-      `SELECT e.id, e.content, e.tags, e.source, e.created_at
-       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
-       ORDER BY bm25(entries_fts) LIMIT ?`
-    ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit),
+    ...matches.map((match, i) => andTier && i === 0
+      ? env.DB.prepare(andTierSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit)
+      : env.DB.prepare(rankedSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), ...shortBindings, limit)),
   ]);
   if (!isFtsLiveRows(livenessResult.results as { name: string; sql: string | null }[] | undefined)) {
     throw new Error("entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body)");
   }
-  return ftsResult.results as unknown as KeywordRow[];
+  return ftsResults.map(r => r.results as unknown as KeywordRow[]);
 }
 
-async function keywordSearch(
+// Exported for the router tests (test/integration/keyword-router-bounded.test.ts); recallEntries is the only production caller.
+export async function keywordSearch(
   tokens: string[],
   env: Env,
   limit: number,
@@ -145,33 +160,45 @@ async function keywordSearch(
   // Absent (or null) on every path that skipped or lost that scan, in which
   // case the cost estimate below cannot run and routing keeps today's rules.
   corpus?: Pick<DistilledQuery, "df" | "total">,
-): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"] }> {
+): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
   if (!tokens.length) return { rows: [], fts: false, route: "like-ineligible-token" };
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
-  // ftsEligibleToken is the single source of truth: any token ftsMatchQuery
-  // would drop means the match silently searches only the survivors and hides
-  // entries matching just that one, so the whole query goes to LIKE.
-  const match = ftsMatchQuery(terms);
-  if (match && terms.every(ftsEligibleToken)) {
-    // Cost-aware routing (T-0058): when distillation's frequency scan covers
-    // every term, its df sum estimates exactly how many rows bm25 would have
-    // to score. Past the budget, LIKE wins — it stops after KEYWORD_CANDIDATE_LIMIT
-    // recency-ordered hits while bm25 scores every match. The scan counts the
-    // deterministic variants retrieval appends too, so a plural query
-    // ("widgets gadgets") estimates like its singular. Any term the scan still
-    // lacks (cap-bound) keeps FTS, as does every single-word query: the distill
-    // shortcut computes no df for one-word inputs, so single-word recall stays
-    // on FTS by design.
-    const df = corpus?.df;
-    if (df && terms.every(t => df.has(t))) {
-      const dfSum = terms.reduce((s, t) => s + (df.get(t) ?? 0), 0);
-      if (dfSum > FTS_MATCH_BUDGET) {
-        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
-      }
+  // ftsEligibleToken is the single source of truth for what the index can
+  // match. A token that is only too short (T-0074) no longer sends the whole
+  // query to the recency-window LIKE scan: the index serves the eligible
+  // tokens and the short ones are weighed in fusion over the rows it returns.
+  // A query with no eligible token, or one carrying a NUL token, still goes
+  // to LIKE, which is the only arm that can match them.
+  const eligible = terms.filter(ftsEligibleToken);
+  if (eligible.length && terms.every(t => ftsEligibleToken(t) || ftsShortToken(t))) {
+    // Cost-aware routing (T-0058, T-0073): when distillation's frequency scan
+    // covers every eligible term, its df sum estimates how many rows bm25 would
+    // have to score. Past the budget the plan is bounded (planFtsMatch) instead
+    // of falling to the newest-500 LIKE window, which cannot see an old memory
+    // that matches only on common words. Any term the scan lacks (cap-bound)
+    // keeps the full OR, as does every single-word query: the distill shortcut
+    // computes no df for one-word inputs.
+    const plan = planFtsMatch(eligible, corpus?.df, limit);
+    if (!plan) {
+      return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
     }
     if (await ftsReady(env)) {
       try {
-        return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true, route: "fts" };
+        const tiers = await keywordSearchFts(plan.matches, plan.andTier, terms.filter(ftsShortToken), env, limit, bounds, identity, only, teamId);
+        const rows = tiers.length === 1 ? tiers[0] : mergeTiers(tiers, limit);
+        // A bounded plan that found nothing has not proven the tokens absent:
+        // the recency window is the pre-bounded answer, so keep it as the floor.
+        if (plan.bounded && !rows.length) {
+          return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
+        }
+        // Without corpus df, fusion estimates IDF from the fetched rows, whose
+        // count is the denominator. LIKE always returned a full recency window
+        // there; the index returns only the matches, so a query that used to be
+        // LIKE-served because of a short token would weigh its keyword arm a
+        // fraction of what it did. Pricing it against the window LIKE would have
+        // filled keeps those weights where they were.
+        const idfWindow = !corpus?.df && eligible.length < terms.length ? limit : undefined;
+        return { rows, fts: true, route: plan.bounded ? "fts-bounded" : "fts", idfWindow };
       } catch (e) {
         console.error("FTS keyword search failed (degrading to LIKE):", e);
         return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-error" };
@@ -182,9 +209,23 @@ async function keywordSearch(
   return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-ineligible-token" };
 }
 
+// Tiers arrive in priority order (the AND tier newest-first, the OR tier by
+// bm25); a row keeps its first, highest-priority position.
+function mergeTiers(tiers: KeywordRow[][], limit: number): KeywordRow[] {
+  const seen = new Set<string>();
+  const out: KeywordRow[] = [];
+  for (const row of tiers.flat()) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function fuseDenseAndKeyword(
+export function fuseDenseAndKeyword(
   denseMatches: VectorizeMatch[],
   keywordRows: KeywordRow[],
   tokens: string[],
@@ -192,6 +233,7 @@ function fuseDenseAndKeyword(
   corpus: Pick<DistilledQuery, "df" | "total">,
   substringWeight: number,
   keywordPreRanked = false,
+  idfWindow = 0,
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -217,7 +259,7 @@ function fuseDenseAndKeyword(
     const { df, total } = corpus;
     idf = t => Math.log(1 + total / ((df.get(t) ?? 0) + 1));
   } else {
-    const kwN = kwLower.length || 1;
+    const kwN = Math.max(kwLower.length, idfWindow) || 1;
     const kwDf = new Map(tokens.map(t => [t, kwLower.reduce((n, x) => n + (x.lc.includes(needle.get(t)!) ? 1 : 0), 0)]));
     idf = t => Math.log(1 + kwN / ((kwDf.get(t) ?? 0) + 1));
   }
@@ -341,6 +383,7 @@ export async function recallEntries(
   markStage("querySignals");
 
   let keywordRows: KeywordRow[] = [];
+  let keywordIdfWindow = 0;
   let ftsServedKeywords = false; // memberFirst never sets this: tag rows are not bm25-ordered
   let results: { matches: VectorizeMatch[] };
   // Deeper dense results, fetched only when the diversified list is shorter than topK (see the fill below).
@@ -448,12 +491,13 @@ export async function recallEntries(
     const [denseResults, kw] = await Promise.all([
       denseQuery(),
       arms === "dense-only"
-        ? Promise.resolve({ rows: [] as KeywordRow[], fts: false, route: "skipped-by-variant" as const })
+        ? Promise.resolve({ rows: [] as KeywordRow[], fts: false, route: "skipped-by-variant" as const, idfWindow: undefined })
         : keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
     ]);
     results = denseResults;
     keywordRows = kw.rows;
     ftsServedKeywords = kw.fts;
+    keywordIdfWindow = kw.idfWindow ?? 0;
     if (internal.diagnostics) internal.diagnostics.ftsRoute = kw.route;
 
     // Governed by its own threshold, not the write-path duplicate flag: the two
@@ -493,8 +537,8 @@ export async function recallEntries(
     });
 
   const keywordPreRanked = internal.keywordPreRankedOverride ?? ftsServedKeywords;
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked);
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 

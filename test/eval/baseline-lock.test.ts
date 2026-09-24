@@ -16,7 +16,7 @@ const LOCK = resolve(CORE_DATA_DIR, "../baselines", `core-1k.${MODEL.split("/").
 const cache = replayPaths(MODEL, "core-1k").read;
 
 // This default-suite tripwire replays on sqlite and checks RANKINGS only (sqlite reports no rows_read). The committed lock
-// was recorded on workerd. Rankings were verified backend-independent: on core-1k all 338 queries' rankedIds from sqlite
+// was recorded on workerd. Rankings were verified backend-independent: on core-1k all 345 queries' rankedIds from sqlite
 // are identical to the workerd lock's (this test compares them, and passes). If the backends ever diverge, this test and
 // the workerd tripwire (baseline-lock.workerd.test.ts, which also checks statements and rows_read) cannot both hold, so
 // the divergence cannot go unnoticed.
@@ -38,6 +38,7 @@ describe("baseline lock (recall tripwire)", () => {
       expect(diff.fingerprintMismatch, `the golden data differs from the data the lock was recorded on. ${how}`).toBe(false);
       expect(diff.missing, `queries in the lock but not in the golden set now. ${how}`).toEqual([]);
       expect(diff.extra, `queries in the golden set but not in the lock. ${how}`).toEqual([]);
+      expect(diff.keywordGoldChanged, `keyword-arm gold coverage changed for ${diff.keywordGoldChanged.join(", ")}. ${how}`).toEqual([]);
       expect(diff.changed, `recall ranking changed for ${diff.changed.length} golden queries (first: ${diff.changed.slice(0, 5).join(", ")}). ${how}`).toEqual([]);
     } finally {
       await corpus.close();

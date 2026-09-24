@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS, type Config } from "../../src/config";
-import { RERANK_MODEL, RERANK_READY_KV_KEY } from "../../src/constants";
+import { FTS_READY_KV_KEY, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../src/constants";
 import type { Env } from "../../src/env";
 import type { Identity } from "../../src/lib/identity";
 import { resetFtsReadyMemo } from "../../src/recall/fts";
@@ -166,6 +166,25 @@ describe("recall reranker step", () => {
     expect(sent.some(t => /Glisteria Labs/.test(t))).toBe(true); // scored although fusion left it far outside the top 25
     expect(sent).toHaveLength(25); // hops 0: the extra took the seat of the lowest fused candidate, so the batch did not grow
     expect(result.matches.map(m => m.id)).toContain("rare"); // still in the top 10 with the model on
+  });
+
+  it("keyword evidence comes from the bounded keyword plan: an old note holding every term is scored though 2,100 newer rows share two of them", async () => {
+    // widget and gadget are past the FTS budget together, so keyword search runs the bounded plan (T-0073); the old LIKE window
+    // (newest 500) would never have returned the three holders. zorblax alone fits the OR tier, and the evidence read still finds them.
+    const extraVectors = Array.from({ length: 34 }, (_, i) => ({ id: `p${i}`, score: 0.895 - i * 0.001, metadata: { parentId: `p${i}`, created_at: 100_000 + i } }));
+    const s = await setup({ extraVectors });
+    await s.kv.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    for (let i = 0; i < 34; i++) s.sqlite.seed({ id: `p${i}`, content: `weekly gardening note ${i} about beans`, createdAt: 100_000 + i });
+    for (let i = 0; i < 2100; i++) s.sqlite.seed({ id: `f${i}`, content: `widget gadget ledger row ${i}`, createdAt: 200_000 + i });
+    for (let i = 0; i < 3; i++) s.sqlite.seed({ id: `h${i}`, content: `Zorblax widget gadget report ${i}, unrelated otherwise.`, createdAt: 10 + i });
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "zorblax widget gadget", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, { diagnostics });
+    await Promise.all(s.deferred);
+    expect(diagnostics.ftsRoute).toBe("fts-bounded");
+    expect(diagnostics.keywordIds).toEqual(expect.arrayContaining(["h0", "h1", "h2"]));
+    const sent = s.rerankInputs.at(-1)!.contexts.map(c => c.text);
+    expect(sent.filter(t => /Zorblax widget gadget report/.test(t))).toHaveLength(3);
   });
 
   it("a single COMMON word is not keyword evidence: no note outside the fused head takes a seat", async () => {

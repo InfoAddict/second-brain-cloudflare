@@ -351,35 +351,38 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(sqlite.issued.some(sql => sql.includes("entries_fts"))).toBe(false);
   });
 
-  it("routes queries with any sub-trigram-floor token to the LIKE path", async () => {
-    // The old builder silently dropped tokens under FTS_MIN_TOKEN_LENGTH, so
-    // ftsMatchQuery("v1 widget") searched only "widget" on the FTS path and
-    // short-only was unretrievable while ftsUsed read true.
+  it("serves a sub-trigram-floor token beside an eligible one from the index, ranking rows that carry it first", async () => {
+    // T-0074: one short token used to send the whole query to the recency-window
+    // LIKE scan. The index now retrieves with the eligible tokens, and the short
+    // one decides the order: rows carrying it come first, never a scan.
+    sqlite.seed({ id: "both", content: "v1 widget note", createdAt: 1000 });
+    sqlite.seed({ id: "long-only", content: "release note about widget", createdAt: 1002 });
+    sqlite.seed({ id: "short-only", content: "v1 release note", createdAt: 1001 });
+    sqlite.seed({ id: "cjk-both", content: "東京 widget note", createdAt: 1003 });
+    sqlite.seed({ id: "cjk-long", content: "widget note about tea", createdAt: 1004 });
+
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    for (const [query, first] of [["v1 widget", "both"], ["東京 widget", "cjk-both"]] as const) {
+      resetFtsReadyMemo();
+      const diagnostics: RecallDiagnostics = {};
+      await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, undefined, { diagnostics });
+      expect(diagnostics.ftsRoute, query).toBe("fts");
+      expect(diagnostics.ftsUsed, query).toBe(true);
+      expect(diagnostics.keywordIds![0], query).toBe(first);
+      expect(diagnostics.keywordIds, query).toContain("long-only");
+    }
+  });
+
+  it("keeps a query made only of sub-trigram-floor tokens on the LIKE path, which alone can retrieve them", async () => {
     sqlite.seed({ id: "short-only", content: "v1 release note", createdAt: 1001 });
     sqlite.seed({ id: "long-only", content: "release note about widget", createdAt: 1000 });
-    sqlite.seed({ id: "cjk-short", content: "東京 release notes", createdAt: 1002 });
-    sqlite.seed({ id: "cjk-long", content: "release notes about widget", createdAt: 1003 });
-
     const cfg = { ...DEFAULTS, KEYWORD_CANDIDATE_LIMIT: KEYWORD_MAX_TOKENS };
-    for (const query of ["v1 widget", "東京 widget"]) {
-      resetFtsReadyMemo();
-      await env.OAUTH_KV.delete(FTS_READY_KV_KEY);
-      const likeDiagnostics: RecallDiagnostics = {};
-      await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: likeDiagnostics });
-      expect(likeDiagnostics.ftsUsed).toBe(false);
-
-      resetFtsReadyMemo();
-      await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
-      const ftsDiagnostics: RecallDiagnostics = {};
-      await recallEntries({ query, topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics: ftsDiagnostics });
-
-      expect(ftsDiagnostics.ftsUsed).toBe(false);
-      expect([...ftsDiagnostics.keywordIds!].sort()).toEqual([...likeDiagnostics.keywordIds!].sort());
-    }
-    resetFtsReadyMemo();
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
     const diagnostics: RecallDiagnostics = {};
-    await recallEntries({ query: "v1 widget", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics });
+    await recallEntries({ query: "v1 ux", topK: 10, synthesize: false }, env, ctx, cfg, { diagnostics });
+    expect(diagnostics.ftsRoute).toBe("like-ineligible-token");
+    expect(diagnostics.ftsUsed).toBe(false);
     expect(diagnostics.keywordIds).toContain("short-only");
   });
 
@@ -545,18 +548,47 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
   });
 
   // T-0058 cost-aware routing: distillation's df scan estimates exactly how
-  // many rows bm25 would have to score. Past FTS_MATCH_BUDGET, LIKE wins —
-  // it stops after KEYWORD_CANDIDATE_LIMIT recency-ordered hits while bm25
-  // scores every match.
-  it("routes a query whose df sum exceeds the budget to LIKE with ftsRoute like-match-budget", async () => {
+  // many rows bm25 would have to score. Past FTS_MATCH_BUDGET the plan is
+  // bounded (T-0073): bm25 scores only what fits, never every match.
+  it("serves a query whose df sum exceeds the budget from a bounded FTS plan, not the LIKE window", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
     for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget gadget ledger", createdAt: i + 1 });
+    // T-0073: the gold is the oldest row and matches only on the two common words.
+    sqlite.seed({ id: "old-gold", content: "widget gadget ledger gold", createdAt: 0 });
 
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "widget gadget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
 
-    // df = 2100 + 2100 = 4200, well over the 2,000 budget.
+    // df = 2101 + 2101, well over the 2,000 budget: neither word fits alone, so the plan is the AND of both.
+    expect(diagnostics.ftsRoute).toBe("fts-bounded");
+    expect(diagnostics.ftsUsed).toBe(true);
+  });
+
+  it("keeps the rarest words that fit the budget and lets the common one rank in fusion only", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    // widget df 2100 (over the budget alone), gadget df 1: the OR covers gadget, the AND covers both.
+    for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget ledger", createdAt: i + 1 });
+    sqlite.seed({ id: "old-gadget", content: "widget gadget ledger", createdAt: 0 });
+
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "widget gadget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
+    expect(diagnostics.ftsRoute).toBe("fts-bounded");
+    expect(diagnostics.keywordIds).toContain("old-gadget");
+    expect(diagnostics.keywordIds!.length).toBeLessThan(10);
+  });
+
+  it("still falls to the LIKE window when the only eligible token alone passes the budget", async () => {
+    await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
+    resetFtsReadyMemo();
+    for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widget ledger", createdAt: i + 1 });
+
+    const diagnostics: RecallDiagnostics = {};
+    // "ux" is under the trigram floor, so widget is the lone eligible token: no bounded plan exists for it.
+    await recallEntries({ query: "widget ux", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
+
     expect(diagnostics.ftsRoute).toBe("like-match-budget");
     expect(diagnostics.ftsUsed).toBe(false);
   });
@@ -589,7 +621,7 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(diagnostics.ftsUsed).toBe(true);
   });
 
-  it("sits exactly on the budget: sum == budget stays on FTS, sum == budget+1 routes to LIKE", async () => {
+  it("sits exactly on the budget: sum == budget stays on the full FTS plan, sum == budget+1 bounds it", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
     // Two tokens at df 1,000 each: the sum is exactly FTS_MATCH_BUDGET.
@@ -601,18 +633,18 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     expect(atBudget.ftsUsed).toBe(true);
 
     // One more widget-only row pushes the sum to 2,001 — the first value
-    // over the budget — so the same query flips to LIKE.
+    // over the budget — so the same query flips to the bounded plan.
     sqlite.seed({ id: "extra", content: "widget only", createdAt: 0 });
     const oneOver: RecallDiagnostics = {};
     await recallEntries({ query: "widget gadget", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics: oneOver });
-    expect(oneOver.ftsRoute).toBe("like-match-budget");
-    expect(oneOver.ftsUsed).toBe(false);
+    expect(oneOver.ftsRoute).toBe("fts-bounded");
+    expect(oneOver.ftsUsed).toBe(true);
   });
 
   // Final fix round: distillation's df scan counts the deterministic variants
   // retrieval appends, so a plural query estimates like its singular — the
-  // same over-budget corpus routes both spellings to LIKE, not just one.
-  it("routes the plural form like its singular once variants are counted", async () => {
+  // same over-budget corpus bounds both spellings, not just one.
+  it("bounds the plural form like its singular once variants are counted", async () => {
     await env.OAUTH_KV.put(FTS_READY_KV_KEY, "1");
     resetFtsReadyMemo();
     for (let i = 0; i < 2100; i++) sqlite.seed({ id: `row-${i}`, content: "widgets gadgets ledger", createdAt: i + 1 });
@@ -621,8 +653,8 @@ describe("recall keyword arm: FTS5 with LIKE fallback", () => {
     await recallEntries({ query: "widgets gadgets", topK: 5, synthesize: false }, env, ctx, undefined, { diagnostics });
 
     // widgets 2100 + gadgets 2100, plus the folded widget/gadget variants.
-    expect(diagnostics.ftsRoute).toBe("like-match-budget");
-    expect(diagnostics.ftsUsed).toBe(false);
+    expect(diagnostics.ftsRoute).toBe("fts-bounded");
+    expect(diagnostics.ftsUsed).toBe(true);
   });
 
   // Final fix round (review item 5): memberFirst recalls never reach

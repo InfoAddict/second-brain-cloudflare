@@ -56,6 +56,8 @@ export interface QueryResult {
   ftsRoute?: string;
   /** What the cross-encoder step did for this query (see RecallDiagnostics.rerankRoute). */
   rerankRoute?: string;
+  /** Whether any gold id was among the keyword arm's candidates (absent when the arm did not run). A diagnostic for router changes: fusion can bury a gold the arm retrieved, so this isolates candidate coverage. Never gated. */
+  keywordGold?: boolean;
   /** Degradation recall reported for this query (dense arm down, filter rejected, FTS error). Any entry is a hard-invariant problem. */
   degraded?: string[];
   error?: string;

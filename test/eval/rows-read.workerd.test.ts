@@ -21,7 +21,7 @@ describe.skipIf(!process.env.EVAL_WORKERD)("workerd rows_read on the whole core-
     const corpus = await loadCorpus({ spec, backend: "workerd", replay: makeReplayAi({ store: new ReplayStore(replayPaths(MODEL, "core-1k").read), mode: "replay" }), embeddingModel: MODEL });
     try {
       const report = await runVariant({ corpus, variant: getVariant("baseline"), queries: spec.queries, isolate: "warm", embeddingModel: MODEL });
-      expect(report.results).toHaveLength(338);
+      expect(report.results).toHaveLength(345);
       const missing = report.results.filter(r => r.cost.d1RowsRead === null).map(r => r.queryId);
       expect(missing, `${missing.length} queries have no rows_read`).toEqual([]);
       expect(report.results.every(r => (r.cost.d1RowsRead as number) > 0)).toBe(true);

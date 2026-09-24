@@ -993,8 +993,8 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results: rows };
         }
-        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries") && s.includes("ORDER BY created_at DESC") && !s.includes("WHERE id = ?")) {
-          // GET /export: the caller's readable set, newest first, no LIMIT. The
+        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries") && s.includes("ORDER BY created_at ASC") && !s.includes("WHERE id = ?")) {
+          // GET /export: the caller's readable set, oldest first, no LIMIT. The
           // route appends `WHERE workspace_id IN (?, ?)` (bound to args), so
           // rows outside those workspaces are withheld here too. `last_updated`
           // models the COALESCE, so a row that never had updated_at written
@@ -1002,7 +1002,7 @@ export class D1Mock {
           const workspaces: string[] = args.map((a: any) => String(a));
           const results = [...db.entries]
             .filter((e: any) => !workspaces.length || workspaces.includes(e.workspace_id ?? ""))
-            .sort((a: any, b: any) => b.created_at - a.created_at)
+            .sort((a: any, b: any) => a.created_at - b.created_at)
             .map((e: any) => ({
               id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at,
               last_updated: e.updated_at ?? e.created_at,
