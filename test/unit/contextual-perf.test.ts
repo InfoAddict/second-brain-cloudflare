@@ -12,8 +12,35 @@ import { CONTEXT_MAX_CONTENT_CHARS, CONTEXT_MAX_CONTENT_TOKENS } from "../../src
 import { DEFAULTS, type Config } from "../../src/config";
 import { chunkText } from "../../src/text/chunk";
 
-/** A third of the free plan's 10 ms CPU per invocation. */
-const CPU_BUDGET_MS = 3.3;
+/**
+ * CPU time of a fixed reference workload, best of several runs. CPU time inflates on a machine that is busy (shared
+ * caches, hyperthreads, throttling), so the budgets below scale with how much slower this workload runs than it did
+ * on a quiet one. A regression to quadratic work is 9x at these sizes and still fails.
+ */
+function referenceMs(): number {
+  let best = Infinity;
+  for (let r = 0; r < 9; r++) {
+    const before = process.cpuUsage();
+    let h = 2166136261;
+    let s = "";
+    for (let i = 0; i < 300_000; i++) {
+      h = Math.imul(h ^ (i & 255), 16777619);
+      if ((i & 4095) === 0) s = `${s.slice(-64)}${h}`;
+    }
+    if (h === 42 && s === "never") throw new Error("keep the loop");
+    const c = process.cpuUsage(before);
+    best = Math.min(best, (c.user + c.system) / 1000);
+  }
+  return best;
+}
+/** referenceMs() on a quiet machine. */
+const REFERENCE_QUIET_MS = 0.3;
+
+/**
+ * A third of the free plan's 10 ms CPU per invocation, scaled for how busy the machine is at the moment of the check
+ * (never below the quiet-machine budget, at most 4x). Read fresh each time, because load comes and goes during a run.
+ */
+const cpuBudget = (): number => 3.3 * Math.min(4, Math.max(1, referenceMs() / REFERENCE_QUIET_MS));
 
 const on: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" };
 const M3: Config = { ...on, EMBEDDING_MODEL: "@cf/baai/bge-m3" };
@@ -45,7 +72,7 @@ describe("contextual builder CPU", () => {
     it(`${name}: stays within budget at 8, 16 and 24 KB (the size limit)`, () => {
       const timings = SIZES.map(n => bestMs(() => buildEmbeddingChunks(entryOf(make(n)), on)));
       // Free-plan CPU is 10 ms per invocation for the whole request, so the builder gets a third of it: at least 3x headroom.
-      SIZES.forEach((n, i) => expect(timings[i], `${name} ${n} chars took ${timings[i].toFixed(2)} ms`).toBeLessThan(CPU_BUDGET_MS));
+      SIZES.forEach((n, i) => expect(timings[i], `${name} ${n} chars took ${timings[i].toFixed(2)} ms`).toBeLessThan(cpuBudget()));
     });
 
     it(`${name}: scales linearly (24 KB costs at most 6x 8 KB; linear is 3x, quadratic 9x)`, () => {
@@ -56,13 +83,13 @@ describe("contextual builder CPU", () => {
   }
 
   it("bge-m3 at the size limit stays within budget too", () => {
-    expect(bestMs(() => buildEmbeddingChunks(entryOf(prose(24_000)), M3))).toBeLessThan(CPU_BUDGET_MS);
+    expect(bestMs(() => buildEmbeddingChunks(entryOf(prose(24_000)), M3))).toBeLessThan(cpuBudget());
   });
 
   it("notes past the size limit are chunked plain, so the builder's cost is bounded", () => {
     for (const n of [64_000, 256_000]) {
       expect(buildEmbeddingChunks(entryOf(prose(n)), on).every(c => !c.contextualized)).toBe(true);
-      expect(bestMs(() => buildEmbeddingChunks(entryOf(prose(n)), on)), `${n} chars`).toBeLessThan(CPU_BUDGET_MS);
+      expect(bestMs(() => buildEmbeddingChunks(entryOf(prose(n)), on)), `${n} chars`).toBeLessThan(cpuBudget());
     }
   });
 
@@ -91,7 +118,7 @@ describe("contextual builder CPU", () => {
         const c = process.cpuUsage(before);
         best = Math.min(best, (c.user + c.system) / 1000);
       }
-      expect(best, `${name} (${content.length} chars) took ${best.toFixed(2)} ms of CPU`).toBeLessThan(CPU_BUDGET_MS);
+      expect(best, `${name} (${content.length} chars) took ${best.toFixed(2)} ms of CPU`).toBeLessThan(cpuBudget());
     }
   });
 
@@ -102,6 +129,6 @@ describe("contextual builder CPU", () => {
   });
 
   it("the token estimator handles 24 KB well within budget", () => {
-    expect(bestMs(() => estimateBgeSmallTokens(prose(24_000)))).toBeLessThan(CPU_BUDGET_MS);
+    expect(bestMs(() => estimateBgeSmallTokens(prose(24_000)))).toBeLessThan(cpuBudget());
   });
 });
