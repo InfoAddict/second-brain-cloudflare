@@ -6,7 +6,7 @@ import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from
 import { intParam, json } from "../lib/http";
 import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
-import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere } from "../lib/scope";
+import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
@@ -1494,7 +1494,7 @@ export async function handleAdminRoutes(
 
     const placeholders = ids.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scope.clause}`,
+      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
     ).bind(...ids, ...scope.bindings).all();
     const found = results as Record<string, any>[];
 

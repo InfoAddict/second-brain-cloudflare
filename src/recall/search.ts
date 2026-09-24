@@ -11,7 +11,7 @@ import { resolveConfig, type Config } from "../config";
 import { embed } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
-import { layerOf, scopeWhereForRead } from "../lib/scope";
+import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { expandGraph } from "../graph/traverse";
 import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
@@ -489,12 +489,12 @@ export async function recallEntries(
   // scope clause here is what stops that id from hydrating into signals. The
   // scope's two bindings count toward D1's bound-parameter ceiling exactly as
   // the ids do, so the batch shrinks by them rather than overrunning.
-  const rcScopeSql = scope ? ` AND ${scope.clause}` : "";
+  const rcScopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   const rcBatchSize = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   for (let i = 0; i < candidateIds.length; i += rcBatchSize) {
     const batch = candidateIds.slice(i, i + rcBatchSize);
     const rcPlaceholders = batch.map(() => "?").join(", ");
-    // scope-checked: the caller's clause IS applied — rcScopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: rcScopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results: rows } = await env.DB.prepare(
       `SELECT ${candidateSignalProjection} FROM entries WHERE id IN (${rcPlaceholders})${rcScopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: CandidateSignalRow[] };
@@ -585,7 +585,7 @@ export async function recallEntries(
   // when idBatchSize subtracts them from the bound-parameter ceiling — the same
   // accounting every other filter's bindings get.
   if (scope) {
-    d1Filters += ` AND ${scope.clause}`;
+    d1Filters += ` AND ${scopeWhereForIdRead(scope).clause}`;
     filterBindings.push(...scope.bindings);
   }
   const d1Rows: Record<string, any>[] = [];
@@ -594,7 +594,7 @@ export async function recallEntries(
     const batch = allParentIds.slice(i, i + idBatchSize);
     const placeholders = batch.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      // scope-checked: the caller's clause IS applied — d1Filters is built from scope.clause above and appended here; the lexer cannot see into a JS-assembled fragment
+      // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
       `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (${placeholders})${d1Filters}`
     ).bind(...batch, ...filterBindings).all() as { results: Record<string, any>[] };
     d1Rows.push(...results);

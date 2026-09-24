@@ -3,7 +3,7 @@ import { DEFAULTS, type Config } from "../config";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { getKind } from "../memory/kind";
 import { getStatus } from "../memory/status";
-import { layerOf, scopeWhereForRead } from "../lib/scope";
+import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { resolveActorLabel } from "../lib/actors";
 import type { Identity } from "../lib/identity";
 import { projectFilterSql } from "../projects/filter";
@@ -110,7 +110,7 @@ async function readableAndDeprecatedAmong(
   teamId?: string,
 ): Promise<{ readable: Set<string>; deprecated: Set<string> }> {
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
-  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const take = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   const readable = new Set<string>();
@@ -118,7 +118,7 @@ async function readableAndDeprecatedAmong(
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
-    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results } = await env.DB.prepare(
       `SELECT id, tags FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
@@ -230,13 +230,13 @@ export async function expandGraph(
 async function hydrateGraphEntries(ids: string[], env: Env, identity?: Identity, only?: "personal" | "company", teamId?: string): Promise<Map<string, Record<string, any>>> {
   const map = new Map<string, Record<string, any>>();
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
-  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const take = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
-    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results } = await env.DB.prepare(
       `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
@@ -343,7 +343,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
   // statement, an unqualified `workspace_id` is a clause a reader (and the scope
   // checker) has to resolve by knowing which table has the column.
   const nodeScope = identity ? scopeWhereForRead(identity, { layer: opts.only, teamId: opts.teamId }, "e.workspace_id") : null;
-  const nodeScopeSql = nodeScope ? ` AND ${nodeScope.clause}` : "";
+  const nodeScopeSql = nodeScope ? ` AND ${scopeWhereForIdRead(nodeScope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const nodeTake = D1_MAX_BOUND_PARAMS - (nodeScope?.bindings.length ?? 0);
   for (let i = 0; i < nodeIds.length; i += nodeTake) {
@@ -359,7 +359,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     // Keep the annotation below immediately above the statement: it is spent by
     // the first query within five lines of it, and prose in between silently
     // pushes the statement out of that window.
-    // scope-checked: the caller's clause IS applied — nodeScopeSql is built as ` AND ${nodeScope.clause}` above, against the `e` alias, and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. The joined `users` rows are labels for the entries this clause already admitted, never a second source of rows. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: nodeScopeSql applies the caller's clause to e through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. The users join supplies labels only
     const { results } = await env.DB.prepare(
       `SELECT e.id, e.content, e.tags, e.importance_score, e.created_at,
               e.workspace_id, e.actor_id, e.source, u.name AS actor_display_name

@@ -128,7 +128,7 @@ export async function checkDuplicateAndContradiction(
       const writerWorkspaceId = workspaceId ?? "";
       const placeholders = parentIds.map(() => "?").join(", ");
       const { results: rows } = await env.DB.prepare(
-        `SELECT id, content FROM entries WHERE id IN (${placeholders}) AND workspace_id = ?`
+        `SELECT id, content FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
       ).bind(...parentIds, writerWorkspaceId).all() as { results: { id: string; content: string }[] };
 
       if (rows.length) {

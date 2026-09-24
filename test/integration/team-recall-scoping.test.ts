@@ -8,10 +8,9 @@
  * full recallEntries path against the sqlite-d1 facade — d1-mock branches on
  * query strings and ignores bindings, which is exactly what scoping lives in.
  *
- * The dense arm is forced down (VECTORIZE.query rejects) so the keyword arm's
- * SQL is the whole candidate source, and the facade's `issued` array pins the
- * byte-for-byte contract: absent an Identity, every statement is exactly what
- * it was before v3.
+ * Most cases force the dense arm down so the keyword arm's SQL is the whole
+ * candidate source. The dense-arm matrix exercises the leak-catcher directly.
+ * The facade's `issued` array pins the byte-for-byte unscoped SQL contract.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { recallEntries } from "../../src/recall/search";
@@ -89,6 +88,38 @@ describe("recallEntries with an Identity", () => {
     expect(ids).not.toContain("foreign");
   });
 
+  it.each([
+    ["member", "member", undefined, undefined, ["own", "co", "co-2"]],
+    ["admin including legacy", "admin", undefined, undefined, ["own", "co", "co-2", "legacy"]],
+    ["personal layer", "member", "personal", undefined, ["own"]],
+    ["company layer", "member", "company", undefined, ["co", "co-2"]],
+    ["named team", "member", undefined, "ws-co", ["co"]],
+  ] as const)("rejects unreadable dense ids for %s", async (_name, role, workspaceFilter, teamId, expected) => {
+    for (const [id, workspace] of [
+      ["own", "ws-a"], ["co", "ws-co"], ["co-2", "ws-co-2"],
+      ["legacy", ""], ["foreign", "ws-b"],
+    ] as const) seedIn(sqlite, id, workspace, `dense result ${id}`);
+    const denseIds = ["own", "co", "co-2", "legacy", "foreign"];
+    const query = vi.fn().mockResolvedValue({
+      matches: denseIds.map((id, i) => ({ id, score: 0.95 - i * 0.01, metadata: { parentId: id } })),
+    });
+    const denseEnv = recallEnv(sqlite, { query });
+    const identity: Identity = {
+      ...memberOf("ws-a"), role, companyWorkspaceIds: ["ws-co", "ws-co-2"],
+    };
+    const diagnostics: NonNullable<RecallInternalOptions["diagnostics"]> = {};
+    const { ctx } = makeCtx();
+
+    const result = await recallEntries(
+      { query: "alpha", topK: 10, synthesize: false }, denseEnv, ctx, undefined,
+      { identity, workspaceFilter, teamId, diagnostics },
+    );
+
+    expect(query).toHaveBeenCalled();
+    expect(diagnostics.denseIds).toContain("foreign");
+    expect(result.matches.map(match => match.id).sort()).toEqual([...expected].sort());
+  });
+
   it("keeps unreadable rows out of a multi-keyword candidate window without date bounds", async () => {
     seedIn(sqlite, "own-answer", "ws-a", "alpha beta decision", 1000);
     for (let i = 0; i < 4; i++) {
@@ -142,7 +173,7 @@ describe("recallEntries with an Identity", () => {
     // the leak-catcher for unscoped vectorize hits until namespaces land (P3).
     const hydrations = sqlite.issued.filter(s => s.includes("FROM entries WHERE id IN"));
     expect(hydrations.length).toBeGreaterThan(0);
-    for (const sql of hydrations) expect(sql).toContain("AND workspace_id IN (?, ?)");
+    for (const sql of hydrations) expect(sql).toContain("AND +(workspace_id IN (?, ?))");
     // The recall_count bump stays by-id: those ids came from already-scoped rows.
     expect(sqlite.issued.some(s => s.includes("UPDATE entries SET recall_count") && s.includes("workspace_id")))
       .toBe(false);

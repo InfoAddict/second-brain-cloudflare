@@ -17,6 +17,12 @@ export interface ScopeClause {
   bindings: string[];
 }
 
+/** Keep the tenancy filter while making id-keyed reads use the entries primary key.
+ * The plan relies on no sqlite_stat1: this project never runs ANALYZE. */
+export function scopeWhereForIdRead(scope: ScopeClause): ScopeClause {
+  return { clause: `+(${scope.clause})`, bindings: scope.bindings };
+}
+
 /**
  * The write-side twin of Identity: where a new entry row lands and who gets
  * stamped as its actor. Resolved from an Identity at the route/MCP edge and

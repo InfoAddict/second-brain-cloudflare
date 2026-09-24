@@ -7,6 +7,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 **Search**
 
 - Searching for identifiers with underscores, such as `DATABASE_URL` and `ERR_TLS_90412`, now finds the matching memories.
+- Searches read far fewer database rows when loading candidate memories, so growing brains stay within the D1 free tier much longer. Workspace visibility remains enforced.
 
 ## [3.6.0] — Search that finds the exact thing
 
