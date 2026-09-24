@@ -10709,7 +10709,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 772,
+    "d1RowsRead": 817,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10746,7 +10746,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 890,
+    "d1RowsRead": 935,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10773,7 +10773,7 @@
     "n-id-007",
     "n-long-014",
     "n-hop-004-root",
-    "f-000025"
+    "f-000488"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -10783,7 +10783,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 665,
+    "d1RowsRead": 710,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10820,7 +10820,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 945,
+    "d1RowsRead": 1010,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10857,7 +10857,7 @@
    },
    "cost": {
     "d1Statements": 19,
-    "d1RowsRead": 2502,
+    "d1RowsRead": 2569,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10884,7 +10884,7 @@
     "n-long-003",
     "n-hop-011-answer",
     "n-long-021",
-    "f-000565"
+    "n-short-025"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -10894,7 +10894,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 887,
+    "d1RowsRead": 937,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10921,7 +10921,7 @@
     "n-long-014",
     "n-id-005",
     "n-rare-010",
-    "f-000391"
+    "f-000007"
    ],
    "metrics": {
     "recall5": 1,
@@ -10931,7 +10931,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1567,
+    "d1RowsRead": 1605,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -10958,7 +10958,7 @@
     "f-000396",
     "n-budget-008",
     "n-short-013",
-    "n-rare-004"
+    "f-000035"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -10968,7 +10968,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 742,
+    "d1RowsRead": 773,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11005,7 +11005,7 @@
    },
    "cost": {
     "d1Statements": 22,
-    "d1RowsRead": 4067,
+    "d1RowsRead": 4121,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11032,7 +11032,7 @@
     "n-para-045",
     "n-long-018",
     "n-para-022",
-    "n-hop-002-answer"
+    "n-short-020"
    ],
    "metrics": {
     "recall5": 1,
@@ -11042,7 +11042,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 931,
+    "d1RowsRead": 985,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11069,7 +11069,7 @@
     "f-000046",
     "f-000418",
     "n-hop-021-answer",
-    "n-short-023"
+    "f-000078"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11079,7 +11079,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 758,
+    "d1RowsRead": 796,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11106,7 +11106,7 @@
     "n-hop-018-root",
     "n-hop-020-root",
     "n-hop-016-answer",
-    "n-id-052"
+    "n-short-026"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11116,7 +11116,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 480,
+    "d1RowsRead": 490,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11143,7 +11143,7 @@
     "n-cjk-006",
     "n-para-043",
     "f-000299",
-    "f-000226"
+    "f-000183"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11153,7 +11153,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1540,
+    "d1RowsRead": 1579,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11190,7 +11190,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 654,
+    "d1RowsRead": 699,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11217,7 +11217,7 @@
     "n-common-020",
     "n-short-020",
     "n-id-013",
-    "f-000144"
+    "f-000060"
    ],
    "metrics": {
     "recall5": 1,
@@ -11227,7 +11227,7 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 519,
+    "d1RowsRead": 564,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11264,7 +11264,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 921,
+    "d1RowsRead": 975,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11301,7 +11301,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1295,
+    "d1RowsRead": 1353,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11338,7 +11338,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1714,
+    "d1RowsRead": 1759,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11375,7 +11375,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 472,
+    "d1RowsRead": 482,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11412,7 +11412,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 1068,
+    "d1RowsRead": 1113,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11439,7 +11439,7 @@
     "f-000548",
     "f-000046",
     "f-000138",
-    "f-000032"
+    "f-000579"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11449,7 +11449,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 816,
+    "d1RowsRead": 849,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11486,7 +11486,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1163,
+    "d1RowsRead": 1253,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11513,7 +11513,7 @@
     "n-cjk-021",
     "n-para-034",
     "n-para-017",
-    "n-long-018"
+    "f-000226"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11523,7 +11523,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 815,
+    "d1RowsRead": 835,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11550,7 +11550,7 @@
     "n-para-019",
     "f-000144",
     "n-hop-007-root",
-    "n-long-002"
+    "f-000574"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11560,7 +11560,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 927,
+    "d1RowsRead": 979,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11597,7 +11597,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 520,
+    "d1RowsRead": 545,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11634,7 +11634,7 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1888,
+    "d1RowsRead": 1970,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11661,7 +11661,7 @@
     "n-short-015",
     "n-short-030",
     "n-hop-004-root",
-    "n-id-025"
+    "n-id-024"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11671,7 +11671,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 679,
+    "d1RowsRead": 716,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11708,7 +11708,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 453,
+    "d1RowsRead": 463,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -11745,7 +11745,7 @@
    },
    "cost": {
     "d1Statements": 19,
-    "d1RowsRead": 2039,
+    "d1RowsRead": 2078,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11772,7 +11772,7 @@
     "f-000438",
     "n-id-048",
     "n-id-047",
-    "n-id-046"
+    "f-000014"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11782,7 +11782,7 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 981,
+    "d1RowsRead": 1011,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
