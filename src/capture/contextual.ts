@@ -224,6 +224,10 @@ const REMOVED = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Mn}\uFFFD]/u;
 // The unified ideograph blocks. (The compatibility blocks decompose under NFD, and BERT does not always split them: they are word characters here.)
 const IDEOGRAPH = /[\u3400-\u4dbf\u4e00-\u9fff\u{20000}-\u{2a6df}\u{2a700}-\u{2b81f}\u{2b820}-\u{2ceaf}]/u;
 
+// A memo, so a wrong answer would be sticky: whatever classify returns first for a code point is what every later call in
+// this isolate gets. That is why it never relies on anything that varies between calls (see the note on lone surrogates,
+// and the determinism tests). There is no cheap safeguard beyond that: re-deriving on every call would give back the
+// per-character cost the memo exists to avoid.
 const classes = new Map<number, number>();
 
 /**
