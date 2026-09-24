@@ -1,4 +1,4 @@
-import { RERANK_AMBIGUITY_MARGIN, RERANK_BLEND_WEIGHT, RERANK_EXCERPT_CHARS, RERANK_MAX_CANDIDATES, RERANK_MAX_DIRECT, RERANK_MODEL, RERANK_NOT_READY_TTL_S, RERANK_QUERY_MAX_CHARS, RERANK_READY_CACHE_MS, RERANK_READY_KV_KEY, RERANK_READY_TTL_S, RERANK_TIMEOUT_MS } from "../constants";
+import { RERANK_AMBIGUITY_MARGIN, RERANK_PROBE_TIMEOUT_MS, RERANK_BLEND_WEIGHT, RERANK_EXCERPT_CHARS, RERANK_MAX_CANDIDATES, RERANK_MAX_DIRECT, RERANK_MODEL, RERANK_NOT_READY_TTL_S, RERANK_QUERY_MAX_CHARS, RERANK_READY_CACHE_MS, RERANK_READY_KV_KEY, RERANK_READY_TTL_S, RERANK_TIMEOUT_MS } from "../constants";
 import type { RerankMode } from "../config";
 import type { Env } from "../env";
 import type { VectorizeMatch } from "./math";
@@ -88,10 +88,10 @@ const TIMED_OUT = Symbol("reranker timed out");
  * cleared, so nothing is left pending (the eval tracks per-query async work, and a promise that never resolves
  * would hold a query open until garbage collection); a late rejection from the model call is absorbed.
  */
-export async function scoreRerankCandidates(query: string, candidates: readonly RerankCandidate[], env: Env): Promise<number[]> {
+export async function scoreRerankCandidates(query: string, candidates: readonly RerankCandidate[], env: Env, timeoutMs = RERANK_TIMEOUT_MS): Promise<number[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let release!: (v: symbol) => void;
-  const guard = new Promise<symbol>(resolve => { release = resolve; timer = setTimeout(() => resolve(TIMED_OUT), RERANK_TIMEOUT_MS); });
+  const guard = new Promise<symbol>(resolve => { release = resolve; timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs); });
   const call = (env.AI as unknown as { run(model: string, input: unknown): Promise<unknown> })
     .run(RERANK_MODEL, { query: query.slice(0, RERANK_QUERY_MAX_CHARS), contexts: candidates.map(c => ({ text: c.text })), top_k: candidates.length });
   call.catch(() => undefined);
@@ -146,7 +146,7 @@ export type ProbeResult = { ok: true; margin: number } | { ok: false; reason: st
 export async function probeReranker(env: Env): Promise<ProbeResult> {
   let result: ProbeResult;
   try {
-    const scores = await scoreRerankCandidates(PROBE.query, PROBE.contexts.map((c, i) => ({ parentId: String(i), text: c.text })), env);
+    const scores = await scoreRerankCandidates(PROBE.query, PROBE.contexts.map((c, i) => ({ parentId: String(i), text: c.text })), env, RERANK_PROBE_TIMEOUT_MS);
     const others = scores.filter((_, i) => i !== PROBE.relevant);
     const margin = scores[PROBE.relevant] - Math.max(...others);
     result = margin >= PROBE.margin ? { ok: true, margin } : { ok: false, reason: "the relevant passage did not clearly outrank the unrelated ones" };

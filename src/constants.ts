@@ -211,6 +211,8 @@ export const RERANK_MAX_DIRECT = 25;
 export const RERANK_EXCERPT_CHARS = 400;
 export const RERANK_QUERY_MAX_CHARS = 256;
 export const RERANK_TIMEOUT_MS = 2500;
+// The probe runs off the hot path and may hit a cold model, so it waits longer than a recall does.
+export const RERANK_PROBE_TIMEOUT_MS = 15000;
 // `auto` reranks only when the runner-up is within this fraction of the leader.
 export const RERANK_AMBIGUITY_MARGIN = 0.15;
 // The model moves a heuristic score by at most +/- this fraction.

@@ -42,6 +42,7 @@ describe.skipIf(!process.env.EVAL_LOCAL_MODELS)("real local models", () => {
 
   it("the production reranker probe passes against the real local model and latches ready", async () => {
     const kv = makeMemoryKV();
+    await ai.run("@cf/baai/bge-reranker-base", { query: "warm", contexts: [{ text: "up" }] }); // load the weights first: the probe's own timeout is for a warm model
     const res = await probeReranker(makeTestEnv(undefined, { AI: ai as unknown as Ai, OAUTH_KV: kv }));
     console.log(`reranker probe: ${JSON.stringify(res)}`);
     expect(res.ok).toBe(true);
