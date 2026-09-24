@@ -11,6 +11,8 @@ import { storeEntry } from "../../src/capture/store";
 import { checkDuplicateAndContradiction } from "../../src/capture/duplicate";
 import { SCHEME_MIGRATION_KEY, CONTEXT_LLM_BACKFILL_KV_KEY } from "../../src/migration/embedding";
 import { chunkText } from "../../src/text/chunk";
+import { WRITE_PATH_TOPK } from "../../src/constants";
+import { neighborsFromVectorQuery } from "../../src/graph/traverse";
 import type { Env } from "../../src/env";
 
 const note = `Fuse box notes. ${Array.from({ length: 120 }, (_, i) => `Before we broke for tea, Karin brought up the rota again, and Petra mentioned the cable for the ${i % 3 ? "third" : "second"} time.`).join(" ")}`;
@@ -56,6 +58,31 @@ describe("contextual embeddings off (the shipped default)", () => {
     await checkDuplicateAndContradiction(note, env);
     expect(embeds).toHaveLength(1);
     expect(env.VECTORIZE.describe).not.toHaveBeenCalled();
+  });
+
+  it("issues the duplicate check's one Vectorize query with exactly the shipped shape: topK 20 with metadata, nothing else", async () => {
+    const { env } = makeEnv();
+    await checkDuplicateAndContradiction(note, env);
+    const query = env.VECTORIZE.query as ReturnType<typeof vi.fn>;
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][1]).toEqual({ topK: WRITE_PATH_TOPK, returnMetadata: "all" });
+  });
+
+  it("issues the graph neighbor query with the same shape", async () => {
+    const { env } = makeEnv();
+    await neighborsFromVectorQuery([0.1, 0.2, 0.3], env);
+    const query = env.VECTORIZE.query as ReturnType<typeof vi.fn>;
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][1]).toEqual({ topK: WRITE_PATH_TOPK, returnMetadata: "all" });
+  });
+
+  it("scopes the duplicate query by workspace exactly as before when a workspace is given, still with one call and one embed", async () => {
+    const { env, embeds } = makeEnv();
+    await checkDuplicateAndContradiction(note, env, DEFAULTS, "w-team");
+    const query = env.VECTORIZE.query as ReturnType<typeof vi.fn>;
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][1]).toMatchObject({ topK: WRITE_PATH_TOPK, filter: { workspace_id: expect.anything() } });
+    expect(embeds).toHaveLength(1);
   });
 
   it("runs no migration and writes no ledger from the hourly or nightly cron", async () => {
