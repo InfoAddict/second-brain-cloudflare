@@ -12,6 +12,9 @@ import { ExactVectorize } from "./vectorize-emulator";
 import { EVAL_TOP_K, RUNNER_VERSION, findLeaks, freezeClock, readReport, runVariant, writeReport } from "./runner";
 import type { EmbeddingProducer, GoldenQuery, VariantReport } from "./types";
 import { hashVector } from "./vectors";
+import { RERANK_MODEL } from "../../src/constants";
+import { dryReranker } from "./prepare";
+import { checkRerankRoute } from "./runner";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,21 +57,21 @@ let open: LoadedCorpus[] = [];
 afterEach(async () => {
   seen.length = 0; bypassDb = undefined; await Promise.all(open.map(c => c.close())); open = []; });
 
-async function corpus(): Promise<LoadedCorpus> {
+async function corpus(dryOther?: (model: string, input: unknown) => unknown): Promise<LoadedCorpus> {
   const c = await loadCorpus({
     spec: { id: "tiny", intent: "tie", entries, edges: [], queries },
-    backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry" }), embeddingModel: MODEL,
+    backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry", dryOther }), embeddingModel: MODEL,
   });
   open.push(c);
   return c;
 }
-const run = (c: LoadedCorpus, name = "baseline", isolate: "warm" | "cold" = "warm") =>
+const run = (c: LoadedCorpus, name = "no-rerank", isolate: "warm" | "cold" = "warm") =>
   runVariant({ corpus: c, variant: getVariant(name), queries, isolate, embeddingModel: MODEL });
 
 describe("runVariant", () => {
   it("returns per-query results with real cost fields and no cross-workspace leaks", async () => {
     const report = await run(await corpus());
-    expect(report).toMatchObject({ schema: 1, variant: "baseline", corpus: "tiny", d1Backend: "sqlite", isolate: "warm" });
+    expect(report).toMatchObject({ schema: 1, variant: "no-rerank", corpus: "tiny", d1Backend: "sqlite", isolate: "warm" });
     const [q1, q2, q3] = report.results;
     expect(q1.rankedIds).toContain("a1");
     expect(q1.rankedIds).not.toContain("b1"); // the decoy belongs to another user
@@ -111,13 +114,13 @@ describe("runVariant", () => {
 
   it("routes each built-in variant the way its description says", async () => {
     const c = await corpus();
-    expect((await run(c, "baseline")).results[0].ftsRoute).toBe("fts");
+    expect((await run(c, "no-rerank")).results[0].ftsRoute).toBe("fts");
     expect((await run(c, "like")).results[0].ftsRoute).toBe("like-not-ready");
     expect((await run(c, "dense-only")).results[0].ftsRoute).toBe("skipped-by-variant");
     const keywordOnly = await run(c, "keyword-only");
     expect(keywordOnly.results[0].cost).toMatchObject({ embeddingCalls: 0, vectorizeQueries: 0 });
     expect(keywordOnly.results[0].rankedIds).toContain("a1");
-    expect((await run(c, "baseline")).results[0].ftsRoute).toBe("fts"); // ready flag restored per run
+    expect((await run(c, "no-rerank")).results[0].ftsRoute).toBe("fts"); // ready flag restored per run
   });
 
   it("records a per-query error instead of aborting the run, and scores it as a miss", async () => {
@@ -159,7 +162,7 @@ describe("runner determinism rules", () => {
     await run(c);
     expect(seen.length).toBeGreaterThan(0);
     for (const call of seen) {
-      expect(call.cfg).toEqual({ ...DEFAULTS, EMBEDDING_MODEL: MODEL });
+      expect(call.cfg).toEqual({ ...DEFAULTS, EMBEDDING_MODEL: MODEL, RERANK_MODE: "off" }); // no-rerank pins the mode; KV overrides never reach the run
       expect(Object.isFrozen(call.cfg)).toBe(true);
       expect(call.now).toBe(EVAL_NOW);
     }
@@ -179,7 +182,7 @@ describe("runner determinism rules", () => {
   it("runs queries sequentially in file order and reports in that order", async () => {
     const c = await corpus();
     const order: string[] = [];
-    const report = await runVariant({ corpus: c, variant: getVariant("baseline"), queries, isolate: "cold", embeddingModel: MODEL, onProgress: (d) => order.push(String(d)) });
+    const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries, isolate: "cold", embeddingModel: MODEL, onProgress: (d) => order.push(String(d)) });
     expect(report.results.map(r => r.queryId)).toEqual(["q1", "q2", "q3"]);
     expect(order).toEqual(["1", "2", "3"]);
   });
@@ -192,8 +195,8 @@ describe("runner determinism rules", () => {
 
   it("warm mode pre-warms per viewer and scores each query once; cold mode pays the readiness read every query", async () => {
     const c = await corpus();
-    const warm = await run(c, "baseline", "warm");
-    const cold = await run(c, "baseline", "cold");
+    const warm = await run(c, "no-rerank", "warm");
+    const cold = await run(c, "no-rerank", "cold");
     expect(warm.results).toHaveLength(3);
     expect(seen.length).toBe(2 + 3 + 3); // two viewers warmed once, then 3 scored, then 3 cold
     // the only difference is the readiness flag read, which cold repeats on every query
@@ -278,7 +281,7 @@ describe("report identity", () => {
   it("carries clusterKey into the report and defaults it to the query id", async () => {
     const c = await corpus();
     const qs: GoldenQuery[] = [{ ...queries[0], clusterKey: "grp" }, queries[1]];
-    const report = await runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL });
+    const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: qs, isolate: "warm", embeddingModel: MODEL });
     expect(report.results.map(r => r.clusterKey)).toEqual(["grp", "q2"]);
   });
 
@@ -344,7 +347,7 @@ describe("stand-in failures fail closed", () => {
     // the empty arm records the corpus and the query embedding but no tag embeddings
     const rec = makeReplayAi({ store: new ReplayStore([], file, { root }), mode: "record", live, budget: new NeuronBudget(1e6), llmTags: "empty" });
     const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: qs }, backend: "sqlite", replay: rec, embeddingModel: MODEL });
-    try { await runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL }); } finally { await c.close(); }
+    try { await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: qs, isolate: "warm", embeddingModel: MODEL }); } finally { await c.close(); }
     return () => makeReplayAi({ store: new ReplayStore([file], undefined, { root }), mode: "replay" });
   }
 
@@ -365,7 +368,7 @@ describe("stand-in failures fail closed", () => {
     const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: qs }, backend: "sqlite", replay, embeddingModel: MODEL });
     open.push(c);
     withLegacyTagCall(replay);
-    return runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL });
+    return runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: qs, isolate: "warm", embeddingModel: MODEL });
   };
 
   it("a tag embedding missing from the cache becomes that query's error instead of an empty tag list", async () => {
@@ -403,7 +406,7 @@ describe("stand-in failures fail closed", () => {
     open.push(c);
     withLegacyTagCall(replay, t => t === "advice"); // only t1 ran the retired call; t2's hashtag never did
     armed = true;
-    const report = await runVariant({ corpus: c, variant: getVariant("baseline"), queries: two, isolate: "cold", embeddingModel: MODEL });
+    const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: two, isolate: "cold", embeddingModel: MODEL });
     const [t1, t2] = report.results;
     expect(t1.error).toMatch(/embedding boom/);
     expect(t1.error).toMatch(/query-tag stand-in failed.*tag boom/); // its own late failure, waited for
@@ -435,8 +438,8 @@ describe("isolate hygiene", () => {
 
   it("cold mode re-probes the filter on every query; warm mode learns it once", async () => {
     const c = await strict();
-    const warm = await run(c, "baseline", "warm");
-    const cold = await run(c, "baseline", "cold");
+    const warm = await run(c, "no-rerank", "warm");
+    const cold = await run(c, "no-rerank", "cold");
     expect(probes(warm).every(n => n === 1)).toBe(true);
     expect(probes(cold).every(n => n === 2)).toBe(true);
   });
@@ -458,7 +461,7 @@ describe("seam and guard", () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every(x => x.internal.keywordPreRankedOverride === false)).toBe(true);
     seen.length = 0;
-    await run(c, "baseline");
+    await run(c, "no-rerank");
     expect(seen.every(x => x.internal.keywordPreRankedOverride === undefined)).toBe(true);
   });
 
@@ -478,5 +481,40 @@ describe("variant registry", () => {
     expect(() => getVariant("tmp-x")).toThrow(/unknown variant/);
     expect(() => unregisterVariant("baseline")).toThrow(/builtin/);
     expect(() => registerVariant({ name: "baseline", description: "z" })).toThrow(/already/);
+  });
+});
+
+describe("the reranker under the runner", () => {
+  it("checkRerankRoute passes healthy routes and fails a fail-open fallback", () => {
+    const call = { model: RERANK_MODEL };
+    expect(checkRerankRoute(true, "applied", [call])).toBeUndefined();
+    for (const route of ["too-few", "exact-id", "clear-leader"]) expect(checkRerankRoute(true, route, [])).toBeUndefined();
+    for (const route of [undefined, "off", "not-ready", "error", "timeout", "attempted"]) expect(checkRerankRoute(true, route, [])).toMatch(/ended in/);
+    expect(checkRerankRoute(true, "applied", [])).toMatch(/expected exactly one/);
+    expect(checkRerankRoute(true, "applied", [call, call])).toMatch(/expected exactly one/);
+    expect(checkRerankRoute(true, "clear-leader", [call])).toMatch(/made 1 model call/);
+    expect(checkRerankRoute(false, "off", [])).toBeUndefined();
+    expect(checkRerankRoute(false, undefined, [])).toBeUndefined(); // an ablation that returns before the step (keyword-only with no candidates)
+    expect(checkRerankRoute(false, "applied", [call])).toMatch(/off for this variant/);
+  });
+
+  it("a forced variant makes exactly one reranker call per applied query, and reports the route", async () => {
+    const report = await run(await corpus(dryReranker), "rerank");
+    const applied = report.results.filter(r => r.rerankRoute === "applied");
+    expect(applied.length).toBeGreaterThan(0);
+    expect(report.results.filter(r => r.error)).toEqual([]);
+    const noRerank = await run(await corpus(dryReranker), "no-rerank");
+    for (const r of applied) {
+      const base = noRerank.results.find(x => x.queryId === r.queryId)!;
+      expect(r.cost.aiCalls).toBe(base.cost.aiCalls + 1);
+    }
+    expect(noRerank.results.every(r => r.rerankRoute === undefined)).toBe(true);
+  });
+
+  it("a missing reranker answer is that query's error, never a silent un-reranked result", async () => {
+    const report = await run(await corpus(), "rerank"); // dry replay with no reranker answer: the miss throws, production would fail open
+    const failed = report.results.filter(r => r.error);
+    expect(failed.length).toBeGreaterThan(0);
+    expect(failed[0].error).toMatch(/reranker step ended in "error"/);
   });
 });

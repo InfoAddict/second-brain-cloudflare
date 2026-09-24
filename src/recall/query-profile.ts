@@ -16,7 +16,7 @@ export interface QueryProfile {
   intent: RecallIntent;
 }
 
-function identifierShaped(token: string): boolean {
+export function identifierShaped(token: string): boolean {
   return /[\d#._%-]/.test(token);
 }
 

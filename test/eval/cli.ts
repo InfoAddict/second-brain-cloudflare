@@ -14,7 +14,7 @@ import { summarize, type Summary } from "./metrics";
 import { assertIgnored, isAllowedDataFile } from "./privacy";
 import { makeLocalAi } from "./local-ai";
 import { producerFromCache, stampCache } from "./stamp";
-import { exportCache, prepare } from "./prepare";
+import { dryReranker, exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
 import { QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
@@ -253,7 +253,7 @@ async function withCorpus<T>(cmd: Common, spec: CorpusSpec, variant: VariantSpec
   const paths = replayPaths(cmd.model, cmd.corpus);
   // Hash smoke: an empty in-memory store, so no recorded vector is mixed in and nothing is read from disk.
   const replay = cmd.hash
-    ? makeReplayAi({ store: new ReplayStore([]), mode: "dry", llmTags: cmd.llmTags })
+    ? makeReplayAi({ store: new ReplayStore([]), mode: "dry", llmTags: cmd.llmTags, dryOther: dryReranker }) // the smoke has no cached reranker answers either
     : makeReplayAi({ store: new ReplayStore(paths.read), mode: "replay", llmTags: cmd.llmTags });
   const corpus = await loadCorpus({ spec, backend: cmd.d1, replay, embeddingModel: cmd.model, index: variant.index });
   try { return await fn(corpus); } finally { await corpus.close(); }
@@ -292,8 +292,10 @@ async function runCompare(cmd: CliCommand & { kind: "compare" }, spec: CorpusSpe
   console.log(`${formatReport(baseline)}\n\n${formatReport(candidate)}\n`);
   const gaps = formatKnownGapDelta(baseline, candidate);
   if (gaps) console.log(`${gaps}\n`);
-  const targets = cmd.target.length ? cmd.target : [...(VARIANTS[candidate.variant]?.targetCategories ?? [])];
-  const targetGaps = cmd.targetGaps.length ? cmd.targetGaps : [...(VARIANTS[candidate.variant]?.targetGaps ?? [])];
+  // getVariant resolves parametric names (rerank:w100k30e400) that the registry does not list; a report file may name any variant
+  const declared = (() => { try { return getVariant(candidate.variant); } catch { return undefined; } })();
+  const targets = cmd.target.length ? cmd.target : [...(declared?.targetCategories ?? [])];
+  const targetGaps = cmd.targetGaps.length ? cmd.targetGaps : [...(declared?.targetGaps ?? [])];
   const gate = evaluateGate(baseline, candidate, { targetCategories: targets, targetGaps, allowUnmeasuredRowsRead: cmd.allowUnmeasuredRows });
   console.log(`${describeVerdict(gate)}\n${formatGate(gate)}`);
   // Per-query view of what the means can hide; printed after the verdict and never part of it.

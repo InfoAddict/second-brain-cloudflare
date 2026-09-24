@@ -6,7 +6,10 @@
  * same keyword pool (see `pool` in test/helpers/recall-benchmark-scoring.ts).
  */
 import { vi } from "vitest";
-import { FTS_READY_KV_KEY } from "../../../src/constants";
+import { DEFAULTS } from "../../../src/config";
+import { FTS_READY_KV_KEY, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../../src/constants";
+import { resetRerankReadyMemo } from "../../../src/recall/model-reranker";
+import { createHash } from "node:crypto";
 import { initializeDatabase, resetDatabaseInit } from "../../../src/db/init";
 import type { Env } from "../../../src/env";
 import { resetFtsReadyMemo } from "../../../src/recall/fts";
@@ -48,6 +51,7 @@ export interface LegacyObservation {
   extraAiCalls: number;
   extraVectorizeQueries: number;
   ftsUsed?: boolean;
+  rerankRoute?: string;
 }
 
 export interface LegacyMetrics {
@@ -91,9 +95,35 @@ interface LegacyOptions {
    * reach and precision gates were written for.
    */
   arms?: "dense-only" | "keyword-only";
+  /**
+   * Run with the reranker on: mode "on", the readiness latch set, and `rerankModel` answering (default: a model that
+   * agrees with the heuristic order). Root quality is then measured through the reranked direct and root views that feed
+   * MMR and graph-root selection.
+   */
+  rerank?: boolean;
+  /** With `rerank`: eval-only weight/floor override, to see how root quality moves with the blend. */
+  rerankTuning?: { weight?: number; floor?: number };
+  /** With `rerank`: answer with the real pinned local bge-reranker-base (opt-in, slow) or any other stand-in. */
+  rerankModel?: { run(model: string, input: unknown): Promise<unknown> };
 }
 
-async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOptions["idOf"]) {
+/** A model that agrees with the heuristic order: best first, in submission order. Isolates the blend plumbing from any judgment. */
+export const heuristicOrderModel = {
+  async run(_model: string, input: unknown) {
+    const { contexts } = input as { contexts: unknown[] };
+    return { response: contexts.map((_c, id) => ({ id, score: contexts.length - id })) };
+  },
+};
+
+/** A model unrelated to the heuristic order (a hash of each passage), so it reorders. Used only to check layout, never quality. */
+export const scramblingModel = {
+  async run(_model: string, input: unknown) {
+    const { contexts } = input as { contexts: { text: string }[] };
+    return { response: contexts.map((c, id) => ({ id, score: (createHash("sha256").update(c.text).digest()[0] / 255) * 10 - 5 })) };
+  },
+};
+
+async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOptions["idOf"], rerank = false, realModel?: LegacyOptions["rerankModel"]) {
   resetDatabaseInit();
   resetFtsReadyMemo();
   const sqlite = makeSqliteD1();
@@ -113,6 +143,12 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
     VECTORIZE: makeVectorizeMock({ query }),
   });
   await initializeDatabase(env);
+  if (rerank) {
+    const embed = (env.AI.run as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (env.AI.run as ReturnType<typeof vi.fn>).mockImplementation(async (model: string, input: never) => (model === RERANK_MODEL ? (realModel ?? heuristicOrderModel).run(model, input) : (embed as unknown as (m: string, i: unknown) => unknown)(model, input)));
+    await env.OAUTH_KV.put(RERANK_READY_KV_KEY, "1");
+    resetRerankReadyMemo();
+  }
 
   // Real INSERTs for every fixture row (dense-only, keyword-only, both, and
   // unlabeled authority rows), so LIKE and FTS see what production would.
@@ -147,16 +183,20 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
   return { env, ctx, query, sqlite, internal, pendingWaits };
 }
 
+// The legacy benchmarks pin the pre-reranker pipeline: their mock AI cannot rank passages, and a reranker probe would count as an extra AI call.
+const RERANK_ON_CONFIG = Object.freeze({ ...DEFAULTS, RERANK_MODE: "on" });
+const LEGACY_CONFIG = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
+
 async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyOptions): Promise<LegacyObservation> {
-  const fixture = await buildFixture(c, mode, opts.idOf);
-  const variant = opts.arms ? { variant: { arms: opts.arms } } : {};
+  const fixture = await buildFixture(c, mode, opts.idOf, opts.rerank, opts.rerankModel);
+  const variant = opts.arms || opts.rerankTuning ? { variant: { ...(opts.arms && { arms: opts.arms }), ...(opts.rerankTuning && { rerankTuning: opts.rerankTuning }) } } : {};
   try {
     const diagnostics: RecallDiagnostics = {};
     const result = await recallEntries(
       { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
       fixture.env,
       fixture.ctx,
-      undefined,
+      opts.rerank ? RERANK_ON_CONFIG : LEGACY_CONFIG,
       { diagnostics, ...fixture.internal, ...variant },
     );
     const acceptableRoots = new Set(c.acceptableRootIds);
@@ -185,6 +225,7 @@ async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyO
       extraAiCalls: Math.max(0, aiCalls - 1),
       extraVectorizeQueries: Math.max(0, fixture.query.mock.calls.length - 1),
       ftsUsed: diagnostics.ftsUsed,
+      rerankRoute: diagnostics.rerankRoute,
     };
   } finally {
     fixture.sqlite.close();

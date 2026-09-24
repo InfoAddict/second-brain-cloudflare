@@ -3,7 +3,7 @@ import { CORPUS_IDS } from "./corpus/build";
 import { fingerprintKey } from "./lock";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { minimumDetectableEffect, pairedBootstrap, type BootstrapCI, type BootstrapOptions } from "./stats";
-import { METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
+import { VARIANT_ADDED_MODELS, METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
 export interface GateThresholds {
   headlineTolerance: number;
@@ -77,14 +77,23 @@ function duplicateIds(r: VariantReport): string[] {
   return [...dups];
 }
 
+/**
+ * A reranker is the one model a variant may add. Present on one side only, it is what the variant changes, not a
+ * difference in provenance; every other model, and the reranker when both sides used it, must match exactly.
+ */
+function withoutAddedModels(mine: VariantReport["producers"], theirs: VariantReport["producers"]): VariantReport["producers"] {
+  if (!mine) return mine;
+  return Object.fromEntries(Object.entries(mine).filter(([model]) => !VARIANT_ADDED_MODELS.includes(model) || theirs?.[model] !== undefined));
+}
+
 function comparabilityProblems(base: VariantReport, cand: VariantReport): string[] {
   const problems: string[] = [];
   if (base.corpus !== cand.corpus) problems.push(`corpus differs (${base.corpus} vs ${cand.corpus})`);
   if (base.embeddingModel !== cand.embeddingModel) problems.push("embedding model differs");
-  if (producersKey(base.producers) !== producersKey(cand.producers)) problems.push("model producers differ (outputs from different producers, or a model used on one side only, are not comparable)");
+  if (producersKey(withoutAddedModels(base.producers, cand.producers)) !== producersKey(withoutAddedModels(cand.producers, base.producers))) problems.push("model producers differ (outputs from different producers, or a model used on one side only, are not comparable)");
   const fingerprinted = (id: string) => (CORPUS_IDS as readonly string[]).includes(id) || Object.hasOwn(PUBLIC_CORPORA, id);
   for (const [label, r] of [["baseline", base], ["candidate", cand]] as const) {
-    if (fingerprinted(r.corpus) && !Object.keys(r.producers ?? {}).length) problems.push(`the ${label} report has no verified model producers (unverified provenance); rerun it against a stamped or freshly recorded cache`);
+    if (fingerprinted(r.corpus) && !Object.keys(r.producers ?? {}).filter(m => !VARIANT_ADDED_MODELS.includes(m)).length) problems.push(`the ${label} report has no verified model producers (unverified provenance); rerun it against a stamped or freshly recorded cache`);
   }
   if ((base.neuronSource ?? "none") !== (cand.neuronSource ?? "none")) problems.push(`neuron source differs (${base.neuronSource ?? "none"} vs ${cand.neuronSource ?? "none"})`);
   if ((base.llmTags ?? "none") !== (cand.llmTags ?? "none")) problems.push(`LLM tag arm differs (${base.llmTags ?? "none"} vs ${cand.llmTags ?? "none"}); the arms answer query-tag inference differently, so rankings and cost are not comparable`);

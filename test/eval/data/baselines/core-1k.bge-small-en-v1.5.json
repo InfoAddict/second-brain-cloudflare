@@ -12,6 +12,15 @@
    "repo": "BAAI/bge-small-en-v1.5",
    "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
    "dtype": "fp32"
+  },
+  "@cf/baai/bge-reranker-base": {
+   "kind": "local-transformers-js",
+   "library": "@huggingface/transformers",
+   "libraryVersion": "4.3.0",
+   "onnxRuntime": "onnxruntime-node@1.30.0",
+   "repo": "BAAI/bge-reranker-base",
+   "revision": "2cfc18c9415c912f9d8155881c133215df768a70",
+   "dtype": "fp32"
   }
  },
  "neuronSource": "projected",
@@ -64,6 +73,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -101,6 +111,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -138,6 +149,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -175,6 +187,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -212,6 +225,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -249,6 +263,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -289,6 +304,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -326,6 +342,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -368,6 +385,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -410,6 +428,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -450,6 +469,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -487,6 +507,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -524,6 +545,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -561,6 +583,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -598,6 +621,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -635,6 +659,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -675,6 +700,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -712,6 +738,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -749,6 +776,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -789,6 +817,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -826,6 +855,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -863,6 +893,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -900,6 +931,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -937,6 +969,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -974,6 +1007,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1014,6 +1048,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1051,6 +1086,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1088,6 +1124,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1129,6 +1166,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1170,6 +1208,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1211,6 +1250,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1248,6 +1288,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1288,6 +1329,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1325,6 +1367,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1362,6 +1405,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1399,6 +1443,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1436,6 +1481,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1477,6 +1523,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1517,6 +1564,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1554,6 +1602,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1591,6 +1640,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1628,6 +1678,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1665,6 +1716,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1706,6 +1758,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1747,6 +1800,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1784,6 +1838,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1821,6 +1876,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1858,6 +1914,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1895,6 +1952,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1932,6 +1990,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -1969,6 +2028,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2006,6 +2066,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2043,6 +2104,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2080,6 +2142,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2117,6 +2180,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2154,6 +2218,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2191,6 +2256,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2228,6 +2294,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -2268,6 +2335,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2308,6 +2376,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2345,6 +2414,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2382,6 +2452,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2419,6 +2490,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2456,6 +2528,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2464,15 +2537,15 @@
    "clusterKey": "n-rare-004",
    "rankedIds": [
     "n-rare-004",
-    "f-000196",
-    "f-000245",
-    "n-cjk-022",
-    "n-budget-004",
-    "f-000398",
-    "f-000608",
-    "f-000496",
+    "f-000088",
+    "f-000369",
+    "f-000060",
     "n-cjk-004",
-    "f-000088"
+    "f-000111",
+    "f-000036",
+    "f-000607",
+    "f-000496",
+    "f-000367"
    ],
    "metrics": {
     "recall5": 1,
@@ -2481,18 +2554,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 256,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 306,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.009205,
+    "kvReads": 4,
+    "neurons": 0.40682,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -2533,6 +2607,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2573,6 +2648,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2610,6 +2686,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2647,6 +2724,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2684,6 +2762,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2721,6 +2800,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2758,6 +2838,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2770,14 +2851,14 @@
    "rankedIds": [
     "n-rare-009",
     "f-000419",
+    "f-000462",
+    "f-000365",
+    "n-cjk-011",
+    "f-000487",
     "f-000226",
     "f-000488",
-    "n-cjk-011",
-    "f-000384",
-    "f-000417",
-    "f-000189",
-    "f-000354",
-    "f-000365"
+    "f-000190",
+    "f-000065"
    ],
    "metrics": {
     "recall5": 1,
@@ -2786,18 +2867,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 260,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 310,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.362955,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -2838,6 +2920,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2875,6 +2958,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2915,6 +2999,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2955,6 +3040,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -2992,6 +3078,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3029,6 +3116,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3037,15 +3125,15 @@
    "clusterKey": "n-rare-013",
    "rankedIds": [
     "n-rare-013",
-    "f-000133",
-    "f-000044",
     "f-000226",
-    "f-000494",
+    "f-000396",
     "f-000435",
-    "f-000602",
-    "f-000270",
-    "f-000086",
-    "f-000239"
+    "f-000512",
+    "f-000436",
+    "f-000285",
+    "f-000235",
+    "f-000494",
+    "n-cjk-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -3054,18 +3142,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 256,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 306,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.356872,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3075,14 +3164,14 @@
    "rankedIds": [
     "n-rare-014",
     "f-000419",
-    "f-000643",
-    "f-000417",
     "f-000454",
-    "f-000293",
-    "f-000095",
-    "f-000381",
-    "f-000088",
-    "f-000396"
+    "f-000606",
+    "f-000396",
+    "f-000285",
+    "f-000479",
+    "f-000113",
+    "f-000417",
+    "f-000152"
    ],
    "metrics": {
     "recall5": 1,
@@ -3091,18 +3180,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 256,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 306,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.38899100000000003,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3140,6 +3230,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3177,6 +3268,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3214,6 +3306,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3254,6 +3347,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3263,14 +3357,14 @@
    "rankedIds": [
     "n-rare-017",
     "f-000419",
-    "f-000044",
     "f-000529",
+    "f-000044",
     "n-short-017",
-    "f-000643",
+    "f-000553",
     "f-000596",
     "f-000063",
     "f-000060",
-    "n-cjk-012"
+    "f-000569"
    ],
    "metrics": {
     "recall5": 1,
@@ -3279,18 +3373,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.317958,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3328,6 +3423,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3335,36 +3431,37 @@
    "category": "rare-word",
    "clusterKey": "n-rare-018",
    "rankedIds": [
-    "f-000635",
-    "f-000615",
-    "f-000596",
+    "f-000592",
     "f-000391",
-    "n-cjk-036",
     "f-000337",
+    "f-000510",
+    "n-rare-018",
     "f-000616",
-    "f-000519",
-    "f-000636",
-    "f-000644"
+    "f-000596",
+    "f-000452",
+    "f-000635",
+    "f-000519"
    ],
    "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 259,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 314,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.327297,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3402,6 +3499,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3439,6 +3537,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3476,6 +3575,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3513,6 +3613,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3521,15 +3622,15 @@
    "clusterKey": "n-rare-021",
    "rankedIds": [
     "n-rare-021",
-    "f-000044",
-    "f-000152",
     "f-000112",
-    "f-000643",
-    "f-000151",
-    "f-000625",
-    "f-000446",
     "f-000257",
-    "f-000226"
+    "f-000461",
+    "f-000152",
+    "f-000511",
+    "f-000226",
+    "f-000435",
+    "f-000616",
+    "f-000636"
    ],
    "metrics": {
     "recall5": 1,
@@ -3539,17 +3640,18 @@
    },
    "cost": {
     "d1Statements": 14,
-    "d1RowsRead": 256,
-    "aiCalls": 1,
+    "d1RowsRead": 306,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.33890000000000003,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3587,6 +3689,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3624,6 +3727,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3661,6 +3765,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3670,14 +3775,14 @@
    "rankedIds": [
     "n-rare-024",
     "f-000408",
-    "f-000306",
-    "f-000109",
-    "f-000088",
-    "f-000270",
+    "f-000031",
+    "f-000454",
+    "f-000635",
+    "f-000113",
+    "f-000029",
+    "f-000164",
     "f-000064",
-    "f-000407",
-    "f-000112",
-    "f-000454"
+    "f-000417"
    ],
    "metrics": {
     "recall5": 1,
@@ -3686,18 +3791,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.39238700000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3735,6 +3841,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3772,6 +3879,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3780,15 +3888,15 @@
    "clusterKey": "n-rare-026",
    "rankedIds": [
     "n-rare-026",
-    "f-000044",
-    "n-cjk-001",
     "n-cjk-015",
     "f-000226",
-    "f-000151",
-    "f-000596",
-    "n-cjk-025",
-    "f-000239",
-    "n-id-047"
+    "n-hop-017-root",
+    "f-000091",
+    "f-000425",
+    "f-000164",
+    "f-000181",
+    "n-id-047",
+    "f-000044"
    ],
    "metrics": {
     "recall5": 1,
@@ -3797,18 +3905,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.288526,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3846,6 +3955,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3883,6 +3993,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3892,14 +4003,14 @@
    "rankedIds": [
     "n-rare-028",
     "f-000060",
-    "f-000306",
+    "f-000596",
+    "f-000527",
+    "f-000635",
+    "f-000337",
+    "f-000572",
+    "n-cjk-014",
     "n-cjk-034",
-    "n-cjk-003",
-    "f-000174",
-    "f-000636",
-    "f-000625",
-    "f-000098",
-    "f-000635"
+    "n-cjk-007"
    ],
    "metrics": {
     "recall5": 1,
@@ -3908,18 +4019,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 256,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 306,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.278055,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -3957,6 +4069,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -3966,14 +4079,14 @@
    "rankedIds": [
     "n-rare-029",
     "n-cjk-010",
-    "n-cjk-020",
-    "n-cjk-013",
-    "n-long-024",
     "f-000612",
+    "n-cjk-022",
     "n-cjk-014",
-    "n-cjk-012",
-    "n-cjk-018",
-    "n-cjk-002"
+    "f-000105",
+    "f-000317",
+    "f-000341",
+    "f-000270",
+    "n-cjk-001"
    ],
    "metrics": {
     "recall5": 1,
@@ -3982,18 +4095,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.276357,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -4031,6 +4145,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4040,14 +4155,14 @@
    "rankedIds": [
     "n-rare-030",
     "n-id-022",
-    "f-000060",
-    "n-id-048",
-    "f-000193",
-    "f-000635",
-    "f-000213",
     "n-short-010",
+    "f-000643",
+    "n-hop-012-root",
+    "f-000134",
+    "f-000251",
     "n-id-003",
-    "n-hop-012-root"
+    "f-000213",
+    "f-000321"
    ],
    "metrics": {
     "recall5": 1,
@@ -4056,18 +4171,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 255,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 305,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.356023,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -4075,36 +4191,37 @@
    "category": "rare-word",
    "clusterKey": "n-rare-031",
    "rankedIds": [
-    "f-000133",
     "n-rare-031",
-    "n-short-025",
-    "n-cjk-013",
-    "n-short-001",
-    "f-000529",
+    "f-000133",
     "n-id-036",
-    "f-000193",
-    "n-id-009",
-    "n-id-048"
+    "n-cjk-023",
+    "f-000596",
+    "f-000299",
+    "f-000632",
+    "f-000529",
+    "n-id-002",
+    "f-000404"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.5,
-    "ndcg10": 0.6309297535714574
+    "mrr10": 1,
+    "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 306,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.294752,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -4142,6 +4259,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4179,6 +4297,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4216,6 +4335,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4253,6 +4373,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4290,6 +4411,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4327,6 +4449,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4337,36 +4460,37 @@
     "tenancy"
    ],
    "rankedIds": [
-    "f-000044",
     "n-rare-036",
+    "f-000044",
     "f-000527",
-    "f-000060",
-    "f-000643",
     "f-000625",
-    "f-000151",
     "f-000047",
-    "f-000636",
-    "f-000419"
+    "f-000151",
+    "f-000643",
+    "f-000419",
+    "f-000596",
+    "f-000635"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.5,
-    "ndcg10": 0.6309297535714574
+    "mrr10": 1,
+    "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 255,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 305,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.341447,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -4407,6 +4531,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4416,14 +4541,14 @@
    "rankedIds": [
     "n-rare-037",
     "f-000419",
-    "n-short-010",
-    "n-rare-010",
-    "n-rare-016",
-    "f-000062",
     "n-rare-035",
-    "f-000412",
+    "n-rare-016",
+    "n-rare-010",
+    "f-000190",
+    "f-000606",
     "n-rare-014",
-    "n-id-054"
+    "n-long-005",
+    "n-short-010"
    ],
    "metrics": {
     "recall5": 1,
@@ -4432,18 +4557,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 14,
-    "d1RowsRead": 258,
-    "aiCalls": 1,
+    "d1Statements": 15,
+    "d1RowsRead": 308,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.326448,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -4481,6 +4607,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4518,6 +4645,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4555,6 +4683,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4592,6 +4721,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4629,6 +4759,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4666,6 +4797,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4703,6 +4835,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4740,6 +4873,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4777,6 +4911,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4814,6 +4949,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4851,6 +4987,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4888,6 +5025,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4925,6 +5063,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4962,6 +5101,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -4999,6 +5139,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5036,6 +5177,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5073,6 +5215,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5110,6 +5253,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5147,6 +5291,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5184,6 +5329,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5192,15 +5338,15 @@
    "clusterKey": "n-common-019",
    "rankedIds": [
     "n-common-019",
-    "f-000270",
+    "n-common-032",
+    "n-common-012",
+    "f-000023",
     "f-000637",
+    "n-common-036",
+    "n-common-022",
+    "n-budget-003",
     "f-000122",
-    "f-000336",
-    "f-000040",
-    "f-000516",
-    "f-000465",
-    "f-000154",
-    "f-000571"
+    "f-000336"
    ],
    "metrics": {
     "recall5": 1,
@@ -5209,18 +5355,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 1957,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2007,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 2,
-    "neurons": 0.009205,
+    "neurons": 0.332391,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -5258,6 +5405,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5295,6 +5443,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5332,6 +5481,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5369,6 +5519,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5406,6 +5557,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5443,6 +5595,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5480,6 +5633,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5517,6 +5671,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5554,6 +5709,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5563,14 +5719,14 @@
    "rankedIds": [
     "n-common-029",
     "f-000408",
-    "f-000082",
+    "n-common-013",
+    "n-common-001",
     "f-000593",
+    "f-000012",
+    "n-common-021",
+    "n-budget-002",
     "f-000139",
-    "n-common-010",
-    "f-000475",
-    "f-000344",
-    "f-000495",
-    "f-000449"
+    "f-000082"
    ],
    "metrics": {
     "recall5": 1,
@@ -5579,18 +5735,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2312,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2362,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.32192000000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -5628,6 +5785,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5665,6 +5823,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5673,15 +5832,15 @@
    "clusterKey": "n-common-032",
    "rankedIds": [
     "n-common-032",
-    "f-000270",
+    "n-common-019",
+    "n-common-011",
+    "n-common-031",
     "f-000543",
-    "f-000431",
-    "f-000122",
-    "f-000581",
-    "f-000336",
-    "f-000516",
-    "f-000465",
-    "f-000132"
+    "f-000205",
+    "n-common-006",
+    "f-000374",
+    "n-common-036",
+    "f-000431"
    ],
    "metrics": {
     "recall5": 1,
@@ -5690,18 +5849,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2005,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2055,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 2,
-    "neurons": 0.009205,
+    "neurons": 0.330976,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -5739,6 +5899,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5776,6 +5937,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5813,6 +5975,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5850,6 +6013,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5887,6 +6051,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5928,6 +6093,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5969,6 +6135,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -5980,36 +6147,37 @@
     "gap:T-0073"
    ],
    "rankedIds": [
-    "f-000408",
     "n-budget-003",
+    "f-000408",
     "f-000184",
     "f-000139",
     "f-000196",
-    "f-000082",
-    "f-000593",
+    "n-common-035",
+    "f-000097",
+    "n-common-036",
     "f-000642",
-    "f-000513",
-    "f-000138"
+    "f-000593"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.5,
-    "ndcg10": 0.6309297535714574
+    "mrr10": 1,
+    "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2677,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2727,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 2,
-    "neurons": 0.009205,
+    "neurons": 0.37342600000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -6022,15 +6190,15 @@
    ],
    "rankedIds": [
     "n-budget-004",
-    "f-000270",
+    "n-common-032",
     "f-000516",
     "f-000465",
-    "f-000122",
-    "n-common-032",
-    "f-000581",
-    "f-000357",
-    "f-000336",
-    "f-000400"
+    "n-common-026",
+    "n-common-019",
+    "f-000040",
+    "f-000652",
+    "n-common-016",
+    "f-000581"
    ],
    "metrics": {
     "recall5": 1,
@@ -6039,18 +6207,19 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 2740,
-    "aiCalls": 1,
+    "d1Statements": 19,
+    "d1RowsRead": 2792,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 2,
-    "neurons": 0.009205,
+    "neurons": 0.36437,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -6092,6 +6261,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6133,6 +6303,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6174,6 +6345,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6215,6 +6387,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6256,6 +6429,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6297,6 +6471,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6334,6 +6509,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6371,6 +6547,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -6408,6 +6585,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6445,6 +6623,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6482,6 +6661,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6519,6 +6699,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6556,6 +6737,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6593,6 +6775,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6630,6 +6813,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6667,6 +6851,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6704,6 +6889,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6741,6 +6927,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6778,6 +6965,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6815,6 +7003,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -6852,6 +7041,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -6889,6 +7079,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "exact-id",
    "degraded": []
   },
   {
@@ -6926,6 +7117,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -6963,6 +7155,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7000,6 +7193,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7037,6 +7231,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7074,6 +7269,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7111,6 +7307,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7148,6 +7345,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7185,6 +7383,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7222,6 +7421,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7259,6 +7459,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7300,6 +7501,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7337,6 +7539,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7374,6 +7577,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7415,6 +7619,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7423,15 +7628,15 @@
    "clusterKey": "n-para-001",
    "rankedIds": [
     "f-000084",
-    "f-000091",
     "f-000345",
+    "n-long-003",
     "f-000132",
     "n-long-001",
+    "n-long-013",
+    "n-long-011",
     "n-long-002",
-    "n-long-020",
     "n-long-019",
-    "n-long-023",
-    "n-long-014"
+    "n-long-020"
    ],
    "metrics": {
     "recall5": 0,
@@ -7440,18 +7645,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2051,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2101,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.012887,
+    "neurons": 0.549172,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7489,6 +7695,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7499,13 +7706,13 @@
     "f-000488",
     "n-long-011",
     "f-000529",
-    "n-long-005",
-    "f-000128",
-    "f-000143",
     "f-000019",
+    "f-000128",
+    "f-000237",
+    "f-000143",
     "f-000288",
-    "f-000222",
-    "f-000237"
+    "f-000148",
+    "n-long-005"
    ],
    "metrics": {
     "recall5": 0,
@@ -7514,18 +7721,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 1878,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 1928,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.42691300000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7563,6 +7771,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7570,16 +7779,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-005",
    "rankedIds": [
-    "f-000154",
     "n-long-024",
-    "n-hop-019-answer",
-    "f-000058",
-    "f-000141",
-    "f-000175",
-    "n-id-022",
-    "f-000350",
+    "f-000157",
     "f-000334",
-    "f-000255"
+    "f-000026",
+    "f-000255",
+    "f-000438",
+    "f-000518",
+    "n-id-022",
+    "f-000480",
+    "f-000299"
    ],
    "metrics": {
     "recall5": 0,
@@ -7588,18 +7797,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 20,
-    "d1RowsRead": 4656,
-    "aiCalls": 1,
+    "d1Statements": 21,
+    "d1RowsRead": 4706,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.42493200000000003,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7607,16 +7817,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-006",
    "rankedIds": [
-    "n-long-004",
-    "n-long-006",
-    "n-long-014",
-    "n-long-024",
-    "n-long-011",
-    "n-long-019",
     "n-long-010",
+    "n-long-004",
+    "n-long-008",
     "n-long-020",
     "n-long-012",
-    "n-long-008"
+    "f-000343",
+    "n-long-006",
+    "n-long-011",
+    "n-long-024",
+    "n-long-014"
    ],
    "metrics": {
     "recall5": 0,
@@ -7625,18 +7835,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2385,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2437,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.578744,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7645,35 +7856,36 @@
    "clusterKey": "n-para-007",
    "rankedIds": [
     "f-000653",
-    "f-000283",
-    "f-000567",
-    "f-000213",
-    "f-000387",
     "f-000251",
-    "f-000154",
+    "f-000213",
+    "f-000567",
     "f-000361",
-    "n-hop-004-answer",
-    "n-cjk-025"
+    "n-para-007",
+    "f-000283",
+    "f-000154",
+    "f-000387",
+    "n-hop-004-answer"
    ],
    "metrics": {
     "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
+    "recall10": 1,
+    "mrr10": 0.16666666666666666,
+    "ndcg10": 0.3562071871080222
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 668,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 718,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.374275,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7711,6 +7923,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7748,6 +7961,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7755,36 +7969,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-010",
    "rankedIds": [
-    "n-id-055",
-    "n-hop-010-answer",
     "n-budget-006",
-    "n-short-015",
+    "n-id-055",
     "n-hop-004-answer",
-    "n-cjk-021",
-    "f-000060",
-    "n-hop-027-root",
+    "n-short-015",
+    "n-hop-010-answer",
     "n-para-010",
-    "n-id-035"
+    "n-hop-027-root",
+    "f-000494",
+    "f-000060",
+    "n-short-021"
    ],
    "metrics": {
     "recall5": 0,
     "recall10": 1,
-    "mrr10": 0.1111111111111111,
-    "ndcg10": 0.3010299956639812
+    "mrr10": 0.16666666666666666,
+    "ndcg10": 0.3562071871080222
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 820,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 870,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.33805100000000005,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7794,34 +8009,35 @@
    "rankedIds": [
     "n-rare-023",
     "f-000588",
-    "f-000642",
-    "f-000140",
-    "f-000234",
-    "f-000359",
-    "f-000511",
-    "f-000132",
     "f-000591",
-    "f-000643"
+    "f-000642",
+    "f-000132",
+    "f-000511",
+    "f-000643",
+    "f-000234",
+    "n-para-011",
+    "f-000140"
    ],
    "metrics": {
     "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
+    "recall10": 1,
+    "mrr10": 0.1111111111111111,
+    "ndcg10": 0.3010299956639812
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 842,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 892,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.405405,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7859,6 +8075,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -7866,36 +8083,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-013",
    "rankedIds": [
-    "n-cjk-025",
-    "f-000133",
     "n-hop-016-root",
-    "n-long-024",
     "n-para-013",
-    "f-000571",
-    "f-000081",
-    "n-hop-002-root",
-    "n-hop-002-answer",
-    "n-rare-029"
+    "n-long-024",
+    "n-hop-026-root",
+    "n-rare-029",
+    "n-cjk-025",
+    "n-long-012",
+    "n-long-013",
+    "n-long-003",
+    "n-long-002"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.2,
-    "ndcg10": 0.38685280723454163
+    "mrr10": 0.5,
+    "ndcg10": 0.6309297535714574
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 609,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 659,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.42917700000000003,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7903,36 +8121,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-014",
    "rankedIds": [
-    "n-id-048",
-    "n-hop-005-root",
-    "n-id-026",
-    "n-id-046",
     "n-para-014",
-    "n-short-017",
-    "n-id-051",
-    "n-cjk-019",
+    "n-hop-005-root",
     "n-para-044",
-    "n-cjk-017"
+    "n-para-041",
+    "n-id-046",
+    "n-para-047",
+    "n-short-026",
+    "n-long-001",
+    "n-id-026",
+    "n-id-006"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.2,
-    "ndcg10": 0.38685280723454163
+    "mrr10": 1,
+    "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 810,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 860,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.323052,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7941,35 +8160,36 @@
    "clusterKey": "n-para-015",
    "rankedIds": [
     "n-long-009",
-    "n-budget-001",
     "f-000649",
     "n-para-015",
-    "n-hop-021-answer",
+    "n-budget-001",
     "n-para-028",
-    "f-000499",
-    "f-000579",
-    "f-000327",
-    "n-para-043"
+    "f-000591",
+    "f-000642",
+    "f-000482",
+    "f-000091",
+    "n-hop-021-answer"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.25,
-    "ndcg10": 0.4306765580733931
+    "mrr10": 0.3333333333333333,
+    "ndcg10": 0.5
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 576,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 626,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.399179,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -7978,15 +8198,15 @@
    "clusterKey": "n-para-016",
    "rankedIds": [
     "f-000128",
+    "f-000183",
     "f-000154",
     "f-000396",
-    "f-000649",
-    "f-000160",
     "f-000591",
-    "f-000643",
-    "n-rare-010",
-    "f-000324",
-    "n-para-003"
+    "f-000649",
+    "f-000256",
+    "f-000169",
+    "f-000588",
+    "f-000643"
    ],
    "metrics": {
     "recall5": 0,
@@ -7995,18 +8215,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 1384,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 1432,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.458326,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8044,6 +8265,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8052,14 +8274,14 @@
    "clusterKey": "n-para-018",
    "rankedIds": [
     "f-000375",
-    "f-000591",
-    "f-000154",
+    "f-000221",
     "n-hop-025-answer",
     "f-000396",
-    "f-000247",
-    "f-000221",
     "f-000391",
+    "f-000247",
     "f-000643",
+    "f-000251",
+    "f-000591",
     "f-000109"
    ],
    "metrics": {
@@ -8069,18 +8291,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2987,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 3037,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.525397,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8089,52 +8312,15 @@
    "clusterKey": "n-para-019",
    "rankedIds": [
     "n-long-005",
-    "n-budget-004",
-    "n-rare-035",
     "n-para-016",
+    "n-rare-035",
+    "n-budget-004",
     "f-000044",
     "n-common-028",
-    "n-common-018",
-    "n-common-022",
+    "n-common-030",
+    "n-common-020",
     "n-common-016",
-    "n-short-005"
-   ],
-   "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
-   },
-   "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 1210,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.009205,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "fts",
-   "degraded": []
-  },
-  {
-   "queryId": "q-para-020",
-   "category": "paraphrase",
-   "clusterKey": "n-para-020",
-   "rankedIds": [
-    "n-long-002",
-    "n-id-001",
-    "f-000361",
-    "n-hop-017-root",
-    "n-para-040",
-    "n-hop-002-root",
-    "n-long-001",
-    "n-para-007",
-    "n-para-032",
-    "n-para-017"
+    "n-budget-008"
    ],
    "metrics": {
     "recall5": 0,
@@ -8144,17 +8330,56 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2616,
-    "aiCalls": 1,
+    "d1RowsRead": 1258,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.31003400000000003,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "degraded": []
+  },
+  {
+   "queryId": "q-para-020",
+   "category": "paraphrase",
+   "clusterKey": "n-para-020",
+   "rankedIds": [
+    "n-long-002",
+    "f-000361",
+    "n-long-003",
+    "n-para-040",
+    "n-id-001",
+    "f-000013",
+    "f-000289",
+    "f-000171",
+    "f-000119",
+    "f-000437"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 2666,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.479268,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8162,127 +8387,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-021",
    "rankedIds": [
-    "n-short-010",
     "n-para-028",
-    "n-short-008",
-    "f-000540",
-    "n-para-046",
     "n-para-021",
+    "n-short-008",
     "n-cjk-017",
-    "n-id-033",
+    "n-id-036",
+    "n-id-019",
+    "n-hop-021-root",
     "n-id-049",
-    "n-id-053"
-   ],
-   "metrics": {
-    "recall5": 0,
-    "recall10": 1,
-    "mrr10": 0.16666666666666666,
-    "ndcg10": 0.3562071871080222
-   },
-   "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 434,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.009205,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "fts",
-   "degraded": []
-  },
-  {
-   "queryId": "q-para-022",
-   "category": "paraphrase",
-   "clusterKey": "n-para-022",
-   "rankedIds": [
-    "f-000583",
-    "n-hop-003-answer",
-    "f-000014",
-    "f-000588",
-    "f-000212",
-    "f-000567",
-    "f-000237",
-    "n-long-010",
-    "f-000564",
-    "f-000154"
-   ],
-   "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
-   },
-   "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 732,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.011046,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "fts",
-   "degraded": []
-  },
-  {
-   "queryId": "q-para-023",
-   "category": "paraphrase",
-   "clusterKey": "n-para-023",
-   "rankedIds": [
-    "f-000408",
-    "n-id-032",
-    "f-000144",
-    "f-000040",
-    "f-000494",
-    "f-000019",
-    "f-000077",
-    "f-000465",
-    "f-000213",
-    "f-000228"
-   ],
-   "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
-   },
-   "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 1136,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.009205,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "fts",
-   "degraded": []
-  },
-  {
-   "queryId": "q-para-024",
-   "category": "paraphrase",
-   "clusterKey": "n-para-024",
-   "rankedIds": [
-    "f-000044",
-    "n-para-024",
-    "f-000060",
-    "n-rare-033",
-    "n-common-020",
-    "f-000527",
-    "f-000625",
-    "f-000572",
-    "n-para-010",
-    "n-cjk-002"
+    "n-short-010",
+    "n-hop-018-root"
    ],
    "metrics": {
     "recall5": 1,
@@ -8292,34 +8406,73 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1322,
-    "aiCalls": 1,
+    "d1RowsRead": 484,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.016569,
+    "neurons": 0.32333500000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
-   "queryId": "q-para-025",
+   "queryId": "q-para-022",
    "category": "paraphrase",
-   "clusterKey": "n-para-025",
+   "clusterKey": "n-para-022",
    "rankedIds": [
-    "n-short-003",
-    "n-para-024",
-    "n-para-044",
-    "n-id-022",
-    "n-rare-024",
-    "n-long-016",
-    "f-000214",
-    "n-short-018",
-    "n-para-009",
-    "n-common-002"
+    "n-long-010",
+    "f-000588",
+    "f-000014",
+    "f-000583",
+    "f-000154",
+    "f-000564",
+    "f-000237",
+    "f-000567",
+    "f-000212",
+    "n-long-021"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 782,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.438659,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "degraded": []
+  },
+  {
+   "queryId": "q-para-023",
+   "category": "paraphrase",
+   "clusterKey": "n-para-023",
+   "rankedIds": [
+    "f-000077",
+    "f-000228",
+    "f-000576",
+    "f-000172",
+    "n-id-032",
+    "f-000019",
+    "f-000506",
+    "f-000465",
+    "f-000040",
+    "f-000482"
    ],
    "metrics": {
     "recall5": 0,
@@ -8329,17 +8482,94 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 2442,
-    "aiCalls": 1,
+    "d1RowsRead": 1186,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.468797,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "degraded": []
+  },
+  {
+   "queryId": "q-para-024",
+   "category": "paraphrase",
+   "clusterKey": "n-para-024",
+   "rankedIds": [
+    "n-para-024",
+    "f-000527",
+    "f-000388",
+    "n-para-010",
+    "n-common-020",
+    "f-000572",
+    "f-000427",
+    "f-000098",
+    "f-000636",
+    "n-common-017"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 1372,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.367206,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "degraded": []
+  },
+  {
+   "queryId": "q-para-025",
+   "category": "paraphrase",
+   "clusterKey": "n-para-025",
+   "rankedIds": [
+    "n-para-044",
+    "n-short-003",
+    "n-rare-024",
+    "n-long-016",
+    "n-para-024",
+    "n-id-022",
+    "f-000214",
+    "n-short-018",
+    "n-short-012",
+    "n-para-009"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 2492,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.38757600000000003,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8347,36 +8577,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-026",
    "rankedIds": [
-    "n-short-023",
-    "n-para-044",
     "f-000044",
     "n-para-026",
-    "n-hop-029-answer",
-    "f-000226",
     "n-id-011",
-    "n-cjk-025",
-    "f-000557",
-    "n-short-022"
+    "n-short-023",
+    "n-para-044",
+    "f-000226",
+    "f-000576",
+    "f-000656",
+    "f-000151",
+    "f-000007"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.25,
-    "ndcg10": 0.4306765580733931
+    "mrr10": 0.5,
+    "ndcg10": 0.6309297535714574
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 574,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 624,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.400594,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8384,36 +8615,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-027",
    "rankedIds": [
-    "n-id-026",
-    "n-id-048",
     "n-para-027",
-    "n-short-016",
-    "n-id-054",
-    "n-id-050",
-    "n-id-029",
     "n-id-053",
-    "n-para-008",
-    "n-long-003"
+    "n-long-003",
+    "n-short-014",
+    "f-000028",
+    "f-000438",
+    "n-short-007",
+    "f-000598",
+    "n-id-029",
+    "n-id-006"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.3333333333333333,
-    "ndcg10": 0.5
+    "mrr10": 1,
+    "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 436,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 486,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.014728,
+    "neurons": 0.363667,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8451,6 +8683,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8458,16 +8691,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-029",
    "rankedIds": [
-    "f-000369",
-    "f-000653",
-    "f-000430",
-    "f-000580",
-    "f-000396",
     "f-000570",
+    "f-000653",
     "n-long-021",
+    "f-000430",
+    "f-000396",
+    "f-000369",
     "f-000251",
     "n-rare-031",
-    "n-hop-010-root"
+    "f-000580",
+    "n-long-017"
    ],
    "metrics": {
     "recall5": 0,
@@ -8476,18 +8709,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 3402,
-    "aiCalls": 1,
+    "d1Statements": 19,
+    "d1RowsRead": 3452,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.447855,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8495,36 +8729,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-030",
    "rankedIds": [
-    "n-hop-023-answer",
+    "n-long-015",
     "n-para-010",
+    "n-hop-023-answer",
+    "f-000396",
     "f-000321",
     "f-000451",
-    "f-000396",
-    "n-long-015",
-    "f-000649",
     "n-para-030",
-    "n-para-043",
-    "n-cjk-032"
+    "f-000649",
+    "n-para-024",
+    "n-hop-016-answer"
    ],
    "metrics": {
     "recall5": 0,
     "recall10": 1,
-    "mrr10": 0.125,
-    "ndcg10": 0.3154648767857287
+    "mrr10": 0.14285714285714285,
+    "ndcg10": 0.3333333333333333
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 816,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 868,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.337768,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8562,6 +8797,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8599,6 +8835,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8636,6 +8873,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8643,36 +8881,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-034",
    "rankedIds": [
-    "f-000133",
-    "f-000540",
-    "n-long-002",
-    "n-para-034",
     "n-hop-029-root",
+    "n-para-034",
     "f-000448",
     "f-000638",
-    "f-000173",
+    "f-000010",
+    "f-000331",
     "f-000571",
-    "f-000364"
+    "f-000543",
+    "n-long-002",
+    "f-000501"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 0.25,
-    "ndcg10": 0.4306765580733931
+    "mrr10": 0.5,
+    "ndcg10": 0.6309297535714574
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2686,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2736,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.41700800000000005,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8710,6 +8949,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8747,6 +8987,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8784,6 +9025,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8793,14 +9035,14 @@
    "rankedIds": [
     "n-long-019",
     "n-long-018",
+    "n-long-024",
     "n-long-003",
+    "f-000023",
+    "n-para-022",
     "n-short-008",
     "n-id-019",
-    "n-long-024",
-    "n-para-048",
-    "n-para-022",
-    "f-000566",
-    "n-hop-014-answer"
+    "n-long-020",
+    "n-para-048"
    ],
    "metrics": {
     "recall5": 0,
@@ -8809,18 +9051,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2364,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2414,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.43964800000000004,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8828,16 +9071,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-039",
    "rankedIds": [
-    "n-hop-006-answer",
     "n-long-023",
     "n-rare-033",
     "f-000159",
-    "n-rare-029",
-    "f-000591",
-    "f-000132",
+    "n-hop-006-answer",
     "f-000109",
+    "f-000591",
+    "f-000396",
     "f-000128",
-    "f-000396"
+    "f-000132",
+    "n-rare-029"
    ],
    "metrics": {
     "recall5": 0,
@@ -8846,18 +9089,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2849,
-    "aiCalls": 1,
+    "d1Statements": 18,
+    "d1RowsRead": 2899,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.450119,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8895,6 +9139,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8902,16 +9147,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-041",
    "rankedIds": [
-    "n-short-023",
     "n-para-044",
-    "f-000040",
-    "n-para-047",
-    "n-rare-031",
-    "f-000359",
+    "f-000130",
+    "f-000537",
     "f-000272",
-    "f-000133",
-    "n-budget-008",
-    "n-short-016"
+    "n-short-023",
+    "f-000512",
+    "f-000077",
+    "f-000004",
+    "f-000106",
+    "n-rare-031"
    ],
    "metrics": {
     "recall5": 0,
@@ -8920,18 +9165,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 572,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 622,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.434697,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -8969,6 +9215,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -8978,51 +9225,14 @@
    "rankedIds": [
     "n-long-009",
     "n-hop-024-answer",
-    "n-hop-022-answer",
-    "n-hop-004-answer",
     "f-000649",
+    "n-hop-004-answer",
+    "n-hop-022-answer",
     "n-id-018",
-    "n-para-043",
-    "n-cjk-018",
-    "n-hop-026-answer",
-    "n-common-012"
-   ],
-   "metrics": {
-    "recall5": 0,
-    "recall10": 1,
-    "mrr10": 0.14285714285714285,
-    "ndcg10": 0.3333333333333333
-   },
-   "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 367,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.009205,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "fts",
-   "degraded": []
-  },
-  {
-   "queryId": "q-para-044",
-   "category": "paraphrase",
-   "clusterKey": "n-para-044",
-   "rankedIds": [
-    "f-000610",
-    "f-000324",
-    "n-rare-010",
-    "n-para-003",
-    "n-long-007",
-    "f-000159",
-    "f-000545",
-    "f-000330",
-    "f-000154",
-    "f-000109"
+    "f-000345",
+    "f-000450",
+    "f-000276",
+    "f-000570"
    ],
    "metrics": {
     "recall5": 0,
@@ -9031,18 +9241,57 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 17,
-    "d1RowsRead": 2808,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 417,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.346258,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "degraded": []
+  },
+  {
+   "queryId": "q-para-044",
+   "category": "paraphrase",
+   "clusterKey": "n-para-044",
+   "rankedIds": [
+    "f-000610",
+    "n-long-006",
+    "f-000159",
+    "f-000545",
+    "f-000455",
+    "f-000476",
+    "f-000330",
+    "f-000324",
+    "f-000109",
+    "f-000626"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 2858,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.527944,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -9080,6 +9329,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9117,6 +9367,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9124,36 +9375,37 @@
    "category": "paraphrase",
    "clusterKey": "n-para-047",
    "rankedIds": [
-    "n-para-047",
     "n-id-013",
     "f-000040",
-    "n-id-032",
-    "n-hop-001-root",
-    "f-000408",
-    "f-000568",
+    "n-para-047",
     "n-id-007",
-    "n-hop-005-root",
-    "n-hop-007-answer"
+    "f-000496",
+    "f-000205",
+    "f-000004",
+    "f-000579",
+    "f-000267",
+    "n-hop-001-root"
    ],
    "metrics": {
     "recall5": 1,
     "recall10": 1,
-    "mrr10": 1,
-    "ndcg10": 1
+    "mrr10": 0.3333333333333333,
+    "ndcg10": 0.5
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 527,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 577,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.423234,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -9161,16 +9413,16 @@
    "category": "paraphrase",
    "clusterKey": "n-para-048",
    "rankedIds": [
-    "n-short-019",
     "f-000461",
-    "n-para-042",
     "n-para-043",
-    "f-000132",
-    "f-000140",
-    "f-000259",
     "n-long-019",
+    "f-000132",
+    "n-short-019",
+    "f-000140",
     "f-000044",
-    "f-000038"
+    "f-000656",
+    "f-000262",
+    "n-para-042"
    ],
    "metrics": {
     "recall5": 0,
@@ -9179,18 +9431,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 940,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 990,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.447572,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -9228,6 +9481,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9238,16 +9492,16 @@
     "cross-lingual"
    ],
    "rankedIds": [
-    "n-hop-012-root",
+    "f-000405",
+    "f-000143",
+    "f-000034",
+    "f-000064",
+    "f-000372",
     "n-short-025",
     "f-000488",
     "f-000198",
-    "f-000405",
-    "f-000619",
-    "f-000398",
-    "f-000064",
-    "f-000135",
-    "f-000034"
+    "f-000344",
+    "f-000619"
    ],
    "metrics": {
     "recall5": 0,
@@ -9256,18 +9510,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 1151,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 1201,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.428611,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -9305,6 +9560,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9345,6 +9601,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9382,6 +9639,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9419,6 +9677,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9456,6 +9715,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9493,6 +9753,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9530,6 +9791,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9567,6 +9829,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9604,6 +9867,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9641,6 +9905,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9678,6 +9943,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9715,6 +9981,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9752,6 +10019,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9789,6 +10057,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9826,6 +10095,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9863,6 +10133,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9903,6 +10174,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9940,6 +10212,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -9977,6 +10250,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10014,6 +10288,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10051,6 +10326,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10088,6 +10364,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10125,6 +10402,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10162,6 +10440,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10199,6 +10478,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10236,6 +10516,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10273,6 +10554,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10310,6 +10592,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10347,6 +10630,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10384,6 +10668,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10424,6 +10709,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10461,6 +10747,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10498,6 +10785,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10535,6 +10823,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10572,6 +10861,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10609,6 +10899,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10646,6 +10937,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10683,6 +10975,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10720,6 +11013,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10732,11 +11026,11 @@
     "n-long-006",
     "n-long-022",
     "f-000032",
-    "n-short-020",
     "n-long-007",
-    "n-hop-014-answer",
-    "f-000624",
-    "f-000236"
+    "n-short-020",
+    "f-000463",
+    "f-000205",
+    "f-000446"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -10746,17 +11040,18 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 839,
-    "aiCalls": 1,
+    "d1RowsRead": 841,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.5817140000000001,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -10794,6 +11089,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10803,14 +11099,14 @@
    "rankedIds": [
     "n-hop-004-root",
     "n-id-022",
-    "n-id-003",
+    "n-id-027",
     "n-hop-025-root",
-    "n-id-054",
-    "n-hop-027-answer",
+    "n-id-003",
+    "n-long-021",
+    "n-long-005",
+    "n-long-003",
     "n-short-012",
-    "n-hop-009-root",
-    "n-long-002",
-    "n-long-004"
+    "n-long-015"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -10820,17 +11116,18 @@
    },
    "cost": {
     "d1Statements": 17,
-    "d1RowsRead": 909,
-    "aiCalls": 1,
+    "d1RowsRead": 889,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.538981,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -10868,6 +11165,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10905,6 +11203,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10942,6 +11241,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -10979,6 +11279,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11016,6 +11317,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11053,6 +11355,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11090,6 +11393,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11127,6 +11431,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11164,6 +11469,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11201,6 +11507,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11238,6 +11545,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11275,6 +11583,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11312,6 +11621,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11349,6 +11659,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11386,6 +11697,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11423,6 +11735,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11460,6 +11773,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11497,6 +11811,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11534,6 +11849,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11571,6 +11887,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11608,6 +11925,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11617,14 +11935,14 @@
    "rankedIds": [
     "n-hop-026-root",
     "n-long-013",
-    "n-long-003",
+    "n-long-006",
     "n-long-005",
     "n-long-014",
-    "n-long-002",
-    "n-long-020",
-    "n-long-022",
-    "n-long-015",
-    "n-long-007"
+    "n-long-011",
+    "n-long-003",
+    "n-long-007",
+    "n-long-010",
+    "n-long-020"
    ],
    "metrics": {
     "recall5": 0.5,
@@ -11634,17 +11952,18 @@
    },
    "cost": {
     "d1Statements": 18,
-    "d1RowsRead": 1857,
-    "aiCalls": 1,
+    "d1RowsRead": 1847,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.8276410000000001,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -11682,6 +12001,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11719,6 +12039,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11756,6 +12077,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11793,6 +12115,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11830,6 +12153,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11867,6 +12191,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -11874,36 +12199,37 @@
    "category": "long-context",
    "clusterKey": "n-long-003",
    "rankedIds": [
-    "n-long-001",
-    "f-000226",
     "f-000166",
-    "n-long-003",
-    "n-rare-008",
-    "f-000641",
+    "f-000226",
     "f-000567",
+    "f-000406",
+    "f-000519",
     "f-000145",
-    "f-000393",
-    "n-hop-013-answer"
+    "f-000641",
+    "f-000468",
+    "n-long-003",
+    "n-long-006"
    ],
    "metrics": {
-    "recall5": 1,
+    "recall5": 0,
     "recall10": 1,
-    "mrr10": 0.25,
-    "ndcg10": 0.4306765580733931
+    "mrr10": 0.1111111111111111,
+    "ndcg10": 0.3010299956639812
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 418,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 468,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.478985,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -11911,16 +12237,16 @@
    "category": "long-context",
    "clusterKey": "n-long-004",
    "rankedIds": [
-    "n-cjk-001",
-    "n-cjk-013",
-    "n-cjk-026",
-    "f-000197",
-    "f-000306",
-    "n-cjk-022",
-    "f-000179",
-    "f-000127",
     "n-para-030",
-    "n-short-010"
+    "n-cjk-026",
+    "f-000179",
+    "n-hop-017-root",
+    "f-000636",
+    "n-cjk-022",
+    "f-000625",
+    "f-000127",
+    "n-cjk-014",
+    "f-000241"
    ],
    "metrics": {
     "recall5": 0,
@@ -11929,18 +12255,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 1293,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 1341,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.379369,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -11948,16 +12275,16 @@
    "category": "long-context",
    "clusterKey": "n-long-005",
    "rankedIds": [
-    "f-000226",
-    "f-000062",
-    "n-hop-007-answer",
-    "f-000040",
     "n-hop-020-root",
+    "n-para-047",
     "f-000654",
+    "f-000454",
     "f-000179",
-    "f-000393",
-    "f-000602",
-    "n-para-047"
+    "f-000143",
+    "f-000605",
+    "f-000283",
+    "f-000453",
+    "f-000040"
    ],
    "metrics": {
     "recall5": 0,
@@ -11966,18 +12293,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 914,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 964,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.012887,
+    "neurons": 0.42125599999999996,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12015,6 +12343,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12052,6 +12381,7 @@
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12089,6 +12419,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12126,6 +12457,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12163,6 +12495,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12170,16 +12503,16 @@
    "category": "long-context",
    "clusterKey": "n-long-011",
    "rankedIds": [
-    "n-short-025",
     "n-para-004",
-    "n-cjk-005",
-    "f-000459",
-    "n-id-034",
-    "n-cjk-009",
-    "n-cjk-013",
-    "f-000533",
     "f-000371",
-    "n-para-046"
+    "n-cjk-011",
+    "f-000523",
+    "f-000123",
+    "f-000618",
+    "f-000548",
+    "n-short-025",
+    "n-para-046",
+    "n-id-020"
    ],
    "metrics": {
     "recall5": 0,
@@ -12188,18 +12521,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 18,
-    "d1RowsRead": 3315,
-    "aiCalls": 1,
+    "d1Statements": 19,
+    "d1RowsRead": 3365,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.328712,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "like-ineligible-token",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12237,6 +12571,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12244,53 +12579,16 @@
    "category": "long-context",
    "clusterKey": "n-long-013",
    "rankedIds": [
-    "n-id-031",
-    "n-short-026",
     "n-rare-011",
+    "n-hop-020-root",
     "n-id-023",
-    "f-000482",
-    "f-000155",
+    "n-hop-003-answer",
+    "n-id-034",
+    "n-id-048",
+    "f-000454",
+    "f-000515",
     "n-id-033",
-    "n-id-047",
-    "n-para-015",
-    "n-hop-003-answer"
-   ],
-   "metrics": {
-    "recall5": 0,
-    "recall10": 0,
-    "mrr10": 0,
-    "ndcg10": 0
-   },
-   "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 475,
-    "aiCalls": 1,
-    "embeddingCalls": 1,
-    "vectorizeQueries": 2,
-    "kvReads": 3,
-    "neurons": 0.011046,
-    "neuronsEstimated": false,
-    "wallMs": 0
-   },
-   "leaked": [],
-   "ftsRoute": "fts",
-   "degraded": []
-  },
-  {
-   "queryId": "q-long-014",
-   "category": "long-context",
-   "clusterKey": "n-long-014",
-   "rankedIds": [
-    "f-000523",
-    "f-000517",
-    "f-000077",
-    "n-hop-014-root",
-    "n-hop-001-root",
-    "f-000601",
-    "f-000019",
-    "f-000345",
-    "f-000328",
-    "f-000239"
+    "n-cjk-024"
    ],
    "metrics": {
     "recall5": 0,
@@ -12300,34 +12598,35 @@
    },
    "cost": {
     "d1Statements": 16,
-    "d1RowsRead": 1405,
-    "aiCalls": 1,
+    "d1RowsRead": 527,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.397907,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
-   "queryId": "q-long-015",
+   "queryId": "q-long-014",
    "category": "long-context",
-   "clusterKey": "n-long-015",
+   "clusterKey": "n-long-014",
    "rankedIds": [
-    "f-000361",
-    "f-000499",
-    "f-000469",
-    "f-000289",
-    "f-000342",
-    "f-000171",
-    "f-000539",
-    "f-000153",
-    "f-000122",
-    "n-hop-002-root"
+    "f-000517",
+    "f-000205",
+    "f-000251",
+    "f-000330",
+    "f-000579",
+    "f-000036",
+    "f-000239",
+    "f-000328",
+    "n-hop-001-root",
+    "f-000523"
    ],
    "metrics": {
     "recall5": 0,
@@ -12336,18 +12635,57 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 534,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 1453,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.470495,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "degraded": []
+  },
+  {
+   "queryId": "q-long-015",
+   "category": "long-context",
+   "clusterKey": "n-long-015",
+   "rankedIds": [
+    "f-000361",
+    "f-000539",
+    "f-000382",
+    "f-000499",
+    "f-000069",
+    "f-000342",
+    "f-000227",
+    "f-000380",
+    "f-000171",
+    "f-000289"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 582,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.38984,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12385,6 +12723,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12422,6 +12761,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12429,16 +12769,16 @@
    "category": "long-context",
    "clusterKey": "n-long-018",
    "rankedIds": [
-    "f-000637",
-    "f-000133",
-    "f-000258",
-    "f-000513",
-    "f-000435",
     "f-000622",
-    "f-000265",
-    "f-000184",
     "f-000106",
-    "f-000145"
+    "f-000435",
+    "f-000637",
+    "f-000264",
+    "f-000434",
+    "f-000436",
+    "f-000472",
+    "f-000250",
+    "f-000235"
    ],
    "metrics": {
     "recall5": 0,
@@ -12447,18 +12787,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 16,
-    "d1RowsRead": 815,
-    "aiCalls": 1,
+    "d1Statements": 17,
+    "d1RowsRead": 865,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.009205,
+    "neurons": 0.492852,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12466,16 +12807,16 @@
    "category": "long-context",
    "clusterKey": "n-long-019",
    "rankedIds": [
+    "n-long-012",
     "n-short-016",
-    "n-long-001",
-    "n-hop-020-answer",
-    "n-long-009",
-    "n-long-013",
-    "n-long-002",
-    "n-long-008",
-    "n-long-007",
     "n-long-005",
-    "n-long-017"
+    "n-long-007",
+    "n-long-008",
+    "n-long-011",
+    "n-long-009",
+    "n-long-001",
+    "f-000479",
+    "n-long-013"
    ],
    "metrics": {
     "recall5": 0,
@@ -12484,18 +12825,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 20,
-    "d1RowsRead": 5176,
-    "aiCalls": 1,
+    "d1Statements": 21,
+    "d1RowsRead": 5228,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.521295,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12533,6 +12875,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12570,6 +12913,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   },
   {
@@ -12577,16 +12921,16 @@
    "category": "long-context",
    "clusterKey": "n-long-022",
    "rankedIds": [
-    "n-id-048",
+    "f-000610",
+    "f-000355",
+    "f-000094",
     "f-000214",
     "n-id-050",
+    "f-000128",
     "f-000564",
-    "f-000189",
-    "f-000042",
-    "f-000489",
-    "n-hop-018-root",
-    "n-short-017",
-    "n-short-025"
+    "f-000258",
+    "n-id-016",
+    "n-id-005"
    ],
    "metrics": {
     "recall5": 0,
@@ -12595,18 +12939,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 559,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 609,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.425641,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12614,16 +12959,16 @@
    "category": "long-context",
    "clusterKey": "n-long-023",
    "rankedIds": [
-    "n-para-040",
-    "n-hop-016-answer",
-    "n-hop-022-answer",
     "n-hop-004-answer",
+    "n-hop-016-answer",
+    "n-para-040",
     "n-hop-024-answer",
-    "f-000196",
+    "f-000435",
+    "f-000044",
     "n-long-001",
     "n-short-029",
-    "n-budget-002",
-    "n-id-054"
+    "n-hop-022-answer",
+    "n-budget-002"
    ],
    "metrics": {
     "recall5": 0,
@@ -12632,18 +12977,19 @@
     "ndcg10": 0
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 744,
-    "aiCalls": 1,
+    "d1Statements": 16,
+    "d1RowsRead": 794,
+    "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
     "kvReads": 3,
-    "neurons": 0.011046,
+    "neurons": 0.410642,
     "neuronsEstimated": false,
     "wallMs": 0
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "applied",
    "degraded": []
   },
   {
@@ -12681,6 +13027,7 @@
    },
    "leaked": [],
    "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
    "degraded": []
   }
  ]

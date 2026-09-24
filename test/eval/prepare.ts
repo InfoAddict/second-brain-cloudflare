@@ -1,8 +1,26 @@
+import { RERANK_MODEL } from "../../src/constants";
 import { NeuronBudget, ReplayStore, makeReplayAi, type LiveAi, type LlmTagsArm } from "./ai-replay";
 import { loadCorpus } from "./corpus/loader";
 import type { CorpusSpec } from "./corpus/types";
 import { runVariant } from "./runner";
 import type { VariantSpec } from "./variants";
+
+/** Dry-pass stand-in for the reranker: a valid answer in the documented shape (best first by index), so the pass can walk on and list the request it would record. */
+export function dryReranker(model: string, input: unknown): unknown {
+  if (model !== RERANK_MODEL) throw new Error(`no dry answer for ${model}`);
+  const contexts = (input as { contexts?: unknown[] }).contexts ?? [];
+  return { response: contexts.map((_, id) => ({ id, score: contexts.length - id })) };
+}
+
+/** Times the real reranker calls only; latency of embedding and tag calls is not what a recall pays for ranking. */
+function timeReranker(live: LiveAi, ms: number[]): LiveAi {
+  return { ...live, run: async (model, input) => {
+    const started = performance.now();
+    try { return await live.run(model, input); } finally { if (model === RERANK_MODEL) ms.push(performance.now() - started); }
+  } };
+}
+
+const pct = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))];
 
 /**
  * The only path that runs live inference, and it is local (makeLocalAi: pinned open weights, no account, no
@@ -39,7 +57,7 @@ export async function prepare(o: {
 
   // every pass must read only a cache labeled with the producer that would fill it
   const expectProducer = (m: string) => o.live.producer?.(m);
-  const dry = makeReplayAi({ store: o.store, mode: "dry", expectProducer, llmTags: o.llmTags });
+  const dry = makeReplayAi({ store: o.store, mode: "dry", expectProducer, llmTags: o.llmTags, dryOther: dryReranker });
   await pass(dry, 1);
   const missing = dry.misses.size;
   const estimatedNeurons = [...dry.misses.values()].reduce((s, m) => s + m.neurons, 0);
@@ -51,9 +69,11 @@ export async function prepare(o: {
       throw new Error(`estimated ${estimatedNeurons.toFixed(1)} neurons exceeds --max-neurons ${o.maxNeurons}; raise it deliberately (the estimate is a byte-count upper bound in production-equivalent neurons)`);
     }
     const budget = new NeuronBudget(o.maxNeurons);
-    await pass(makeReplayAi({ store: o.store, mode: "record", live: o.live, budget, llmTags: o.llmTags }), o.concurrency);
+    const rerankMs: number[] = [];
+    await pass(makeReplayAi({ store: o.store, mode: "record", live: timeReranker(o.live, rerankMs), budget, llmTags: o.llmTags }), o.concurrency);
     spentNeurons = budget.spent;
     o.log(`recorded; estimated spend ${spentNeurons.toFixed(1)} neurons.`);
+    if (rerankMs.length) o.log(`reranker: ${rerankMs.length} local model call(s), p50 ${pct(rerankMs, 0.5).toFixed(0)} ms, p95 ${pct(rerankMs, 0.95).toFixed(0)} ms (local CPU inference, NOT Workers AI latency, which is unmeasured).`);
   }
 
   await pass(makeReplayAi({ store: o.store, mode: "replay", expectProducer, llmTags: o.llmTags }), 1, true);

@@ -11,6 +11,9 @@ import {
 } from "../fixtures/recall-root-quality";
 import { D1Mock } from "../helpers/d1-mock";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
+
+// This frozen benchmark pins the pre-reranker pipeline: its mock AI cannot rank passages, and a probe would count as an extra AI call.
+const NO_RERANK = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
 import {
   baselineRecall,
   directTopFourRegressed,
@@ -147,7 +150,7 @@ async function runCase(c: RootQualityCase): Promise<CaseObservation> {
     { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
     graph.env,
     graph.ctx,
-    undefined,
+    NO_RERANK,
     { diagnostics },
   );
   const acceptableRoots = new Set(c.acceptableRootIds);
@@ -425,7 +428,7 @@ describe("frozen recall root-quality benchmark", () => {
   it("AI and Vectorize parity sentinel keeps the controlled path at one call", async () => {
     const c = ROOT_QUALITY_CASES.find(candidate => candidate.failureShape === "crowded-lexical-root" && candidate.split === "development")!;
     const fixture = buildFixture(c);
-    await recallEntries({ query: c.query, topK: TOP_K, hops: 1, synthesize: false }, fixture.env, fixture.ctx);
+    await recallEntries({ query: c.query, topK: TOP_K, hops: 1, synthesize: false }, fixture.env, fixture.ctx, NO_RERANK);
     expect((fixture.env.AI.run as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])).toEqual([DEFAULTS.EMBEDDING_MODEL]);
     expect(fixture.query).toHaveBeenCalledTimes(1);
   });

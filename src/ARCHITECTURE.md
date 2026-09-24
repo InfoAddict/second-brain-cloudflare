@@ -166,6 +166,123 @@ within `FTS_READY_CACHE_MS` (5 minutes) of the flag going live, since each
 instance only checks periodically rather than on every request. No API or
 MCP change.
 
+## Recall cross-encoder reranker
+
+`recall/model-reranker.ts` re-scores a bounded set of already fused candidates
+with `@cf/baai/bge-reranker-base` (one nonstreaming `AI.run`, request
+`{query, contexts: [{text}], top_k}`, answer `{response: [{id, score}]}` with raw
+logits). It sits after `rerankWithTimeDecay` and before `mmrRerank` and graph-root
+selection, so dense and keyword candidate generation, fusion, graph expansion,
+evidence rescue, rendering and synthesis are untouched.
+
+- **Candidates.** Up to 25 direct parents in heuristic order plus up to 5 extra
+  graph-root parents (30 total, one batch). Only parents the scoped
+  candidate-signal read returned are eligible. At hops 0 one extra by-id read
+  fetches their text (at hops above 0 the text is already in hand); it omits the
+  scope clause on purpose, because with it SQLite scans the whole workspace instead
+  of doing 30 primary-key lookups. Vectorize and keyword metadata content never
+  reach the model. Each passage is `queryRelevantWindow(content, ..., 400)`.
+- **Blend.** Model scores become rank percentiles within the batch (ties keep
+  baseline order; all-equal is neutral). Only parents the model scored are
+  reordered: each has its heuristic score multiplied by
+  `max(floor, 1 + w * (2p - 1))` (`w = 1.0`, `floor = 0.25`, so nothing is
+  multiplied by zero), and the scored block is scaled, by one factor, just clear of the
+  best unscored score. A scored candidate therefore never falls below one the model
+  did not see, unscored candidates keep their positions, and the same parent factor
+  scales the direct and the root view. `w` and `floor` were chosen on core-1k from
+  a grid pre-registered in the commit message before it ran ({0.5, 0.75, 1.0} x
+  {0.25, 0.5}; rule: best paraphrase mrr@10 among configs with no regression, cost
+  within budget and overall recall@10 not below baseline) and then validated once
+  on scale-20k and SciFact. At full weight the model's order dominates.
+- **Keyword evidence.** A parent the keyword arm returned that holds every distilled
+  query term is always scored (up to five), taking the seat of the lowest-ranked
+  fused candidate, and enters the blend at the edge of the fused candidates. A
+  single-term query counts only if its df is within the saturation fraction (the
+  keyword rows holding the term over one `entry_counts` read, taken only when the
+  model is about to be called and an evidence row lies outside the head), so a
+  common word takes no seats. At hops 0 the batch is 25 wide, so evidence extras
+  evict fused candidates while up to five seats stay empty; that is the
+  pre-registered rule, chosen to keep cost flat, and worth revisiting once real
+  Workers AI cost is measured.
+- **Routing (no AI).** `RERANK_MODE` is `off`, `on` or `auto` (default `auto`;
+  an unknown stored value reads as `off`). `on` needs at least three parents;
+  `auto` also needs the top two heuristic scores within 15%. A lookup-shaped
+  query token always skips: `#` or `_`, a digit next to a letter (`v1.2`,
+  `abc123`, `40mg`), a dotted name (`config.yaml`), a multi-dot number
+  (`10.0.0.1`). Prose does not: a sentence-final period, a plain hyphenated word,
+  a bare year, a plain number or percentage, and a dotted abbreviation of segments
+  of two letters or fewer (`U.S.`, `e.g.`). Skip rates on the eval's queries:
+  core-1k 29 of 338, SciFact 195 of 693 (the rule was fixed after seeing SciFact,
+  so SciFact is in-sample for routing and held out for the blend). `off` returns
+  before any read of the latch.
+- **Readiness.** A model never runs until `reranker:ready:bge-base-v1` says the
+  probe passed. `probeReranker` sends a small ranking check (the relevant passage
+  must lead two unrelated ones by two logits) and then a production-shaped request
+  (30 passages of 400 characters, a 256-character query) that must come back
+  complete; any rejection, truncation or wrong length latches "0". The first
+  recall that would have used the model schedules the probe in `waitUntil` (one per
+  isolate at a time; a passing verdict lives a week, a failing one six hours, and
+  the isolate remembers the verdict even if the KV write fails), so the contract is
+  re-proved lazily at no cost to the nightly cron's statement budget. The probe has
+  its own 15 s timeout; a recall allows 1.5 s (a judgment, unverified against
+  Workers AI). The probe also latches "0" if its full-batch leg takes longer than a recall may wait. Its Latin filler
+  under-probes a token-based size limit by about 4x for CJK text (400 CJK characters are
+  roughly 400 tokens, not 100), so the circuit breaker below is the runtime backstop.
+- **Circuit breaker.** Three consecutive timeouts or errors in an isolate latch the
+  model off for six hours (here and in KV) until the probe re-proves it. Every
+  applied, timed-out or failed step logs one JSON line (route, ms, batch size) to
+  the Worker's logs, so the first real deploy measures Workers AI latency itself
+  (`wrangler tail` or Workers Logs); the same route and latency are in
+  `RecallDiagnostics.rerankRoute` and `rerankMs`.
+- **Failure.** A thrown error, quota (3036) or capacity (3040) failure, timeout,
+  or malformed, truncated or duplicate-id answer returns the un-reranked matches
+  exactly. `RecallDiagnostics.rerankRoute` records what happened.
+- **Cost.** One AI call, one D1 statement at hops 0 (none above), and one KV read
+  for the latch per reranked recall. At the published 283 neurons per million
+  input tokens the eval projects about 0.35 neurons per reranked recall (the
+  query is counted once per pair, so this is conservative).
+
+What the persistent losers show (core-1k `q-para-047/043/028/042`, `q-rare-011-c`,
+`q-long-003`; scale-20k `q-rare-015`; SciFact 169 and 500). For the short notes
+(most of them) the excerpt the model reads is the whole note, so the model simply
+disagrees: it ranks generic filler that shares a word with the query above the
+right memory, and every score in those batches is a low logit (about -6 to -10),
+so the percentile order is close to noise. Two causes are structural rather than
+model disagreement: a note longer than the excerpt is read from its head (or a
+keyword window), so `q-long-003` and SciFact 169 never show the model the sentence
+that answers (it sits about 1,400 characters in); and a keyword-only exact match
+that sits at the tail of the fused pool (`q-rare-032`, `q-rare-015`) is never scored,
+reaches the top 10 without the reranker only through MMR's diversity term, and is
+displaced when the scored block is ranked above it. Anchoring the excerpt at the
+dense arm's best chunk was tried for the first and did not move core-1k (paraphrase
+mrr@10 +0.097 either way, overall recall@10 +0.012 against +0.015), because the
+answer still sits inside a 1,600-character chunk; it was not shipped.
+
+The eval's `rerank` variant forces the mode on through the typed
+`variant.rerank` flag (no route can set it); `no-rerank` pins it off,
+`baseline` and `rerank-auto` are the shipped `auto`, and `rerank-auto` carries the
+pre-registered target category (paraphrase only: multi-hop has no headroom, mrr@10 0.974). The ship decision is
+`npm run eval:recall -- --compare no-rerank,rerank-auto --corpus core-1k --d1 workerd`
+(no `--target` flag), repeated on `scale-20k` and `scifact` with
+`--allow-unmeasured-rows`. What it shows: the improvement clears its bar on the
+point estimate only (paraphrase mrr@10 +0.064 against a 0.05 bar, CI lower bound
+0.006, on core-1k), overall recall@10 does not move beyond noise (+0.003, CI
+[-0.006, 0.015]), and on scale-20k it does not clear the bar (+0.037, lower bound
+0.001). It is an ordering gain (better rank among candidates already retrieved),
+not a retrieval gain. A change made on top of the shipped pipeline compares with
+`--compare baseline,<variant>`; one made before the reranker with
+`--compare no-rerank,<variant>`. The runner fails a query, instead of scoring
+the fallback order, whenever the reranker was expected and the step did not end
+in a model answer or a legitimate skip, so a replay miss cannot pass as a
+result. Graph-root quality with the reranker on is covered two ways: the default suite
+(`test/eval/legacy-rerank.test.ts`) checks plumbing only, with a model that agrees
+with the heuristic order and a scrambling one, so linked memories keep their slots
+and every frozen gate holds; the quality pin against the real model (at least 14
+authoritative answers and no fewer than without the reranker, at most one
+authority-rank regression where the frozen gate says zero) runs only under
+`EVAL_LOCAL_MODELS=1` (`npm run test:eval:local-models`). `prepare` is the only path that runs the model (locally, pinned open
+weights). Real Workers AI latency and billing are unmeasured: no account is used.
+
 ## Recall eval (developer tooling)
 
 `npm run eval:recall` lets a contributor prove that a retrieval change helps
@@ -251,11 +368,13 @@ redesigning them.
 **Variants.** A change under test is a variant: query-time flags on
 `RecallInternalOptions` (for example `variant.arms`), config overrides, or an
 index-time hook that replaces `storeEntry`. Built in: `baseline` (shipped
-recall), `like` (keyword arm on the LIKE fallback), `fts-orderless`, and the
-ablations `dense-only` and `keyword-only`, which each must lose somewhere or the
-golden set is too easy.
+recall, including the reranker in its shipped `auto` mode), `no-rerank` (the same
+with the reranker off), `rerank` (reranker forced on), `like` (keyword arm on the
+LIKE fallback), `fts-orderless`, and the ablations `dense-only` and
+`keyword-only`, which each must lose somewhere or the golden set is too easy. The
+ablations run with the reranker off so each isolates one factor.
 
-**The gate.** `npm run eval:recall -- --compare baseline,<variant>` ends in
+**The gate.** `npm run eval:recall -- --compare <reference>,<variant>` (`baseline` for the shipped pipeline, `no-rerank` for the one before the reranker) ends in
 PASS, FAIL, or INCONCLUSIVE. Rules, in order: the two reports are comparable;
 hard invariants (zero cross-workspace leaks, errors, and degraded queries);
 enough queries and clusters to judge (200 and 30); no regression (no headline

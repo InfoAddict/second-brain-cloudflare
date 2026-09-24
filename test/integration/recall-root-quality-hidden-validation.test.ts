@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULTS } from "../../src/config";
 import { buildQueryProfile } from "../../src/recall/query-profile";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
@@ -16,6 +17,9 @@ import {
 } from "../fixtures/recall-root-quality";
 import { D1Mock } from "../helpers/d1-mock";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
+
+// This sealed validation pins the pre-reranker pipeline: its mock AI cannot rank passages, and a probe would count as an extra AI call.
+const NO_RERANK = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
 import {
   baselineRecall,
   directTopFourRegressed,
@@ -150,7 +154,7 @@ async function runCase(c: RootQualityCase): Promise<CaseObservation> {
     { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
     graph.env,
     graph.ctx,
-    undefined,
+    NO_RERANK,
     { diagnostics },
   );
   const acceptableRoots = new Set(c.acceptableRootIds);

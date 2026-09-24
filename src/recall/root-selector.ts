@@ -5,12 +5,17 @@ export type RootView = "semantic" | "lexical" | "metadata" | "diversity";
 export interface RootCandidate extends VectorizeMatch {
   parentId: string;
   rootScore: number;
+  /** The root's heuristic score before any reranker blend: the scale the linked-evidence rules were calibrated on. */
+  evidenceScore?: number;
   localEvidence: string;
   tags: string[];
   lexicalCoverage: number;
   metadataAlignment: number;
   semanticRank?: number;
 }
+
+/** The score the linked-evidence and evidence-slot rules read: the pre-blend heuristic score when a reranker blended the root's score. */
+export const evidenceScoreOf = (root: Pick<RootCandidate, "rootScore" | "evidenceScore">): number => root.evidenceScore ?? root.rootScore;
 
 export interface SelectedRoot {
   candidate: RootCandidate;

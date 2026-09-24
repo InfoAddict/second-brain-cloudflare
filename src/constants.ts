@@ -195,6 +195,38 @@ export const FTS_MIN_TOKEN_LENGTH = 3;
 // Readiness cache lifetime. Bounds both the KV read rate and how long a warm
 // isolate keeps using FTS after the integrity check clears the flag.
 export const FTS_READY_CACHE_MS = 5 * 60 * 1000;
+// Cross-encoder reranker (src/recall/model-reranker.ts). The readiness latch is
+// written only by the model probe: "1" once the model answers in the documented
+// shape and ranks a known relevant passage first, "0" after a failed probe.
+export const RERANK_MODEL = "@cf/baai/bge-reranker-base";
+export const RERANK_READY_KV_KEY = "reranker:ready:bge-base-v1";
+// A ready verdict is re-proved after a week, a failed one retried after six hours.
+export const RERANK_READY_TTL_S = 7 * 24 * 3600;
+export const RERANK_NOT_READY_TTL_S = 6 * 3600;
+// Warm-isolate cache for the latch, both directions, like FTS_READY_CACHE_MS.
+export const RERANK_READY_CACHE_MS = 5 * 60 * 1000;
+// One batch: up to 25 direct parents plus up to 5 extra graph-root parents.
+export const RERANK_MAX_CANDIDATES = 30;
+export const RERANK_MAX_DIRECT = 25;
+export const RERANK_EXCERPT_CHARS = 400;
+export const RERANK_QUERY_MAX_CHARS = 256;
+// Unverified against Workers AI (no account here). The reranker sits on the recall critical path, and the rest of
+// a recall (embedding, D1, Vectorize) finishes well under a second, so a batch that has not answered in 1.5 s
+// costs more in waiting than a reordering is worth. The circuit breaker below stops paying that wait repeatedly.
+export const RERANK_TIMEOUT_MS = 1500;
+// Consecutive timeouts or errors in one isolate that latch the reranker off (for RERANK_NOT_READY_TTL_S).
+export const RERANK_BREAKER_FAILURES = 3;
+// The probe runs off the hot path and may hit a cold model, so it waits longer than a recall does.
+export const RERANK_PROBE_TIMEOUT_MS = 15000;
+// `auto` reranks only when the runner-up is within this fraction of the leader.
+export const RERANK_AMBIGUITY_MARGIN = 0.15;
+// A scored parent's heuristic score is scaled by max(floor, 1 + weight * (2p - 1)), p the model's rank percentile
+// (1 = best), so nothing is ever multiplied by zero. Only candidates the model saw are reordered: they stay above
+// every candidate it did not see (see blendRerankerScores). Weight and floor were chosen on core-1k from the grid
+// {0.5, 0.75, 1.0} x {0.25, 0.5} pre-registered in the blend commit.
+export const RERANK_BLEND_WEIGHT = 1.0;
+export const RERANK_BLEND_FLOOR = 0.25;
+
 // Rows spot-checked nightly for rowid-mapping drift; newest rows move first.
 export const FTS_INTEGRITY_SPOT_CHECK = 5;
 // Rotating content check: rowid window compared nightly (both directions)

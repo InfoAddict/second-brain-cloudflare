@@ -63,7 +63,7 @@ describe("evaluateGate", () => {
     const cases = [
       withMap("v", { ...both, "@cf/baai/bge-reranker-base": mk("BAAI/bge-reranker-base", "def") }),   // reranker differs, embedding same
       withMap("v", { ...both, "@cf/baai/bge-small-en-v1.5": mk("BAAI/bge-small-en-v1.5", "abc", "4.4.0") }),
-      withMap("v", { "@cf/baai/bge-small-en-v1.5": emb }),                                              // reranker missing on one side
+      withMap("v", { "@cf/baai/bge-reranker-base": rr }),                                               // embedding model missing on one side
       withMap("v", { ...both, "@cf/baai/bge-m3": mk("Xenova/bge-m3") }),                                // extra model on one side
       withMap("v"),                                                                                       // no producers at all
     ];
@@ -72,6 +72,26 @@ describe("evaluateGate", () => {
       expect(r?.status).toBe("inconclusive");
       expect(r?.detail).toMatch(/model producers differ/);
     }
+  });
+
+  it("reads a reranker on one side only as what the variant adds, never as a provenance mismatch", () => {
+    const mk = (repo: string, revision = "abc"): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision, dtype: "fp32" });
+    const emb = { "@cf/baai/bge-small-en-v1.5": mk("BAAI/bge-small-en-v1.5") };
+    const withRr = { ...emb, "@cf/baai/bge-reranker-base": mk("BAAI/bge-reranker-base") };
+    const comparable = (b: VariantReport, c: VariantReport) => evaluateGate(b, c).rules.find(r => r.rule === "comparable")?.detail ?? "";
+    const on = (name: string, producers: Record<string, EmbeddingProducer>) => ({ ...report(name), producers });
+    expect(comparable(on("baseline", emb), on("v", withRr))).not.toMatch(/producer/);
+    expect(comparable(on("baseline", withRr), on("v", emb))).not.toMatch(/producer/);
+    // once both sides used it, it must match; and any other model still may not appear on one side only
+    expect(comparable(on("baseline", withRr), on("v", { ...emb, "@cf/baai/bge-reranker-base": mk("BAAI/bge-reranker-base", "def") }))).toMatch(/model producers differ/);
+    expect(comparable(on("baseline", emb), on("v", { ...withRr, "@cf/baai/bge-m3": mk("Xenova/bge-m3") }))).toMatch(/model producers differ/);
+  });
+
+  it("a reranker-only producer map does not satisfy the provenance rule", () => {
+    const rrOnly = { "@cf/baai/bge-reranker-base": { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-reranker-base", revision: "abc", dtype: "fp32" } as EmbeddingProducer };
+    const r = evaluateGate({ ...report("baseline"), producers: rrOnly }, { ...report("v"), producers: rrOnly }).rules.find(x => x.rule === "comparable");
+    expect(r?.status).toBe("inconclusive");
+    expect(r?.detail).toMatch(/no verified model producers/);
   });
 
   it("treats a missing producers map on a core report as unverified provenance", () => {

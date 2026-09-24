@@ -3,13 +3,14 @@ import {
   D1_MAX_BOUND_PARAMS,
   FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
+  QUERY_SATURATION_FRACTION,
   VECTORIZE_GET_BY_IDS_BATCH,
   RECALL_BLOCK,
   RECALL_DEEP_POOL_SIZE,
   RECALL_POOL_SIZE,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
-import { resolveConfig, type Config } from "../config";
+import { isRerankMode, resolveConfig, type Config, type RerankMode } from "../config";
 import { embed } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
@@ -19,7 +20,7 @@ import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { parseTimePhrase } from "../text/temporal";
 import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
-import { distillToRareTerms, inferQueryTags, type DistilledQuery, type TimeBounds } from "./distill";
+import { distillToRareTerms, inferQueryTags, scopedEntryTotal, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
@@ -29,7 +30,8 @@ import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLi
 import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
-import { selectGraphRoots, type RootCandidate } from "./root-selector";
+import { blendRerankerScores, rerankDirectCap, rerankStep } from "./model-reranker";
+import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
 import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
@@ -512,7 +514,64 @@ export async function recallEntries(
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
 
-  const directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  let directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  // The root view is computed here, beside the direct one, so a single model batch can cover both.
+  let rootReranked = hops > 0
+    ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
+    : [];
+  const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
+  // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
+  const scopedParents = new Set(rcRows.map(r => r.id));
+  const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
+  const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  // Keyword evidence: rows the keyword arm returned that hold every distilled query term, in fused order. Scoped like
+  // everything else here (inScope), and used only to choose ids: the model reads D1 text.
+  const fusedOrder = new Map<string, number>();
+  directReranked.forEach((m, i) => { const id = parentOfMatch(m); if (!fusedOrder.has(id)) fusedOrder.set(id, i); });
+  const keywordEvidence = async (): Promise<string[]> => {
+    if (!tokens.length) return [];
+    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => r.content.toLowerCase().includes(t.toLowerCase())));
+    // Several terms were already through distillation's saturation filter. One term has no df there, so a common word
+    // ("budget") must not count as evidence: apply the same rule (df over the corpus <= QUERY_SATURATION_FRACTION) with
+    // the keyword rows holding the term as its df and one entry_counts read for the corpus size. Unknown = not evidence.
+    if (tokens.length === 1 && !distilled.df) {
+      const outsideHead = holding.some(r => (fusedOrder.get(r.id) ?? Infinity) >= rerankDirectCap(internal.variant?.rerankTuning?.maxCandidates));
+      if (!outsideHead) return [];
+      const total = await scopedEntryTotal(env, scope);
+      if (total === null || total <= 0) { if (internal.diagnostics) internal.diagnostics.rerankEvidence = "suppressed-no-total"; return []; }
+      if (holding.length >= cfg.KEYWORD_CANDIDATE_LIMIT || holding.length / total > QUERY_SATURATION_FRACTION) { if (internal.diagnostics) internal.diagnostics.rerankEvidence = "suppressed-saturated"; return []; }
+    }
+    return holding.map(r => r.id).sort((a, b) => (fusedOrder.get(a) ?? Infinity) - (fusedOrder.get(b) ?? Infinity));
+  };
+  const rerank = await rerankStep({
+    mode: rerankMode, forced: internal.variant?.rerank === true, tuning: internal.variant?.rerankTuning, keywordEvidence, env, ctx, query: semanticQuery,
+    queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
+    loadContent: async ids => {
+      const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
+      const need = ids.filter(id => !known.has(id) && scopedParents.has(id));
+      if (need.length) {
+        // scope-exempt: by-id: every id here came from rcRows, the scoped candidate-signal read above (inScope filters to it). The scope clause is left out on purpose: with it SQLite plans a scan of the caller's whole workspace instead of <=30 primary-key lookups, which costs rows_read in proportion to the brain's size on every recall
+        const { results } = await env.DB.prepare(
+          `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})`
+        ).bind(...need).all() as { results: { id: string; content: string }[] };
+        for (const r of results) known.set(r.id, r.content);
+      }
+      return known;
+    },
+  });
+  if (internal.diagnostics) {
+    internal.diagnostics.rerankRoute = rerank.route;
+    if (rerank.ms !== undefined) internal.diagnostics.rerankMs = rerank.ms;
+  }
+  // Linked-evidence scoring is calibrated on heuristic root scores; a reranker blend rescales them (best x2, worst x0.25),
+  // which would move which linked memories qualify even when the model agrees with the heuristic order. Keep the
+  // pre-blend scores for it; the blend still decides the ORDER of the direct picks and of root selection.
+  const heuristicRootScore = new Map<string, number>();
+  for (const m of rootReranked) if (!heuristicRootScore.has(parentOfMatch(m))) heuristicRootScore.set(parentOfMatch(m), m.score);
+  if (rerank.percentiles) {
+    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
+    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
+  }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 
   const seen = new Set<string>();
@@ -548,7 +607,6 @@ export async function recallEntries(
   let rootCandidates: RootCandidate[] = [];
   if (hops > 0) {
     const candidateContent = new Map(rcRows.map(r => [r.id, r.content ?? ""]));
-    const rootReranked = rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false });
     const rootSeen = new Set<string>();
     rootCandidates = rootReranked.flatMap(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
@@ -559,7 +617,7 @@ export async function recallEntries(
       const tagAlignment = queryTags.length ? tags.filter(value => queryTags.includes(value)).length / queryTags.length : 0;
       const episodicAlignment = ["causal", "chronology"].includes(profile.intent) && tags.includes("kind:episodic") ? 1 : 0;
       const authorityAlignment = ["current", "direct"].includes(profile.intent) && tags.includes("status:canonical") ? 1 : 0;
-      return [{ ...match, parentId, rootScore: match.score, localEvidence, tags,
+      return [{ ...match, parentId, rootScore: match.score, evidenceScore: heuristicRootScore.get(parentId) ?? match.score, localEvidence, tags,
         lexicalCoverage: queryCoverage(localEvidence, tokens, distilled).score,
         metadataAlignment: Math.min(1, .6 * tagAlignment + .2 * episodicAlignment + .2 * authorityAlignment),
         semanticRank: semanticRankByParent.get(parentId) }];
@@ -687,11 +745,10 @@ export async function recallEntries(
   // is. They are the picks, not the survivors: a pick that did not hydrate cannot be a linked memory either.
   const headParentIds = directParentIds.slice(0, RECALL_BLOCK);
   const leadingParentIds = directParentIds.slice(0, 2 * RECALL_BLOCK);
-  const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.rootScore));
+  const maximumRootScore = Math.max(...selectedRoots.map(x => evidenceScoreOf(x.candidate)));
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
-  const fallbackRootScore = directCandidates[Math.min(directCandidates.length, RECALL_BLOCK) - 1]?.score ?? 0;
   for (const e of expanded) {
     rootIdByNode.set(e.id, rootIdByNode.get(e.viaFrom) ?? e.viaFrom);
   }
@@ -704,7 +761,11 @@ export async function recallEntries(
     const row = d1Map.get(e.id);
     if (!row) return [];
     const root = rootById.get(rootIdByNode.get(e.id) ?? "");
-    const rootScore = root ? root.rootScore / normalizedRootDivisor : fallbackRootScore;
+    // Every expanded node descends from a selected seed (expandGraph walks by hop from graphSeedIds and rootIdByNode is filled
+    // in that order), so a root is always found; there is no made-up parent score to fall back on. Checked by throwing at
+    // this point across the integration, frozen-benchmark and unit suites and both eval variants on core-1k: never reached.
+    if (!root) { internal.diagnostics?.rejections?.push({ id: e.id, reason: "no-root" }); return []; }
+    const rootScore = evidenceScoreOf(root) / normalizedRootDivisor;
     const evidence = scoreLinkedEvidence({
       parentScore: rootScore,
       parentContent: root?.localEvidence ?? "",
@@ -835,7 +896,7 @@ export async function recallEntries(
         exactHighIdf: supplemental.exactHighIdf,
         exactMatchCount: exactQueryMatchCount(root.localEvidence, profile.evidenceTokens),
         metadataAlignment: root.metadataAlignment,
-        score: root.rootScore,
+        score: evidenceScoreOf(root), // same scale as the linked candidates below (scoreLinkedEvidence reads the pre-blend score)
         source: "omitted-root",
         semanticRank: root.semanticRank,
         semanticEligible,

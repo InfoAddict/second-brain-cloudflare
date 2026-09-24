@@ -165,6 +165,16 @@ function entryCountsTotalStmt(env: Env, scope: ScopeClause | null) {
   return env.DB.prepare(`SELECT COALESCE(SUM(n), 0) AS total FROM entry_counts${scopeSql}`).bind(...(scope?.bindings ?? []));
 }
 
+/** The caller's readable corpus size (entry_counts, exact and O(1)); null when the counter is unavailable. One statement. */
+export async function scopedEntryTotal(env: Env, scope: ScopeClause | null): Promise<number | null> {
+  try {
+    const row = await entryCountsTotalStmt(env, scope).first<{ total: number }>();
+    return typeof row?.total === "number" ? row.total : null;
+  } catch {
+    return null;
+  }
+}
+
 /** One term's scoped FTS MATCH count, capped via a SQL subquery on entry_counts (see saturationCapSql) rather than a JS-bound number. No time bounds: those callers use ftsTermCountStmt/ftsScopedTotal instead. */
 function ftsTermCountStmtSqlCap(env: Env, term: string, scope: ScopeClause | null) {
   const match = ftsMatchQuery([term])!; // pre-filtered eligible by the caller
