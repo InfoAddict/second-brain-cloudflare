@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import { ROOT_QUALITY_CASES, type RootQualityCase } from "../fixtures/recall-root-quality";
+import { evaluateLegacy, heuristicOrderModel, summarizeLegacy } from "./legacy/harness";
+import { ROOT_QUALITY_GATES, checkGate, type Gate } from "./legacy/gates";
+import { makeLocalAi } from "./local-ai";
+
+/*
+ * The frozen root-quality benchmarks pin the reranker off, because their mock AI cannot rank passages. The reranker
+ * rescales the root view that feeds selectGraphRoots, so these run the same 20 real-SQL cases with it ON and hold
+ * graph-root QUALITY (seeds, answers, fusion survival, authority-rank regressions) to the original frozen gates.
+ * Only the AI-call gate changes, by exactly the one reranker call per applied recall.
+ *   1. a model that agrees with the heuristic order: the blend plumbing (direct and root rescale, the scored-block
+ *      lift) must not disturb root selection, so every frozen gate holds;
+ *   2. opt-in (EVAL_LOCAL_MODELS=1): the real pinned bge-reranker-base, which is the quality evidence.
+ */
+const rootId = (c: RootQualityCase) => `${c.domain}/${c.failureShape}`;
+const withoutAiCalls = (list: readonly Gate[]) => list.filter(g => g.name !== "extraAiCalls == 0");
+const DEV = ROOT_QUALITY_CASES.filter(c => c.split === "development");
+const HOLD = ROOT_QUALITY_CASES.filter(c => c.split === "holdout");
+
+async function measure(model: { run(model: string, input: unknown): Promise<unknown> }) {
+  const opts = { idOf: rootId, pool: "like" as const, rerank: true, rerankModel: model };
+  const dev = await evaluateLegacy(DEV, "fts", opts);
+  const hold = await evaluateLegacy(HOLD, "fts", opts);
+  const observations = [...dev.observations, ...hold.observations];
+  return { dev: dev.metrics, hold: hold.metrics, all: summarizeLegacy(observations, ROOT_QUALITY_CASES, rootId), observations };
+}
+
+describe("root quality with the reranker on (fts mode, real SQL)", () => {
+  it("a model that agrees with the heuristic order leaves every frozen root-quality gate intact", async () => {
+    const r = await measure(heuristicOrderModel);
+    const failures = [
+      ...withoutAiCalls(ROOT_QUALITY_GATES.development).map(g => checkGate("rerank-on/development", "fts", r.dev, g)),
+      ...withoutAiCalls(ROOT_QUALITY_GATES.holdout).map(g => checkGate("rerank-on/holdout", "fts", r.hold, g)),
+      ...withoutAiCalls(ROOT_QUALITY_GATES.overall).map(g => checkGate("rerank-on/overall", "fts", r.all, g)),
+    ].filter((f): f is string => f !== undefined);
+    expect(failures, failures.join("\n")).toEqual([]);
+    const applied = r.observations.filter(o => o.rerankRoute === "applied");
+    expect(applied.length).toBeGreaterThanOrEqual(r.observations.length / 2);
+    expect(r.all.extraAiCalls).toBe(applied.length);
+    expect(r.all.extraVectorizeQueries).toBe(0);
+  }, 120_000);
+
+  it.skipIf(!process.env.EVAL_LOCAL_MODELS)("the real local bge-reranker-base keeps root quality: no fewer authoritative answers, at most one authority-rank regression", async () => {
+    const r = await measure(makeLocalAi());
+    expect(r.all.authoritativeAnswers).toBeGreaterThanOrEqual(14); // the frozen absolute floor
+    expect(r.all.authoritativeAnswers).toBeGreaterThanOrEqual(r.all.baselineAuthoritativeAnswers); // never fewer than the un-reranked pipeline
+    expect(r.all.candidateAvailability).toBe(16);
+    expect(r.all.seedHits).toBeGreaterThanOrEqual(13);
+    // The frozen gate is zero. The real model demotes the authoritative answer of one case; that is the measured cost, pinned so it cannot grow.
+    expect(r.all.authorityRankRegressions).toBeLessThanOrEqual(1);
+  }, 900_000);
+});

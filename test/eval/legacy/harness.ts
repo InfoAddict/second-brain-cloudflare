@@ -7,7 +7,9 @@
  */
 import { vi } from "vitest";
 import { DEFAULTS } from "../../../src/config";
-import { FTS_READY_KV_KEY } from "../../../src/constants";
+import { FTS_READY_KV_KEY, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../../src/constants";
+import { resetRerankReadyMemo } from "../../../src/recall/model-reranker";
+import { tokenizeQuery } from "../../../src/text/tokenize";
 import { initializeDatabase, resetDatabaseInit } from "../../../src/db/init";
 import type { Env } from "../../../src/env";
 import { resetFtsReadyMemo } from "../../../src/recall/fts";
@@ -49,6 +51,7 @@ export interface LegacyObservation {
   extraAiCalls: number;
   extraVectorizeQueries: number;
   ftsUsed?: boolean;
+  rerankRoute?: string;
 }
 
 export interface LegacyMetrics {
@@ -92,9 +95,38 @@ interface LegacyOptions {
    * reach and precision gates were written for.
    */
   arms?: "dense-only" | "keyword-only";
+  /**
+   * Run with the reranker on: mode "on", the readiness latch set, and a deterministic stand-in model that scores each
+   * passage by the share of the query's terms it contains (a neutral relevance signal, not an oracle). Root quality
+   * is then measured through the reranked direct and root views that feed MMR and graph-root selection.
+   */
+  rerank?: boolean;
+  /** With `rerank`: eval-only weight/floor override, to see how root quality moves with the blend. */
+  rerankTuning?: { weight?: number; floor?: number };
+  /** With `rerank`: answer with the real pinned local bge-reranker-base instead of the term-coverage stand-in (opt-in, slow). */
+  rerankModel?: { run(model: string, input: unknown): Promise<unknown> };
 }
 
-async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOptions["idOf"]) {
+/** A model that agrees with the heuristic order: best first, in submission order. Isolates the blend plumbing from any judgment. */
+export const heuristicOrderModel = {
+  async run(_model: string, input: unknown) {
+    const { contexts } = input as { contexts: unknown[] };
+    return { response: contexts.map((_c, id) => ({ id, score: contexts.length - id })) };
+  },
+};
+
+/** Cross-encoder stand-in: query-term coverage of each passage, in Workers AI's documented answer shape. */
+export function lexicalCrossEncoder(input: { query: string; contexts: { text: string }[] }): { response: { id: number; score: number }[] } {
+  const terms = new Set(tokenizeQuery(input.query));
+  return { response: input.contexts.map((c, id) => {
+    const words = new Set(tokenizeQuery(c.text));
+    let hit = 0;
+    for (const t of terms) if (words.has(t)) hit++;
+    return { id, score: terms.size ? 8 * (hit / terms.size) - 4 : 0 };
+  }) };
+}
+
+async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOptions["idOf"], rerank = false, realModel?: LegacyOptions["rerankModel"]) {
   resetDatabaseInit();
   resetFtsReadyMemo();
   const sqlite = makeSqliteD1();
@@ -114,6 +146,12 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
     VECTORIZE: makeVectorizeMock({ query }),
   });
   await initializeDatabase(env);
+  if (rerank) {
+    const embed = (env.AI.run as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (env.AI.run as ReturnType<typeof vi.fn>).mockImplementation(async (model: string, input: never) => (model === RERANK_MODEL ? (realModel ? realModel.run(model, input) : lexicalCrossEncoder(input)) : (embed as unknown as (m: string, i: unknown) => unknown)(model, input)));
+    await env.OAUTH_KV.put(RERANK_READY_KV_KEY, "1");
+    resetRerankReadyMemo();
+  }
 
   // Real INSERTs for every fixture row (dense-only, keyword-only, both, and
   // unlabeled authority rows), so LIKE and FTS see what production would.
@@ -149,18 +187,19 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
 }
 
 // The legacy benchmarks pin the pre-reranker pipeline: their mock AI cannot rank passages, and a reranker probe would count as an extra AI call.
+const RERANK_ON_CONFIG = Object.freeze({ ...DEFAULTS, RERANK_MODE: "on" });
 const LEGACY_CONFIG = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
 
 async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyOptions): Promise<LegacyObservation> {
-  const fixture = await buildFixture(c, mode, opts.idOf);
-  const variant = opts.arms ? { variant: { arms: opts.arms } } : {};
+  const fixture = await buildFixture(c, mode, opts.idOf, opts.rerank, opts.rerankModel);
+  const variant = opts.arms || opts.rerankTuning ? { variant: { ...(opts.arms && { arms: opts.arms }), ...(opts.rerankTuning && { rerankTuning: opts.rerankTuning }) } } : {};
   try {
     const diagnostics: RecallDiagnostics = {};
     const result = await recallEntries(
       { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
       fixture.env,
       fixture.ctx,
-      LEGACY_CONFIG,
+      opts.rerank ? RERANK_ON_CONFIG : LEGACY_CONFIG,
       { diagnostics, ...fixture.internal, ...variant },
     );
     const acceptableRoots = new Set(c.acceptableRootIds);
@@ -189,6 +228,7 @@ async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyO
       extraAiCalls: Math.max(0, aiCalls - 1),
       extraVectorizeQueries: Math.max(0, fixture.query.mock.calls.length - 1),
       ftsUsed: diagnostics.ftsUsed,
+      rerankRoute: diagnostics.rerankRoute,
     };
   } finally {
     fixture.sqlite.close();
