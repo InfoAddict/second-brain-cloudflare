@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { UsageError, assertJsonPathAllowed, describeVerdict, exitCodeFor, formatKnownGapDelta, formatReport, main, parseCli, runProblems } from "./cli";
 import { CORE_DATA_DIR } from "./corpus/build";
 import { evaluateGate } from "./gate";
@@ -11,6 +11,9 @@ import { registerVariant, unregisterVariant } from "./variants";
 import { registerCorpusProvider, resolveCorpus } from "./corpora";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry } from "./corpus/types";
 import { RUNNER_VERSION, type CostSample, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const cost: CostSample = { d1Statements: 8, d1RowsRead: null, aiCalls: 1, embeddingCalls: 1, vectorizeQueries: 1, kvReads: 1, neurons: 2, neuronsEstimated: false, wallMs: 30 };
 const result = (o: Partial<QueryResult> & { queryId: string }): QueryResult => ({

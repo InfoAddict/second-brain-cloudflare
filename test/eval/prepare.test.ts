@@ -1,12 +1,15 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { ReplayStore, makeReplayAi, type LiveAi } from "./ai-replay";
 import { ACTORS, EVAL_NOW, WORKSPACES, type CorpusEntry, type CorpusSpec } from "./corpus/types";
 import { exportCache, prepare } from "./prepare";
 import { hashVector } from "./vectors";
 import { getVariant } from "./variants";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const MODEL = "@cf/baai/bge-small-en-v1.5";
 const entry = (id: string, content: string): CorpusEntry => ({ id, content, tags: [], source: "api", createdAt: EVAL_NOW - 86_400_000, workspaceId: WORKSPACES.avery, actorId: ACTORS.avery });

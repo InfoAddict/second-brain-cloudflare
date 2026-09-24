@@ -2,6 +2,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { cleanTemp } from "../helpers/tmp";
+
+afterAll(cleanTemp);
 
 afterAll(() => { vi.unstubAllEnvs(); vi.resetModules(); });
 

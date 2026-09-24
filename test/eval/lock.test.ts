@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { LockRefused, applyLock, compareToLock, hashDataDir, historyProblems, type Manifest } from "./lock";
 import type { VariantReport } from "./types";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const cost = { d1Statements: 1, d1RowsRead: null, aiCalls: 0, embeddingCalls: 0, vectorizeQueries: 0, kvReads: 0, neurons: 0, neuronsEstimated: false, wallMs: 12 };

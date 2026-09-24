@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { EmbeddingProducer } from "./types";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   NEURON_RATES, NeuronBudget, ReplayMissError, ReplayStore, estimateNeurons, estimateTokens, makeReplayAi, producerId, replayKey, stableStringify,
 } from "./ai-replay";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const MODEL = "@cf/baai/bge-small-en-v1.5";
 const LLM = "@cf/meta/llama-4-scout-17b-16e-instruct";

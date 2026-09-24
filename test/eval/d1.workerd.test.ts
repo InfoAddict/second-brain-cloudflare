@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterAll } from "vitest";
 import { openD1 } from "./d1";
+import { cleanTemp } from "../helpers/tmp";
+
+// wrangler and Miniflare leave a miniflare-* dir behind even after dispose().
+afterAll(cleanTemp);
 
 // Opt-in: boots a local workerd (never a remote binding).
 describe.skipIf(!process.env.EVAL_WORKERD)("workerd D1 backend", () => {

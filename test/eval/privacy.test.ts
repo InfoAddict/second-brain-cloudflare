@@ -3,10 +3,13 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import {
   REPO_ROOT, assertIgnored, dataAllowlistViolations, ignoreRuleViolations, isAllowedDataFile, scanText, scanTracked, trackedButIgnored, trackedFiles,
 } from "./privacy";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 // Violation samples are assembled at runtime so this tracked file never trips its own scan.
 const AT = "@";

@@ -16,6 +16,9 @@ import { getVariant, registerVariant, unregisterVariant } from "./variants";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 type Call = { params: Record<string, unknown>; ctx: ExecutionContext; cfg: Readonly<Config>; internal: RecallInternalOptions; now: number };
 const seen: Call[] = [];

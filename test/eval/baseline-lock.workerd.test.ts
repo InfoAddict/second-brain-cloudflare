@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterAll } from "vitest";
 import { DEFAULTS } from "../../src/config";
 import { ReplayStore, makeReplayAi } from "./ai-replay";
 import { buildCorpus, CORE_DATA_DIR } from "./corpus/build";
@@ -10,6 +10,10 @@ import { compareToLock } from "./lock";
 import { runVariant } from "./runner";
 import type { VariantReport } from "./types";
 import { getVariant } from "./variants";
+import { cleanTemp } from "../helpers/tmp";
+
+// wrangler and Miniflare leave a miniflare-* dir behind even after dispose().
+afterAll(cleanTemp);
 
 const MODEL = DEFAULTS.EMBEDDING_MODEL;
 const LOCK = resolve(CORE_DATA_DIR, "../baselines", `core-1k.${MODEL.split("/").pop()}.json`);

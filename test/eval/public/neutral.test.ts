@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { WORKSPACES } from "../corpus/types";
 import { loadNeutralCorpus, PUBLIC_CORPORA, publicCorpusProvider } from "./neutral";
+import { cleanTemp } from "../../helpers/tmp";
+
+afterEach(cleanTemp);
 
 /** Writes MANIFEST.json the way the fetch script does: sha256 of each derived file. */
 function writeManifest(dir: string) {

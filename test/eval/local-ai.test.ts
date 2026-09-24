@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   MODEL_PINS, ModelHashMismatch, countTokens, ensureModelFiles, l2normalize, makeLocalAi, poolBatch, producerFor,
   type EncodedBatch, type EmbedRuntime, type RerankRuntime, type RuntimeLoader,
 } from "./local-ai";
 import { NEURON_RATES, ReplayStore, makeReplayAi } from "./ai-replay";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const SMALL = "@cf/baai/bge-small-en-v1.5";
 const M3 = "@cf/baai/bge-m3";

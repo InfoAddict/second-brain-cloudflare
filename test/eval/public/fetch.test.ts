@@ -3,9 +3,12 @@ import { existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { downloadPinned, normalizeMiracl, normalizeScifact, PINS, sha256File, writeManifest } from "../../../scripts/eval-fetch-public.mjs";
 import { loadNeutralCorpus } from "./neutral";
+import { cleanTemp } from "../../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterAll } from "vitest";
 import { DEFAULTS } from "../../src/config";
 import { ReplayStore, makeReplayAi } from "./ai-replay";
 import { buildCorpus } from "./corpus/build";
@@ -6,6 +6,10 @@ import { loadCorpus } from "./corpus/loader";
 import { replayPaths } from "./corpora";
 import { runVariant } from "./runner";
 import { getVariant } from "./variants";
+import { cleanTemp } from "../helpers/tmp";
+
+// wrangler and Miniflare leave a miniflare-* dir behind even after dispose().
+afterAll(cleanTemp);
 
 const MODEL = DEFAULTS.EMBEDDING_MODEL;
 

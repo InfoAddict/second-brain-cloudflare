@@ -2,11 +2,14 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { ReplayStore, makeReplayAi, producerId, replayKey } from "./ai-replay";
 import { producerFromCache, stampCache } from "./stamp";
 import { UsageError, main, parseCli } from "./cli";
 import type { EmbeddingProducer } from "./types";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const MODEL = "@cf/baai/bge-small-en-v1.5";
 const P: EmbeddingProducer = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" };

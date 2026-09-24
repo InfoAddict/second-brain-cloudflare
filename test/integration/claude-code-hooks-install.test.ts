@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 const HOOKS = resolve(import.meta.dirname, "../../integrations/claude-code-hooks");
 const hasBash = process.platform !== "win32" && spawnSync("bash", ["--version"]).status === 0;

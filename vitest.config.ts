@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
+    globalSetup: ["./vitest.global-setup.ts"],
     setupFiles: ["./vitest.setup.ts"],
     // .worktrees/ is where this repo's .gitignore expects git worktrees to live.
     // Without this, a checkout with any worktree present runs the whole suite once

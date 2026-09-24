@@ -4,6 +4,9 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { cleanTemp } from "../helpers/tmp";
+
+afterAll(cleanTemp);
 
 // Local inference is replaced by a stub: no model is downloaded or run here.
 vi.mock("./local-ai", async orig => ({
