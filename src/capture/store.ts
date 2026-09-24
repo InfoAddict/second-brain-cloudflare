@@ -4,8 +4,9 @@ import { CHUNK_MAX_CHARS, VECTORIZE_UPSERT_BATCH } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
-import { buildEmbeddingChunks, isContextEligible, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
+import { buildEmbeddingChunks, mayBeContextual, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
 import { focusModeAllowed } from "./focus-budget";
+import { deleteVectorIds } from "../vectorize/batch";
 import { schemeOf, LEGACY_SCHEME } from "../embedding/scheme";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement } from "../tags/system";
@@ -41,6 +42,8 @@ export async function storeEntry(
   config: Readonly<Config> = DEFAULTS,
   writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
   llmContexts?: readonly string[],
+  /** Chunks the caller already built for exactly this entry, config and focus mode (the migration costs them before writing); built once here otherwise. */
+  planned?: readonly EmbeddingChunk[],
 ): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
@@ -58,8 +61,11 @@ export async function storeEntry(
   let chunks: EmbeddingChunk[];
   try {
     // The index-size read happens only for a note that would get focus chunks.
-    const focus = config.CONTEXTUAL_EMBEDDINGS === "on" && isContextEligible(entry) ? await focusModeAllowed(env, config) : true;
-    chunks = buildEmbeddingChunks(entry, config, llmContexts, focus);
+    if (planned) chunks = [...planned];
+    else {
+      const focus = config.CONTEXTUAL_EMBEDDINGS === "on" && mayBeContextual(entry) ? await focusModeAllowed(env, config) : true;
+      chunks = buildEmbeddingChunks(entry, config, llmContexts, focus);
+    }
   } catch (e) {
     // Context is an enhancement; a failure building it must not fail the save.
     console.error("Contextual chunking failed, embedding plain chunks:", e);
@@ -124,8 +130,9 @@ export async function storeEntry(
 
 export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: string[]): Promise<void> {
   if (!newIds.length) return;
-  const stale = oldIds.filter(v => !newIds.includes(v));
-  if (stale.length) await env.VECTORIZE.deleteByIds(stale);
+  const keep = new Set(newIds);
+  const stale = oldIds.filter(v => !keep.has(v));
+  if (stale.length) await deleteVectorIds(env, stale);
 }
 
 export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS, writeCtx: WriteContext = OWNER_WRITE_CONTEXT): Promise<StoredEntry> {

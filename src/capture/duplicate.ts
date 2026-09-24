@@ -11,7 +11,7 @@ import {
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { embed, readStreamText } from "../lib/ai";
-import { firstChunkEmbeddingText, isContextEligible } from "./contextual";
+import { firstChunkEmbeddingText, isContextEligible, mayBeContextual } from "./contextual";
 import { focusModeAllowed } from "./focus-budget";
 import { nearestParents } from "../vectorize/parents";
 import { queryVectorizeScoped, singleWorkspaceFilter } from "../vectorize/scope";
@@ -53,6 +53,9 @@ export async function checkDuplicateAndContradiction(
   // queryVectorizeScoped a fire-and-forget KV write on filter degradation —
   // src/vectorize/scope.ts itself stays env-free.
   ctx?: { waitUntil(promise: Promise<unknown>): void },
+  // What capture is about to store the note with. The comparison chunk is embedded with the same prefix the stored chunks
+  // carry (source and tags are in it); without them it still matches, just less closely.
+  meta?: { source: string; tags: string[] },
 ): Promise<{
   duplicate: DuplicateResult;
   contradiction: ContradictionResult;
@@ -66,8 +69,9 @@ export async function checkDuplicateAndContradiction(
   // way is also compared as its own first chunk, embedded exactly as capture
   // will store it; the sample still finds notes stored before contextual
   // embeddings, whose vectors are whole 1,600-character chunks.
-  const chunkText0 = config.CONTEXTUAL_EMBEDDINGS === "on" && isContextEligible({ content, source: "" })
-    ? firstChunkEmbeddingText({ content, source: "" }, config, await focusModeAllowed(env, config))
+  const probe = { content, source: meta?.source ?? "" };
+  const chunkText0 = config.CONTEXTUAL_EMBEDDINGS === "on" && mayBeContextual(probe) && isContextEligible(probe)
+    ? firstChunkEmbeddingText({ ...probe, tags: meta?.tags ?? [] }, config, await focusModeAllowed(env, config))
     : null;
   const [values, chunkValues] = await Promise.all([
     embed(sample, env, config),

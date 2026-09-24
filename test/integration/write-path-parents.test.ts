@@ -107,6 +107,26 @@ describe("duplicate check on a re-captured long note", () => {
     expect(embeds.some(t => t.includes("\n...\n"))).toBe(true);
   });
 
+  it("carries the capture's source and tags into the comparison prefix, exactly as the stored chunks have them", async () => {
+    resetFocusBudgetCache();
+    const { env, d1, embeds } = makeEnv();
+    const content = longNote("Fuse box");
+    const tags = ["project:atlas", "renovation", "budget"];
+    d1.seed({ id: "orig", content, createdAt: 1 });
+    await storeEntry(env, "orig", content, tags, "claude-desktop", 1, on);
+    const storedPrefix = embeds[0].split("\n")[0];
+    embeds.length = 0;
+    resetFocusBudgetCache();
+    const r = await checkDuplicateAndContradiction(content, env, on, undefined, undefined, { source: "claude-desktop", tags });
+    const asStored = embeds.find(t => t.startsWith("[Memory: "))!;
+    expect(asStored).toContain("Project atlas");
+    expect(asStored).toContain("Topics renovation, budget");
+    expect(asStored).toContain("Source claude-desktop");
+    // same prefix but for the part number's neighbors and the save date, which is today rather than the stored day
+    expect(asStored.split("\n")[0].replace(/Saved [\d-]+/, "")).toBe(storedPrefix.replace(/Saved [\d-]+/, ""));
+    expect(r.duplicate.status).toBe("blocked");
+  });
+
   it("does not call an unrelated long note a duplicate", async () => {
     resetFocusBudgetCache();
     const { env, d1 } = makeEnv();

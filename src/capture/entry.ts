@@ -104,7 +104,7 @@ export async function captureEntry(
   const cfg = config ?? await resolveConfig(env);
   const { content: c, tags: t } = normalizeCaptureInput(rawContent, tags);
 
-  const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
+  const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx, { source, tags: t });
 
   const definesCapsule = t.some(isCapsuleTag);
   if (definesCapsule && getStatus(t) === null) t.push("status:draft");
