@@ -103,7 +103,11 @@ export interface RecallVariantFlags {
   rerankTuning?: RerankTuning;
 }
 
-export interface RerankTuning { weight?: number; floor?: number; maxCandidates?: number; excerptChars?: number }
+export interface RerankTuning {
+  weight?: number; floor?: number; maxCandidates?: number; excerptChars?: number;
+  /** Eval-only: how long one reranker call may take before recall falls back. `prepare`'s record pass raises it because local CPU inference can exceed the production budget; replay and gate runs never set it. */
+  timeoutMs?: number;
+}
 
 export interface RecallInternalOptions {
   embeddingQueryMode?: EmbeddingQueryMode;

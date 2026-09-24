@@ -330,7 +330,7 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
       return text ? [{ parentId: id, text }] : [];
     });
     if (candidates.length < 3) return { route: "too-few", ms: performance.now() - started };
-    const scores = await scoreRerankCandidates(o.query, candidates, o.env);
+    const scores = await scoreRerankCandidates(o.query, candidates, o.env, o.tuning?.timeoutMs);
     consecutiveFailures = 0;
     const ms = performance.now() - started;
     // The first real deploy measures Workers AI latency from these lines (wrangler tail / Workers Logs).

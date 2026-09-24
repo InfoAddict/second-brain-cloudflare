@@ -244,6 +244,25 @@ describe("recall reranker step", () => {
     expect(r.diagnostics.rerankEvidence).toBe("suppressed-no-total");
   });
 
+  it("the eval-only timeout override lets a slow model finish; without it the same call times out, and the probe never reads it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const slow = (c: { text: string }[]) => new Promise(r => setTimeout(() => r({ response: c.map((_, id) => ({ id, score: id })) }), 2000));
+      const run = async (tuning?: { timeoutMs: number }) => {
+        const s = await setup({ scorer: slow as never });
+        const diagnostics: RecallDiagnostics = {};
+        const pending = recallEntries({ query: "launch planning tomato", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, { diagnostics, ...(tuning && { variant: { rerankTuning: tuning } }) });
+        await vi.advanceTimersByTimeAsync(5000);
+        await pending;
+        return diagnostics.rerankRoute;
+      };
+      expect(await run()).toBe("timeout"); // production budget: 1.5 s
+      expect(await run({ timeoutMs: 10_000 })).toBe("applied");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("skips exact-identifier queries and too-few candidates", async () => {
     const s = await setup();
     const exact = await recall(s, "on", "release v1.9 launch planning");
