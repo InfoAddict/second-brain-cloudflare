@@ -269,7 +269,7 @@ run that skips only the `rows_read` check.
 tracked issue): failures that are documented and measured but not yet fixed. The
 headline `overall` row and the category rows exclude them, because a query no
 variant can answer only dilutes every delta, and the report prints a `known
-gaps:` block and an `all queries` row (so `overall n=306` and `all queries
+gaps:` block and an `all queries` row (so `overall n=318` and `all queries
 n=338` appear together). Cost and the hard invariants always cover all queries.
 A gap is corpus-conditional, so the gate decides by score, not by tag alone: a
 gap query the baseline already answers stays in the regression rule. A variant
@@ -310,8 +310,8 @@ was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps:
-over the 306 remaining queries, recall@5 is 0.724, recall@10 0.760, MRR@10
-0.748, and nDCG@10 0.696. Over all 338 queries it is 0.750, 0.783, 0.771, and
+over the 318 remaining queries, recall@5 is 0.734, recall@10 0.769, MRR@10
+0.758, and nDCG@10 0.707. Over all 338 queries it is 0.750, 0.783, 0.771, and
 0.723.
 
 **How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`

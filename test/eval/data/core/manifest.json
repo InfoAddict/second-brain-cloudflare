@@ -5,7 +5,7 @@
   "files": {
     "needles.jsonl": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af",
     "edges.jsonl": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
-    "queries.jsonl": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193"
+    "queries.jsonl": "1b44f8385717e98b74c3e649d2c77137605eecb6dbfb8748fa9126499abb3637"
   },
   "counts": {
     "needles": 344,
@@ -58,6 +58,29 @@
           "old": "",
           "new": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193"
         }
+      }
+    },
+    {
+      "date": "2026-09-24T08:43:27.767Z",
+      "reason": "retire gap:T-0072: underscore identifiers are fixed by 9b2016c",
+      "files": {
+        "queries.jsonl": {
+          "old": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193",
+          "new": "1b44f8385717e98b74c3e649d2c77137605eecb6dbfb8748fa9126499abb3637"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 338,
+        "recall5": 0.75,
+        "recall10": 0.7825443786982249,
+        "mrr10": 0.770733539964309,
+        "ndcg10": 0.723336649147895,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
       }
     }
   ]

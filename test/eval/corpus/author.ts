@@ -5,8 +5,6 @@ import type { NeedleRow } from "./types";
 
 /** Needles at least this old get a second, common-token-prefixed query: the shape that exposes LIKE's newest-500 window. */
 export const OLD_NEEDLE_DAYS = 450;
-/** Board item for underscore identifiers that the keyword arm cannot match. */
-export const UNDERSCORE_GAP = "gap:T-0072";
 /**
  * Mechanical queries the production router fails at the discriminating scales (5k, 20k), keyed by query id.
  * T-0073: the "roadmap" prefix pushes the df sum past FTS_MATCH_BUDGET, so keyword search runs as LIKE.
@@ -35,9 +33,8 @@ export function mechanicalQueries(needles: readonly NeedleRow[]): GoldenQuery[] 
     const n = ++counters[needle.purpose];
     const id = `${needle.purpose === "identifier" ? "q-id" : "q-rare"}-${String(n).padStart(3, "0")}`;
     const key = needle.keys[0];
-    // Production strips "_" from query tokens (a LIKE wildcard), so these keys are a measured gap, not an audit error.
     const tagsFor = (queryId: string) => {
-      const gaps = [...(key.includes("_") ? [UNDERSCORE_GAP] : []), ...(ROUTE_GAP_QUERIES[queryId] ? [ROUTE_GAP_QUERIES[queryId]] : [])];
+      const gaps = ROUTE_GAP_QUERIES[queryId] ? [ROUTE_GAP_QUERIES[queryId]] : [];
       return [...(decoyed.has(needle.id) ? ["tenancy"] : []), ...(gaps.length ? ["known-gap", ...gaps] : [])];
     };
     const byBlake = needle.purpose === "identifier" && needle.workspace === "company" && n % 2 === 1;

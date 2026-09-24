@@ -17,8 +17,8 @@ const IDENTIFIER_DF = 5;
  */
 export type CorpusIntent = "tie" | "discriminate";
 /**
- * Tags: tenancy, cross-lingual, and known-gap (with a gap:T-NNNN board reference). Three gaps are measured:
- *  - gap:T-0072  underscore identifiers: production strips "_" from query tokens (a LIKE wildcard).
+ * Tags: tenancy, cross-lingual, and known-gap (with a gap:T-NNNN board reference). Two gaps are measured
+ * (T-0072, underscore identifiers, was fixed and retired; production now keeps "_" in query tokens):
  *  - gap:T-0073  the router sends keyword search to LIKE once the df sum passes FTS_MATCH_BUDGET.
  *  - gap:T-0074  one FTS-ineligible token (under 3 characters) forces the whole query to LIKE.
  * T-0073 and T-0074 only bite at scale: the LIKE window (newest KEYWORD_CANDIDATE_LIMIT matches) holds every
@@ -140,7 +140,7 @@ export function auditQueries(spec: {
     const shared = tokens.filter(token => content.includes(token));
     const cross = query.tags?.includes("cross-lingual") ?? false;
     for (const tag of query.tags ?? []) if (!KNOWN_TAGS.has(tag) && !GAP_REF.test(tag)) add(query.id, "unknown-tag", tag);
-    // A known gap must name its board item; only identifier-not-in-gold is waived for it.
+    // A known gap must name its board item; the tag waives no audit rule by itself.
     const gapRefs = (query.tags ?? []).filter(tag => GAP_REF.test(tag));
     const knownGap = query.tags?.includes("known-gap") ?? false;
     if (knownGap && !gapRefs.length) add(query.id, "known-gap-no-ref", "tag gap:T-NNNN is required");
@@ -155,11 +155,7 @@ export function auditQueries(spec: {
       case "identifier": {
         keyToken = tokens.find(token => isIdentifier(token) && [...token].length >= 3);
         if (!keyToken) add(query.id, "identifier-no-token", query.text);
-        else if (!containsBounded(content, keyToken)) {
-          // Waived only when the gold holds the key as written: stripping "_" is then the sole reason it cannot match.
-          const written = query.text.split(/\s+/).map(chunk => chunk.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "")).find(chunk => chunk.includes("_") && chunk.replaceAll("_", "") === keyToken);
-          if (!(knownGap && written && containsBounded(content, written))) add(query.id, "identifier-not-in-gold", keyToken);
-        }
+        else if (!containsBounded(content, keyToken)) add(query.id, "identifier-not-in-gold", keyToken);
         else if (df(keyToken) > IDENTIFIER_DF) add(query.id, "identifier-too-common", `${keyToken} df=${df(keyToken)}`);
         break;
       }

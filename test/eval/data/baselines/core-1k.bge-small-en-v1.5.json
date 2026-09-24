@@ -23,7 +23,7 @@
  "dataFingerprint": {
   "edges.jsonl": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
   "needles.jsonl": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af",
-  "queries.jsonl": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193"
+  "queries.jsonl": "1b44f8385717e98b74c3e649d2c77137605eecb6dbfb8748fa9126499abb3637"
  },
  "results": [
   {
@@ -1790,10 +1790,6 @@
    "queryId": "q-id-037",
    "category": "identifier",
    "clusterKey": "n-id-046",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-046",
     "n-id-005",
@@ -1831,10 +1827,6 @@
    "queryId": "q-id-038",
    "category": "identifier",
    "clusterKey": "n-id-047",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-047",
     "n-id-032",
@@ -1872,10 +1864,6 @@
    "queryId": "q-id-038-c",
    "category": "identifier",
    "clusterKey": "n-id-047",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-047",
     "f-000448",
@@ -1913,10 +1901,6 @@
    "queryId": "q-id-039",
    "category": "identifier",
    "clusterKey": "n-id-048",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-048",
     "n-id-051",
@@ -1954,10 +1938,6 @@
    "queryId": "q-id-040",
    "category": "identifier",
    "clusterKey": "n-id-049",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-049",
     "n-id-048",
@@ -1995,10 +1975,6 @@
    "queryId": "q-id-040-c",
    "category": "identifier",
    "clusterKey": "n-id-049",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-049",
     "f-000448",
@@ -2036,10 +2012,6 @@
    "queryId": "q-id-041",
    "category": "identifier",
    "clusterKey": "n-id-050",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-050",
     "n-id-048",
@@ -2077,10 +2049,6 @@
    "queryId": "q-id-042",
    "category": "identifier",
    "clusterKey": "n-id-051",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-051",
     "n-id-029",
@@ -2118,10 +2086,6 @@
    "queryId": "q-id-043",
    "category": "identifier",
    "clusterKey": "n-id-052",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-052",
     "f-000312",
@@ -2159,10 +2123,6 @@
    "queryId": "q-id-044",
    "category": "identifier",
    "clusterKey": "n-id-053",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-053",
     "n-id-012",
@@ -2200,10 +2160,6 @@
    "queryId": "q-id-045",
    "category": "identifier",
    "clusterKey": "n-id-054",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-054",
     "n-id-022",
@@ -2241,10 +2197,6 @@
    "queryId": "q-id-046",
    "category": "identifier",
    "clusterKey": "n-id-055",
-   "tags": [
-    "known-gap",
-    "gap:T-0072"
-   ],
    "rankedIds": [
     "n-id-055",
     "n-cjk-025",

@@ -44,18 +44,18 @@
 {"id":"q-id-035","text":"PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0074"]}
 {"id":"q-id-035-c","text":"roadmap PO-88-4471","category":"identifier","gold":[{"id":"n-id-035","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0074"]}
 {"id":"q-id-036","text":"ticket-88902","category":"identifier","gold":[{"id":"n-id-036","grade":2}],"viewer":"avery"}
-{"id":"q-id-037","text":"ERR_QUOTA_77120","category":"identifier","gold":[{"id":"n-id-046","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-038","text":"BILLING_WEBHOOK_SECRET_V2","category":"identifier","gold":[{"id":"n-id-047","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-038-c","text":"roadmap BILLING_WEBHOOK_SECRET_V2","category":"identifier","gold":[{"id":"n-id-047","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-039","text":"reconcile_ledger_batch_v2","category":"identifier","gold":[{"id":"n-id-048","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-040","text":"enable_split_invoices_v3","category":"identifier","gold":[{"id":"n-id-049","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-040-c","text":"roadmap enable_split_invoices_v3","category":"identifier","gold":[{"id":"n-id-049","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-041","text":"MAX_RETRY_COUNT_25","category":"identifier","gold":[{"id":"n-id-050","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-042","text":"ERR_DISK_FULL_28801","category":"identifier","gold":[{"id":"n-id-051","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-043","text":"SESSION_TTL_MINUTES_30","category":"identifier","gold":[{"id":"n-id-052","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-044","text":"sync_customer_tags_v4","category":"identifier","gold":[{"id":"n-id-053","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-045","text":"feature_flag_dark_mode_2","category":"identifier","gold":[{"id":"n-id-054","grade":2}],"viewer":"blake","layer":"company","tags":["known-gap","gap:T-0072"]}
-{"id":"q-id-046","text":"WORKER_POOL_SIZE_16","category":"identifier","gold":[{"id":"n-id-055","grade":2}],"viewer":"avery","tags":["known-gap","gap:T-0072"]}
+{"id":"q-id-037","text":"ERR_QUOTA_77120","category":"identifier","gold":[{"id":"n-id-046","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-038","text":"BILLING_WEBHOOK_SECRET_V2","category":"identifier","gold":[{"id":"n-id-047","grade":2}],"viewer":"avery"}
+{"id":"q-id-038-c","text":"roadmap BILLING_WEBHOOK_SECRET_V2","category":"identifier","gold":[{"id":"n-id-047","grade":2}],"viewer":"avery"}
+{"id":"q-id-039","text":"reconcile_ledger_batch_v2","category":"identifier","gold":[{"id":"n-id-048","grade":2}],"viewer":"avery"}
+{"id":"q-id-040","text":"enable_split_invoices_v3","category":"identifier","gold":[{"id":"n-id-049","grade":2}],"viewer":"avery"}
+{"id":"q-id-040-c","text":"roadmap enable_split_invoices_v3","category":"identifier","gold":[{"id":"n-id-049","grade":2}],"viewer":"avery"}
+{"id":"q-id-041","text":"MAX_RETRY_COUNT_25","category":"identifier","gold":[{"id":"n-id-050","grade":2}],"viewer":"avery"}
+{"id":"q-id-042","text":"ERR_DISK_FULL_28801","category":"identifier","gold":[{"id":"n-id-051","grade":2}],"viewer":"avery"}
+{"id":"q-id-043","text":"SESSION_TTL_MINUTES_30","category":"identifier","gold":[{"id":"n-id-052","grade":2}],"viewer":"avery"}
+{"id":"q-id-044","text":"sync_customer_tags_v4","category":"identifier","gold":[{"id":"n-id-053","grade":2}],"viewer":"avery"}
+{"id":"q-id-045","text":"feature_flag_dark_mode_2","category":"identifier","gold":[{"id":"n-id-054","grade":2}],"viewer":"blake","layer":"company"}
+{"id":"q-id-046","text":"WORKER_POOL_SIZE_16","category":"identifier","gold":[{"id":"n-id-055","grade":2}],"viewer":"avery"}
 {"id":"q-rare-001","text":"zylophantine","category":"rare-word","gold":[{"id":"n-rare-001","grade":2}],"viewer":"avery","tags":["tenancy"]}
 {"id":"q-rare-001-c","text":"roadmap zylophantine","category":"rare-word","gold":[{"id":"n-rare-001","grade":2}],"viewer":"avery","tags":["tenancy"]}
 {"id":"q-rare-002","text":"quorbex","category":"rare-word","gold":[{"id":"n-rare-002","grade":2}],"viewer":"avery"}

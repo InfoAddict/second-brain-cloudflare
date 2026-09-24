@@ -211,25 +211,37 @@ describe("auditQueries fidelity and scale", () => {
     expect(rules([...denseFiller, g], [{ ...q, viewer: "outsider" }])).toContain("c:common-word-layer-scoped");
   });
 
-  it("waives only identifier-not-in-gold for a known-gap underscore query, and demands a gap reference", () => {
+  it("audits an underscore identifier like any other, with no waiver (T-0072 is fixed)", () => {
     const gold = entry("g", "Uploads failed with ERR_QUOTA_77120 after the bucket filled up");
     const q = (over: Partial<GoldenQuery> = {}) => query({ id: "u", category: "identifier", text: "ERR_QUOTA_77120", ...over });
-    const gap = ["known-gap", "gap:T-0072"];
-    expect(rules([...filler, gold], [q()])).toContain("u:identifier-not-in-gold");
+    // production keeps "_" in the token, so the key matches the gold as written
+    expect(rules([...filler, gold], [q()])).toEqual([]);
+    // a key the gold lacks fails, tagged or not: no tag waives identifier-not-in-gold
+    for (const tags of [undefined, ["known-gap", "gap:T-0073"], ["known-gap", "gap:T-0072"]]) {
+      expect(rules([...filler, gold], [q({ text: "ERR_QUOTA_99999", ...(tags ? { tags } : {}) })]), String(tags)).toContain("u:identifier-not-in-gold");
+    }
+    // stripped in the gold, kept in the query: the pre-fix waiver case now fails
+    expect(rules([...filler, entry("g", "Uploads failed with ERRQUOTA77120")], [q({ tags: ["known-gap", "gap:T-0073"] })])).toContain("u:identifier-not-in-gold");
+    expect(rules([...filler, gold], [q({ text: "err_quota" })])).toContain("u:identifier-no-token");
+    expect(rules([...filler, entry("g", gold.content, "blake")], [q()])).toContain("u:gold-unreadable");
+  });
+
+  it("keeps the known-gap machinery: a gap tag needs a reference, and waives no other rule", () => {
+    const gold = entry("g", "Uploads failed with ERR_QUOTA_77120 after the bucket filled up");
+    const q = (over: Partial<GoldenQuery> = {}) => query({ id: "u", category: "identifier", text: "ERR_QUOTA_77120", ...over });
+    const gap = ["known-gap", "gap:T-0073"];
+    // a well-formed gap on a query the audit otherwise accepts is allowed
     expect(rules([...filler, gold], [q({ tags: gap })])).toEqual([]);
     expect(rules([...filler, gold], [q({ tags: ["known-gap", "gap:T-15"] })])).toEqual([]);
-    // still applies: a key the gold lacks, an unreadable gold, a digitless key
-    expect(rules([...filler, gold], [q({ text: "ERR_QUOTA_99999", tags: gap })])).toContain("u:identifier-not-in-gold");
+    // the tag does not excuse an unreadable gold, a digitless key, or a key that is too common
     expect(rules([...filler, entry("g", gold.content, "blake")], [q({ tags: gap })])).toContain("u:gold-unreadable");
     expect(rules([...filler, gold], [q({ text: "err_quota", tags: gap })])).toContain("u:identifier-no-token");
-    // no underscore, so stripping is not the cause: the waiver does not apply
-    expect(rules([...filler, gold], [q({ text: "ERR-QUOTA-99999", tags: gap })])).toContain("u:identifier-not-in-gold");
     const flood = Array.from({ length: 6 }, (_, i) => entry(`x${i}`, `copy ERRQUOTA77120 ${i}`));
     expect(rules([...filler, entry("g", "ERRQUOTA77120 seen"), ...flood], [q({ text: "ERRQUOTA77120", tags: gap })])).toContain("u:identifier-too-common");
     // gap tags must be well-formed and paired
     expect(rules([...filler, gold], [q({ tags: ["known-gap"] })])).toContain("u:known-gap-no-ref");
-    expect(rules([...filler, gold], [q({ tags: ["known-gap", "gap:T-0072", "gap:oops"] })])).toContain("u:unknown-tag");
-    expect(rules([...filler, gold], [q({ tags: ["gap:T-0072"] })])).toContain("u:gap-ref-without-known-gap");
+    expect(rules([...filler, gold], [q({ tags: ["known-gap", "gap:T-0073", "gap:oops"] })])).toContain("u:unknown-tag");
+    expect(rules([...filler, gold], [q({ tags: ["gap:T-0073"] })])).toContain("u:gap-ref-without-known-gap");
     expect(rules([...filler, gold], [q({ tags: ["gap"] })])).toContain("u:unknown-tag");
   });
 

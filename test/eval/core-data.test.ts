@@ -97,33 +97,18 @@ describe("core golden data", () => {
     expect(queries.slice(0, generated.length)).toEqual(generated);
   });
 
-  it("pins the known-gap queries, so fixing T-0072 must consciously remove the tags", () => {
-    const gaps = queries.filter(q => q.tags?.includes("gap:T-0072"));
-    expect(gaps.map(q => q.id)).toEqual([
-      "q-id-037", "q-id-038", "q-id-038-c", "q-id-039", "q-id-040", "q-id-040-c", "q-id-041", "q-id-042", "q-id-043", "q-id-044", "q-id-045", "q-id-046",
-    ]);
-    expect(new Set(gaps.map(q => q.tags!.filter(tag => tag.startsWith("gap:")).join()))).toEqual(new Set(["gap:T-0072"]));
-    expect(new Set(gaps.map(q => q.clusterKey ?? q.gold[0].id)).size, "one cluster per needle").toBe(10);
-    // every one is an underscore identifier, and each key is rare in the corpus as written (df 1-2 at 20k)
-    const spec = buildCorpus("scale-20k");
-    for (const q of gaps) {
-      const key = needles.find(n => n.id === q.gold[0].id)!.keys![0];
-      expect(key, q.id).toContain("_");
-      expect(q.text.endsWith(key), q.id).toBe(true);
-      const df = spec.entries.filter(e => e.content.toLowerCase().includes(key.toLowerCase())).length;
-      expect(df, `${q.id} ${key}`).toBeGreaterThanOrEqual(1);
-      expect(df, `${q.id} ${key}`).toBeLessThanOrEqual(2);
-    }
-    expect(gaps.filter(q => q.id.endsWith("-c")).length, "common-token-prefixed variants").toBeGreaterThanOrEqual(2);
-    // every known-gap query names at least one boarded gap, and only the boarded ones
+  it("has retired gap:T-0072: underscore identifiers are ordinary queries, and only boarded route gaps remain", () => {
+    expect(queries.filter(q => q.tags?.includes("gap:T-0072")).map(q => q.id)).toEqual([]);
+    // the twelve underscore queries are still present, untagged, and count toward the identifier headline
+    const underscore = queries.filter(q => q.category === "identifier" && q.text.includes("_"));
+    expect(underscore.length).toBe(12);
+    for (const q of underscore) expect(q.tags?.includes("known-gap") ?? false, q.id).toBe(false);
+    // every remaining known-gap query names at least one boarded gap, and only the boarded ones
     for (const q of queries.filter(q => q.tags?.includes("known-gap"))) {
       const refs = q.tags!.filter(tag => tag.startsWith("gap:"));
       expect(refs.length, q.id).toBeGreaterThanOrEqual(1);
-      for (const ref of refs) expect(["gap:T-0072", "gap:T-0073", "gap:T-0074"], q.id).toContain(ref);
+      for (const ref of refs) expect(["gap:T-0073", "gap:T-0074"], q.id).toContain(ref);
     }
-    // an underscore identifier anywhere else must be tagged, so none slips into the set unmeasured
-    const untagged = queries.filter(q => q.category === "identifier" && q.text.includes("_") && !q.tags?.includes("known-gap"));
-    expect(untagged.map(q => q.id)).toEqual([]);
   });
 
   it("puts the tenancy decoys of the blake company-layer identifier queries in another tenant", () => {
