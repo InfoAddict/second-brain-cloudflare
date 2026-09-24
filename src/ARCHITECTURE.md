@@ -215,7 +215,9 @@ evidence rescue, rendering and synthesis are untouched.
   the isolate remembers the verdict even if the KV write fails), so the contract is
   re-proved lazily at no cost to the nightly cron's statement budget. The probe has
   its own 15 s timeout; a recall allows 1.5 s (a judgment, unverified against
-  Workers AI).
+  Workers AI). The probe also latches "0" if its full-batch leg takes longer than a recall may wait. Its Latin filler
+  under-probes a token-based size limit by about 4x for CJK text (400 CJK characters are
+  roughly 400 tokens, not 100), so the circuit breaker below is the runtime backstop.
 - **Circuit breaker.** Three consecutive timeouts or errors in an isolate latch the
   model off for six hours (here and in KV) until the probe re-proves it. Every
   applied, timed-out or failed step logs one JSON line (route, ms, batch size) to
