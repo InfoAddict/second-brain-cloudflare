@@ -210,7 +210,12 @@ export const RERANK_MAX_CANDIDATES = 30;
 export const RERANK_MAX_DIRECT = 25;
 export const RERANK_EXCERPT_CHARS = 400;
 export const RERANK_QUERY_MAX_CHARS = 256;
-export const RERANK_TIMEOUT_MS = 2500;
+// Unverified against Workers AI (no account here). The reranker sits on the recall critical path, and the rest of
+// a recall (embedding, D1, Vectorize) finishes well under a second, so a batch that has not answered in 1.5 s
+// costs more in waiting than a reordering is worth. The circuit breaker below stops paying that wait repeatedly.
+export const RERANK_TIMEOUT_MS = 1500;
+// Consecutive timeouts or errors in one isolate that latch the reranker off (for RERANK_NOT_READY_TTL_S).
+export const RERANK_BREAKER_FAILURES = 3;
 // The probe runs off the hot path and may hit a cold model, so it waits longer than a recall does.
 export const RERANK_PROBE_TIMEOUT_MS = 15000;
 // `auto` reranks only when the runner-up is within this fraction of the leader.

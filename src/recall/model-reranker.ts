@@ -1,4 +1,4 @@
-import { RERANK_AMBIGUITY_MARGIN, RERANK_PROBE_TIMEOUT_MS, RERANK_BLEND_WEIGHT, RERANK_EXCERPT_CHARS, RERANK_MAX_CANDIDATES, RERANK_MAX_DIRECT, RERANK_MODEL, RERANK_NOT_READY_TTL_S, RERANK_QUERY_MAX_CHARS, RERANK_READY_CACHE_MS, RERANK_READY_KV_KEY, RERANK_READY_TTL_S, RERANK_TIMEOUT_MS } from "../constants";
+import { RERANK_AMBIGUITY_MARGIN, RERANK_BREAKER_FAILURES, RERANK_PROBE_TIMEOUT_MS, RERANK_BLEND_WEIGHT, RERANK_EXCERPT_CHARS, RERANK_MAX_CANDIDATES, RERANK_MAX_DIRECT, RERANK_MODEL, RERANK_NOT_READY_TTL_S, RERANK_QUERY_MAX_CHARS, RERANK_READY_CACHE_MS, RERANK_READY_KV_KEY, RERANK_READY_TTL_S, RERANK_TIMEOUT_MS } from "../constants";
 import type { RerankMode } from "../config";
 import type { Env } from "../env";
 import type { VectorizeMatch } from "./math";
@@ -122,7 +122,8 @@ let readyCache: { ready: boolean | null; at: number } | null = null;
 // failed (or has not propagated) can never turn into a re-probe on every recall.
 let localLatch: { ready: boolean; until: number } | null = null;
 let probeInFlight: Promise<ProbeResult> | null = null;
-export function resetRerankReadyMemo(): void { readyCache = null; localLatch = null; probeInFlight = null; }
+let consecutiveFailures = 0;
+export function resetRerankReadyMemo(): void { readyCache = null; localLatch = null; probeInFlight = null; consecutiveFailures = 0; }
 
 const rememberVerdict = (ready: boolean): void => {
   localLatch = { ready, until: Date.now() + (ready ? RERANK_READY_TTL_S : RERANK_NOT_READY_TTL_S) * 1000 };
@@ -204,6 +205,15 @@ async function runProbe(env: Env): Promise<ProbeResult> {
   return result;
 }
 
+/** Circuit breaker: after RERANK_BREAKER_FAILURES consecutive timeouts or errors, latch the model off here and in KV until the probe is retried. */
+function tripBreaker(o: RerankStepInput): void {
+  consecutiveFailures = 0;
+  rememberVerdict(false);
+  console.error("Reranker circuit breaker open: recall stays on the heuristic order until the next probe");
+  o.ctx.waitUntil(o.env.OAUTH_KV.put(RERANK_READY_KV_KEY, "0", { expirationTtl: RERANK_NOT_READY_TTL_S })
+    .catch((e: unknown) => console.error("Reranker breaker latch write failed (non-fatal):", e)));
+}
+
 export interface RerankStepInput {
   mode: RerankMode;
   /** Eval-only: skips the readiness latch (the local fixture has no probe); no route sets it. */
@@ -247,9 +257,16 @@ export async function rerankStep(o: RerankStepInput): Promise<RerankStepResult> 
     });
     if (candidates.length < 3) return { route: "too-few", ms: performance.now() - started };
     const scores = await scoreRerankCandidates(o.query, candidates, o.env);
-    return { route: "applied", percentiles: percentilesFromScores(candidates.map(c => c.parentId), scores), ms: performance.now() - started };
+    consecutiveFailures = 0;
+    const ms = performance.now() - started;
+    // The first real deploy measures Workers AI latency from these lines (wrangler tail / Workers Logs).
+    console.info(JSON.stringify({ rerank: "applied", ms: Math.round(ms), n: candidates.length }));
+    return { route: "applied", percentiles: percentilesFromScores(candidates.map(c => c.parentId), scores), ms };
   } catch (e) {
-    console.error(`Reranker failed (keeping the heuristic order): ${e instanceof RerankTimeout ? "timeout" : e instanceof Error ? e.message : "unknown"}`);
-    return { route: e instanceof RerankTimeout ? "timeout" : "error", ms: performance.now() - started };
+    const route = e instanceof RerankTimeout ? "timeout" : "error";
+    const ms = performance.now() - started;
+    console.error(JSON.stringify({ rerank: route, ms: Math.round(ms), reason: route === "error" && e instanceof Error ? e.message.slice(0, 120) : undefined }));
+    if (++consecutiveFailures >= RERANK_BREAKER_FAILURES) tripBreaker(o);
+    return { route, ms };
   }
 }

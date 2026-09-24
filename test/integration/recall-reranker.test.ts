@@ -125,6 +125,33 @@ describe("recall reranker step", () => {
     }
   });
 
+  it("three consecutive failures open the breaker: the latch flips to not-ready and the model is not called again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = await setup({ scorer: "throw" });
+    for (let i = 0; i < 3; i++) expect((await recall(s, "on")).diagnostics.rerankRoute).toBe("error");
+    expect(await s.kv.get(RERANK_READY_KV_KEY)).toBe("0");
+    const before = s.rerankInputs.length;
+    // forced runs (the eval) ignore the latch; a production recall must not
+    const diagnostics: RecallDiagnostics = {};
+    await recallEntries({ query: "launch planning tomato", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, { diagnostics });
+    expect(diagnostics.rerankRoute).toBe("not-ready");
+    expect(s.rerankInputs.length).toBe(before);
+  });
+
+  it("a success resets the failure count", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = await setup();
+    const flaky = s.run.getMockImplementation()!;
+    let fail = true;
+    s.run.mockImplementation(async (model: string, input: any) => (model === RERANK_MODEL && fail ? Promise.reject(new Error("boom")) : flaky(model, input)));
+    for (let i = 0; i < 2; i++) await recall(s, "on");
+    fail = false;
+    expect((await recall(s, "on")).diagnostics.rerankRoute).toBe("applied");
+    fail = true;
+    for (let i = 0; i < 2; i++) await recall(s, "on");
+    expect(await s.kv.get(RERANK_READY_KV_KEY)).toBe("1"); // 2 + success + 2 never reaches 3 in a row
+  });
+
   it("skips exact-identifier queries and too-few candidates", async () => {
     const s = await setup();
     const exact = await recall(s, "on", "release v1.9 launch planning");
