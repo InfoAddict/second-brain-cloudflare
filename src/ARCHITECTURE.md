@@ -248,7 +248,13 @@ not a retrieval gain. A change made on top of the shipped pipeline compares with
 `--compare no-rerank,<variant>`. The runner fails a query, instead of scoring
 the fallback order, whenever the reranker was expected and the step did not end
 in a model answer or a legitimate skip, so a replay miss cannot pass as a
-result. `prepare` is the only path that runs the model (locally, pinned open
+result. Graph-root quality with the reranker on is covered two ways: the default suite
+(`test/eval/legacy-rerank.test.ts`) checks plumbing only, with a model that agrees
+with the heuristic order and a scrambling one, so linked memories keep their slots
+and every frozen gate holds; the quality pin against the real model (at least 14
+authoritative answers and no fewer than without the reranker, at most one
+authority-rank regression where the frozen gate says zero) runs only under
+`EVAL_LOCAL_MODELS=1` (`npm run test:eval:local-models`). `prepare` is the only path that runs the model (locally, pinned open
 weights). Real Workers AI latency and billing are unmeasured: no account is used.
 
 ## Recall eval (developer tooling)
