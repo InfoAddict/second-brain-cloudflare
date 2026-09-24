@@ -194,6 +194,16 @@ evidence rescue, rendering and synthesis are untouched.
   {0.25, 0.5}; rule: best paraphrase mrr@10 among configs with no regression, cost
   within budget and overall recall@10 not below baseline) and then validated once
   on scale-20k and SciFact. At full weight the model's order dominates.
+- **Keyword evidence.** A parent the keyword arm returned that holds every distilled
+  query term is always scored (up to five), taking the seat of the lowest-ranked
+  fused candidate, and enters the blend at the edge of the fused candidates. A
+  single-term query counts only if its df is within the saturation fraction (the
+  keyword rows holding the term over one `entry_counts` read, taken only when the
+  model is about to be called and an evidence row lies outside the head), so a
+  common word takes no seats. At hops 0 the batch is 25 wide, so evidence extras
+  evict fused candidates while up to five seats stay empty; that is the
+  pre-registered rule, chosen to keep cost flat, and worth revisiting once real
+  Workers AI cost is measured.
 - **Routing (no AI).** `RERANK_MODE` is `off`, `on` or `auto` (default `auto`;
   an unknown stored value reads as `off`). `on` needs at least three parents;
   `auto` also needs the top two heuristic scores within 15%. A lookup-shaped
