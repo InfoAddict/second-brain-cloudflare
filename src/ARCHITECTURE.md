@@ -603,8 +603,10 @@ failed. Both sides of a comparison must use the same arm.
 
 **Corpora** (`npm run eval:recall -- --list` names them). `core-1k`, `scale-5k`,
 and `scale-20k` share one authored, fully synthetic set of golden memories and
-queries (1,636 memories, 1,586 queries in 1,433 independent clusters, weighted
-to paraphrase, multi-hop, and long-context, because power scales with clusters)
+queries (1,726 memories, 1,676 queries in 1,474 independent clusters, weighted
+to paraphrase, multi-hop, and long-context, because power scales with clusters;
+long-context has two constructions, 220 legacy notes and 90 coherent-padding
+notes tagged `subset:coherent-padding`, reported apart)
 inside a seeded haystack of 656 / 4,656 / 19,656 rows (the needles come on top;
 haystack rows carry a seeded importance score skewed to 2-3 and every needle an
 authored one); the two larger ones push a common
