@@ -95,8 +95,7 @@ export function blendRerankerScores<T extends VectorizeMatch>(
 ): T[] {
   // A keyword-evidence parent enters the block at the edge of the fused candidates (the lowest heuristic score among the
   // scored ones that are not evidence), where the model's percentile then moves it. Its own fused score is a tail rank
-  // from a different arm, and left as is it would both bury a match the model rated well and, as the block's minimum,
-  // force a huge scale on every other scored score.
+  // from a different arm; left as is, even the top percentile's doubling would leave a match the model rated best buried.
   const edge = Math.min(...ranked.filter(m => percentiles.has(parentOf(m)) && !keywordEvidence.has(parentOf(m))).map(m => m.score));
   const scored: T[] = [], unscored: T[] = [];
   for (const match of ranked) {
