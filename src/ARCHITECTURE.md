@@ -798,16 +798,22 @@ on `core-1k` (1,475 clusters; it was 299), by comparison against baseline:
 
 | comparison | overall | paraphrase | multi-hop | long-context | coherent subset | legacy 220 |
 |---|---|---|---|---|---|---|
-| like | 0.003 | 0.009 | 0.009 | 0 | 0 | 0 |
-| dense-only | 0.036 | 0.063 | 0.030 | 0.047 | 0.098 | 0.052 |
-| keyword-only | 0.016 | 0.042 | 0.023 | 0.036 | 0.112 | 0.018 |
-| sabotage | 0.029 | 0.067 | 0.027 | 0.054 | 0.119 | 0.058 |
-| mild MMR change | 0.013 | 0.016 | 0 | 0.016 | 0.053 | 0 |
-| mild recency change | 0.011 | 0.022 | 0 | 0.024 | 0.074 | 0.013 |
+| like | 0.012 | 0.028 | 0 | 0.029 | 0.082 | 0.026 |
+| dense-only | 0.039 | 0.064 | 0.029 | 0.053 | 0.133 | 0.051 |
+| keyword-only | 0.014 | 0.041 | 0.023 | 0.032 | 0.090 | 0.025 |
+| mild MMR change | 0.009 | 0.013 | 0 | 0.009 | 0.031 | 0 |
 
-(before: like 0.000, dense-only 0.057, keyword-only 0.049, sabotage 0.051 overall).
-Like against baseline at the discriminating scales is 0.027 at `scale-5k` and
-0.028 at `scale-20k` (was 0.057 and 0.059). The target-category rule needs +0.05
+The sabotage, mild-recency and mild-tags rows of the table are not reported: with the
+reranker in the baseline, a variant that changes candidate order asks for reranker
+scores the cache does not hold (they are recorded per candidate list by `prepare
+--variant <name>`), the circuit breaker opens, and the row then measures the
+fallback order, not the change. Like against baseline is now a delta of -0.019
+overall at core-1k rather than a tie, for the same reason.
+
+(before, on 299 clusters: like 0.000, dense-only 0.057, keyword-only 0.049, sabotage
+0.051 overall). Like against baseline at the discriminating scales was measured
+before the integrated router and reranker (0.027 at `scale-5k`, 0.028 at
+`scale-20k`, were 0.057 and 0.059) and has not been re-measured. The target-category rule needs +0.05
 with a lower bound above zero, so it needs an MDE of 0.05 or less: a change that
 moves part of paraphrase, long-context, or multi-hop clears it, and a whole-arm
 ablation of paraphrase does not. The 90-cluster coherent subset cannot prove
@@ -819,7 +825,8 @@ scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints the core-1k table (add
 `scale-5k` and `scale-20k` caches runs only by hand, never in the default suite
 or CI: record the caches with `npm run eval:recall -- prepare --variant baseline
 --corpus scale-5k` (and `scale-20k`; about 30 minutes each), then `EVAL_SCALE=1
-npx vitest run --maxWorkers=2 test/eval/calibration.test.ts`. Measured, baseline
+npx vitest run --maxWorkers=2 test/eval/calibration.test.ts`. Measured on 5336d6d, before the
+router fix and the reranker landed (re-run it by hand on the integrated code), baseline
 (FTS) minus like: paraphrase recall@10 -0.0227 at `scale-5k` and at `scale-20k`,
 long-context MRR@10 -0.0122 at `scale-20k`; the regression rule fails on them and
 the lexical categories win by 0.05 to 0.6. The test pins exactly that, so a change

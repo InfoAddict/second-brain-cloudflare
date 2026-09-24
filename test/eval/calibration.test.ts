@@ -20,31 +20,29 @@
 // coherent-padding subset, tagged subset:coherent-padding and reported apart). Common-word counts 84 clusters (dense
 // triples) for its 133 queries.
 //
-// MEASURED RECORD, recall@10, minimum detectable effect (2.8 x bootstrap SE) on the regression population. Regenerate the
-// core-1k table with:  node scripts/eval-run-ts.mjs test/eval/mde-table.ts
+// MEASURED RECORD, recall@10, minimum detectable effect (2.8 x bootstrap SE) on the regression population, core-1k on
+// integration 96b600e (reranker in the baseline). Regenerate with:  node scripts/eval-run-ts.mjs test/eval/mde-table.ts
 // and a scale row with:  node scripts/eval-run-ts.mjs test/eval/mde-table.ts --corpus scale-5k --only like
-// core-1k (comparison vs baseline):  all | ident | cjk | rare | common | short | para | hop | long | long-coherent | long-legacy
-//   like          .0030 | .0131 | 0     | 0     | 0     | 0     | .0091 | .0091 | 0     | 0     | 0       (a true tie)
-//   dense-only    .0362 | .0983 | .1245 | .0840 | .1171 | .1379 | .0627 | .0304 | .0468 | .0977 | .0523
-//   keyword-only  .0159 | .0425 | 0     | .0496 | 0     | 0     | .0422 | .0225 | .0357 | .1122 | .0178
-//   sabotage      .0294 | .0899 | .0635 | .0736 | 0     | .1380 | .0669 | .0273 | .0542 | .1194 | .0581
-//   mild MMR .6   .0128 | .0425 | 0     | .0481 | .0907 | 0     | .0155 | 0     | .0158 | .0534 | 0
-//   mild recency  .0114 | .0310 | 0     | .0198 | .0837 | 0     | .0220 | 0     | .0237 | .0736 | .0126
-// like vs baseline at the discriminating scales: scale-5k all .0273 (paraphrase .0217, long .0223, coherent .0535);
-// scale-20k all .0278 (paraphrase .0217, long .0241, coherent .0537). Before the expansion (299 clusters) the like row read
-// 0.0000 / 0.0568 / 0.0587 at core-1k / 5k / 20k, dense-only 0.0568, keyword-only 0.0486, sabotage 0.0513, and the
-// mild changes 0.0202 and 0.0083.
-// The MDE belongs to the comparison (the spread of its paired deltas), not to the query set, so it fell by less than
-// sqrt(clusters): the large ablations move many more lexical queries now. The target-category rule needs +0.05 with a lower
-// bound above zero, i.e. MDE <= 0.05: a change that moves part of paraphrase, long-context or multi-hop clears it (mild
-// changes .016-.024); a whole-arm ablation of paraphrase (dense-only .063) does not. The 90-cluster coherent subset cannot
-// prove +0.05 (MDE .05-.12); it is a no-loss check, not a target.
+// (comparison vs baseline):  all | para | hop | long | long-coherent | long-legacy
+//   like          .0119 | .0280 | 0     | .0291 | .0820 | .0256   (delta -0.019: no longer a tie)
+//   dense-only    .0391 | .0641 | .0289 | .0526 | .1331 | .0509
+//   keyword-only  .0140 | .0406 | .0228 | .0316 | .0901 | .0254
+//   mild MMR .6   .0087 | .0128 | 0     | .0090 | .0312 | 0
+// sabotage, mild-recency and mild-tags are omitted: with the reranker in the baseline, a variant that changes candidate order
+// asks for reranker scores the cache does not hold, the circuit breaker opens, and the row measures the fallback, not the change
+// (record them with prepare --variant <name> first). Before the expansion (299 clusters) the like row read 0.0000 / 0.0568 /
+// 0.0587 at core-1k / 5k / 20k, dense-only 0.0568, keyword-only 0.0486, sabotage 0.0513, and the mild changes 0.0202 and 0.0083;
+// like against baseline at scale-5k / scale-20k was 0.0273 / 0.0278 on 5336d6d and has not been re-measured.
+// The MDE belongs to the comparison (the spread of its paired deltas), not to the query set. The target-category rule needs
+// +0.05 with a lower bound above zero, i.e. MDE <= 0.05: a change that moves part of paraphrase, long-context or multi-hop
+// clears it (mild changes .009-.013); a whole-arm ablation of paraphrase (dense-only .064) does not. The 90-cluster coherent
+// subset cannot prove +0.05 (MDE .03-.13); it is a no-loss check, not a target.
 //
 // FTS vs LIKE at scale (the 3.6.0 question). This runs ONLY BY HAND, never in the default suite or CI, because it needs the
 // uncommitted scale-5k and scale-20k caches (about 30 minutes each to record):
 //   npm run eval:recall -- prepare --variant baseline --corpus scale-5k    (and scale-20k)
 //   EVAL_SCALE=1 npx vitest run --maxWorkers=2 test/eval/calibration.test.ts
-// Measured, baseline (FTS) minus like: paraphrase recall@10 -0.0227 at scale-5k and at scale-20k, long-context MRR@10
+// Measured on 5336d6d, before the router fix and the reranker landed (re-run by hand on integration), baseline (FTS) minus like: paraphrase recall@10 -0.0227 at scale-5k and at scale-20k, long-context MRR@10
 // -0.0122 at scale-20k (regression rule FAILs on them); lexical categories win by 0.05 to 0.6. The assertions at the end of
 // this file pin exactly that, so a fix that closes the gap forces a deliberate re-record.
 //
