@@ -86,7 +86,7 @@ export function percentilesFromScores(parentIds: readonly string[], scores: read
 /**
  * Reorders only what the model saw. A scored parent's heuristic score is scaled by max(floor, 1 + weight * (2p - 1));
  * parents outside the scored batch keep their scores and their order, and every scored parent ends up above every
- * unscored one (the scored block is lifted, as a whole and by one amount, just clear of the best unscored score), so
+ * unscored one (the scored block is scaled, as a whole and by one factor, just clear of the best unscored score), so
  * the model can never demote a candidate below one it did not rank.
  */
 export function blendRerankerScores<T extends VectorizeMatch>(
@@ -102,8 +102,13 @@ export function blendRerankerScores<T extends VectorizeMatch>(
   scored.sort(byScore);
   unscored.sort(byScore);
   if (scored.length && unscored.length) {
-    const lift = Math.max(0, unscored[0].score - scored[scored.length - 1].score);
-    if (lift > 0) for (const m of scored) m.score += lift + 1e-9;
+    // Scale (not shift) the scored block so its minimum clears the best unscored score: ratios inside the block, which
+    // MMR's relevance/diversity trade reads, are preserved exactly.
+    const lowest = scored[scored.length - 1].score, best = unscored[0].score;
+    if (lowest < best) {
+      const factor = lowest > 0 ? (best / lowest) * (1 + 1e-9) : 1;
+      for (const m of scored) m.score = lowest > 0 ? m.score * factor : m.score + best + 1e-9;
+    }
   }
   return [...scored, ...unscored];
 }

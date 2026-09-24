@@ -186,7 +186,7 @@ evidence rescue, rendering and synthesis are untouched.
   baseline order; all-equal is neutral). Only parents the model scored are
   reordered: each has its heuristic score multiplied by
   `max(floor, 1 + w * (2p - 1))` (`w = 1.0`, `floor = 0.25`, so nothing is
-  multiplied by zero), and the scored block is lifted as a whole just clear of the
+  multiplied by zero), and the scored block is scaled, by one factor, just clear of the
   best unscored score. A scored candidate therefore never falls below one the model
   did not see, unscored candidates keep their positions, and the same parent factor
   scales the direct and the root view. `w` and `floor` were chosen on core-1k from

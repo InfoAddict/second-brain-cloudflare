@@ -88,8 +88,8 @@ describe("percentilesFromScores and blendRerankerScores", () => {
     expect(out.find(x => x.id === "a")!.score).toBeGreaterThan(out.find(x => x.id === "u1")!.score);
     expect(out.find(x => x.id === "u1")!.score).toBe(10);
     expect(out.find(x => x.id === "u2")!.score).toBe(9);
-    // the lift is one amount for the whole scored block, so the model's own spacing survives
-    expect(out.find(x => x.id === "b")!.score - out.find(x => x.id === "a")!.score).toBeCloseTo(1.75);
+    // one factor for the whole scored block, so the ratios inside it (what MMR reads) survive: 2 / 0.25 stays 8
+    expect(out.find(x => x.id === "b")!.score / out.find(x => x.id === "a")!.score).toBeCloseTo(8, 6);
   });
   it("uses the parent id, not the chunk id, to look up the percentile", () => {
     const out = blendRerankerScores([m("p-0", 1, "p"), m("q", 0.1)], new Map([["p", 0]]), 0.25);
