@@ -6,7 +6,7 @@ import {
 } from "../../src/capture/contextual";
 import { storeEntry } from "../../src/capture/store";
 import { DEFAULTS, type Config } from "../../src/config";
-import { CHUNK_MAX_CHARS, CONTEXT_PREFIX_MAX_CHARS, CONTEXT_SMALL_BODY_START_CHARS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
+import { CHUNK_MAX_CHARS, CONTEXT_PREFIX_MAX_CHARS, CONTEXT_MAX_FOCUS_CHUNKS, CONTEXT_SMALL_BODY_START_CHARS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
 import { chunkText } from "../../src/text/chunk";
 import { makeTestEnv } from "../helpers/make-env";
 
@@ -104,13 +104,13 @@ describe("buildEmbeddingChunks", () => {
     const e = entry({ content: longText(3200) });
     for (const model of [DEFAULTS.EMBEDDING_MODEL, M3]) {
       const chunks = buildEmbeddingChunks(e, { ...on, EMBEDDING_MODEL: model });
-      expect(Math.max(...chunks.map(c => c.rawContent.length))).toBeLessThanOrEqual(CONTEXT_SMALL_BODY_START_CHARS);
+      expect(Math.max(...chunks.slice(0, CONTEXT_MAX_FOCUS_CHUNKS).map(c => c.rawContent.length))).toBeLessThanOrEqual(CONTEXT_SMALL_BODY_START_CHARS + 1);
       expect(chunks.length).toBeGreaterThan(chunkText(e.content).length);
     }
   });
 
-  it("keeps vector growth for a long note bounded: at most 8 vectors for 3,200 characters", () => {
-    expect(buildEmbeddingChunks(entry({ content: longText(3200) }), on).length).toBeLessThanOrEqual(8);
+  it("keeps vector growth for a long note bounded: at most 7 vectors for 3,200 characters", () => {
+    expect(buildEmbeddingChunks(entry({ content: longText(3200) }), on).length).toBeLessThanOrEqual(CONTEXT_MAX_FOCUS_CHUNKS + 1);
   });
 
   it("fits token-dense text under the BGE Small target by splitting, never truncating", () => {
@@ -221,5 +221,94 @@ describe("storeEntry with contextual embeddings", () => {
     expect(mean.embed.mock.calls[0][1]).toEqual({ text: ["hello"] });
     const m3 = await run({ ...off, EMBEDDING_MODEL: M3, EMBEDDING_POOLING: "cls" }, entry({ content: "hello" }));
     expect(m3.embed.mock.calls[0][1]).toEqual({ text: ["hello"], truncate_inputs: true });
+  });
+});
+
+// Reference implementations of the code the perf work replaced. The fast versions must agree with them exactly,
+// except that any Unicode digit (not only 0-9) now marks a run as digit-bearing, which can only raise the estimate.
+const refChunk = (text: string, maxChars = 1600, overlapChars = 200): string[] => {
+  if (text.length <= maxChars) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = start + maxChars;
+    if (end < text.length) {
+      const lastPeriod = text.lastIndexOf(".", end);
+      const lastNewline = text.lastIndexOf("\n", end);
+      const breakPoint = Math.max(lastPeriod, lastNewline);
+      if (breakPoint > start + maxChars / 2) end = breakPoint + 1;
+    }
+    chunks.push(text.slice(start, Math.min(end, text.length)).trim());
+    start = end - overlapChars;
+  }
+  return chunks.filter(c => c.length > 0);
+};
+const refEstimate = (text: string): number => {
+  let tokens = 2;
+  let run = "";
+  const flush = () => {
+    const len = run.length;
+    if (len) tokens += /\p{N}/u.test(run) || len > 12 ? len : len > 6 ? Math.ceil(len / 2) : Math.ceil(len / 3);
+    run = "";
+  };
+  for (const ch of text) {
+    if (/[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\u3040-\u30ff]/u.test(ch)) { flush(); tokens += 1; }
+    else if (/[\p{L}\p{N}]/u.test(ch)) run += ch;
+    else { flush(); if (!/\s/.test(ch)) tokens += 1; }
+  }
+  flush();
+  return tokens;
+};
+
+describe("fast paths agree with the code they replaced", () => {
+  let seed = 11;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+  const alphabet = ["a", "b", "e", "Z", "7", "0", " ", " ", "\n", ".", ".", ",", "-", "é", "ß", "設", "計", "한", "😀", "𝟘", "\t", "\u00a0", "_"];
+  const randomText = (n: number) => Array.from({ length: n }, () => alphabet[Math.floor(rnd() * alphabet.length)]).join("");
+
+  it("chunkText returns exactly the old chunks on random text of every shape", () => {
+    for (let k = 0; k < 60; k++) {
+      const text = randomText(Math.floor(rnd() * 6000));
+      for (const [max, overlap] of [[1600, 200], [500, 50], [1200, 200], [300, 50]] as const) {
+        expect(chunkText(text, max, overlap), `${k} ${max}`).toEqual(refChunk(text, max, overlap));
+      }
+    }
+  });
+
+  it("estimateBgeSmallTokens returns exactly the old count on random text, astral characters included", () => {
+    for (let k = 0; k < 200; k++) {
+      const text = randomText(Math.floor(rnd() * 1500));
+      expect(estimateBgeSmallTokens(text), text.slice(0, 40)).toBe(refEstimate(text));
+    }
+  });
+
+  it("notes over the size limit embed plain and are not context-eligible", () => {
+    const big = longText(70_000);
+    expect(isContextEligible({ content: big, source: "api" })).toBe(false);
+    expect(buildEmbeddingChunks(entry({ content: big }), on).every(c => !c.contextualized)).toBe(true);
+  });
+
+  it("caps a note's focus chunks and cuts the rest at legacy size, covering every character", () => {
+    const unique = `Dashboard redesign. ${Array.from({ length: 400 }, (_, i) => `Step ${i} of the rollout is owned by team ${i * 7}.`).join(" ")}`;
+    const chunks = buildEmbeddingChunks(entry({ content: unique }), on);
+    const short = chunks.filter(c => c.rawContent.length <= CONTEXT_SMALL_BODY_START_CHARS);
+    expect(chunks.slice(0, CONTEXT_MAX_FOCUS_CHUNKS).every(c => c.rawContent.length <= CONTEXT_SMALL_BODY_START_CHARS + 1)).toBe(true);
+    expect(chunks.slice(CONTEXT_MAX_FOCUS_CHUNKS).some(c => c.rawContent.length > CONTEXT_SMALL_BODY_START_CHARS)).toBe(true);
+    expect(short.length).toBeGreaterThanOrEqual(CONTEXT_MAX_FOCUS_CHUNKS);
+    expect(chunks.at(-1)!.rawContent.endsWith(unique.trimEnd().slice(-40))).toBe(true);
+  });
+});
+
+describe("storeEntry upserts", () => {
+  it("splits a note with more than 1,000 chunks into Vectorize-sized batches", async () => {
+    const env = makeTestEnv();
+    // Plain chunks (past the contextual size limit), about 1,400 of them.
+    const content = `Big log. ${"word ".repeat(400_000)}`;
+    const { vectorIds } = await storeEntry(env, "big", content, [], "api", 1, on);
+    const calls = (env.VECTORIZE.upsert as any).mock.calls as unknown[][][];
+    expect(vectorIds.length).toBeGreaterThan(1000);
+    expect(calls.length).toBeGreaterThan(1);
+    for (const c of calls) expect(c[0].length).toBeLessThanOrEqual(1000);
+    expect(calls.reduce((n, c) => n + c[0].length, 0)).toBe(vectorIds.length);
   });
 });

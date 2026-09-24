@@ -62,6 +62,10 @@ export const CONTRADICTION_IMPORTANCE_STEP = 1.0;
 export const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 
 export const CHUNK_MAX_CHARS = 1600;
+// Vectorize's per-call ceiling for a Worker upsert.
+export const VECTORIZE_UPSERT_BATCH = 1000;
+// A write-path neighbor query asks for this many chunk hits and keeps the 5 best distinct notes: one long note can be up to 7 hits.
+export const WRITE_PATH_TOPK = 20;
 
 // Sources that mirror an external system rather than record a thought.
 //
@@ -113,6 +117,12 @@ export const CONTEXT_SMALL_BODY_START_CHARS = 500;
 export const CONTEXT_OVERLAP_CHARS = 50;
 export const CONTEXT_SMALL_BODY_MIN_CHARS = 300;
 export const CONTEXT_M3_BODY_MAX_CHARS = 500;
+// The head of a note gets at most this many focus chunks; whatever is left is cut at the tail sizes below.
+export const CONTEXT_MAX_FOCUS_CHUNKS = 6;
+// Past this size a note is chunked plain: the builder's CPU grows with the note and the free plan allows 10 ms an invocation.
+export const CONTEXT_MAX_CONTENT_CHARS = 64_000;
+export const CONTEXT_SMALL_TAIL_CHARS = 1200;
+export const CONTEXT_M3_TAIL_CHARS = 1400;
 export const BGE_SMALL_MAX_INPUT_TOKENS = 512;
 export const CONTEXT_SMALL_TARGET_TOKENS = 480;
 export const CONTEXT_LLM_CHUNKS_PER_NIGHT = 20;

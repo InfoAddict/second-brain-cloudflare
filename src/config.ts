@@ -87,6 +87,11 @@ export const DEFAULTS = {
   // entry-level prefix (src/capture/contextual.ts). Off stops new contextual
   // vectors and pauses the backfill; existing vectors are left as they are.
   CONTEXTUAL_EMBEDDINGS: "on",
+  // Stored vector dimensions below which long notes get focus chunks (about 2.4x
+  // the vectors of plain chunking); past it they are chunked at the larger tail
+  // size. 2,500,000 is 50% of the free plan's 5M stored dimensions. 0 removes
+  // the limit. See src/capture/focus-budget.ts.
+  CONTEXTUAL_FOCUS_DIMENSION_BUDGET: 2_500_000,
   // Optional nightly tier that swaps the deterministic prefix for one
   // model-written sentence per chunk. Capped at CONTEXT_LLM_CHUNKS_PER_NIGHT.
   CONTEXTUAL_EMBEDDING_LLM: "off",
@@ -218,6 +223,7 @@ export const RULES: Record<ConfigKey, Rule> = {
   EMBEDDING_MODEL: { kind: "string" },
   EMBEDDING_POOLING: { kind: "string" },
   CONTEXTUAL_EMBEDDINGS: { kind: "string" },
+  CONTEXTUAL_FOCUS_DIMENSION_BUDGET: { kind: "number", min: 0, max: 20_000_000_000, integer: true },
   CONTEXTUAL_EMBEDDING_LLM: { kind: "string" },
   CONTEXTUAL_EMBEDDING_LLM_MODEL: { kind: "string" },
   INSIGHT_LLM_MODEL: { kind: "string" },

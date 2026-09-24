@@ -1,10 +1,11 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { CHUNK_MAX_CHARS } from "../constants";
+import { CHUNK_MAX_CHARS, VECTORIZE_UPSERT_BATCH } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
-import { buildEmbeddingChunks, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
+import { buildEmbeddingChunks, isContextEligible, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
+import { focusModeAllowed } from "./focus-budget";
 import { schemeOf, LEGACY_SCHEME } from "../embedding/scheme";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement } from "../tags/system";
@@ -56,7 +57,9 @@ export async function storeEntry(
   const entry = { id, content, tags, source, createdAt: now };
   let chunks: EmbeddingChunk[];
   try {
-    chunks = buildEmbeddingChunks(entry, config, llmContexts);
+    // The index-size read happens only for a note that would get focus chunks.
+    const focus = config.CONTEXTUAL_EMBEDDINGS === "on" && isContextEligible(entry) ? await focusModeAllowed(env, config) : true;
+    chunks = buildEmbeddingChunks(entry, config, llmContexts, focus);
   } catch (e) {
     // Context is an enhancement; a failure building it must not fail the save.
     console.error("Contextual chunking failed, embedding plain chunks:", e);
@@ -99,7 +102,8 @@ export async function storeEntry(
     })
   );
 
-  await env.VECTORIZE.upsert(vectors);
+  // Vectorize accepts at most 1,000 vectors per upsert from a Worker.
+  for (let i = 0; i < vectors.length; i += VECTORIZE_UPSERT_BATCH) await env.VECTORIZE.upsert(vectors.slice(i, i + VECTORIZE_UPSERT_BATCH));
 
   const vectorIds = vectors.map(v => v.id);
 
