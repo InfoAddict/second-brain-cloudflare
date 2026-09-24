@@ -9,6 +9,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Searching for identifiers with underscores, such as `DATABASE_URL` and `ERR_TLS_90412`, now finds the matching memories.
 - Searches read far fewer database rows when loading candidate memories, so growing brains stay within the D1 free tier much longer. Workspace visibility remains enforced.
 - Searches no longer spend AI calls guessing topic tags. They return faster and use far less of the Workers AI allowance.
+- A thin, generic memory that happens to share two words with your question can no longer take the last result slot from a strong answer. Recall keeps one slot for a memory linked to (or sitting just behind) the ones it found; a memory that reached that slot on keyword matching alone now has to cover most of what you asked for, not a word or two of boilerplate. Memories the semantic search itself ranked, and memories reached through a link, are judged as before.
 
 ## [3.6.0] — Search that finds the exact thing
 

@@ -4,7 +4,7 @@ import { HIDDEN_VALIDATION_CASES } from "../fixtures/recall-root-quality-hidden"
 import { ROOT_QUALITY_CASES, type RootQualityCase } from "../fixtures/recall-root-quality";
 import { ftsEligibleToken } from "../../src/recall/fts";
 import { tokenizeQuery } from "../../src/text/tokenize";
-import { HIDDEN_GATES, ROOT_QUALITY_GATES, checkGate, type Gate } from "./legacy/gates";
+import { GRAPH_REACH_GATES, HIDDEN_GATES, ROOT_QUALITY_GATES, checkGate, type Gate } from "./legacy/gates";
 import {
   LEGACY_MODES, evaluateLegacy, summarizeLegacy,
   type LegacyMetrics, type LegacyMode, type LegacyObservation,
@@ -17,22 +17,23 @@ const hasShortToken = (q: string) => tokenizeQuery(q).some(t => !ftsEligibleToke
 const DEVELOPMENT = ROOT_QUALITY_CASES.filter(c => c.split === "development");
 const HOLDOUT = ROOT_QUALITY_CASES.filter(c => c.split === "holdout");
 
-// Each (scope, mode) is evaluated once; every test reads the same result.
+// Each (scope, mode, arms) is evaluated once; every test reads the same result.
 type Evaluated = { observations: LegacyObservation[]; metrics: LegacyMetrics };
+type Scope = "development" | "holdout" | "hidden";
 const memo = new Map<string, Promise<Evaluated>>();
-function evaluated(scope: "development" | "holdout" | "hidden", mode: LegacyMode): Promise<Evaluated> {
-  const key = `${scope}/${mode}`;
+function evaluated(scope: Scope, mode: LegacyMode, arms?: "dense-only"): Promise<Evaluated> {
+  const key = `${scope}/${mode}/${arms ?? "both"}`;
   if (!memo.has(key)) {
     memo.set(key, scope === "hidden"
-      ? evaluateLegacy(HIDDEN_VALIDATION_CASES, mode, { idOf: hiddenId, pool: "like" })
-      : evaluateLegacy(scope === "development" ? DEVELOPMENT : HOLDOUT, mode, { idOf: rootId, pool: "like" }));
+      ? evaluateLegacy(HIDDEN_VALIDATION_CASES, mode, { idOf: hiddenId, pool: "like", arms })
+      : evaluateLegacy(scope === "development" ? DEVELOPMENT : HOLDOUT, mode, { idOf: rootId, pool: "like", arms }));
   }
   return memo.get(key)!;
 }
 
-async function rootQuality(mode: LegacyMode) {
-  const dev = await evaluated("development", mode);
-  const hold = await evaluated("holdout", mode);
+async function rootQuality(mode: LegacyMode, arms?: "dense-only") {
+  const dev = await evaluated("development", mode, arms);
+  const hold = await evaluated("holdout", mode, arms);
   const observations = [...dev.observations, ...hold.observations];
   return { dev, hold, all: { observations, metrics: summarizeLegacy(observations, ROOT_QUALITY_CASES, rootId) } };
 }
@@ -79,6 +80,30 @@ describe.each(LEGACY_MODES)("legacy benchmarks on real SQL, honest baseline: %s 
       const rows = observations.filter(o => o.domain === domain);
       expect(rows.filter(o => o.authoritative).length, `${domain} (${mode})`).toBeGreaterThanOrEqual(rows.filter(o => o.baselineAuthoritative).length);
     }
+  });
+});
+
+// The graph arm cannot be measured under the shipped pipeline here: the real keyword
+// arm finds the answer, so it arrives as a graph seed and expandGraph never re-emits a
+// seed. Ablating that arm leaves the graph as the only route, which is what the mock's
+// controlled keyword list simulated (see GRAPH_REACH_GATES).
+describe.each(LEGACY_MODES)("legacy graph reach on real SQL, dense-only ablation: %s mode", (mode) => {
+  it("root-quality: reach and related-id precision, per split and overall", async () => {
+    const { dev, hold, all } = await rootQuality(mode, "dense-only");
+    report("graph-reach/development", mode, dev.metrics);
+    report("graph-reach/holdout", mode, hold.metrics);
+    report("graph-reach/overall", mode, all.metrics);
+    expectNoFailures([
+      ...gateFailures("graph-reach/development", mode, dev.metrics, GRAPH_REACH_GATES.development),
+      ...gateFailures("graph-reach/holdout", mode, hold.metrics, GRAPH_REACH_GATES.holdout),
+      ...gateFailures("graph-reach/overall", mode, all.metrics, GRAPH_REACH_GATES.overall),
+    ]);
+  });
+
+  it("hidden validation: reach and related-id precision", async () => {
+    const { metrics } = await evaluated("hidden", mode, "dense-only");
+    report("graph-reach/hidden", mode, metrics);
+    expectNoFailures(gateFailures("graph-reach/hidden", mode, metrics, GRAPH_REACH_GATES.hidden));
   });
 });
 

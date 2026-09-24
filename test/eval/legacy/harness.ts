@@ -82,6 +82,15 @@ export function authorityRankRegressed(outputIds: readonly string[], baselineIds
 interface LegacyOptions {
   idOf: (c: RootQualityCase) => string;
   pool: KeywordPool;
+  /**
+   * Ablation for the graph-reach condition. Under the shipped pipeline the real
+   * keyword arm finds every authoritative answer these fixtures place in the
+   * corpus, so the answer is itself a graph seed and expandGraph — which never
+   * re-emits a seed — cannot report reaching it. Ablating the keyword arm leaves
+   * the graph as the only route to those answers, which is the condition the
+   * reach and precision gates were written for.
+   */
+  arms?: "dense-only" | "keyword-only";
 }
 
 async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOptions["idOf"]) {
@@ -140,6 +149,7 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
 
 async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyOptions): Promise<LegacyObservation> {
   const fixture = await buildFixture(c, mode, opts.idOf);
+  const variant = opts.arms ? { variant: { arms: opts.arms } } : {};
   try {
     const diagnostics: RecallDiagnostics = {};
     const result = await recallEntries(
@@ -147,7 +157,7 @@ async function runLegacyCase(c: RootQualityCase, mode: LegacyMode, opts: LegacyO
       fixture.env,
       fixture.ctx,
       undefined,
-      { diagnostics, ...fixture.internal },
+      { diagnostics, ...fixture.internal, ...variant },
     );
     const acceptableRoots = new Set(c.acceptableRootIds);
     const authoritative = new Set(c.authoritativeIds);

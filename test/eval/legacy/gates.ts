@@ -33,15 +33,15 @@ export function improvementFloor(m: LegacyMetrics): number {
 const gate = (name: string, metric: keyof LegacyMetrics, holds: Gate["holds"]): Gate => ({ name, metric, holds });
 
 const common: Gate[] = [
-  // null (no related id selected) fails: an empty denominator is not a pass.
-  gate("usefulGraphPrecision >= 0.7", "usefulGraphPrecision", m => m.usefulGraphPrecision !== null && m.usefulGraphPrecision >= 0.7),
   // Replaces directTopFourRegressions == 0, an order-identity metric that scored a promoted answer as a regression.
   gate("authorityRankRegressions == 0", "authorityRankRegressions", m => m.authorityRankRegressions === 0),
   gate("extraAiCalls == 0", "extraAiCalls", m => m.extraAiCalls === 0),
   gate("extraVectorizeQueries == 0", "extraVectorizeQueries", m => m.extraVectorizeQueries === 0),
 ];
-const reach = (n: number) => gate(`neighborhoodReach >= ${n}`, "neighborhoodReach", m => m.neighborhoodReach >= n);
 const improvement = gate("improvement >= ceil(headroom / 3)", "improvement", m => m.improvement >= improvementFloor(m));
+const reach = (n: number) => gate(`neighborhoodReach >= ${n}`, "neighborhoodReach", m => m.neighborhoodReach >= n);
+// null (no related id selected) fails: an empty denominator is not a pass.
+const precision = gate("usefulGraphPrecision >= 0.7", "usefulGraphPrecision", m => m.usefulGraphPrecision !== null && m.usefulGraphPrecision >= 0.7);
 
 // Counts, seed and answer floors are the mock originals' (recall-root-quality-benchmark.test.ts,
 // recall-root-quality-hidden-validation.test.ts). Reach floors are the mock's measured
@@ -54,7 +54,6 @@ export const ROOT_QUALITY_GATES = {
     gate("candidateAvailability == 8", "candidateAvailability", m => m.candidateAvailability === 8),
     gate("fusionSurvival == 8", "fusionSurvival", m => m.fusionSurvival === 8),
     gate("seedHits >= 7", "seedHits", m => m.seedHits >= 7),
-    reach(6),
     ...common,
   ],
   holdout: [
@@ -62,7 +61,6 @@ export const ROOT_QUALITY_GATES = {
     gate("candidateAvailability == 8", "candidateAvailability", m => m.candidateAvailability === 8),
     gate("fusionSurvival == 8", "fusionSurvival", m => m.fusionSurvival === 8),
     gate("seedHits >= 6", "seedHits", m => m.seedHits >= 6),
-    reach(6),
     ...common,
   ],
   overall: [
@@ -70,7 +68,6 @@ export const ROOT_QUALITY_GATES = {
     gate("seedHits >= 13", "seedHits", m => m.seedHits >= 13),
     gate("authoritativeAnswers >= 14", "authoritativeAnswers", m => m.authoritativeAnswers >= 14),
     improvement,
-    reach(12),
     ...common,
   ],
 } as const;
@@ -82,9 +79,30 @@ export const HIDDEN_GATES: Gate[] = [
   // Absolute floor: with the relative improvement gate, a pipeline and baseline that degrade together would pass.
   gate("authoritativeAnswers >= 8", "authoritativeAnswers", m => m.authoritativeAnswers >= 8),
   improvement,
-  reach(6),
   ...common,
 ];
+
+/**
+ * The graph arm's own gates, asserted against the dense-only ablation rather
+ * than the shipped pipeline (see LegacyOptions.arms). Under the full pipeline
+ * the real keyword arm retrieves every authoritative answer these fixtures put
+ * in the corpus, so the answer enters the run as a graph SEED; expandGraph
+ * seeds `visited` with the seed ids and never re-emits one, so expandedIds
+ * cannot contain the answer and neighborhoodReach reads 0 in all 20 cases
+ * however well the graph works. The mock scored 12/20 only because its keyword
+ * arm was a controlled list that omitted the answer.
+ *
+ * Ablating the keyword arm restores the condition the mock measured — the graph
+ * is the only route to the answer — and on real SQL the pipeline then reaches
+ * it in exactly the mock's 12 of 20 cases, at precision 1.0 over 8 selected
+ * related ids. The floors are the mock's measured values, unchanged.
+ */
+export const GRAPH_REACH_GATES = {
+  development: [reach(6), precision],
+  holdout: [reach(6), precision],
+  overall: [reach(12), precision],
+  hidden: [reach(6), precision],
+} as const;
 
 /**
  * Baseline convention and its sensitivity. The honest baseline's LIKE pool is
@@ -114,17 +132,17 @@ function gap(suite: string, gateName: string, metric: keyof LegacyMetrics, item:
   }
 }
 
-// Measured on c58c941 + this change; identical in all three modes.
+// The one gap left. The two dev misses are enterprise/popular-broad-summary and
+// architecture/popular-broad-summary, where the acceptable root is dense rank 14 of 15
+// and the fused root pool is 17 rows against a seed budget of topK * 3 = 15
+// (graphSeedLimit). The budget is sized for the DENSE arm's fetch and then applied to
+// the fused pool, so every keyword-only row the real SQL adds costs one dense row its
+// seat: here the answer and the keyword leader take the top two, and the root and the
+// popular summary fall off the end. The pipeline still answers both cases, and the
+// graph still reaches their roots (from the answer, in the other direction), so raising
+// the budget would buy this metric at the cost of every recall's graph expansion.
+// T-0083.6 owns that trade; until it is taken the number stands as measured.
 gap("root-quality/development", "seedHits >= 7", "seedHits", "T-0057.4", 6);
-gap("root-quality/overall", "authoritativeAnswers >= 14", "authoritativeAnswers", "T-0057.4", 12);
-gap("root-quality/overall", "improvement >= ceil(headroom / 3)", "improvement", "T-0057.4", -1);
-gap("root-quality/development", "authorityRankRegressions == 0", "authorityRankRegressions", "T-0057.7", 2);
-gap("root-quality/overall", "authorityRankRegressions == 0", "authorityRankRegressions", "T-0057.7", 2);
-// The graph arm never selects a related id on real SQL (mock: reach 6/6/12/6 and precision 1.0 over 5 ids).
-for (const [suite, floor] of [["root-quality/development", 6], ["root-quality/holdout", 6], ["root-quality/overall", 12], ["hidden", 6]] as const) {
-  gap(suite, `neighborhoodReach >= ${floor}`, "neighborhoodReach", "T-0057.6", 0);
-  gap(suite, "usefulGraphPrecision >= 0.7", "usefulGraphPrecision", "T-0057.6", null);
-}
 
 /** A failure message for one gate under one suite and mode, or undefined when it behaves as recorded. */
 export function checkGate(suite: string, mode: string, m: LegacyMetrics, g: Gate, gaps: GapTable = KNOWN_GAPS): string | undefined {

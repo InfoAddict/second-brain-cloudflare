@@ -770,6 +770,7 @@ export async function recallEntries(
         source: "omitted-root",
         semanticRank: root.semanticRank,
         semanticEligible,
+        lexicalOnly: root.semanticRank === undefined,
       });
     }
 
