@@ -15,21 +15,38 @@
 // bootstrap that draws the interval, so unit (whole clusters) and weighting (clusters count by their queries) match; an
 // equal-weight cluster-mean formula understated a two-query-cluster gain (0.0144 vs 0.026) and could FAIL where the
 // bootstrap says INCONCLUSIVE.
-// Golden-set expansion (T-0043.6): 299 -> 1,433 clusters (338 -> 1,586 queries), weighted to the target categories:
-// paraphrase 48 -> 440, multi-hop 30 -> 150, long-context 24 -> 220. Recall@10 MDE on the regression population, core-1k,
-// old (299 clusters) -> new (`node scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints every category):
-//   like->baseline 0.0000 -> 0.0022 (a true tie);  baseline->dense-only 0.0568 -> 0.0351;  ->keyword-only 0.0486 -> 0.0189;
-//   ->sabotage 0.0513 -> 0.0299; like->baseline at scale-5k 0.0568 -> 0.0240 and at scale-20k 0.0587 -> 0.0248;
-//   mild changes (MMR_LAMBDA 0.6, RECENCY_FLOOR 0.5), the ~0.02-sized effects a reranker or contextual embeddings are
-//   expected to have: 0.0202 -> 0.0144 and 0.0083 -> 0.0127.
-// Per category (the target-category rule asks for +0.05 with a lower bound above zero, so it needs MDE <= 0.05 there):
-//   paraphrase 0.180 (dense-only, old) -> 0.055 / 0.051 (dense-only / keyword-only) and 0.030, 0.029 on mild changes;
-//   long-context 0.230 -> 0.054 / 0.038 and 0.013-0.018 on mild changes; multi-hop 0.024 / 0.023 and about 0.009.
-// The MDE belongs to the comparison (the spread of its paired deltas), not to the query set, so it did not fall by
-// sqrt(clusters): the large ablations move many more lexical queries now, which raises their own spread. Honest limit: a
-// comparison that moves nearly every paraphrase query (an ablation of a whole arm) sits at about 0.05 in that category, so a
-// +0.05 target gain is at the edge of detectability there; a reranker that moves a fraction of the queries is well inside it.
-// Measured (core-1k, the 5k/20k like-vs-baseline runs, quality-only): see docs/superpowers/eval-results/DISCRIMINATION.md.
+// Golden-set expansion (T-0043.6, review-fixed): 299 -> 1,474 clusters (338 -> 1,676 queries), weighted to the target
+// categories: paraphrase 48 -> 440, multi-hop 30 -> 150, long-context 24 -> 310 (the 220 legacy notes plus a 90-note
+// coherent-padding subset, tagged subset:coherent-padding and reported apart). Common-word counts 84 clusters (dense
+// triples) for its 133 queries.
+//
+// MEASURED RECORD, recall@10, minimum detectable effect (2.8 x bootstrap SE) on the regression population. Regenerate the
+// core-1k table with:  node scripts/eval-run-ts.mjs test/eval/mde-table.ts
+// and a scale row with:  node scripts/eval-run-ts.mjs test/eval/mde-table.ts --corpus scale-5k --only like
+// core-1k (comparison vs baseline):  all | ident | cjk | rare | common | short | para | hop | long | long-coherent | long-legacy
+//   like          .0030 | .0131 | 0     | 0     | 0     | 0     | .0091 | .0091 | 0     | 0     | 0       (a true tie)
+//   dense-only    .0362 | .0983 | .1245 | .0840 | .1171 | .1379 | .0627 | .0304 | .0468 | .0977 | .0523
+//   keyword-only  .0159 | .0425 | 0     | .0496 | 0     | 0     | .0422 | .0225 | .0357 | .1122 | .0178
+//   sabotage      .0294 | .0899 | .0635 | .0736 | 0     | .1380 | .0669 | .0273 | .0542 | .1194 | .0581
+//   mild MMR .6   .0128 | .0425 | 0     | .0481 | .0907 | 0     | .0155 | 0     | .0158 | .0534 | 0
+//   mild recency  .0114 | .0310 | 0     | .0198 | .0837 | 0     | .0220 | 0     | .0237 | .0736 | .0126
+// like vs baseline at the discriminating scales: scale-5k all .0273 (paraphrase .0217, long .0223, coherent .0535);
+// scale-20k all .0278 (paraphrase .0217, long .0241, coherent .0537). Before the expansion (299 clusters) the like row read
+// 0.0000 / 0.0568 / 0.0587 at core-1k / 5k / 20k, dense-only 0.0568, keyword-only 0.0486, sabotage 0.0513, and the
+// mild changes 0.0202 and 0.0083.
+// The MDE belongs to the comparison (the spread of its paired deltas), not to the query set, so it fell by less than
+// sqrt(clusters): the large ablations move many more lexical queries now. The target-category rule needs +0.05 with a lower
+// bound above zero, i.e. MDE <= 0.05: a change that moves part of paraphrase, long-context or multi-hop clears it (mild
+// changes .016-.024); a whole-arm ablation of paraphrase (dense-only .063) does not. The 90-cluster coherent subset cannot
+// prove +0.05 (MDE .05-.12); it is a no-loss check, not a target.
+//
+// FTS vs LIKE at scale (the 3.6.0 question). This runs ONLY BY HAND, never in the default suite or CI, because it needs the
+// uncommitted scale-5k and scale-20k caches (about 30 minutes each to record):
+//   npm run eval:recall -- prepare --variant baseline --corpus scale-5k    (and scale-20k)
+//   EVAL_SCALE=1 npx vitest run --maxWorkers=2 test/eval/calibration.test.ts
+// Measured, baseline (FTS) minus like: paraphrase recall@10 -0.0227 at scale-5k and at scale-20k, long-context MRR@10
+// -0.0122 at scale-20k (regression rule FAILs on them); lexical categories win by 0.05 to 0.6. The assertions at the end of
+// this file pin exactly that, so a fix that closes the gap forces a deliberate re-record.
 //
 // Golden labels: the Task 6c step 9 20-query spot check is DONE, as a Codex blind pass (step 9b): 17/20 exact and 3
 // graded-gold ambiguities; labels trustworthy (gw notes on T-0043.2). Not owed again.
@@ -113,17 +130,17 @@ describe("gate calibration on core-1k (offline)", () => {
     expect(rule(gate, "improvement").status).toBe("fail"); // MDE about 0: a real tie, not an underpowered one
   });
 
-  it("has the clusters the expansion promised: realistic comparisons reach an overall MDE under 0.025, and the target categories stay under 0.05 (paraphrase under 0.06)", () => {
+  it("has the clusters the expansion promised: realistic comparisons reach an overall MDE under 0.025, and the keyword-only ablation stays under 0.05 in paraphrase, long-context and multi-hop", () => {
     const gate = evaluateGate(reports.baseline, reports["keyword-only"], { allowUnmeasuredRowsRead: true });
     const overall = gate.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(overall.ci.clusters).toBeGreaterThanOrEqual(1400);
     // measured 0.0195 (was 0.0486 on the 299-cluster set)
     expect(gate.mde.recall10!).toBeLessThan(0.025);
-    // the target categories can prove a +0.05 gain (MDE at most 0.05) when a variant moves part of them; measured 0.0514 and 0.0379
+    // the target categories can prove a +0.05 gain (MDE at most 0.05) when a variant moves part of them; measured 0.0422 (paraphrase), 0.0357 (long-context), 0.0225 (multi-hop)
     const categoryMde = (scope: string) => 2.8 * gate.deltas.find(d => d.scope === scope && d.metric === "recall10")!.ci.se;
     expect(categoryMde("multi-hop")).toBeLessThan(0.05);
     expect(categoryMde("long-context")).toBeLessThan(0.05);
-    expect(categoryMde("paraphrase")).toBeLessThan(0.06);
+    expect(categoryMde("paraphrase")).toBeLessThan(0.05);
     // an ablation that moves most queries is not a realistic comparison: report its MDE, do not pretend it reaches 0.02
     expect(evaluateGate(reports.baseline, reports["dense-only"], { allowUnmeasuredRowsRead: true }).mde.recall10!).toBeGreaterThan(0.025);
   });
@@ -185,12 +202,15 @@ describe.runIf(process.env.EVAL_SCALE)("discrimination at scale: like vs baselin
     expect(rule(evaluateGate(scaled[id].like, scaled[id].baseline, { allowUnmeasuredRowsRead: true }), "improvement").status).toBe("pass");
   });
 
-  // Measured on the 1,433-cluster set (T-0043.6): the FTS keyword arm costs a little on the queries it does not help. On the
-  // 299-cluster set these losses were inside the noise and the regression rule passed; with 440 paraphrase and 220 long-context
-  // clusters they are significant, so the rule FAILs on them. That is the more powered gate telling the truth about the 3.6.0
-  // release (FTS won lexical categories by 0.05-0.6 and lost 0.009 paraphrase at 5k, 0.023 long-context at 20k), not a
-  // calibration error. The losers are non-lexical queries only: a keyword change cannot make the dense arm worse.
-  it.each([["scale-5k", "paraphrase", 0.02], ["scale-20k", "long-context", 0.03]] as const)("%s: the regression rule fails only on a small %s loss", (id, category, bound) => {
+  // Measured on the 1,474-cluster set (T-0043.6, review-fixed): the FTS keyword arm costs a little on the queries it does not
+  // help. On the 299-cluster set these losses were inside the noise and the regression rule passed; with 440 paraphrase and
+  // 310 long-context clusters they are significant, so the rule FAILs on them: paraphrase -0.0227 recall@10 at scale-5k and
+  // at scale-20k, long-context MRR@10 -0.0122 at scale-20k. That is the more powered gate telling the truth about the 3.6.0
+  // release (FTS won the lexical categories by 0.05-0.6), not a calibration error. The losers are non-lexical queries only:
+  // a keyword change cannot make the dense arm worse. Diagnosis (T-0043.6 board notes): not an FTS defect; the keyword arm's
+  // lexical breadth costs paraphrase in RRF (dense-only 0.336 > like 0.232 > fts 0.223 > 5000-row LIKE 0.214 at 5k).
+  const ALLOWED: Record<string, readonly string[]> = { "scale-5k": ["paraphrase"], "scale-20k": ["paraphrase", "long-context"] };
+  it.each(["scale-5k", "scale-20k"] as const)("%s: the regression rule fails only on a small loss in a non-lexical category", id => {
     const { like, baseline } = scaled[id];
     const gate = evaluateGate(like, baseline, { allowUnmeasuredRowsRead: true });
     const regression = rule(gate, "regression");
@@ -198,11 +218,11 @@ describe.runIf(process.env.EVAL_SCALE)("discrimination at scale: like vs baselin
     const named = [...regression.detail.matchAll(/([a-z-]+) (?:recall5|recall10|mrr10|ndcg10) (-?[\d.]+)/g)];
     expect(named.length).toBeGreaterThan(0);
     for (const [, scope, value] of named) {
-      expect(scope, regression.detail).toBe(category);
-      expect(Math.abs(Number(value)), regression.detail).toBeLessThan(bound);
+      expect(ALLOWED[id], regression.detail).toContain(scope);
+      expect(Math.abs(Number(value)), regression.detail).toBeLessThan(0.03);
     }
     const losers = findLosers(like, baseline).map(l => l.queryId);
     expect(losers.length).toBeGreaterThan(0);
-    for (const queryId of losers) expect(queryId, "only non-lexical queries lose to FTS").toMatch(/^q-(para|long|hop)-/);
+    for (const queryId of losers) expect(queryId, "only non-lexical queries lose to FTS").toMatch(/^q-(para|long|lcoh|hop)-/);
   });
 });

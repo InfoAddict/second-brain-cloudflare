@@ -772,15 +772,37 @@ with no gap tagged, all 345 queries are in the headline: recall@5 is 0.749,
 recall@10 0.777, MRR@10 0.757, and nDCG@10 0.713.
 
 **Power.** The MDE belongs to a comparison, not to the query set, so growing the
-set lowers it only as far as the comparison's own spread allows. On the
-1,433-cluster set the recall@10 MDE on `core-1k` is about 0.013-0.020 overall
-for changes that move a few queries (the large ablations were 0.05-0.06 on 299
-clusters and are now 0.03-0.035). The target-category rule needs +0.05 with a
-lower bound above zero: multi-hop, long-context, and paraphrase reach an MDE of
-about 0.009-0.038 on mild changes and 0.05 for a whole-arm ablation, so a
-reranker (paraphrase, multi-hop) or contextual embeddings (long-context) that
-moves part of a category can be proven. `node scripts/eval-run-ts.mjs
-test/eval/mde-table.ts` prints the table per category.
+set lowers it only as far as the comparison's own spread allows. Recall@10 MDE
+on `core-1k` (1,474 clusters; it was 299), by comparison against baseline:
+
+| comparison | overall | paraphrase | multi-hop | long-context | coherent subset | legacy 220 |
+|---|---|---|---|---|---|---|
+| like | 0.003 | 0.009 | 0.009 | 0 | 0 | 0 |
+| dense-only | 0.036 | 0.063 | 0.030 | 0.047 | 0.098 | 0.052 |
+| keyword-only | 0.016 | 0.042 | 0.023 | 0.036 | 0.112 | 0.018 |
+| sabotage | 0.029 | 0.067 | 0.027 | 0.054 | 0.119 | 0.058 |
+| mild MMR change | 0.013 | 0.016 | 0 | 0.016 | 0.053 | 0 |
+| mild recency change | 0.011 | 0.022 | 0 | 0.024 | 0.074 | 0.013 |
+
+(before: like 0.000, dense-only 0.057, keyword-only 0.049, sabotage 0.051 overall).
+Like against baseline at the discriminating scales is 0.027 at `scale-5k` and
+0.028 at `scale-20k` (was 0.057 and 0.059). The target-category rule needs +0.05
+with a lower bound above zero, so it needs an MDE of 0.05 or less: a change that
+moves part of paraphrase, long-context, or multi-hop clears it, and a whole-arm
+ablation of paraphrase does not. The 90-cluster coherent subset cannot prove
++0.05; it is a no-loss check for T-0042, not a target. `node
+scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints the core-1k table (add
+`--corpus scale-5k --only like` for a scale row).
+
+**FTS against LIKE at scale.** The one calibration that needs the uncommitted
+`scale-5k` and `scale-20k` caches runs only by hand, never in the default suite
+or CI: record the caches with `npm run eval:recall -- prepare --variant baseline
+--corpus scale-5k` (and `scale-20k`; about 30 minutes each), then `EVAL_SCALE=1
+npx vitest run --maxWorkers=2 test/eval/calibration.test.ts`. Measured, baseline
+(FTS) minus like: paraphrase recall@10 -0.0227 at `scale-5k` and at `scale-20k`,
+long-context MRR@10 -0.0122 at `scale-20k`; the regression rule fails on them and
+the lexical categories win by 0.05 to 0.6. The test pins exactly that, so a change
+that closes the gap forces a deliberate re-record.
 
 **How long it takes.** A `core-1k` comparison takes under a minute on `sqlite`
 and several minutes on `workerd` (about 25 on a heavily shared machine), which runs each query against a real local D1.
