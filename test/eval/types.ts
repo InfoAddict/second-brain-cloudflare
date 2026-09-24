@@ -42,6 +42,19 @@ export interface CostSample {
   wallMs: number;
 }
 
+/**
+ * Candidate-pool diagnostic (never gated): the fused, reranked candidate list before diversification and truncation.
+ * A reranker can only reorder what is in the pool, so recall@30 minus recall@10 is its headroom on a query.
+ */
+export interface PoolDiagnostic {
+  /** Distinct parent ids in the pool. */
+  size: number;
+  /** Any grade-2 gold anywhere in the pool. */
+  goldInPool: boolean;
+  /** recall@30 over the pool in score order. */
+  recall30: number;
+}
+
 export interface QueryResult {
   queryId: string;
   category: QueryCategory;
@@ -58,6 +71,8 @@ export interface QueryResult {
   rerankRoute?: string;
   /** Whether any gold id was among the keyword arm's candidates (absent when the arm did not run). A diagnostic for router changes: fusion can bury a gold the arm retrieved, so this isolates candidate coverage. Never gated. */
   keywordGold?: boolean;
+  /** Absent on a run that errored and on reports before runner version 8. */
+  pool?: PoolDiagnostic;
   /** Degradation recall reported for this query (dense arm down, filter rejected, FTS error). Any entry is a hard-invariant problem. */
   degraded?: string[];
   error?: string;
@@ -117,5 +132,5 @@ export interface VariantReport {
   results: QueryResult[];
 }
 
-/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). 7: recall diagnostics count first() statements (run as all()), so workerd rows_read is no longer null for queries that ran one. */
-export const RUNNER_VERSION = 7;
+/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). 7: recall diagnostics count first() statements (run as all()), so workerd rows_read is no longer null for queries that ran one. 8: each result carries the candidate-pool diagnostic (pool). */
+export const RUNNER_VERSION = 8;
