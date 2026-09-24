@@ -16,7 +16,7 @@ const LOCK = resolve(CORE_DATA_DIR, "../baselines", `core-1k.${MODEL.split("/").
 const cache = replayPaths(MODEL, "core-1k").read;
 
 // This default-suite tripwire replays on sqlite and checks RANKINGS only (sqlite reports no rows_read). The committed lock
-// was recorded on workerd. Rankings were verified backend-independent: on core-1k all 345 queries' rankedIds from sqlite
+// was recorded on workerd. Rankings were verified backend-independent: on core-1k every query's rankedIds from sqlite
 // are identical to the workerd lock's (this test compares them, and passes). If the backends ever diverge, this test and
 // the workerd tripwire (baseline-lock.workerd.test.ts, which also checks statements and rows_read) cannot both hold, so
 // the divergence cannot go unnoticed.

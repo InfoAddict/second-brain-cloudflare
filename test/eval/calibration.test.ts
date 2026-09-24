@@ -46,7 +46,7 @@ import { runVariant } from "./runner";
 import type { VariantReport } from "./types";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
 
-// Each gate evaluation resamples 1,256 queries 10,000 times per metric and category; a loaded machine needs the room.
+// Each gate evaluation resamples about 1,600 queries per metric and category; a loaded machine needs the room.
 vi.setConfig({ testTimeout: 30_000 });
 
 const MODEL = DEFAULTS.EMBEDDING_MODEL;
@@ -113,7 +113,7 @@ describe("gate calibration on core-1k (offline)", () => {
     expect(rule(gate, "improvement").status).toBe("fail"); // MDE about 0: a real tie, not an underpowered one
   });
 
-  it("has the clusters the expansion promised, and realistic comparisons are powered to about 0.02", () => {
+  it("has the clusters the expansion promised: realistic comparisons reach an overall MDE under 0.025, and the target categories stay under 0.05 (paraphrase under 0.06)", () => {
     const gate = evaluateGate(reports.baseline, reports["keyword-only"], { allowUnmeasuredRowsRead: true });
     const overall = gate.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(overall.ci.clusters).toBeGreaterThanOrEqual(1400);

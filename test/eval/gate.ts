@@ -30,9 +30,9 @@ export const DEFAULT_GATE: Readonly<GateThresholds> = Object.freeze({
   improvementMargin: 0.02,
   targetMargin: 0.05,
   minQueries: 200,
-  // Provisional: 4 clusters x 50 queries covered only 78.5% of a nominal 95% interval; Task 11 calibrates this.
+  // 4 clusters x 50 queries covered only 78.5% of a nominal 95% interval. Approved in the Task 11 calibration (calibration.test.ts); the shipped set has 1,433 clusters.
   minClusters: 30,
-  // Provisional: distinct clusters a category needs before its interval can prove a targeted gain; Task 11 calibrates.
+  // Distinct clusters a category needs before its interval can prove a targeted gain. Approved in the Task 11 calibration; the smallest shipped category has 67.
   minCategoryClusters: 10,
   maxAddedD1Statements: 2,
   d1StatementCeiling: 50,
@@ -220,6 +220,18 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     for (const metric of ["recall10", "mrr10"] as const) {
       const row = delta(category, subset, metric);
       if (row.ci.mean < -tolerance - 1e-9 || row.ci.hi < 0) regressions.push(`${category} ${metric} ${row.ci.mean.toFixed(4)}`);
+    }
+  }
+  // Report-only: a category split by a `subset:<name>` tag (a second construction of the same kind of query) shows each
+  // part, and the untagged remainder, as its own row. No rule reads these rows.
+  const subsetOf = (p: Pair) => (p.c.tags ?? []).find(tag => tag.startsWith("subset:"));
+  for (const category of QUERY_CATEGORIES) {
+    const inCategory = regressionPairs.filter(p => p.c.category === category);
+    const names = [...new Set(inCategory.map(subsetOf).filter((name): name is string => !!name))].sort();
+    for (const name of names) {
+      for (const [label, part] of [[`${category} [${name}]`, inCategory.filter(p => subsetOf(p) === name)], [`${category} [rest]`, inCategory.filter(p => subsetOf(p) !== name)]] as const) {
+        if (part.length) for (const metric of ["recall10", "mrr10"] as const) delta(label, part, metric);
+      }
     }
   }
   add("regression", regressions.length ? "fail" : "pass",
