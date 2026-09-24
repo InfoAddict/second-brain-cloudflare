@@ -469,8 +469,9 @@ export async function recallEntries(
     // A full pool means the index has more to give. Already widened: the deep list is in hand.
     if (!semanticUnavailable && results.matches.length >= vectorizeTopK) {
       const have = results.matches.length > vectorizeTopK ? results.matches : undefined;
-      denseFill = cfg.CONTEXTUAL_EMBEDDINGS === "on"
+      denseFill = cfg.CONTEXTUAL_EMBEDDINGS === "on" && !have
         // Sized in distinct notes: ids only, up to 100 vectors, the note read from each id (see RECALL_DEEP_IDS_POOL_SIZE).
+        // When the widening query already fetched a deep list it is in hand and is used, as with contextual off.
         ? async () => asParentMatches((await denseIdsAt(RECALL_DEEP_IDS_POOL_SIZE)).matches) as unknown as VectorizeMatch[]
         : async () => have ?? (await denseAt(RECALL_DEEP_POOL_SIZE)).matches;
     }

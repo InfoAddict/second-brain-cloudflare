@@ -17,12 +17,12 @@ const off: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "off" };
 const PER_NOTE = 7;
 
 /** `notes` long notes, each seven chunks, best-scoring notes first; the mock honours topK and returnMetadata like the index. */
-function setup(notes: number) {
+function setup(notes: number, topScore = 0.95) {
   const db = new D1Mock();
   for (let i = 0; i < notes; i++) db.entries.push({ id: `e${i}`, content: `topic note ${i}`, tags: "[]", source: "api", created_at: 1000 + i, vector_ids: "[]", recall_count: 0, importance_score: 0 });
   const rand = mulberry32(notes);
   const index = Array.from({ length: notes * PER_NOTE }, (_, i) => ({
-    id: `e${Math.floor(i / PER_NOTE)}-chunk-${i % PER_NOTE}`, score: 0.95 - i * 0.001, values: Array.from({ length: 6 }, () => rand() - 0.5), metadata: { parentId: `e${Math.floor(i / PER_NOTE)}`, isUpdate: false },
+    id: `e${Math.floor(i / PER_NOTE)}-chunk-${i % PER_NOTE}`, score: topScore - i * 0.001, values: Array.from({ length: 6 }, () => rand() - 0.5), metadata: { parentId: `e${Math.floor(i / PER_NOTE)}`, isUpdate: false },
   }));
   const query = vi.fn(async (_v: unknown, opts: { topK?: number; returnMetadata?: string; returnValues?: boolean } = {}) => ({
     matches: index.slice(0, opts.topK ?? 10).map(m => (opts.returnMetadata === "none" || opts.returnMetadata === undefined ? { id: m.id, score: m.score } : m)),
@@ -63,6 +63,19 @@ describe("deep dense fill sized in distinct notes", () => {
     const shortOff = await setup(30).recall(8, off);
     const shortOn = await setup(30).recall(8, on);
     expect(shortOn.slice(0, shortOff.length)).toEqual(shortOff);
+  });
+
+  it("reuses the deep list the widening query already fetched, as off does, instead of a third query", async () => {
+    // a weak best match (0.5 < the widen threshold) widens the primary query to 50 vectors: that deep list is in hand
+    for (const cfg of [off, on]) {
+      const { recall, query } = setup(30, 0.5);
+      const got = await recall(12, cfg);
+      expect(query.mock.calls.map(c => (c[1] as { topK: number }).topK), cfg.CONTEXTUAL_EMBEDDINGS).toEqual([RECALL_POOL_SIZE, RECALL_DEEP_POOL_SIZE]);
+      expect(got.length).toBeGreaterThan(0);
+    }
+    const a = await setup(30, 0.5).recall(12, off);
+    const b = await setup(30, 0.5).recall(12, on);
+    expect(b).toEqual(a);
   });
 
   it("does not ask for the deeper list when the pool never fills", async () => {
