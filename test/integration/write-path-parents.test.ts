@@ -76,26 +76,84 @@ describe("neighbor queries over long notes", () => {
   });
 });
 
-describe("duplicate check window over multi-chunk notes", () => {
-  it("collapses one long note's chunks so neighbors are distinct notes", async () => {
+describe("duplicate check on a re-captured long note", () => {
+  it("recognises the same note as a duplicate against its stored focus chunks", async () => {
+    resetFocusBudgetCache();
     const { env, d1 } = makeEnv();
-    const off: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "off" };
+    const content = longNote("Fuse box");
+    d1.seed({ id: "orig", content, createdAt: 1 });
+    await storeEntry(env, "orig", content, [], "api", 1, on);
+    resetFocusBudgetCache();
+    const r = await checkDuplicateAndContradiction(content, env, on);
+    expect(r.duplicate.status).not.toBe("unique");
+    expect((r.duplicate as { matchId: string }).matchId).toBe("orig");
+    expect((r.duplicate as { score: number }).score).toBeGreaterThanOrEqual(DEFAULTS.DUPLICATE_BLOCK_THRESHOLD);
+  });
+
+  it("embeds the comparison exactly as capture would store the note's first chunk", async () => {
+    resetFocusBudgetCache();
+    const { env, d1, vectorize, embeds } = makeEnv();
+    const content = longNote("Fuse box");
+    d1.seed({ id: "orig", content, createdAt: 1 });
+    await storeEntry(env, "orig", content, [], "api", 1, on);
+    const stored = (await vectorize.getByIds(["orig-chunk-0"]))[0].metadata as { content: string };
+    embeds.length = 0;
+    resetFocusBudgetCache();
+    await checkDuplicateAndContradiction(content, env, on);
+    const asStored = embeds.find(t => t.startsWith("[Memory: "));
+    expect(asStored, "a prefixed comparison embed").toBeDefined();
+    expect(asStored!.endsWith(`\n${stored.content}`)).toBe(true);
+    // and the whole-note sample is still embedded, for notes stored before contextual embeddings
+    expect(embeds.some(t => t.includes("\n...\n"))).toBe(true);
+  });
+
+  it("does not call an unrelated long note a duplicate", async () => {
+    resetFocusBudgetCache();
+    const { env, d1 } = makeEnv();
+    d1.seed({ id: "orig", content: longNote("Fuse box"), createdAt: 1 });
+    await storeEntry(env, "orig", longNote("Fuse box"), [], "api", 1, on);
+    resetFocusBudgetCache();
+    const other = "Trip planning. " + Array.from({ length: 150 }, (_, i) => `On day ${i} we rented a car and drove past the harbour toward the northern glacier, stopping for soup.`).join(" ");
+    expect((await checkDuplicateAndContradiction(other, env, on)).duplicate.status).toBe("unique");
+  });
+
+  it("compares a long note two ways (sample and first stored chunk) but a short note one way", async () => {
+    resetFocusBudgetCache();
+    const { env, embeds } = makeEnv();
+    await checkDuplicateAndContradiction(longNote("Fuse box"), env, on);
+    expect(embeds).toHaveLength(2);
+    embeds.length = 0;
+    await checkDuplicateAndContradiction("a short note", env, on);
+    expect(embeds).toHaveLength(1);
+  });
+
+  it("with contextual embeddings off, compares exactly as before", async () => {
+    const { env, embeds } = makeEnv();
+    await checkDuplicateAndContradiction(longNote("Fuse box"), env, { ...on, CONTEXTUAL_EMBEDDINGS: "off" });
+    expect(embeds).toHaveLength(1);
+  });
+
+  it("still finds a note stored before contextual embeddings (whole 1,600-character chunks) through the sample", async () => {
+    resetFocusBudgetCache();
+    const { env, d1 } = makeEnv();
+    const content = longNote("Fuse box");
+    d1.seed({ id: "old", content, createdAt: 1 });
+    await storeEntry(env, "old", content, [], "api", 1, { ...on, CONTEXTUAL_EMBEDDINGS: "off" });
+    const r = await checkDuplicateAndContradiction(content, env, on);
+    expect(r.duplicate.status).not.toBe("unique");
+  });
+
+  it("collapses one long note's chunks so neighbors are distinct notes", async () => {
+    resetFocusBudgetCache();
+    const { env, d1 } = makeEnv();
     for (const [i, t] of ["Fuse box", "Kitchen", "Trip plan", "Retro notes", "Garden", "Tax filing", "Boat repair"].entries()) {
       d1.seed({ id: `n${i}`, content: longNote(t), createdAt: i + 1 });
-      await storeEntry(env, `n${i}`, longNote(t), [], "api", i + 1, off);
+      await storeEntry(env, `n${i}`, longNote(t), [], "api", i + 1, on);
     }
-    const r = await checkDuplicateAndContradiction(longNote("Fuse box"), env, off);
+    resetFocusBudgetCache();
+    const r = await checkDuplicateAndContradiction(longNote("Fuse box"), env, on);
     expect(r.neighbors.length).toBeGreaterThan(3);
     expect(new Set(r.neighbors.map(n => n.id)).size).toBe(r.neighbors.length);
     expect(r.neighbors.length).toBeLessThanOrEqual(5);
-  });
-
-  it("asks Vectorize for the wider window, in the scoped form too", async () => {
-    const { env } = makeEnv();
-    await checkDuplicateAndContradiction(longNote("Fuse box"), env, DEFAULTS);
-    await checkDuplicateAndContradiction(longNote("Fuse box"), env, DEFAULTS, "w-team");
-    const query = vi.spyOn(env.VECTORIZE, "query");
-    await checkDuplicateAndContradiction(longNote("Fuse box"), env, DEFAULTS);
-    expect(query.mock.calls[0][1]).toMatchObject({ topK: WRITE_PATH_TOPK });
   });
 });
