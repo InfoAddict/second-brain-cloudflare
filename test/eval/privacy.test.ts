@@ -80,7 +80,7 @@ describe("guard 3: canary and export-shape scan", () => {
   it("finds nothing in what git tracks now, having scanned a real tree", () => {
     expect(trackedFiles().length).toBeGreaterThan(100); // a floor, so an empty listing can never pass vacuously
     expect(scanTracked()).toEqual([]);
-  });
+  }, 30_000); // scans every tracked file; takes 3-6s, past the 5s default under suite load
 
   it("fails closed when git cannot list files (not a repo), instead of scanning nothing", () => {
     const notRepo = mkdtempSync(join(tmpdir(), "privacy-norepo-"));
