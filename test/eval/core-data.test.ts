@@ -103,10 +103,10 @@ describe("core golden data", () => {
     for (const n of needles.filter(n => n.id.endsWith("-root"))) expect(n.importance!, n.id).toBeGreaterThanOrEqual(needles.find(a => a.id === n.id.replace("-root", "-answer"))!.importance! - 1);
   });
 
-  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors). The expansion holds 4,304 vectors at about 1.6 KB
-  // each (float32 embeddings barely compress): 6.8 MB, so 8 MiB leaves 1.6 MB with contextual embeddings off. Contextual
-  // rows (T-0042) re-embed chunks: the 682 chunks of the 231 multi-chunk notes are about 1.1 MB and still fit; all 2,743
-  // chunks (4.3 MB) do not, so those stay in the local cache, uncommitted. Past the cap, move the layer out of git.
+  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors). The set now holds 4,802 vectors at about 1.6 KB each
+  // (float32 embeddings barely compress): 7.6 MB, so 8 MiB leaves 0.8 MB with contextual embeddings off. Contextual rows
+  // (T-0042) re-embed chunks: the 1,088 chunks of the 321 multi-chunk notes would add 1.7 MB and do not fit, so T-0042's
+  // rows stay in the local cache, uncommitted, unless the cap is deliberately raised or the haystack shrinks.
   it("keeps every committed replay layer together within its size budget", () => {
     // the privacy allowlist admits replay.<model>.jsonl.gz for any model, so the cap is on their sum (a bge-m3 layer counts too)
     const layers = readdirSync(DATA).filter(name => /^replay\.[\w.-]+\.jsonl\.gz$/.test(name));
