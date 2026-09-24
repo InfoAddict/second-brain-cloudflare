@@ -362,7 +362,8 @@ describe("evaluateGate pairing and cluster validation", () => {
   it("is INCONCLUSIVE when the candidate relabels clusters (20 clusters presented as 200 independent queries)", () => {
     const honestBase = report("b", clustered(40), 200);
     const gain = (i: number, r: QueryResult) => { clustered(40)(i, r); if (i % 40 < 2) for (const k of ["recall10", "mrr10", "ndcg10"] as const) r.metrics[k] += 0.5; };
-    expect(status(evaluateGate(honestBase, report("v", gain, 200)), "improvement")).toBe("fail");
+    // a +0.025 gain confined to 2 of 40 clusters is unproven, and too noisy to have been proven: underpowered, not a fail
+    expect(status(evaluateGate(honestBase, report("v", gain, 200)), "improvement")).toBe("inconclusive");
     const relabeled = report("v", (i, r) => { gain(i, r); r.clusterKey = `q${i}`; }, 200);
     const result = evaluateGate(honestBase, relabeled);
     expect(result.verdict).toBe("INCONCLUSIVE");
@@ -482,7 +483,9 @@ describe("evaluateGate boundaries", () => {
     const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(row.ci.mean).toBeGreaterThanOrEqual(0.02);
     expect(row.ci.lo).toBe(0);
-    expect(status(result, "improvement")).toBe("fail");
+    // not an improvement: the interval reaches zero, and the paired deltas are too spread (MDE > margin) to call it a fail
+    expect(status(result, "improvement")).toBe("inconclusive");
+    expect(result.rules.find(r => r.rule === "improvement")?.detail).toMatch(/underpowered: MDE/);
   });
 
   // Gains are dyadic (0.5, 0.25) so the sums are exact and the mean lands on the threshold literal.
@@ -719,5 +722,57 @@ describe("evaluateGate: known gaps", () => {
     expect(status(evaluateGate(gapBase(0), c), "comparable")).toBe("inconclusive");
     const extraId = report("v", (i, r) => { if (inGap(i)) r.tags = [...GAP, "gap:T-0073"]; });
     expect(status(evaluateGate(gapBase(0), extraId), "comparable")).toBe("inconclusive");
+  });
+});
+
+describe("evaluateGate: a category loses strictly more than one query's worth to fail", () => {
+  // 240 queries, 30 per category: the tolerance is max(0.03, 1/30) = one query. Baseline 1.0 everywhere, so a lost query is -1.
+  const perfect = (i: number, r: QueryResult) => { for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = 1; void i; };
+  const lose = (n: number) => (i: number, r: QueryResult) => {
+    perfect(i, r);
+    // the first n queries of the first category
+    if (i % QUERY_CATEGORIES.length === 0 && i / QUERY_CATEGORIES.length < n) for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = 0;
+  };
+  const category = QUERY_CATEGORIES[0];
+
+  it("exactly one query lost passes the regression rule (its delta equals the tolerance), and the losers list still names it", () => {
+    const b = report("baseline", perfect), c = report("v", lose(1));
+    const row = evaluateGate(b, c).deltas.find(d => d.scope === category && d.metric === "recall10")!;
+    expect(row.ci.mean).toBeCloseTo(-1 / 30, 12);
+    expect(status(evaluateGate(b, c), "regression")).toBe("pass");
+    expect(findLosers(b, c).map(l => l.queryId)).toEqual(["q0"]);
+  });
+
+  it("two queries lost fail it, naming the category", () => {
+    const result = evaluateGate(report("baseline", perfect), report("v", lose(2)));
+    expect(status(result, "regression")).toBe("fail");
+    expect(result.rules.find(r => r.rule === "regression")!.detail).toContain(category);
+  });
+});
+
+describe("evaluateGate: an underpowered comparison is INCONCLUSIVE for improvement, not FAIL", () => {
+  // Equal numbers of queries gain and lose 0.5 in every category: no regression, no improvement, and a wide paired-delta spread.
+  const noisy = (i: number, r: QueryResult) => {
+    const slot = i % 16;
+    for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] += slot < 4 ? 0.5 : slot >= 8 && slot < 12 ? -0.5 : 0;
+  };
+
+  it("no improvement shown and MDE above the margin: INCONCLUSIVE, with the numbers", () => {
+    const result = evaluateGate(report("baseline"), report("v", noisy));
+    expect(status(result, "regression")).toBe("pass");
+    expect(status(result, "improvement")).toBe("inconclusive");
+    expect(result.rules.find(r => r.rule === "improvement")!.detail).toMatch(/underpowered: MDE 0\.\d{4} > margin 0\.02/);
+    expect(result.verdict).toBe("INCONCLUSIVE");
+  });
+
+  it("a true no-op (MDE about 0) still FAILs improvement", () => {
+    const result = evaluateGate(report("baseline"), report("v"));
+    expect(result.mde.recall10).toBe(0);
+    expect(status(result, "improvement")).toBe("fail");
+    expect(result.verdict).toBe("FAIL");
+  });
+
+  it("a proven gain still passes however wide the spread", () => {
+    expect(status(evaluateGate(report("baseline"), report("v", shift(0.5, 120))), "improvement")).toBe("pass");
   });
 });
