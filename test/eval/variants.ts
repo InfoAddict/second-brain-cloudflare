@@ -42,8 +42,8 @@ const builtin: VariantSpec[] = [
   { name: "like", description: "Keyword arm forced onto the LIKE fallback (fts:ready cleared).", ftsReady: false, config: NO_RERANK },
   { name: "fts-orderless", description: "FTS candidates with bm25 order disabled in fusion (isolates candidate selection from fusion order).", internal: { keywordPreRankedOverride: false }, config: NO_RERANK },
   { name: "no-rerank", description: "Shipped recall with the cross-encoder reranker off (the pre-T-0041 ordering).", config: NO_RERANK },
-  { name: "rerank-auto", description: "The shipped reranker in its auto mode, with its target categories pre-registered: the ship-decision candidate (`--compare no-rerank,rerank-auto`).", targetCategories: ["paraphrase", "multi-hop"] },
-  { name: "rerank", description: "Cross-encoder reranking forced on for every eligible recall (auto's ambiguity gate bypassed).", internal: { variant: { rerank: true } }, targetCategories: ["paraphrase", "multi-hop"] },
+  { name: "rerank-auto", description: "The shipped reranker in its auto mode, with its target categories pre-registered: the ship-decision candidate (`--compare no-rerank,rerank-auto`). Paraphrase is the only target: multi-hop has no headroom (mrr@10 0.974).", targetCategories: ["paraphrase"] },
+  { name: "rerank", description: "Cross-encoder reranking forced on for every eligible recall (auto's ambiguity gate bypassed).", internal: { variant: { rerank: true } }, targetCategories: ["paraphrase"] },
   { name: "dense-only", description: "Ablation: keyword arm skipped. Must lose on identifier and rare-word queries.", internal: { variant: { arms: "dense-only" } }, config: NO_RERANK },
   { name: "keyword-only", description: "Ablation: embedding and Vectorize skipped. Must lose on paraphrase queries.", internal: { variant: { arms: "keyword-only" } }, config: NO_RERANK },
 ];

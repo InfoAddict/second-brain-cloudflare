@@ -36,18 +36,18 @@ describe("RERANK_MODE", () => {
 });
 
 describe("the eval variants", () => {
-  it("rerank forces the model on through the typed internal flag and targets paraphrase and multi-hop", () => {
+  it("rerank forces the model on through the typed internal flag and targets paraphrase only", () => {
     const v = getVariant("rerank");
     expect(v.internal?.variant?.rerank).toBe(true);
     expect(v.internal?.variant?.arms).toBeUndefined();
-    expect(v.targetCategories).toEqual(["paraphrase", "multi-hop"]);
+    expect(v.targetCategories).toEqual(["paraphrase"]);
     expect(v.config).toBeUndefined();
   });
   it("rerank-auto is the shipped mode with pre-registered targets, so the ship gate needs no --target flag", () => {
     const v = getVariant("rerank-auto");
     expect(v.config).toBeUndefined();
     expect(v.internal).toBeUndefined();
-    expect(v.targetCategories).toEqual(["paraphrase", "multi-hop"]);
+    expect(v.targetCategories).toEqual(["paraphrase"]);
   });
   it("baseline is the shipped default; no-rerank and the ablations pin the mode off", () => {
     expect(getVariant("baseline").config).toBeUndefined();

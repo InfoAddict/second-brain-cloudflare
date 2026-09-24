@@ -261,7 +261,7 @@ answer still sits inside a 1,600-character chunk; it was not shipped.
 The eval's `rerank` variant forces the mode on through the typed
 `variant.rerank` flag (no route can set it); `no-rerank` pins it off,
 `baseline` and `rerank-auto` are the shipped `auto`, and `rerank-auto` carries the
-pre-registered target categories (paraphrase, multi-hop). The ship decision is
+pre-registered target category (paraphrase only: multi-hop has no headroom, mrr@10 0.974). The ship decision is
 `npm run eval:recall -- --compare no-rerank,rerank-auto --corpus core-1k --d1 workerd`
 (no `--target` flag), repeated on `scale-20k` and `scifact` with
 `--allow-unmeasured-rows`. What it shows: the improvement clears its bar on the
