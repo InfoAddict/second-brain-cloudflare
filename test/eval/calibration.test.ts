@@ -184,15 +184,24 @@ describe.runIf(process.env.EVAL_SCALE)("discrimination at scale: like vs baselin
     expect(rule(evaluateGate(scaled[id].like, scaled[id].baseline, { allowUnmeasuredRowsRead: true }), "improvement").status).toBe("pass");
   });
 
-  it("scale-5k: the regression rule passes", () => {
-    expect(rule(evaluateGate(scaled["scale-5k"].like, scaled["scale-5k"].baseline, { allowUnmeasuredRowsRead: true }), "regression").status).toBe("pass");
-  });
-
-  // Measured: FTS scores one of 24 long-context queries (q-long-006) lower than LIKE at scale-20k, recall@10 -1/24. That is
-  // one query's worth, which the category rule tolerates (a loss must EXCEED max(0.03, 1/n)); the losers list still names it.
-  it("scale-20k: the regression rule passes for baseline over like, and the losers list still names q-long-006", () => {
-    const { like, baseline } = scaled["scale-20k"];
-    expect(rule(evaluateGate(like, baseline, { allowUnmeasuredRowsRead: true }), "regression").status).toBe("pass");
-    expect(findLosers(like, baseline).map(l => l.queryId)).toEqual(["q-long-006"]);
+  // Measured on the 1,433-cluster set (T-0043.6): the FTS keyword arm costs a little on the queries it does not help. On the
+  // 299-cluster set these losses were inside the noise and the regression rule passed; with 440 paraphrase and 220 long-context
+  // clusters they are significant, so the rule FAILs on them. That is the more powered gate telling the truth about the 3.6.0
+  // release (FTS won lexical categories by 0.05-0.6 and lost 0.009 paraphrase at 5k, 0.023 long-context at 20k), not a
+  // calibration error. The losers are non-lexical queries only: a keyword change cannot make the dense arm worse.
+  it.each([["scale-5k", "paraphrase", 0.02], ["scale-20k", "long-context", 0.03]] as const)("%s: the regression rule fails only on a small %s loss", (id, category, bound) => {
+    const { like, baseline } = scaled[id];
+    const gate = evaluateGate(like, baseline, { allowUnmeasuredRowsRead: true });
+    const regression = rule(gate, "regression");
+    expect(regression.status).toBe("fail");
+    const named = [...regression.detail.matchAll(/([a-z-]+) (?:recall5|recall10|mrr10|ndcg10) (-?[\d.]+)/g)];
+    expect(named.length).toBeGreaterThan(0);
+    for (const [, scope, value] of named) {
+      expect(scope, regression.detail).toBe(category);
+      expect(Math.abs(Number(value)), regression.detail).toBeLessThan(bound);
+    }
+    const losers = findLosers(like, baseline).map(l => l.queryId);
+    expect(losers.length).toBeGreaterThan(0);
+    for (const queryId of losers) expect(queryId, "only non-lexical queries lose to FTS").toMatch(/^q-(para|long|hop)-/);
   });
 });
