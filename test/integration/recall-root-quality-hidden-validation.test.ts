@@ -63,15 +63,17 @@ function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
   (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
     if (sql.includes("SELECT COUNT(*) AS total") && sql.includes("SUM(CASE WHEN content LIKE")) {
       return {
-        bind: (...patterns: string[]) => ({
-          first: async () => c.failureShape === "weak-generic-neighbor"
+        bind: (...patterns: string[]) => {
+          // The recall observer runs first() as all() to count rows_read, so the double answers both the same way.
+          const first = async () => c.failureShape === "weak-generic-neighbor"
             || c.failureShape === "long-parent-pollution"
             ? Promise.reject(new Error("controlled corpus scan unavailable"))
             : Object.fromEntries([
               ["total", 100],
               ...patterns.map((_, index) => [`d${index}`, 2]),
-            ]),
-        }),
+            ]);
+          return { first, all: async () => ({ results: [await first()], meta: {} }) };
+        },
       };
     }
     if (sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT")) {

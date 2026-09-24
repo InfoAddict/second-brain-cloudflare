@@ -110,5 +110,5 @@ export interface VariantReport {
   results: QueryResult[];
 }
 
-/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). */
-export const RUNNER_VERSION = 6;
+/** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). 7: recall diagnostics count first() statements (run as all()), so workerd rows_read is no longer null for queries that ran one. */
+export const RUNNER_VERSION = 7;

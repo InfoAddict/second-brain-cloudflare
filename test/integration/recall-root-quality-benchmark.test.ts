@@ -57,8 +57,9 @@ function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
   (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
     if (sql.includes("SELECT COUNT(*) AS total") && sql.includes("SUM(CASE WHEN content LIKE")) {
       return {
-        bind: (...patterns: string[]) => ({
-          first: async () => {
+        bind: (...patterns: string[]) => {
+          // The recall observer runs first() as all() to count rows_read, so the double answers both the same way.
+          const first = async () => {
             // Keep the eight-token weak-neighborhood query intact so its two generic
             // matches clear the lexical-count gate but remain below the score threshold.
             if (c.failureShape === "weak-generic-neighbor" || c.failureShape === "long-parent-pollution") {
@@ -68,8 +69,9 @@ function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
               ["total", 100],
               ...patterns.map((_, index) => [`d${index}`, 2]),
             ]);
-          },
-        }),
+          };
+          return { first, all: async () => ({ results: [await first()], meta: {} }) };
+        },
       };
     }
     if (sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT")) {

@@ -39,7 +39,18 @@ function observeD1(database: D1Database, operations: RecallOperationDiagnostics)
             (Reflect.get(target, property, receiver) as (...values: unknown[]) => object).apply(target, args),
           );
         }
-        if (property === "all" || property === "first" || property === "run" || property === "raw") {
+        // first() returns the bare row with no meta, so rows_read would go unseen. Run it as all() (the same statement,
+        // the same rows_read) and hand back what first() would have: the first row, or one column of it.
+        if (property === "first") {
+          return async (column?: string) => {
+            operations.d1Statements += 1;
+            const result = await (target as unknown as { all: () => Promise<{ results?: Record<string, unknown>[] }> }).all();
+            recordMeta(result);
+            const row = result.results?.[0] ?? null;
+            return column === undefined || row === null ? row : (row[column] ?? null);
+          };
+        }
+        if (property === "all" || property === "run" || property === "raw") {
           return async (...args: unknown[]) => {
             operations.d1Statements += 1;
             const result = await (Reflect.get(target, property, receiver) as (...values: unknown[]) => unknown).apply(target, args);
