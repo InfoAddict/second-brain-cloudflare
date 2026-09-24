@@ -1,4 +1,4 @@
-import { NeuronBudget, ReplayStore, makeReplayAi, type LiveAi } from "./ai-replay";
+import { NeuronBudget, ReplayStore, makeReplayAi, type LiveAi, type LlmTagsArm } from "./ai-replay";
 import { loadCorpus } from "./corpus/loader";
 import type { CorpusSpec } from "./corpus/types";
 import { runVariant } from "./runner";
@@ -19,6 +19,8 @@ export async function prepare(o: {
   model: string;
   store: ReplayStore;
   live: LiveAi;
+  /** Arm whose rows to record; the stand-in needs the query and tag embeddings, the empty arm needs none. Defaults to the stand-in. */
+  llmTags?: LlmTagsArm;
   maxNeurons: number;
   concurrency: number;
   log: (line: string) => void;
@@ -34,7 +36,7 @@ export async function prepare(o: {
 
   // every pass must read only a cache labeled with the producer that would fill it
   const expectProducer = (m: string) => o.live.producer?.(m);
-  const dry = makeReplayAi({ store: o.store, mode: "dry", expectProducer });
+  const dry = makeReplayAi({ store: o.store, mode: "dry", expectProducer, llmTags: o.llmTags });
   await pass(dry, 1);
   const missing = dry.misses.size;
   const estimatedNeurons = [...dry.misses.values()].reduce((s, m) => s + m.neurons, 0);
@@ -46,12 +48,12 @@ export async function prepare(o: {
       throw new Error(`estimated ${estimatedNeurons.toFixed(1)} neurons exceeds --max-neurons ${o.maxNeurons}; raise it deliberately (the estimate is a byte-count upper bound in production-equivalent neurons)`);
     }
     const budget = new NeuronBudget(o.maxNeurons);
-    await pass(makeReplayAi({ store: o.store, mode: "record", live: o.live, budget }), o.concurrency);
+    await pass(makeReplayAi({ store: o.store, mode: "record", live: o.live, budget, llmTags: o.llmTags }), o.concurrency);
     spentNeurons = budget.spent;
     o.log(`recorded; estimated spend ${spentNeurons.toFixed(1)} neurons.`);
   }
 
-  await pass(makeReplayAi({ store: o.store, mode: "replay", expectProducer }), 1);
+  await pass(makeReplayAi({ store: o.store, mode: "replay", expectProducer, llmTags: o.llmTags }), 1);
   o.log("replay verification passed: the cache is complete for this variant and corpus.");
   return { missing, estimatedNeurons, spentNeurons };
 }
@@ -66,9 +68,11 @@ export async function exportCache(o: {
   outPath: string;
   /** Repo root for the store's path containment; tests point this at a temp dir. */
   root?: string;
+  /** Arm whose rows count as used; the committed cache must carry the stand-in's embeddings. Defaults to the stand-in. */
+  llmTags?: LlmTagsArm;
 }): Promise<number> {
   const store = new ReplayStore(o.readPaths, undefined, { root: o.root });
-  const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay: makeReplayAi({ store, mode: "replay" }), embeddingModel: o.model, index: o.variant.index });
+  const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay: makeReplayAi({ store, mode: "replay", llmTags: o.llmTags }), embeddingModel: o.model, index: o.variant.index });
   try {
     await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
   } finally {

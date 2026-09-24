@@ -84,8 +84,8 @@ describe("makeReplayAi", () => {
     expect(live.run).not.toHaveBeenCalled();
   });
 
-  it("stubs an LLM miss with an empty stream in replay mode and says so", async () => {
-    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+  it("stubs an LLM miss with an empty stream in replay mode under the empty arm and says so", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay", llmTags: "empty" });
     const stream = await replay.ai.run("@cf/meta/llama-4-scout-17b-16e-instruct" as never, { messages: [{ role: "user", content: "hi" }], stream: true } as never) as ReadableStream;
     const text = await new Response(stream).text();
     expect(text).toBe("data: [DONE]\n\n");
@@ -413,6 +413,58 @@ describe("path containment", () => {
     expect(() => s.exportUsed(join(root, "test/eval/data/core/notes.txt"))).toThrow(/exportUsed/);
     expect(() => s.exportUsed(join(root, "test/eval/data/core/../../leak.jsonl.gz"))).toThrow(/exportUsed/);
     expect(s.exportUsed(join(root, "test/eval/data/core/replay.m.jsonl.gz"))).toBe(1);
+  });
+});
+
+describe("tag stand-in arm", () => {
+  const tagPrompt = (tags: string, query: string) =>
+    ({ messages: [{ role: "user", content: `From this list of tags: ${tags}\n\nWhich tags best match this query? Reply with only a comma-separated list of matching tag names from the list, or nothing if none apply.\n\nQuery: ${query}` }], max_tokens: 100, stream: true });
+  const filled = (root: string) => {
+    const s = store(root, "t.jsonl");
+    const vecs: Record<string, number[]> = { "the freight dispute": [1, 0], finance: [0.95, Math.sqrt(1 - 0.95 ** 2)], travel: [0, 1], vendor: [0.9, Math.sqrt(1 - 0.81)] };
+    const live = { run: vi.fn(async (_m: string, input: unknown) => ({ data: [vecs[(input as { text: string[] }).text[0]]] })), producer: () => PRODUCER };
+    return { s, live, vecs };
+  };
+  const sse = async (v: unknown) => (await new Response(v as ReadableStream).text());
+
+  it("answers with the shown tags nearest the query, prices the synthetic output, and labels the call stand-in", async () => {
+    const root = tmp();
+    const { s, live } = filled(root);
+    const rec = makeReplayAi({ store: s, mode: "record", live, budget: new NeuronBudget(1000) });
+    const input = tagPrompt("finance, travel, vendor", "the freight dispute");
+    const first = await sse(await rec.ai.run(LLM as never, input as never));
+    const replay = makeReplayAi({ store: new ReplayStore([join(cacheOf(root), "t.jsonl")], undefined, { root }), mode: "replay" });
+    const out = await sse(await replay.ai.run(LLM as never, input as never));
+    expect(out).toBe(`data: ${JSON.stringify({ response: "finance, vendor" })}\n\ndata: [DONE]\n\n`);
+    expect(first).toBe(out);
+    const calls = replay.drainCalls();
+    expect(calls).toHaveLength(1); // the embeddings behind the answer are not billed calls
+    expect(calls[0]).toMatchObject({ kind: "llm", source: "stand-in", neuronsEstimated: true });
+    const content = (input.messages[0] as { content: string }).content;
+    expect(calls[0].neurons).toBeCloseTo((Math.ceil(content.length / 4) * 24545 + Math.ceil("finance, vendor".length / 4) * 77273) / 1_000_000, 12);
+    expect(calls[0].neurons).toBeGreaterThan(estimateNeurons(LLM, content) * 0.2); // output is priced, not zero
+  });
+
+  it("is a replay miss when a tag or query embedding was never recorded", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    await expect(replay.ai.run(LLM as never, tagPrompt("finance", "q") as never)).rejects.toBeInstanceOf(ReplayMissError);
+  });
+
+  it("dry mode collects the embeddings it would need", async () => {
+    const dry = makeReplayAi({ store: new ReplayStore([]), mode: "dry" });
+    await dry.ai.run(LLM as never, tagPrompt("finance, travel", "q") as never);
+    expect(dry.misses.size).toBe(3);
+    expect([...dry.misses.values()].every(m => m.model === MODEL)).toBe(true);
+  });
+
+  it("refuses an LLM call that is not the inferQueryTags prompt", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    await expect(replay.ai.run(LLM as never, { messages: [{ role: "user", content: "Summarize." }] } as never)).rejects.toThrow(/inferQueryTags prompt/);
+  });
+
+  it("defaults to stand-in and reports the arm", () => {
+    expect(makeReplayAi({ store: new ReplayStore([]), mode: "replay" }).llmTags).toBe("stand-in");
+    expect(makeReplayAi({ store: new ReplayStore([]), mode: "replay", llmTags: "empty" }).llmTags).toBe("empty");
   });
 });
 

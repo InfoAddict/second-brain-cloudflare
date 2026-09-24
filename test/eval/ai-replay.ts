@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { producerKey, type EmbeddingProducer, type NeuronSource } from "./types";
+import { STAND_IN_EMBEDDING_MODEL, STAND_IN_MAX_TAGS, STAND_IN_TAG_THRESHOLD, formatTags, parseTagPrompt, pickTags } from "./tag-standin";
 import { hashVector } from "./vectors";
 
 /** Short stable id of a producer record; stored in every row so a row names the exact producer that made it. */
@@ -582,10 +583,16 @@ export interface AiCall {
   neurons: number;
   /** True when the provider omitted complete usage; the reported cost is an approximation. */
   neuronsEstimated: boolean;
-  source: "replay" | "live" | "stub" | "dry";
+  source: "replay" | "live" | "stub" | "stand-in" | "dry";
 }
+/** How an unrecorded LLM call (query-tag inference) is answered: a deterministic embedding-nearest stand-in, or an empty reply. */
+export type LlmTagsArm = "stand-in" | "empty";
+export const LLM_TAGS_ARMS: readonly LlmTagsArm[] = ["stand-in", "empty"];
+
 export interface ReplayAi {
   ai: Ai;
+  /** The arm that answers unrecorded LLM calls; reports record it and the gate refuses to compare different arms. */
+  llmTags: LlmTagsArm;
   /** Calls since the last drain; the runner drains once per query. */
   drainCalls(): AiCall[];
   /** Producer of every non-LLM model this ai was asked for (corpus load and queries), as the cache records it. */
@@ -636,6 +643,8 @@ export function makeReplayAi(opts: {
   recordLlm?: boolean;
   /** Output tokens to reserve against the budget before a live LLM call (reporting always prices the actual output). */
   maxOutputTokens?: number;
+  /** Answer for LLM calls with no recorded reply. Defaults to the deterministic stand-in. */
+  llmTags?: LlmTagsArm;
   /** Dry-mode answer for non-embedding, non-LLM calls (a rerank variant supplies its own). */
   dryOther?: (model: string, input: unknown) => unknown;
 }): ReplayAi {
@@ -650,7 +659,10 @@ export function makeReplayAi(opts: {
       throw new Error(`replay row for ${model} (sha256 ${key}) has unverified provenance: ${prov ? `it was recorded for ${prov.model}` : "it predates provenance (legacy row)"}. Re-record it, or stamp a cache you recorded yourself: npm run eval:recall -- stamp-cache --model ${model} --producer-from current --i-recorded-this`);
     }
   };
-  const run = async (model: string, input: AiInput) => {
+  const arm: LlmTagsArm = opts.llmTags ?? "stand-in";
+  // `quiet` keeps the stand-in's own embedding lookups out of the per-query call list: production pays for the LLM call, not these.
+  const exec = async (model: string, input: AiInput, quiet = false): Promise<unknown> => {
+    const record = (call: AiCall) => { if (!quiet) calls.push(call); };
     const kind = kindOf(input);
     if (kind !== "llm") {
       // A run with a declared producer only reads (or extends) a cache that is labeled with that same producer.
@@ -667,20 +679,29 @@ export function makeReplayAi(opts: {
         verifiedModels.add(model);
       }
       const cost = price(hit);
-      calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: "replay" });
+      record({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: "replay" });
       return respond(input, hit);
     }
     const preview = text.slice(0, 60).replace(/\s+/g, " ");
     if (kind === "llm" && (opts.mode === "replay" || !opts.recordLlm)) {
-      const cost = price();
-      calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "stub" });
-      return input.stream ? sseStream("") : { response: "" };
+      let answer = "";
+      if (arm === "stand-in") {
+        const { tags, query } = parseTagPrompt(input as Parameters<typeof parseTagPrompt>[0]);
+        const embed = async (t: string) => ((await exec(STAND_IN_EMBEDDING_MODEL, { text: [t] }, true)) as { data: number[][] }).data[0];
+        const vectors = new Map<string, number[]>();
+        for (const t of tags) vectors.set(t, await embed(t));
+        answer = formatTags(pickTags(await embed(query), tags, vectors, STAND_IN_TAG_THRESHOLD, STAND_IN_MAX_TAGS));
+      }
+      // The output is priced at the published rate whatever produced it, so an answered call is not free.
+      const cost = reportedNeurons(model, kind, text, { text: answer });
+      record({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: arm === "stand-in" ? "stand-in" : "stub" });
+      return input.stream ? sseStream(answer) : { response: answer };
     }
     if (opts.mode === "dry") {
       const neurons = estimateNeurons(model, text);
       misses.set(key, { model, preview, neurons });
       const cost = price();
-      calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "dry" });
+      record({ model, kind, neurons: cost.neurons, neuronsEstimated: true, source: "dry" });
       if (kind === "embedding") return { data: [hashVector(text, EMBEDDING_DIMS[model] ?? 384)] };
       if (kind === "llm") return input.stream ? sseStream("") : { response: "" };
       if (opts.dryOther) return opts.dryOther(model, input);
@@ -711,11 +732,13 @@ export function makeReplayAi(opts: {
       verifiedModels.add(model);
     }
     const cost = price(stored);
-    calls.push({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
+    record({ model, kind, neurons: cost.neurons, neuronsEstimated: cost.estimated, source: ranLive ? "live" : "replay" });
     return respond(input, stored);
   };
+  const run = (model: string, input: AiInput) => exec(model, input);
   return {
     ai: { run } as unknown as Ai,
+    llmTags: arm,
     drainCalls: () => calls.splice(0),
     producers: () => Object.fromEntries([...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [[m, p]] : []; })),
     neuronSource: () => {
