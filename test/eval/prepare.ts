@@ -29,7 +29,7 @@ export async function prepare(o: {
     const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay, embeddingModel: o.model, index: o.variant.index, concurrency });
     try {
       const report = await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
-      // a swallowed miss (the tag stand-in's) shows up only as a query error, so the verification pass must read them
+      // a swallowed miss (a stand-in's) shows up only as a query error, so the verification pass must read them
       const failed = report.results.filter(r => r.error);
       if (strict && failed.length) throw new Error(`replay verification failed on ${failed.length} query(ies), first: ${failed[0].queryId}: ${failed[0].error}`);
     } finally {

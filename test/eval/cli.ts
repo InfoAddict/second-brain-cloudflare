@@ -143,6 +143,8 @@ function rowsReadMissing(report: VariantReport): string {
 
 export function formatReport(report: VariantReport): string {
   const { overall, byCategory, knownGaps, allQueries } = summarize(report.results);
+  // AI calls beyond the embeddings: the LLM arm answered something (a reranking variant also counts, which only prints the caveat)
+  const llmCalled = report.results.some(r => r.cost.aiCalls > r.cost.embeddingCalls);
   const gapKeys = Object.keys(knownGaps.byGap);
   return [
     `variant ${report.variant} | corpus ${report.corpus} | model ${report.embeddingModel} | d1 ${report.d1Backend} | ${report.isolate}${report.limit ? ` | LIMITED to ${report.limit} queries` : ""}`,
@@ -159,8 +161,8 @@ export function formatReport(report: VariantReport): string {
     `    D1 statements  ${dist(allQueries.d1Statements)}`,
     allQueries.d1RowsRead ? `    D1 rows_read   ${dist(allQueries.d1RowsRead, 0)}` : rowsReadMissing(report),
     "    caveat: recall@5 and MRR are read from the top-10 prefix; production's topK 5 can rank differently (topK changes MMR and the related-slot reservation)",
-    ...(report.llmTags ? [`    llm tags       ${report.llmTags}${report.llmTags === "stand-in" ? " (embedding-nearest stand-in for the tag-inference LLM call)" : " (empty answer: no query tags, as if the LLM call failed)"}`] : []),
-    ...(report.llmTags === "stand-in" ? ["    caveat: agreement with the real model is unmeasured"] : []),
+    ...(report.llmTags ? [`    llm tags       ${report.llmTags}${llmCalled ? (report.llmTags === "stand-in" ? " (embedding-nearest stand-in for the tag-inference LLM call)" : " (empty answer: no query tags, as if the LLM call failed)") : " (inert: no LLM call was made)"}`] : []),
+    ...(report.llmTags === "stand-in" && llmCalled ? ["    caveat: agreement with the real model is unmeasured"] : []),
     ...(report.llmTags ? ["    caveat: cost excludes synthesizeInsight (GET /recall's default; off in MCP and in the eval)"] : []),
     ...(report.neuronSource ? [`    neurons source ${report.neuronSource === "projected" ? "projected from local token counts x published rates (not billed)" : "provider-reported usage"}`] : []),
     `    AI calls       mean ${allQueries.aiCalls.mean.toFixed(2)}   neurons mean ${allQueries.neurons.mean.toFixed(1)}${allQueries.estimatedNeuronQueries ? ` (estimated for ${allQueries.estimatedNeuronQueries} quer${allQueries.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,

@@ -6,7 +6,6 @@ import {
   MAX_QUERY_TERMS,
   QUERY_SATURATION_FRACTION,
 } from "../constants";
-import { readStreamText } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { tokenizeQuery } from "../text/tokenize";
@@ -22,23 +21,15 @@ import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsEligibleToken, ftsMatchQuery, f
  * caller; pass it wherever there is one, or an aged-out vocabulary is rebuilt on the
  * request's own critical path instead of behind it.
  */
-export async function inferQueryTags(query: string, env: Env, config: Readonly<Config> = DEFAULTS, ctx?: ExecutionContext, identity?: Identity, only?: "personal" | "company", teamId?: string): Promise<string[]> {
+export async function inferQueryTags(query: string, env: Env, ctx?: ExecutionContext, identity?: Identity): Promise<string[]> {
   const { hashtags } = extractHashtags(query);
   if (hashtags.length) return hashtags;
 
   // Cached (#288): this used to be a full table scan expanded per tag per row, on
   // every recall, and it was 82% of a recall's read cost.
   //
-  // System tags are dropped rather than matched against. They say what the system
-  // did to an entry, not what it is about, and the only thing a query tag does is
-  // boost entries whose subject overlaps the question. Two of them — `auto-pattern`
-  // and `status:deprecated` — name entries that recall's hydration filter removes
-  // outright, so a boost they win is spent on rows that are then discarded. They are
-  // also applied in bulk (the staleness pass alone writes `volatility:` and
-  // `stale:as-of` across up to 25 entries a night), which makes them the highest-
-  // count tags in a mature brain and exactly the ones that would crowd real topics
-  // out of the 50 the LLM below is shown. The same predicate #278 used to keep them
-  // out of digest candidates, so the two agree by construction.
+  // System tags describe processing state, not the entry's subject. Keep only
+  // topic tags for the ranking boost.
   const knownTags = (await getTagVocabulary(env, ctx, identity)).filter(isTopicTag);
 
   const lowerQuery = query.toLowerCase();
@@ -46,25 +37,7 @@ export async function inferQueryTags(query: string, env: Env, config: Readonly<C
     new RegExp(`(?<![\\w-])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(lowerQuery)
   );
 
-  if (keywordMatches.length) return keywordMatches;
-
-  if (!knownTags.length) return [];
-
-  try {
-    const stream = await env.AI.run(config.LLM_MODEL as any, {
-      messages: [{
-        role: "user",
-        content: `From this list of tags: ${knownTags.slice(0, 50).join(", ")}\n\nWhich tags best match this query? Reply with only a comma-separated list of matching tag names from the list, or nothing if none apply.\n\nQuery: ${query.slice(0, 300)}`,
-      }],
-      max_tokens: 100,
-      stream: true,
-    });
-    const text = await readStreamText(stream as ReadableStream);
-    const knownSet = new Set(knownTags);
-    return text.split(",").map(t => t.trim().toLowerCase()).filter(t => t && knownSet.has(t));
-  } catch {
-    return [];
-  }
+  return keywordMatches;
 }
 
 /**

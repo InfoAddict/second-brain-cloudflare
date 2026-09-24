@@ -82,12 +82,11 @@ describe("internal.variant.arms", () => {
     expect(query).toHaveBeenCalled();
   });
 
-  it("keyword-only skips embedding and Vectorize but retains tag inference", async () => {
+  it("keyword-only skips embedding and Vectorize; no arm makes an LLM call", async () => {
     const { env, query } = await setup(false, true);
     await run(env, { arms: "both" });
     const ai = env.AI.run as ReturnType<typeof vi.fn>;
-    const bothAiCalls = ai.mock.calls.length;
-    expect(bothAiCalls).toBe(2);
+    expect(ai.mock.calls).toHaveLength(1);
     expect(ai.mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL)).toHaveLength(1);
     ai.mockClear();
     query.mockClear();
@@ -95,9 +94,15 @@ describe("internal.variant.arms", () => {
     const r = await run(env, { arms: "keyword-only" });
     expect(r.ids).toEqual(["kw-doc"]);
     expect(query).not.toHaveBeenCalled();
-    expect(ai.mock.calls.filter(([model]) => model === DEFAULTS.EMBEDDING_MODEL)).toHaveLength(0);
-    expect(ai.mock.calls).toHaveLength(bothAiCalls - 1);
-    expect(ai.mock.calls[0][0]).toBe(DEFAULTS.LLM_MODEL);
+    expect(ai.mock.calls).toHaveLength(0);
+  });
+
+  it("makes no LLM call for tag inference when no known tag appears in the query", async () => {
+    const { env } = await setup(false, true);
+    await run(env, undefined, "quarterly planning session");
+    const ai = env.AI.run as ReturnType<typeof vi.fn>;
+    expect(ai.mock.calls.filter(([model]) => model === DEFAULTS.LLM_MODEL)).toHaveLength(0);
+    expect(ai.mock.calls.map(([model]) => model)).toEqual([DEFAULTS.EMBEDDING_MODEL]);
   });
 
   it("dense-only skips the keyword arm and reports why", async () => {

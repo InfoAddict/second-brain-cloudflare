@@ -586,7 +586,7 @@ export interface AiCall {
   neuronsEstimated: boolean;
   source: "replay" | "live" | "stub" | "stand-in" | "dry";
 }
-/** How an unrecorded LLM call (query-tag inference) is answered: a deterministic embedding-nearest stand-in, or an empty reply. */
+/** How an unrecorded LLM call (recall makes none now; query-tag inference did) is answered: a deterministic embedding-nearest stand-in, or an empty reply. */
 export type LlmTagsArm = "stand-in" | "empty";
 export const LLM_TAGS_ARMS: readonly LlmTagsArm[] = ["stand-in", "empty"];
 
@@ -597,9 +597,9 @@ export interface ReplayAi {
   /** Calls since the last drain; the runner drains once per query. */
   drainCalls(): AiCall[];
   /**
-   * Stand-in failures recorded under `scope` since its last drain ("" when a call ran outside any scope). distill.ts
-   * swallows any error from the LLM call and returns no tags, which would silently turn the stand-in into the empty
-   * arm, so the failure is also recorded here and the runner turns it into that query's error.
+   * Stand-in failures recorded under `scope` since its last drain ("" when a call ran outside any scope). A caller that
+   * swallows the LLM call's error would silently turn the stand-in into the empty arm, so the failure is also
+   * recorded here and the runner turns it into that query's error.
    */
   drainErrors(scope?: string): string[];
   /** Runs `fn` with every AI call it starts, awaited or not, attributed to `scope` (one query). */
@@ -650,7 +650,7 @@ export function makeReplayAi(opts: {
   budget?: NeuronBudget;
   /** The producer this run expects for a model (replay and dry runs that must not read foreign vectors). Defaults to the live provider's. */
   expectProducer?: (model: string) => EmbeddingProducer | undefined;
-  /** Record LLM calls too (query-tag inference); off by default because it spends neurons on non-embedding work. */
+  /** Record LLM calls too; off by default because it spends neurons on non-embedding work. */
   recordLlm?: boolean;
   /** Output tokens to reserve against the budget before a live LLM call (reporting always prices the actual output). */
   maxOutputTokens?: number;
@@ -705,7 +705,7 @@ export function makeReplayAi(opts: {
       };
       if (arm === "empty") return answered("");
       // The whole stand-in path is one recorded unit: whatever throws (parse, embed, select, price, format) reaches
-      // the caller, which swallows it, and is also on record for the runner under its query's scope.
+      // the caller, which may swallow it, and is also on record for the runner under its query's scope.
       const scope = scopes.id() ?? "";
       return (async () => {
         try {

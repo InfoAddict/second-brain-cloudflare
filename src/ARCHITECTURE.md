@@ -200,9 +200,12 @@ download to run that corpus. Every cached row records which model build produced
 it, and reports from different producers never compare. Vectorize is an
 exact-cosine emulator, the clock is frozen, and `recall_count` writes are
 dropped, so one variant on one corpus ranks every query identically on every
-run. The query-tag LLM call is not recorded: `--llm-tags stand-in` (default)
-answers it with a deterministic embedding-nearest stand-in whose agreement with
-the real model is unmeasured, and `--llm-tags empty` answers as if the call
+run. Recall makes no query-tag LLM call (hashtags and literal tag matches only),
+so the `--llm-tags` arms are inert for current code. They stay because a
+comparison against a commit that still made the call needs both sides on one arm,
+and because any LLM call recall grows again is answered by the stand-in (a
+deterministic embedding-nearest pick, agreement with a real model unmeasured) or
+fails the query loudly, never silently. `--llm-tags empty` answers as if the call
 failed. Both sides of a comparison must use the same arm.
 
 **Corpora** (`npm run eval:recall -- --list` names them). `core-1k`, `scale-5k`,
@@ -307,9 +310,9 @@ was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps:
-over the 306 remaining queries, recall@5 is 0.727, recall@10 0.760, MRR@10
-0.745, and nDCG@10 0.693. Over all 338 queries it is 0.753, 0.783, 0.768, and
-0.721.
+over the 306 remaining queries, recall@5 is 0.724, recall@10 0.760, MRR@10
+0.748, and nDCG@10 0.696. Over all 338 queries it is 0.750, 0.783, 0.771, and
+0.723.
 
 **How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`
 and about 7 minutes on `workerd`, which runs each query against a real local D1.

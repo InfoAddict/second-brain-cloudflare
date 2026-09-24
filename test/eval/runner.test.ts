@@ -344,9 +344,24 @@ describe("stand-in failures fail closed", () => {
     try { await runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL }); } finally { await c.close(); }
     return () => makeReplayAi({ store: new ReplayStore([file], undefined, { root }), mode: "replay" });
   }
+
+  // Recall no longer calls the tag LLM; issue the retired call from the embedding so the stand-in's fail-closed path stays covered.
+  const withLegacyTagCall = (replay: ReturnType<typeof makeReplayAi>, when: (text: string) => boolean = () => true) => {
+    const ai = replay.ai as unknown as { run: (m: string, i: { text?: string[] }) => Promise<unknown> };
+    const run = ai.run.bind(ai);
+    ai.run = (m, i) => {
+      if (m === MODEL && i.text && when(i.text[0])) {
+        const content = "From this list of tags: gardening, planning\n\nWhich tags best match this query? Reply with only a comma-separated list of matching tag names from the list, or nothing if none apply.\n\nQuery: tomato advice";
+        void run(DEFAULTS.LLM_MODEL, { messages: [{ role: "user", content }], max_tokens: 100, stream: true } as never).catch(() => {});
+      }
+      return run(m, i);
+    };
+    return replay;
+  };
   const replayRun = async (replay: ReturnType<typeof makeReplayAi>) => {
     const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: qs }, backend: "sqlite", replay, embeddingModel: MODEL });
     open.push(c);
+    withLegacyTagCall(replay);
     return runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL });
   };
 
@@ -362,7 +377,7 @@ describe("stand-in failures fail closed", () => {
     const run = (replay.ai as unknown as { run: (m: string, i: { messages?: { role: string; content: string }[] }) => Promise<unknown> }).run.bind(replay.ai);
     (replay.ai as unknown as { run: typeof run }).run = (m, i) =>
       run(m, i.messages ? { ...i, messages: [{ role: "user", content: i.messages[0].content.replace("Which tags best match", "Which tags match") }] } : i);
-    const report = await replayRun(replay);
+    const report = await replayRun(replay); // the legacy call goes through the drifting wrapper above
     expect(report.results[0].error).toMatch(/query-tag stand-in failed.*inferQueryTags prompt/);
   });
 
@@ -383,6 +398,7 @@ describe("stand-in failures fail closed", () => {
     ];
     const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: two }, backend: "sqlite", replay, embeddingModel: MODEL });
     open.push(c);
+    withLegacyTagCall(replay, t => t === "advice"); // only t1 ran the retired call; t2's hashtag never did
     armed = true;
     const report = await runVariant({ corpus: c, variant: getVariant("baseline"), queries: two, isolate: "cold", embeddingModel: MODEL });
     const [t1, t2] = report.results;

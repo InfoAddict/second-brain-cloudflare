@@ -1,5 +1,6 @@
 /*
- * Deterministic stand-in for the inferQueryTags LLM call (src/recall/distill.ts) in the replay layer.
+ * Deterministic stand-in for the retired inferQueryTags LLM call in the replay layer. Recall no longer makes it;
+ * the stand-in answers it only for a commit that still does, and rejects any other LLM call.
  * It reads the tags the prompt shows and the query, and returns the shown tags whose bge-small embedding is
  * near the query's. Agreement with the real model (llama-4-scout) is unmeasured.
  */
@@ -23,11 +24,11 @@ const HEAD = "From this list of tags: ";
 const MID = "\n\nWhich tags best match this query? Reply with only a comma-separated list of matching tag names from the list, or nothing if none apply.\n\nQuery: ";
 
 const drift = (why: string): never => {
-  throw new Error(`the LLM prompt is not the inferQueryTags prompt (${why}); update PROMPT parsing in test/eval/tag-standin.ts to match src/recall/distill.ts`);
+  throw new Error(`recall grew an LLM call the stand-in does not recognize (${why}); it is not the retired inferQueryTags prompt`);
 };
 
 /**
- * Strict on the template: any deviation from distill.ts's wording throws instead of guessing.
+ * Strict on the template: any deviation from the retired prompt's wording throws instead of guessing.
  *
  * The list is split the way production splits a reply (on commas, trimmed, empties dropped, repeats folded).
  * Stored tags may contain commas (capture only trims and lowercases; validInputTags bounds length and NUL), so
@@ -44,7 +45,7 @@ export function parseTagPrompt(input: { messages?: { role?: string; content?: st
   const midAt = content.indexOf(MID, HEAD.length);
   if (midAt < 0) return drift("instruction");
   const tags = [...new Set(content.slice(HEAD.length, midAt).split(",").map(t => t.trim()).filter(Boolean))];
-  if (!tags.length) throw new Error("empty tag list in the inferQueryTags prompt; production never calls the model without tags");
+  if (!tags.length) throw new Error("empty tag list in the inferQueryTags prompt; the retired call was never made without tags");
   return { tags, query: content.slice(midAt + MID.length) };
 }
 
@@ -68,5 +69,5 @@ export function pickTags(query: readonly number[], tags: readonly string[], vect
     .map(t => t.tag);
 }
 
-/** The reply shape inferQueryTags parses: comma-separated tag names, or nothing. */
+/** The reply shape the retired inferQueryTags parsed: comma-separated tag names, or nothing. */
 export const formatTags = (tags: readonly string[]): string => tags.join(", ");

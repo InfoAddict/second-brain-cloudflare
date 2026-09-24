@@ -486,7 +486,7 @@ describe("GET /tags", () => {
     await handleEntriesRoutes(req("GET", "/tags"), new URL("http://localhost/tags"), h.env, h.ctx);
     expect(h.scans()).toHaveLength(1);
 
-    await inferQueryTags("notes about legal work", h.env, undefined, h.ctx, (await identify(h))!);
+    await inferQueryTags("notes about legal work", h.env, h.ctx, (await identify(h))!);
 
     expect(h.scans()).toHaveLength(1);
   });

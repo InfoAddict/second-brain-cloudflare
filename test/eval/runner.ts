@@ -89,8 +89,7 @@ export async function runVariant(o: {
       const degradedBefore = vectorizeFilterState().degradedQueries;
       intercepted = 0;
       const started = performance.now();
-      // Tag inference runs beside the query embedding (search.ts) and distill.ts swallows its failures, so it can outlive a
-      // failed recall. Scope its calls to this query and wait for them, or a late failure would be charged to the next one.
+      // A swallowed side call (as the retired tag inference was) can outlive a failed recall. Scope its calls to this query and wait for them, or a late failure would be charged to the next one.
       let result: Awaited<ReturnType<typeof recallEntries>> | undefined;
       let recallError: unknown;
       try {

@@ -193,16 +193,23 @@ describe("main (end to end on a tiny registered corpus)", () => {
     expect(() => parseCli(["--variant", "baseline", "--llm-tags", "oracle"])).toThrow(/--llm-tags must be stand-in or empty/);
   });
 
-  it("formatReport names the tag arm and the caveats that go with it", () => {
-    const base = report([result({ queryId: "a" })]);
-    const stand = formatReport({ ...base, llmTags: "stand-in" });
+  it("formatReport names the tag arm and its caveats only when the LLM arm answered calls", () => {
+    const called = report([result({ queryId: "a", cost: { ...cost, aiCalls: cost.embeddingCalls + 1 } })]);
+    const stand = formatReport({ ...called, llmTags: "stand-in" });
     expect(stand).toMatch(/llm tags\s+stand-in/);
     expect(stand).toMatch(/agreement with the real model is unmeasured/);
     expect(stand).toMatch(/excludes synthesizeInsight/);
-    const empty = formatReport({ ...base, llmTags: "empty" });
+    const empty = formatReport({ ...called, llmTags: "empty" });
     expect(empty).toMatch(/llm tags\s+empty/);
     expect(empty).not.toMatch(/agreement with the real model/);
     expect(empty).toMatch(/excludes synthesizeInsight/);
+  });
+
+  it("formatReport calls the tag arm inert, with no unmeasured-agreement caveat, when no LLM call was made", () => {
+    const quiet = report([result({ queryId: "a", cost: { ...cost, aiCalls: cost.embeddingCalls } })]);
+    const text = formatReport({ ...quiet, llmTags: "stand-in" });
+    expect(text).toMatch(/llm tags\s+stand-in \(inert: no LLM call was made\)/);
+    expect(text).not.toMatch(/agreement with the real model/);
   });
 
   it("formatReport says @5 comes from the top-10 prefix, and never suggests --d1 workerd on a workerd run", () => {

@@ -1,9 +1,9 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 
 /*
- * Per-query attribution for async work the code under test starts and does not await. recall runs tag inference
- * beside the query embedding (search.ts) and distill.ts swallows its failures, so when the embedding rejects first
- * the tag call can still be running, or not yet started, when the recall promise settles. `run` tags everything a
+ * Per-query attribution for async work the code under test starts and does not await. A call started beside the
+ * query embedding and whose failure the caller swallows (as the retired tag-inference call was) can still be
+ * running, or not yet started, when the recall promise settles if the embedding rejects first. `run` tags everything a
  * query starts with its id (AsyncLocalStorage); `settle` waits until every tracked resource created under that id
  * has finished: promises (until resolved), and timers, immediates and nextTick callbacks (until they have run or
  * been cleared), since any of those can create a promise later.

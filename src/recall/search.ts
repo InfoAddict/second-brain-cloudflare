@@ -330,7 +330,7 @@ export async function recallEntries(
   const tokens = profile.lexicalTokens;
   const [values, queryTags] = await Promise.all([
     arms === "keyword-only" ? Promise.resolve([] as number[]) : embed(embedQuery, env, cfg),
-    inferQueryTags(lexicalQuery, env, cfg, ctx, identity, internal.workspaceFilter, internal.teamId),
+    inferQueryTags(lexicalQuery, env, ctx, identity),
   ]);
   markStage("querySignals");
 

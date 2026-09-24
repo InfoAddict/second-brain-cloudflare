@@ -68,10 +68,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
 
     expect(budget).toMatchObject({
       workerRequests: 1,
-      // Existing behavior: one embedding plus one tag-inference LLM because
-      // the warm vocabulary has no literal query match. Recovery may not add a
-      // third call.
-      aiCalls: 2,
+      // One embedding only: tag inference is a literal match, never an LLM call.
+      aiCalls: 1,
       embeddingCalls: 1,
       vectorizeQueries: 1,
       vectorizeGets: 0,
@@ -97,7 +95,7 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
   it("adds graph reads but no extra AI, embedding, or Vectorize path", async () => {
     const budget = await run(1);
 
-    expect(budget.aiCalls).toBe(2);
+    expect(budget.aiCalls).toBe(1);
     expect(budget.embeddingCalls).toBe(1);
     expect(budget.vectorizeQueries).toBe(1);
     expect(budget.vectorizeGets).toBe(0);
