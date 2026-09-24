@@ -78,9 +78,10 @@ describe("guard 2: tracked-data allowlist", () => {
 
 describe("guard 3: canary and export-shape scan", () => {
   it("finds nothing in what git tracks now, having scanned a real tree", () => {
-    expect(trackedFiles().length).toBeGreaterThan(100); // a floor, so an empty listing can never pass vacuously
-    expect(scanTracked()).toEqual([]);
-  }, 30_000); // scans every tracked file; takes 3-6s, past the 5s default under suite load
+    const files = trackedFiles();
+    expect(files.length).toBeGreaterThan(100); // a floor, so an empty listing can never pass vacuously
+    expect(scanTracked(REPO_ROOT, files)).toEqual([]);
+  });
 
   it("fails closed when git cannot list files (not a repo), instead of scanning nothing", () => {
     const notRepo = mkdtempSync(join(tmpdir(), "privacy-norepo-"));
@@ -143,6 +144,20 @@ describe("guard 3: canary and export-shape scan", () => {
   it("flags credential shapes", () => {
     expect(rules(`token ${["ghp", "abcdefghijklmnopqrstuvwx"].join("_")}`)).toEqual(["credential"]);
     expect(rules(`Authorization: Bearer ${"a".repeat(30)}`)).toEqual(["credential"]);
+  });
+
+  it("keeps detecting every rule and credential shape behind the literal gates, after other text", () => {
+    const blob = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo".repeat(20);
+    const samples: Record<string, string> = {
+      email: GMAIL, phone: `415-867-${N}`, "entry-id": UUID, canary: CANARY,
+      cfut: `${"cfut"}_${"a".repeat(24)}`, cfat: `${"cfat"}_${"a".repeat(24)}`, ghp: `${"ghp"}_${"a".repeat(24)}`, sk: `${"sk"}_${"a".repeat(24)}`,
+      bearer: `Bearer ${"a".repeat(30)}`,
+    };
+    const want: Record<string, string> = { email: "email", phone: "phone", "entry-id": "entry-id", canary: "canary", cfut: "credential", cfat: "credential", ghp: "credential", sk: "credential", bearer: "credential" };
+    for (const [name, sample] of Object.entries(samples)) {
+      expect(rules(`${blob}\n ${sample} \n${blob}`), name).toEqual([want[name]]);
+    }
+    expect(rules(blob)).toEqual([]);
   });
 
   it("fires on tracked violations, including inside a gzip replay cache", () => {

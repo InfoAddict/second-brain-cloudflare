@@ -311,6 +311,7 @@ describe("lock lease and fence", () => {
   });
 
   it("gives up on a lock that stays live past the wait cap, naming the lock path", async () => {
+    vi.useFakeTimers();
     const root = tmp();
     const lock = lockOf(root, MODEL, embedInput("x"), "cap.jsonl");
     const beat = () => writeFileSync(lock, JSON.stringify({ pid: 1, t: Date.now(), token: "holder" }));
@@ -319,12 +320,15 @@ describe("lock lease and fence", () => {
     try {
       const live = fakeLive();
       const r = makeReplayAi({ store: store(root, "cap.jsonl", { lockStaleMs: 60 }), mode: "record", live });
-      const err = await r.ai.run(MODEL as never, embedInput("x") as never).then(() => null, (e: Error) => e);
+      const pending = r.ai.run(MODEL as never, embedInput("x") as never).then(() => null, (e: Error) => e);
+      await vi.advanceTimersByTimeAsync(400);
+      const err = await pending;
       expect(err?.message).toContain(lock);
       expect(err?.message).toMatch(/delete/i);
       expect(live.run).not.toHaveBeenCalled();
     } finally {
       clearInterval(timer);
+      vi.useRealTimers();
     }
   });
 

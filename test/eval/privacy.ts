@@ -112,7 +112,19 @@ export const trackedFiles = (root: string = REPO_ROOT): string[] => {
 export const CANARY_RE = /SB_EVAL_CANARY_[A-Za-z0-9]{6,}/;
 
 const RESERVED_DOMAIN = /(?:^|\.)(?:example\.(?:com|org|net)|[\w-]+\.(?:test|invalid|example)|localhost)$/i;
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/g;
+const EMAIL_LOCAL_RE = /[A-Za-z0-9._%+-]+$/;
+const EMAIL_DOMAIN_RE = /((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})/y;
+
+/** Emails, anchored on each "@": matching the local part first is quadratic on a long base64 replay row. */
+function* emailsIn(text: string): Generator<[sample: string, domain: string]> {
+  for (let at = text.indexOf("@"); at >= 0; at = text.indexOf("@", at + 1)) {
+    const local = EMAIL_LOCAL_RE.exec(text.slice(Math.max(0, at - 64), at));
+    if (!local) continue;
+    EMAIL_DOMAIN_RE.lastIndex = at + 1;
+    const domain = EMAIL_DOMAIN_RE.exec(text);
+    if (domain) yield [`${local[0]}@${domain[1]}`, domain[1]];
+  }
+}
 // NANP (555-01xx is the fictional block) and E.164-style international numbers.
 const PHONE_RE = /(?<![\w.-])(?:\+?1[\s.-])?\(?[2-9]\d{2}\)?[\s.-]\d{3}[\s.-]\d{4}(?![\w-])|(?<![\w.-])\+\d{1,3}[\s.-]?\d(?:[\s.-]?\d){7,13}(?![\w-])/g;
 // Production entry and edge ids are crypto.randomUUID() (v4).
@@ -130,10 +142,11 @@ export function scanText(file: string, text: string, heuristics: boolean): Findi
   const canary = CANARY_RE.exec(text);
   if (canary) out.push({ file, rule: "canary", sample: canary[0] });
   if (!heuristics) return out;
-  for (const m of text.matchAll(EMAIL_RE)) if (!RESERVED_DOMAIN.test(m[1])) out.push({ file, rule: "email", sample: m[0] });
+  for (const [sample, domain] of emailsIn(text)) if (!RESERVED_DOMAIN.test(domain)) out.push({ file, rule: "email", sample });
   for (const m of text.matchAll(PHONE_RE)) if (!/555[\s.-]01\d\d/.test(m[0])) out.push({ file, rule: "phone", sample: m[0] });
-  for (const m of text.matchAll(UUID_RE)) out.push({ file, rule: "entry-id", sample: m[0] });
-  for (const m of text.matchAll(CREDENTIAL_RE)) out.push({ file, rule: "credential", sample: `${m[0].slice(0, 8)}...` });
+  // Literal gates: every alternative of UUID_RE and CREDENTIAL_RE requires one, so a base64 blob skips them.
+  if (text.includes("-")) for (const m of text.matchAll(UUID_RE)) out.push({ file, rule: "entry-id", sample: m[0] });
+  if (text.includes("_") || text.includes("Bearer")) for (const m of text.matchAll(CREDENTIAL_RE)) out.push({ file, rule: "credential", sample: `${m[0].slice(0, 8)}...` });
   return out;
 }
 
@@ -175,7 +188,9 @@ export function scanTracked(root: string = REPO_ROOT, files: readonly string[] =
     const text = buf.toString("utf8");
     const heuristics = isEvalScope(file);
     const found = scanText(file, text, heuristics);
-    if (/\.(?:jsonl?|gz)$/.test(file)) {
+    // Decoding is only needed when an ASCII marker can be hidden in a JSON
+    // Unicode escape. Parsing every replay row otherwise dominates this scan.
+    if (/\.(?:jsonl?|gz)$/.test(file) && text.includes("\\u")) {
       const seen = new Set(found.map(f => `${f.rule}:${f.sample}`));
       for (const f of scanText(file, jsonStrings(text).join("\n"), heuristics)) if (!seen.has(`${f.rule}:${f.sample}`)) found.push(f);
     }
