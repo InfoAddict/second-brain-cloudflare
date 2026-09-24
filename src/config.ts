@@ -76,6 +76,18 @@ export const DEFAULTS = {
   // else above keeps using LLM_MODEL. See the cost comment on
   // constants.INSIGHT_LLM_MODEL for why this is a separate setting.
   INSIGHT_LLM_MODEL: "@cf/openai/gpt-oss-120b",
+  // Pooling sent to the bge-en embedders ("mean" sends no field, Workers AI's
+  // default). It changes the vector space, so it is part of the embedding
+  // scheme (src/embedding/scheme.ts): changing it re-embeds the brain.
+  EMBEDDING_POOLING: "mean",
+  // Whether each chunk of a multi-chunk memory is embedded with a transient
+  // entry-level prefix (src/capture/contextual.ts). Off stops new contextual
+  // vectors and pauses the backfill; existing vectors are left as they are.
+  CONTEXTUAL_EMBEDDINGS: "off",
+  // Optional nightly tier that swaps the deterministic prefix for one
+  // model-written sentence per chunk. Capped at CONTEXT_LLM_CHUNKS_PER_NIGHT.
+  CONTEXTUAL_EMBEDDING_LLM: "off",
+  CONTEXTUAL_EMBEDDING_LLM_MODEL: "@cf/ibm-granite/granite-4.0-h-micro",
   // Used only by src/when/pass.ts's nightly commitment-extraction call.
   // Defaults to the same model as INSIGHT_LLM_MODEL — a smaller model's
   // judgment on "is this a commitment, and when is it due" was not measured
@@ -201,6 +213,10 @@ export const RULES: Record<ConfigKey, Rule> = {
 
   LLM_MODEL: { kind: "string" },
   EMBEDDING_MODEL: { kind: "string" },
+  EMBEDDING_POOLING: { kind: "string" },
+  CONTEXTUAL_EMBEDDINGS: { kind: "string" },
+  CONTEXTUAL_EMBEDDING_LLM: { kind: "string" },
+  CONTEXTUAL_EMBEDDING_LLM_MODEL: { kind: "string" },
   INSIGHT_LLM_MODEL: { kind: "string" },
   WHEN_LLM_MODEL: { kind: "string" },
   TEAM_DEFAULT_WORKSPACE: { kind: "string" },
@@ -208,6 +224,13 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_MODE: { kind: "string" },
   TIMEZONE: { kind: "string" },
   PUSH_CONTACT: { kind: "string" },
+};
+
+/** String settings that accept only these values. Anything else degrades to the default (resolve) or is refused (write). */
+const ENUM_VALUES: Partial<Record<ConfigKey, readonly string[]>> = {
+  EMBEDDING_POOLING: ["mean", "cls"],
+  CONTEXTUAL_EMBEDDINGS: ["off", "on"],
+  CONTEXTUAL_EMBEDDING_LLM: ["off", "on"],
 };
 
 /**
@@ -283,6 +306,10 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
     }
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return { value: fallback, note: `${key}: "${value}" is not a recognized IANA timezone` };
+    }
+    const allowed = ENUM_VALUES[key];
+    if (allowed && !allowed.includes(value)) {
+      return { value: fallback, note: `${key}: expected one of ${allowed.join(", ")}, got ${JSON.stringify(value)}` };
     }
     return { value: value as Config[ConfigKey] };
   }
@@ -393,6 +420,8 @@ function validateStrict(key: string, value: unknown): string | null {
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;
     }
+    const allowed = ENUM_VALUES[key as ConfigKey];
+    if (allowed && !allowed.includes(value)) return `${key} must be one of ${allowed.join(", ")}`;
     return null;
   }
   if (typeof value !== "number" || !Number.isFinite(value)) {

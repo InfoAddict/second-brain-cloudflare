@@ -1,10 +1,11 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { CHUNK_MAX_CHARS, MIRRORED_SOURCES } from "../constants";
+import { CHUNK_MAX_CHARS } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
-import { chunkText } from "../text/chunk";
+import { buildEmbeddingChunks, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
+import { schemeOf, LEGACY_SCHEME } from "../embedding/scheme";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
@@ -51,15 +52,23 @@ export async function storeEntry(
   //
   // Only the INDEX is truncated. entries.content keeps the whole record, so
   // nothing is lost to the reader and keyword search still covers all of it.
-  const allChunks = chunkText(content);
-  const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
+  const entry = { id, content, tags, source, createdAt: now };
+  let chunks: EmbeddingChunk[];
+  try {
+    chunks = buildEmbeddingChunks(entry, config);
+  } catch (e) {
+    // Context is an enhancement; a failure building it must not fail the save.
+    console.error("Contextual chunking failed, embedding plain chunks:", e);
+    chunks = plainEmbeddingChunks(entry);
+  }
+  const scheme = schemeOf(config);
 
   const vectors = await Promise.all(
-    chunks.map(async (chunk, i) => {
+    chunks.map(async chunk => {
       const metadata: Record<string, any> = {
-        content: chunk,
+        content: chunk.rawContent,
         parentId: id,
-        chunkIndex: i,
+        chunkIndex: chunk.chunkIndex,
         totalChunks: chunks.length,
         tags,
         source,
@@ -69,14 +78,21 @@ export async function storeEntry(
         // passes query unfiltered.
         workspace_id: writeCtx.workspaceId,
       };
+      // Scheme 1 vectors carry no field, exactly as before schemes existed.
+      if (scheme !== LEGACY_SCHEME) metadata.scheme = scheme;
+      if (chunk.contextualized) {
+        metadata.contextualized = true;
+        metadata.contextSource = chunk.contextSource;
+      }
 
       tags.forEach(t => {
         metadata[`tag_${t.replace(/[."]/g, "_")}`] = true;
       });
 
       return {
-        id: chunks.length === 1 ? id : `${id}-chunk-${i}`,
-        values: await embed(chunk, env, config),
+        id: chunks.length === 1 ? id : `${id}-chunk-${chunk.chunkIndex}`,
+        // The prefix is embedding input only; metadata.content stays raw.
+        values: await embed(chunk.embeddingText, env, config),
         metadata,
       };
     })

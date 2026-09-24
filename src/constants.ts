@@ -101,6 +101,20 @@ export const MIGRATION_MAX_ENTRIES_PER_BATCH = 25;
 
 export const CHUNK_OVERLAP_CHARS = 200;
 
+// ── Contextual chunk embeddings (T-0042) ─────────────────────────────────────
+// A short entry-level prefix is sent to the embedder with each chunk of a
+// multi-chunk memory; it is never stored. BGE Small's 512-token window keeps
+// 32 tokens of headroom under the 480 target.
+export const CONTEXT_PREFIX_MAX_CHARS = 180;
+export const CONTEXT_SMALL_BODY_START_CHARS = 1200;
+export const CONTEXT_SMALL_BODY_MIN_CHARS = 300;
+export const CONTEXT_M3_BODY_MAX_CHARS = 1400;
+export const BGE_SMALL_MAX_INPUT_TOKENS = 512;
+export const CONTEXT_SMALL_TARGET_TOKENS = 480;
+export const CONTEXT_LLM_CHUNKS_PER_NIGHT = 20;
+export const CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY = 8;
+export const CONTEXT_LLM_MAX_TOKENS = 32;
+
 export const CLASSIFY_MAX_TOKENS = 80;
 export const CONTRADICTION_MAX_TOKENS = 80;
 export const SMART_MERGE_MAX_TOKENS = 250;
