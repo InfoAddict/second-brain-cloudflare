@@ -187,11 +187,23 @@ not billed. `rows_read` is real only with `--d1 workerd`, which runs wrangler's
 local workerd D1; the default `sqlite` backend cannot measure it. recall@5 is
 read from the top-10 prefix, which is what production's `topK` 5 returns:
 recall ranks from a fixed candidate pool (dense 15, graph seat budgets sized
-for `topK` 5), in blocks of five, with graph slots at ranks 5 and 10, so a
-larger `topK` only appends results and never reorders the head. When the
-diversified list is shorter than `topK` the rest comes from a deeper dense query
-(50, the most Vectorize returns with values and metadata), fetched only then and
-appended after everything else.
+for `topK` 5), diversified in blocks of five picks with each block ordered by
+score, and the linked memories are placed against those blocks (the first in
+the fifth place, the second at rank 10 or after the second block), never
+against how many of a block's picks could be shown. **What is guaranteed:** for
+one query, filters, scope and `hops` over an unchanged brain, the results of a
+`topK` are the leading results of every larger `topK`, up to the API maximum
+of 20, whether or not some indexed memories are hidden from the caller (an
+`auto-*` or deprecated tag, another workspace, a filter, a deleted memory whose
+vector is still indexed). A list can be shorter than `topK` when the picks of a
+block do not all hydrate, as a `topK` 5 call always could; a larger `topK` then
+continues it. When the diversified list runs out before `topK`, the rest comes
+from a deeper dense query (50, the most Vectorize returns with values and
+metadata), fetched only then and appended after everything else. Each recall
+bumps `recall_count` on what it shows, which feeds later rankings, so two calls
+made apart are only comparable if nothing was recalled between them (the eval
+drops that write). `test/integration/recall-top-k-prefix.test.ts` sweeps this
+over seeded corpora.
 
 **Why the numbers can be trusted.** Runs are deterministic and need no network
 and no Cloudflare account. Embeddings (and any reranker scores) come from pinned

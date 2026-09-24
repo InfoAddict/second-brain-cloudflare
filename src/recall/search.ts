@@ -654,8 +654,8 @@ export async function recallEntries(
 
   // Blocks of five in MMR order, each ordered by score: the first block is what a topK 5 call always returned, and a
   // later block only depends on the picks before it, so no topK can reorder a block it does not cut.
-  const inBlocks = Array.from({ length: Math.ceil(directCandidates.length / RECALL_BLOCK) }, (_, b) =>
-    directCandidates.slice(b * RECALL_BLOCK, (b + 1) * RECALL_BLOCK).sort((a, c) => c.score - a.score)).flat();
+  const pickBlocks = Array.from({ length: Math.ceil(directCandidates.length / RECALL_BLOCK) }, (_, b) =>
+    directCandidates.slice(b * RECALL_BLOCK, (b + 1) * RECALL_BLOCK).sort((a, c) => c.score - a.score));
   const directMatchOf = (m: VectorizeMatch, score: number): RecallMatch[] => {
     const meta = m.metadata as Record<string, any>;
     const parentId = (meta?.parentId ?? m.id) as string;
@@ -675,23 +675,27 @@ export async function recallEntries(
       staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
     }];
   };
-  const directMatches: RecallMatch[] = inBlocks.flatMap(m => directMatchOf(m, m.score));
+  // The direct matches that hydrated, per block. Every position below is decided against these blocks and the picks
+  // that made them, never against how many of them survived, and only a topK past the last block can add one.
+  const blockMatches = pickBlocks.map(block => block.flatMap(m => directMatchOf(m, m.score)));
+  const directMatches: RecallMatch[] = blockMatches.flat();
   // The deeper matches rank below everything above, in dense order, so their scores step down from the lowest.
   const fillFloor = directMatches.length ? Math.min(...directMatches.map(m => m.score)) : 0;
   const fillMatches = fillCandidates.flatMap((m, i) => directMatchOf(m, fillFloor * (1 - 0.01 * (i + 1))));
 
-  // Linked memories compete with the leading direct matches only, whatever topK is.
-  const headParentIds = directMatches.slice(0, GRAPH_SLOT_INDEX + 1).map(match => match.id);
-  const leadingParentIds = directMatches.slice(0, GRAPH_SLOT_INDICES[GRAPH_SLOT_INDICES.length - 1] + 1).map(match => match.id);
+  // Linked memories compete with the leading picks only (first block; first two for the second slot), whatever topK
+  // is. They are the picks, not the survivors: a pick that did not hydrate cannot be a linked memory either.
+  const headParentIds = directParentIds.slice(0, RECALL_BLOCK);
+  const leadingParentIds = directParentIds.slice(0, 2 * RECALL_BLOCK);
   const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.rootScore));
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
-  const fallbackRootScore = directMatches[Math.min(directMatches.length, GRAPH_SLOT_INDEX + 1) - 1]?.score ?? 0;
+  const fallbackRootScore = directCandidates[Math.min(directCandidates.length, RECALL_BLOCK) - 1]?.score ?? 0;
   for (const e of expanded) {
     rootIdByNode.set(e.id, rootIdByNode.get(e.viaFrom) ?? e.viaFrom);
   }
-  const replacement = directMatches[GRAPH_SLOT_INDEX];
+  const replacement = blockMatches[0]?.[GRAPH_SLOT_INDEX];
   const replacementCoverage = replacement ? Math.max(
     queryCoverage(replacement.content, tokens, distilled).score,
     queryCoverage(replacement.content, profile.evidenceTokens, distilled).score,
@@ -754,23 +758,26 @@ export async function recallEntries(
       .filter(entry => entry.eligible && !headParentIds.includes(entry.match.id))
       .map(entry => entry.match.id);
   }
-  // The first linked memory must be outside the first five directs; each later
-  // one outside the direct matches up to its own rank.
+  // The first linked memory must be outside the first block of picks; the second outside the first two.
   const eligibleRelated = sortedExpanded.filter(e => e.eligible && !headParentIds.includes(e.match.id)).map(e => e.match);
-  // A slot exists once topK reaches its rank; asking for more only adds slots after the ones already there.
-  const slotCount = GRAPH_SLOT_INDICES.filter(index => topK > index).length;
   const selectedRelated = [
-    ...eligibleRelated.slice(0, Math.min(slotCount, 1)),
-    ...eligibleRelated.slice(1).filter(match => !leadingParentIds.includes(match.id)).slice(0, Math.max(slotCount - 1, 0)),
+    ...eligibleRelated.slice(0, 1),
+    ...eligibleRelated.slice(1).filter(match => !leadingParentIds.includes(match.id)).slice(0, GRAPH_SLOT_INDICES.length - 1),
   ];
-  // Graph slots sit at fixed ranks. Everything is laid out for the whole pool
-  // and cut to topK at the end, so topK k is always a prefix of topK k+n.
-  const [firstRelated, ...laterRelated] = selectedRelated;
-  const baselineMatches: RecallMatch[] = [...directMatches.slice(0, GRAPH_SLOT_INDEX), ...(firstRelated ? [firstRelated] : directMatches.slice(GRAPH_SLOT_INDEX, GRAPH_SLOT_INDEX + 1))];
+  const [firstRelated, secondRelated] = selectedRelated;
+  const [block1 = [], block2 = [], ...laterBlocks] = blockMatches;
+  // The list is laid out block by block and cut to topK at the end:
+  //  - the window is exactly what a topK 5 call returns: the first block's survivors with the first linked memory in
+  //    the fifth place (or the fifth survivor when there is none);
+  //  - the second block follows, with the second linked memory at rank 10 (or after the block's last item when it
+  //    ends sooner); a linked memory is placed against the blocks, never against how many of their picks survived;
+  //  - later blocks follow, and everything a deeper dense query adds follows them.
+  // A topK past a block only adds that block after everything above it, so a larger topK only appends.
+  const baselineMatches: RecallMatch[] = [...block1.slice(0, firstRelated ? GRAPH_SLOT_INDEX : GRAPH_SLOT_INDEX + 1), ...(firstRelated ? [firstRelated] : [])];
   let window: RecallMatch[] = baselineMatches;
   // A direct match the evidence slot pushed out, to be shown where the chosen match used to sit if that was further down.
   let displaced: RecallMatch | undefined;
-  if (hops > 0 && topK > GRAPH_SLOT_INDEX && baselineMatches.length > GRAPH_SLOT_INDEX) {
+  if (hops > 0 && baselineMatches.length > GRAPH_SLOT_INDEX) {
     const replacementIndex = GRAPH_SLOT_INDEX;
     const replacementMatch = baselineMatches[replacementIndex];
     const replacementEvidence = queryCoverage(
@@ -781,7 +788,6 @@ export async function recallEntries(
     const protectedIds = new Set(baselineMatches.slice(0, replacementIndex).map(match => match.id));
     const matchById = new Map<string, RecallMatch>();
     const candidates: EvidenceSlotCandidate[] = [];
-
     const selectedRootIds = new Set(selectedRoots.map(selection => selection.candidate.parentId));
     const omittedChallenger = rootCandidates
       .filter(root => !selectedRootIds.has(root.parentId) && !headParentIds.includes(root.parentId))
@@ -863,24 +869,24 @@ export async function recallEntries(
       if (replacementMatch.hop === 0) displaced = replacementMatch;
     }
   }
-  // Direct matches past the window continue the list, with each later linked
-  // memory at its own rank; the direct match the first slot displaced is only
-  // shown again when that slot was won by a linked memory.
   const taken = new Set(window.map(match => match.id));
-  const tail = directMatches.slice(firstRelated ? GRAPH_SLOT_INDEX : GRAPH_SLOT_INDEX + 1).flatMap(match => {
+  // One pass over what follows the window: drop what the window already shows (it moved up), and put the direct
+  // match the evidence slot displaced where the chosen match used to sit, so nothing is lost.
+  const follow = (list: RecallMatch[]) => list.flatMap(match => {
     if (!taken.has(match.id)) return [match];
-    // The chosen match came from further down the list: the one it displaced takes its place, so nothing is lost.
     return displaced && match.id === window[GRAPH_SLOT_INDEX]?.id && !taken.has(displaced.id) ? [displaced] : [];
   });
-  for (const [i, related] of laterRelated.entries()) {
-    if (taken.has(related.id)) continue;
-    const at = GRAPH_SLOT_INDICES[i + 1] - window.length;
-    const own = tail.findIndex(match => match.id === related.id);
-    if (own >= 0) tail.splice(own, 1); // already in the list further down: it moves up to its slot
-    tail.splice(Math.min(at, tail.length), 0, related);
+  const region = follow([...block1.slice(firstRelated ? GRAPH_SLOT_INDEX : GRAPH_SLOT_INDEX + 1), ...block2]);
+  const later = follow(laterBlocks.flat());
+  // The second linked memory belongs to the second block: a call that stops within the first never sees it. It is
+  // the request that decides, not how many picks exist, so a small brain still gets it once topK reaches the block.
+  if (secondRelated && topK > RECALL_BLOCK && !taken.has(secondRelated.id)) {
+    const own = later.findIndex(match => match.id === secondRelated.id);
+    if (own >= 0) later.splice(own, 1); // already listed further down: it moves up to its slot
+    region.splice(Math.min(GRAPH_SLOT_INDICES[1] - window.length, region.length), 0, secondRelated);
   }
-  const listed = new Set([...window, ...tail].map(match => match.id));
-  const matches = [...window, ...tail, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
+  const listed = new Set([...window, ...region, ...later].map(match => match.id));
+  const matches = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
   const finalDirectIds = new Set(matches.filter(match => match.hop === 0).map(match => match.id));
   const finalRelated = matches.filter(match => match.hop > 0);
   if (internal.diagnostics) internal.diagnostics.selectedRelatedIds = finalRelated.map(x => x.id);
