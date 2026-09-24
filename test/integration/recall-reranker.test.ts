@@ -88,6 +88,21 @@ describe("recall reranker step", () => {
     for (const c of s.rerankInputs[0].contexts) expect(Object.values(CONTENT)).toContain(c.text);
   });
 
+  it("with an Identity, a real row in another workspace never reaches the model even when its vector hits first", async () => {
+    const foreign = { id: "foreign", score: 0.99, metadata: { parentId: "foreign", created_at: 1, content: "FOREIGN private diary" } };
+    const s = await setup({ extraVectors: [foreign] });
+    s.sqlite.seed({ id: "foreign", content: "FOREIGN private diary about launch planning tomato", createdAt: 5 });
+    for (const id of IDS) s.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-a", id).run();
+    s.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-b", "foreign").run();
+    const identity = { userId: "u1", role: "member", personalWorkspaceId: "ws-a", companyWorkspaceIds: [], defaultShare: "" as const };
+    const diagnostics: RecallDiagnostics = {};
+    const result = await recallEntries({ query: "launch planning tomato", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on" }, { identity, diagnostics });
+    expect(diagnostics.rerankRoute).toBe("applied");
+    expect(s.rerankInputs[0].contexts.map(c => c.text).join("\n")).not.toMatch(/FOREIGN/);
+    expect(s.rerankInputs[0].contexts).toHaveLength(6);
+    expect(result.matches.map(m => m.id)).not.toContain("foreign");
+  });
+
   it.each([
     ["an AI error (quota or capacity)", "throw", "error"],
     ["a malformed answer", () => ({ data: [[1]] }), "error"],

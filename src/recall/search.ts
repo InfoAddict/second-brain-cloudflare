@@ -527,12 +527,12 @@ export async function recallEntries(
     queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
     loadContent: async ids => {
       const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
-      const need = ids.filter(id => !known.has(id));
+      const need = ids.filter(id => !known.has(id) && scopedParents.has(id));
       if (need.length) {
-        // scope-checked: ` AND ${scope.clause}` is appended exactly as in the candidate-signal read above; only D1 rows the caller may read reach the model
+        // scope-exempt: by-id: every id here came from rcRows, the scoped candidate-signal read above (inScope filters to it). The scope clause is left out on purpose: with it SQLite plans a scan of the caller's whole workspace instead of <=30 primary-key lookups, which costs rows_read in proportion to the brain's size on every recall
         const { results } = await env.DB.prepare(
-          `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})${rcScopeSql}`
-        ).bind(...need, ...(scope?.bindings ?? [])).all() as { results: { id: string; content: string }[] };
+          `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})`
+        ).bind(...need).all() as { results: { id: string; content: string }[] };
         for (const r of results) known.set(r.id, r.content);
       }
       return known;
