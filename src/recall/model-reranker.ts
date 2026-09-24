@@ -31,13 +31,20 @@ export function validateRerankerResponse(raw: unknown, count: number): number[] 
 const parentOf = (m: VectorizeMatch): string => ((m.metadata as { parentId?: string } | undefined)?.parentId ?? m.id) as string;
 
 /**
- * A token that names one thing exactly: a digit, `#` or `_` anywhere, or a dot between alphanumerics (v1.9, a.b).
- * Sentence punctuation is not part of the token ("cells." is a word) and a hyphen between plain words
- * ("tissue-resident") is prose, so a natural-language question is never mistaken for an identifier lookup.
+ * A token that names one thing exactly, which the keyword arm already answers: `#` or `_` anywhere, a digit next
+ * to a letter (v1.2, abc123, 40mg), a dotted name (config.yaml), or a dotted-quad style number (10.0.0.1).
+ * Prose is not a lookup: sentence punctuation is not part of the token ("cells."), a plain hyphenated word
+ * ("tissue-resident") is a word, and so are a bare year (2026), a plain number or percentage (32%, 1.5), and a
+ * dotted abbreviation of short segments (U.S., e.g.).
  */
 export function lookupShaped(token: string): boolean {
   const t = token.replace(/[.,;:!?)\]"']+$/u, "");
-  return /[\d#_]/.test(t) || /[\p{L}\p{N}]\.[\p{L}\p{N}]/u.test(t);
+  if (/[#_]/.test(t)) return true;
+  if (/\p{L}\d|\d\p{L}/u.test(t)) return true;
+  if (/^\d+(\.\d+){2,}$/.test(t)) return true;
+  const segments = t.split(".");
+  if (segments.length > 1 && segments.every(x => /^[\p{L}\p{N}]+$/u.test(x)) && segments.some(x => /\p{L}/u.test(x) && [...x].length > 2)) return true;
+  return false;
 }
 
 /**
