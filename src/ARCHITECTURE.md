@@ -628,6 +628,17 @@ under `test/eval/data/`, a canary scan, and a refusal to write any path git
 would pick up) and documents how a private tier could be added without
 redesigning them.
 
+**What the golden set measures.** Read a category's number for what it counts.
+Multi-hop measures root-finding: each query restates a root memory ("why did we
+replace the chairs") and carries `gold = [answer grade 2, root grade 1]`. In the
+locked baseline the root is in the top 10 for 150 of 150 queries and the answer
+for 7 of 150, so recall@10 0.523 is about 96% "found the note the query
+paraphrases" and MRR@10 0.974 leaves 0.026 of headroom against the 0.05 target
+margin. Multi-hop is therefore not a valid target category for a reranker
+(T-0041's `rerank` and `rerank-auto` variants declare it in `targetCategories`
+and should drop it; that change is applied at integration), and a graph change
+is judged by the answer's rank, not by this recall.
+
 **Variants.** A change under test is a variant: query-time flags on
 `RecallInternalOptions` (for example `variant.arms`), config overrides, or an
 index-time hook that replaces `storeEntry`. Built in: `baseline` (shipped
