@@ -56,8 +56,8 @@ jobs:
   # NOT run in CI.
   eval-workerd:
     runs-on: ubuntu-latest
-    # Locally about 4 minutes (two full core-1k passes on miniflare); CI runners are slower.
-    timeout-minutes: 20
+    # One full core-1k pass on miniflare (1,256 queries; the lock test also covers rows_read): locally several minutes, CI runners are slower.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4

@@ -48,5 +48,5 @@ describe("recall diagnostics are passive: observed and unobserved rankings are i
       restore();
       await corpus.close();
     }
-  }, 300_000);
+  }, 600_000);
 });

@@ -14,16 +14,27 @@
 // MDE estimator (Sep 24 2026 review fixes): MDE = 2.8 x the standard error (SD of the replicates) of the SAME cluster
 // bootstrap that draws the interval, so unit (whole clusters) and weighting (clusters count by their queries) match; an
 // equal-weight cluster-mean formula understated a two-query-cluster gain (0.0144 vs 0.026) and could FAIL where the
-// bootstrap says INCONCLUSIVE. Recall@10, regression population:
-//   like->baseline core-1k 0.0000, scale-5k 0.0568, scale-20k 0.0587; baseline->dense-only 0.0568,
-//   ->keyword-only 0.0479, ->sabotage 0.0514 (all metrics and categories in DISCRIMINATION.md). All far above 0.02.
+// bootstrap says INCONCLUSIVE.
+// Golden-set expansion (T-0043.6): 299 -> 1,433 clusters (338 -> 1,586 queries), weighted to the target categories:
+// paraphrase 48 -> 440, multi-hop 30 -> 150, long-context 24 -> 220. Recall@10 MDE on the regression population, core-1k,
+// old (299 clusters) -> new (`node scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints every category):
+//   like->baseline 0.0000 -> 0.0018 (a true tie);  baseline->dense-only 0.0568 -> 0.0351;  ->keyword-only 0.0486 -> 0.0195;
+//   ->sabotage 0.0513 -> 0.0297; like->baseline at scale-5k 0.0568 -> 0.0240 and at scale-20k 0.0587 -> 0.0248; mild changes (MMR_LAMBDA 0.6, RECENCY_FLOOR 0.5), the ~0.02-sized effects a reranker or
+//   contextual embeddings are expected to have: 0.0202 -> 0.0150 and 0.0083 -> 0.0129.
+// Per category (the target-category rule asks for +0.05 with a lower bound above zero, so it needs MDE <= 0.05 there):
+//   paraphrase 0.180 (dense-only, old) -> 0.055 / 0.053 (dense-only / keyword-only) and 0.033, 0.029, 0.014 on mild changes;
+//   long-context 0.230 -> 0.054 / 0.038 and 0.013-0.018 on mild changes; multi-hop 0.021 / 0.013 and about 0.009.
+// The MDE belongs to the comparison (the spread of its paired deltas), not to the query set, so it did not fall by
+// sqrt(clusters): the large ablations move many more lexical queries now, which raises their own spread. Honest limit: a
+// comparison that moves nearly every paraphrase query (an ablation of a whole arm) sits at about 0.05 in that category, so a
+// +0.05 target gain is at the edge of detectability there; a reranker that moves a fraction of the queries is well inside it.
 // Measured (core-1k, the 5k/20k like-vs-baseline runs, quality-only): see docs/superpowers/eval-results/DISCRIMINATION.md.
 //
 // Golden labels: the Task 6c step 9 20-query spot check is DONE, as a Codex blind pass (step 9b): 17/20 exact and 3
 // graded-gold ambiguities; labels trustworthy (gw notes on T-0043.2). Not owed again.
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DEFAULTS } from "../../src/config";
 import { ReplayStore, makeReplayAi } from "./ai-replay";
 import { CORE_DATA_DIR, buildCorpus } from "./corpus/build";
@@ -33,6 +44,9 @@ import { replayPaths } from "./corpora";
 import { runVariant } from "./runner";
 import type { VariantReport } from "./types";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
+
+// Each gate evaluation resamples 1,256 queries 10,000 times per metric and category; a loaded machine needs the room.
+vi.setConfig({ testTimeout: 30_000 });
 
 const MODEL = DEFAULTS.EMBEDDING_MODEL;
 const COMMITTED = resolve(CORE_DATA_DIR, `replay.${MODEL.split("/").pop()}.jsonl.gz`);
@@ -67,7 +81,7 @@ describe("gate calibration on core-1k (offline)", () => {
     } finally {
       await corpus.close();
     }
-  }, 600_000);
+  }, 1_800_000);
 
   it("is deterministic: the same variant twice ranks every query identically", () => {
     expect(reports["baseline-again"].results.map(r => r.rankedIds)).toEqual(reports.baseline.results.map(r => r.rankedIds));
@@ -96,6 +110,21 @@ describe("gate calibration on core-1k (offline)", () => {
     const overall = gate.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
     expect(Math.abs(overall.ci.mean)).toBeLessThan(0.02);
     expect(rule(gate, "improvement").status).toBe("fail"); // MDE about 0: a real tie, not an underpowered one
+  });
+
+  it("has the clusters the expansion promised, and realistic comparisons are powered to about 0.02", () => {
+    const gate = evaluateGate(reports.baseline, reports["keyword-only"], { allowUnmeasuredRowsRead: true });
+    const overall = gate.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
+    expect(overall.ci.clusters).toBeGreaterThanOrEqual(1400);
+    // measured 0.0195 (was 0.0486 on the 299-cluster set)
+    expect(gate.mde.recall10!).toBeLessThan(0.025);
+    // the target categories can prove a +0.05 gain (MDE at most 0.05) when a variant moves part of them; measured 0.0527 and 0.0379
+    const categoryMde = (scope: string) => 2.8 * gate.deltas.find(d => d.scope === scope && d.metric === "recall10")!.ci.se;
+    expect(categoryMde("multi-hop")).toBeLessThan(0.05);
+    expect(categoryMde("long-context")).toBeLessThan(0.05);
+    expect(categoryMde("paraphrase")).toBeLessThan(0.06);
+    // an ablation that moves most queries is not a realistic comparison: report its MDE, do not pretend it reaches 0.02
+    expect(evaluateGate(reports.baseline, reports["dense-only"], { allowUnmeasuredRowsRead: true }).mde.recall10!).toBeGreaterThan(0.025);
   });
 
   it("a deliberately sabotaged variant fails the regression rule", () => {
@@ -132,7 +161,7 @@ describe.runIf(process.env.EVAL_SCALE)("discrimination at scale: like vs baselin
         await corpus.close();
       }
     }
-  }, 1_800_000);
+  }, 7_200_000);
 
   const cell = (id: string, scope: string, metric: "recall10" | "mrr10") =>
     evaluateGate(scaled[id].like, scaled[id].baseline, { allowUnmeasuredRowsRead: true }).deltas.find(d => d.scope === scope && d.metric === metric)!;

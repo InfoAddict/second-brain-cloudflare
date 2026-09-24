@@ -588,7 +588,7 @@ dependency): bge-small-en-v1.5, bge-m3, and bge-reranker-base, fetched
 anonymously from Hugging Face into `.eval-cache/models/` and verified against
 recorded hashes. They are computed once and stored in a content-addressed replay
 cache; a cache miss during a run fails instead of computing. The committed
-`core-1k` cache means a contributor needs neither an account nor a model
+`core-1k` cache (about 6.9 MB gzipped, 4,365 vectors; a test caps it at 8 MB) means a contributor needs neither an account nor a model
 download to run that corpus. Every cached row records which model build produced
 it, and reports from different producers never compare. Vectorize is an
 exact-cosine emulator, the clock is frozen, and `recall_count` writes are
@@ -603,7 +603,11 @@ failed. Both sides of a comparison must use the same arm.
 
 **Corpora** (`npm run eval:recall -- --list` names them). `core-1k`, `scale-5k`,
 and `scale-20k` share one authored, fully synthetic set of golden memories and
-queries inside a growing seeded haystack; the two larger ones push a common
+queries (1,636 memories, 1,586 queries in 1,433 independent clusters, weighted
+to paraphrase, multi-hop, and long-context, because power scales with clusters)
+inside a seeded haystack of 656 / 4,656 / 19,656 rows (the needles come on top;
+haystack rows carry a seeded importance score skewed to 2-3 and every needle an
+authored one); the two larger ones push a common
 token past the 500-row keyword window, which is what lets the eval tell the LIKE
 and FTS keyword arms apart. `scifact` (about 5,200 abstracts, 693 judged claims)
 and `miracl-ja` (about 13,500 Japanese passages, 860 queries) are public sets
@@ -729,8 +733,19 @@ locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps;
 with no gap tagged, all 345 queries are in the headline: recall@5 is 0.749,
 recall@10 0.777, MRR@10 0.757, and nDCG@10 0.713.
 
-**How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`
-and about 7 minutes on `workerd`, which runs each query against a real local D1.
+**Power.** The MDE belongs to a comparison, not to the query set, so growing the
+set lowers it only as far as the comparison's own spread allows. On the
+1,433-cluster set the recall@10 MDE on `core-1k` is about 0.013-0.020 overall
+for changes that move a few queries (the large ablations were 0.05-0.06 on 299
+clusters and are now 0.03-0.035). The target-category rule needs +0.05 with a
+lower bound above zero: multi-hop, long-context, and paraphrase reach an MDE of
+about 0.009-0.038 on mild changes and 0.05 for a whole-arm ablation, so a
+reranker (paraphrase, multi-hop) or contextual embeddings (long-context) that
+moves part of a category can be proven. `node scripts/eval-run-ts.mjs
+test/eval/mde-table.ts` prints the table per category.
+
+**How long it takes.** A `core-1k` comparison takes under a minute on `sqlite`
+and several minutes on `workerd` (about 25 on a heavily shared machine), which runs each query against a real local D1.
 A cold `prepare` for `scale-20k` takes about 25 minutes locally. `npm run
 test:eval:workerd` runs the workerd-backed tests (including the workerd lock
 tripwire), which the default suite skips; `npm run test:eval:public-download`
