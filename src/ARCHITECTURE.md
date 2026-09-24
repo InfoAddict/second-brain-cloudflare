@@ -588,7 +588,7 @@ dependency): bge-small-en-v1.5, bge-m3, and bge-reranker-base, fetched
 anonymously from Hugging Face into `.eval-cache/models/` and verified against
 recorded hashes. They are computed once and stored in a content-addressed replay
 cache; a cache miss during a run fails instead of computing. The committed
-`core-1k` cache (about 7.6 MB gzipped, 4,802 vectors; a test caps the committed layers at 8 MiB, which leaves 0.8 MB: contextual rows for the 1,088 chunks of the multi-chunk notes would add 1.7 MB, so T-0042's rows stay local unless the cap is raised deliberately) means a contributor needs neither an account nor a model
+`core-1k` cache (8.15 MiB gzipped, 5,842 entries including the reranker's scores; a test caps the committed layers at 8 MiB and this layer is 0.15 MiB over it: the cap is a decision for T-0043.6, and contextual rows would not fit either) means a contributor needs neither an account nor a model
 download to run that corpus. Every cached row records which model build produced
 it, and reports from different producers never compare. Vectorize is an
 exact-cosine emulator, the clock is frozen, and `recall_count` writes are
@@ -603,7 +603,7 @@ failed. Both sides of a comparison must use the same arm.
 
 **Corpora** (`npm run eval:recall -- --list` names them). `core-1k`, `scale-5k`,
 and `scale-20k` share one authored, fully synthetic set of golden memories and
-queries (1,726 memories, 1,676 queries in 1,474 independent clusters, weighted
+queries (1,733 memories and 96 long haystack rows, 1,683 queries in 1,475 independent clusters, weighted
 to paraphrase, multi-hop, and long-context, because power scales with clusters;
 long-context has two constructions, 220 legacy notes and 90 coherent-padding
 notes tagged `subset:coherent-padding`, reported apart)
@@ -641,16 +641,33 @@ margin. Multi-hop is therefore not a valid target category for a reranker
 and should drop it; that change is applied at integration), and a graph change
 is judged by the answer's rank, not by this recall.
 
-The paraphrase base rate fell when the set grew. The original 48 paraphrase
-queries scored recall@10 0.375; the 440 now in the set score 0.109 (0.182 before
-the coherent long-context notes added on-topic distractors). The new paraphrases
-are harder, not the baseline worse: their queries share no content word with the
-gold, and the note collection they compete against is far denser in the same
-topics. Long-context moved the same way: the original 24 notes went from 0.083 to
-0.000 as more notes competed, all 220 legacy notes score 0.055, and the 90
-coherent notes 0.222. A target gain in paraphrase is therefore measured from a
-base of about 0.11, not 0.375, and the +0.05 target margin is a 45% relative
-gain.
+The paraphrase base rate fell when the set grew, in two steps with different
+causes. The original 48 paraphrase queries scored recall@10 0.375. After the 4.8x
+expansion (0f02eff) the 440 scored 0.182: the new paraphrases are harder (no
+content word in common with the gold) and the collection they compete against is
+far larger. It fell to 0.109 when the 90 coherent long-context notes were added,
+and the cause is not on-topic distractors: a sweep of all 44 displaced queries
+found at most two incidental shared words with any coherent note in their new top
+ten. The cause is length. Those notes average 5,337 characters against 485 for
+every other needle, and a dense retriever ranks long, diffuse text into any short
+query's top ten: they held 46.9% of paraphrase top-10 slots and 0% of common-word
+slots, so length itself had become a signal that a note was a needle. A
+cross-encoder rejects such notes trivially, which would have inflated a
+reranker's paraphrase gain. Ninety-six long, coherent haystack rows (`h-long-*`,
+3,000 to 7,000 characters, mean 5,013) now balance them. On the integrated code
+the long notes hold 63% of paraphrase top-10 slots (coherent needles 38.7%, long
+haystack 24.2%, legacy long needles 7.8%; long-context 35.5% / 25.7% / 7.1%),
+and the locked paraphrase recall@10 is 0.102. Long haystack rows are still
+notes a reranker can reject, so a paraphrase gain should be read next to
+`--exclude-needles 'n-lcoh-*,h-long-*'`, which reports it with both families
+absent. Long-context moved for its own reasons: the original 24 notes were already
+at 0.000 at 0f02eff (the 4.8x expansion, before any coherent note existed); the
+220 legacy notes score 0.050 and the 90 coherent ones 0.200. The coherent notes'
+answers sit in chunk 2 for 24 of them, chunk 3 for 39 and chunk 4 or later for 27,
+counted with the real chunker (1,600 characters with a 200-character overlap); an
+earlier report of 27 / 51 / 12 divided offsets by 1,600 and ignored the overlap.
+A target gain in paraphrase is therefore measured from a base near 0.10, not
+0.375, and the +0.05 target margin is a 50% relative gain.
 
 **The overall improvement path is not evidence for T-0041 or T-0042.** The
 0.02 `improvementMargin` was approved when paraphrase was 15% and long-context
@@ -744,7 +761,9 @@ the report or comparison to a git-ignored path (never under `test/eval/data/`);
 `--limit <n>` runs the first n queries and the gate refuses it;
 `--hash-embeddings` uses fake vectors, for harness smoke tests only; `--target
 <categories>` and `--target-gaps <ids>` (comma-separated) declare what a variant
-claims to fix; `--allow-unmeasured-rows`; `--list`.
+claims to fix; `--allow-unmeasured-rows`; `--exclude-needles <glob,...>` (comparison only)
+reruns both variants with the matching needles removed and prints each category's
+delta beside the gate, report only; `--list`.
 
 **Commands.** `prepare --variant <name> [--max-neurons <n>] [--concurrency <n>]`
 computes and caches every missing embedding locally in three passes (dry run for
@@ -770,12 +789,12 @@ was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps;
-with no gap tagged, all 345 queries are in the headline: recall@5 is 0.749,
-recall@10 0.777, MRR@10 0.757, and nDCG@10 0.713.
+with no gap tagged, all 1,683 queries are in the headline: recall@5 is 0.496,
+recall@10 0.535, MRR@10 0.492, and nDCG@10 0.451.
 
 **Power.** The MDE belongs to a comparison, not to the query set, so growing the
 set lowers it only as far as the comparison's own spread allows. Recall@10 MDE
-on `core-1k` (1,474 clusters; it was 299), by comparison against baseline:
+on `core-1k` (1,475 clusters; it was 299), by comparison against baseline:
 
 | comparison | overall | paraphrase | multi-hop | long-context | coherent subset | legacy 220 |
 |---|---|---|---|---|---|---|
