@@ -460,6 +460,8 @@ export interface SchemeMigrationState {
   processed: number;
   skipped: number;
   failed: number;
+  /** Old chunk ids a rewrite could not delete after writing its new vectors; retried at the start of the next run so they are not stranded. */
+  pendingDelete?: string[];
   /** The entry at the cursor that keeps failing for its own reasons, and how many runs it has. */
   failedId?: string;
   failedRuns?: number;
@@ -637,6 +639,17 @@ export async function runSchemeBatch(
   const model = await readMigration(env);
   if (model && !model.finishedAt && model.model === config.EMBEDDING_MODEL) return idle({ done: false, paused: "model-migration" });
 
+  // Ids an earlier rewrite could not delete: try again before anything else, and keep them if it still cannot.
+  let pendingDelete = state.pendingDelete ?? [];
+  if (pendingDelete.length) {
+    try {
+      await deleteVectorIds(env, pendingDelete);
+      pendingDelete = [];
+    } catch (e) {
+      console.error("Scheme migration could not delete leftover vectors (will retry):", e);
+    }
+  }
+
   const contextualOnly = !state.sources.some(s => needsRewrite(s, target, false));
   const day = utcDay(now);
   const neuronCap = opts.neuronCap ?? SCHEME_DAILY_NEURON_CAP;
@@ -675,7 +688,9 @@ export async function runSchemeBatch(
 
     // A live write since the switch went on already stored this entry under the target scheme: rewriting it
     // would repeat the embeds it just paid for. One lookup of its first vector says so.
-    if (await vectorsAtScheme(env, row, target)) {
+    // Not for the entry the ledger says failed last time: its new vectors may already be in while the tail of its
+    // rewrite (deleting the ones it replaced, the re-read) is what failed, and the first vector alone cannot say so.
+    if (id !== failedId && await vectorsAtScheme(env, row, target)) {
       skipped++;
       reached = mark;
       continue;
@@ -701,6 +716,10 @@ export async function runSchemeBatch(
     } catch (e) {
       failed++;
       console.error("Scheme migration failed for entry", id, e);
+      const stale = (e as { staleIds?: string[] }).staleIds;
+      if (stale?.length) pendingDelete = [...new Set([...pendingDelete, ...stale])].slice(-5000);
+      // Remembered whatever the reason, so the retry rewrites it in full; only its own failures count toward stepping past it.
+      if (failedId !== id) { failedId = id; failedRuns = 0; }
       if (looksLikeBudgetError(e)) { stalledReason = "budget"; break; }
       // Its own failure: count it against the entry, and after enough runs step the cursor past it so one bad
       // entry cannot hold the whole migration.
@@ -725,6 +744,7 @@ export async function runSchemeBatch(
     skipped: state.skipped + skipped,
     failed: state.failed + failed,
     failedId, failedRuns,
+    pendingDelete: pendingDelete.length ? pendingDelete : undefined,
     day, neuronsToday: neuronsToday + neurons,
   };
   const stalled = processed === 0 && failed > 0;
@@ -805,7 +825,14 @@ async function rewriteEntry(
       return;
     }
     if (fresh.content === row.content && fresh.tags === row.tags && fresh.workspace_id === row.workspace_id && fresh.actor_id === row.actor_id) {
-      await deleteStaleVectors(env, oldIds, stored.vectorIds);
+      const keep = new Set(stored.vectorIds);
+      const stale = stored.vectorIds.length ? oldIds.filter(v => !keep.has(v)) : [];
+      try {
+        await deleteVectorIds(env, stale);
+      } catch (e) {
+        // The new vectors and vector_ids are already written, so a retry cannot know these ids any more: hand them to the caller to remember.
+        throw Object.assign(e instanceof Error ? e : new Error(String(e)), { staleIds: stale });
+      }
       return;
     }
     row = fresh;

@@ -565,3 +565,46 @@ describe("scheme migration skips entries already at the target scheme", () => {
     expect((h.env.VECTORIZE as unknown as { getByIds: ReturnType<typeof vi.fn> }).getByIds).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("scheme migration retries an entry whose rewrite failed after its vectors were written", () => {
+  it("does not mistake the half-finished entry for done: the stale ids are deleted on the retry", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "a", long("Alpha"), 1);
+    // an id an earlier, longer version left behind: the rewrite has to delete it, and the first delete throws
+    h.index.set("a-chunk-99", { metadata: { parentId: "a" }, values: [0] });
+    d1.db.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify([...idsOf(d1, "a"), "a-chunk-99"]), "a").run();
+    let calls = 0;
+    const real = h.env.VECTORIZE.deleteByIds as unknown as (ids: string[]) => Promise<void>;
+    (h.env.VECTORIZE as { deleteByIds: unknown }).deleteByIds = vi.fn(async (ids: string[]) => { if (calls++ === 0) throw new Error("delete failed"); return real(ids); });
+
+    const first = await runSchemeBatch(h.env, ctx);
+    expect(first).toMatchObject({ failed: 1, processed: 0, stalled: true });
+    // its new vectors are already in: a check on the first vector alone would call the entry done
+    expect(h.index.get("a-chunk-0")?.metadata.scheme).toBe(2);
+    expect(h.index.has("a-chunk-99")).toBe(true);
+    expect((await readSchemeMigration(h.env))!.failedId).toBe("a");
+
+    const second = await runSchemeBatch(h.env, ctx);
+    expect(second).toMatchObject({ processed: 1, skipped: 0, done: true });
+    expect(h.index.has("a-chunk-99")).toBe(false);
+    expect(idsOf(d1, "a")).not.toContain("a-chunk-99");
+  });
+
+  it("remembers a quota failure's entry too, without counting it against the entry", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "a", long("Alpha"), 1);
+    const real = h.env.VECTORIZE.deleteByIds as unknown as (ids: string[]) => Promise<void>;
+    h.index.set("a-chunk-99", { metadata: { parentId: "a" }, values: [0] });
+    d1.db.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify([...idsOf(d1, "a"), "a-chunk-99"]), "a").run();
+    let calls = 0;
+    (h.env.VECTORIZE as { deleteByIds: unknown }).deleteByIds = vi.fn(async (ids: string[]) => { if (calls++ === 0) throw new Error("quota exhausted (4006)"); return real(ids); });
+    expect(await runSchemeBatch(h.env, ctx)).toMatchObject({ stalled: true, stalledReason: "budget" });
+    const state = (await readSchemeMigration(h.env))!;
+    expect(state.failedId).toBe("a");
+    expect(state.failedRuns ?? 0).toBe(0);
+    expect(await runSchemeBatch(h.env, ctx)).toMatchObject({ processed: 1, done: true });
+    expect(h.index.has("a-chunk-99")).toBe(false);
+  });
+});
