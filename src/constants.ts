@@ -120,7 +120,11 @@ export const CONTEXT_M3_BODY_MAX_CHARS = 500;
 // The head of a note gets at most this many focus chunks; whatever is left is cut at the tail sizes below.
 export const CONTEXT_MAX_FOCUS_CHUNKS = 6;
 // Past this size a note is chunked plain: the builder's CPU grows with the note and the free plan allows 10 ms an invocation.
-export const CONTEXT_MAX_CONTENT_CHARS = 64_000;
+export const CONTEXT_MAX_CONTENT_CHARS = 24_000;
+// The same limit in estimated tokens, which is what the CPU cost follows: a token-dense note is many more chunks per
+// character than prose. Calibrated so the worst shape (one token per character) keeps storeEntry's JavaScript at a third
+// of that 10 ms or less (test/unit/contextual-perf.test.ts).
+export const CONTEXT_MAX_CONTENT_TOKENS = 16_000;
 export const CONTEXT_SMALL_TAIL_CHARS = 1200;
 export const CONTEXT_M3_TAIL_CHARS = 1400;
 export const BGE_SMALL_MAX_INPUT_TOKENS = 512;

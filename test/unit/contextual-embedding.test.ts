@@ -7,6 +7,7 @@ import {
 import { storeEntry } from "../../src/capture/store";
 import { DEFAULTS, type Config } from "../../src/config";
 import { CHUNK_MAX_CHARS, CONTEXT_PREFIX_MAX_CHARS, CONTEXT_MAX_FOCUS_CHUNKS, CONTEXT_SMALL_BODY_START_CHARS, CONTEXT_SMALL_TARGET_TOKENS } from "../../src/constants";
+import { COMMON_WORDS } from "../../src/capture/common-words";
 import { chunkText } from "../../src/text/chunk";
 import { makeTestEnv } from "../helpers/make-env";
 
@@ -247,8 +248,7 @@ describe("storeEntry with contextual embeddings", () => {
   });
 });
 
-// Reference implementations of the code the perf work replaced. The fast versions must agree with them exactly,
-// except that any Unicode digit (not only 0-9) now marks a run as digit-bearing, which can only raise the estimate.
+// Reference implementations. The fast versions must agree with them exactly.
 const refChunk = (text: string, maxChars = 1600, overlapChars = 200): string[] => {
   if (text.length <= maxChars) return [text];
   const chunks: string[] = [];
@@ -266,18 +266,18 @@ const refChunk = (text: string, maxChars = 1600, overlapChars = 200): string[] =
   }
   return chunks.filter(c => c.length > 0);
 };
+// The estimator's rule, written the slow obvious way with regexes and the word list.
 const refEstimate = (text: string): number => {
   let tokens = 2;
   let run = "";
   const flush = () => {
-    const len = run.length;
-    if (len) tokens += /\p{N}/u.test(run) || len > 12 ? len : len > 6 ? Math.ceil(len / 2) : Math.ceil(len / 3);
+    if (run) tokens += /^[a-zA-Z]+$/.test(run) && COMMON_WORDS.has(run.toLowerCase()) ? 1 : run.length;
     run = "";
   };
   for (const ch of text) {
-    if (/[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\u3040-\u30ff]/u.test(ch)) { flush(); tokens += 1; }
+    if (/[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]/u.test(ch)) { flush(); tokens += 1; }
     else if (/[\p{L}\p{N}]/u.test(ch)) run += ch;
-    else { flush(); if (!/\s/.test(ch)) tokens += 1; }
+    else { flush(); if (!/\s/u.test(ch)) tokens += 1; }
   }
   flush();
   return tokens;
@@ -298,7 +298,7 @@ describe("fast paths agree with the code they replaced", () => {
     }
   });
 
-  it("estimateBgeSmallTokens returns exactly the old count on random text, astral characters included", () => {
+  it("estimateBgeSmallTokens returns exactly the reference count on random text, astral characters included", () => {
     for (let k = 0; k < 200; k++) {
       const text = randomText(Math.floor(rnd() * 1500));
       expect(estimateBgeSmallTokens(text), text.slice(0, 40)).toBe(refEstimate(text));
@@ -333,5 +333,18 @@ describe("storeEntry upserts", () => {
     expect(calls.length).toBeGreaterThan(1);
     for (const c of calls) expect(c[0].length).toBeLessThanOrEqual(1000);
     expect(calls.reduce((n, c) => n + c[0].length, 0)).toBe(vectorIds.length);
+  });
+});
+
+describe("vector deletion", () => {
+  it("splits a delete into batches of at most 1,000 ids and diffs stale ids without a quadratic scan", async () => {
+    const { deleteStaleVectors } = await import("../../src/capture/store");
+    const env = makeTestEnv();
+    const oldIds = Array.from({ length: 2500 }, (_, i) => `n-chunk-${i}`);
+    await deleteStaleVectors(env, oldIds, ["n-chunk-0", "n-chunk-1"]);
+    const calls = (env.VECTORIZE.deleteByIds as any).mock.calls as string[][][];
+    expect(calls.length).toBe(3);
+    for (const c of calls) expect(c[0].length).toBeLessThanOrEqual(1000);
+    expect(calls.flatMap(c => c[0])).toEqual(oldIds.slice(2));
   });
 });

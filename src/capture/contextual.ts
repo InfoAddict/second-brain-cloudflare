@@ -14,6 +14,7 @@ import { readStreamText } from "../lib/ai";
 import {
   CHUNK_MAX_CHARS,
   CONTEXT_MAX_CONTENT_CHARS,
+  CONTEXT_MAX_CONTENT_TOKENS,
   CONTEXT_MAX_FOCUS_CHUNKS,
   CONTEXT_M3_TAIL_CHARS,
   CONTEXT_OVERLAP_CHARS,
@@ -27,6 +28,7 @@ import {
   MIRRORED_SOURCES,
 } from "../constants";
 import { PROJECT_TAG_PREFIX, isWorkerOwnedTag } from "../tags/system";
+import { COMMON_WORD_KEYS, COMMON_WORD_MAX_LENGTH, WordKey } from "./common-words";
 import { chunkText, chunkTextLimited } from "../text/chunk";
 
 export type ContextSource = "none" | "deterministic" | "llm";
@@ -126,53 +128,63 @@ export function buildDeterministicContext(entry: ContextEntry, chunkIndex: numbe
 const ALNUM = /[\p{L}\p{N}]/u;
 
 /**
- * Upper-bounds the BERT WordPiece token count of `text`, special tokens
- * included. CJK code points and punctuation cost one token each. An
- * alphanumeric run costs one token per character when it mixes in digits or
- * runs past 12 characters (hex ids, UUIDs, base64, long identifiers tokenize at
- * about 1 to 1.4 characters per token), one per two characters from 7 to 12
- * letters, and one per three up to 6. Biased high so a contextualized input
- * does not depend on the embedder truncating its tail.
+ * An upper bound on the BERT WordPiece token count of `text`, special tokens
+ * included, that holds for any input. Every token consumes at least one
+ * character, so charging one token per character is always safe; the only
+ * discount is for a run of letters that is a word in COMMON_WORDS, each of which
+ * was verified to be exactly one token. So: a listed word costs 1, any other
+ * alphanumeric run costs its length, CJK code points and punctuation cost 1
+ * each, whitespace is free, and [CLS] and [SEP] add 2.
  *
- * The margin against the 512-token window is not this function's slack alone:
- * a fitted chunk is never shorter than CONTEXT_SMALL_BODY_MIN_CHARS, and even
- * at one token per character that body plus a capped prefix stays under the
- * window. A run of random short letters can still beat the per-run rule, which
- * is no worse than the plain 1,600-character chunks already sent.
+ * That is deliberately pessimistic for uncommon words (prose measures about 2x
+ * high), because a cheaper rule for "short words" was not safe: random short
+ * words tokenize at up to 3 tokens for a 3-character word, and a chunk the rule
+ * called 407 tokens was 613. The margin against the 512-token window is this
+ * bound, held by construction: a chunk is cut or split until its bound is at
+ * most CONTEXT_SMALL_TARGET_TOKENS.
  *
  * One pass, ASCII decided by character code and only other characters by
  * regex, because this runs over every character of a long note on the write path.
  */
 export function estimateBgeSmallTokens(text: string): number {
   let tokens = 2;
-  let run = 0;
-  let digit = false;
-  const flush = () => {
-    if (run) tokens += digit || run > 12 ? run : run > 6 ? Math.ceil(run / 2) : Math.ceil(run / 3);
-    run = 0;
-    digit = false;
+  let runStart = -1;
+  let plain = true; // the run so far is ASCII letters only, so it may be a listed word
+  const key = new WordKey();
+  const flush = (end: number) => {
+    if (runStart < 0) return;
+    const len = end - runStart;
+    tokens += plain && len <= COMMON_WORD_MAX_LENGTH && COMMON_WORD_KEYS.has(key.key) ? 1 : len;
+    runStart = -1;
+    plain = true;
+    key.reset();
   };
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     if (c < 128) {
-      if (c >= 97 && c <= 122 || c >= 65 && c <= 90) run++;
-      else if (c >= 48 && c <= 57) { run++; digit = true; }
-      else {
-        flush();
+      if (c >= 97 && c <= 122 || c >= 65 && c <= 90) {
+        if (runStart < 0) runStart = i;
+        if (plain) key.add(c);
+      } else if (c >= 48 && c <= 57) {
+        if (runStart < 0) runStart = i;
+        plain = false;
+      } else {
+        flush(i);
         if (c !== 32 && c !== 10 && c !== 9 && c !== 13 && c !== 11 && c !== 12) tokens++;
       }
       continue;
     }
-    if (c >= 0x2e80 && c <= 0x9fff || c >= 0xac00 && c <= 0xd7af || c >= 0xf900 && c <= 0xfaff) { flush(); tokens++; continue; }
+    if (c >= 0x2e80 && c <= 0x9fff || c >= 0xac00 && c <= 0xd7af || c >= 0xf900 && c <= 0xfaff) { flush(i); tokens++; continue; }
     // Astral characters are two UTF-16 units; classify the pair once.
     const ch = c >= 0xd800 && c <= 0xdbff ? String.fromCodePoint(text.codePointAt(i)!) : String.fromCharCode(c);
-    if (ch.length === 2) i++;
+    const width = ch.length;
     if (ALNUM.test(ch)) {
-      run += ch.length;
-      if (/\p{N}/u.test(ch)) digit = true;
-    } else { flush(); if (!/\s/u.test(ch)) tokens++; }
+      if (runStart < 0) runStart = i;
+      plain = false;
+    } else { flush(i); if (!/\s/u.test(ch)) tokens++; }
+    i += width - 1;
   }
-  flush();
+  flush(text.length);
   return tokens;
 }
 
@@ -185,11 +197,28 @@ export function plainEmbeddingChunks(entry: Pick<ContextEntry, "content" | "sour
   }));
 }
 
-/** True when this entry gets contextual vectors: more than one effective chunk, no more than CONTEXT_MAX_CONTENT_CHARS, and not a mirrored record (first chunk only). */
+/**
+ * Cheap pre-check for callers that only need to know whether a note could be
+ * contextualized (a long-enough, non-mirrored, not-too-long note): no
+ * chunking, no token estimate. `isContextEligible` is the full answer.
+ *
+ * Mirrored sources index only their first chunk (see storeEntry), so they never
+ * get contextual vectors; the duplicate check has no source at capture time and
+ * passes its own, and the migration passes each row's.
+ */
+export function mayBeContextual(entry: Pick<ContextEntry, "content" | "source">): boolean {
+  return !MIRRORED_SOURCES.has(entry.source) && entry.content.length > CHUNK_MAX_CHARS && entry.content.length <= CONTEXT_MAX_CONTENT_CHARS;
+}
+
+/**
+ * True when this entry gets contextual vectors: more than one effective chunk,
+ * no more than CONTEXT_MAX_CONTENT_CHARS characters and CONTEXT_MAX_CONTENT_TOKENS
+ * estimated tokens (the write path's CPU follows both), and not a mirrored record.
+ */
 export function isContextEligible(entry: Pick<ContextEntry, "content" | "source">): boolean {
-  return !MIRRORED_SOURCES.has(entry.source)
-    && entry.content.length > CHUNK_MAX_CHARS && entry.content.length <= CONTEXT_MAX_CONTENT_CHARS
-    && chunkText(entry.content).length > 1;
+  if (!mayBeContextual(entry) || chunkText(entry.content).length <= 1) return false;
+  // No token is shorter than a character plus the two specials, so a note this short cannot be over the token limit.
+  return entry.content.length + 2 <= CONTEXT_MAX_CONTENT_TOKENS || estimateBgeSmallTokens(entry.content) <= CONTEXT_MAX_CONTENT_TOKENS;
 }
 
 /** The chunks to embed for `entry`, in order. Single-chunk and mirrored entries come back plain, byte for byte. */
@@ -209,6 +238,8 @@ export function buildEmbeddingChunks(
   const contextSource: ContextSource = llmContexts ? "llm" : "deterministic";
 
   let raw: string[];
+  // Each chunk's own token bound, worked out once and carried through every later step.
+  let bodyTokens: number[] = [];
   // A part number of at most two digits, worst case, so the prefix's cost is one number for every chunk.
   const worstPrefixTokens = m3 ? 0 : estimateBgeSmallTokens(prefixFor(0, 99, 0)) - 2 + 1;
   if (m3) {
@@ -220,24 +251,26 @@ export function buildEmbeddingChunks(
     let tail = CONTEXT_SMALL_TAIL_CHARS;
     for (;;) {
       raw = cutHybrid(entry.content, head, tail);
-      let worst = 0;
-      for (const c of raw) worst = Math.max(worst, estimateBgeSmallTokens(c) - 2);
+      bodyTokens = raw.map(c => estimateBgeSmallTokens(c) - 2);
+      const worst = Math.max(...bodyTokens);
       if (worst + worstPrefixTokens + 2 <= CONTEXT_SMALL_TARGET_TOKENS || (head <= CONTEXT_SMALL_BODY_MIN_CHARS && tail <= CONTEXT_SMALL_BODY_MIN_CHARS)) break;
       // Scale by how far over the worst chunk was, with a little to spare, so dense text settles in one or two cuts.
       const shrink = Math.min(0.8, ((CONTEXT_SMALL_TARGET_TOKENS - worstPrefixTokens - 2) / worst) * 0.95);
       head = Math.max(CONTEXT_SMALL_BODY_MIN_CHARS, Math.floor(head * shrink));
       tail = Math.max(CONTEXT_SMALL_BODY_MIN_CHARS, Math.floor(tail * shrink));
     }
+    // Whatever the loop settled on, no chunk may go out over the budget: a chunk whose bound plus the smallest possible
+    // prefix is still too big is split, not sent short of its tail.
+    ({ chunks: raw, tokens: bodyTokens } = splitToFit(raw, bodyTokens, CONTEXT_SMALL_TARGET_TOKENS - 2 - MIN_PREFIX_TOKENS));
   }
 
   const n = raw.length;
   return raw.map((c, i) => {
     // Under BGE Small, fall through to a shorter prefix rather than exceed the budget.
     let prefix = prefixFor(i, n, 0);
-    if (!m3) {
-      const bodyTokens = estimateBgeSmallTokens(c) - 2;
+    if (!m3 && bodyTokens[i] + worstPrefixTokens + 2 > CONTEXT_SMALL_TARGET_TOKENS) {
       for (const detail of [1, 2] as const) {
-        if (estimateBgeSmallTokens(prefix) + bodyTokens <= CONTEXT_SMALL_TARGET_TOKENS) break;
+        if (estimateBgeSmallTokens(prefix) + bodyTokens[i] <= CONTEXT_SMALL_TARGET_TOKENS) break;
         prefix = prefixFor(i, n, detail);
       }
     }
@@ -245,6 +278,34 @@ export function buildEmbeddingChunks(
       rawContent: c, embeddingText: `${prefix}\n${c}`, chunkIndex: i, totalChunks: n, contextualized: true, contextSource,
     };
   });
+}
+
+/** "[Memory: Part 99 of 99.]": the smallest prefix a chunk can carry, in the estimator's units. */
+const MIN_PREFIX_TOKENS = estimateBgeSmallTokens("[Memory: Part 99 of 99.]") - 2;
+
+/**
+ * Splits any chunk whose token bound exceeds `limit` at the whitespace nearest
+ * its middle, recursively; the rest pass through with the bound they came with.
+ * (The only chunk a whitespace-free run can produce is one it cannot shorten, so
+ * it is split at the middle character.)
+ */
+function splitToFit(chunks: string[], tokens: number[], limit: number): { chunks: string[]; tokens: number[] } {
+  const out: string[] = [];
+  const outTokens: number[] = [];
+  const visit = (c: string, t: number): void => {
+    if (t <= limit || c.length < 2) { out.push(c); outTokens.push(t); return; }
+    const mid = Math.floor(c.length / 2);
+    let cut = c.lastIndexOf(" ", mid);
+    if (cut < c.length / 4) cut = c.indexOf(" ", mid);
+    if (cut <= 0 || cut >= c.length - 1) cut = mid;
+    const left = c.slice(0, cut).trim();
+    const right = c.slice(cut).trim();
+    if (!left || !right) { out.push(c); outTokens.push(t); return; }
+    visit(left, estimateBgeSmallTokens(left) - 2);
+    visit(right, estimateBgeSmallTokens(right) - 2);
+  };
+  chunks.forEach((c, i) => visit(c, tokens[i]));
+  return { chunks: out, tokens: outTokens };
 }
 
 /** Focus chunks for the head of the note, then `tail`-sized chunks for the rest: at most CONTEXT_MAX_FOCUS_CHUNKS small vectors per note. */
