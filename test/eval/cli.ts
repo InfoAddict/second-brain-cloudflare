@@ -156,7 +156,7 @@ export function formatReport(report: VariantReport): string {
       "  candidate pool (diagnostic, not gated): share of queries with a gold anywhere in the fused pool, and recall@30; recall@30 minus recall@10 is a reranker's headroom",
       ...["overall", ...QUERY_CATEGORIES.filter(c => byCategory[c])].map(name => {
         const s = name === "overall" ? overall : byCategory[name as QueryCategory]!;
-        return `    ${name.padEnd(14)} gold in pool ${f(s.pool?.goldInPool ?? 0)}  recall@30 ${f(s.pool?.recall30 ?? 0)}  headroom ${f((s.pool?.recall30 ?? 0) - s.metrics.recall10)}`;
+        return `    ${name.padEnd(14)} gold in pool ${f(s.pool?.goldInPool ?? 0)}  recall@30 ${f(s.pool?.recall30 ?? 0)}  headroom ${f((s.pool?.recall30 ?? 0) - s.metrics.recall10)}${name === "multi-hop" ? "  (not reranker headroom: the answer arrives by graph expansion, and recall counts the root too)" : ""}`;
       }),
     ] : []),
     ...(gapKeys.length ? [

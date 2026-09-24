@@ -7,9 +7,17 @@ const gold = [{ id: "g", grade: 2 as const }, { id: "root", grade: 1 as const }]
 
 describe("candidate-pool diagnostic", () => {
   it("collapses chunk duplicates and reports whether a grade-2 gold is anywhere in the pool", () => {
-    expect(poolDiagnostic(["a", "a", "g", "b"], gold)).toEqual({ size: 3, goldInPool: true, recall30: 0.5 });
-    expect(poolDiagnostic(["a", "root"], gold)).toEqual({ size: 2, goldInPool: false, recall30: 0.5 });
+    expect(poolDiagnostic(["a", "a", "g", "b"], gold)).toEqual({ size: 3, goldInPool: true, recall30: 1 });
+    // a grade-1 gold (the multi-hop root) counts toward neither field
+    expect(poolDiagnostic(["a", "root"], gold)).toEqual({ size: 2, goldInPool: false, recall30: 0 });
     expect(poolDiagnostic([], gold)).toEqual({ size: 0, goldInPool: false, recall30: 0 });
+  });
+
+  it("keeps goldInPool and recall30 consistent: recall30 never exceeds the share of queries with a gold in the pool", () => {
+    const two = [{ id: "a", grade: 2 as const }, { id: "b", grade: 2 as const }];
+    const found = poolDiagnostic(["a", "x"], two)!;
+    expect(found).toEqual({ size: 2, goldInPool: true, recall30: 0.5 });
+    expect(found.recall30 > 0 && !found.goldInPool).toBe(false);
   });
 
   it("counts only the first 30 pool entries toward recall@30", () => {

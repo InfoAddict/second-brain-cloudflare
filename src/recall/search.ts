@@ -679,6 +679,9 @@ export async function recallEntries(
         metadataAlignment: Math.min(1, .6 * tagAlignment + .2 * episodicAlignment + .2 * authorityAlignment),
         semanticRank: semanticRankByParent.get(parentId) }];
     });
+    // Diagnostic only: the graph root arm is a second source of candidates (a multi-hop answer arrives through it), so
+    // a pool measure that ignored it would call reachable golds unreachable. Appended after the direct pool.
+    internal.diagnostics && (internal.diagnostics.candidateIds = [...new Set([...(internal.diagnostics.candidateIds ?? []), ...rootCandidates.map(r => r.parentId)])]);
     // The seat budgets are sized for RECALL_SEED_TOPK, not the caller's topK, so a larger topK cannot change which
     // roots are seeded (and with them the head).
     // One selection per arm, against that arm's own budget: a row the dense arm

@@ -82,8 +82,14 @@ const ZERO_COST: CostSample = { d1Statements: 0, d1RowsRead: null, aiCalls: 0, e
 export function poolDiagnostic(candidateIds: readonly string[] | undefined, gold: GoldenQuery["gold"]): PoolDiagnostic | undefined {
   if (!candidateIds) return undefined;
   const pool = [...new Set(candidateIds)];
-  const primary = new Set(gold.filter(g => g.grade === 2).map(g => g.id));
-  return { size: pool.length, goldInPool: pool.some(id => primary.has(id)), recall30: recallAtK(pool, gold, 30) };
+  // Grade-2 golds only, for both fields: a grade-1 gold (a multi-hop root) is context, not the answer being reached.
+  const primary = gold.filter(g => g.grade === 2).map(g => g.id);
+  const head = new Set(pool.slice(0, 30));
+  return {
+    size: pool.length,
+    goldInPool: primary.some(id => pool.includes(id)),
+    recall30: primary.length ? primary.filter(id => head.has(id)).length / primary.length : 0,
+  };
 }
 
 export async function runVariant(o: {
