@@ -3449,8 +3449,8 @@
     "ndcg10": 0.38685280723454163
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 309,
+    "d1Statements": 16,
+    "d1RowsRead": 314,
     "aiCalls": 2,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -11025,7 +11025,7 @@
     "n-hop-002-root",
     "n-long-006",
     "n-long-022",
-    "f-000353",
+    "f-000032",
     "n-long-007",
     "n-short-020",
     "f-000463",
