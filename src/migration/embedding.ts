@@ -39,15 +39,17 @@
  */
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
+import { focusModeAllowed } from "../capture/focus-budget";
 import { deleteStaleVectors, storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
-import { chunkText } from "../text/chunk";
-import { buildEmbeddingChunks, generateChunkContext, isContextEligible } from "../capture/contextual";
+import { buildEmbeddingChunks, estimateBgeSmallTokens, generateChunkContext, isContextEligible } from "../capture/contextual";
 import { LEGACY_SCHEME, poolingOf, schemeOf } from "../embedding/scheme";
 import {
+  CHUNK_MAX_CHARS,
   CONTEXT_LLM_CHUNKS_PER_NIGHT,
   CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY,
   MIGRATION_CHUNK_BUDGET,
+  MIRRORED_SOURCES,
   MIGRATION_MAX_ENTRIES_PER_BATCH,
 } from "../constants";
 
@@ -134,35 +136,52 @@ export async function clearMigration(env: Env): Promise<void> {
   await env.OAUTH_KV.delete(MIGRATION_KEY);
 }
 
-/** Entries that would be re-embedded, and the vectors they would produce. */
+/**
+ * Entries that would be re-embedded, and the vectors they would produce under
+ * `config`: exactly the chunks `storeEntry` would write, counted with the same
+ * builder (contextual focus chunks included), not a projection from length.
+ *
+ * Entries at or under CHUNK_MAX_CHARS are one chunk, so they are counted in SQL;
+ * only the longer ones are read and chunked, a page at a time.
+ */
 export async function estimate(
   env: Env,
+  config: Readonly<Config> = DEFAULTS,
 ): Promise<{ entries: number; chunks: number }> {
   const row = (await env.DB.prepare(
     // scope-exempt: one-time re-embed migration: admin-triggered, deployment-wide, returns counts only
     `SELECT COUNT(*) AS entries,
-            COALESCE(SUM(MAX(1, (LENGTH(content) + ${
-              CHUNK_STRIDE - 1
-            }) / ${CHUNK_STRIDE})), 0) AS chunks
+            COALESCE(SUM(CASE WHEN LENGTH(content) > ${CHUNK_MAX_CHARS - 100} THEN 0 ELSE 1 END), 0) AS shorts
        FROM entries
       WHERE ${NOT_DEPRECATED}`,
   ).first()) as Record<string, number> | null;
 
-  return {
-    entries: Number(row?.entries ?? 0),
-    chunks: Number(row?.chunks ?? 0),
-  };
+  let chunks = Number(row?.shorts ?? 0);
+  let after: { created_at: number; id: string } | null = null;
+  for (;;) {
+    const cursor = after ? `AND (created_at > ? OR (created_at = ? AND id > ?))` : "";
+    const stmt = env.DB.prepare(
+      // scope-exempt: one-time re-embed migration: admin-triggered and deployment-wide; only chunk counts reach the response
+      `SELECT id, content, tags, source, created_at FROM entries
+        WHERE ${NOT_DEPRECATED} AND LENGTH(content) > ${CHUNK_MAX_CHARS - 100} ${cursor}
+        ORDER BY created_at ASC, id ASC LIMIT ${ESTIMATE_PAGE}`,
+    );
+    const page = await (after ? stmt.bind(after.created_at, after.created_at, after.id) : stmt).all();
+    const rows = (page.results ?? []) as Record<string, unknown>[];
+    for (const r of rows) {
+      chunks += buildEmbeddingChunks(
+        { id: r.id as string, content: r.content as string, tags: JSON.parse((r.tags as string) ?? "[]"), source: r.source as string, createdAt: r.created_at as number },
+        config,
+      ).length;
+    }
+    if (rows.length < ESTIMATE_PAGE) break;
+    after = { created_at: rows[rows.length - 1].created_at as number, id: rows[rows.length - 1].id as string };
+  }
+
+  return { entries: Number(row?.entries ?? 0), chunks };
 }
 
-/**
- * How far `chunkText` advances per chunk: `CHUNK_MAX_CHARS - CHUNK_OVERLAP_CHARS`.
- *
- * Kept here as the one place the estimate's arithmetic is tied to the chunker,
- * and asserted against the real `chunkText` in the tests so the two cannot
- * drift. The projection is a lower bound: sentence-boundary snapping can only
- * shorten a chunk, never lengthen it, so the real count is sometimes higher.
- */
-const CHUNK_STRIDE = 1400;
+const ESTIMATE_PAGE = 100;
 
 /** Rows after the cursor, oldest first. */
 function pageSql(hasCursor: boolean): string {
@@ -289,7 +308,10 @@ export async function runBatch(
 
   for (const row of rows) {
     const content = row.content as string;
-    const cost = chunkText(content).length;
+    const cost = buildEmbeddingChunks(
+      { id: row.id as string, content, tags: JSON.parse((row.tags as string) ?? "[]"), source: row.source as string, createdAt: row.created_at as number },
+      config,
+    ).length;
     // Always take the first entry even if it alone exceeds the budget, or a
     // single very long memory would stall the run forever.
     if (chunkBudget !== MIGRATION_CHUNK_BUDGET && cost > chunkBudget) break;
@@ -398,10 +420,30 @@ export async function runBatch(
 
 export const SCHEME_MIGRATION_KEY = "migration:embedding-scheme";
 
-/** Chunk budget for one scheme batch. Smaller than MIGRATION_CHUNK_BUDGET so a nightly slice stays well inside the D1 statement budget. */
-export const SCHEME_BATCH_CHUNK_BUDGET = 12;
-/** A row edited while it is rebuilt is rebuilt again, this many times at most, before the batch gives up on it for now. */
+/**
+ * Chunk budget for one run. The hourly cron runs the full budget; the nightly
+ * job shares its invocation with the other maintenance, so it takes the small
+ * one. 80 chunks is about 80 model calls plus roughly 4 storage calls per
+ * rewritten entry, well inside the free plan's 1,000 internal subrequests, and
+ * its JavaScript CPU stays a small part of the 10 ms an invocation gets (the
+ * model calls themselves are I/O and do not count).
+ */
+export const SCHEME_RUN_CHUNK_BUDGET = 80;
+export const SCHEME_NIGHTLY_CHUNK_BUDGET = 12;
+/** Rows a run may load; only rows that need a rewrite are loaded when the change is contextual text alone. */
+export const SCHEME_RUN_MAX_ENTRIES = 40;
+/**
+ * The most Workers AI neurons the migration may spend in one UTC day: 15% of the
+ * 10,000-neuron free allowance, so captures, recall and the other nightly passes
+ * keep the rest. Counted from a deliberately high token estimate.
+ */
+export const SCHEME_DAILY_NEURON_CAP = 1_500;
+/** A row edited while it is rebuilt is rebuilt again, this many times at most, before the run gives up on it for now. */
 const SCHEME_MAX_REBUILDS = 3;
+/** Runs an entry may fail for its own reasons before the cursor steps past it. A quota failure never counts. */
+const SCHEME_MAX_ENTRY_FAILURES = 3;
+/** Neurons per million input tokens, by model (Workers AI pricing). */
+const NEURONS_PER_MTOK: Record<string, number> = { "@cf/baai/bge-small-en-v1.5": 1841, "@cf/baai/bge-m3": 1075 };
 
 export interface SchemeMigrationState {
   model: string;
@@ -415,6 +457,12 @@ export interface SchemeMigrationState {
   processed: number;
   skipped: number;
   failed: number;
+  /** The entry at the cursor that keeps failing for its own reasons, and how many runs it has. */
+  failedId?: string;
+  failedRuns?: number;
+  /** UTC day (YYYY-MM-DD) and the neurons this migration has estimated it spent on it. */
+  day?: string;
+  neuronsToday?: number;
   /** Set when every vector is at `target`; the ledger then says what a brain's vectors are. */
   finishedAt?: number;
 }
@@ -424,11 +472,15 @@ export interface SchemeBatchResult {
   skipped: number;
   failed: number;
   chunks: number;
+  /** Entries still to rewrite (not every later row). */
   remaining: number;
   done: boolean;
   stalled: boolean;
   stalledReason?: string;
-  /** Nothing to do this run: a model migration is in flight, or the switch that would need a rewrite is off. */
+  /** Estimated neurons this run spent, and whether the day's cap ended it. */
+  neurons: number;
+  capped: boolean;
+  /** Nothing to do this run: a model migration is in flight. */
   paused?: "model-migration";
 }
 
@@ -490,64 +542,108 @@ export function queryPoolings(state: SchemeMigrationState | null, config: Readon
 /** True when a query needs the ledger at all: only a pooling other than the legacy one can put two spaces in one index. */
 export const schemeLedgerMatters = (config: Readonly<Config>): boolean => poolingOf(schemeOf(config)) !== poolingOf(LEGACY_SCHEME);
 
+/** Rows that could need a rewrite: for a change in contextual text alone, only long, non-mirrored ones. */
+function schemePageSql(hasCursor: boolean, contextualOnly: boolean, count: boolean): { sql: string; extra: string[] } {
+  const mirrored = [...MIRRORED_SOURCES];
+  const filter = contextualOnly
+    // LENGTH counts characters and JS counts UTF-16 units, so the SQL bound is a little under the limit and JS decides exactly.
+    ? `AND LENGTH(content) > ${CHUNK_MAX_CHARS - 100} AND source NOT IN (${mirrored.map(() => "?").join(",")})`
+    : "";
+  const after = hasCursor ? `AND (created_at > ? OR (created_at = ? AND id > ?))` : "";
+  // scope-exempt: one-time re-embed migration: admin/cron-driven and deployment-wide; returns a count only
+  const countSql = `SELECT COUNT(*) AS count FROM entries WHERE ${NOT_DEPRECATED} ${after} ${filter}`;
+  // scope-exempt: one-time re-embed migration: admin/cron-driven and deployment-wide; the rows it selects go to the embedder, and only counts reach the response
+  const rowsSql = `SELECT id, content, tags, source, created_at, vector_ids, workspace_id, actor_id
+         FROM entries
+        WHERE ${NOT_DEPRECATED} ${after} ${filter}
+        ORDER BY created_at ASC, id ASC
+        LIMIT ${SCHEME_RUN_MAX_ENTRIES}`;
+  const sql = count ? countSql : rowsSql;
+  return { sql, extra: contextualOnly ? mirrored : [] };
+}
+
+const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+
+/** Neurons for embedding these inputs, from a token estimate that runs high. */
+function neuronsFor(model: string, texts: string[]): number {
+  const rate = NEURONS_PER_MTOK[model] ?? NEURONS_PER_MTOK["@cf/baai/bge-small-en-v1.5"];
+  let tokens = 0;
+  for (const t of texts) tokens += estimateBgeSmallTokens(t);
+  return (tokens * rate) / 1_000_000;
+}
+
 /**
- * One bounded batch of the in-place scheme migration. Safe to call any number
- * of times, from the nightly job and from the admin route: an idle call reads
- * one KV key and returns.
+ * One bounded run of the in-place scheme migration. Safe to call any number of
+ * times, from the hourly and nightly crons and from the admin route: an idle
+ * call reads one KV key and returns.
+ *
+ * Pace. Rows that need no rewrite are never loaded (a contextual-text change
+ * only concerns long, non-mirrored entries, which the SQL filter selects), so a
+ * run spends its budget on real work and the cursor jumps over everything else.
+ * A run rewrites up to `chunkBudget` chunks; a UTC day up to `neuronCap`
+ * estimated neurons in total.
  */
 export async function runSchemeBatch(
   env: Env,
   config: Readonly<Config> = DEFAULTS,
-  opts: { chunkBudget?: number } = {},
+  opts: { chunkBudget?: number; neuronCap?: number; now?: number } = {},
 ): Promise<SchemeBatchResult> {
   const idle = (extra: Partial<SchemeBatchResult> = {}): SchemeBatchResult =>
-    ({ processed: 0, skipped: 0, failed: 0, chunks: 0, remaining: 0, done: true, stalled: false, ...extra });
+    ({ processed: 0, skipped: 0, failed: 0, chunks: 0, remaining: 0, done: true, stalled: false, neurons: 0, capped: false, ...extra });
+  const now = opts.now ?? Date.now();
 
   const target = schemeOf(config);
   const prior = await readSchemeMigration(env);
+  const sameModel = !!prior && prior.model === config.EMBEDDING_MODEL;
   let state: SchemeMigrationState;
-  if (prior && prior.model === config.EMBEDDING_MODEL && prior.target === target) {
-    state = prior;
+  if (sameModel && prior!.target === target) {
+    state = prior!;
     if (state.finishedAt) return idle();
   } else {
     // A new target. Vectors may be at the old target, or (if that run never finished) anywhere in its sources.
-    const sources = prior && prior.model === config.EMBEDDING_MODEL
-      ? [...new Set([...(prior.finishedAt ? [] : prior.sources), prior.target])]
+    const sources = sameModel
+      ? [...new Set([...(prior!.finishedAt ? [] : prior!.sources), prior!.target])]
       : [LEGACY_SCHEME];
     state = {
-      model: config.EMBEDDING_MODEL, target, sources: sources.filter(s => s !== target), startedAt: Date.now(),
+      model: config.EMBEDDING_MODEL, target, sources: sources.filter(s => s !== target), startedAt: now,
       cursorCreatedAt: null, cursorId: null, processed: 0, skipped: 0, failed: 0,
     };
-    if (state.sources.length === 0) {
-      await writeScheme(env, { ...state, finishedAt: Date.now() });
+    // Nothing any vector needs: the only differences are switches that never rewrite. A ledger that already
+    // exists is left exactly as it is, so switching contextual embeddings off and on again resumes where it was.
+    if (!state.sources.some(s => needsRewrite(s, target, true))) {
+      if (!prior) await writeScheme(env, { ...state, finishedAt: now });
       return idle();
     }
   }
 
-  // Nothing any vector needs: the only differences are switches that never rewrite.
-  if (!state.sources.some(s => needsRewrite(s, target, true))) {
-    await writeScheme(env, { ...state, finishedAt: Date.now() });
-    return idle();
-  }
-
   // A model migration rebuilds every vector into a new index with the current
   // config; running both would rewrite the abandoned index. Checked only once
-  // there is work, so an idle night does not pay for it.
+  // there is work, so an idle run does not pay for it.
   const model = await readMigration(env);
   if (model && !model.finishedAt && model.model === config.EMBEDDING_MODEL) return idle({ done: false, paused: "model-migration" });
 
-  const page = state.cursorCreatedAt === null
-    ? await env.DB.prepare(pageSql(false)).all()
-    : await env.DB.prepare(pageSql(true)).bind(state.cursorCreatedAt, state.cursorCreatedAt, state.cursorId).all();
+  const contextualOnly = !state.sources.some(s => needsRewrite(s, target, false));
+  const day = utcDay(now);
+  const neuronCap = opts.neuronCap ?? SCHEME_DAILY_NEURON_CAP;
+  const neuronsToday = state.day === day ? state.neuronsToday ?? 0 : 0;
+
+  const focus = await focusModeAllowed(env, config);
+  const pageQuery = schemePageSql(state.cursorCreatedAt !== null, contextualOnly, false);
+  const cursorBinds = state.cursorCreatedAt === null ? [] : [state.cursorCreatedAt, state.cursorCreatedAt, state.cursorId];
+  const page = await env.DB.prepare(pageQuery.sql).bind(...cursorBinds, ...pageQuery.extra).all();
   const rows = (page.results ?? []) as Record<string, unknown>[];
 
   let processed = 0;
   let skipped = 0;
   let failed = 0;
   let chunks = 0;
-  const budget = opts.chunkBudget ?? SCHEME_BATCH_CHUNK_BUDGET;
+  let neurons = 0;
+  let capped = false;
+  const budget = opts.chunkBudget ?? SCHEME_RUN_CHUNK_BUDGET;
   let reached: { created_at: number; id: string } | null = null;
   let stalledReason: string | undefined;
+  let failedId = state.failedId;
+  let failedRuns = state.failedRuns ?? 0;
 
   for (const row of rows) {
     const id = row.id as string;
@@ -563,19 +659,36 @@ export async function runSchemeBatch(
     }
 
     const tags = JSON.parse((row.tags as string) ?? "[]") as string[];
-    const cost = buildEmbeddingChunks({ id, content, tags, source, createdAt: row.created_at as number }, config).length;
-    // The first rewrite always goes ahead, or one very long memory would wedge the cursor.
+    const planned = buildEmbeddingChunks({ id, content, tags, source, createdAt: row.created_at as number }, config, undefined, focus);
+    const cost = planned.length;
+    const cents = neuronsFor(config.EMBEDDING_MODEL, planned.map(c => c.embeddingText));
+    // The first rewrite of a run always goes ahead, or one very long memory would wedge the cursor.
     if (chunks > 0 && chunks + cost > budget) break;
+    // The day's cap ends the run; like the chunk budget it always lets the first rewrite of a run through, unless the day is already spent.
+    const spent = neuronsToday + neurons;
+    if (spent >= neuronCap || (chunks > 0 && spent + cents > neuronCap)) { capped = true; break; }
     chunks += cost;
+    neurons += cents;
 
     try {
       await rewriteEntry(env, row, config);
       processed++;
       reached = mark;
+      if (failedId === id) { failedId = undefined; failedRuns = 0; }
     } catch (e) {
       failed++;
       console.error("Scheme migration failed for entry", id, e);
-      if (looksLikeBudgetError(e)) stalledReason = "budget";
+      if (looksLikeBudgetError(e)) { stalledReason = "budget"; break; }
+      // Its own failure: count it against the entry, and after enough runs step the cursor past it so one bad
+      // entry cannot hold the whole migration.
+      failedRuns = failedId === id ? failedRuns + 1 : 1;
+      failedId = id;
+      if (failedRuns >= SCHEME_MAX_ENTRY_FAILURES) {
+        skipped++;
+        reached = mark;
+        failedId = undefined;
+        failedRuns = 0;
+      }
       break;
     }
     if (chunks >= budget) break;
@@ -588,20 +701,29 @@ export async function runSchemeBatch(
     processed: state.processed + processed,
     skipped: state.skipped + skipped,
     failed: state.failed + failed,
+    failedId, failedRuns,
+    day, neuronsToday: neuronsToday + neurons,
   };
-  const remaining = await countRemaining(env, next.cursorCreatedAt, next.cursorId);
+  const countQuery = schemePageSql(next.cursorCreatedAt !== null, contextualOnly, true);
+  const countBinds = next.cursorCreatedAt === null ? [] : [next.cursorCreatedAt, next.cursorCreatedAt, next.cursorId];
+  const counted = (await env.DB.prepare(countQuery.sql).bind(...countBinds, ...countQuery.extra).first()) as Record<string, number> | null;
+  const remaining = Number(counted?.count ?? 0);
   const stalled = processed === 0 && failed > 0;
   const done = remaining === 0 && !stalled;
-  await writeScheme(env, done ? { ...next, finishedAt: Date.now() } : next);
-  return { processed, skipped, failed, chunks, remaining, done, stalled, ...(stalled ? { stalledReason: stalledReason ?? "failing" } : {}) };
+  await writeScheme(env, done ? { ...next, finishedAt: now } : next);
+  return {
+    processed, skipped, failed, chunks, remaining, done, stalled, neurons, capped,
+    ...(stalled ? { stalledReason: stalledReason ?? "failing" } : {}),
+  };
 }
 
 /**
  * Rebuilds one entry's vectors under `config`, then drops the chunk ids the new
- * set no longer uses. If the row's content or tags changed meanwhile, the edit's
- * own write may have been overwritten by this one's older content, so it is
- * rebuilt from the fresh row until it holds still. (Compared by value: updated_at
- * is nullable and never backfilled, so it cannot be relied on.)
+ * set no longer uses. If the row's content, tags, workspace or actor changed
+ * meanwhile (an edit, or a share that moved it to another workspace), the
+ * writer's own vectors may have been overwritten by this one's older ones, so it
+ * is rebuilt from the fresh row until it holds still. (Compared by value:
+ * updated_at is nullable and never backfilled, so it cannot be relied on.)
  */
 async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Readonly<Config>, llmContexts?: readonly string[]): Promise<void> {
   let row = first;
@@ -628,7 +750,7 @@ async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Re
       await env.VECTORIZE.deleteByIds(stored.vectorIds);
       return;
     }
-    if (fresh.content === row.content && fresh.tags === row.tags) {
+    if (fresh.content === row.content && fresh.tags === row.tags && fresh.workspace_id === row.workspace_id && fresh.actor_id === row.actor_id) {
       await deleteStaleVectors(env, oldIds, stored.vectorIds);
       return;
     }

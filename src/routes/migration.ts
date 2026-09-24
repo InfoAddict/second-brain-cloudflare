@@ -40,12 +40,12 @@ export async function handleMigrationRoutes(
     if (authErr) return authErr;
 
     const cfg = await resolveConfig(env);
-    const { entries, chunks } = await estimate(env);
+    const { entries, chunks } = await estimate(env, cfg);
     return json({
       ok: true,
       entries,
-      // A lower bound — see the note on CHUNK_STRIDE. Named so the app can say
-      // "at least" rather than implying precision it does not have.
+      // Exactly what a rebuild under the current config would write (contextual
+      // focus chunks included). The name predates that and stays for callers.
       chunksAtLeast: chunks,
       model: cfg.EMBEDDING_MODEL,
     });

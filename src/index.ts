@@ -13,7 +13,7 @@ import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
-import { runLlmContextBatch, runSchemeBatch } from "./migration/embedding";
+import { SCHEME_NIGHTLY_CHUNK_BUDGET, runLlmContextBatch, runSchemeBatch } from "./migration/embedding";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -95,6 +95,15 @@ export default {
           await pushDueItemsAllWorkspaces(env);
         } catch (e) {
           console.error("push due items failed (non-fatal):", e);
+        }
+        // Moves existing vectors onto the configured embedding scheme, a full
+        // run's budget an hour, so a large brain finishes in days rather than
+        // months. Idle it costs two KV reads. Own try/catch: it must never hide
+        // or delay what the hour is for.
+        try {
+          await runSchemeBatch(env, await resolveConfig(env));
+        } catch (e) {
+          console.error("embedding scheme migration failed (non-fatal):", e);
         }
       })());
       return;
@@ -223,7 +232,7 @@ export default {
       // the admin route (POST /migration/scheme) drives it faster on demand.
       try {
         const cfg = await resolveConfig(env);
-        await runSchemeBatch(env, cfg);
+        await runSchemeBatch(env, cfg, { chunkBudget: SCHEME_NIGHTLY_CHUNK_BUDGET });
         // Off by default; returns before touching anything unless both switches are on.
         await runLlmContextBatch(env, cfg);
       } catch (e) {

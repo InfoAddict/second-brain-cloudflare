@@ -289,3 +289,172 @@ describe("in-place scheme migration: idle cost", () => {
     expect(get.mock.calls.length).toBeLessThanOrEqual(2);
   });
 });
+
+describe("in-place scheme migration: tenancy", () => {
+  let d1: SqliteD1;
+  let h: Harness;
+  const stamp = (id: string) => [...h.index.values()].filter(m => m.metadata.parentId === id).map(m => m.metadata.workspace_id);
+  beforeEach(async () => {
+    d1 = makeSqliteD1();
+    h = harness(d1);
+    d1.seed({ id: "a", content: long("Alpha"), createdAt: 1 });
+    d1.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = ?`).bind("ws-team", "u-1", "a").run();
+    await storeEntry(h.env, "a", long("Alpha"), [], "api", 1, legacy, { workspaceId: "ws-team", actorId: "u-1" });
+  });
+
+  it("stamps every rewritten vector with the row's own workspace, not a default", async () => {
+    await drain(h.env, ctx);
+    const ws = stamp("a");
+    expect(ws.length).toBeGreaterThan(1);
+    expect(new Set(ws)).toEqual(new Set(["ws-team"]));
+  });
+
+  it("re-stamps from the fresh row when the entry is shared while it is being rebuilt", async () => {
+    let fired = false;
+    const race = harness(d1, {
+      onUpsert: () => {
+        if (fired) return;
+        fired = true;
+        // shareEntry moves the row to another workspace between the read and the re-check
+        d1.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-other", "a").run();
+      },
+    });
+    for (const [k, v] of h.index) race.index.set(k, v);
+    await drain(race.env, ctx);
+    const ws = [...race.index.values()].filter(m => m.metadata.parentId === "a").map(m => m.metadata.workspace_id);
+    expect(new Set(ws)).toEqual(new Set(["ws-other"]));
+  });
+
+  it("gives up on an entry that keeps changing rather than looping", async () => {
+    let n = 0;
+    const race = harness(d1, { onUpsert: () => { d1.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind(`ws-${++n}`, "a").run(); } });
+    for (const [k, v] of h.index) race.index.set(k, v);
+    const r = await runSchemeBatch(race.env, ctx);
+    expect(r.failed).toBe(1);
+  });
+});
+
+describe("in-place scheme migration: poison entries", () => {
+  it("steps past an entry that fails for its own reasons after three tries, and finishes the rest", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "bad", long("Poison"), 1);
+    await seedIndexed(d1, h, "good", long("Fine"), 2);
+    const real = h.env.AI.run as unknown as (m: string, i: { text: string[] }) => Promise<unknown>;
+    (h.env.AI as { run: unknown }).run = vi.fn(async (m: string, i: { text: string[] }) => {
+      if (i.text[0].includes("Poison programme")) throw new Error("input rejected");
+      return real(m, i);
+    });
+    for (let run = 0; run < 2; run++) {
+      expect(await runSchemeBatch(h.env, ctx)).toMatchObject({ processed: 0, failed: 1, stalled: true, done: false });
+      expect((await readSchemeMigration(h.env))!.cursorId).toBeNull();
+    }
+    // the third failure steps the cursor past it
+    await runSchemeBatch(h.env, ctx);
+    expect((await readSchemeMigration(h.env))!.cursorId).toBe("bad");
+    await drain(h.env, ctx);
+    const state = (await readSchemeMigration(h.env))!;
+    expect(state.skipped).toBe(1);
+    expect(state.finishedAt).toBeTypeOf("number");
+    for (const v of idsOf(d1, "good")) expect(h.index.get(v)?.metadata.contextualized).toBe(true);
+  });
+
+  it("does not count a quota failure against the entry", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "a", long("Alpha"), 1);
+    const bad = harness(d1, { failFrom: 1 });
+    for (const [k, v] of h.index) bad.index.set(k, v);
+    for (let i = 0; i < 5; i++) expect(await runSchemeBatch(bad.env, ctx)).toMatchObject({ stalled: true, stalledReason: "budget" });
+    expect((await readSchemeMigration(bad.env))!.skipped).toBe(0);
+  });
+});
+
+describe("in-place scheme migration: switching contextual embeddings off and on", () => {
+  it("resumes without re-embedding entries that are already contextual", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    await seedIndexed(d1, h, "a", long("Alpha"), 1);
+    await seedIndexed(d1, h, "b", long("Beta"), 2);
+    await drain(h.env, ctx);
+    h.embeds.length = 0;
+    expect(await runSchemeBatch(h.env, legacy)).toMatchObject({ done: true, processed: 0 });
+    expect(await runSchemeBatch(h.env, ctx)).toMatchObject({ done: true, processed: 0 });
+    expect(h.embeds).toHaveLength(0);
+    expect((await readSchemeMigration(h.env))!.finishedAt).toBeTypeOf("number");
+  });
+
+  it("carries a half-finished run across an off and on", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 3; i++) await seedIndexed(d1, h, `e${i}`, long(`Topic${i}`), i + 1);
+    await runSchemeBatch(h.env, ctx, { chunkBudget: 1 });
+    const cursor = (await readSchemeMigration(h.env))!.cursorId;
+    await runSchemeBatch(h.env, legacy);
+    h.embeds.length = 0;
+    await drain(h.env, ctx);
+    expect(cursor).toBe("e0");
+    expect(h.embeds.some(e => e.text.includes("Topic0 programme"))).toBe(false);
+    for (const id of ["e0", "e1", "e2"]) for (const v of idsOf(d1, id)) expect(h.index.get(v)?.metadata.contextualized).toBe(true);
+  });
+});
+
+describe("in-place scheme migration: pace", () => {
+  it("does not spend runs on entries that need no rewrite: a page of shorts around three long notes takes one run", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 120; i++) d1.seed({ id: `s${String(i).padStart(3, "0")}`, content: `short note ${i}`, createdAt: 10 + i });
+    for (const [i, id] of ["l1", "l2", "l3"].entries()) {
+      d1.seed({ id, content: long(id), createdAt: 500 + i });
+      await storeEntry(h.env, id, long(id), [], "api", 500 + i, legacy, { workspaceId: "", actorId: "" });
+    }
+    h.embeds.length = 0;
+    const r = await runSchemeBatch(h.env, ctx);
+    expect(r).toMatchObject({ processed: 3, done: true, remaining: 0 });
+    expect(h.embeds.every(e => e.text.startsWith("[Memory: "))).toBe(true);
+  });
+
+  it("reports remaining as entries still to rewrite, not every later row", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 30; i++) d1.seed({ id: `s${i}`, content: `short ${i}`, createdAt: i });
+    for (let i = 0; i < 4; i++) await seedIndexed(d1, h, `l${i}`, long(`T${i}`), 100 + i);
+    const r = await runSchemeBatch(h.env, ctx, { chunkBudget: 1 });
+    expect(r.remaining).toBe(3);
+  });
+
+  it("stops at the daily neuron cap and picks up the next UTC day", async () => {
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 6; i++) await seedIndexed(d1, h, `l${i}`, long(`T${i}`), i + 1);
+    const day1 = Date.UTC(2026, 8, 24, 12);
+    const r1 = await runSchemeBatch(h.env, ctx, { chunkBudget: 1000, neuronCap: 1.5, now: day1 });
+    expect(r1.processed).toBeGreaterThan(0);
+    expect(r1.processed).toBeLessThan(6);
+    expect(r1.capped).toBe(true);
+    const r2 = await runSchemeBatch(h.env, ctx, { chunkBudget: 1000, neuronCap: 1.5, now: day1 + 3600_000 });
+    expect(r2).toMatchObject({ processed: 0, capped: true });
+    const r3 = await runSchemeBatch(h.env, ctx, { chunkBudget: 1000, neuronCap: 1.5, now: day1 + 86_400_000 });
+    expect(r3.processed).toBeGreaterThan(0);
+  });
+});
+
+describe("scheme migration schedule", () => {
+  it("runs from the hourly cron with the full budget and from the nightly cron with the small one", async () => {
+    const { default: worker } = await import("../../src/index");
+    const { INTEGRATION_SYNC_CRON } = await import("../../src/integrations/mirror");
+    const { SCHEME_NIGHTLY_CHUNK_BUDGET, SCHEME_RUN_CHUNK_BUDGET } = await import("../../src/migration/embedding");
+    const d1 = makeSqliteD1();
+    const h = harness(d1);
+    for (let i = 0; i < 30; i++) await seedIndexed(d1, h, `e${String(i).padStart(2, "0")}`, long(`T${i}`), i + 1);
+    h.embeds.length = 0;
+    const waits: Promise<unknown>[] = [];
+    const ctxStub = { waitUntil: (p: Promise<unknown>) => { waits.push(p); }, passThroughOnException() {} } as unknown as ExecutionContext;
+    const env = { ...h.env, AUTH_TOKEN: "t", VECTORIZE_GRACE_MS: "0" } as Env;
+    await worker.scheduled({ cron: INTEGRATION_SYNC_CRON, scheduledTime: Date.now() } as unknown as ScheduledEvent, env, ctxStub);
+    await Promise.allSettled(waits);
+    const hourly = h.embeds.length;
+    expect(hourly).toBeGreaterThan(SCHEME_NIGHTLY_CHUNK_BUDGET);
+    expect(hourly).toBeLessThanOrEqual(SCHEME_RUN_CHUNK_BUDGET + 10);
+  });
+});
