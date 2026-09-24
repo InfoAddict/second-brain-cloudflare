@@ -31,13 +31,14 @@ try {
   const names = flag("--only")?.split(",") ?? ["like", "dense-only", "keyword-only", "sabotage", "mild-mmr", "mild-graph", "mild-recency", "mild-tags"];
   const shortCat = (c: string) => c.replace("-word", "").replace("long-context", "long").replace("multi-hop", "hop").replace("identifier", "ident").replace("paraphrase", "para");
   console.log(`corpus ${corpusId}, ${spec.entries.length} entries, ${spec.queries.length} queries; MDE of ${metric}, 2.8 x bootstrap SE`);
-  console.log(["comparison", "delta", "MDE all", ...QUERY_CATEGORIES.map(shortCat)].join(" | "));
+  const SUBSETS = ["long-context [subset:coherent-padding]", "long-context [rest]"] as const;
+  console.log(["comparison", "delta", "MDE all", ...QUERY_CATEGORIES.map(shortCat), "long coherent", "long legacy"].join(" | "));
   for (const name of names) {
     const gate = evaluateGate(baseline, await run(name), { allowUnmeasuredRowsRead: true });
     const at = (scope: string) => gate.deltas.find(d => d.scope === scope && d.metric === metric)!;
-    const cell = (scope: string) => (2.8 * at(scope).ci.se).toFixed(4);
+    const cell = (scope: string) => { const row = gate.deltas.find(d => d.scope === scope && d.metric === metric); return row ? (2.8 * row.ci.se).toFixed(4) : "-"; };
     const overall = at("overall");
-    console.log([name, overall.ci.mean.toFixed(4), cell("overall"), ...QUERY_CATEGORIES.map(cell)].join(" | ") + `   (clusters ${overall.ci.clusters}, n ${overall.ci.n})`);
+    console.log([name, overall.ci.mean.toFixed(4), cell("overall"), ...QUERY_CATEGORIES.map(cell), ...SUBSETS.map(cell)].join(" | ") + `   (clusters ${overall.ci.clusters}, n ${overall.ci.n})`);
   }
 } finally {
   await corpus.close();
