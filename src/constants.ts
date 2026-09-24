@@ -175,7 +175,8 @@ export const VECTORIZE_TOP_K_MULTIPLIER = 3;
 // dense query to 50.
 export const RECALL_POOL_SIZE = 15;
 // The deeper dense list a call draws on when the diversified one is shorter than its topK, and what a weak best
-// match widens to. 50 is the most Vectorize returns with values and metadata (the ceiling this code has always used).
+// match widens to. 50 is the most Vectorize returns with values and metadata today (it was 20 until March 2026; this code
+// moved to the ceiling with T-0081).
 export const RECALL_DEEP_POOL_SIZE = 50;
 // With contextual embeddings on one long note is up to seven vectors, so the deep list is sized in distinct notes by
 // asking for ids only: Vectorize returns up to 100 vectors when it returns neither values nor metadata, and the fill
