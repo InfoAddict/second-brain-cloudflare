@@ -20,11 +20,14 @@ const FAILURE_CACHE_MS = 60_000;
 /** The last answer (a size, or null for "could not read it") and when it was given; and the read now in flight, so captures that arrive together share it. */
 let cached: { at: number; dims: number | null } | null = null;
 let inFlight: Promise<number | null> | null = null;
+/** Bumped by a reset, so a read that started before it cannot write its answer into the cache after it. */
+let generation = 0;
 
 /** For tests: forgets the remembered index size. */
 export function resetFocusBudgetCache(): void {
   cached = null;
   inFlight = null;
+  generation++;
 }
 
 async function readStoredDimensions(env: Env): Promise<number | null> {
@@ -48,10 +51,12 @@ async function storedDimensions(env: Env): Promise<number | null> {
   const now = Date.now();
   if (cached && now - cached.at < (cached.dims === null ? FAILURE_CACHE_MS : CACHE_MS)) return cached.dims;
   if (!inFlight) {
-    inFlight = readStoredDimensions(env).then(dims => {
-      cached = { at: Date.now(), dims };
+    const mine = generation;
+    const read: Promise<number | null> = readStoredDimensions(env).then(dims => {
+      if (mine === generation) cached = { at: Date.now(), dims };
       return dims;
-    }).finally(() => { inFlight = null; });
+    }).finally(() => { if (inFlight === read) inFlight = null; });
+    inFlight = read;
   }
   return inFlight;
 }

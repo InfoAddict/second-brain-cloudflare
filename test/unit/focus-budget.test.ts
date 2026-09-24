@@ -84,6 +84,20 @@ describe("focusModeAllowed", () => {
     expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(1);
   });
 
+  it("a reset also cancels a read already in flight: its answer is not cached after the reset", async () => {
+    let release!: (v: unknown) => void;
+    const env = makeTestEnv() as Env;
+    let n = 0;
+    (env.VECTORIZE as { describe: unknown }).describe = vi.fn(() => new Promise(r => { if (n++ === 0) release = r; else r({ vectorCount: 9000, dimensions: 384 }); }));
+    const stale = focusModeAllowed(env, on);
+    resetFocusBudgetCache();
+    release({ vectorCount: 10, dimensions: 384 }); // the pre-reset read finishes with a small index
+    expect(await stale).toBe(true);
+    // the next call must read afresh (a full index now), not be served the pre-reset answer
+    expect(await focusModeAllowed(env, on)).toBe(false);
+    expect(env.VECTORIZE.describe).toHaveBeenCalledTimes(2);
+  });
+
   it("remembers the size for a few minutes instead of reading it on every write", async () => {
     const env = envWith({ vectorCount: 10, dimensions: 384 });
     await focusModeAllowed(env, on);
