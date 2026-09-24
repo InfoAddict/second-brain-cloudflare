@@ -49,6 +49,32 @@ describe("prepare", () => {
     expect(l.run.mock.calls.length).toBe(calls);
   });
 
+  describe("with tags, where the stand-in needs the query and tag embeddings", () => {
+    const tagged: CorpusSpec = {
+      ...spec, id: "tiny-tagged", entries: spec.entries.map(e => ({ ...e, tags: ["gardening", "planning"] })),
+      queries: [{ id: "q", category: "paraphrase", text: "tomato advice", gold: [{ id: "c", grade: 2 }], viewer: "avery" }],
+    };
+    const targs = (store: ReplayStore, l: LiveAi) => ({ ...args(store, l), spec: tagged });
+
+    it("records the tag embeddings and verifies them", async () => {
+      const { root, file } = scratch();
+      const l = live();
+      await prepare(targs(new ReplayStore([], file, { root }), l));
+      const embedded = l.run.mock.calls.map(c => (c[1] as { text: string[] }).text[0]);
+      expect(embedded).toEqual(expect.arrayContaining(["gardening", "planning"]));
+    });
+
+    it("does not report a clean verification when a tag embedding could not be recorded", async () => {
+      const { root, file } = scratch();
+      const l = live();
+      const flaky: LiveAi = { producer: l.producer, run: async (m, input) => {
+        if ((input as { text: string[] }).text[0] === "planning") throw new Error("boom");
+        return l.run(m, input);
+      } };
+      await expect(prepare(targs(new ReplayStore([], file, { root }), flaky))).rejects.toThrow(/replay verification failed.*query-tag stand-in failed/);
+    });
+  });
+
   it("aborts before any live call when the estimate exceeds the neuron cap", async () => {
     const l = live();
     const { root, file } = scratch();

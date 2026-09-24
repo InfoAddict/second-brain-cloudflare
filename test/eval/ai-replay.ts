@@ -595,6 +595,12 @@ export interface ReplayAi {
   llmTags: LlmTagsArm;
   /** Calls since the last drain; the runner drains once per query. */
   drainCalls(): AiCall[];
+  /**
+   * Stand-in failures since the last drain. distill.ts swallows any error from the LLM call and returns no tags,
+   * which would silently turn the stand-in into the empty arm, so the failure is also recorded here and the runner
+   * turns it into that query's error.
+   */
+  drainErrors(): string[];
   /** Producer of every non-LLM model this ai was asked for (corpus load and queries), as the cache records it. */
   producers(): Record<string, EmbeddingProducer>;
   /** Where the neuron figures of the calls served so far come from; undefined when no call had verified provenance. */
@@ -649,6 +655,7 @@ export function makeReplayAi(opts: {
   dryOther?: (model: string, input: unknown) => unknown;
 }): ReplayAi {
   const calls: AiCall[] = [];
+  const errors: string[] = [];
   const misses: ReplayAi["misses"] = new Map();
   /** Models with at least one call served from (or recorded with) verified provenance. */
   const verifiedModels = new Set<string>();
@@ -686,11 +693,16 @@ export function makeReplayAi(opts: {
     if (kind === "llm" && (opts.mode === "replay" || !opts.recordLlm)) {
       let answer = "";
       if (arm === "stand-in") {
-        const { tags, query } = parseTagPrompt(input as Parameters<typeof parseTagPrompt>[0]);
-        const embed = async (t: string) => ((await exec(STAND_IN_EMBEDDING_MODEL, { text: [t] }, true)) as { data: number[][] }).data[0];
-        const vectors = new Map<string, number[]>();
-        for (const t of tags) vectors.set(t, await embed(t));
-        answer = formatTags(pickTags(await embed(query), tags, vectors, STAND_IN_TAG_THRESHOLD, STAND_IN_MAX_TAGS));
+        try {
+          const { tags, query } = parseTagPrompt(input as Parameters<typeof parseTagPrompt>[0]);
+          const embed = async (t: string) => ((await exec(STAND_IN_EMBEDDING_MODEL, { text: [t] }, true)) as { data: number[][] }).data[0];
+          const vectors = new Map<string, number[]>();
+          for (const t of tags) vectors.set(t, await embed(t));
+          answer = formatTags(pickTags(await embed(query), tags, vectors, STAND_IN_TAG_THRESHOLD, STAND_IN_MAX_TAGS));
+        } catch (e) {
+          errors.push(e instanceof Error ? e.message : String(e));
+          throw e;
+        }
       }
       // The output is priced at the published rate whatever produced it, so an answered call is not free.
       const cost = reportedNeurons(model, kind, text, { text: answer });
@@ -740,6 +752,7 @@ export function makeReplayAi(opts: {
     ai: { run } as unknown as Ai,
     llmTags: arm,
     drainCalls: () => calls.splice(0),
+    drainErrors: () => errors.splice(0),
     producers: () => Object.fromEntries([...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [[m, p]] : []; })),
     neuronSource: () => {
       const kinds = [...verifiedModels].flatMap(m => { const p = opts.store.producerOf(m); return p ? [p.kind] : []; });

@@ -85,6 +85,7 @@ export async function runVariant(o: {
     const recallOnce = async (q: GoldenQuery) => {
       const diagnostics: RecallDiagnostics = {};
       corpus.replay.drainCalls();
+      corpus.replay.drainErrors();
       const degradedBefore = vectorizeFilterState().degradedQueries;
       intercepted = 0;
       const started = performance.now();
@@ -93,6 +94,9 @@ export async function runVariant(o: {
         env, ctx, cfg,
         { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
       );
+      // distill.ts swallows a failed tag-inference call, so a stand-in failure is surfaced here or the run would be the empty arm unannounced
+      const standInFailures = corpus.replay.drainErrors();
+      if (standInFailures.length) throw new Error(`query-tag stand-in failed: ${standInFailures.join("; ")}`);
       return {
         result, diagnostics, wallMs: performance.now() - started, calls: corpus.replay.drainCalls(),
         filterDegraded: vectorizeFilterState().degradedQueries > degradedBefore,

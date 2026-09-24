@@ -462,6 +462,33 @@ describe("tag stand-in arm", () => {
     await expect(replay.ai.run(LLM as never, { messages: [{ role: "user", content: "Summarize." }] } as never)).rejects.toThrow(/inferQueryTags prompt/);
   });
 
+  it("records a replay miss out of band, still throws to the caller, and drains once", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    await expect(replay.ai.run(LLM as never, tagPrompt("finance", "q") as never)).rejects.toBeInstanceOf(ReplayMissError);
+    expect(replay.drainErrors()).toEqual([expect.stringMatching(/replay cache miss/)]);
+    expect(replay.drainErrors()).toEqual([]);
+  });
+
+  it("records a prompt that does not parse out of band", async () => {
+    const replay = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    await expect(replay.ai.run(LLM as never, { messages: [{ role: "user", content: "Summarize." }] } as never)).rejects.toThrow();
+    expect(replay.drainErrors()).toEqual([expect.stringMatching(/inferQueryTags prompt/)]);
+  });
+
+  it("records nothing on success, under the empty arm, or for a plain embedding miss", async () => {
+    const root = tmp();
+    const { s, live } = filled(root);
+    const rec = makeReplayAi({ store: s, mode: "record", live, budget: new NeuronBudget(1000) });
+    await rec.ai.run(LLM as never, tagPrompt("finance, travel, vendor", "the freight dispute") as never);
+    expect(rec.drainErrors()).toEqual([]);
+    const empty = makeReplayAi({ store: new ReplayStore([]), mode: "replay", llmTags: "empty" });
+    await empty.ai.run(LLM as never, { messages: [{ role: "user", content: "anything" }] } as never);
+    expect(empty.drainErrors()).toEqual([]);
+    const plain = makeReplayAi({ store: new ReplayStore([]), mode: "replay" });
+    await expect(plain.ai.run(MODEL as never, embedInput("nope") as never)).rejects.toBeInstanceOf(ReplayMissError);
+    expect(plain.drainErrors()).toEqual([]); // the caller already sees that one
+  });
+
   it("defaults to stand-in and reports the arm", () => {
     expect(makeReplayAi({ store: new ReplayStore([]), mode: "replay" }).llmTags).toBe("stand-in");
     expect(makeReplayAi({ store: new ReplayStore([]), mode: "replay", llmTags: "empty" }).llmTags).toBe("empty");

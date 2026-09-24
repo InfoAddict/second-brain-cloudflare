@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS } from "../../src/config";
 import type { Config } from "../../src/config";
 import type { RecallInternalOptions } from "../../src/recall/types";
-import { ReplayStore, makeReplayAi } from "./ai-replay";
+import { NeuronBudget, ReplayStore, makeReplayAi } from "./ai-replay";
 import { loadCorpus, type LoadedCorpus } from "./corpus/loader";
 import { ACTORS, EVAL_NOW, IDENTITIES, WORKSPACES, type CorpusEntry } from "./corpus/types";
 import { EMBEDDING_DIMS } from "./ai-replay";
@@ -310,6 +310,51 @@ describe("model producers in the report", () => {
     const report = await run(await corpus());
     expect(report.producers).toBeUndefined();
     expect(report.neuronSource).toBeUndefined();
+  });
+});
+
+describe("stand-in failures fail closed", () => {
+  const tagged = entries.map(e => ({ ...e, tags: ["gardening", "planning"] }));
+  const qs: GoldenQuery[] = [{ id: "t1", category: "paraphrase", text: "tomato advice", gold: [{ id: "f1", grade: 2 }], viewer: "avery" }];
+  const producer: EmbeddingProducer = { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-small-en-v1.5", revision: "abc", dtype: "fp32" };
+  const live = { run: async (_m: string, input: unknown) => ({ data: (input as { text: string[] }).text.map(t => hashVector(t, 384)) }), producer: () => producer };
+
+  async function recorded() {
+    const root = mkdtempSync(join(tmpdir(), "eval-standin-"));
+    mkdirSync(join(root, ".eval-cache"), { recursive: true });
+    const file = join(root, ".eval-cache", "s.jsonl");
+    // the empty arm records the corpus and the query embedding but no tag embeddings
+    const rec = makeReplayAi({ store: new ReplayStore([], file, { root }), mode: "record", live, budget: new NeuronBudget(1e6), llmTags: "empty" });
+    const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: qs }, backend: "sqlite", replay: rec, embeddingModel: MODEL });
+    try { await runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL }); } finally { await c.close(); }
+    return () => makeReplayAi({ store: new ReplayStore([file], undefined, { root }), mode: "replay" });
+  }
+  const replayRun = async (replay: ReturnType<typeof makeReplayAi>) => {
+    const c = await loadCorpus({ spec: { id: "tiny", intent: "tie", entries: tagged, edges: [], queries: qs }, backend: "sqlite", replay, embeddingModel: MODEL });
+    open.push(c);
+    return runVariant({ corpus: c, variant: getVariant("baseline"), queries: qs, isolate: "warm", embeddingModel: MODEL });
+  };
+
+  it("a tag embedding missing from the cache becomes that query's error instead of an empty tag list", async () => {
+    const report = await replayRun((await recorded())());
+    expect(report.llmTags).toBe("stand-in");
+    expect(report.results[0].error).toMatch(/query-tag stand-in failed.*replay cache miss/);
+    expect(report.results[0].rankedIds).toEqual([]);
+  });
+
+  it("a prompt the stand-in cannot parse becomes that query's error", async () => {
+    const replay = (await recorded())();
+    const run = (replay.ai as unknown as { run: (m: string, i: { messages?: { role: string; content: string }[] }) => Promise<unknown> }).run.bind(replay.ai);
+    (replay.ai as unknown as { run: typeof run }).run = (m, i) =>
+      run(m, i.messages ? { ...i, messages: [{ role: "user", content: i.messages[0].content.replace("Which tags best match", "Which tags match") }] } : i);
+    const report = await replayRun(replay);
+    expect(report.results[0].error).toMatch(/query-tag stand-in failed.*inferQueryTags prompt/);
+  });
+
+  it("the empty arm still runs clean", async () => {
+    const report = await replayRun(makeReplayAi({ store: new ReplayStore([]), mode: "dry", llmTags: "empty" }));
+    expect(report.llmTags).toBe("empty");
+    expect(report.results[0].error).toBeUndefined();
   });
 });
 

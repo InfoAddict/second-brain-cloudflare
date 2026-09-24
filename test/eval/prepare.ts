@@ -25,10 +25,13 @@ export async function prepare(o: {
   concurrency: number;
   log: (line: string) => void;
 }): Promise<{ missing: number; estimatedNeurons: number; spentNeurons: number }> {
-  const pass = async (replay: ReturnType<typeof makeReplayAi>, concurrency: number) => {
+  const pass = async (replay: ReturnType<typeof makeReplayAi>, concurrency: number, strict = false) => {
     const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay, embeddingModel: o.model, index: o.variant.index, concurrency });
     try {
-      await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
+      const report = await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
+      // a swallowed miss (the tag stand-in's) shows up only as a query error, so the verification pass must read them
+      const failed = report.results.filter(r => r.error);
+      if (strict && failed.length) throw new Error(`replay verification failed on ${failed.length} query(ies), first: ${failed[0].queryId}: ${failed[0].error}`);
     } finally {
       await corpus.close();
     }
@@ -53,7 +56,7 @@ export async function prepare(o: {
     o.log(`recorded; estimated spend ${spentNeurons.toFixed(1)} neurons.`);
   }
 
-  await pass(makeReplayAi({ store: o.store, mode: "replay", expectProducer, llmTags: o.llmTags }), 1);
+  await pass(makeReplayAi({ store: o.store, mode: "replay", expectProducer, llmTags: o.llmTags }), 1, true);
   o.log("replay verification passed: the cache is complete for this variant and corpus.");
   return { missing, estimatedNeurons, spentNeurons };
 }
