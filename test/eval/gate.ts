@@ -93,7 +93,7 @@ function comparabilityProblems(base: VariantReport, cand: VariantReport): string
   if (producersKey(withoutAddedModels(base.producers, cand.producers)) !== producersKey(withoutAddedModels(cand.producers, base.producers))) problems.push("model producers differ (outputs from different producers, or a model used on one side only, are not comparable)");
   const fingerprinted = (id: string) => (CORPUS_IDS as readonly string[]).includes(id) || Object.hasOwn(PUBLIC_CORPORA, id);
   for (const [label, r] of [["baseline", base], ["candidate", cand]] as const) {
-    if (fingerprinted(r.corpus) && !Object.keys(r.producers ?? {}).length) problems.push(`the ${label} report has no verified model producers (unverified provenance); rerun it against a stamped or freshly recorded cache`);
+    if (fingerprinted(r.corpus) && !Object.keys(r.producers ?? {}).filter(m => !VARIANT_ADDED_MODELS.includes(m)).length) problems.push(`the ${label} report has no verified model producers (unverified provenance); rerun it against a stamped or freshly recorded cache`);
   }
   if ((base.neuronSource ?? "none") !== (cand.neuronSource ?? "none")) problems.push(`neuron source differs (${base.neuronSource ?? "none"} vs ${cand.neuronSource ?? "none"})`);
   if ((base.llmTags ?? "none") !== (cand.llmTags ?? "none")) problems.push(`LLM tag arm differs (${base.llmTags ?? "none"} vs ${cand.llmTags ?? "none"}); the arms answer query-tag inference differently, so rankings and cost are not comparable`);

@@ -87,6 +87,13 @@ describe("evaluateGate", () => {
     expect(comparable(on("baseline", emb), on("v", { ...withRr, "@cf/baai/bge-m3": mk("Xenova/bge-m3") }))).toMatch(/model producers differ/);
   });
 
+  it("a reranker-only producer map does not satisfy the provenance rule", () => {
+    const rrOnly = { "@cf/baai/bge-reranker-base": { kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo: "BAAI/bge-reranker-base", revision: "abc", dtype: "fp32" } as EmbeddingProducer };
+    const r = evaluateGate({ ...report("baseline"), producers: rrOnly }, { ...report("v"), producers: rrOnly }).rules.find(x => x.rule === "comparable");
+    expect(r?.status).toBe("inconclusive");
+    expect(r?.detail).toMatch(/no verified model producers/);
+  });
+
   it("treats a missing producers map on a core report as unverified provenance", () => {
     const bare = { ...report("v"), producers: undefined, neuronSource: undefined };
     for (const [b, c] of [[report("baseline"), bare], [bare, report("v")]] as const) {
