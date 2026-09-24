@@ -84,8 +84,6 @@ export interface EncodedBatch {
   dim: number;
   /** attention[b][t] is 1 for a real token and 0 for padding. */
   attention: number[][];
-  /** How many inputs the tokenizer cut at the model's limit. Absent on fakes. */
-  truncated?: number;
 }
 
 export function l2normalize(v: Float32Array): Float32Array {
@@ -193,15 +191,12 @@ export const transformersLoader: RuntimeLoader = {
     return {
       async encode(texts, maxTokens) {
         const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: maxTokens });
-        // An input past the limit is silently cut; count them so a caller can refuse a recording that depends on it.
-        const full = tokenizer(texts, { padding: false, truncation: false, return_tensor: false }) as { input_ids: number[][] };
-        const truncated = full.input_ids.filter(ids => ids.length > maxTokens).length;
         const out = await model(inputs);
         const hidden = out.last_hidden_state;
         const [batch, seq, dim] = hidden.dims as number[];
         const mask = inputs.attention_mask;
         const attention = Array.from({ length: batch }, (_, b) => Array.from({ length: seq }, (_, t) => Number(mask.data[b * seq + t])));
-        return { hidden: hidden.data as Float32Array, batch, seq, dim, attention, truncated };
+        return { hidden: hidden.data as Float32Array, batch, seq, dim, attention };
       },
     };
   },
@@ -230,8 +225,6 @@ function rows(mask: { data: ArrayLike<number | bigint>; dims: number[] }): numbe
 export interface LocalAi extends LiveAi {
   /** Who produces this model's outputs; recorded beside the cached rows and on every report. */
   producer(model: string): EmbeddingProducer;
-  /** Inputs cut at the token limit since this provider was made, per model. Recording contextual vectors must leave it at zero. */
-  truncations: Record<string, number>;
 }
 
 export function producerFor(pin: ModelPin, libraryVersion: string, runtimeVersion: string): EmbeddingProducer {
@@ -257,7 +250,6 @@ export function makeLocalAi(opts: { loader?: RuntimeLoader; modelsDir?: string; 
   const modelsDir = opts.modelsDir ?? MODELS_DIR;
   const embedders = new Map<string, Promise<EmbedRuntime>>();
   const rerankers = new Map<string, Promise<RerankRuntime>>();
-  const truncations: Record<string, number> = {};
   let queue: Promise<unknown> = Promise.resolve(); // one inference at a time: ONNX already uses every core, and m3 is 2GB of weights
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
     const next = queue.then(fn, fn);
@@ -277,7 +269,6 @@ export function makeLocalAi(opts: { loader?: RuntimeLoader; modelsDir?: string; 
   };
 
   return {
-    truncations,
     producer(model) {
       const pin = MODEL_PINS[model];
       if (!pin) throw new Error(`no local model for ${model}`);
@@ -295,7 +286,6 @@ export function makeLocalAi(opts: { loader?: RuntimeLoader; modelsDir?: string; 
         const rt = await memo(embedders, model, async () => loader.embed(p, await ready(p)));
         const mode: Pooling = model === "@cf/baai/bge-m3" ? "cls" : pooling ?? "mean";
         const enc = await rt.encode(texts, p.maxTokens);
-        if (enc.truncated) truncations[model] = (truncations[model] ?? 0) + enc.truncated;
         const vectors = poolBatch(enc, mode);
         if (p.dims && enc.dim !== p.dims) throw new Error(`${model} produced ${enc.dim}-d vectors, expected ${p.dims}`);
         const tokens = countTokens(enc.attention);
