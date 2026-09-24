@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ROOT_QUALITY_CASES, type RootQualityCase } from "../fixtures/recall-root-quality";
-import { evaluateLegacy, heuristicOrderModel, summarizeLegacy } from "./legacy/harness";
+import { evaluateLegacy, heuristicOrderModel, scramblingModel, summarizeLegacy } from "./legacy/harness";
 import { ROOT_QUALITY_GATES, checkGate, type Gate } from "./legacy/gates";
 import { makeLocalAi } from "./local-ai";
 
@@ -51,7 +51,7 @@ describe("root quality with the reranker on (fts mode, real SQL)", () => {
     off.observations.forEach((o, i) => expect(positions(keep.observations[i]), o.id).toEqual(positions(o)));
     // A model that reorders may change WHICH linked memory qualifies (its evidence rides on the reranked root score), but
     // whatever is linked still occupies a graph slot, never a direct rank: the block layout is untouched.
-    const moved = await evaluateLegacy(ROOT_QUALITY_CASES, "fts", { ...base, rerank: true });
+    const moved = await evaluateLegacy(ROOT_QUALITY_CASES, "fts", { ...base, rerank: true, rerankModel: scramblingModel });
     for (const o of moved.observations) for (const k of positions(o)) expect([4, 9], `${o.id} linked at rank ${k + 1}`).toContain(k);
   }, 240_000);
 

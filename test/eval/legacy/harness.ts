@@ -9,7 +9,7 @@ import { vi } from "vitest";
 import { DEFAULTS } from "../../../src/config";
 import { FTS_READY_KV_KEY, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../../src/constants";
 import { resetRerankReadyMemo } from "../../../src/recall/model-reranker";
-import { tokenizeQuery } from "../../../src/text/tokenize";
+import { createHash } from "node:crypto";
 import { initializeDatabase, resetDatabaseInit } from "../../../src/db/init";
 import type { Env } from "../../../src/env";
 import { resetFtsReadyMemo } from "../../../src/recall/fts";
@@ -96,14 +96,14 @@ interface LegacyOptions {
    */
   arms?: "dense-only" | "keyword-only";
   /**
-   * Run with the reranker on: mode "on", the readiness latch set, and a deterministic stand-in model that scores each
-   * passage by the share of the query's terms it contains (a neutral relevance signal, not an oracle). Root quality
-   * is then measured through the reranked direct and root views that feed MMR and graph-root selection.
+   * Run with the reranker on: mode "on", the readiness latch set, and `rerankModel` answering (default: a model that
+   * agrees with the heuristic order). Root quality is then measured through the reranked direct and root views that feed
+   * MMR and graph-root selection.
    */
   rerank?: boolean;
   /** With `rerank`: eval-only weight/floor override, to see how root quality moves with the blend. */
   rerankTuning?: { weight?: number; floor?: number };
-  /** With `rerank`: answer with the real pinned local bge-reranker-base instead of the term-coverage stand-in (opt-in, slow). */
+  /** With `rerank`: answer with the real pinned local bge-reranker-base (opt-in, slow) or any other stand-in. */
   rerankModel?: { run(model: string, input: unknown): Promise<unknown> };
 }
 
@@ -115,16 +115,13 @@ export const heuristicOrderModel = {
   },
 };
 
-/** Cross-encoder stand-in: query-term coverage of each passage, in Workers AI's documented answer shape. */
-export function lexicalCrossEncoder(input: { query: string; contexts: { text: string }[] }): { response: { id: number; score: number }[] } {
-  const terms = new Set(tokenizeQuery(input.query));
-  return { response: input.contexts.map((c, id) => {
-    const words = new Set(tokenizeQuery(c.text));
-    let hit = 0;
-    for (const t of terms) if (words.has(t)) hit++;
-    return { id, score: terms.size ? 8 * (hit / terms.size) - 4 : 0 };
-  }) };
-}
+/** A model unrelated to the heuristic order (a hash of each passage), so it reorders. Used only to check layout, never quality. */
+export const scramblingModel = {
+  async run(_model: string, input: unknown) {
+    const { contexts } = input as { contexts: { text: string }[] };
+    return { response: contexts.map((c, id) => ({ id, score: (createHash("sha256").update(c.text).digest()[0] / 255) * 10 - 5 })) };
+  },
+};
 
 async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOptions["idOf"], rerank = false, realModel?: LegacyOptions["rerankModel"]) {
   resetDatabaseInit();
@@ -148,7 +145,7 @@ async function buildFixture(c: RootQualityCase, mode: LegacyMode, idOf: LegacyOp
   await initializeDatabase(env);
   if (rerank) {
     const embed = (env.AI.run as ReturnType<typeof vi.fn>).getMockImplementation()!;
-    (env.AI.run as ReturnType<typeof vi.fn>).mockImplementation(async (model: string, input: never) => (model === RERANK_MODEL ? (realModel ? realModel.run(model, input) : lexicalCrossEncoder(input)) : (embed as unknown as (m: string, i: unknown) => unknown)(model, input)));
+    (env.AI.run as ReturnType<typeof vi.fn>).mockImplementation(async (model: string, input: never) => (model === RERANK_MODEL ? (realModel ?? heuristicOrderModel).run(model, input) : (embed as unknown as (m: string, i: unknown) => unknown)(model, input)));
     await env.OAUTH_KV.put(RERANK_READY_KV_KEY, "1");
     resetRerankReadyMemo();
   }
