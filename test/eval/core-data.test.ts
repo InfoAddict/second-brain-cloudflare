@@ -103,15 +103,16 @@ describe("core golden data", () => {
     for (const n of needles.filter(n => n.id.endsWith("-root"))) expect(n.importance!, n.id).toBeGreaterThanOrEqual(needles.find(a => a.id === n.id.replace("-root", "-answer"))!.importance! - 1);
   });
 
-  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors). The set now holds 5,842 entries (chunk vectors and the
-  // reranker's scores, now part of the baseline) at 8.15 MiB, over the 8 MiB cap by 0.15 MiB. The size test below fails
-  // until the cap is raised deliberately or rows are dropped; contextual rows (T-0042) would add more still.
+  // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors), then 8 MiB for the expanded set. The baseline now
+  // includes the cross-encoder reranker, whose per-candidate scores are recorded alongside the chunk vectors: 5,842 entries,
+  // 8.15 MiB. The cap is 9 MiB (approved on T-0043.6), which leaves 0.85 MiB; contextual rows (T-0042) stay in the local
+  // cache, uncommitted. Past this, move the layer out of git rather than raise it again.
   it("keeps every committed replay layer together within its size budget", () => {
     // the privacy allowlist admits replay.<model>.jsonl.gz for any model, so the cap is on their sum (a bge-m3 layer counts too)
     const layers = readdirSync(DATA).filter(name => /^replay\.[\w.-]+\.jsonl\.gz$/.test(name));
     expect(layers).toContain(`replay.${DEFAULTS.EMBEDDING_MODEL.split("/").pop()}.jsonl.gz`);
     const bytes = layers.reduce((sum, name) => sum + statSync(resolve(DATA, name)).size, 0);
-    expect(bytes).toBeLessThan(8 * 1024 * 1024);
+    expect(bytes).toBeLessThan(9 * 1024 * 1024);
   });
 
   it("clusters common-word queries by dense triple, so permutation twins share one cluster", () => {
