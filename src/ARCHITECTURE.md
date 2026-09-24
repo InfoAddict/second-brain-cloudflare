@@ -308,8 +308,8 @@ checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
 opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps:
 over the 306 remaining queries, recall@5 is 0.727, recall@10 0.760, MRR@10
-0.745, and nDCG@10 0.693. Over all 338 queries it is 0.738, 0.777, 0.742, and
-0.700.
+0.745, and nDCG@10 0.693. Over all 338 queries it is 0.753, 0.783, 0.768, and
+0.721.
 
 **How long it takes.** A `core-1k` comparison takes about 10 seconds on `sqlite`
 and about 7 minutes on `workerd`, which runs each query against a real local D1.
