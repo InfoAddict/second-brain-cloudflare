@@ -335,9 +335,15 @@ migration pauses this one and settles its ledger when it finishes. The
 ledger's pooling branch (`queryPoolings`) is the design for a future pooling
 change; recall does not use it yet because nothing that changes pooling ships.
 
-The optional generated tier (`CONTEXTUAL_EMBEDDING_LLM`, off) replaces the
-deterministic prefix with one model sentence per chunk. It has no eval variant
-yet because the eval records no generation calls; it stays off until one does.
+The optional generated tier (`CONTEXTUAL_EMBEDDING_LLM`, off; model
+`CONTEXTUAL_EMBEDDING_LLM_MODEL`, Granite Micro by default) replaces the
+deterministic prefix with one model sentence per chunk. `runLlmContextBatch`
+runs after the scheme batch in the nightly job, only when both switches are on
+and the deterministic migration has finished, at most 20 model calls a night,
+whole entries of 2 to 8 chunks only. Any failed call leaves the entry's
+deterministic vectors untouched; after three failed nights the cursor steps past
+the entry. It has no eval variant: the eval records no generation calls, so its
+quality is unmeasured and it stays off.
 
 ## Recall eval (developer tooling)
 

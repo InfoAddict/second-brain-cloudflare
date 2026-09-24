@@ -38,7 +38,8 @@ export async function storeEntry(
   source: string,
   now: number,
   config: Readonly<Config> = DEFAULTS,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
+  llmContexts?: readonly string[],
 ): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
@@ -55,7 +56,7 @@ export async function storeEntry(
   const entry = { id, content, tags, source, createdAt: now };
   let chunks: EmbeddingChunk[];
   try {
-    chunks = buildEmbeddingChunks(entry, config);
+    chunks = buildEmbeddingChunks(entry, config, llmContexts);
   } catch (e) {
     // Context is an enhancement; a failure building it must not fail the save.
     console.error("Contextual chunking failed, embedding plain chunks:", e);

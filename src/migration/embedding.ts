@@ -42,9 +42,11 @@ import { DEFAULTS, type Config } from "../config";
 import { deleteStaleVectors, storeEntry } from "../capture/store";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { chunkText } from "../text/chunk";
-import { buildEmbeddingChunks, isContextEligible } from "../capture/contextual";
+import { buildEmbeddingChunks, generateChunkContext, isContextEligible } from "../capture/contextual";
 import { LEGACY_SCHEME, poolingOf, schemeOf } from "../embedding/scheme";
 import {
+  CONTEXT_LLM_CHUNKS_PER_NIGHT,
+  CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY,
   MIGRATION_CHUNK_BUDGET,
   MIGRATION_MAX_ENTRIES_PER_BATCH,
 } from "../constants";
@@ -601,7 +603,7 @@ export async function runSchemeBatch(
  * rebuilt from the fresh row until it holds still. (Compared by value: updated_at
  * is nullable and never backfilled, so it cannot be relied on.)
  */
-async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Readonly<Config>): Promise<void> {
+async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Readonly<Config>, llmContexts?: readonly string[]): Promise<void> {
   let row = first;
   for (let attempt = 0; attempt < SCHEME_MAX_REBUILDS; attempt++) {
     const oldIds = JSON.parse((row.vector_ids as string) ?? "[]") as string[];
@@ -614,6 +616,8 @@ async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Re
       row.created_at as number,
       config,
       { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
+      // Generated sentences describe the row as first read; a rebuild after an edit falls back to the deterministic prefix.
+      attempt === 0 ? llmContexts : undefined,
     );
     const fresh = (await env.DB.prepare(
       // scope-exempt: one-time re-embed migration: by-id re-read of the row being rebuilt
@@ -631,4 +635,96 @@ async function rewriteEntry(env: Env, first: Record<string, unknown>, config: Re
     row = fresh;
   }
   throw new Error(`entry ${String(row.id)} kept changing while it was rebuilt`);
+}
+
+
+// ── Generated context tier (T-0042, off by default) ──────────────────────────
+//
+// Optional and nightly: replaces a long note's deterministic prefix with one
+// model-written sentence per chunk (CONTEXTUAL_EMBEDDING_LLM). Bounded to
+// CONTEXT_LLM_CHUNKS_PER_NIGHT model calls a night, whole entries only, and
+// never before the deterministic scheme migration has finished, so a failure at
+// any point leaves the deterministic vectors in place.
+
+export const CONTEXT_LLM_BACKFILL_KV_KEY = "contextual-embedding:v1:llm-backfill";
+/** Nights an entry may fail before the backfill steps past it. */
+const LLM_MAX_FAILED_NIGHTS = 3;
+
+interface LlmBackfillState {
+  cursorCreatedAt: number | null;
+  cursorId: string | null;
+  upgraded: number;
+  skipped: number;
+  /** Failed nights per entry id, for the entry at the cursor only. */
+  failedNights: number;
+}
+
+export interface LlmBatchResult { calls: number; upgraded: number; skipped: number; stalled: boolean; idle: boolean }
+
+export async function runLlmContextBatch(env: Env, config: Readonly<Config> = DEFAULTS): Promise<LlmBatchResult> {
+  const result: LlmBatchResult = { calls: 0, upgraded: 0, skipped: 0, stalled: false, idle: true };
+  if (config.CONTEXTUAL_EMBEDDINGS !== "on" || config.CONTEXTUAL_EMBEDDING_LLM !== "on") return result;
+
+  const scheme = await readSchemeMigration(env);
+  if (!scheme?.finishedAt || scheme.target !== schemeOf(config) || scheme.model !== config.EMBEDDING_MODEL) return result;
+
+  let state: LlmBackfillState = { cursorCreatedAt: null, cursorId: null, upgraded: 0, skipped: 0, failedNights: 0 };
+  try {
+    const raw = await env.OAUTH_KV.get(CONTEXT_LLM_BACKFILL_KV_KEY);
+    if (raw) state = { ...state, ...(JSON.parse(raw) as Partial<LlmBackfillState>) };
+  } catch { /* unreadable cursor restarts the backfill; an upgraded entry is simply upgraded again */ }
+
+  const page = state.cursorCreatedAt === null
+    ? await env.DB.prepare(pageSql(false)).all()
+    : await env.DB.prepare(pageSql(true)).bind(state.cursorCreatedAt, state.cursorCreatedAt, state.cursorId).all();
+  const rows = (page.results ?? []) as Record<string, unknown>[];
+
+  for (const row of rows) {
+    const id = row.id as string;
+    const mark = { cursorCreatedAt: row.created_at as number, cursorId: id };
+    const entry = { id, content: row.content as string, tags: JSON.parse((row.tags as string) ?? "[]") as string[], source: row.source as string, createdAt: row.created_at as number };
+    const chunks = isContextEligible(entry) ? buildEmbeddingChunks(entry, config) : [];
+    if (chunks.length < 2 || chunks.length > CONTEXT_LLM_MAX_CHUNKS_PER_ENTRY) {
+      state = { ...state, ...mark, failedNights: 0 };
+      continue;
+    }
+    // Never cross the nightly ceiling mid-entry; the first entry of a night always fits.
+    if (result.calls > 0 && result.calls + chunks.length > CONTEXT_LLM_CHUNKS_PER_NIGHT) break;
+    result.idle = false;
+
+    const contexts: string[] = [];
+    for (const c of chunks) {
+      result.calls++;
+      const sentence = await generateChunkContext(entry, c.rawContent, c.chunkIndex, c.totalChunks, env, config);
+      if (!sentence) break;
+      contexts.push(sentence);
+    }
+    let ok = contexts.length === chunks.length;
+    if (ok) {
+      try {
+        await rewriteEntry(env, row, config, contexts);
+      } catch (e) {
+        console.error("Generated-context rewrite failed for entry", id, e);
+        ok = false;
+      }
+    }
+    if (ok) {
+      state = { ...state, ...mark, upgraded: state.upgraded + 1, failedNights: 0 };
+      result.upgraded++;
+      continue;
+    }
+    // A failed entry stays in front of the cursor so tomorrow retries it; after a few nights it is stepped past.
+    const failed = state.failedNights + 1;
+    if (failed >= LLM_MAX_FAILED_NIGHTS) {
+      state = { ...state, ...mark, skipped: state.skipped + 1, failedNights: 0 };
+      result.skipped++;
+    } else {
+      state = { ...state, failedNights: failed };
+    }
+    result.stalled = true;
+    break;
+  }
+
+  if (!result.idle || state.cursorId !== null) await env.OAUTH_KV.put(CONTEXT_LLM_BACKFILL_KV_KEY, JSON.stringify(state));
+  return result;
 }

@@ -9,8 +9,11 @@
  * metadata.content stay raw.
  */
 import type { Config } from "../config";
+import type { Env } from "../env";
+import { readStreamText } from "../lib/ai";
 import {
   CONTEXT_OVERLAP_CHARS,
+  CONTEXT_LLM_MAX_TOKENS,
   CONTEXT_M3_BODY_MAX_CHARS,
   CONTEXT_PREFIX_MAX_CHARS,
   CONTEXT_SMALL_BODY_MIN_CHARS,
@@ -175,4 +178,44 @@ export function buildEmbeddingChunks(
       rawContent: c, embeddingText: `${prefix}\n${c}`, chunkIndex: i, totalChunks: n, contextualized: true, contextSource,
     };
   });
+}
+
+const LLM_ENTRY_CHARS = 800;
+
+/** One plain sentence, one line, no markup, and not the prompt read back. Null means unusable. */
+export function cleanGeneratedContext(raw: string): string | null {
+  const line = squash(raw.replace(/^["'\s]+|["'\s]+$/g, ""));
+  if (!line || line.length > CONTEXT_PREFIX_MAX_CHARS - "[Memory: ]".length) return null;
+  if (/[`*#<>\[\]{}]|^(here|sure|this chunk|the chunk)\b/i.test(line) || /situate|chunk of|memory:/i.test(line)) return null;
+  return line;
+}
+
+/**
+ * One model-written sentence that situates `chunk` within its entry, or null on
+ * any failure (call error, empty or unusable output). Never throws: the
+ * caller keeps the deterministic prefix when this returns null.
+ */
+export async function generateChunkContext(
+  entry: ContextEntry,
+  chunk: string,
+  chunkIndex: number,
+  totalChunks: number,
+  env: Env,
+  config: Readonly<Config>,
+): Promise<string | null> {
+  try {
+    const stream = await env.AI.run(config.CONTEXTUAL_EMBEDDING_LLM_MODEL as any, {
+      messages: [{ role: "user", content:
+        `Write ONE plain sentence, at most 25 words, that says what part of the whole memory this chunk covers, so the chunk can be found by what the memory is about. ` +
+        `Use only facts present below. No markdown, no quotes, no preamble.\n\n` +
+        `Whole memory (start): ${entry.content.slice(0, LLM_ENTRY_CHARS)}\n\n` +
+        `Chunk ${chunkIndex + 1} of ${totalChunks}: ${chunk}` }],
+      max_tokens: CONTEXT_LLM_MAX_TOKENS,
+      temperature: 0,
+      stream: true,
+    });
+    return cleanGeneratedContext(await readStreamText(stream as ReadableStream));
+  } catch {
+    return null;
+  }
 }

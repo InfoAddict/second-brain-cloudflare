@@ -13,7 +13,7 @@ import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
-import { runSchemeBatch } from "./migration/embedding";
+import { runLlmContextBatch, runSchemeBatch } from "./migration/embedding";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -222,7 +222,10 @@ export default {
       // caught: a scheme batch failing must never hide the night summary, and
       // the admin route (POST /migration/scheme) drives it faster on demand.
       try {
-        await runSchemeBatch(env, await resolveConfig(env));
+        const cfg = await resolveConfig(env);
+        await runSchemeBatch(env, cfg);
+        // Off by default; returns before touching anything unless both switches are on.
+        await runLlmContextBatch(env, cfg);
       } catch (e) {
         console.error("Embedding scheme migration failed (non-fatal):", e);
       }
