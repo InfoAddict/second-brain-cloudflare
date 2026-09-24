@@ -94,10 +94,16 @@ export async function prepare(o: {
   return { missing, estimatedNeurons, spentNeurons };
 }
 
-/** Writes exactly the cache rows a baseline replay of this corpus uses, plus the producer records, as a gzipped layer. */
+/**
+ * Variants the default suite replays against the committed layer alone (calibration, observation-passive, the lock).
+ * Routing differs per variant (LIKE embeds queries the FTS route skips), so the layer must hold the union of their rows.
+ */
+export const COMMITTED_LAYER_VARIANTS = ["baseline", "no-rerank", "like", "dense-only", "keyword-only"] as const;
+
+/** Writes exactly the cache rows a replay of this corpus by those variants uses, plus the producer records, as a gzipped layer. */
 export async function exportCache(o: {
   spec: CorpusSpec;
-  variant: VariantSpec;
+  variant: VariantSpec | VariantSpec[];
   backend: "sqlite" | "workerd";
   model: string;
   readPaths: string[];
@@ -107,10 +113,13 @@ export async function exportCache(o: {
   /** Arm whose rows count as used; the committed cache must carry the stand-in's embeddings. Defaults to the stand-in. */
   llmTags?: LlmTagsArm;
 }): Promise<number> {
+  const variants = Array.isArray(o.variant) ? o.variant : [o.variant];
   const store = new ReplayStore(o.readPaths, undefined, { root: o.root });
-  const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay: makeReplayAi({ store, mode: "replay", llmTags: o.llmTags }), embeddingModel: o.model, index: o.variant.index });
+  const corpus = await loadCorpus({ spec: o.spec, backend: o.backend, replay: makeReplayAi({ store, mode: "replay", llmTags: o.llmTags }), embeddingModel: o.model, index: variants[0].index });
   try {
-    await runVariant({ corpus, variant: o.variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
+    for (const variant of variants) {
+      await runVariant({ corpus, variant, queries: o.spec.queries, isolate: "warm", embeddingModel: o.model });
+    }
   } finally {
     await corpus.close();
   }
