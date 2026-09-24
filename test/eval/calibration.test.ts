@@ -11,11 +11,12 @@
 //     replaces the plan's "MDE <= 0.0133" criterion: MDE is a property of each comparison's paired deltas (near 0 when
 //     nothing changes, 0.05-0.065 when a comparison has real effects), not of the query set, so no query-set size can
 //     satisfy that criterion for an arbitrary variant.
-// MDE unit (Sep 24 2026 review fix): the MDE is computed from per-cluster mean deltas (sd over clusters / sqrt(clusters)),
-// the unit the gate's bootstrap resamples, not per query. Cluster-level MDE, recall@10, regression population:
-//   like->baseline core-1k 0.0000, scale-5k 0.0579, scale-20k 0.0594; baseline->dense-only 0.0522,
-//   ->keyword-only 0.0524, ->sabotage 0.0555 (recall@5/MRR/nDCG in DISCRIMINATION.md). Still far above 0.02, so the
-//   underpowered rule stands; the earlier per-query figures overstated power by about 10%.
+// MDE estimator (Sep 24 2026 review fixes): MDE = 2.8 x the standard error (SD of the replicates) of the SAME cluster
+// bootstrap that draws the interval, so unit (whole clusters) and weighting (clusters count by their queries) match; an
+// equal-weight cluster-mean formula understated a two-query-cluster gain (0.0144 vs 0.026) and could FAIL where the
+// bootstrap says INCONCLUSIVE. Recall@10, regression population:
+//   like->baseline core-1k 0.0000, scale-5k 0.0568, scale-20k 0.0587; baseline->dense-only 0.0568,
+//   ->keyword-only 0.0479, ->sabotage 0.0514 (all metrics and categories in DISCRIMINATION.md). All far above 0.02.
 // Measured (core-1k, the 5k/20k like-vs-baseline runs, quality-only): see docs/superpowers/eval-results/DISCRIMINATION.md.
 //
 // Golden labels: the Task 6c step 9 20-query spot check is DONE, as a Codex blind pass (step 9b): 17/20 exact and 3

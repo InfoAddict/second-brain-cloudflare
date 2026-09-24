@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { minimumDetectableEffect, mulberry32, pairedBootstrap } from "./stats";
+import { bootstrapStandardError, minimumDetectableEffect, mulberry32, pairedBootstrap } from "./stats";
 
 describe("mulberry32", () => {
   it("is deterministic and uniform in [0, 1)", () => {
@@ -45,29 +45,22 @@ describe("pairedBootstrap", () => {
 
   it("rejects misaligned input and handles empty input", () => {
     expect(() => pairedBootstrap([1, 2], ["a"])).toThrow(/align/);
-    expect(pairedBootstrap([], [])).toEqual({ mean: 0, lo: 0, hi: 0, n: 0, clusters: 0 });
+    expect(pairedBootstrap([], [])).toEqual({ mean: 0, lo: 0, hi: 0, n: 0, clusters: 0, se: 0 });
   });
 });
 
 describe("minimumDetectableEffect", () => {
-  it("is 2.8 * sd / sqrt(n)", () => {
-    const deltas = [0.5, -0.5, 0.5, -0.5];
-    const sd = Math.sqrt(4 * 0.25 / 3);
-    expect(minimumDetectableEffect(deltas)).toBeCloseTo(2.8 * sd / 2, 10);
-    expect(minimumDetectableEffect([0.1])).toBe(0);
+  const ones = (n: number) => Array.from({ length: n }, (_, i) => `k${i}`);
+
+  it("is 2.8 x the bootstrap standard error of the mean delta, the SD of the replicates the interval is cut from", () => {
+    const deltas = [0.5, -0.5, 0.25, 0, 0.1, 0.3, -0.2, 0.4];
+    const keys = ones(deltas.length);
+    expect(minimumDetectableEffect(deltas, keys)).toBeCloseTo(2.8 * bootstrapStandardError(deltas, keys), 12);
+    expect(minimumDetectableEffect([0.1], ["a"])).toBe(0);
+    expect(minimumDetectableEffect([0.3, 0.3], ["a", "b"])).toBe(0); // no spread, no uncertainty
   });
 
-  it("uses the interval's unit: per-cluster mean deltas, sd over clusters, sqrt(clusters)", () => {
-    // 20 clusters of 10 queries; every query in a cluster moves together, so 200 queries carry only 20 independent draws.
-    const keys = Array.from({ length: 200 }, (_, i) => `c${Math.floor(i / 10)}`);
-    const deltas = Array.from({ length: 200 }, (_, i) => (Math.floor(i / 10) % 2 ? 0.5 : -0.5));
-    const clusterSd = Math.sqrt(20 * 0.25 / 19);
-    expect(minimumDetectableEffect(deltas, keys)).toBeCloseTo(2.8 * clusterSd / Math.sqrt(20), 10);
-    // treating the 200 queries as independent would understate it by about sqrt(10)
-    expect(minimumDetectableEffect(deltas, keys)).toBeGreaterThan(2.5 * minimumDetectableEffect(deltas));
-  });
-
-  it("agrees with the bootstrap interval's width when clusters are the unit (95% half-width = 1.96 se; MDE = 2.8 se)", () => {
+  it("matches the interval: (hi - lo) / 2 is about 1.96 standard errors, so the MDE is about 2.8 / 1.96 half-widths", () => {
     const keys = Array.from({ length: 300 }, (_, i) => `c${i % 60}`);
     const rand = mulberry32(3);
     const perCluster = Array.from({ length: 60 }, () => rand() - 0.4);
@@ -76,9 +69,25 @@ describe("minimumDetectableEffect", () => {
     expect(minimumDetectableEffect(deltas, keys) / 2.8).toBeCloseTo((ci.hi - ci.lo) / 2 / 1.96, 2);
   });
 
-  it("with no keys each delta is its own cluster", () => {
-    const deltas = [0.5, -0.5, 0.25, 0, 0.1];
-    expect(minimumDetectableEffect(deltas)).toBeCloseTo(minimumDetectableEffect(deltas, deltas.map((_, i) => `k${i}`)), 12);
+  it("weights clusters by query count, as the bootstrap does: gains in two two-query clusters among many singletons", () => {
+    // 242 singletons and 32 pairs (306 queries); +1 in two of the pairs. Equal-weight cluster means give about 0.0144;
+    // the query-weighted estimator the interval uses gives about 0.026, which crosses the 0.02 margin.
+    const keys = Array.from({ length: 306 }, (_, i) => (i < 64 ? `p${Math.floor(i / 2)}` : `s${i}`));
+    const deltas = keys.map((_, i) => (i < 4 ? 1 : 0));
+    const mde = minimumDetectableEffect(deltas, keys);
+    expect(mde).toBeGreaterThan(0.0245);
+    expect(mde).toBeLessThan(0.028);
+  });
+
+  it("the interval carries the same standard error the MDE uses", () => {
+    const keys = Array.from({ length: 50 }, (_, i) => `c${i % 20}`);
+    const deltas = keys.map((_, i) => (i % 7) / 10);
+    expect(pairedBootstrap(deltas, keys).se).toBeCloseTo(bootstrapStandardError(deltas, keys), 12);
+  });
+
+  it("with singleton clusters it is close to the classic 2.8 * sd / sqrt(n)", () => {
+    const deltas = Array.from({ length: 400 }, (_, i) => (i % 2 ? 0.5 : -0.5));
+    expect(minimumDetectableEffect(deltas, ones(400))).toBeCloseTo(2.8 * 0.5 / Math.sqrt(400), 2);
   });
 });
 
@@ -87,7 +96,7 @@ describe("pairedBootstrap statistical correctness (known answers, seeded)", () =
 
   it("identical variants (all-zero deltas) give a zero-width interval at 0", () => {
     const ci = pairedBootstrap(Array(300).fill(0), keys(300));
-    expect(ci).toEqual({ mean: 0, lo: 0, hi: 0, n: 300, clusters: 300 });
+    expect(ci).toEqual({ mean: 0, lo: 0, hi: 0, n: 300, clusters: 300, se: 0 });
   });
 
   it("matches the analytic normal interval: mean +/- 1.96 * sd / sqrt(n)", () => {

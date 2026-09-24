@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, evaluateGate, formatGate, formatLosers, findLosers } from "./gate";
-import { minimumDetectableEffect } from "./stats";
+import { bootstrapStandardError, minimumDetectableEffect } from "./stats";
 import { QUERY_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
 
 const LOCAL = (repo: string): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision: "abc", dtype: "fp32" });
@@ -251,19 +251,27 @@ describe("evaluateGate", () => {
   });
 });
 
-describe("evaluateGate: MDE is measured in clusters, the unit the interval resamples", () => {
-  it("a comparison whose 240 queries move in 30 lock-step clusters reports the cluster-level MDE, and is underpowered by it", () => {
-    const clustered = (name: string, tweak: (i: number, r: QueryResult) => void = () => {}) => report(name, (i, r) => { r.clusterKey = `c${i % 30}`; tweak(i, r); });
-    const moves = (i: number, r: QueryResult) => {
-      const g = i % 30;
-      for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] += g < 5 ? 0.5 : g >= 15 && g < 20 ? -0.5 : 0;
-    };
-    const result = evaluateGate(clustered("baseline"), clustered("v", moves));
-    const clusterMeans = Array.from({ length: 30 }, (_, g) => (g < 5 ? 0.5 : g >= 15 && g < 20 ? -0.5 : 0));
-    expect(result.mde.recall10).toBeCloseTo(minimumDetectableEffect(clusterMeans), 10);
-    // per-query would have said sqrt(8) times smaller
-    expect(result.mde.recall10!).toBeGreaterThan(2.5 * minimumDetectableEffect(Array.from({ length: 240 }, (_, i) => clusterMeans[i % 30])));
+describe("evaluateGate: MDE comes from the same estimator as the interval", () => {
+  // The shape of the core non-gap set: mostly one-query clusters plus some two-query clusters.
+  const core = (name: string, gainTo: number) => report(name, (i, r) => {
+    r.clusterKey = i < 64 ? `p${Math.floor(i / 2)}` : `s${i}`;
+    for (const k of Object.keys(r.metrics) as (keyof QueryResult["metrics"])[]) r.metrics[k] = i < 4 ? gainTo : 0;
+  }, 306);
+
+  it("a gain confined to two two-query clusters is INCONCLUSIVE (underpowered), not FAIL", () => {
+    const result = evaluateGate(core("baseline", 0), core("v", 1));
+    const row = result.deltas.find(d => d.scope === "overall" && d.metric === "recall10")!;
+    expect(row.ci.mean).toBeCloseTo(4 / 306, 10); // below the 0.02 margin: no improvement shown
+    expect(result.mde.recall10!).toBeGreaterThan(0.02); // query-weighted, as the bootstrap resamples; equal-weight cluster means said 0.0144
     expect(status(result, "improvement")).toBe("inconclusive");
+    expect(result.rules.find(r => r.rule === "improvement")!.detail).toMatch(/underpowered: MDE 0\.02\d+ > margin 0\.02/);
+    expect(result.verdict).toBe("INCONCLUSIVE");
+  });
+
+  it("reports the same figure the bootstrap gives: MDE = 2.8 x the standard error of the replicates", () => {
+    const b = core("baseline", 0), c = core("v", 1);
+    const result = evaluateGate(b, c);
+    expect(result.mde.recall10!).toBeCloseTo(2.8 * bootstrapStandardError(c.results.map((r, i) => r.metrics.recall10 - b.results[i].metrics.recall10), c.results.map(r => r.clusterKey)), 12);
   });
 });
 

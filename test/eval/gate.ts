@@ -194,7 +194,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   for (const metric of METRIC_NAMES) {
     const row = delta("overall", regressionPairs, metric);
     // Same rows the regression rule judges: how small a loss could it have seen.
-    mde[metric] = minimumDetectableEffect(regressionPairs.map(p => p.c.metrics[metric] - p.b.metrics[metric]), regressionPairs.map(p => p.c.clusterKey));
+    mde[metric] = 2.8 * row.ci.se; // the interval's own standard error: one estimator for both
     if (row.ci.mean <= -t.headlineTolerance || row.ci.hi < 0) regressions.push(`overall ${metric} ${row.ci.mean.toFixed(4)}`);
   }
   const skipped: string[] = [];
@@ -252,7 +252,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   }
   // No gain shown and the comparison could not have seen one of the margin's size: unproven, not disproven.
   // Measured over the rows the improvement rule judges (the non-gap queries), so a protected gap's gain cannot inflate it.
-  const improvementMde = (m: MetricName) => minimumDetectableEffect(pairs.map(p => p.c.metrics[m] - p.b.metrics[m]), pairs.map(p => p.c.clusterKey));
+  const improvementMde = (m: MetricName) => protectedGaps.length ? minimumDetectableEffect(pairs.map(p => p.c.metrics[m] - p.b.metrics[m]), pairs.map(p => p.c.clusterKey)) : mde[m]!;
   const underpoweredMde = (["recall10", "mrr10", "ndcg10"] as const).map(m => [m, improvementMde(m)] as const)
     .filter(([, v]) => v > t.improvementMargin).map(([m, v]) => `MDE ${v.toFixed(4)} > margin ${t.improvementMargin} (${m})`);
   if (wins.length) add("improvement", "pass", wins.join("; "));

@@ -245,14 +245,15 @@ down beyond its noise floor); an improvement (recall@10, MRR@10, or nDCG@10 up
 category declared with `--target`); and cost within budget (at most +2 D1
 statements, +25 neurons, and +1 AI call per recall, and `rows_read` within 25%
 plus 50 rows). A cost-only win with flat quality FAILs the improvement rule by
-design. The report prints the minimum detectable effect (MDE), computed at the
-cluster level, the same unit the bootstrap resamples, so queries sharing a
-source memory count once, and, after the verdict, a `losers:` list of queries
+design. The report prints the minimum detectable effect (MDE), 2.8 times the
+standard error of the same cluster bootstrap that draws the interval, so the two
+share one estimator: whole clusters are resampled and each counts by its
+queries. After the verdict it prints a `losers:` list of queries
 that got worse, which a mean can hide behind a few winners.
 
 A comparison is INCONCLUSIVE, meaning not proven rather than disproven, when:
 `rows_read` is unmeasured (any `sqlite` run); the paired deltas are too noisy to
-show a gain of the margin's size (the cluster-level MDE exceeds it); a targeted
+show a gain of the margin's size (the bootstrap MDE exceeds it); a targeted
 category or known gap has too few queries or clusters to prove a gain; or the
 reports are not comparable (different corpus, model, producer, D1 backend,
 isolate mode, LLM tag arm, or golden data; a missing producer or data
