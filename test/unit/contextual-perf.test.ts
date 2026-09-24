@@ -33,14 +33,19 @@ function referenceMs(): number {
   }
   return best;
 }
-/** referenceMs() on a quiet machine. */
+/**
+ * referenceMs() on a quiet machine. MACHINE-SPECIFIC: measured on the development box (0.31 to 0.40 ms, best of 9). It cannot
+ * tell "busy" from "slow", so on a slower machine (hosted CI, say) every budget here inflates even when idle: re-measure it
+ * there (run referenceMs() on a quiet machine) rather than loosening a budget. The floor only protects faster machines.
+ */
 const REFERENCE_QUIET_MS = 0.3;
 
 /**
  * A third of the free plan's 10 ms CPU per invocation, scaled for how busy the machine is at the moment of the check
- * (never below the quiet-machine budget, at most 4x). Read fresh each time, because load comes and goes during a run.
+ * (never below the quiet-machine budget) and capped at 9 ms, so it can never exceed one free-plan invocation's 10 ms
+ * whatever the load. Read fresh each time, because load comes and goes during a run.
  */
-const cpuBudget = (): number => 3.3 * Math.min(4, Math.max(1, referenceMs() / REFERENCE_QUIET_MS));
+const cpuBudget = (): number => Math.min(9, 3.3 * Math.max(1, referenceMs() / REFERENCE_QUIET_MS));
 
 const on: Config = { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" };
 const M3: Config = { ...on, EMBEDDING_MODEL: "@cf/baai/bge-m3" };
