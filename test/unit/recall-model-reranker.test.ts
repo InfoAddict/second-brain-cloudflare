@@ -113,6 +113,12 @@ describe("scoreRerankCandidates", () => {
     await expect(scoreRerankCandidates("q", cands, envWith(aiReturning(async () => ({ data: [[1]] }))))).rejects.toThrow();
     await expect(scoreRerankCandidates("q", cands, envWith(aiReturning(async () => { throw new Error("3040: capacity"); })))).rejects.toThrow(/capacity/);
   });
+  it("a synchronous throw from AI.run leaves no pending timer", async () => {
+    vi.useFakeTimers();
+    const ai = { run: () => { throw new Error("binding absent"); } } as unknown as Ai;
+    await expect(scoreRerankCandidates("q", cands, envWith(ai))).rejects.toThrow(/binding absent/);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("times out a hung call and absorbs its late rejection", async () => {
     vi.useFakeTimers();
     let reject!: (e: Error) => void;

@@ -102,10 +102,11 @@ export async function scoreRerankCandidates(query: string, candidates: readonly 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let release!: (v: symbol) => void;
   const guard = new Promise<symbol>(resolve => { release = resolve; timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs); });
-  const call = (env.AI as unknown as { run(model: string, input: unknown): Promise<unknown> })
-    .run(RERANK_MODEL, { query: query.slice(0, RERANK_QUERY_MAX_CHARS), contexts: candidates.map(c => ({ text: c.text })), top_k: candidates.length });
-  call.catch(() => undefined);
   try {
+    // Inside the try: a synchronous throw from AI.run (absent binding, a mock returning a non-promise) must still clear the timer.
+    const call = Promise.resolve((env.AI as unknown as { run(model: string, input: unknown): unknown })
+      .run(RERANK_MODEL, { query: query.slice(0, RERANK_QUERY_MAX_CHARS), contexts: candidates.map(c => ({ text: c.text })), top_k: candidates.length }));
+    call.catch(() => undefined);
     const raw = await Promise.race([call, guard]);
     if (raw === TIMED_OUT) throw new RerankTimeout("reranker timed out");
     return validateRerankerResponse(raw, candidates.length);
