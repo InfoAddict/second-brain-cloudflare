@@ -14,6 +14,9 @@ export interface RootCandidate extends VectorizeMatch {
   semanticRank?: number;
 }
 
+/** The score the linked-evidence and evidence-slot rules read: the pre-blend heuristic score when a reranker blended the root's score. */
+export const evidenceScoreOf = (root: Pick<RootCandidate, "rootScore" | "evidenceScore">): number => root.evidenceScore ?? root.rootScore;
+
 export interface SelectedRoot {
   candidate: RootCandidate;
   selectedBy: RootView;

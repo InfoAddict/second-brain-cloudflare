@@ -32,7 +32,7 @@ import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
 import { blendRerankerScores, rerankStep } from "./model-reranker";
-import { selectGraphRoots, type RootCandidate } from "./root-selector";
+import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
 import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
@@ -747,7 +747,7 @@ export async function recallEntries(
   // is. They are the picks, not the survivors: a pick that did not hydrate cannot be a linked memory either.
   const headParentIds = directParentIds.slice(0, RECALL_BLOCK);
   const leadingParentIds = directParentIds.slice(0, 2 * RECALL_BLOCK);
-  const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.evidenceScore ?? x.candidate.rootScore));
+  const maximumRootScore = Math.max(...selectedRoots.map(x => evidenceScoreOf(x.candidate)));
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
@@ -765,7 +765,7 @@ export async function recallEntries(
     const row = d1Map.get(e.id);
     if (!row) return [];
     const root = rootById.get(rootIdByNode.get(e.id) ?? "");
-    const rootScore = root ? (root.evidenceScore ?? root.rootScore) / normalizedRootDivisor : fallbackRootScore;
+    const rootScore = root ? evidenceScoreOf(root) / normalizedRootDivisor : fallbackRootScore;
     const evidence = scoreLinkedEvidence({
       parentScore: rootScore,
       parentContent: root?.localEvidence ?? "",
@@ -896,7 +896,7 @@ export async function recallEntries(
         exactHighIdf: supplemental.exactHighIdf,
         exactMatchCount: exactQueryMatchCount(root.localEvidence, profile.evidenceTokens),
         metadataAlignment: root.metadataAlignment,
-        score: root.rootScore,
+        score: evidenceScoreOf(root), // same scale as the linked candidates below (scoreLinkedEvidence reads the pre-blend score)
         source: "omitted-root",
         semanticRank: root.semanticRank,
         semanticEligible,
