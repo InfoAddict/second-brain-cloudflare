@@ -83,10 +83,16 @@ export const DEFAULTS = {
   // vectors from another space. cls was measured and rejected (T-0077); the
   // key exists so the eval can build a cls index.
   EMBEDDING_POOLING: "mean",
-  // Off until measured at scale (T-0042): with it off nothing below runs, reads
-  // or writes anything. Whether each chunk of a multi-chunk memory is embedded with a transient
-  // entry-level prefix (src/capture/contextual.ts). Off stops new contextual
-  // vectors and pauses the backfill; existing vectors are left as they are.
+  // OPERATOR KILL SWITCH, not a user setting: it is never surfaced in an app or
+  // dashboard, and stays an ordinary (unlocked) key so an operator can set it
+  // through the config API. Whether each chunk of a multi-chunk memory is
+  // embedded with a transient entry-level prefix (src/capture/contextual.ts).
+  // "off" stops new contextual vectors and pauses the migration and the generated
+  // tier, leaving existing vectors as they are; turning it back on resumes the
+  // same ledger. Ships off until measured at scale (T-0042): while off, nothing
+  // below runs, reads or writes anything. Flipping the shipped default is the
+  // release decision; the key is what lets a misbehaving multi-day migration be
+  // stopped without a redeploy.
   CONTEXTUAL_EMBEDDINGS: "off",
   // Stored vector dimensions below which long notes get focus chunks (about 2.4x
   // the vectors of plain chunking); past it they are chunked at the larger tail

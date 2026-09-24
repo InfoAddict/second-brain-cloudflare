@@ -288,6 +288,13 @@ weights). Real Workers AI latency and billing are unmeasured: no account is used
 models but not yet at scale, so it ships off until the expanded golden set clears
 it; off, nothing below reads, writes or runs (no migration, ledger, index-size
 read or second duplicate comparison), and the baseline lock is the plain scheme.
+There is no user-facing toggle and none is planned: the feature ships on or not at
+all. The key stays an ordinary, unlocked config key because it is the operator's
+kill switch (API only, in no UI): setting it off pauses the migration, stops new
+contextual vectors and stops the generated tier without a redeploy, and setting it
+back on resumes the same ledger without re-embedding what is already contextual.
+Flipping the shipped default is a one-line change, with a rewrite of the CHANGELOG
+entry, which is written for the opt-in state.
 
 A memory over 1,600 characters is split into chunks and every chunk is its own
 vector. A fact buried in the middle of a long note is a small part of one large
