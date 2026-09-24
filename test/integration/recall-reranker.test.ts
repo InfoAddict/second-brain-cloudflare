@@ -149,8 +149,8 @@ describe("recall reranker step", () => {
     const first = await recall(s, "on");
     expect(first.diagnostics.rerankRoute).toBe("not-ready");
     expect(await s.kv.get(RERANK_READY_KV_KEY)).toBe("1"); // the probe ran in waitUntil
-    expect(s.rerankInputs).toHaveLength(1); // that one call is the probe, not a recall batch
-    expect(s.rerankInputs[0].contexts).toHaveLength(3);
+    expect(s.rerankInputs).toHaveLength(2); // both calls are the probe (ranking check, then the full batch), not a recall batch
+    expect(s.rerankInputs.map(i => i.contexts.length)).toEqual([3, 30]);
   });
 
   it("a latch marked failed keeps recall on the heuristic order without another probe", async () => {

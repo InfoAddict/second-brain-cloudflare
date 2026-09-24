@@ -156,11 +156,21 @@ const PROBE = {
   margin: 2,
 };
 
+/** A production-shaped request: a full batch of full-length passages and a full-length query, so a size limit the small ranking check cannot reach still latches the model off. */
+const fullBatch = () => ({
+  query: "what should I remember about the project decision and why did the team choose that approach ".repeat(4).slice(0, RERANK_QUERY_MAX_CHARS),
+  candidates: Array.from({ length: RERANK_MAX_CANDIDATES }, (_, i) => ({
+    parentId: String(i),
+    text: `Passage ${i}: ${"notes about a planning meeting, the budget, and follow-up actions for the quarter. ".repeat(6)}`.slice(0, RERANK_EXCERPT_CHARS),
+  })),
+});
+
 export type ProbeResult = { ok: true; margin: number } | { ok: false; reason: string };
 
 /**
- * The model contract probe. One call with a fixed, non-private request: the answer must validate against the
- * documented shape and the relevant passage must lead the others by PROBE.margin logits. Writes the readiness latch
+ * The model contract probe. Two calls with fixed, non-private requests: a small one whose answer must validate against the
+ * documented shape and put the relevant passage ahead of the others by PROBE.margin logits, then a full-size batch (RERANK_MAX_CANDIDATES
+ * passages of RERANK_EXCERPT_CHARS each, a query of RERANK_QUERY_MAX_CHARS) that must come back complete. Writes the readiness latch
  * either way ("1" for a week, "0" for six hours) so recall never runs an unverified model. Never throws.
  */
 export function probeReranker(env: Env): Promise<ProbeResult> {
@@ -176,6 +186,11 @@ async function runProbe(env: Env): Promise<ProbeResult> {
     const others = scores.filter((_, i) => i !== PROBE.relevant);
     const margin = scores[PROBE.relevant] - Math.max(...others);
     result = margin >= PROBE.margin ? { ok: true, margin } : { ok: false, reason: "the relevant passage did not clearly outrank the unrelated ones" };
+    if (result.ok) {
+      // Any rejection, truncation or wrong length throws here and latches the model off.
+      const big = fullBatch();
+      await scoreRerankCandidates(big.query, big.candidates, env, RERANK_PROBE_TIMEOUT_MS);
+    }
   } catch (e) {
     result = { ok: false, reason: e instanceof Error ? e.message : "probe failed" };
   }

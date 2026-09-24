@@ -170,6 +170,32 @@ describe("readiness latch and probe", () => {
   });
 });
 
+describe("production-shaped probe request", () => {
+  const good = (_: string, input: unknown) => Promise.resolve({ response: (input as { contexts: { text: string }[] }).contexts.map((c, id) => ({ id, score: /reset a forgotten password/.test(c.text) ? 4 : -6 })) });
+
+  it("sends a full batch of full-length passages after the ranking check", async () => {
+    const ai = aiReturning(good);
+    expect((await probeReranker(envWith(ai))).ok).toBe(true);
+    expect(ai.run).toHaveBeenCalledTimes(2);
+    const big = (ai.run as ReturnType<typeof vi.fn>).mock.calls[1][1] as { query: string; contexts: { text: string }[]; top_k: number };
+    expect(big.contexts).toHaveLength(30);
+    expect(big.contexts.every(c => c.text.length === 400)).toBe(true);
+    expect(big.query.length).toBe(256);
+    expect(big.top_k).toBe(30);
+  });
+
+  it.each([
+    ["a rejection", () => { throw new Error("input too large"); }],
+    ["a truncated answer", (input: { contexts: unknown[] }) => ({ response: input.contexts.slice(0, 5).map((_c, id) => ({ id, score: 1 })) })],
+  ])("latches not-ready when the full batch gets %s", async (_name, onBig) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const kv = makeMemoryKV();
+    const ai = aiReturning(async (m, input) => (input as { contexts: unknown[] }).contexts.length === 30 ? (onBig as never as (i: unknown) => unknown)(input) : good(m, input));
+    expect((await probeReranker(envWith(ai, kv))).ok).toBe(false);
+    expect(await kv.get(RERANK_READY_KV_KEY)).toBe("0");
+  });
+});
+
 describe("probe herd and KV write failure", () => {
   const good = (_: string, input: unknown) => Promise.resolve({ response: (input as { contexts: { text: string }[] }).contexts.map((c, id) => ({ id, score: /reset a forgotten password/.test(c.text) ? 4 : -6 })) });
 
@@ -178,7 +204,7 @@ describe("probe herd and KV write failure", () => {
     const env = envWith(ai);
     const results = await Promise.all([probeReranker(env), probeReranker(env), probeReranker(env)]);
     expect(results.every(r => r.ok)).toBe(true);
-    expect(ai.run).toHaveBeenCalledTimes(1);
+    expect(ai.run).toHaveBeenCalledTimes(2); // one probe = the ranking check plus the full batch
   });
 
   it("a failed KV put does not make the next readiness read re-probe", async () => {
