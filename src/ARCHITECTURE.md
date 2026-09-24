@@ -639,6 +639,17 @@ margin. Multi-hop is therefore not a valid target category for a reranker
 and should drop it; that change is applied at integration), and a graph change
 is judged by the answer's rank, not by this recall.
 
+The paraphrase base rate fell when the set grew. The original 48 paraphrase
+queries scored recall@10 0.375; the 440 now in the set score 0.109 (0.182 before
+the coherent long-context notes added on-topic distractors). The new paraphrases
+are harder, not the baseline worse: their queries share no content word with the
+gold, and the note collection they compete against is far denser in the same
+topics. Long-context moved the same way: the original 24 notes went from 0.083 to
+0.000 as more notes competed, all 220 legacy notes score 0.055, and the 90
+coherent notes 0.222. A target gain in paraphrase is therefore measured from a
+base of about 0.11, not 0.375, and the +0.05 target margin is a 45% relative
+gain.
+
 **The overall improvement path is not evidence for T-0041 or T-0042.** The
 0.02 `improvementMargin` was approved when paraphrase was 15% and long-context
 7.5% of the non-gap queries. On the expanded set they are 27% and 19%, and the
