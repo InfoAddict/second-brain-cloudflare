@@ -26,7 +26,14 @@ const drift = (why: string): never => {
   throw new Error(`the LLM prompt is not the inferQueryTags prompt (${why}); update PROMPT parsing in test/eval/tag-standin.ts to match src/recall/distill.ts`);
 };
 
-/** Strict: any deviation from distill.ts's template throws instead of guessing. */
+/**
+ * Strict on the template: any deviation from distill.ts's wording throws instead of guessing.
+ *
+ * The list is split the way production splits a reply (on commas, trimmed, empties dropped, repeats folded).
+ * Stored tags may contain commas (capture only trims and lowercases; validInputTags bounds length and NUL), so
+ * "a, b" is shown as two words and a reply can never name it. Mirroring the split keeps every tag the stand-in
+ * returns an exact piece of what production will split, so production's own known-tag filter decides what survives.
+ */
 export function parseTagPrompt(input: { messages?: { role?: string; content?: string }[]; [other: string]: unknown }): { tags: string[]; query: string } {
   const msgs = input.messages;
   if (!Array.isArray(msgs) || msgs.length !== 1 || msgs[0].role !== "user" || typeof msgs[0].content !== "string") {
@@ -36,10 +43,8 @@ export function parseTagPrompt(input: { messages?: { role?: string; content?: st
   if (!content.startsWith(HEAD)) return drift("head");
   const midAt = content.indexOf(MID, HEAD.length);
   if (midAt < 0) return drift("instruction");
-  const tags = content.slice(HEAD.length, midAt).split(", ");
-  if (tags.some(t => !t || t !== t.trim()) || new Set(tags).size !== tags.length) {
-    throw new Error(`malformed tag list in the inferQueryTags prompt: ${JSON.stringify(tags.slice(0, 5))}`);
-  }
+  const tags = [...new Set(content.slice(HEAD.length, midAt).split(",").map(t => t.trim()).filter(Boolean))];
+  if (!tags.length) throw new Error("empty tag list in the inferQueryTags prompt; production never calls the model without tags");
   return { tags, query: content.slice(midAt + MID.length) };
 }
 

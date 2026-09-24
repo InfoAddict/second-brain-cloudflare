@@ -23,27 +23,68 @@ describe("parseTagPrompt", () => {
     expect(() => parseTagPrompt(input("Summarize this."))).toThrow(/inferQueryTags prompt/);
   });
 
-  it("fails loudly on a malformed tag list or message shape", () => {
+  it("splits the shown list the way production splits a reply: on commas, trimmed, empties dropped, repeats folded", () => {
+    expect(parseTagPrompt(input(prompt("a, , b, a,c ", "q"))).tags).toEqual(["a", "b", "c"]);
+  });
+
+  it("fails loudly on an empty tag list or message shape", () => {
     expect(() => parseTagPrompt(input(prompt("", "q")))).toThrow(/tag list/);
-    expect(() => parseTagPrompt(input(prompt("a, , b", "q")))).toThrow(/tag list/);
-    expect(() => parseTagPrompt(input(prompt("a, a", "q")))).toThrow(/tag list/);
+    expect(() => parseTagPrompt(input(prompt(" , ", "q")))).toThrow(/tag list/);
     expect(() => parseTagPrompt({ messages: [], stream: true })).toThrow(/one user message/);
     expect(() => parseTagPrompt({ messages: [{ role: "system", content: prompt("a", "q") }] })).toThrow(/one user message/);
   });
 
-  it("tracks the real prompt in src/recall/distill.ts", async () => {
-    const db = makeTestDb();
-    db.entries.push({ id: "e1", content: "Note", tags: '["work","personal","finance"]', source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 });
-    let seen: unknown;
-    const aiRun = vi.fn(async (_model: string, body: unknown) => {
-      seen = body;
-      return new ReadableStream({ start(c) { c.close(); } });
-    });
-    await inferQueryTags("quarterly planning session", makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai }));
-    expect(aiRun).toHaveBeenCalledTimes(1);
-    const parsed = parseTagPrompt(seen as never);
+});
+
+/** Runs the real inferQueryTags over a brain holding these tags; returns what it sent the model and what it returned for `reply`. */
+async function viaProduction(tags: string[], query: string, reply = "") {
+  const db = makeTestDb();
+  db.entries.push({ id: "e1", content: "Note", tags: JSON.stringify(tags), source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 });
+  let seen: unknown;
+  const aiRun = vi.fn(async (_model: string, body: unknown) => {
+    seen = body;
+    return new ReadableStream({ start(c) { if (reply) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ response: reply })}\n\n`)); c.enqueue(new TextEncoder().encode("data: [DONE]\n\n")); c.close(); } });
+  });
+  const returned = await inferQueryTags(query, makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai }));
+  expect(aiRun).toHaveBeenCalledTimes(1);
+  return { parsed: parseTagPrompt(seen as never), returned };
+}
+
+// These fail when the matching part of src/recall/distill.ts changes shape, so the stand-in cannot drift silently.
+describe("parseTagPrompt against the real inferQueryTags", () => {
+  it("reads the shown tags and the query", async () => {
+    const { parsed } = await viaProduction(["work", "personal", "finance"], "quarterly planning session");
     expect([...parsed.tags].sort()).toEqual(["finance", "personal", "work"]);
     expect(parsed.query).toBe("quarterly planning session");
+  });
+
+  it("sees only the first 50 tags of the vocabulary", async () => {
+    const all = Array.from({ length: 60 }, (_, i) => `topic${String(i).padStart(2, "0")}`);
+    const { parsed } = await viaProduction(all, "unrelated wording");
+    expect(parsed.tags).toEqual(all.slice(0, 50));
+  });
+
+  it("sees the query cut to its first 300 characters", async () => {
+    const long = `${"x".repeat(299)}\u{1F600}${"tail ".repeat(20)}`; // the cut lands inside a surrogate pair
+    const { parsed } = await viaProduction(["work"], long);
+    expect(parsed.query).toBe(long.slice(0, 300));
+    expect(parsed.query).toHaveLength(300);
+  });
+
+  it("carries a CJK query through unchanged", async () => {
+    const cjk = "四半期の計画について教えてください";
+    expect((await viaProduction(["work"], cjk)).parsed.query).toBe(cjk);
+    const long = "計".repeat(350);
+    expect((await viaProduction(["work"], long)).parsed.query).toBe("計".repeat(300));
+  });
+
+  it("splits a stored tag that contains a comma exactly as production splits a reply", async () => {
+    // production stores "a, b" as one tag but shows it as "a, b" in a comma-joined list, then splits replies on commas
+    const { parsed, returned } = await viaProduction(["a", "a, b", "c"], "unrelated wording", "a, b, c");
+    expect(parsed.tags).toEqual(["a", "b", "c"]);
+    expect(returned).toEqual(["a", "c"]); // "b" is not a known tag; "a, b" can never come back
+    const echoed = await viaProduction(["a", "a, b", "c"], "unrelated wording", formatTags(pickTags([1, 0], parsed.tags, new Map(parsed.tags.map(t => [t, [1, 0]])), 0.5, 10)));
+    for (const t of echoed.returned) expect(["a", "a, b", "c"]).toContain(t);
   });
 });
 
