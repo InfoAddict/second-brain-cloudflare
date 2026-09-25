@@ -48632,8 +48632,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4790,
+    "d1Statements": 16,
+    "d1RowsRead": 4791,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -49383,8 +49383,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4792,
+    "d1Statements": 16,
+    "d1RowsRead": 4796,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -49914,8 +49914,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4790,
+    "d1Statements": 16,
+    "d1RowsRead": 4791,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -50586,8 +50586,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4687,
+    "d1Statements": 16,
+    "d1RowsRead": 4691,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 1,
@@ -50674,8 +50674,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4792,
+    "d1Statements": 16,
+    "d1RowsRead": 4796,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -50853,8 +50853,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 2324,
+    "d1Statements": 16,
+    "d1RowsRead": 2336,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -51701,8 +51701,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4806,
+    "d1Statements": 16,
+    "d1RowsRead": 4818,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -52370,8 +52370,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4802,
+    "d1Statements": 16,
+    "d1RowsRead": 4810,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -52505,8 +52505,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 2318,
+    "d1Statements": 16,
+    "d1RowsRead": 2324,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
@@ -52989,8 +52989,8 @@
     "ndcg10": 1
    },
    "cost": {
-    "d1Statements": 15,
-    "d1RowsRead": 4790,
+    "d1Statements": 16,
+    "d1RowsRead": 4791,
     "aiCalls": 1,
     "embeddingCalls": 1,
     "vectorizeQueries": 2,
