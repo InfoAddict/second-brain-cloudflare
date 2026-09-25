@@ -212,6 +212,45 @@ within `FTS_READY_CACHE_MS` (5 minutes) of the flag going live, since each
 instance only checks periodically rather than on every request. No API or
 MCP change.
 
+### Candidate rows carry match levels, not text (T-0088)
+
+The keyword arm used to select every candidate note in full (up to `KEYWORD_CANDIDATE_LIMIT` = 500 rows) so the Worker could weigh
+each query term in it. On a brain with long notes (session logs, transcripts) that is tens of MB per recall, and the Worker's
+CPU is spent parsing it, lowercasing it and running a boundary regex over it per term per row. D1 does that work now
+(`src/recall/keyword-rows.ts`): each candidate row comes back with `id, created_at, tags, source` and, per query term, one level:
+
+| level | meaning |
+|---|---|
+| 0 | the term is not in the note |
+| 1 | it is, but only inside longer words ("cat" in "concatenate") |
+| 2 | it stands as a word of its own: the characters either side are not `[A-Za-z0-9_]` |
+
+Fusion weighs a term `idf` at level 2 and `idf * SUBSTRING_MATCH_WEIGHT` at level 1, exactly as before; the single-word df and
+the reranker's keyword evidence read the same levels. Note text is fetched by id only where something renders or scores it (the
+final results, the reranker's passages), which was already the case.
+
+What the SQL does not reproduce, and why it was accepted:
+- **The first two occurrences decide the boundary.** A note whose first two occurrences of a term sit inside longer words and
+  whose third is a word of its own reads as level 1 (the scan read 2). On core-1k this moves 78 of 1,751 rankings (reranker off),
+  none in identifier, rare-word or common-word, and no category regresses (gate: overall MRR@10 +0.0002, multi-hop recall@10
+  -0.0033 with a bound of 0.0000).
+- **Case is folded with SQLite's `lower()`, which is ASCII-only** (as `LIKE` is). A term with non-ASCII characters is also looked
+  for as typed, so a full-width raw-surface probe still matches.
+- **rows_read rises about 8%** on core-1k (2,494 to 2,696 per recall on workerd): the statement's candidate CTE is materialized and
+  read once more to compute the levels. The same rows are scanned; no statement was added.
+
+Each term is bound once and referenced by number (`?N`), so sixteen terms and a scope stay far under D1's 100 bound values.
+A row that carries its own text (the `?tag=` path, and test doubles standing in for D1) is scored from that text as before.
+
+Measured worker CPU per recall (local, response parsing included; D1 stand-in time excluded), before to after:
+
+| brain | 3.6.0 | fbe2f1d | after |
+|---|---|---|---|
+| 3,300 short notes, 2% long (3-8 KB) | 6.5 ms | 6.5 ms | 6.3 ms |
+| 15% of notes 10-50 KB, FTS | 36.4 ms | 67.6 ms | 8.3 ms |
+| 20% of notes 20-100 KB, FTS | 90.4 ms | 159.1 ms | 10.9 ms |
+| 20% of notes 20-100 KB, LIKE | 83.2 ms | 79.9 ms | 8.6 ms |
+
 ## Recall cross-encoder reranker
 
 `recall/model-reranker.ts` re-scores a bounded set of already fused candidates

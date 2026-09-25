@@ -138,7 +138,9 @@ describe("recall stays inside D1's statement limits", () => {
       expect(frequency?.sql).toContain("WHERE created_at >= ? AND created_at < ?");
       expect(keyword.sql).toContain("AND created_at >= ? AND created_at < ?");
       expect(frequency?.params.slice(-2)).toEqual([day, day + 86400000]);
-      expect(keyword.params.slice(-3, -1)).toEqual([day, day + 86400000]);
+      // the limit is followed by the terms the statement scores (bound once each)
+      const terms = (keyword.sql.match(/ AS p\d+/g) ?? []).length;
+      expect(keyword.params.slice(-3 - terms, -1 - terms)).toEqual([day, day + 86400000]);
     });
 
     it("answers a 120-word query with no memories stored", async () => {
@@ -197,8 +199,9 @@ describe("recall stays inside D1's statement limits", () => {
       // retrieval anchors use the remainder of the existing 16-token budget.
       // The final parameter remains the row limit; between them sit the three
       // workspace-scope bindings (personal, company, legacy '') that v3 adds
-      // whenever an Identity is in play — 16 + 3 + 1 = 20.
-      expect(keywordStatements(executed)[0].params.length).toBe(20);
+      // whenever an Identity is in play — 16 + 3 + 1 = 20 — and then the 16 terms the statement scores for the notes it
+      // selects, each bound once and referenced by number: 36, far under D1's 100.
+      expect(keywordStatements(executed)[0].params.length).toBe(36);
 
       executed.length = 0;
       const short = await worker.fetch(req("GET", "/recall?query=topic0"), env, ctx);

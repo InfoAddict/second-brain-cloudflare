@@ -40,6 +40,7 @@ import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
+import { rawColumn, rowWithLevels, withMatchLevels } from "./keyword-rows";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -94,6 +95,7 @@ async function keywordSearchLike(
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   // `not` are terms whose rows are excluded (already read whole by an earlier window); `max` is the window's row cap.
+  // The rows come back without their text: each carries, for every term, how the note holds it (see keyword-rows.ts).
   const windowFor = (subset: string[], max: number, not: string[] = []) => {
     const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
     const exclude = not.length ? ` AND NOT (${not.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ")})` : "";
@@ -102,12 +104,13 @@ async function keywordSearchLike(
     // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
     const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
     // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
-    return env.DB.prepare(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`
-    ).bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max);
+    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc${rawColumn(terms, "content")} FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`;
+    const levels = withMatchLevels(inner, ["id", "created_at", "tags", "source"], terms, "created_at DESC");
+    return env.DB.prepare(levels.sql)
+      .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max, ...levels.binds);
   };
   const split = splitLikeTerms(terms, corpus?.df, limit);
-  if (!split) return ((await windowFor(terms, limit).all()).results ?? []) as unknown as KeywordRow[];
+  if (!split) return ((await windowFor(terms, limit).all()).results ?? []).map(r => rowWithLevels(r as Record<string, unknown>, terms));
   // The window would truncate. A row matching only common words must not push out one matching the rarest: those rows
   // are read whole (they fit the limit), then the newest rows for the remaining terms fill what is left. The rare rows
   // number at most their df sum, so the second window asks for no more than the slots that leaves, and skips the rows
@@ -119,7 +122,7 @@ async function keywordSearchLike(
     : [await windowFor(split.rare, limit).all(), { results: [] as unknown[] }];
   const seen = new Set<string>();
   const out: KeywordRow[] = [];
-  for (const row of [...(rare.results ?? []), ...(rest.results ?? [])] as unknown as KeywordRow[]) {
+  for (const row of [...(rare.results ?? []), ...(rest.results ?? [])].map(r => rowWithLevels(r as Record<string, unknown>, terms))) {
     if (seen.has(row.id)) continue;
     seen.add(row.id);
     out.push(row);
@@ -139,6 +142,8 @@ async function keywordSearchFts(
   // in "io scheduler") still decides which of the index's matches survive the
   // LIMIT. Evaluated on rows the MATCH already read, never a scan.
   shortTerms: string[],
+  // Every term the query searches with (eligible or short): each row reports how it holds each one.
+  terms: string[],
   env: Env,
   limit: number,
   bounds: Readonly<TimeBounds>,
@@ -155,15 +160,21 @@ async function keywordSearchFts(
   // columns, so the clause below resolves unambiguously though unqualified.
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
   const shortHits = shortTerms.map(() => `(e.content LIKE ? ${CONTENT_LIKE_ESCAPE})`).join(" + ");
-  const shortOrder = shortHits ? `${shortHits} DESC, ` : "";
   const shortBindings = shortTerms.map(contentLikePattern);
+  // Rows come back without their text, with per-term match levels instead (keyword-rows.ts). `sh` and `rk` carry the ranking
+  // (short-token hits, then bm25) so the outer SELECT keeps the order the LIMIT chose.
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
-  const sqlFor = (order: string) => `SELECT e.id, e.content, e.tags, e.source, e.created_at
+  const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc${rawColumn(terms, "e.content")}, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
        WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
-       ${order}LIMIT ?`;
-  const rankedSql = sqlFor(`ORDER BY ${shortOrder}bm25(entries_fts) `);
-  const andTierSql = sqlFor("ORDER BY entries_fts.rowid DESC ");
+       ORDER BY sh DESC, rk, ord LIMIT ?`;
+  // scope-checked: same clause, same reason as above
+  const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc${rawColumn(terms, "e.content")}, entries_fts.rowid AS ord
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       ORDER BY entries_fts.rowid DESC LIMIT ?`;
+  const rankedLevels = withMatchLevels(rankedInner, ["id", "created_at", "tags", "source", "sh", "rk", "ord"], terms, "sh DESC, rk, ord", ["id", "created_at", "tags", "source"]);
+  const andTierLevels = withMatchLevels(andTierInner, ["id", "created_at", "tags", "source", "ord"], terms, "ord DESC", ["id", "created_at", "tags", "source"]);
   // Join on rowid as well as id: rowids are unique, so a stale duplicate FTS
   // row for one id cannot fill two LIMIT slots, and a drifted row (an FTS id
   // at a rowid whose entries.id differs) maps to nothing instead of a wrong entry.
@@ -178,8 +189,8 @@ async function keywordSearchFts(
   // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
   // wiring below, rather than adding a second control path.
   const statementFor = (match: string, i: number, max: number) => andTier && i === 0
-    ? env.DB.prepare(andTierSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), max)
-    : env.DB.prepare(rankedSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), ...shortBindings, max);
+    ? env.DB.prepare(andTierLevels.sql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), max, ...andTierLevels.binds)
+    : env.DB.prepare(rankedLevels.sql).bind(...shortBindings, match, ...timeBindings, ...(scope?.bindings ?? []), max, ...rankedLevels.binds);
   const [livenessResult, ...firstTier] = await env.DB.batch([
     // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
     // never entries/edges rows — nothing here to scope by workspace.
@@ -189,14 +200,15 @@ async function keywordSearchFts(
   if (!isFtsLiveRows(livenessResult.results as { name: string; sql: string | null }[] | undefined)) {
     throw new Error("entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body)");
   }
-  const tiers = [firstTier[0].results as unknown as KeywordRow[]];
+  const asRows = (results: unknown) => ((results ?? []) as Record<string, unknown>[]).map(r => rowWithLevels(r, terms));
+  const tiers = [asRows(firstTier[0].results)];
   // Later tiers only fill what the earlier ones leave under the limit (mergeTiers keeps a row's first tier and stops at
   // the limit), so each asks for that many rows: a tier that could not fit is not read at all.
   for (let i = 1; i < matches.length; i++) {
     const room = limit - new Set(tiers.flat().map(r => r.id)).size;
     if (room <= 0) break;
     const [next] = await env.DB.batch([statementFor(matches[i], i, room)]);
-    tiers.push(next.results as unknown as KeywordRow[]);
+    tiers.push(asRows(next.results));
   }
   return tiers;
 }
@@ -238,7 +250,7 @@ export async function keywordSearch(
     }
     if (await ftsReady(env)) {
       try {
-        const tiers = await keywordSearchFts(plan.matches, plan.andTier, terms.filter(ftsShortToken), env, limit, bounds, identity, only, teamId);
+        const tiers = await keywordSearchFts(plan.matches, plan.andTier, terms.filter(ftsShortToken), terms, env, limit, bounds, identity, only, teamId);
         const rows = tiers.length === 1 ? tiers[0] : mergeTiers(tiers, limit);
         // A bounded plan that found nothing has not proven the tokens absent:
         // the recency window is the pre-bounded answer, so keep it as the floor.
@@ -277,16 +289,30 @@ function mergeTiers(tiers: KeywordRow[][], limit: number): KeywordRow[] {
   return out;
 }
 
-// A keyword row's text is lowercased for fusion (twice: the all-terms view and the lexical view), for the single-word df, and for the
-// reranker's keyword evidence. Notes can be tens of KB and a recall reads up to 500 of them, so it is done once per row.
+// A keyword row read by the tag path carries its text; one read by the keyword arm carries per-term match levels instead
+// (keyword-rows.ts). Either way `termLevel` answers how a note holds a term: 0 not at all, 1 only inside longer words, 2 as a word
+// of its own (a token found at a word boundary earns full IDF; found only inside a longer word, "cat" in "concatenate", a fraction).
+// Lookarounds rather than \b so identifier-shaped tokens ("#149", "v1.9") keep matching, \b treats their punctuation as the boundary.
+// Text is lowercased once per row, not once per view and per term: notes can be tens of KB.
 const lowerCache = new WeakMap<object, string>();
-const lowerContent = (row: { content: string }): string => {
+const lowerContent = (row: { content?: string }): string => {
   let lc = lowerCache.get(row);
-  if (lc === undefined) lowerCache.set(row, lc = row.content.toLowerCase());
+  if (lc === undefined) lowerCache.set(row, lc = (row.content ?? "").toLowerCase());
   return lc;
 };
-
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const boundaryOf = new Map<string, RegExp>();
+function termLevel(row: KeywordRow, term: string): 0 | 1 | 2 {
+  const known = row.hits?.get(term);
+  if (known !== undefined) return known;
+  const needle = term.toLowerCase();
+  const lc = lowerContent(row);
+  if (!lc.includes(needle)) return 0;
+  let re = boundaryOf.get(needle);
+  if (!re) boundaryOf.set(needle, re = new RegExp(`(?<![\\w])${escapeRegExp(needle)}(?![\\w])`));
+  return re.test(lc) ? 2 : 1;
+}
+
 
 export function fuseDenseAndKeyword(
   denseMatches: VectorizeMatch[],
@@ -305,12 +331,6 @@ export function fuseDenseAndKeyword(
   }
   const denseRanked = [...denseByParent.keys()];
 
-  const kwLower = keywordRows.map(r => ({ row: r, lc: lowerContent(r) }));
-
-  // Matched against lowercased content, so lowercased here too. Canonical
-  // tokens already are; raw-surface probes (#326) arrive as typed.
-  const needle = new Map(tokens.map(t => [t, t.toLowerCase()]));
-
   // IDF from the corpus-wide frequencies distillToRareTerms already computed,
   // when they cover every token; otherwise the old estimate from the fetched
   // rows. All-or-nothing rather than per-token, because the two denominators
@@ -322,23 +342,18 @@ export function fuseDenseAndKeyword(
     const { df, total } = corpus;
     idf = t => Math.log(1 + total / ((df.get(t) ?? 0) + 1));
   } else {
-    const kwN = Math.max(kwLower.length, idfWindow) || 1;
-    const kwDf = new Map(tokens.map(t => [t, kwLower.reduce((n, x) => n + (x.lc.includes(needle.get(t)!) ? 1 : 0), 0)]));
+    const kwN = Math.max(keywordRows.length, idfWindow) || 1;
+    const kwDf = new Map(tokens.map(t => [t, keywordRows.reduce((n, r) => n + (termLevel(r, t) > 0 ? 1 : 0), 0)]));
     idf = t => Math.log(1 + kwN / ((kwDf.get(t) ?? 0) + 1));
   }
 
-  // A token found at a word boundary earns full IDF; found only inside a longer
-  // word ("cat" in "concatenate") it earns a configured fraction. Lookarounds
-  // rather than \b so identifier-shaped tokens ("#149", "v1.9") keep matching —
-  // \b treats their punctuation as the boundary itself.
-  const boundary = new Map(tokens.map(t => [t, new RegExp(`(?<![\\w])${escapeRegExp(needle.get(t)!)}(?![\\w])`)]));
-  const tokenWeight = (lc: string, t: string) => {
-    if (!lc.includes(needle.get(t)!)) return 0;
-    return boundary.get(t)!.test(lc) ? idf(t) : idf(t) * substringWeight;
+  const tokenWeight = (row: KeywordRow, t: string) => {
+    const level = termLevel(row, t);
+    return level === 0 ? 0 : level === 2 ? idf(t) : idf(t) * substringWeight;
   };
 
-  const keywordScored = kwLower
-    .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + tokenWeight(x.lc, t), 0) }))
+  const keywordScored = keywordRows
+    .map(row => ({ row, weight: tokens.reduce((s, t) => s + tokenWeight(row, t), 0) }))
     .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)));
   // Combined review of Tasks 4-6 (FIX 3): the JS boundary/coverage weight is
   // the PRIMARY sort key in both paths. In the pre-ranked (FTS) path the
@@ -361,7 +376,7 @@ export function fuseDenseAndKeyword(
       out.push({ id: dm.id, score, metadata: dm.metadata, values: dm.values });
     } else {
       const r = keywordRowById.get(pid)!;
-      out.push({ id: pid, score, metadata: { parentId: pid, created_at: r.created_at, tags: JSON.parse(r.tags ?? "[]"), content: r.content, source: r.source } });
+      out.push({ id: pid, score, metadata: { parentId: pid, created_at: r.created_at, tags: JSON.parse(r.tags ?? "[]"), content: r.content ?? "", source: r.source } });
     }
   }
   return out;
@@ -596,8 +611,7 @@ export async function recallEntries(
   if (!distilled.df && keywordRows.length && keywordRows.length < cfg.KEYWORD_CANDIDATE_LIMIT) {
     const total = await scopedEntryTotal(env, scope);
     if (total) {
-      const lowered = keywordRows.map(lowerContent);
-      const df = new Map([...profile.retrievalTokens, ...tokens].map(t => [t, lowered.filter(c => c.includes(t.toLowerCase())).length] as const));
+      const df = new Map([...profile.retrievalTokens, ...tokens].map(t => [t, keywordRows.filter(r => termLevel(r, t) > 0).length] as const));
       corpus = { df, total };
     }
   }
@@ -651,7 +665,7 @@ export async function recallEntries(
   directReranked.forEach((m, i) => { const id = parentOfMatch(m); if (!fusedOrder.has(id)) fusedOrder.set(id, i); });
   const keywordEvidence = async (): Promise<string[]> => {
     if (!tokens.length) return [];
-    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => lowerContent(r).includes(t.toLowerCase())));
+    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => termLevel(r, t) > 0));
     // Several terms were already through distillation's saturation filter. One term has no df there, so a common word
     // ("budget") must not count as evidence: apply the same rule (df over the corpus <= QUERY_SATURATION_FRACTION) with
     // the keyword rows holding the term as its df and one entry_counts read for the corpus size. Unknown = not evidence.

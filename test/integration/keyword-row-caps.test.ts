@@ -44,9 +44,11 @@ function spy(db: SqliteD1["db"]): Env["DB"] {
   }) as unknown as Env["DB"];
 }
 
+/** The row limit is the bound value before the terms the statement scores (bound once each, after it). */
+const limitOf = (s: { sql: string; binds: unknown[] }) => s.binds[s.binds.length - 1 - (s.sql.match(/ AS p\d+/g) ?? []).length];
 const rowsRead = (pred: (sql: string) => boolean) => seen.filter(s => pred(s.sql)).reduce((n, s) => n + s.rows, 0);
 const likeWindows = () => seen.filter(s => s.sql.includes("FROM entries WHERE") && s.sql.includes("ORDER BY created_at DESC"));
-const ftsTiers = () => seen.filter(s => s.sql.includes("SELECT e.id, e.content") && s.sql.includes("entries_fts MATCH"));
+const ftsTiers = () => seen.filter(s => s.sql.includes("lower(e.content) AS lc") && s.sql.includes("entries_fts MATCH"));
 
 async function boot(ftsReady: boolean) {
   resetDatabaseInit(); resetFtsReadyMemo();
@@ -71,8 +73,8 @@ describe("LIKE second window", () => {
     const { rows } = await keywordSearch(["all", "zorvane"], env, LIMIT, {}, undefined, undefined, undefined, { df: new Map([["all", 200], ["zorvane", 3]]), total: 203 });
     const windows = likeWindows();
     expect(windows).toHaveLength(2);
-    expect(windows[0].binds.at(-1)).toBe(LIMIT);
-    expect(windows[1].binds.at(-1)).toBe(LIMIT - 3);
+    expect(limitOf(windows[0])).toBe(LIMIT);
+    expect(limitOf(windows[1])).toBe(LIMIT - 3);
     expect(windows[1].sql).toMatch(/AND NOT \(content LIKE/);
     expect(rows).toHaveLength(LIMIT);
     expect(rows.filter(r => r.id.startsWith("rare-"))).toHaveLength(3);
@@ -105,9 +107,9 @@ describe("FTS second tier", () => {
     await recall("alpha bravo charlie delta", LIMIT);
     const tiers = ftsTiers();
     expect(tiers).toHaveLength(2);
-    expect(tiers[0].binds.at(-1)).toBe(LIMIT);
+    expect(limitOf(tiers[0])).toBe(LIMIT);
     expect(tiers[0].rows).toBe(40);
-    expect(tiers[1].binds.at(-1)).toBe(LIMIT - 40);
+    expect(limitOf(tiers[1])).toBe(LIMIT - 40);
   });
 
   it("does not read the OR tier when the AND tier already fills the limit", async () => {

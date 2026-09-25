@@ -157,8 +157,9 @@ describe("recallEntries with an Identity", () => {
     // projection now carries workspace_id so matches can report their layer —
     // what must never appear unscoped is the workspace_id *clause*.)
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx);
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`,
+    // The keyword arm returns match levels, not text (src/recall/keyword-rows.ts): its candidate SELECT is the CTE's body.
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`,
     );
     expect(sqlite.issued.some(s => s.includes("FROM entries") && s.includes("workspace_id IN"))).toBe(false);
 
@@ -166,8 +167,8 @@ describe("recallEntries with an Identity", () => {
     sqlite.issued.length = 0;
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a") });
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?, ?) ORDER BY created_at DESC LIMIT ?`,
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?, ?) ORDER BY created_at DESC LIMIT ?`,
     );
     // Both hydration steps carry the clause too — the candidate-signal read is
     // the leak-catcher for unscoped vectorize hits until namespaces land (P3).
@@ -217,16 +218,16 @@ describe("recallEntries with an Identity", () => {
     // Layer filter: only the personal workspace is bound.
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a"), workspaceFilter: "personal" });
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?) ORDER BY created_at DESC LIMIT ?`,
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?) ORDER BY created_at DESC LIMIT ?`,
     );
 
     // Team filter: exactly one workspace id, and the result set is that team's row.
     sqlite.issued.length = 0;
     const res = await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a"), teamId: "ws-co" });
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
     );
     expect(res.matches.map(m => m.id)).toEqual(["co"]);
   });

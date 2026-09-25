@@ -139,10 +139,13 @@ export interface RecallInternalOptions {
 
 export interface KeywordRow {
   id: string;
-  content: string;
+  /** The note's text. Absent on rows the keyword arm reads: it returns `hits` instead and never the text (see keyword-rows.ts). */
+  content?: string;
   tags: string;
   source: string;
   created_at: number;
+  /** Per query term, how the note holds it: 0 not at all, 1 only inside longer words, 2 as a word of its own. */
+  hits?: ReadonlyMap<string, 0 | 1 | 2>;
 }
 
 export type { VectorizeMatch } from "./math";

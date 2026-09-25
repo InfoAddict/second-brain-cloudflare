@@ -71,15 +71,16 @@ describe("bounded plan: the AND tier", () => {
     expect(diagnostics.ftsRoute).toBe("fts-bounded");
     const statements = searchSql();
     expect(statements).toHaveLength(2);
-    // tier 0 is the AND: no bm25 sort, stopped by its LIMIT
+    // tier 0 is the AND: no bm25 sort, stopped by its LIMIT (the candidate SELECT is the CTE body; the rest turns note text into match levels)
     expect(statements[0]).not.toContain("bm25");
-    expect(statements[0]).toMatch(/ORDER BY entries_fts\.rowid DESC LIMIT \?\s*$/);
+    const body = statements[0].match(/WITH s AS MATERIALIZED \(([\s\S]*?)\)\s+SELECT/)![1];
+    expect(body).toMatch(/ORDER BY entries_fts\.rowid DESC LIMIT \?\s*$/);
     // tier 1 is the OR over the rarest words that fit the candidate limit, ranked as ever
     expect(statements[1]).toContain("bm25(entries_fts)");
     expect(diagnostics.keywordIds!.length).toBeLessThanOrEqual(50);
 
     // the plan is a reverse scan of the index joined by rowid: no temp b-tree over the matches
-    const plan = (sqlite.db.prepare(`EXPLAIN QUERY PLAN ${statements[0]}`).bind('"alpha" "bravo" "charlie" "delta"', 50) as unknown as { all(): Promise<{ results: { detail: string }[] }> });
+    const plan = (sqlite.db.prepare(`EXPLAIN QUERY PLAN ${body}`).bind('"alpha" "bravo" "charlie" "delta"', 50) as unknown as { all(): Promise<{ results: { detail: string }[] }> });
     const details = (await plan.all()).results.map(r => r.detail).join(" | ");
     expect(details).toContain("SCAN entries_fts VIRTUAL TABLE");
     expect(details).not.toMatch(/TEMP B-TREE/i);

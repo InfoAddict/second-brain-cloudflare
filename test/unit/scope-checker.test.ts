@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (136 queries, 68 exceptions, 11 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (137 queries, 68 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1222,7 +1222,11 @@ describe("the checker over the real source tree", () => {
     // its <=30 candidate parents, every id of which the scoped candidate-signal
     // read above already returned. The clause is omitted because it makes SQLite
     // scan the whole workspace instead of doing primary-key lookups.
-    ).toEqual({ queries: 136, exempt: 68, checked: 11, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-checked for the keyword arm's ids-first rewrite (src/recall/search.ts,
+    // src/recall/keyword-rows.ts): the FTS statement that was one prepare over both tiers is now two candidate
+    // SELECTs (the AND tier and the bm25 tier), each carrying the caller's clause into a CTE that D1 turns into
+    // per-term match levels. Same rows, same scope.
+    ).toEqual({ queries: 137, exempt: 68, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

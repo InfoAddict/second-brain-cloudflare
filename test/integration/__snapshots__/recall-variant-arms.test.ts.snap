@@ -19,10 +19,17 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     ],
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
-      "SELECT e.id, e.content, e.tags, e.source, e.created_at
+      "WITH s AS MATERIALIZED (SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, 0 AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
        WHERE entries_fts MATCH ?
-       ORDER BY bm25(entries_fts) LIMIT ?",
+       ORDER BY sh DESC, rk, ord LIMIT ?)
+    SELECT id, created_at, tags, source, l0, l1 FROM (
+      SELECT id, created_at, tags, source, sh, rk, ord, CASE WHEN p0 = 0 THEN 0 WHEN (substr(lc, p0 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p0 + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q0 = 0 THEN 1 WHEN (substr(lc, (p0 + q0) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p0 + q0) + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l0, CASE WHEN p1 = 0 THEN 0 WHEN (substr(lc, p1 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p1 + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q1 = 0 THEN 1 WHEN (substr(lc, (p1 + q1) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p1 + q1) + 6, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l1 FROM (
+        SELECT id, created_at, tags, source, sh, rk, ord, lc, p0, p1, instr(substr(lc, p0 + 1), ?3) AS q0, instr(substr(lc, p1 + 1), ?4) AS q1 FROM (
+          SELECT id, created_at, tags, source, sh, rk, ord, lc, instr(lc, ?3) AS p0, instr(lc, ?4) AS p1 FROM s
+        )
+      )
+    ) ORDER BY sh DESC, rk, ord",
     ],
   ],
   "diagnostics": {
@@ -94,10 +101,17 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     ],
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
-      "SELECT e.id, e.content, e.tags, e.source, e.created_at
+      "WITH s AS MATERIALIZED (SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, 0 AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
        WHERE entries_fts MATCH ?
-       ORDER BY bm25(entries_fts) LIMIT ?",
+       ORDER BY sh DESC, rk, ord LIMIT ?)
+    SELECT id, created_at, tags, source, l0, l1 FROM (
+      SELECT id, created_at, tags, source, sh, rk, ord, CASE WHEN p0 = 0 THEN 0 WHEN (substr(lc, p0 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p0 + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q0 = 0 THEN 1 WHEN (substr(lc, (p0 + q0) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p0 + q0) + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l0, CASE WHEN p1 = 0 THEN 0 WHEN (substr(lc, p1 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p1 + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q1 = 0 THEN 1 WHEN (substr(lc, (p1 + q1) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p1 + q1) + 8, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l1 FROM (
+        SELECT id, created_at, tags, source, sh, rk, ord, lc, p0, p1, instr(substr(lc, p0 + 1), ?3) AS q0, instr(substr(lc, p1 + 1), ?4) AS q1 FROM (
+          SELECT id, created_at, tags, source, sh, rk, ord, lc, instr(lc, ?3) AS p0, instr(lc, ?4) AS p1 FROM s
+        )
+      )
+    ) ORDER BY sh DESC, rk, ord",
     ],
   ],
   "diagnostics": {
@@ -171,10 +185,17 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     ],
     [
       "SELECT name, sql FROM sqlite_master WHERE (type = 'table' AND name = 'entries_fts') OR (type = 'trigger' AND name IN ('entries_fts_insert','entries_fts_update','entries_fts_delete'))",
-      "SELECT e.id, e.content, e.tags, e.source, e.created_at
+      "WITH s AS MATERIALIZED (SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, 0 AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
        WHERE entries_fts MATCH ?
-       ORDER BY bm25(entries_fts) LIMIT ?",
+       ORDER BY sh DESC, rk, ord LIMIT ?)
+    SELECT id, created_at, tags, source, l0, l1 FROM (
+      SELECT id, created_at, tags, source, sh, rk, ord, CASE WHEN p0 = 0 THEN 0 WHEN (substr(lc, p0 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p0 + 12, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q0 = 0 THEN 1 WHEN (substr(lc, (p0 + q0) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p0 + q0) + 12, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l0, CASE WHEN p1 = 0 THEN 0 WHEN (substr(lc, p1 - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, p1 + 7, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 WHEN q1 = 0 THEN 1 WHEN (substr(lc, (p1 + q1) - 1, 1) NOT GLOB '[A-Za-z0-9_]' AND substr(lc, (p1 + q1) + 7, 1) NOT GLOB '[A-Za-z0-9_]') THEN 2 ELSE 1 END AS l1 FROM (
+        SELECT id, created_at, tags, source, sh, rk, ord, lc, p0, p1, instr(substr(lc, p0 + 1), ?3) AS q0, instr(substr(lc, p1 + 1), ?4) AS q1 FROM (
+          SELECT id, created_at, tags, source, sh, rk, ord, lc, instr(lc, ?3) AS p0, instr(lc, ?4) AS p1 FROM s
+        )
+      )
+    ) ORDER BY sh DESC, rk, ord",
     ],
   ],
   "diagnostics": {
