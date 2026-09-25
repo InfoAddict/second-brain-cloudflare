@@ -5,7 +5,7 @@ import type { VectorizeMatch } from "./math";
 import { queryRelevantWindow } from "./snippet";
 import type { RerankRoute, RerankTuning } from "./types";
 
-/** Workers AI's documented bge-reranker-base output: `id` indexes the submitted contexts, `score` is a raw logit. */
+/** Workers AI's documented bge-reranker-base output: `id` indexes the submitted contexts; `score` is a logit (local ONNX) or a sigmoid probability (Workers AI may return either; only ranks and the probe's margin read it, and the probe handles both). */
 export type RerankerResponse = { response: { id: number; score: number }[] };
 
 /** Scores by submitted-context index; throws on anything but a complete, finite, duplicate-free answer. */
@@ -232,11 +232,28 @@ const fullBatch = () => ({
   })),
 });
 
+const clampP = (p: number): number => Math.min(1 - 1e-6, Math.max(1e-6, p));
+const logit = (p: number): number => Math.log(clampP(p) / (1 - clampP(p)));
+
+/**
+ * How far the relevant passage leads the best of the others, in logits. Cloudflare's model page says the score "can be
+ * mapped to [0,1] by sigmoid", and Workers AI may return either scale: when every score lies in [0,1] they are read as
+ * probabilities and compared in logit space (p clamped to [1e-6, 1-1e-6]); anything else is a raw logit, as the local
+ * model gives. null when there is no other passage to lead.
+ */
+export function probeMargin(scores: readonly number[], relevant: number): { margin: number; scale: "probability" | "logit" } | null {
+  const others = scores.filter((_, i) => i !== relevant);
+  if (!others.length || relevant < 0 || relevant >= scores.length) return null;
+  const scale = scores.every(v => v >= 0 && v <= 1) ? "probability" : "logit";
+  const at = (v: number) => (scale === "probability" ? logit(v) : v);
+  return { margin: at(scores[relevant]) - Math.max(...others.map(at)), scale };
+}
+
 export type ProbeResult = { ok: true; margin: number } | { ok: false; reason: string };
 
 /**
  * The model contract probe. Two calls with fixed, non-private requests: a small one whose answer must validate against the
- * documented shape and put the relevant passage ahead of the others by PROBE.margin logits, then a full-size batch (RERANK_MAX_CANDIDATES
+ * documented shape and put the relevant passage ahead of the others by PROBE.margin logits (scale-agnostic, see probeMargin), then a full-size batch (RERANK_MAX_CANDIDATES
  * passages of RERANK_EXCERPT_CHARS each, a query of RERANK_QUERY_MAX_CHARS) that must come back complete. Writes the readiness latch
  * either way ("1" for a week, "0" for six hours) so recall never runs an unverified model. Never throws.
  */
@@ -250,9 +267,11 @@ async function runProbe(env: Env): Promise<ProbeResult> {
   let result: ProbeResult;
   try {
     const scores = await scoreRerankCandidates(PROBE.query, PROBE.contexts.map((c, i) => ({ parentId: String(i), text: c.text })), env, RERANK_PROBE_TIMEOUT_MS);
-    const others = scores.filter((_, i) => i !== PROBE.relevant);
-    const margin = scores[PROBE.relevant] - Math.max(...others);
-    result = margin >= PROBE.margin ? { ok: true, margin } : { ok: false, reason: "the relevant passage did not clearly outrank the unrelated ones" };
+    const m = probeMargin(scores, PROBE.relevant);
+    const shown = `scores [${scores.map(v => Number(v.toFixed(3))).join(", ")}]`;
+    result = m && m.margin >= PROBE.margin
+      ? { ok: true, margin: m.margin }
+      : { ok: false, reason: `the relevant passage did not clearly outrank the unrelated ones (${shown}, read as ${m?.scale ?? "n/a"}, margin ${m ? m.margin.toFixed(3) : "n/a"} < ${PROBE.margin} logits)` };
     if (result.ok) {
       // Any rejection, truncation or wrong length throws here and latches the model off.
       const big = fullBatch();

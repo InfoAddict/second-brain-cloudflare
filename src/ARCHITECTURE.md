@@ -264,7 +264,7 @@ evidence rescue, rendering and synthesis are untouched.
   before any read of the latch.
 - **Readiness.** A model never runs until `reranker:ready:bge-base-v1` says the
   probe passed. `probeReranker` sends a small ranking check (the relevant passage
-  must lead two unrelated ones by two logits) and then a production-shaped request
+  must lead two unrelated ones by two logits; scores that all lie in [0,1] are read as sigmoid probabilities and compared in logit space, since Workers AI may return either scale, and a failure logs the raw scores) and then a production-shaped request
   (30 passages of 400 characters, a 256-character query) that must come back
   complete; any rejection, truncation or wrong length latches "0". The first
   recall that would have used the model schedules the probe in `waitUntil` (one per

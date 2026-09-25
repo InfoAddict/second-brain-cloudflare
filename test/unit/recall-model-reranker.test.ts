@@ -3,7 +3,7 @@ import { RERANK_MAX_CANDIDATES, RERANK_MODEL, RERANK_READY_KV_KEY } from "../../
 import type { Env } from "../../src/env";
 import {
   blendRerankerScores, percentilesFromScores, probeReranker, rerankReadiness, resetRerankReadyMemo, scoreRerankCandidates,
-  rerankDirectCap, selectRerankIds, shouldRerank, validateRerankerResponse,
+  probeMargin, rerankDirectCap, selectRerankIds, shouldRerank, validateRerankerResponse,
 } from "../../src/recall/model-reranker";
 import type { VectorizeMatch } from "../../src/recall/math";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
@@ -242,6 +242,58 @@ describe("readiness latch and probe", () => {
     const res = await probeReranker(envWith(aiReturning(run as never), kv));
     expect(res.ok).toBe(false);
     expect(await kv.get(RERANK_READY_KV_KEY)).toBe("0");
+  });
+});
+
+describe("probe scale: logits or sigmoid probabilities", () => {
+  const scaled = (relevant: number, other: number) => (_: string, input: unknown) => Promise.resolve({ response: (input as { contexts: { text: string }[] }).contexts.map((c, id) => ({ id, score: /reset a forgotten password/.test(c.text) ? relevant : other })) });
+
+  it("probeMargin reads all-[0,1] scores as probabilities in logit space, anything else as logits", () => {
+    const p = probeMargin([0.02, 0.98, 0.02], 1)!;
+    expect(p.scale).toBe("probability");
+    expect(p.margin).toBeCloseTo(2 * Math.log(0.98 / 0.02), 6);
+    const l = probeMargin([-6, 4, -6], 1)!;
+    expect(l.scale).toBe("logit");
+    expect(l.margin).toBe(10);
+    expect(probeMargin([0.9, 1.4, 0.1], 1)!.scale).toBe("logit"); // one score outside [0,1]: not probabilities
+  });
+  it("clamps saturated probabilities instead of returning infinity or NaN", () => {
+    const sat = probeMargin([0, 1, 0], 1)!;
+    expect(Number.isFinite(sat.margin)).toBe(true);
+    expect(sat.margin).toBeGreaterThan(20);
+    expect(Number.isFinite(probeMargin([1, 1, 1], 1)!.margin)).toBe(true);
+  });
+  it("has no margin when there is nothing to lead (single element) or the index is out of range", () => {
+    expect(probeMargin([0.9], 0)).toBeNull();
+    expect(probeMargin([0.9, 0.1], 5)).toBeNull();
+    expect(probeMargin([], 0)).toBeNull();
+    expect(probeMargin([0.9, 0.1], 0)!.margin).toBeGreaterThan(2); // two elements is enough
+  });
+
+  it("a sigmoid-scale model that separates the relevant passage passes the probe", async () => {
+    const kv = makeMemoryKV();
+    const res = await probeReranker(envWith(aiReturning(scaled(0.98, 0.02)), kv));
+    expect(res.ok).toBe(true);
+    expect(await kv.get(RERANK_READY_KV_KEY)).toBe("1");
+  });
+  it("a sigmoid-scale model with weak separation fails, and the reason carries the raw scores", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const kv = makeMemoryKV();
+    const res = await probeReranker(envWith(aiReturning(scaled(0.6, 0.5)), kv));
+    expect(res.ok).toBe(false);
+    const reason = (res as { reason: string }).reason;
+    expect(reason).toMatch(/scores \[0\.5, 0\.6, 0\.5\]/);
+    expect(reason).toMatch(/read as probability/);
+    expect(reason).toMatch(/margin 0\.405 < 2 logits/);
+    expect(await kv.get(RERANK_READY_KV_KEY)).toBe("0");
+  });
+  it("the logit-scale model still passes, and a weak logit-scale model fails with its scores in the reason", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await probeReranker(envWith(aiReturning(scaled(4, -6))))).ok).toBe(true);
+    resetRerankReadyMemo();
+    const weak = await probeReranker(envWith(aiReturning(scaled(1.5, 0.5))));
+    expect(weak.ok).toBe(false);
+    expect((weak as { reason: string }).reason).toMatch(/scores \[0\.5, 1\.5, 0\.5\], read as logit/);
   });
 });
 
