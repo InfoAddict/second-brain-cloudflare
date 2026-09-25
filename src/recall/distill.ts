@@ -296,7 +296,9 @@ export async function distillToRareTerms(
   // ones the keyword arm binds, so corpus IDF covers everything fusion asks
   // about — search.ts requires all-or-nothing coverage.
   const tokensOf = new Map<string, string[]>();
-  for (const w of words) if (!tokensOf.has(w)) tokensOf.set(w, tokenizeQuery(w));
+  // A word is judged with the whole query: a scaffolding word ("wants") is a term only when nothing else in the query is.
+  const queryTokens = new Set(tokenizeQuery(query));
+  for (const w of words) if (!tokensOf.has(w)) tokensOf.set(w, tokenizeQuery(w).filter(t => queryTokens.has(t)));
   const content = words.filter(w => tokensOf.get(w)!.length > 0);
   const uniq = [...new Set(content.flatMap(w => tokensOf.get(w)!))].slice(0, KEYWORD_MAX_TOKENS);
   // keywordSearch's budget check needs df for every retrieval token, and

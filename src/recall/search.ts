@@ -562,8 +562,20 @@ export async function recallEntries(
     });
 
   const keywordPreRanked = internal.keywordPreRankedOverride ?? ftsServedKeywords;
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
+  // A one-word query skips distillation's frequency scan, and fusion then prices each word against the rows it fetched: a word
+  // held only by its own matches then weighs about the same whether it is a name or "the". When the fetch holds every match,
+  // the rows holding a word are its df, so weigh it against the corpus size (one entry_counts read) like any counted word.
+  let corpus: Pick<DistilledQuery, "df" | "total"> = distilled;
+  if (!distilled.df && keywordRows.length && keywordRows.length < cfg.KEYWORD_CANDIDATE_LIMIT) {
+    const total = await scopedEntryTotal(env, scope);
+    if (total) {
+      const lowered = keywordRows.map(r => r.content.toLowerCase());
+      const df = new Map([...profile.retrievalTokens, ...tokens].map(t => [t, lowered.filter(c => c.includes(t.toLowerCase())).length] as const));
+      corpus = { df, total };
+    }
+  }
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 

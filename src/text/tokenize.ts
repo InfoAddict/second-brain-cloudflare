@@ -1,4 +1,4 @@
-import { CJK_STOPWORDS, KEYWORD_MIN_TOKEN_LEN, KEYWORD_STOPWORDS } from "../constants";
+import { CJK_STOPWORDS, KEYWORD_MIN_TOKEN_LEN, KEYWORD_STOPWORDS, QUERY_FRAME_WORDS } from "../constants";
 
 // ASCII chunks bypass the segmenter so ordinary queries keep their existing
 // word boundaries. Only text that needs Unicode handling reaches it.
@@ -17,22 +17,28 @@ function wordsOf(text: string): string[] {
 // Lowercase each ASCII chunk, trim its edges, and drop stopwords and short
 // tokens. Identifier-shaped chunks ("v1.9", "#149", URLs, paths) survive whole.
 // Interior % and _ stay literal because every content LIKE site escapes them.
-function asciiToken(chunk: string): string | null {
+function asciiToken(chunk: string, frame: boolean): string | null {
   const t = chunk.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "");
-  return t.length >= KEYWORD_MIN_TOKEN_LEN && HAS_LETTER_OR_DIGIT.test(t) && !KEYWORD_STOPWORDS.has(t) ? t : null;
+  return t.length >= KEYWORD_MIN_TOKEN_LEN && HAS_LETTER_OR_DIGIT.test(t) && !KEYWORD_STOPWORDS.has(t) && !(frame && QUERY_FRAME_WORDS.has(t)) ? t : null;
 }
 
 // Split a query into lexical search tokens (#326). Canonical tokens first, in
 // source order; raw-surface probes last, so every capped consumer drops a probe
 // before it drops a real term.
 export function tokenizeQuery(query: string): string[] {
+  // Scaffolding words ("user wants to", "tell me", "what should I know") are not terms unless nothing else is.
+  const terms = tokenizeTerms(query, true);
+  return terms.length ? terms : tokenizeTerms(query, false);
+}
+
+function tokenizeTerms(query: string, frame: boolean): string[] {
   const tokens: string[] = [];
   const singleHan: string[] = [];
   const probes: string[] = [];
   for (const chunk of query.split(/\s+/)) {
     if (!chunk) continue;
     if (ASCII_ONLY.test(chunk)) {
-      const t = asciiToken(chunk);
+      const t = asciiToken(chunk, frame);
       if (t) tokens.push(t);
       continue;
     }
@@ -45,7 +51,7 @@ export function tokenizeQuery(query: string): string[] {
       if (chunk.length >= KEYWORD_MIN_TOKEN_LEN && HAS_LETTER_OR_DIGIT.test(chunk)) probes.push(chunk);
     }
     if (ASCII_ONLY.test(folded)) {
-      const t = asciiToken(folded);
+      const t = asciiToken(folded, frame);
       if (t) tokens.push(t);
       continue;
     }

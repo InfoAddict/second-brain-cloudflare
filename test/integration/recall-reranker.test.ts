@@ -53,9 +53,9 @@ describe("recall reranker step", () => {
     return { env, ctx, deferred, rerankInputs, run, kv, sqlite };
   }
 
-  async function recall(s: Awaited<ReturnType<typeof setup>>, mode: Config["RERANK_MODE"], q = "launch planning tomato", hops = 0) {
+  async function recall(s: Awaited<ReturnType<typeof setup>>, mode: Config["RERANK_MODE"], q = "launch planning tomato", hops = 0, cfg: Partial<Config> = {}) {
     const diagnostics: RecallDiagnostics = {};
-    const result = await recallEntries({ query: q, topK: 5, hops, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: mode }, { diagnostics });
+    const result = await recallEntries({ query: q, topK: 5, hops, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, ...cfg, RERANK_MODE: mode }, { diagnostics });
     await Promise.all(s.deferred);
     return { result, diagnostics };
   }
@@ -215,7 +215,7 @@ describe("recall reranker step", () => {
       const real = s.env.DB;
       s.env = { ...s.env, DB: new Proxy(real as object as Record<string, unknown>, { get: (t, k) => k === "prepare" ? (sql: string) => { if (/entry_counts/.test(sql)) throw new Error("entry_counts unavailable"); return (t.prepare as (q: string) => unknown)(sql); } : typeof t[k as string] === "function" ? (t[k as string] as (...a: unknown[]) => unknown).bind(t) : t[k as string] }) as unknown as Env["DB"] };
     }
-    const off = await recall(s, "off", "zorblax");
+    const off = await recall(s, "off", "zorblax", 0, { ...(opts.limit && { KEYWORD_CANDIDATE_LIMIT: opts.limit }) }); // the same window as the run below, or the two heads weigh the term differently
     const diagnostics: RecallDiagnostics = {};
     await recallEntries({ query: "zorblax", topK: 5, hops: 0, synthesize: false }, s.env, s.ctx, { ...DEFAULTS, RERANK_MODE: "on", ...(opts.limit && { KEYWORD_CANDIDATE_LIMIT: opts.limit }) }, { diagnostics });
     await Promise.all(s.deferred);
@@ -231,9 +231,9 @@ describe("recall reranker step", () => {
     expect(r.diagnostics.rerankEvidence).toBe("suppressed-saturated");
   });
 
-  it("a rare single term below the window still earns its seats (the control for the two tests around it)", async () => {
+  it("a rare single term below the window is weighed against the corpus, so its holders are already in the fused head the batch is cut from", async () => {
     const r = await singleTermCorpus(3, 160, { limit: 50 });
-    expect(r.sent).not.toEqual(r.head);
+    expect(r.sent).toEqual(r.head);
     expect(r.sent.filter(t => /Zorblax report/.test(t))).toHaveLength(3);
     expect(r.diagnostics.rerankEvidence).toBeUndefined();
   });

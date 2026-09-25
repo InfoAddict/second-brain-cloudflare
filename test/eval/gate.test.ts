@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GATE, evaluateGate, formatGate, formatLosers, findLosers } from "./gate";
 import { BOOTSTRAP_DEFAULTS, bootstrapStandardError, minimumDetectableEffect } from "./stats";
-import { QUERY_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
+import { QUERY_CATEGORIES as ALL_CATEGORIES, RUNNER_VERSION, type EmbeddingProducer, type QueryResult, type VariantReport } from "./types";
 
 const LOCAL = (repo: string): EmbeddingProducer => ({ kind: "local-transformers-js", library: "@huggingface/transformers", libraryVersion: "4.3.0", onnxRuntime: "onnxruntime-node@1.30.0", repo, revision: "abc", dtype: "fp32" });
+// These tests pin exact deltas over eight equal categories; a category added later would change every count.
+const QUERY_CATEGORIES = ALL_CATEGORIES.filter(c => c !== "agent-framed");
+
 function report(name: string, tweak: (i: number, r: QueryResult) => void = () => {}, n = 240): VariantReport {
   return {
     schema: 1, variant: name, corpus: "core-1k", embeddingModel: "m", producers: { m: LOCAL("BAAI/bge-small-en-v1.5") }, neuronSource: "projected", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, dataFingerprint: { "queries.jsonl": "h" },

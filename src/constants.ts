@@ -250,6 +250,15 @@ export const KEYWORD_STOPWORDS = new Set([
   "do", "did", "does", "what", "when", "where", "who", "whom", "how", "why", "which",
 ]);
 
+// The scaffolding an agent wraps around a subject ("User wants to X about Y — what should I know?", "tell me all about Y",
+// "what have we tried before", "remind me", "help me", "show me", "find"). It says how to ask, not what to find, and a
+// brain full of notes about sessions, users and requests holds these words in many rows. Kept out of the keyword terms
+// whenever the query has other terms, so a row that only echoes the scaffolding never outranks the one about the subject;
+// a query made only of them ("help", "user") still searches for them.
+export const QUERY_FRAME_WORDS = new Set([
+  "user", "wants", "want", "should", "know", "tried", "tell", "show", "find", "help", "remind", "recommended", "please", "have", "has", "had", "done",
+]);
+
 // Function words for the scripts Intl.Segmenter splits without spaces (#326).
 // KEYWORD_STOPWORDS never matches them, and without this a Japanese question
 // spends its keyword slots on auxiliaries and particles (した, ている, ため)
