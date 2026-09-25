@@ -93,22 +93,30 @@ async function keywordSearchLike(
   // plus strangers' rows truncated by the window.
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
-  const windowFor = (subset: string[]) => {
+  // `not` are terms whose rows are excluded (already read whole by an earlier window); `max` is the window's row cap.
+  const windowFor = (subset: string[], max: number, not: string[] = []) => {
     const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
+    const exclude = not.length ? ` AND NOT (${not.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ")})` : "";
     // Keep the alternatives as one predicate whenever an AND filter follows.
     // Without grouping, SQLite applies that filter only to the final LIKE term
     // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
-    const tokenWhere = subset.length > 1 && (timeWhere || scopeSql) ? `(${where})` : where;
+    const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
     // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
     return env.DB.prepare(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} ORDER BY created_at DESC LIMIT ?`
-    ).bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), limit);
+      `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`
+    ).bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max);
   };
   const split = splitLikeTerms(terms, corpus?.df, limit);
-  if (!split) return ((await windowFor(terms).all()).results ?? []) as unknown as KeywordRow[];
+  if (!split) return ((await windowFor(terms, limit).all()).results ?? []) as unknown as KeywordRow[];
   // The window would truncate. A row matching only common words must not push out one matching the rarest: those rows
-  // are read whole (they fit the limit), then the newest rows for the remaining terms fill what is left.
-  const [rare, rest] = await env.DB.batch([windowFor(split.rare), windowFor(split.rest)]);
+  // are read whole (they fit the limit), then the newest rows for the remaining terms fill what is left. The rare rows
+  // number at most their df sum, so the second window asks for no more than the slots that leaves, and skips the rows
+  // the first already holds (they would only take those slots twice).
+  const spent = split.rare.reduce((sum, t) => sum + (corpus?.df?.get(t) ?? 0), 0);
+  const room = limit - spent;
+  const [rare, rest] = room > 0
+    ? await env.DB.batch([windowFor(split.rare, limit), windowFor(split.rest, room, split.rare)])
+    : [await windowFor(split.rare, limit).all(), { results: [] as unknown[] }];
   const seen = new Set<string>();
   const out: KeywordRow[] = [];
   for (const row of [...(rare.results ?? []), ...(rest.results ?? [])] as unknown as KeywordRow[]) {
@@ -169,18 +177,28 @@ async function keywordSearchFts(
   // structurally instead of relying on an error that never comes. Throwing
   // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
   // wiring below, rather than adding a second control path.
-  const [livenessResult, ...ftsResults] = await env.DB.batch([
+  const statementFor = (match: string, i: number, max: number) => andTier && i === 0
+    ? env.DB.prepare(andTierSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), max)
+    : env.DB.prepare(rankedSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), ...shortBindings, max);
+  const [livenessResult, ...firstTier] = await env.DB.batch([
     // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
     // never entries/edges rows — nothing here to scope by workspace.
     env.DB.prepare(FTS_LIVENESS_SQL),
-    ...matches.map((match, i) => andTier && i === 0
-      ? env.DB.prepare(andTierSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit)
-      : env.DB.prepare(rankedSql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), ...shortBindings, limit)),
+    statementFor(matches[0], 0, limit),
   ]);
   if (!isFtsLiveRows(livenessResult.results as { name: string; sql: string | null }[] | undefined)) {
     throw new Error("entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body)");
   }
-  return ftsResults.map(r => r.results as unknown as KeywordRow[]);
+  const tiers = [firstTier[0].results as unknown as KeywordRow[]];
+  // Later tiers only fill what the earlier ones leave under the limit (mergeTiers keeps a row's first tier and stops at
+  // the limit), so each asks for that many rows: a tier that could not fit is not read at all.
+  for (let i = 1; i < matches.length; i++) {
+    const room = limit - new Set(tiers.flat().map(r => r.id)).size;
+    if (room <= 0) break;
+    const [next] = await env.DB.batch([statementFor(matches[i], i, room)]);
+    tiers.push(next.results as unknown as KeywordRow[]);
+  }
+  return tiers;
 }
 
 // Exported for the router tests (test/integration/keyword-router-bounded.test.ts); recallEntries is the only production caller.

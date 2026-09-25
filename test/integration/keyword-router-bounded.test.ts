@@ -61,8 +61,9 @@ afterEach(() => sqlite.close());
 
 describe("bounded plan: the AND tier", () => {
   it("runs newest-first by FTS rowid under a LIMIT, with no sort over the matches", async () => {
-    // alpha, bravo, charlie co-occur in every row (800 each); delta is in 60 of them: it alone fits the OR tier, but past the limit of 50, so the AND tier is still needed
-    for (let i = 0; i < 800; i++) sqlite.seed({ id: `row-${i}`, content: `alpha bravo charlie ${i < 60 ? "delta " : ""}note${i}`, createdAt: i + 1 });
+    // alpha, bravo, charlie co-occur in every row (800 each); delta is in 60 rows, 40 of them with the other three: it alone fits the OR tier, but past the limit of 50, so the AND tier is still needed and, holding only 40, leaves room for the OR tier
+    for (let i = 0; i < 800; i++) sqlite.seed({ id: `row-${i}`, content: `alpha bravo charlie ${i < 40 ? "delta " : ""}note${i}`, createdAt: i + 1 });
+    for (let i = 0; i < 20; i++) sqlite.seed({ id: `lone-${i}`, content: `delta lone${i}`, createdAt: 2000 + i });
     sqlite.batches.length = 0;
 
     const diagnostics = await recall("alpha bravo charlie delta", { cfg: { KEYWORD_CANDIDATE_LIMIT: 50 } });
