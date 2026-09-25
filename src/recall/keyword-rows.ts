@@ -26,6 +26,11 @@ export type MatchLevel = 0 | 1 | 2;
 
 const WORD_CHAR = `'[A-Za-z0-9_]'`;
 
+/**
+ * Text holding the Kelvin sign (U+212A) or the dotted capital İ (U+0130): SQLite's lower() leaves them, and lowercase turns them into
+ * the ASCII "k" and "i" (plus a mark), so a term or its neighbours read differently there. `content` is the column to test.
+ */
+export const ODD_TEXT = "(instr(content, char(8490)) > 0 OR instr(content, char(304)) > 0)";
 const isWide = (t: string) => /[^\x00-\x7f]/.test(t);
 const chars = (t: string) => Array.from(t).length;
 export const isWideTerm = isWide;
@@ -53,10 +58,10 @@ export function withMatchLevels(inner: string, passthrough: string[], terms: rea
   const level = terms.map((t, i) =>
     `CASE WHEN p${i} = 0 THEN 0 WHEN ${standsAlone(`p${i}`, String(chars(lowered[i])))} THEN 2 WHEN q${i} = 0 THEN 1 WHEN ${standsAlone(`(p${i} + q${i})`, String(chars(lowered[i])))} THEN 2 ELSE 1 END AS l${i}`).join(", ");
   const sql = `WITH s AS MATERIALIZED (${inner})
-    SELECT ${returned.join(", ")}, ${terms.map((_, i) => `l${i}`).join(", ")} FROM (
-      SELECT ${cols}, ${level} FROM (
-        SELECT ${cols}, lc, ${carried}, ${second} FROM (
-          SELECT ${cols}, lc, ${first} FROM s
+    SELECT ${returned.join(", ")}, ${terms.map((_, i) => `l${i}`).join(", ")}, fl FROM (
+      SELECT ${cols}, ${level}, fl FROM (
+        SELECT ${cols}, lc, ${carried}, ${second}, fl FROM (
+          SELECT ${cols}, lc, ${first}, ${ODD_TEXT.replace(/\bcontent\b/g, "lc")} AS fl FROM s
         )
       )
     ) ORDER BY ${orderBy}`;
@@ -69,7 +74,7 @@ export function rowWithLevels(raw: Record<string, unknown>, terms: readonly stri
   if (typeof raw.content === "string" && !("l0" in raw)) return raw as unknown as KeywordRow;
   const hits = new Map<string, MatchLevel>();
   terms.forEach((t, i) => hits.set(t, Number(raw[`l${i}`] ?? 0) as MatchLevel));
-  return { id: raw.id as string, tags: raw.tags as string, source: raw.source as string, created_at: raw.created_at as number, hits };
+  return { id: raw.id as string, tags: raw.tags as string, source: raw.source as string, created_at: raw.created_at as number, hits, odd: Number(raw.fl) === 1 };
 }
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -97,19 +102,20 @@ export function widePrefilter(term: string): string {
 }
 
 /**
- * Settles the non-ASCII terms the SQL could not decide. Each row's level for such a term below 2 may be wrong (a second occurrence
- * in another case, a note mixing cases inside a word), so the text of those rows is read by id and the level is worked out as
- * the old scan did. A note no fold of the term can match (`widePrefilter`) is not read: its level is already 0.
+ * Settles the levels the SQL could not decide, from the text of just those rows, read by id:
+ *   - a term with non-ASCII characters whose level is below 2 (a second occurrence in another case, a note mixing cases inside a
+ *     word, a fold that changes length): a note no fold of the term can match (`widePrefilter`) is not read, its level is 0;
+ *   - every term of a note holding U+212A or U+0130 (`ODD_TEXT`), which lowercase turns into ASCII the SQL never saw.
+ * Either way the level is worked out as the old scan did (Unicode toLowerCase, the boundary above). Other rows keep the SQL's.
  */
-export async function settleWideTerms(env: Env, rows: KeywordRow[], terms: readonly string[]): Promise<void> {
+export async function settleLevels(env: Env, rows: KeywordRow[], terms: readonly string[]): Promise<void> {
   const wide = terms.filter(isWide);
-  if (!wide.length || !rows.length) return;
-  const open = rows.filter(r => r.hits && wide.some(t => (r.hits?.get(t) ?? 0) < 2));
+  const open = rows.filter(r => r.hits && (r.odd || wide.some(t => (r.hits!.get(t) ?? 0) < 2)));
   if (!open.length) return;
   const patterns = wide.map(widePrefilter);
   // D1 allows 100 bound values in a statement: the patterns and the ids share them.
   const size = Math.max(1, 90 - patterns.length);
-  const where = patterns.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
+  const where = [...patterns.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`), ODD_TEXT].join(" OR ");
   const chunks: string[][] = [];
   for (let i = 0; i < open.length; i += size) chunks.push(open.slice(i, i + size).map(r => r.id));
   // scope-exempt: by-id: every id here came from the scoped keyword read that produced `rows`; the scope clause is left out, as it is for the reranker's by-id read, so SQLite does primary-key lookups
@@ -121,7 +127,7 @@ export async function settleWideTerms(env: Env, rows: KeywordRow[], terms: reado
       const row = byId.get(id);
       if (!row?.hits) continue;
       const lc = content.toLowerCase();
-      for (const t of wide) if ((row.hits.get(t) ?? 0) < 2) (row.hits as Map<string, MatchLevel>).set(t, levelInLower(lc, t.toLowerCase()));
+      for (const t of row.odd ? terms : wide) if (row.odd || (row.hits.get(t) ?? 0) < 2) (row.hits as Map<string, MatchLevel>).set(t, levelInLower(lc, t.toLowerCase()));
     }
   }
 }

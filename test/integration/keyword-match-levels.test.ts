@@ -136,6 +136,25 @@ describe("keyword rows are ids first, text last", () => {
     });
   }
 
+  // Two characters lowercase into ASCII (Kelvin sign to k, dotted capital İ to i plus a mark), which SQLite's lower() leaves alone
+  const TO_ASCII: [string, string, string][] = [
+    ["Kelvin sign for k", "anchor \u212A", "k"],
+    ["dotted capital I for i", "anchor \u0130", "i"],
+    ["Kelvin sign inside a word", "anchor \u212Aite", "kite"],
+    ["Kelvin sign beside a term", "anchor cat\u212A", "cat"],
+    ["dotted capital I beside a term", "anchor cat\u0130", "cat"],
+    ["Kelvin sign before a term", "anchor \u212Acat", "cat"],
+  ];
+  for (const [name, content, term] of TO_ASCII) {
+    it(`reads ${name} as the text scan did (FTS route)`, async () => {
+      const env = await boot(true);
+      sqlite.seed({ id: "n", content, createdAt: 1 });
+      const { rows } = await keywordSearch(["anchor", term], env, 500);
+      expect(rows.map(r => r.id)).toEqual(["n"]);
+      expect(rows[0].hits!.get(term)).toBe(reference(content, term));
+    });
+  }
+
   it("settles a mixed-script note term by term", async () => {
     const env = await boot(true);
     const content = "Москва is not CAFÉ, and xΑΘΗΝΑ ΑΘΗΝΑ stays; cAFÉ too";

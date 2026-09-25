@@ -239,7 +239,7 @@ What the SQL does not reproduce, and why it was accepted:
   upper-case form is not trusted, since ß, ﬁ and a capital Σ do not round-trip through lowercase. Any level below 2 for such a term is settled by `settleWideTerms` (keyword-rows.ts): the text of just those rows is read by id
   (skipping notes `widePrefilter`'s LIKE says no fold of the term can match, in chunks that share D1's 100 bound values with the
   patterns) and the level is worked out in the Worker with the old rule (Unicode `toLowerCase`, the boundary above). An ASCII-only
-  query never reads text. The worst case is a non-ASCII query whose candidates are mostly long notes without the term: it reads
+  query never reads text, except for a note holding U+212A (Kelvin sign) or U+0130 (dotted İ), which the SQL flags with one `instr` each: lowercase turns them into ASCII `k` and `i`, which SQLite's `lower()` never sees, so every term of such a note is settled the same way. The worst case is a non-ASCII query whose candidates are mostly long notes without the term: it reads
   what the old code read for those rows.
 - **rows_read rises about 8%** on core-1k (2,494 to 2,696 per recall on workerd): the statement's candidate CTE is materialized and
   read once more to compute the levels. The same rows are scanned; no statement was added.

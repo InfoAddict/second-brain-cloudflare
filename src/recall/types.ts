@@ -146,6 +146,8 @@ export interface KeywordRow {
   created_at: number;
   /** Per query term, how the note holds it: 0 not at all, 1 only inside longer words, 2 as a word of its own. */
   hits?: ReadonlyMap<string, 0 | 1 | 2>;
+  /** The note holds U+212A or U+0130, which lowercase turns into ASCII: its `hits` are settled from the text (keyword-rows.ts). */
+  odd?: boolean;
 }
 
 export type { VectorizeMatch } from "./math";

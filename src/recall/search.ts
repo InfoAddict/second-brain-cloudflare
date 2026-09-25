@@ -40,7 +40,7 @@ import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
-import { levelInLower, rowWithLevels, settleWideTerms, withMatchLevels } from "./keyword-rows";
+import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -228,8 +228,8 @@ export async function keywordSearch(
   corpus?: Pick<DistilledQuery, "df" | "total">,
 ): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
   const result = await keywordSearchRows(tokens, env, limit, bounds, identity, only, teamId, corpus);
-  // Non-ASCII terms the SQL could not decide are settled from the notes' text, for those rows only (keyword-rows.ts).
-  await settleWideTerms(env, result.rows, tokens.slice(0, KEYWORD_MAX_TOKENS));
+  // Levels the SQL could not decide (non-ASCII terms, notes with U+212A or U+0130) are settled from the notes' text, for those rows only (keyword-rows.ts).
+  await settleLevels(env, result.rows, tokens.slice(0, KEYWORD_MAX_TOKENS));
   return result;
 }
 
