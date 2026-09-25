@@ -257,9 +257,10 @@ evidence rescue, rendering and synthesis are untouched.
   `abc123`, `40mg`), a dotted name (`config.yaml`), a multi-dot number
   (`10.0.0.1`). Prose does not: a sentence-final period, a plain hyphenated word,
   a bare year, a plain number or percentage, and a dotted abbreviation of segments
-  of two letters or fewer (`U.S.`, `e.g.`). Skip rates on the eval's queries:
-  core-1k 29 of 338, SciFact 195 of 693 (the rule was fixed after seeing SciFact,
-  so SciFact is in-sample for routing and held out for the blend). `off` returns
+  of two letters or fewer (`U.S.`, `e.g.`). On the expanded core-1k set the
+  shipped `auto` mode skips 239 of 1,683 queries as lookups and 810 for a clear
+  leader, and calls the model on 634. The rule was fixed after seeing SciFact, so
+  SciFact is in-sample for routing and held out for the blend. `off` returns
   before any read of the latch.
 - **Readiness.** A model never runs until `reranker:ready:bge-base-v1` says the
   probe passed. `probeReranker` sends a small ranking check (the relevant passage
@@ -285,11 +286,14 @@ evidence rescue, rendering and synthesis are untouched.
   exactly. `RecallDiagnostics.rerankRoute` records what happened.
 - **Cost.** One AI call, one D1 statement at hops 0 (none above), and one KV read
   for the latch per reranked recall. At the published 283 neurons per million
-  input tokens the eval projects about 0.35 neurons per reranked recall (the
-  query is counted once per pair, so this is conservative).
+  input tokens the eval projects about 0.5 neurons per reranked recall on the
+  expanded core-1k set (the query is counted once per pair, so this is
+  conservative). Averaged over every recall in `auto`, that is about 0.4 extra AI
+  calls, 0.2 neurons, 0.4 D1 statements and 18 `rows_read`.
 
-What the persistent losers show (core-1k `q-para-047/043/028/042`, `q-rare-011-c`,
-`q-long-003`; scale-20k `q-rare-015`; SciFact 169 and 500). For the short notes
+What the persistent losers showed while the blend was tuned, on the original
+338-query set (core-1k `q-para-047/043/028/042`, `q-rare-011-c`, `q-long-003`;
+scale-20k `q-rare-015`; SciFact 169 and 500). For the short notes
 (most of them) the excerpt the model reads is the whole note, so the model simply
 disagrees: it ranks generic filler that shares a word with the query above the
 right memory, and every score in those batches is a low logit (about -6 to -10),
@@ -297,9 +301,10 @@ so the percentile order is close to noise. Two causes are structural rather than
 model disagreement: a note longer than the excerpt is read from its head (or a
 keyword window), so `q-long-003` and SciFact 169 never show the model the sentence
 that answers (it sits about 1,400 characters in); and a keyword-only exact match
-that sits at the tail of the fused pool (`q-rare-032`, `q-rare-015`) is never scored,
-reaches the top 10 without the reranker only through MMR's diversity term, and is
-displaced when the scored block is ranked above it. Anchoring the excerpt at the
+that sat at the tail of the fused pool (`q-rare-032`, `q-rare-015`) was never scored,
+reached the top 10 without the reranker only through MMR's diversity term, and was
+displaced when the scored block was ranked above it (the keyword-evidence rule above
+now scores such a match). Anchoring the excerpt at the
 dense arm's best chunk was tried for the first and did not move core-1k (paraphrase
 mrr@10 +0.097 either way, overall recall@10 +0.012 against +0.015), because the
 answer still sits inside a 1,600-character chunk; it was not shipped.
@@ -310,12 +315,18 @@ The eval's `rerank` variant forces the mode on through the typed
 pre-registered target category (paraphrase only: multi-hop has no headroom, mrr@10 0.974). The ship decision is
 `npm run eval:recall -- --compare no-rerank,rerank-auto --corpus core-1k --d1 workerd`
 (no `--target` flag), repeated on `scale-20k` and `scifact` with
-`--allow-unmeasured-rows`. What it shows: the improvement clears its bar on the
-point estimate only (paraphrase mrr@10 +0.064 against a 0.05 bar, CI lower bound
-0.006, on core-1k), overall recall@10 does not move beyond noise (+0.003, CI
-[-0.006, 0.015]), and on scale-20k it does not clear the bar (+0.037, lower bound
-0.001). It is an ordering gain (better rank among candidates already retrieved),
-not a retrieval gain. A change made on top of the shipped pipeline compares with
+`--allow-unmeasured-rows`. On the expanded core-1k set (1,683 queries, 1,475
+clusters, `workerd`) the gate passes through the overall path, which the amended
+pre-registration on T-0043.6 does not accept as evidence for the reranker: MRR@10
++0.058 [0.049, 0.067], nDCG@10 +0.048 [0.041, 0.055], recall@10 +0.019 [0.012,
+0.027], and no category regresses. The pre-registered paraphrase target is not met
+(recall@10 +0.023 [0.007, 0.041], MRR@10 +0.005, against a +0.05 bar). The gain is
+in ordering: rare-word MRR@10 0.584 to 0.858 and common-word 0.607 to 0.836. Without
+the model, near-flat fused scores at the top are reordered by the recency and
+importance multipliers (recency alone spans 0.6 to 1.0 for an ordinary memory),
+which can move the best match below a newer or more important one; the model's
+order undoes that. The reranker ships in `auto` on that basis (the decision is
+recorded on T-0041), with scale-20k and SciFact as no-regression checks. A change made on top of the shipped pipeline compares with
 `--compare baseline,<variant>`; one made before the reranker with
 `--compare no-rerank,<variant>`. The runner fails a query, instead of scoring
 the fallback order, whenever the reranker was expected and the step did not end
@@ -375,7 +386,7 @@ dependency): bge-small-en-v1.5, bge-m3, and bge-reranker-base, fetched
 anonymously from Hugging Face into `.eval-cache/models/` and verified against
 recorded hashes. They are computed once and stored in a content-addressed replay
 cache; a cache miss during a run fails instead of computing. The committed
-`core-1k` cache (8.16 MiB gzipped, 5,846 entries: chunk vectors plus the reranker's scores, which the baseline now includes, for the union of the variants the default suite replays (`COMMITTED_LAYER_VARIANTS`: LIKE embeds queries the FTS route skips), guarded by `committed-layer.test.ts`, which replays the committed layer alone; a test caps the committed layers at 9 MiB, raised from 8 because of those scores, and contextual rows stay local) means a contributor needs neither an account nor a model
+`core-1k` cache (8.16 MiB gzipped, 5,846 entries: chunk vectors plus the reranker's scores, which the baseline now includes, for the union of the variants the default suite replays (`COMMITTED_LAYER_VARIANTS`: LIKE embeds queries the FTS route skips), guarded by `committed-layer.test.ts`, which replays the committed layer alone; a test caps the committed layers at 9 MiB, raised from 8 because of those scores) means a contributor needs neither an account nor a model
 download to run that corpus. Every cached row records which model build produced
 it, and reports from different producers never compare. Vectorize is an
 exact-cosine emulator, the clock is frozen, and `recall_count` writes are
@@ -423,9 +434,8 @@ replace the chairs") and carries `gold = [answer grade 2, root grade 1]`. In the
 locked baseline the root is in the top 10 for 150 of 150 queries and the answer
 for 7 of 150, so recall@10 0.523 is about 96% "found the note the query
 paraphrases" and MRR@10 0.974 leaves 0.026 of headroom against the 0.05 target
-margin. Multi-hop is therefore not a valid target category for a reranker
-(T-0041's `rerank` and `rerank-auto` variants declare it in `targetCategories`
-and should drop it; that change is applied at integration), and a graph change
+margin. Multi-hop is therefore not a valid target category for a reranker (the
+`rerank` and `rerank-auto` variants declare paraphrase only), and a graph change
 is judged by the answer's rank, not by this recall.
 
 The paraphrase base rate fell when the set grew, in two steps with different
@@ -456,21 +466,39 @@ earlier report of 27 / 51 / 12 divided offsets by 1,600 and ignored the overlap.
 A target gain in paraphrase is therefore measured from a base near 0.10, not
 0.375, and the +0.05 target margin is a 50% relative gain.
 
-**The overall improvement path is not evidence for T-0041 or T-0042.** The
+**The overall improvement path was not evidence for T-0041 or T-0042.** The
 0.02 `improvementMargin` was approved when paraphrase was 15% and long-context
 7.5% of the non-gap queries. On the expanded set they are 27% and 19%, and the
 overall path averages by query, so an overall +0.02 now needs an in-category
 gain of about +0.075 in paraphrase and +0.106 in long-context, against +0.133
 and +0.265 before: roughly half the bar for the reranker and 40% of it for
-contextual embeddings. Each of those changes must pass through its target
-category (paraphrase for T-0041, long-context for T-0042) with a bootstrap lower
-bound above zero, and show no regression in any category; T-0042 must also show
-no loss and a positive point estimate on the coherent-padding long-context
-subset, reported apart from the 220 legacy notes. This is pre-registered on
-T-0043.6 (the amended note of Sep 24 2026, written before any candidate ran on
-the expanded set). The candidate-pool diagnostic (gold anywhere in the fused
-pool, recall@30) is printed for every category so a target FAIL can be read as
-"the reranker did not help" or "the gold was never a candidate".
+contextual embeddings. The amended pre-registration on T-0043.6 (Sep 24 2026,
+written before either candidate ran on the expanded set) therefore required
+each to pass through its target category (paraphrase for the reranker,
+long-context for contextual embeddings) with a bootstrap lower bound above zero
+and no regression in any category, and required contextual embeddings to show
+no loss and a positive point estimate on the coherent-padding subset. Neither
+met its target rule: the reranker shipped on a separate decision (see the
+reranker section), and contextual embeddings were not shipped (below). The
+candidate-pool diagnostic (gold anywhere in the fused pool, recall@30) is
+printed for every category so a target FAIL can be read as "the change did not
+help" or "the gold was never a candidate".
+
+**Evaluated, not shipped: contextual chunk embeddings (T-0042).** Long notes
+were indexed as smaller chunks, each embedded with a short situating line about
+the note it came from, to find an answer buried deep in a long note. An early
++0.21 long-context gain came from legacy notes built of topic-free filler, which
+favor such a prefix. On the balanced expanded set it did not clear its bar:
+long-context recall@10 +0.029 [0.0065, 0.0548] on core-1k with the reranker on,
+under the +0.05 target, and +0.016 [-0.0097, 0.042] on scale-5k (bge-small,
+reranker off); the coherent-padding subset was flat. It would also have taken
+more index room per long note and a background re-embedding of every existing
+brain, so it was removed rather than shipped off. The write-path fixes it
+carried stand on their own and remain: neighbor queries on save ask for 20 chunk
+hits and keep the 5 nearest distinct notes (`WRITE_PATH_TOPK`), Vectorize
+upserts and deletes go in calls of at most 1,000 (`VECTORIZE_UPSERT_BATCH`), and
+the hourly cron reads config once. The index-time variant hook (`index` on a
+variant, which replaces `storeEntry`) stays for the next such experiment.
 
 **Variants.** A change under test is a variant: query-time flags on
 `RecallInternalOptions` (for example `variant.arms`), config overrides, or an
@@ -604,7 +632,7 @@ before the integrated router and reranker (0.027 at `scale-5k`, 0.028 at
 with a lower bound above zero, so it needs an MDE of 0.05 or less: a change that
 moves part of paraphrase, long-context, or multi-hop clears it, and a whole-arm
 ablation of paraphrase does not. The 90-cluster coherent subset cannot prove
-+0.05; it is a no-loss check for T-0042, not a target. `node
++0.05; it is a no-loss check, not a target. `node
 scripts/eval-run-ts.mjs test/eval/mde-table.ts` prints the core-1k table (add
 `--corpus scale-5k --only like` for a scale row).
 
