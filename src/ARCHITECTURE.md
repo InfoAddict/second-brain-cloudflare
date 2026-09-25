@@ -235,8 +235,8 @@ What the SQL does not reproduce, and why it was accepted:
   none in identifier, rare-word or common-word, and no category regresses (gate: overall MRR@10 +0.0002, multi-hop recall@10
   -0.0033 with a bound of 0.0000).
 - **Case is folded with SQLite's `lower()`, which is ASCII-only** (as `LIKE` is), so a term with non-ASCII characters is not decided
-  in SQL alone. The SQL also looks for it in the note's own text as typed, UPPERCASE and Capitalised, and a 2 from that is exact.
-  Any level below 2 for such a term is settled by `settleWideTerms` (keyword-rows.ts): the text of just those rows is read by id
+  in SQL alone. The SQL searches the ASCII-lowered text for the lowercased term, and a 2 from that is exact; a match through an
+  upper-case form is not trusted, since ß, ﬁ and a capital Σ do not round-trip through lowercase. Any level below 2 for such a term is settled by `settleWideTerms` (keyword-rows.ts): the text of just those rows is read by id
   (skipping notes `widePrefilter`'s LIKE says no fold of the term can match, in chunks that share D1's 100 bound values with the
   patterns) and the level is worked out in the Worker with the old rule (Unicode `toLowerCase`, the boundary above). An ASCII-only
   query never reads text. The worst case is a non-ASCII query whose candidates are mostly long notes without the term: it reads

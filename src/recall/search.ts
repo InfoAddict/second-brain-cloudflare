@@ -40,7 +40,7 @@ import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
-import { levelInLower, rawColumn, rowWithLevels, settleWideTerms, withMatchLevels } from "./keyword-rows";
+import { levelInLower, rowWithLevels, settleWideTerms, withMatchLevels } from "./keyword-rows";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -104,7 +104,7 @@ async function keywordSearchLike(
     // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
     const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
     // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
-    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc${rawColumn(terms, "content")} FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`;
+    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`;
     const levels = withMatchLevels(inner, ["id", "created_at", "tags", "source"], terms, "created_at DESC");
     return env.DB.prepare(levels.sql)
       .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max, ...levels.binds);
@@ -164,12 +164,12 @@ async function keywordSearchFts(
   // Rows come back without their text, with per-term match levels instead (keyword-rows.ts). `sh` and `rk` carry the ranking
   // (short-token hits, then bm25) so the outer SELECT keeps the order the LIMIT chose.
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
-  const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc${rawColumn(terms, "e.content")}, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
+  const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
        WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
        ORDER BY sh DESC, rk, ord LIMIT ?`;
   // scope-checked: same clause, same reason as above
-  const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc${rawColumn(terms, "e.content")}, entries_fts.rowid AS ord
+  const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
        WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
        ORDER BY entries_fts.rowid DESC LIMIT ?`;

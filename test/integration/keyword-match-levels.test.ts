@@ -84,7 +84,7 @@ describe("keyword rows are ids first, text last", () => {
     expect(rows[0].hits!.get("needle")).toBe(2);
   });
 
-  it("looks for a non-ASCII term as typed too, since SQLite folds ASCII case only", async () => {
+  it("finds a full-width term, which SQLite does not fold", async () => {
     const env = await boot(false);
     sqlite.seed({ id: "wide", content: "Ｚｏｒｖａｎｅ 123 was here", createdAt: 1 });
     const { rows } = await keywordSearch(["Ｚｏｒｖａｎｅ"], env, 500);
@@ -113,6 +113,24 @@ describe("keyword rows are ids first, text last", () => {
       const env = await boot(true);
       sqlite.seed({ id: "n", content, createdAt: 1 });
       const { rows } = await keywordSearch([term], env, 500);
+      expect(rows.map(r => r.id)).toEqual(["n"]);
+      expect(rows[0].hits!.get(term)).toBe(reference(content, term));
+    });
+  }
+
+  // A level of 2 found through an UPPERCASE form is not what the old scan found: it lowercased the note, and these do not round-trip
+  const NO_ROUNDTRIP: [string, string, string][] = [
+    ["sharp s against SS", "anchor SS", "ß"],
+    ["fi ligature against FI", "anchor FI", "ﬁ"],
+    ["sigma against a capital sigma", "anchor ΟΣ", "σ"],
+    ["final sigma against a capital sigma", "anchor ΟΣΑ", "ς"],
+    ["sigma against the word it ends", "anchor ΑΣΑ", "σ"],
+  ];
+  for (const [name, content, term] of NO_ROUNDTRIP) {
+    it(`does not read a level the text scan would not: ${name} (FTS route)`, async () => {
+      const env = await boot(true);
+      sqlite.seed({ id: "n", content, createdAt: 1 });
+      const { rows } = await keywordSearch(["anchor", term], env, 500);
       expect(rows.map(r => r.id)).toEqual(["n"]);
       expect(rows[0].hits!.get(term)).toBe(reference(content, term));
     });

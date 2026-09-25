@@ -643,11 +643,10 @@ export class D1Mock {
           // Keyword (hybrid recall) query: content LIKE ? OR content LIKE ? ... LIMIT ?. The keyword arm asks for per-term match levels
           // instead of the text (src/recall/keyword-rows.ts): the binds end with the lowercased terms (each once, referenced by number) after the limit.
           const nTerms = (s.match(/ AS p\d+/g) ?? []).length;
-          const nRaw = (s.match(/instr\(raw, /g) ?? []).length;
-          const tail = nTerms + nRaw;
+          const tail = nTerms;
           const limit = Number(args[args.length - 1 - tail]);
           const patterns = args.slice(0, args.length - 1 - tail).map((a: any) => String(a).replace(/^%/, "").replace(/%$/, "").toLowerCase());
-          const terms: string[] = args.slice(args.length - tail, args.length - nRaw).map((a: any) => String(a));
+          const terms: string[] = args.slice(args.length - tail).map((a: any) => String(a));
           const alone = (lc: string, at: number, len: number) => !/\w/.test(lc[at - 1] ?? "") && !/\w/.test(lc[at + len] ?? "");
           const level = (lc: string, t: string): number => {
             const first = lc.indexOf(t);
