@@ -1,13 +1,11 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { CHUNK_MAX_CHARS, VECTORIZE_UPSERT_BATCH } from "../constants";
+import { CHUNK_MAX_CHARS, MIRRORED_SOURCES, VECTORIZE_UPSERT_BATCH } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
-import { buildEmbeddingChunks, mayBeContextual, plainEmbeddingChunks, type EmbeddingChunk } from "./contextual";
-import { focusModeAllowed } from "./focus-budget";
+import { chunkText } from "../text/chunk";
 import { deleteVectorIds } from "../vectorize/batch";
-import { schemeOf, LEGACY_SCHEME } from "../embedding/scheme";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
@@ -40,10 +38,7 @@ export async function storeEntry(
   source: string,
   now: number,
   config: Readonly<Config> = DEFAULTS,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
-  llmContexts?: readonly string[],
-  /** Chunks the caller already built for exactly this entry, config and focus mode (the migration costs them before writing); built once here otherwise. */
-  planned?: readonly EmbeddingChunk[],
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
 ): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
@@ -57,28 +52,15 @@ export async function storeEntry(
   //
   // Only the INDEX is truncated. entries.content keeps the whole record, so
   // nothing is lost to the reader and keyword search still covers all of it.
-  const entry = { id, content, tags, source, createdAt: now };
-  let chunks: EmbeddingChunk[];
-  try {
-    // The index-size read happens only for a note that would get focus chunks.
-    if (planned) chunks = [...planned];
-    else {
-      const focus = config.CONTEXTUAL_EMBEDDINGS === "on" && mayBeContextual(entry) ? await focusModeAllowed(env, config) : true;
-      chunks = buildEmbeddingChunks(entry, config, llmContexts, focus);
-    }
-  } catch (e) {
-    // Context is an enhancement; a failure building it must not fail the save.
-    console.error("Contextual chunking failed, embedding plain chunks:", e);
-    chunks = plainEmbeddingChunks(entry);
-  }
-  const scheme = schemeOf(config);
+  const allChunks = chunkText(content);
+  const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
 
   const vectors = await Promise.all(
-    chunks.map(async chunk => {
+    chunks.map(async (chunk, i) => {
       const metadata: Record<string, any> = {
-        content: chunk.rawContent,
+        content: chunk,
         parentId: id,
-        chunkIndex: chunk.chunkIndex,
+        chunkIndex: i,
         totalChunks: chunks.length,
         tags,
         source,
@@ -88,21 +70,14 @@ export async function storeEntry(
         // passes query unfiltered.
         workspace_id: writeCtx.workspaceId,
       };
-      // Scheme 1 vectors carry no field, exactly as before schemes existed.
-      if (scheme !== LEGACY_SCHEME) metadata.scheme = scheme;
-      if (chunk.contextualized) {
-        metadata.contextualized = true;
-        metadata.contextSource = chunk.contextSource;
-      }
 
       tags.forEach(t => {
         metadata[`tag_${t.replace(/[."]/g, "_")}`] = true;
       });
 
       return {
-        id: chunks.length === 1 ? id : `${id}-chunk-${chunk.chunkIndex}`,
-        // The prefix is embedding input only; metadata.content stays raw.
-        values: await embed(chunk.embeddingText, env, config),
+        id: chunks.length === 1 ? id : `${id}-chunk-${i}`,
+        values: await embed(chunk, env, config),
         metadata,
       };
     })

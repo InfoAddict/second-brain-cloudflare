@@ -76,33 +76,6 @@ export const DEFAULTS = {
   // else above keeps using LLM_MODEL. See the cost comment on
   // constants.INSIGHT_LLM_MODEL for why this is a separate setting.
   INSIGHT_LLM_MODEL: "@cf/openai/gpt-oss-120b",
-  // Pooling sent to the bge-en embedders ("mean" sends no field, Workers AI's
-  // default). It changes the vector space, so it is part of the embedding
-  // scheme (src/embedding/scheme.ts) and NOT settable from KV or PATCH /config:
-  // a brain that flipped it without re-embedding would rank queries against
-  // vectors from another space. cls was measured and rejected (T-0077); the
-  // key exists so the eval can build a cls index.
-  EMBEDDING_POOLING: "mean",
-  // OPERATOR KILL SWITCH, not a user setting: it is never surfaced in an app or
-  // dashboard, and stays an ordinary (unlocked) key so an operator can set it
-  // through the config API. Whether each chunk of a multi-chunk memory is
-  // embedded with a transient entry-level prefix (src/capture/contextual.ts).
-  // "off" stops new contextual vectors and pauses the migration and the generated
-  // tier, leaving existing vectors as they are; turning it back on resumes the
-  // same ledger. Ships off until measured at scale (T-0042): while off, nothing
-  // below runs, reads or writes anything. Flipping the shipped default is the
-  // release decision; the key is what lets a misbehaving multi-day migration be
-  // stopped without a redeploy.
-  CONTEXTUAL_EMBEDDINGS: "off",
-  // Stored vector dimensions below which long notes get focus chunks (about 2.4x
-  // the vectors of plain chunking); past it they are chunked at the larger tail
-  // size. 2,500,000 is 50% of the free plan's 5M stored dimensions. 0 removes
-  // the limit. See src/capture/focus-budget.ts.
-  CONTEXTUAL_FOCUS_DIMENSION_BUDGET: 2_500_000,
-  // Optional nightly tier that swaps the deterministic prefix for one
-  // model-written sentence per chunk. Capped at CONTEXT_LLM_CHUNKS_PER_NIGHT.
-  CONTEXTUAL_EMBEDDING_LLM: "off",
-  CONTEXTUAL_EMBEDDING_LLM_MODEL: "@cf/ibm-granite/granite-4.0-h-micro",
   // Used only by src/when/pass.ts's nightly commitment-extraction call.
   // Defaults to the same model as INSIGHT_LLM_MODEL — a smaller model's
   // judgment on "is this a commitment, and when is it due" was not measured
@@ -228,11 +201,6 @@ export const RULES: Record<ConfigKey, Rule> = {
 
   LLM_MODEL: { kind: "string" },
   EMBEDDING_MODEL: { kind: "string" },
-  EMBEDDING_POOLING: { kind: "string" },
-  CONTEXTUAL_EMBEDDINGS: { kind: "string" },
-  CONTEXTUAL_FOCUS_DIMENSION_BUDGET: { kind: "number", min: 0, max: 20_000_000_000, integer: true },
-  CONTEXTUAL_EMBEDDING_LLM: { kind: "string" },
-  CONTEXTUAL_EMBEDDING_LLM_MODEL: { kind: "string" },
   INSIGHT_LLM_MODEL: { kind: "string" },
   WHEN_LLM_MODEL: { kind: "string" },
   TEAM_DEFAULT_WORKSPACE: { kind: "string" },
@@ -240,16 +208,6 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_MODE: { kind: "string" },
   TIMEZONE: { kind: "string" },
   PUSH_CONTACT: { kind: "string" },
-};
-
-/** Keys the shipped value of which is fixed: not read from KV and refused on write. */
-const LOCKED_KEYS: ReadonlySet<ConfigKey> = new Set<ConfigKey>(["EMBEDDING_POOLING"]);
-
-/** String settings that accept only these values. Anything else degrades to the default (resolve) or is refused (write). */
-const ENUM_VALUES: Partial<Record<ConfigKey, readonly string[]>> = {
-  EMBEDDING_POOLING: ["mean", "cls"],
-  CONTEXTUAL_EMBEDDINGS: ["off", "on"],
-  CONTEXTUAL_EMBEDDING_LLM: ["off", "on"],
 };
 
 /**
@@ -326,10 +284,6 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return { value: fallback, note: `${key}: "${value}" is not a recognized IANA timezone` };
     }
-    const allowed = ENUM_VALUES[key];
-    if (allowed && !allowed.includes(value)) {
-      return { value: fallback, note: `${key}: expected one of ${allowed.join(", ")}, got ${JSON.stringify(value)}` };
-    }
     return { value: value as Config[ConfigKey] };
   }
 
@@ -376,7 +330,6 @@ export async function resolveConfig(env: Env): Promise<Readonly<Config>> {
     // Unknown keys are ignored rather than carried through: they may be a
     // setting removed in a later release, or a typo in a hand-edited blob.
     if (!(key in DEFAULTS)) continue;
-    if (LOCKED_KEYS.has(key as ConfigKey)) continue;
     const { value: safe, note } = coerce(key as ConfigKey, value);
     (resolved as Record<string, unknown>)[key] = safe;
     if (note) notes.push(note);
@@ -426,7 +379,6 @@ export async function readOverrides(env: Env): Promise<Partial<Config>> {
 /** Strict per-key check. Returns an error message, or null when acceptable. */
 function validateStrict(key: string, value: unknown): string | null {
   if (!(key in DEFAULTS)) return `${key} is not a known setting`;
-  if (LOCKED_KEYS.has(key as ConfigKey)) return `${key} is not settable: it changes the vector space and needs a re-embed`;
   const rule = RULES[key as ConfigKey];
 
   if (rule.kind === "string") {
@@ -441,8 +393,6 @@ function validateStrict(key: string, value: unknown): string | null {
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;
     }
-    const allowed = ENUM_VALUES[key as ConfigKey];
-    if (allowed && !allowed.includes(value)) return `${key} must be one of ${allowed.join(", ")}`;
     return null;
   }
   if (typeof value !== "number" || !Number.isFinite(value)) {

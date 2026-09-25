@@ -50,12 +50,15 @@ export function resetVectorizeFilterState(): void {
 export async function queryVectorizeScoped<M = unknown>(
   vectorize: Queryable,
   values: number[],
-  opts: { topK: number; filter: VectorizeWorkspaceFilter["filter"]; onDegrade?: () => void; /** Ids and scores only: the query then returns up to 100 vectors instead of 50. */ idsOnly?: boolean },
+  opts: { topK: number; filter: VectorizeWorkspaceFilter["filter"]; onDegrade?: () => void },
 ): Promise<{ matches: M[]; degraded: boolean }> {
-  const shape = opts.idsOnly ? { returnMetadata: "none" as const } : { returnMetadata: "all" as const, returnValues: true };
   const unfiltered = async (): Promise<{ matches: M[]; degraded: boolean }> => {
     degradedQueryCount++;
-    const result = await vectorize.query(values, { topK: opts.topK, ...shape });
+    const result = await vectorize.query(values, {
+      topK: opts.topK,
+      returnMetadata: "all",
+      returnValues: true,
+    });
     return { matches: (result?.matches ?? []) as M[], degraded: true };
   };
 
@@ -72,7 +75,12 @@ export async function queryVectorizeScoped<M = unknown>(
     return unfiltered();
   }
   try {
-    const result = await vectorize.query(values, { topK: opts.topK, ...shape, filter: opts.filter });
+    const result = await vectorize.query(values, {
+      topK: opts.topK,
+      returnMetadata: "all",
+      returnValues: true,
+      filter: opts.filter,
+    });
     workspaceFiltersSupported = true;
     return { matches: (result.matches ?? []) as M[], degraded: false };
   } catch (e) {

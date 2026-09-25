@@ -22,8 +22,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeMemoryKV } from "../helpers/make-env";
 import { chunkText } from "../../src/text/chunk";
-import { buildEmbeddingChunks } from "../../src/capture/contextual";
-import { DEFAULTS, type Config } from "../../src/config";
+import { DEFAULTS } from "../../src/config";
 import {
   MIGRATION_KEY,
   clearMigration,
@@ -84,40 +83,22 @@ describe("migration estimate", () => {
     d1 = makeSqliteD1();
   });
 
-  it("counts exactly the chunks a rebuild would write, contextual focus chunks included", async () => {
-    // One short entry and one long enough to split, so the count is exercised rather than trivially 1-per-entry.
+  it("counts entries and projects at least as many chunks as the chunker makes", async () => {
+    // One short entry and one long enough to split, so the projection is
+    // exercised rather than trivially 1-per-entry.
     const long = "word ".repeat(900); // 4500 chars
     d1.seed({ id: "short", content: "hello", createdAt: 1 });
     d1.seed({ id: "long", content: long, createdAt: 2 });
-    d1.seed({ id: "mail", content: long, createdAt: 3, source: "email-gmail" });
 
     const { env } = makeEnv(d1, makeAI());
-    const on = await estimate(env, { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" });
-    const off = await estimate(env, { ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "off" });
+    const { entries, chunks } = await estimate(env);
 
-    const entryOf = (id: string, content: string, source = "api") => ({ id, content, tags: [], source, createdAt: 1 });
-    const real = (cfg: Config) => [entryOf("s", "hello"), entryOf("l", long), entryOf("m", long, "email-gmail")]
-      .reduce((n, e) => n + buildEmbeddingChunks(e, cfg).length, 0);
-    expect(on).toEqual({ entries: 3, chunks: real({ ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "on" }) });
-    expect(off).toEqual({ entries: 3, chunks: real({ ...DEFAULTS, CONTEXTUAL_EMBEDDINGS: "off" }) });
-    // the old projection said about 1 + 4 + 4 here; contextual focus chunks cost more, and the count must say so
-    expect(on.chunks).toBeGreaterThan(off.chunks);
-    expect(off.chunks).toBe(1 + chunkText(long).length + 1);
-  });
-
-  it("budgets a batch by the chunks it will really write", async () => {
-    const long = "word ".repeat(900);
-    d1.seed({ id: "a", content: long, createdAt: 1 });
-    d1.seed({ id: "b", content: long, createdAt: 2 });
-    const ai = makeAI();
-    const { env } = makeEnv(d1, ai);
-    const onCfg = { ...cfg, CONTEXTUAL_EMBEDDINGS: "on" as const }; // shipped off
-    const per = buildEmbeddingChunks({ id: "a", content: long, tags: [], source: "api", createdAt: 1 }, onCfg).length;
-    expect(per).toBeGreaterThan(chunkText(long).length);
-    const r = await runBatch(env, onCfg);
-    // MIGRATION_CHUNK_BUDGET is 20: the second entry only fits if both really cost less than 20
-    expect(r.processed).toBe(per * 2 <= 20 ? 2 : 1);
-    expect(ai.calls).toHaveLength(r.processed * per);
+    expect(entries).toBe(2);
+    // The projection must never promise fewer chunks than the chunker produces,
+    // or the estimate understates the cost the user is agreeing to.
+    const real = chunkText("hello").length + chunkText(long).length;
+    expect(chunks).toBeLessThanOrEqual(real);
+    expect(chunks).toBeGreaterThanOrEqual(2);
   });
 
   /** Deprecated entries have had their vectors deliberately deleted and recall

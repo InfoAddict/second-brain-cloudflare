@@ -288,20 +288,11 @@ async function runPrepare(cmd: CliCommand & { kind: "prepare" }): Promise<number
   const spec = await resolveCorpus(cmd.corpus);
   const paths = replayPaths(cmd.model, cmd.corpus);
   guardWrite(paths.write); // the cache is the one thing prepare writes
-  const variant = getVariant(cmd.variant);
-  const live = makeLocalAi();
   await prepare({
-    spec, variant, backend: cmd.d1, model: cmd.model,
-    store: new ReplayStore(paths.read, paths.write), live,
+    spec, variant: getVariant(cmd.variant), backend: cmd.d1, model: cmd.model,
+    store: new ReplayStore(paths.read, paths.write), live: makeLocalAi(),
     llmTags: cmd.llmTags, maxNeurons: cmd.maxNeurons, concurrency: cmd.concurrency, log: line => console.log(line),
   });
-  const cut = live.truncations?.[cmd.model] ?? 0;
-  console.log(`inputs cut at the model's token limit while recording: ${cut}`);
-  // A contextual input must never rely on the embedder dropping its tail.
-  if (cut > 0 && variant.config?.CONTEXTUAL_EMBEDDINGS === "on") {
-    console.error(`prepare FAILED: ${cut} contextual input(s) exceeded the token limit; the recorded vectors would not cover their whole chunk`);
-    return 1;
-  }
   return 0;
 }
 

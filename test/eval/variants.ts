@@ -1,4 +1,3 @@
-import { storeEntry } from "../../src/capture/store";
 import type { Config } from "../../src/config";
 import type { RecallInternalOptions } from "../../src/recall/types";
 import type { IndexVariant } from "./corpus/loader";
@@ -48,21 +47,6 @@ const builtin: VariantSpec[] = [
   { name: "dense-only", description: "Ablation: keyword arm skipped. Must lose on identifier and rare-word queries.", internal: { variant: { arms: "dense-only" } }, config: NO_RERANK },
   { name: "keyword-only", description: "Ablation: embedding and Vectorize skipped. Must lose on paraphrase queries.", internal: { variant: { arms: "keyword-only" } }, config: NO_RERANK },
 ];
-
-/** The shipped write path with config overrides layered on, so a stored-vector variant re-embeds the corpus under them. */
-const storeWith = (over: Partial<Config>): typeof storeEntry => (env, id, content, tags, source, now, config, writeCtx) =>
-  storeEntry(env, id, content, tags, source, now, Object.freeze({ ...config, ...over } as Config), writeCtx);
-
-/** A variant whose stored vectors (and its queries) are made under `over`. */
-const embedVariant = (name: string, description: string, over: Partial<Config>, extra: Partial<VariantSpec> = {}): VariantSpec =>
-  ({ name, description, config: over, index: { id: name, storeEntry: storeWith(over) }, ...extra });
-
-builtin.push(
-  embedVariant("legacy-embed", "The pre-T-0042 scheme: raw chunks, mean pooling. The reference for scheme comparisons once the shipped default moves.", { CONTEXTUAL_EMBEDDINGS: "off", EMBEDDING_POOLING: "mean" }),
-  embedVariant("contextual-embed", "Multi-chunk memories are embedded with a transient entry-level prefix (T-0042).", { CONTEXTUAL_EMBEDDINGS: "on", EMBEDDING_POOLING: "mean" }, { targetCategories: ["long-context", "paraphrase"] }),
-  embedVariant("cls-pooling", "bge-en embeddings use CLS pooling instead of Workers AI's default mean (T-0077).", { CONTEXTUAL_EMBEDDINGS: "off", EMBEDDING_POOLING: "cls" }),
-  embedVariant("contextual-cls", "Contextual chunk embeddings and CLS pooling together.", { CONTEXTUAL_EMBEDDINGS: "on", EMBEDDING_POOLING: "cls" }, { targetCategories: ["long-context", "paraphrase"] }),
-);
 
 export const VARIANTS: Record<string, VariantSpec> = Object.fromEntries(builtin.map(v => [v.name, v]));
 

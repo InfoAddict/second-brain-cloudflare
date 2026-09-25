@@ -88,14 +88,9 @@ export async function embed(
   // defensive default (controller ruling) — live measurement against
   // Workers AI wasn't possible in the environment that authored this; see
   // the #326 spec, §10.6.
-  // bge-m3 is always CLS and takes no pooling field. The bge-en models default
-  // to mean pooling, so "mean" sends nothing and stays byte-identical to the
-  // request every existing vector was made with.
   const input = config.EMBEDDING_MODEL === "@cf/baai/bge-m3"
     ? { text: [text], truncate_inputs: true }
-    : config.EMBEDDING_POOLING === "cls"
-      ? { text: [text], pooling: "cls" }
-      : { text: [text] };
+    : { text: [text] };
   // Workers AI requires `as any` here — the SDK types don't cover all models
   const result = (await env.AI.run(config.EMBEDDING_MODEL as any, input as any)) as any;
   return result.data[0] as number[];
