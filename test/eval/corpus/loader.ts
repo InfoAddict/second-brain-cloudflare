@@ -14,7 +14,7 @@ import type { CorpusSpec } from "./types";
 // The classifier's own fallback (src/capture/classify.ts); 0 would switch off a live ranking signal.
 const DEFAULT_IMPORTANCE = 3;
 
-/** Index-time variant hook: T-0042 supplies its contextual storeEntry here. */
+/** Index-time variant hook: a variant that changes how entries are indexed supplies its own storeEntry here. */
 export interface IndexVariant { id: string; storeEntry: typeof storeEntry }
 
 export interface LoadedCorpus {

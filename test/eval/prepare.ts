@@ -41,7 +41,7 @@ const pct = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)[Math.min(
  *  1. dry: learn which texts are missing and what recording them would cost;
  *  2. record: only if the estimate fits --max-neurons, embed each missing text once;
  *  3. replay: prove the cache is now complete (throws on any miss).
- * The same three passes are T-0042's corpus re-embedding step for an index variant.
+ * The same three passes re-embed the corpus for an index-time variant (`variant.index`).
  */
 export async function prepare(o: {
   spec: CorpusSpec;

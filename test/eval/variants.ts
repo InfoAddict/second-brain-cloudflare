@@ -23,13 +23,14 @@ export interface VariantSpec {
 }
 
 /*
- * How T-0041 and T-0042 plug in:
+ * How a candidate plugs in (the reranker, T-0041, is a query-time variant; contextual embeddings, T-0042, were an
+ * index-time one, evaluated and removed):
  *
  *   registerVariant({ name: "rerank", description: "...", internal: { variant: { rerank: true } },
- *                     targetCategories: ["paraphrase", "common-word"] });
- *   registerVariant({ name: "contextual-embed", description: "...",
- *                     index: { id: "contextual-embed", storeEntry: storeEntryContextual },
- *                     targetCategories: ["long-context", "paraphrase"] });
+ *                     targetCategories: ["paraphrase"] });
+ *   registerVariant({ name: "my-index", description: "...",
+ *                     index: { id: "my-index", storeEntry: myStoreEntry },
+ *                     targetCategories: ["long-context"] });
  *
  * then `npm run eval:recall -- prepare --variant <name> --corpus core-1k` records the AI
  * calls the variant needs (rerank scores, or re-embedded chunks), and

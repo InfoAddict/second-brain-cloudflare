@@ -136,7 +136,7 @@ describe("runVariant", () => {
 
   it("refuses to run a variant whose index-time build differs from the loaded corpus", async () => {
     const c = await corpus();
-    await expect(runVariant({ corpus: c, variant: { name: "ctx", description: "x", index: { id: "contextual-embed", storeEntry: (async () => { throw new Error("unused"); }) as never } }, queries, isolate: "warm", embeddingModel: MODEL }))
+    await expect(runVariant({ corpus: c, variant: { name: "alt", description: "x", index: { id: "alt-index", storeEntry: (async () => { throw new Error("unused"); }) as never } }, queries, isolate: "warm", embeddingModel: MODEL }))
       .rejects.toThrow(/index/);
   });
 

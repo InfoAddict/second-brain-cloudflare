@@ -104,9 +104,9 @@ describe("core golden data", () => {
   });
 
   // Guidance was 3 MB for the 338-query set (2.3 MB, 1,450 vectors), then 8 MiB for the expanded set. The baseline now
-  // includes the cross-encoder reranker, whose per-candidate scores are recorded alongside the chunk vectors: 5,842 entries,
-  // 8.15 MiB. The cap is 9 MiB (approved on T-0043.6), which leaves 0.85 MiB; contextual rows (T-0042) stay in the local
-  // cache, uncommitted. Past this, move the layer out of git rather than raise it again.
+  // includes the cross-encoder reranker, whose per-candidate scores are recorded alongside the chunk vectors: 5,846 entries,
+  // 8.16 MiB. The cap is 9 MiB (approved on T-0043.6), which leaves 0.84 MiB. Past this, move the layer out of git rather
+  // than raise it again.
   it("keeps every committed replay layer together within its size budget", () => {
     // the privacy allowlist admits replay.<model>.jsonl.gz for any model, so the cap is on their sum (a bge-m3 layer counts too)
     const layers = readdirSync(DATA).filter(name => /^replay\.[\w.-]+\.jsonl\.gz$/.test(name));
