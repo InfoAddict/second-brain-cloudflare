@@ -33,7 +33,7 @@
   "edges.jsonl": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f",
   "haystack.jsonl": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc",
   "needles.jsonl": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c",
-  "queries.jsonl": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5"
+  "queries.jsonl": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74"
  },
  "results": [
   {
@@ -74685,6 +74685,3014 @@
    "keywordGold": false,
    "pool": {
     "size": 61,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-001",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-002",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-002",
+    "n-lcoh-060",
+    "n-lcoh-073",
+    "n-lcoh-012",
+    "n-lcoh-054",
+    "h-long-091",
+    "h-long-005",
+    "h-long-052",
+    "n-lcoh-052",
+    "n-lcoh-058"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 4955,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.710482,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 518,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-002",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-009",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-009",
+    "n-para-375",
+    "n-id-057",
+    "n-id-001",
+    "n-lcoh-039",
+    "n-lcoh-003",
+    "h-long-078",
+    "h-long-046",
+    "n-id-115",
+    "n-lcoh-009"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 5067,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 69,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-003",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-015",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-015",
+    "n-lcoh-015",
+    "f-000002",
+    "h-long-078",
+    "n-lcoh-050",
+    "h-long-002",
+    "h-long-051",
+    "n-lcoh-039",
+    "f-000094",
+    "h-long-015"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 967,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.693076,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 120,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-004",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-022",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-rare-022",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-para-079",
+    "n-para-030",
+    "n-rare-057",
+    "n-lcoh-020",
+    "n-rare-047"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.5,
+    "ndcg10": 0.6309297535714574
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 2643,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 120,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-005",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-030",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-030",
+    "n-lcoh-060",
+    "h-long-091",
+    "n-lcoh-012",
+    "n-lcoh-054",
+    "n-lcoh-073",
+    "n-lcoh-057",
+    "h-long-033",
+    "h-long-052",
+    "n-lcoh-045"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 4970,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.712889,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 524,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-006",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-037",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-037",
+    "n-lcoh-005",
+    "n-lcoh-015",
+    "h-long-078",
+    "n-lcoh-060",
+    "n-lcoh-039",
+    "h-long-053",
+    "f-000002",
+    "f-000094",
+    "f-000251"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 914,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 119,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-007",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-048",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-048",
+    "n-lcoh-034",
+    "n-lcoh-044",
+    "f-000169",
+    "n-lcoh-006",
+    "f-000283",
+    "f-000643",
+    "n-lcoh-051",
+    "n-lcoh-064",
+    "n-lcoh-045"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 6399,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.727179,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 115,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-008",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-059",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-rare-059",
+    "n-rare-057",
+    "n-para-079",
+    "n-lcoh-063",
+    "n-lcoh-020",
+    "n-para-030"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7900,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.014728,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 120,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-009",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-066",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-066",
+    "n-lcoh-047",
+    "n-para-230",
+    "n-para-026",
+    "n-hop-005-answer",
+    "n-lcoh-059",
+    "n-lcoh-009",
+    "n-long-033",
+    "n-lcoh-024",
+    "n-lcoh-073"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 4943,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 111,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-010",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-071",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-rare-071",
+    "n-rare-057",
+    "n-para-079",
+    "n-lcoh-020",
+    "n-para-030",
+    "n-lcoh-063"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 5165,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 116,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-011",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-078",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "h-long-046",
+    "h-long-078",
+    "n-rare-078",
+    "n-lcoh-006",
+    "n-lcoh-009",
+    "n-lcoh-036",
+    "n-lcoh-032",
+    "n-lcoh-045",
+    "n-lcoh-051",
+    "h-long-088"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.3333333333333333,
+    "ndcg10": 0.5
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 4084,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 83,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-012",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-086",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-086",
+    "n-lcoh-073",
+    "h-long-091",
+    "n-lcoh-012",
+    "h-long-049",
+    "n-lcoh-054",
+    "h-long-033",
+    "h-long-052",
+    "h-long-005",
+    "h-long-028"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 4979,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.7216619999999999,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 526,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-013",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-093",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-093",
+    "n-lcoh-005",
+    "n-lcoh-015",
+    "h-long-078",
+    "n-lcoh-060",
+    "n-lcoh-039",
+    "f-000468",
+    "h-long-053",
+    "f-000002",
+    "f-000094"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 905,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 116,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-014",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-099",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-072",
+    "n-rare-099",
+    "h-long-070",
+    "n-lcoh-077",
+    "h-long-051",
+    "n-lcoh-031",
+    "n-lcoh-056",
+    "h-long-014",
+    "n-lcoh-058",
+    "n-lcoh-038"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.5,
+    "ndcg10": 0.6309297535714574
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 2713,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.014728,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 65,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-015",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-107",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-107",
+    "h-long-091",
+    "n-lcoh-073",
+    "h-long-005",
+    "n-lcoh-054",
+    "h-long-052",
+    "n-lcoh-012",
+    "h-long-049",
+    "h-long-033",
+    "n-lcoh-060"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 5021,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.7056709999999999,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 540,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-016",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-115",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-rare-115",
+    "n-rare-057",
+    "n-para-079",
+    "n-lcoh-020",
+    "n-lcoh-063",
+    "n-para-030"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7087,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 122,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-017",
+   "category": "agent-framed",
+   "clusterKey": "n-rare-123",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-rare-123",
+    "n-lcoh-006",
+    "h-long-047",
+    "n-lcoh-055",
+    "n-lcoh-057",
+    "h-long-038",
+    "n-long-050",
+    "n-lcoh-034",
+    "h-long-092",
+    "h-long-004"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 958,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.757034,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 117,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-018",
+   "category": "agent-framed",
+   "clusterKey": "n-id-004",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-id-004",
+    "n-lcoh-059",
+    "n-lcoh-018",
+    "n-lcoh-046",
+    "n-lcoh-051",
+    "n-para-362",
+    "n-id-051",
+    "n-id-060",
+    "n-lcoh-043",
+    "n-lcoh-041"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 6645,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.023933,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 55,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-019",
+   "category": "agent-framed",
+   "clusterKey": "n-id-019",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-id-019",
+    "n-lcoh-060",
+    "h-long-091",
+    "h-long-058",
+    "n-para-230",
+    "n-lcoh-057",
+    "n-lcoh-052",
+    "n-para-026",
+    "h-long-049",
+    "n-long-033"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 5238,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.016569,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 521,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-020",
+   "category": "agent-framed",
+   "clusterKey": "n-id-036",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-id-036",
+    "n-lcoh-036",
+    "n-lcoh-032",
+    "n-lcoh-045",
+    "n-para-030",
+    "n-rare-047",
+    "n-lcoh-020",
+    "n-lcoh-063",
+    "n-long-068"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.5,
+    "ndcg10": 0.6309297535714574
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 8077,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.016569,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 106,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-021",
+   "category": "agent-framed",
+   "clusterKey": "n-id-061",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-id-061",
+    "n-lcoh-005",
+    "n-lcoh-015",
+    "h-long-078",
+    "n-lcoh-060",
+    "f-000468",
+    "n-lcoh-039",
+    "h-long-053",
+    "f-000002",
+    "f-000094"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 930,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 123,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-022",
+   "category": "agent-framed",
+   "clusterKey": "n-id-075",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-id-075",
+    "n-lcoh-060",
+    "n-para-264",
+    "n-para-248",
+    "n-para-387",
+    "n-hop-081-root",
+    "n-lcoh-070",
+    "n-hop-125-answer",
+    "n-long-109",
+    "h-long-050"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 2002,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.016569,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 97,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-023",
+   "category": "agent-framed",
+   "clusterKey": "n-id-089",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-045",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-id-089",
+    "n-rare-057",
+    "n-para-079",
+    "n-lcoh-063",
+    "n-lcoh-020",
+    "n-para-030"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 0.2,
+    "ndcg10": 0.38685280723454163
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7993,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.01841,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 121,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-024",
+   "category": "agent-framed",
+   "clusterKey": "n-id-106",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-id-106",
+    "h-long-091",
+    "h-long-058",
+    "n-lcoh-060",
+    "n-para-230",
+    "n-lcoh-012",
+    "n-para-026",
+    "h-long-010",
+    "n-long-033",
+    "h-long-028"
+   ],
+   "metrics": {
+    "recall5": 1,
+    "recall10": 1,
+    "mrr10": 1,
+    "ndcg10": 1
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 4993,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.023933,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 541,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-025",
+   "category": "agent-framed",
+   "clusterKey": "n-id-145",
+   "tags": [
+    "subset:named"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-045",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-para-030",
+    "n-id-145",
+    "n-rare-047",
+    "h-long-047",
+    "n-lcoh-020",
+    "n-lcoh-063"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 1,
+    "mrr10": 0.16666666666666666,
+    "ndcg10": 0.3562071871080222
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 4981,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.023933,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "exact-id",
+   "keywordGold": true,
+   "pool": {
+    "size": 122,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-026",
+   "category": "agent-framed",
+   "clusterKey": "n-para-006",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-031",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-lcoh-008",
+    "n-rare-047",
+    "n-para-079",
+    "n-para-030",
+    "n-lcoh-020"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7733,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 122,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-027",
+   "category": "agent-framed",
+   "clusterKey": "n-para-017",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-076",
+    "h-long-078",
+    "n-long-067",
+    "n-lcoh-015",
+    "n-lcoh-064",
+    "n-lcoh-039",
+    "h-long-044",
+    "f-000002",
+    "f-000094",
+    "h-long-010"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 5784,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.764815,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 128,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-028",
+   "category": "agent-framed",
+   "clusterKey": "n-para-028",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-long-049",
+    "n-lcoh-045",
+    "h-long-046",
+    "h-long-091",
+    "n-lcoh-021",
+    "n-lcoh-006",
+    "n-long-190",
+    "n-lcoh-058",
+    "h-long-055",
+    "n-lcoh-032"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 4047,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 97,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-029",
+   "category": "agent-framed",
+   "clusterKey": "n-para-039",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-062",
+    "n-lcoh-032",
+    "n-lcoh-008",
+    "n-lcoh-029",
+    "n-lcoh-080",
+    "n-long-120",
+    "h-long-077",
+    "h-long-088",
+    "f-000060",
+    "n-lcoh-006"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 6613,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.766796,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 147,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-030",
+   "category": "agent-framed",
+   "clusterKey": "n-para-050",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-para-081",
+    "f-000499",
+    "f-000361",
+    "f-000342",
+    "n-lcoh-006",
+    "f-000593",
+    "n-para-054",
+    "n-para-050",
+    "n-para-056",
+    "n-hop-033-answer"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 1,
+    "mrr10": 0.125,
+    "ndcg10": 0.3154648767857287
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 5399,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 50,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-031",
+   "category": "agent-framed",
+   "clusterKey": "n-para-061",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-015",
+    "n-lcoh-003",
+    "n-lcoh-004",
+    "h-long-017",
+    "n-lcoh-085",
+    "h-long-069",
+    "h-long-070",
+    "n-lcoh-032",
+    "n-lcoh-082",
+    "n-lcoh-078"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 7293,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.858065,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 94,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-032",
+   "category": "agent-framed",
+   "clusterKey": "n-para-072",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-060",
+    "n-para-015",
+    "n-hop-013-root",
+    "n-hop-033-root",
+    "h-long-067",
+    "n-lcoh-006",
+    "n-long-140",
+    "n-lcoh-089",
+    "n-long-184",
+    "n-lcoh-032"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7982,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 79,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-033",
+   "category": "agent-framed",
+   "clusterKey": "n-para-083",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-069",
+    "n-long-213",
+    "n-long-203",
+    "n-long-034",
+    "n-lcoh-077",
+    "h-long-068",
+    "n-lcoh-028",
+    "h-long-054",
+    "n-lcoh-081",
+    "n-long-098"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 5582,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 50,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-034",
+   "category": "agent-framed",
+   "clusterKey": "n-para-094",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-para-351",
+    "n-lcoh-073",
+    "n-lcoh-006",
+    "h-long-020",
+    "n-hop-117-answer",
+    "n-lcoh-038",
+    "n-lcoh-025",
+    "h-long-002",
+    "h-long-092",
+    "n-lcoh-070"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 5384,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.758306,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 80,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-035",
+   "category": "agent-framed",
+   "clusterKey": "n-para-105",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-046",
+    "n-hop-088-answer",
+    "h-long-037",
+    "n-lcoh-070",
+    "n-lcoh-075",
+    "n-lcoh-006",
+    "n-lcoh-044",
+    "n-lcoh-076",
+    "n-lcoh-066",
+    "n-lcoh-013"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7998,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 82,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-036",
+   "category": "agent-framed",
+   "clusterKey": "n-para-116",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-084",
+    "n-lcoh-056",
+    "n-lcoh-021",
+    "h-long-083",
+    "n-lcoh-020",
+    "n-rare-101",
+    "f-000292",
+    "h-long-041",
+    "h-long-075",
+    "h-long-068"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 5204,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.618221,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 67,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-037",
+   "category": "agent-framed",
+   "clusterKey": "n-para-127",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-046",
+    "h-long-067",
+    "h-long-045",
+    "n-lcoh-067",
+    "h-long-035",
+    "n-para-293",
+    "n-lcoh-079",
+    "n-lcoh-042",
+    "n-lcoh-003",
+    "h-long-077"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 7782,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.753212,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 62,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-038",
+   "category": "agent-framed",
+   "clusterKey": "n-para-138",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "h-long-040",
+    "n-para-079",
+    "n-para-030",
+    "n-lcoh-020",
+    "n-rare-057",
+    "n-lcoh-063"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 4938,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 122,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-039",
+   "category": "agent-framed",
+   "clusterKey": "n-para-160",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-016",
+    "h-long-043",
+    "n-lcoh-053",
+    "n-lcoh-006",
+    "n-lcoh-074",
+    "n-lcoh-045",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-044",
+    "n-lcoh-051"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 6739,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 88,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-040",
+   "category": "agent-framed",
+   "clusterKey": "n-para-171",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "h-long-047",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-lcoh-032",
+    "n-lcoh-044",
+    "n-lcoh-003",
+    "h-long-091",
+    "n-lcoh-020",
+    "n-rare-057"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 8314,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts-bounded",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 169,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-041",
+   "category": "agent-framed",
+   "clusterKey": "n-para-182",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-051",
+    "n-lcoh-036",
+    "n-lcoh-060",
+    "n-lcoh-080",
+    "h-long-082",
+    "n-lcoh-016",
+    "n-lcoh-006",
+    "n-lcoh-024",
+    "h-long-027",
+    "n-short-039"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 4917,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.7585890000000001,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 87,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-042",
+   "category": "agent-framed",
+   "clusterKey": "n-para-193",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-long-040",
+    "n-lcoh-009",
+    "n-long-022",
+    "n-para-381",
+    "n-lcoh-041",
+    "n-lcoh-008",
+    "n-lcoh-067",
+    "h-long-034",
+    "n-lcoh-024",
+    "h-long-033"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 5344,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.549452,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 58,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-043",
+   "category": "agent-framed",
+   "clusterKey": "n-para-204",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-hop-012-root",
+    "n-common-085",
+    "n-lcoh-009",
+    "n-long-028",
+    "h-long-047",
+    "n-rare-086",
+    "n-lcoh-032",
+    "n-lcoh-051",
+    "h-long-060",
+    "h-long-019"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 7038,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.5921850000000001,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 91,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-044",
+   "category": "agent-framed",
+   "clusterKey": "n-para-215",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-085",
+    "n-lcoh-006",
+    "h-long-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-lcoh-051",
+    "n-lcoh-027",
+    "h-long-091",
+    "n-para-201",
+    "h-long-018"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 4408,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 2,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 64,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-045",
+   "category": "agent-framed",
+   "clusterKey": "n-para-226",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "h-long-005",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-lcoh-045",
+    "n-lcoh-044",
+    "n-lcoh-051",
+    "h-long-088",
+    "n-lcoh-046",
+    "n-lcoh-060"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7382,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 77,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-046",
+   "category": "agent-framed",
+   "clusterKey": "n-para-237",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-hop-080-root",
+    "h-long-030",
+    "n-lcoh-014",
+    "n-lcoh-067",
+    "n-lcoh-032",
+    "h-long-013",
+    "h-long-038",
+    "h-long-096",
+    "n-lcoh-040",
+    "n-lcoh-053"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 10322,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.710762,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts-bounded",
+   "rerankRoute": "applied",
+   "keywordGold": true,
+   "pool": {
+    "size": 47,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-047",
+   "category": "agent-framed",
+   "clusterKey": "n-para-248",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "f-000128",
+    "n-lcoh-039",
+    "f-000086",
+    "f-000650",
+    "n-long-109",
+    "n-lcoh-029",
+    "f-000566",
+    "n-long-094",
+    "n-long-020",
+    "f-000181"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 4310,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 76,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-048",
+   "category": "agent-framed",
+   "clusterKey": "n-para-259",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-033",
+    "n-lcoh-073",
+    "n-para-041",
+    "n-lcoh-015",
+    "n-para-264",
+    "n-hop-125-answer",
+    "n-lcoh-060",
+    "n-lcoh-070",
+    "n-para-387",
+    "n-lcoh-017"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 4212,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 74,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-049",
+   "category": "agent-framed",
+   "clusterKey": "n-para-270",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "n-hop-146-root",
+    "n-lcoh-069",
+    "n-lcoh-019",
+    "h-long-065",
+    "n-lcoh-062",
+    "n-lcoh-017",
+    "h-long-092",
+    "h-long-027",
+    "h-long-053"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 5102,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 73,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-050",
+   "category": "agent-framed",
+   "clusterKey": "n-para-281",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-046",
+    "h-long-088",
+    "n-lcoh-070",
+    "h-long-057",
+    "n-lcoh-064",
+    "n-lcoh-084",
+    "n-lcoh-027",
+    "h-long-034",
+    "n-lcoh-088",
+    "n-lcoh-006"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 5384,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.748687,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 79,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-051",
+   "category": "agent-framed",
+   "clusterKey": "n-para-292",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-para-286",
+    "n-lcoh-003",
+    "n-lcoh-032",
+    "h-long-033",
+    "n-lcoh-077",
+    "h-long-088",
+    "h-long-003",
+    "h-long-036",
+    "n-short-093",
+    "n-lcoh-055"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 6986,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 62,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-052",
+   "category": "agent-framed",
+   "clusterKey": "n-para-303",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-013",
+    "n-lcoh-073",
+    "n-long-113",
+    "h-long-043",
+    "h-long-003",
+    "n-para-048",
+    "n-lcoh-088",
+    "n-lcoh-055",
+    "n-rare-113",
+    "h-long-065"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 18,
+    "d1RowsRead": 2898,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.720101,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 69,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-053",
+   "category": "agent-framed",
+   "clusterKey": "n-para-314",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-para-069",
+    "n-id-154",
+    "h-long-043",
+    "n-id-001",
+    "n-lcoh-003",
+    "h-long-013",
+    "h-long-074",
+    "n-lcoh-028",
+    "h-long-001",
+    "h-long-080"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 5834,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 47,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-054",
+   "category": "agent-framed",
+   "clusterKey": "n-para-325",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-006",
+    "h-long-018",
+    "h-long-067",
+    "n-lcoh-032",
+    "n-lcoh-036",
+    "n-long-186",
+    "n-lcoh-045",
+    "h-long-016",
+    "n-lcoh-051",
+    "n-lcoh-057"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 6540,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 110,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-055",
+   "category": "agent-framed",
+   "clusterKey": "n-para-336",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-003",
+    "n-lcoh-006",
+    "h-long-073",
+    "n-lcoh-002",
+    "n-lcoh-087",
+    "n-lcoh-089",
+    "h-long-041",
+    "h-long-072",
+    "n-lcoh-032",
+    "n-lcoh-044"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7151,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 76,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-056",
+   "category": "agent-framed",
+   "clusterKey": "n-para-347",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-012",
+    "h-long-013",
+    "n-long-138",
+    "n-lcoh-081",
+    "n-lcoh-068",
+    "n-lcoh-082",
+    "n-lcoh-075",
+    "n-lcoh-022",
+    "h-long-058",
+    "n-long-134"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 3751,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.711757,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 75,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-057",
+   "category": "agent-framed",
+   "clusterKey": "n-para-358",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-033",
+    "n-lcoh-046",
+    "n-para-164",
+    "n-lcoh-050",
+    "n-lcoh-085",
+    "n-para-381",
+    "f-000641",
+    "h-long-051",
+    "n-lcoh-086",
+    "n-lcoh-037"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 17,
+    "d1RowsRead": 2788,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 55,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-058",
+   "category": "agent-framed",
+   "clusterKey": "n-para-369",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "h-long-067",
+    "n-lcoh-072",
+    "n-long-147",
+    "n-lcoh-025",
+    "n-hop-148-root",
+    "h-long-079",
+    "n-para-264",
+    "n-lcoh-005",
+    "n-lcoh-073",
+    "n-lcoh-070"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 4578,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 52,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-059",
+   "category": "agent-framed",
+   "clusterKey": "n-para-380",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-031",
+    "n-lcoh-055",
+    "n-lcoh-050",
+    "n-long-108",
+    "n-lcoh-052",
+    "n-lcoh-036",
+    "h-long-052",
+    "n-hop-020-root",
+    "n-id-066",
+    "n-cjk-069"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 3950,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.44870699999999997,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 54,
+    "goldInPool": true,
+    "recall30": 1
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-060",
+   "category": "agent-framed",
+   "clusterKey": "n-para-391",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-para-382",
+    "n-lcoh-070",
+    "n-long-089",
+    "n-para-430",
+    "n-lcoh-056",
+    "n-para-410",
+    "n-para-393",
+    "n-lcoh-052",
+    "n-lcoh-059",
+    "n-lcoh-057"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 19,
+    "d1RowsRead": 3773,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.6930820000000001,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 66,
+    "goldInPool": true,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-061",
+   "category": "agent-framed",
+   "clusterKey": "n-para-402",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-015",
+    "n-para-416",
+    "n-lcoh-027",
+    "n-hop-119-root",
+    "n-hop-063-answer",
+    "n-lcoh-033",
+    "n-lcoh-073",
+    "n-lcoh-069",
+    "n-para-091",
+    "h-long-046"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7388,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.012887,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 86,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-062",
+   "category": "agent-framed",
+   "clusterKey": "n-para-413",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "f-000396",
+    "f-000128",
+    "f-000455",
+    "f-000610",
+    "f-000476",
+    "f-000545",
+    "f-000435",
+    "f-000349",
+    "f-000436",
+    "f-000154"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 21,
+    "d1RowsRead": 7298,
+    "aiCalls": 2,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.646524,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "applied",
+   "keywordGold": false,
+   "pool": {
+    "size": 102,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-063",
+   "category": "agent-framed",
+   "clusterKey": "n-para-424",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-lcoh-031",
+    "n-para-076",
+    "n-lcoh-006",
+    "n-para-156",
+    "n-hop-033-answer",
+    "n-lcoh-072",
+    "n-hop-057-answer",
+    "n-lcoh-003",
+    "n-para-014",
+    "h-long-018"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 20,
+    "d1RowsRead": 7520,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 3,
+    "neurons": 0.009205,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": true,
+   "pool": {
+    "size": 65,
+    "goldInPool": false,
+    "recall30": 0
+   },
+   "degraded": []
+  },
+  {
+   "queryId": "q-agent-064",
+   "category": "agent-framed",
+   "clusterKey": "n-para-435",
+   "tags": [
+    "subset:paraphrased"
+   ],
+   "rankedIds": [
+    "n-hop-069-root",
+    "h-long-050",
+    "f-000564",
+    "n-hop-002-root",
+    "h-long-072",
+    "f-000028",
+    "f-000457",
+    "f-000606",
+    "n-id-087",
+    "n-para-189"
+   ],
+   "metrics": {
+    "recall5": 0,
+    "recall10": 0,
+    "mrr10": 0,
+    "ndcg10": 0
+   },
+   "cost": {
+    "d1Statements": 16,
+    "d1RowsRead": 2574,
+    "aiCalls": 1,
+    "embeddingCalls": 1,
+    "vectorizeQueries": 2,
+    "kvReads": 2,
+    "neurons": 0.011046,
+    "neuronsEstimated": false,
+    "wallMs": 0
+   },
+   "leaked": [],
+   "ftsRoute": "fts",
+   "rerankRoute": "clear-leader",
+   "keywordGold": false,
+   "pool": {
+    "size": 51,
     "goldInPool": false,
     "recall30": 0
    },

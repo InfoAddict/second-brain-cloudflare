@@ -29,9 +29,9 @@ const DATA = resolve(import.meta.dirname, "data/core");
 // and long-context (contextual embeddings) got the most. Minimums and floors are 0.8 x the shipped counts, so a ~35% power
 // cut in any category fails. Common-word clusters are dense triples (84 for 133 queries: the same triple in the two
 // viewer scopes is one cluster), which is why its floor is lower than its query minimum.
-const MINIMUMS = { identifier: 120, "rare-word": 105, "common-word": 105, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248 } as const;
+const MINIMUMS = { identifier: 120, "rare-word": 105, "common-word": 105, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248, "agent-framed": 51 } as const;
 const CLUSTER_MINIMUM = 1180;
-const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 67, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248 } as const;
+const CLUSTER_FLOORS = { identifier: 120, "rare-word": 104, "common-word": 67, "short-word": 80, paraphrase: 352, cjk: 88, "multi-hop": 120, "long-context": 248, "agent-framed": 51 } as const;
 
 describe("core golden data", () => {
   beforeAll(() => { for (const id of ["core-1k", "scale-5k", "scale-20k"] as const) buildCorpus(id); }, 60_000);

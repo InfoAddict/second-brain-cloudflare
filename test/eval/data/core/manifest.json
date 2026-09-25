@@ -5,12 +5,12 @@
   "files": {
     "needles.jsonl": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c",
     "edges.jsonl": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f",
-    "queries.jsonl": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5",
+    "queries.jsonl": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74",
     "haystack.jsonl": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc"
   },
   "counts": {
     "needles": 1733,
-    "queries": 1683,
+    "queries": 1747,
     "needlesByPurpose": {
       "identifier": 179,
       "rare-word": 154,
@@ -19,7 +19,8 @@
       "paraphrase": 440,
       "cjk": 110,
       "multi-hop": 300,
-      "long-context": 310
+      "long-context": 310,
+      "agent-framed": 0
     },
     "byCategory": {
       "identifier": 214,
@@ -29,7 +30,8 @@
       "paraphrase": 440,
       "cjk": 130,
       "multi-hop": 150,
-      "long-context": 310
+      "long-context": 310,
+      "agent-framed": 64
     },
     "clustersByCategory": {
       "identifier": 150,
@@ -39,7 +41,8 @@
       "paraphrase": 440,
       "cjk": 110,
       "multi-hop": 150,
-      "long-context": 310
+      "long-context": 310,
+      "agent-framed": 64
     }
   },
   "history": [
@@ -168,6 +171,29 @@
         "recall10": 0.5353535353535354,
         "mrr10": 0.4922330211545894,
         "ndcg10": 0.45076027132811625,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-25T05:09:19.602Z",
+      "reason": "Add the agent-framed category (64 queries over existing needles): named (a rare word or identifier framed the way agents ask) and paraphrased subjects. Authored blind, from needle text only; no retrieval was run before they were written.",
+      "files": {
+        "queries.jsonl": {
+          "old": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5",
+          "new": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 1747,
+        "recall5": 0.4911276473955352,
+        "recall10": 0.5306239267315398,
+        "mrr10": 0.485033299715612,
+        "ndcg10": 0.44604545460719275,
         "errors": 0,
         "degraded": 0,
         "leaks": 0

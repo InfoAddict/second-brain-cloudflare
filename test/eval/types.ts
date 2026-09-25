@@ -1,5 +1,5 @@
 export const QUERY_CATEGORIES = [
-  "identifier", "cjk", "rare-word", "common-word", "short-word", "paraphrase", "multi-hop", "long-context",
+  "identifier", "cjk", "rare-word", "common-word", "short-word", "paraphrase", "multi-hop", "long-context", "agent-framed",
 ] as const;
 export type QueryCategory = (typeof QUERY_CATEGORIES)[number];
 export type ViewerId = "avery" | "blake" | "outsider";

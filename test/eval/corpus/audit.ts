@@ -38,6 +38,13 @@ const KNOWN_TAGS: ReadonlySet<string> = new Set(["tenancy", "cross-lingual", "kn
 const GAP_REF = /^gap:T-\d+$/;
 /** A subset tag names a second construction inside a category (e.g. subset:coherent-padding); the gate reports it separately. */
 const SUBSET_TAG = /^subset:[a-z][a-z-]*$/;
+/**
+ * How an agent frames a question to the brain ("User wants to X about Y — what should I know?", "Tell me all about Y", "what did
+ * we decide about Y", "help me ...", "remind me ..."). An agent-framed query is one of those wrappers around a subject: a
+ * named one (subset:named: a rare word or identifier the gold carries) or a paraphrased one (subset:paraphrased: no rare
+ * word shared with the gold, as in a paraphrase query).
+ */
+const AGENT_FRAME = /\b(?:user (?:wants|is about)|tell me|what should i know|what have we|what did we|what do we know|have i recommended|remind me|help me)\b/i;
 const KEYWORD_SOLVED: ReadonlySet<string> = new Set(["identifier", "rare-word", "common-word", "short-word", "cjk"]);
 export type KeywordRoute = "fts" | "fts-bounded" | "like-match-budget" | "like-ineligible-token";
 /** The board reference a query must carry when its keyword arm loses the gold on this LIKE route. */
@@ -250,6 +257,20 @@ export function auditQueries(spec: {
         if (leaking.length) add(query.id, "paraphrase-lexical-leak", leaking.join(","));
         break;
       }
+      case "agent-framed": {
+        if (!AGENT_FRAME.test(query.text)) add(query.id, "agent-framed-no-frame", query.text);
+        const named = query.tags?.includes("subset:named") ?? false;
+        if (named === (query.tags?.includes("subset:paraphrased") ?? false)) add(query.id, "agent-framed-needs-one-subset", (query.tags ?? []).join(","));
+        if (named) {
+          const rare = tokens.filter(token => df(token) <= rareDf(rows) && content.includes(token));
+          keyToken = rare[0];
+          if (!rare.length) add(query.id, "agent-framed-no-rare-token", query.text);
+        } else {
+          const leaking = shared.filter(token => df(token) < common);
+          if (leaking.length) add(query.id, "agent-framed-lexical-leak", leaking.join(","));
+        }
+        break;
+      }
       case "cjk": {
         if (!CJK.test(primary.content)) add(query.id, "cjk-gold-not-cjk", primary.id);
         if (cross) {
@@ -286,7 +307,7 @@ export function auditQueries(spec: {
     // A lexical key names one memory. When a second readable row carries it, the gold is not the unique best answer:
     // the query scores a hard zero for returning the other note, or MRR splits arbitrarily between the two. Rows the
     // viewer cannot read (tenancy decoys) are the only allowed repeats.
-    if ((query.category === "identifier" || query.category === "rare-word") && keyToken) {
+    if ((query.category === "identifier" || query.category === "rare-word" || query.category === "agent-framed") && keyToken) {
       const holders = visible.filter(row => containsBounded(row.content, keyToken!));
       if (holders.length !== 1) add(query.id, "key-not-unique", `${keyToken} occurs in ${holders.length} readable rows${holders.length > 1 ? `, e.g. ${holders.map(row => row.entry.id).slice(0, 3).join(", ")}` : ""}`);
     }
