@@ -31,4 +31,9 @@ describe("tokenizeQuery: the scaffolding an agent wraps around a subject", () =>
     expect(tokenizeQuery("paseo heartbeat schedule")).toEqual(["paseo", "heartbeat", "schedule"]);
     expect(tokenizeQuery("gatewright")).toEqual(["gatewright"]);
   });
+
+  it("drops scaffolding inside an ASCII run that touches CJK text, as it does in a spaced chunk", () => {
+    expect(tokenizeQuery("wantsの決定 SB-024")).toEqual(["決定", "sb-024"]);
+    expect(tokenizeQuery("wantsの")).toEqual(["wants"]);
+  });
 });

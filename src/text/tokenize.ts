@@ -63,7 +63,7 @@ function tokenizeTerms(query: string, frame: boolean): string[] {
     for (const run of folded.split(CJK_RUN)) {
       if (!run) continue;
       if (ASCII_ONLY.test(run)) {
-        const t = asciiToken(run);
+        const t = asciiToken(run, frame);
         if (t) tokens.push(t);
         continue;
       }
