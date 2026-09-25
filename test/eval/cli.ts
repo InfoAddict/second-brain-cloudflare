@@ -27,7 +27,7 @@ interface Common { llmTags: LlmTagsArm; corpus: string; d1: "sqlite" | "workerd"
 export type CliCommand =
   | ({ kind: "run"; variant: string } & Common)
   | ({ kind: "compare"; variants: [string, string]; target: QueryCategory[]; targetGaps: string[]; allowUnmeasuredRows: boolean; excludeNeedles: string[] } & Common)
-  | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number } & Common)
+  | ({ kind: "prepare"; variant: string; maxNeurons: number; concurrency: number; excludeNeedles: string[] } & Common)
   | ({ kind: "lock"; acceptDataChange?: string } & Common)
   | ({ kind: "export-cache" } & Common)
   | ({ kind: "stamp-cache"; producerFrom: string; layer: "local" | "committed"; assertRecorded: boolean } & Common)
@@ -55,6 +55,12 @@ function resolveModel(corpus: string, explicit: string | undefined): string {
     throw new UsageError(`${corpus} must run with ${pub.embeddingModel} (its recorded embedding model); --embedding-model ${explicit} is refused`);
   }
   return pub.embeddingModel;
+}
+
+function parseExcludeNeedles(raw: string | undefined): string[] {
+  const globs = (raw ?? "").split(",").map(x => x.trim()).filter(Boolean);
+  if (globs.some(pattern => /[^\w*.-]/.test(pattern))) throw new UsageError("--exclude-needles takes comma-separated id globs such as n-lcoh-* (letters, digits, - _ . and *)");
+  return globs;
 }
 
 export function parseCli(argv: string[]): CliCommand {
@@ -88,7 +94,7 @@ export function parseCli(argv: string[]): CliCommand {
     if (!values.variant) throw new UsageError("prepare needs --variant <name>");
     return {
       kind: "prepare", variant: values.variant, maxNeurons: positive("max-neurons", values["max-neurons"]!, { allowZero: true }),
-      concurrency: positive("concurrency", values.concurrency!), ...common,
+      concurrency: positive("concurrency", values.concurrency!), excludeNeedles: parseExcludeNeedles(values["exclude-needles"]), ...common,
     };
   }
   if (command === "stamp-cache") {
@@ -108,8 +114,7 @@ export function parseCli(argv: string[]): CliCommand {
     const target = (values.target ?? "").split(",").filter(Boolean);
     for (const t of target) if (!(QUERY_CATEGORIES as readonly string[]).includes(t)) throw new UsageError(`--target: unknown category "${t}"`);
     const targetGaps = (values["target-gaps"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
-    const excludeNeedles = (values["exclude-needles"] ?? "").split(",").map(x => x.trim()).filter(Boolean);
-    if (excludeNeedles.some(pattern => /[^\w*.-]/.test(pattern))) throw new UsageError("--exclude-needles takes comma-separated id globs such as n-lcoh-* (letters, digits, - _ . and *)");
+    const excludeNeedles = parseExcludeNeedles(values["exclude-needles"]);
     return { kind: "compare", variants: [parts[0], parts[1]], target: target as QueryCategory[], targetGaps, allowUnmeasuredRows: values["allow-unmeasured-rows"]!, excludeNeedles, ...common };
   }
   if (values.variant) return { kind: "run", variant: values.variant, ...common };
@@ -285,7 +290,9 @@ function writeJson(path: string, value: unknown): void {
 
 async function runPrepare(cmd: CliCommand & { kind: "prepare" }): Promise<number> {
   if (cmd.hash) throw new UsageError("prepare records real embeddings; --hash-embeddings does not apply");
-  const spec = await resolveCorpus(cmd.corpus);
+  const full = await resolveCorpus(cmd.corpus);
+  // records the rows a `--compare --exclude-needles` run of the reduced corpus will ask for (its reranker batches differ)
+  const spec = cmd.excludeNeedles.length ? excludeNeedles(full, cmd.excludeNeedles).spec : full;
   const paths = replayPaths(cmd.model, cmd.corpus);
   guardWrite(paths.write); // the cache is the one thing prepare writes
   await prepare({
@@ -306,6 +313,19 @@ async function runWithoutNeedles(cmd: CliCommand & { kind: "compare" }, spec: Co
   const reduced = excludeNeedles(spec, cmd.excludeNeedles);
   const base = await runNamed(cmd, reduced.spec, cmd.variants[0]);
   const cand = await runNamed(cmd, reduced.spec, cmd.variants[1]);
+  // A replay miss degrades a run silently (a query error scores zero; a failed rerank opens the breaker and falls back), so a
+  // reduced-corpus delta is only meaningful if both runs were clean. Refuse otherwise rather than print a plausible number.
+  const unclean = [base, cand].flatMap(r => {
+    const errors = r.results.filter(x => x.error);
+    const badRoutes = r.results.filter(x => x.rerankRoute === "error" || x.rerankRoute === "timeout" || x.rerankRoute === "not-ready").length;
+    const degraded = r.results.filter(x => x.degraded?.length).length;
+    return errors.length || badRoutes || degraded
+      ? [`${r.variant}: ${errors.length} query error(s), ${degraded} degraded, ${badRoutes} failed rerank(s); first: ${errors[0]?.error ?? "none"}`]
+      : [];
+  });
+  if (unclean.length) {
+    throw new UsageError(`the reduced-corpus run is not clean, so its deltas would be meaningless:\n  ${unclean.join("\n  ")}\nRecord the missing rows with: npm run eval:recall -- prepare --variant <name> --corpus ${cmd.corpus} --exclude-needles ${cmd.excludeNeedles.join(",")}`);
+  }
   const gate = evaluateGate(base, cand, { allowUnmeasuredRowsRead: true });
   const rows = ["overall", ...QUERY_CATEGORIES].flatMap(scope => (["recall10", "mrr10"] as const).flatMap(metric => {
     const d = gate.deltas.find(x => x.scope === scope && x.metric === metric);

@@ -31,6 +31,11 @@ describe("parseCli", () => {
     expect(() => parseCli(["--compare", "baseline,rerank", "--exclude-needles", "n-lcoh;rm"])).toThrow(/id globs/);
   });
 
+  it("prepare takes --exclude-needles too, so the reduced corpus's rows can be recorded", () => {
+    expect(parseCli(["prepare", "--variant", "rerank-auto", "--exclude-needles", "n-lcoh-*"])).toMatchObject({ kind: "prepare", excludeNeedles: ["n-lcoh-*"] });
+    expect(parseCli(["prepare", "--variant", "rerank-auto"])).toMatchObject({ excludeNeedles: [] });
+  });
+
   it("parses the contract forms", () => {
     expect(parseCli(["--variant", "rerank", "--corpus", "scale-20k", "--json", "/tmp/x.json"]))
       .toMatchObject({ kind: "run", variant: "rerank", corpus: "scale-20k", json: "/tmp/x.json", d1: "sqlite", isolate: "warm" });
