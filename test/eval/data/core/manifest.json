@@ -3,17 +3,17 @@
   "persona": "Avery Lindqvist (fictional)",
   "authoredBy": "Claude Sonnet 5 (claude-sonnet-5), 2026-09-23",
   "files": {
-    "needles.jsonl": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c",
+    "needles.jsonl": "ad7fd55c2bc3069b957160def1b320e0908e28190b9612dc048706627221c1cd",
     "edges.jsonl": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f",
-    "queries.jsonl": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74",
+    "queries.jsonl": "d16c392f67b735d9a700afc61bc42859e69106d4b0ae32c3fa5aab4163082225",
     "haystack.jsonl": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc"
   },
   "counts": {
-    "needles": 1733,
-    "queries": 1747,
+    "needles": 1735,
+    "queries": 1751,
     "needlesByPurpose": {
       "identifier": 179,
-      "rare-word": 154,
+      "rare-word": 156,
       "common-word": 140,
       "short-word": 100,
       "paraphrase": 440,
@@ -24,25 +24,25 @@
     },
     "byCategory": {
       "identifier": 214,
-      "rare-word": 199,
+      "rare-word": 201,
       "common-word": 140,
       "short-word": 100,
       "paraphrase": 440,
       "cjk": 130,
       "multi-hop": 150,
       "long-context": 310,
-      "agent-framed": 64
+      "agent-framed": 66
     },
     "clustersByCategory": {
       "identifier": 150,
-      "rare-word": 130,
+      "rare-word": 132,
       "common-word": 85,
       "short-word": 100,
       "paraphrase": 440,
       "cjk": 110,
       "multi-hop": 150,
       "long-context": 310,
-      "agent-framed": 64
+      "agent-framed": 66
     }
   },
   "history": [
@@ -194,6 +194,33 @@
         "recall10": 0.5306239267315398,
         "mrr10": 0.485033299715612,
         "ndcg10": 0.44604545460719275,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-25T12:45:57.005Z",
+      "reason": "Add the deep-evidence guard: two 19-23 KB notes whose only lexical evidence (a coined rare word) sits at about 9.9 KB and 14.9 KB, with their bare rare-word queries (generated) and two agent-framed named queries. It guards a cap on the keyword rows' text. No other data changed.",
+      "files": {
+        "needles.jsonl": {
+          "old": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c",
+          "new": "ad7fd55c2bc3069b957160def1b320e0908e28190b9612dc048706627221c1cd"
+        },
+        "queries.jsonl": {
+          "old": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74",
+          "new": "d16c392f67b735d9a700afc61bc42859e69106d4b0ae32c3fa5aab4163082225"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 1751,
+        "recall5": 0.5051399200456882,
+        "recall10": 0.5376927470017133,
+        "mrr10": 0.5317213293084222,
+        "ndcg10": 0.48342242702441685,
         "errors": 0,
         "degraded": 0,
         "leaks": 0

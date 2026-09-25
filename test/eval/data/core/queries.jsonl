@@ -411,6 +411,8 @@
 {"id":"q-rare-129","text":"pareidolia","category":"rare-word","gold":[{"id":"n-rare-129","grade":2}],"viewer":"avery"}
 {"id":"q-rare-129-c","text":"roadmap pareidolia","category":"rare-word","gold":[{"id":"n-rare-129","grade":2}],"viewer":"avery"}
 {"id":"q-rare-130","text":"kintsugi","category":"rare-word","gold":[{"id":"n-rare-130","grade":2}],"viewer":"avery"}
+{"id":"q-rare-131","category":"rare-word","text":"zanthorpe","gold":[{"id":"n-deep-001","grade":2}],"viewer":"avery"}
+{"id":"q-rare-132","category":"rare-word","text":"quillenmoor","gold":[{"id":"n-deep-002","grade":2}],"viewer":"avery"}
 {"id":"q-common-001","category":"common-word","text":"coffee garden kitchen","gold":[{"id":"n-common-001","grade":2}],"viewer":"avery"}
 {"id":"q-common-002","category":"common-word","text":"table window letter","gold":[{"id":"n-common-002","grade":2}],"viewer":"avery"}
 {"id":"q-common-003","category":"common-word","text":"bread cheese kitchen","gold":[{"id":"n-common-003","grade":2}],"viewer":"blake"}
@@ -1745,3 +1747,5 @@
 {"id":"q-agent-062","category":"agent-framed","text":"User wants to protect deep-work hours on the team schedule — what should I know?","gold":[{"id":"n-para-413","grade":2}],"viewer":"avery","tags":["subset:paraphrased"]}
 {"id":"q-agent-063","category":"agent-framed","text":"User wants to check how fast recovery from backup went in the last rehearsal — what should I know?","gold":[{"id":"n-para-424","grade":2}],"viewer":"avery","tags":["subset:paraphrased"]}
 {"id":"q-agent-064","category":"agent-framed","text":"User wants to recall my counselling appointment cadence — what should I know?","gold":[{"id":"n-para-435","grade":2}],"viewer":"blake","tags":["subset:paraphrased"]}
+{"id":"q-deep-003","category":"agent-framed","text":"Tell me all about zanthorpe","gold":[{"id":"n-deep-001","grade":2}],"viewer":"avery","tags":["subset:named","subset:deep-evidence"]}
+{"id":"q-deep-004","category":"agent-framed","text":"User wants to know about quillenmoor — what should I know?","gold":[{"id":"n-deep-002","grade":2}],"viewer":"avery","tags":["subset:named","subset:deep-evidence"]}
