@@ -70,6 +70,25 @@ function enqueue<T>(db: DatabaseSync, fn: () => T | Promise<T>): Promise<T> {
 /** The token of the batch CURRENTLY holding connection X's queue slot, if any. */
 const currentBatchToken = new WeakMap<DatabaseSync, object>();
 
+/**
+ * D1 accepts numbered placeholders (`?3`, referenced more than once); some `node:sqlite` builds reject them ("column index out of
+ * range"). Rewrite to plain `?` with the bound values expanded in order, which every build takes and SQLite reads the same way:
+ * a bare `?` is one past the highest number so far. Quoted text is left alone.
+ */
+export function positionalParams(sql: string, args: unknown[]): { sql: string; args: unknown[] } {
+  if (!/\?\d/.test(sql)) return { sql, args };
+  const out: unknown[] = [];
+  let highest = 0;
+  const rewritten = sql.replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"|\?(\d+)?/g, (m, n?: string) => {
+    if (m[0] !== "?") return m;
+    const idx = n ? Number(n) : highest + 1;
+    highest = Math.max(highest, idx);
+    out.push(args[idx - 1]);
+    return "?";
+  });
+  return { sql: rewritten, args: out };
+}
+
 class SqliteStatement {
   constructor(
     private readonly db: DatabaseSync,
@@ -87,7 +106,8 @@ class SqliteStatement {
   }
 
   private allOnce(): { results: unknown[]; success: true; meta: { rows_written: 0 } } {
-    const rows = this.db.prepare(this.sql).all(...(this.args as never[]));
+    const q = positionalParams(this.sql, this.args);
+    const rows = this.db.prepare(q.sql).all(...(q.args as never[]));
     // SQLite can prove that this SELECT wrote no rows, but it cannot reproduce
     // Cloudflare D1's billed rows_read (which includes index/table work rather
     // than merely returned rows). Leave rows_read absent instead of inventing it.
@@ -95,7 +115,8 @@ class SqliteStatement {
   }
 
   private firstOnce(): unknown | null {
-    const row = this.db.prepare(this.sql).get(...(this.args as never[]));
+    const q = positionalParams(this.sql, this.args);
+    const row = this.db.prepare(q.sql).get(...(q.args as never[]));
     return row ?? null;
   }
 
@@ -111,11 +132,12 @@ class SqliteStatement {
    * simply absent where there are no rows to report.
    */
   private runOnce(): { results?: unknown[]; success: true; meta: { rows_written: number } } {
-    const statement = this.db.prepare(this.sql);
+    const q = positionalParams(this.sql, this.args);
+    const statement = this.db.prepare(q.sql);
     if (/^\s*(SELECT|WITH)\b/i.test(this.sql)) {
-      return { results: statement.all(...(this.args as never[])), success: true, meta: { rows_written: 0 } };
+      return { results: statement.all(...(q.args as never[])), success: true, meta: { rows_written: 0 } };
     }
-    const result = statement.run(...(this.args as never[]));
+    const result = statement.run(...(q.args as never[]));
     return { success: true, meta: { rows_written: Number(result.changes) } };
   }
 
