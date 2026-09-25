@@ -41,6 +41,25 @@ import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescu
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 
+/**
+ * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
+ * a frequency is missing, every term fits, or even the rarest is too common to fit. The df sum over-counts rows that
+ * carry several terms, so the fitted group can never truncate. Same greedy as planFtsMatch's bounded plan.
+ */
+function splitLikeTerms(terms: string[], df: ReadonlyMap<string, number> | null | undefined, limit: number): { rare: string[]; rest: string[] } | null {
+  if (!df || !terms.every(t => df.has(t))) return null;
+  const dfOf = (t: string) => df.get(t) ?? 0;
+  if (terms.reduce((sum, t) => sum + dfOf(t), 0) <= limit) return null;
+  const rare: string[] = [];
+  let spent = 0;
+  for (const t of [...terms].sort((a, b) => dfOf(a) - dfOf(b))) {
+    if (spent + dfOf(t) > limit) break;
+    spent += dfOf(t);
+    rare.push(t);
+  }
+  return rare.length ? { rare, rest: terms.filter(t => !rare.includes(t)) } : null;
+}
+
 async function keywordSearchLike(
   tokens: string[],
   env: Env,
@@ -49,6 +68,9 @@ async function keywordSearchLike(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
+  // Corpus df from distillation. With it, rows carrying the rarest terms are kept whole and recency fills the rest;
+  // without it the window is the newest rows matching any term, as before.
+  corpus?: Pick<DistilledQuery, "df" | "total">,
 ): Promise<KeywordRow[]> {
   if (!tokens.length) return [];
   // Capped here rather than at distillation's uncapped exits because this is
@@ -57,7 +79,6 @@ async function keywordSearchLike(
   // order is the only ordering available on those paths: they are exactly the
   // paths where the frequencies that would rank the terms are missing.
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
-  const where = terms.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
   let timeWhere = "";
   const timeBindings: number[] = [];
   if (bounds.after !== undefined) {
@@ -72,14 +93,31 @@ async function keywordSearchLike(
   // plus strangers' rows truncated by the window.
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
-  // Keep the alternatives as one predicate whenever an AND filter follows.
-  // Without grouping, SQLite applies that filter only to the final LIKE term
-  // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
-  const tokenWhere = terms.length > 1 && (timeWhere || scopeSql) ? `(${where})` : where;
-  const { results } = await env.DB.prepare(
-    `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} ORDER BY created_at DESC LIMIT ?`
-  ).bind(...terms.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), limit).all();
-  return results as unknown as KeywordRow[];
+  const windowFor = (subset: string[]) => {
+    const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
+    // Keep the alternatives as one predicate whenever an AND filter follows.
+    // Without grouping, SQLite applies that filter only to the final LIKE term
+    // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
+    const tokenWhere = subset.length > 1 && (timeWhere || scopeSql) ? `(${where})` : where;
+    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
+    return env.DB.prepare(
+      `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} ORDER BY created_at DESC LIMIT ?`
+    ).bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), limit);
+  };
+  const split = splitLikeTerms(terms, corpus?.df, limit);
+  if (!split) return ((await windowFor(terms).all()).results ?? []) as unknown as KeywordRow[];
+  // The window would truncate. A row matching only common words must not push out one matching the rarest: those rows
+  // are read whole (they fit the limit), then the newest rows for the remaining terms fill what is left.
+  const [rare, rest] = await env.DB.batch([windowFor(split.rare), windowFor(split.rest)]);
+  const seen = new Set<string>();
+  const out: KeywordRow[] = [];
+  for (const row of [...(rare.results ?? []), ...(rest.results ?? [])] as unknown as KeywordRow[]) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 async function keywordSearchFts(
@@ -178,7 +216,7 @@ export async function keywordSearch(
     // computes no df for one-word inputs.
     const plan = planFtsMatch(eligible, corpus?.df, limit);
     if (!plan) {
-      return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
+      return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-match-budget" };
     }
     if (await ftsReady(env)) {
       try {
@@ -187,7 +225,7 @@ export async function keywordSearch(
         // A bounded plan that found nothing has not proven the tokens absent:
         // the recency window is the pre-bounded answer, so keep it as the floor.
         if (plan.bounded && !rows.length) {
-          return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
+          return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-match-budget" };
         }
         // Without corpus df, fusion estimates IDF from the fetched rows, whose
         // count is the denominator. LIKE always returned a full recency window
@@ -199,12 +237,12 @@ export async function keywordSearch(
         return { rows, fts: true, route: plan.bounded ? "fts-bounded" : "fts", idfWindow };
       } catch (e) {
         console.error("FTS keyword search failed (degrading to LIKE):", e);
-        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-error" };
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-error" };
       }
     }
-    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-not-ready" };
+    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-not-ready" };
   }
-  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-ineligible-token" };
+  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-ineligible-token" };
 }
 
 // Tiers arrive in priority order (the AND tier newest-first, the OR tier by
