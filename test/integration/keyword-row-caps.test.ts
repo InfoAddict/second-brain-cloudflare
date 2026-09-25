@@ -97,7 +97,7 @@ describe("FTS second tier", () => {
   beforeEach(async () => {
     await boot(true);
     for (let i = 0; i < 800; i++) sqlite.seed({ id: `row-${i}`, content: `alpha bravo charlie ${i < 40 ? "delta " : ""}note${i}`, createdAt: i + 1 });
-    for (let i = 0; i < 20; i++) sqlite.seed({ id: `lone-${i}`, content: `delta lone${i}`, createdAt: 2000 + i });
+    for (let i = 0; i < 20; i++) sqlite.seed({ id: `lone-${i}`, content: `delta ${"pad ".repeat(60)}lone${i}`, createdAt: 2000 + i });
     seen = [];
   });
 
@@ -110,6 +110,16 @@ describe("FTS second tier", () => {
     expect(limitOf(tiers[0])).toBe(LIMIT);
     expect(tiers[0].rows).toBe(40);
     expect(limitOf(tiers[1])).toBe(LIMIT - 40);
+  });
+
+  it("fills the slots with rows the AND tier did not return, even where the tiers overlap", async () => {
+    const df = new Map([["alpha", 800], ["bravo", 800], ["charlie", 800], ["delta", 60]]);
+    const { rows } = await keywordSearch(["alpha", "bravo", "charlie", "delta"], env, 50, {}, undefined, undefined, undefined, { df, total: 820 });
+    expect(ftsTiers()).toHaveLength(2);
+    const ids = rows.map(r => r.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(50);
+    expect(ids.filter(id => id.startsWith("lone-")).length).toBe(10);
   });
 
   it("does not read the OR tier when the AND tier already fills the limit", async () => {

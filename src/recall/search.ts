@@ -207,7 +207,10 @@ async function keywordSearchFts(
   for (let i = 1; i < matches.length; i++) {
     const room = limit - new Set(tiers.flat().map(r => r.id)).size;
     if (room <= 0) break;
-    const [next] = await env.DB.batch([statementFor(matches[i], i, room)]);
+    // The AND tier came back short of its limit, so it holds every AND match: the OR tier excludes those in the index, or
+    // overlap would spend its slots on rows already held and leave other matches unread.
+    const match = andTier ? `(${matches[i]}) NOT (${matches[0]})` : matches[i];
+    const [next] = await env.DB.batch([statementFor(match, i, room)]);
     tiers.push(asRows(next.results));
   }
   return tiers;
