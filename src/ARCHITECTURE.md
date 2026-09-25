@@ -640,13 +640,23 @@ a single run with errors, leaks, or degraded queries), 3 is INCONCLUSIVE, and 2
 is a usage or runtime error (a bad flag, a replay cache miss, a refused write, a
 refused `lock`).
 
+**The full eval is opt-in.** Replays of the golden set (`baseline-lock`, `committed-layer`,
+`calibration`, `observation-passive`, and the workerd lock) take minutes each and
+do not run in the default suite or on pull requests: they are gated behind
+`EVAL_FULL=1` (`test/eval/full.ts`), and the workerd ones behind `EVAL_WORKERD=1`.
+`npm run test:eval:full` runs everything the gates need (about 40 minutes, most of
+it the workerd lock) and is run by hand before merging any ranking change; the CI
+`eval-full` job runs the same thing, manual trigger only (Actions > CI > Run
+workflow). The default suite keeps the fast harness check `test/eval/smoke.test.ts`
+(40 queries on a synthetic corpus, a few seconds) and the privacy scan.
+
 **Baseline lock.** A test (`test/eval/baseline-lock.test.ts`) reruns the
 baseline on `core-1k` and fails if any query's ranking differs from the
 committed lock, so every change to default recall ranking is deliberate: run the
 comparison, run `lock`, and commit the new lock with the gate output. The lock
 was recorded on `workerd`, so `test/eval/baseline-lock.workerd.test.ts` also
 checks D1 statements (exactly) and `rows_read` (within 2 rows per query); it is
-opt-in, run by `npm run test:eval:workerd` and by the `eval-workerd` CI job. The
+opt-in, run by `npm run test:eval:full` (or `test:eval:workerd` alone) and by the manual `eval-full` CI job. The
 locked headline (core-1k, `workerd`, `--llm-tags stand-in`) excludes known gaps;
 with no gap tagged, all 1,683 queries are in the headline: recall@5 is 0.496,
 recall@10 0.535, MRR@10 0.492, and nDCG@10 0.451.
@@ -694,7 +704,7 @@ that closes the gap forces a deliberate re-record.
 **How long it takes.** A `core-1k` comparison takes under a minute on `sqlite`
 and several minutes on `workerd` (about 25 on a heavily shared machine), which runs each query against a real local D1.
 A cold `prepare` for `scale-20k` takes about 25 minutes locally. `npm run
-test:eval:workerd` runs the workerd-backed tests (including the workerd lock
+test:eval:workerd` runs the workerd-backed tests alone (including the workerd lock
 tripwire), which the default suite skips; `npm run test:eval:public-download`
 and `npm run test:eval:local-models` are the other opt-in checks.
 

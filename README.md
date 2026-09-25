@@ -264,7 +264,8 @@ Follow the [Setup Guide](https://github.com/rahilp/second-brain-cloudflare/wiki/
 
 ```bash
 npm run dev      # start the Worker locally
-npm test         # run the test suite
+npm test         # run the test suite (fast: the golden-set eval replays are opt-in)
+npm run test:eval:full   # the full eval (golden-set replays, workerd lock); run by hand before merging a ranking change
 ```
 
 See [Local Development](https://github.com/rahilp/second-brain-cloudflare/wiki/Local-Development) for mixed local/remote Wrangler configuration and sharing a local brain through a tunnel.

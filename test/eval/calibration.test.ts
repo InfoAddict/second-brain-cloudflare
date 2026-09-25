@@ -60,6 +60,7 @@ import { replayPaths } from "./corpora";
 import { runVariant } from "./runner";
 import type { VariantReport } from "./types";
 import { getVariant, registerVariant, unregisterVariant } from "./variants";
+import { EVAL_FULL } from "./full";
 
 // Each gate evaluation resamples about 1,600 queries per metric and category; a loaded machine needs the room.
 vi.setConfig({ testTimeout: 30_000 });
@@ -80,7 +81,8 @@ const rule = (r: ReturnType<typeof evaluateGate>, name: string) => r.rules.find(
 // A deliberately broken recall: the keyword arm keeps one candidate and MMR ignores relevance.
 const SABOTAGE = "sabotage";
 
-describe("gate calibration on core-1k (offline)", () => {
+// Opt-in (EVAL_FULL=1, npm run test:eval:full): it replays the whole golden set for several variants, about 10 minutes.
+describe.skipIf(!EVAL_FULL)("gate calibration on core-1k (offline)", () => {
   const reports: Record<string, VariantReport> = {};
 
   registerVariant({ name: SABOTAGE, description: "Calibration only: KEYWORD_CANDIDATE_LIMIT 1 and MMR_LAMBDA 0.", config: { KEYWORD_CANDIDATE_LIMIT: 1, MMR_LAMBDA: 0, RERANK_MODE: "off" } });

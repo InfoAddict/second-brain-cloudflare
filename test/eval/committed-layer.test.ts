@@ -8,6 +8,7 @@ import { loadCorpus } from "./corpus/loader";
 import { COMMITTED_LAYER_VARIANTS } from "./prepare";
 import { runVariant } from "./runner";
 import { getVariant, type VariantSpec } from "./variants";
+import { EVAL_FULL } from "./full";
 
 const MODEL = DEFAULTS.EMBEDDING_MODEL;
 const COMMITTED = resolve(CORE_DATA_DIR, `replay.${MODEL.split("/").pop()}.jsonl.gz`);
@@ -17,7 +18,8 @@ const SABOTAGE: VariantSpec = { name: "sabotage", description: "Keyword arm keep
 
 // CI is a clean checkout with no .eval-cache, so the default suite may replay ONLY the committed layer. A developer's
 // local cache hides a row the layer lacks, so this reads the committed layer alone, whatever the local cache holds.
-describe("the committed replay layer alone serves every variant the default suite runs", () => {
+// Opt-in (EVAL_FULL=1, npm run test:eval:full): it replays every variant over the golden set, about 4 minutes.
+describe.skipIf(!EVAL_FULL)("the committed replay layer alone serves every variant the full eval runs", () => {
   it("has every row core-1k needs, for every variant, with no cache miss", async () => {
     expect(existsSync(COMMITTED)).toBe(true);
     const spec = buildCorpus("core-1k");

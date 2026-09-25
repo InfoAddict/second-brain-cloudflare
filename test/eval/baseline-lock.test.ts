@@ -6,6 +6,7 @@ import { ReplayStore, makeReplayAi } from "./ai-replay";
 import { buildCorpus, CORE_DATA_DIR } from "./corpus/build";
 import { loadCorpus } from "./corpus/loader";
 import { replayPaths } from "./corpora";
+import { EVAL_FULL } from "./full";
 import { compareToLock } from "./lock";
 import { runVariant } from "./runner";
 import type { VariantReport } from "./types";
@@ -20,14 +21,15 @@ const cache = replayPaths(MODEL, "core-1k").read;
 // are identical to the workerd lock's (this test compares them, and passes). If the backends ever diverge, this test and
 // the workerd tripwire (baseline-lock.workerd.test.ts, which also checks statements and rows_read) cannot both hold, so
 // the divergence cannot go unnoticed.
-// No skipIf: on a checkout missing the lock or the committed cache this must fail loudly, not pass by skipping.
+// The presence check always runs: on a checkout missing the lock or the committed cache it must fail loudly, not pass by skipping.
+// The two replays below are opt-in (EVAL_FULL=1, npm run test:eval:full): about 100 s each on the whole golden set.
 describe("baseline lock (recall tripwire)", () => {
   it("the committed lock and replay layer are present", () => {
     expect(existsSync(LOCK), `${LOCK} missing: run npm run eval:recall -- lock and commit it`).toBe(true);
     expect(cache.length, "no replay cache: Task 9 Step 12 must be committed").toBeGreaterThan(0);
   });
 
-  it("recall on core-1k still ranks every golden query exactly as the committed lock does", async () => {
+  it.skipIf(!EVAL_FULL)("recall on core-1k still ranks every golden query exactly as the committed lock does", async () => {
     const lock = JSON.parse(readFileSync(LOCK, "utf8")) as VariantReport;
     const spec = buildCorpus("core-1k");
     const corpus = await loadCorpus({ spec, backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore(cache), mode: "replay" }), embeddingModel: MODEL });
@@ -47,7 +49,7 @@ describe("baseline lock (recall tripwire)", () => {
 
   // The lock ranks the top 10; a topK 5 call must return exactly its first 5. The reverse (a larger topK reordering the
   // head) is what this catches, whether it comes from the candidate pool, the diversity pass, or the graph slot.
-  it("a topK 5 call returns the first 5 of the locked top 10 on every golden query", async () => {
+  it.skipIf(!EVAL_FULL)("a topK 5 call returns the first 5 of the locked top 10 on every golden query", async () => {
     const lock = JSON.parse(readFileSync(LOCK, "utf8")) as VariantReport;
     const locked = new Map(lock.results.map(r => [r.queryId, r.rankedIds]));
     const spec = buildCorpus("core-1k");

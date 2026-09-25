@@ -219,7 +219,7 @@ describe("runner determinism rules", () => {
     open.push(c);
     const report = await run(c);
     expect(report.results.every(r => typeof r.cost.d1RowsRead === "number" && r.cost.d1RowsRead > 0)).toBe(true);
- }, 30_000); // workerd startup is slow under parallel load
+ }, 180_000); // a workerd boot on a CI runner (or under parallel load) takes well over 30 s; the corpus is tiny
 });
 
 describe("leak sentinel", () => {

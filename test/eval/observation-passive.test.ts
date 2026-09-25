@@ -11,6 +11,7 @@ import { loadCorpus } from "./corpus/loader";
 import { EVAL_NOW, IDENTITIES } from "./corpus/types";
 import { replayPaths } from "./corpora";
 import { EVAL_TOP_K, freezeClock, withoutRecallCountWrites } from "./runner";
+import { EVAL_FULL } from "./full";
 
 const MODEL = DEFAULTS.EMBEDDING_MODEL;
 const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
@@ -18,7 +19,8 @@ const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 // The eval always observes (diagnostics on); production does not. Observation must be purely passive, or the eval's
 // rankings would differ from what production computes. The 'like' variant is the one whose distillation runs the
 // first() statement that the observer executes as all().
-describe("recall diagnostics are passive: observed and unobserved rankings are identical on core-1k", () => {
+// Opt-in (EVAL_FULL=1, npm run test:eval:full): it replays the golden set twice per variant, about 4 minutes.
+describe.skipIf(!EVAL_FULL)("recall diagnostics are passive: observed and unobserved rankings are identical on core-1k", () => {
   it.each([["baseline", true], ["like", false]] as const)("%s", async (_name, ftsReady) => {
     const spec = buildCorpus("core-1k");
     const corpus = await loadCorpus({ spec, backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore(replayPaths(MODEL, "core-1k").read), mode: "replay" }), embeddingModel: MODEL });
