@@ -9,7 +9,10 @@
  *
  * "Standing as a word" is the fusion's boundary rule, `(?<![\w])term(?![\w])`: the characters either side are not [A-Za-z0-9_].
  * The rule is decided on the first two occurrences of the term: a note whose first two are inside longer words and whose third is
- * a word of its own reads as 1 here and 2 in the old scan. Case is folded with SQLite's lower(), which is ASCII-only, as LIKE is.
+ * a word of its own reads as 1 here and 2 in the old scan. SQLite's lower() folds ASCII only (as LIKE does), so a term with other
+ * characters is also looked for in the note's own text in the forms text takes: as typed, lowercase, UPPERCASE and Capitalised
+ * ("café" finds "CAFÉ", "москва" finds "МОСКВА", a full-width probe finds itself). A note that mixes cases inside one word
+ * ("cAFÉ") reads as absent for such a term, where the old scan lowercased the whole note.
  */
 import type { KeywordRow } from "./types";
 
@@ -17,15 +20,16 @@ export type MatchLevel = 0 | 1 | 2;
 
 const WORD_CHAR = `'[A-Za-z0-9_]'`;
 
-/**
- * SQLite folds ASCII case only, so a term with other characters ("ＡＢＣ" as typed, or an accented capital) is also looked for
- * as typed in the note's own text. `raw` is that text; a query with such a term asks the inner SELECT to carry it.
- */
+/** `raw` is the note's own text; a query with a non-ASCII term asks the inner SELECT to carry it (see above). */
 const isWide = (t: string) => /[^\x00-\x7f]/.test(t);
+const capitalised = (t: string) => { const [head, ...rest] = Array.from(t.toLowerCase()); return head ? head.toUpperCase() + rest.join("") : t; };
+/** The forms of a non-ASCII term to look for in the note's own text, apart from the lowercase one searched in `lc`. */
+const rawForms = (t: string): string[] => [...new Set([t, t.toUpperCase(), capitalised(t)])].filter(v => v !== t.toLowerCase());
+const chars = (t: string) => Array.from(t).length;
 export const rawColumn = (terms: readonly string[], expr: string) => (terms.some(isWide) ? `, ${expr} AS raw` : "");
 
 /** `pos` is a SQL expression holding a 1-based match position (never 0 when this is evaluated). */
-const standsAlone = (pos: string, len: number) =>
+const standsAlone = (pos: string, len: string) =>
   `(substr(lc, ${pos} - 1, 1) NOT GLOB ${WORD_CHAR} AND substr(lc, ${pos} + ${len}, 1) NOT GLOB ${WORD_CHAR})`;
 
 /**
@@ -42,25 +46,33 @@ export function withMatchLevels(inner: string, passthrough: string[], terms: rea
   const base = (inner.match(/\?/g) ?? []).length;
   const wide = terms.map((t, i) => [t, i] as const).filter(([t]) => isWide(t));
   const at = (i: number) => `?${base + 1 + i}`;
-  const rawAt = (i: number) => `?${base + 1 + terms.length + wide.findIndex(([, wi]) => wi === i)}`;
-  const first = terms.map((t, i) => isWide(t)
-    ? `CASE WHEN instr(lc, ${at(i)}) > 0 THEN instr(lc, ${at(i)}) ELSE instr(raw, ${rawAt(i)}) END AS p${i}`
-    : `instr(lc, ${at(i)}) AS p${i}`).join(", ");
+  // the raw forms of each wide term, bound after all the lowercased terms, one placeholder per distinct form
+  const forms = new Map<number, { form: string; at: string }[]>();
+  let next = base + 1 + terms.length;
+  for (const [t, i] of wide) forms.set(i, rawForms(t).map(form => ({ form, at: `?${next++}` })));
+  const first = terms.map((t, i) => {
+    if (!isWide(t)) return `instr(lc, ${at(i)}) AS p${i}`;
+    const raw = forms.get(i)!;
+    return `CASE WHEN instr(lc, ${at(i)}) > 0 THEN instr(lc, ${at(i)})${raw.map(f => ` WHEN instr(raw, ${f.at}) > 0 THEN instr(raw, ${f.at})`).join("")} ELSE 0 END AS p${i}, `
+      + `CASE WHEN instr(lc, ${at(i)}) > 0 THEN ${chars(lowered[i])}${raw.map(f => ` WHEN instr(raw, ${f.at}) > 0 THEN ${chars(f.form)}`).join("")} ELSE 0 END AS w${i}`;
+  }).join(", ");
   const rawCol = wide.length ? ", raw" : "";
+  const wcols = wide.map(([, i]) => `w${i}`);
+  const carried = [...terms.map((_, i) => `p${i}`), ...wcols].join(", ");
   const second = terms.map((_, i) => `instr(substr(lc, p${i} + 1), ${at(i)}) AS q${i}`).join(", ");
-  const level = terms.map((_, i) => {
-    const len = Array.from(lowered[i]).length;
+  const level = terms.map((t, i) => {
+    const len = isWide(t) ? `w${i}` : String(chars(lowered[i]));
     return `CASE WHEN p${i} = 0 THEN 0 WHEN ${standsAlone(`p${i}`, len)} THEN 2 WHEN q${i} = 0 THEN 1 WHEN ${standsAlone(`(p${i} + q${i})`, len)} THEN 2 ELSE 1 END AS l${i}`;
   }).join(", ");
   const sql = `WITH s AS MATERIALIZED (${inner})
     SELECT ${returned.join(", ")}, ${terms.map((_, i) => `l${i}`).join(", ")} FROM (
       SELECT ${cols}, ${level} FROM (
-        SELECT ${cols}, lc, ${terms.map((_, i) => `p${i}`).join(", ")}, ${second} FROM (
+        SELECT ${cols}, lc, ${carried}, ${second} FROM (
           SELECT ${cols}, lc${rawCol}, ${first} FROM s
         )
       )
     ) ORDER BY ${orderBy}`;
-  return { sql, binds: [...lowered, ...wide.map(([t]) => t)] };
+  return { sql, binds: [...lowered, ...wide.flatMap(([, i]) => forms.get(i)!.map(f => f.form))] };
 }
 
 /** A keyword row as the SQL above returns it: no text, and each term's level. */

@@ -92,6 +92,27 @@ describe("keyword rows are ids first, text last", () => {
     expect(rows[0].hits!.get("Ｚｏｒｖａｎｅ")).toBeGreaterThan(0);
   });
 
+  // LIKE folds ASCII case only, so it never proposed an upper-case non-ASCII note; the FTS route does, and the levels must agree with the scan
+  const FOLDS: [string, string, string][] = [
+    ["accented capitals", "CAFÉ au lait", "café"],
+    ["capitalised accent", "Café au lait", "café"],
+    ["accented capitals inside a word", "CAFÉS au lait", "café"],
+    ["Greek capitals", "ΑΘΗΝΑ ΕΛΛΑΔΑ", "αθηνα"],
+    ["Greek capitals, accented", "ΆΘΗΝΑ ΕΛΛΑΔΑ", "άθηνα"],
+    ["Cyrillic capitals", "МОСКВА и Питер", "москва"],
+    ["Cyrillic title case", "Москва и Питер", "москва"],
+    ["typed upper, note lower", "café au lait", "CAFÉ"],
+  ];
+  for (const [name, content, term] of FOLDS) {
+    it(`folds non-ASCII case as the text scan did: ${name} (FTS route)`, async () => {
+      const env = await boot(true);
+      sqlite.seed({ id: "n", content, createdAt: 1 });
+      const { rows } = await keywordSearch([term], env, 500);
+      expect(rows.map(r => r.id)).toEqual(["n"]);
+      expect(rows[0].hits!.get(term)).toBe(reference(content, term));
+    });
+  }
+
   it("decides on the first two occurrences of a term: a boundary occurrence only after two inside-word ones reads as inside", async () => {
     const env = await boot(false);
     sqlite.seed({ id: "late", content: "concat concats and finally cat", createdAt: 1 });

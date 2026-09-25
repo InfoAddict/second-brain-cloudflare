@@ -235,7 +235,8 @@ What the SQL does not reproduce, and why it was accepted:
   none in identifier, rare-word or common-word, and no category regresses (gate: overall MRR@10 +0.0002, multi-hop recall@10
   -0.0033 with a bound of 0.0000).
 - **Case is folded with SQLite's `lower()`, which is ASCII-only** (as `LIKE` is). A term with non-ASCII characters is also looked
-  for as typed, so a full-width raw-surface probe still matches.
+  for in the note's own text as typed, UPPERCASE and Capitalised (`café` finds `CAFÉ`, `москва` finds `МОСКВА`), and the boundary
+  check uses the matched form's length. A word that mixes cases inside itself (`cAFÉ`) reads as absent for such a term.
 - **rows_read rises about 8%** on core-1k (2,494 to 2,696 per recall on workerd): the statement's candidate CTE is materialized and
   read once more to compute the levels. The same rows are scanned; no statement was added.
 
