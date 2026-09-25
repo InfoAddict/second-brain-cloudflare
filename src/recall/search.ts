@@ -40,7 +40,7 @@ import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
-import { rawColumn, rowWithLevels, withMatchLevels } from "./keyword-rows";
+import { levelInLower, rawColumn, rowWithLevels, settleWideTerms, withMatchLevels } from "./keyword-rows";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -225,6 +225,22 @@ export async function keywordSearch(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
+  corpus?: Pick<DistilledQuery, "df" | "total">,
+): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
+  const result = await keywordSearchRows(tokens, env, limit, bounds, identity, only, teamId, corpus);
+  // Non-ASCII terms the SQL could not decide are settled from the notes' text, for those rows only (keyword-rows.ts).
+  await settleWideTerms(env, result.rows, tokens.slice(0, KEYWORD_MAX_TOKENS));
+  return result;
+}
+
+async function keywordSearchRows(
+  tokens: string[],
+  env: Env,
+  limit: number,
+  bounds: Readonly<TimeBounds> = {},
+  identity?: Identity,
+  only?: "personal" | "company",
+  teamId?: string,
   // The corpus document frequencies distillToRareTerms already computed.
   // Absent (or null) on every path that skipped or lost that scan, in which
   // case the cost estimate below cannot run and routing keeps today's rules.
@@ -303,17 +319,10 @@ const lowerContent = (row: { content?: string }): string => {
   if (lc === undefined) lowerCache.set(row, lc = (row.content ?? "").toLowerCase());
   return lc;
 };
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const boundaryOf = new Map<string, RegExp>();
 function termLevel(row: KeywordRow, term: string): 0 | 1 | 2 {
   const known = row.hits?.get(term);
   if (known !== undefined) return known;
-  const needle = term.toLowerCase();
-  const lc = lowerContent(row);
-  if (!lc.includes(needle)) return 0;
-  let re = boundaryOf.get(needle);
-  if (!re) boundaryOf.set(needle, re = new RegExp(`(?<![\\w])${escapeRegExp(needle)}(?![\\w])`));
-  return re.test(lc) ? 2 : 1;
+  return levelInLower(lowerContent(row), term.toLowerCase());
 }
 
 

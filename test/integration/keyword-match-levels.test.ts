@@ -102,6 +102,11 @@ describe("keyword rows are ids first, text last", () => {
     ["Cyrillic capitals", "МОСКВА и Питер", "москва"],
     ["Cyrillic title case", "Москва и Питер", "москва"],
     ["typed upper, note lower", "café au lait", "CAFÉ"],
+    ["second occurrence in another case", "xCAFÉ CAFÉ", "café"],
+    ["second occurrence, first inside a word", "cafés and CAFÉ", "café"],
+    ["mixed case inside the word", "cAFÉ au lait", "café"],
+    ["mixed case, inside a longer word", "xcAFÉ au lait", "café"],
+    ["mixed case second occurrence", "xcafé cAFÉ", "café"],
   ];
   for (const [name, content, term] of FOLDS) {
     it(`folds non-ASCII case as the text scan did: ${name} (FTS route)`, async () => {
@@ -112,6 +117,35 @@ describe("keyword rows are ids first, text last", () => {
       expect(rows[0].hits!.get(term)).toBe(reference(content, term));
     });
   }
+
+  it("settles a mixed-script note term by term", async () => {
+    const env = await boot(true);
+    const content = "Москва is not CAFÉ, and xΑΘΗΝΑ ΑΘΗΝΑ stays; cAFÉ too";
+    sqlite.seed({ id: "n", content, createdAt: 1 });
+    const terms = ["москва", "café", "αθηνα", "athens"];
+    const { rows } = await keywordSearch(terms, env, 500);
+    expect(rows.map(r => r.id)).toEqual(["n"]);
+    for (const t of terms) expect(rows[0].hits!.get(t)).toBe(reference(content, t));
+    expect(rows[0].hits!.get("αθηνα")).toBe(2);
+  });
+
+  it("reads note text only for a non-ASCII term, and only for the rows still undecided", async () => {
+    const env = await boot(true);
+    sqlite.seed({ id: "decided", content: "café society", createdAt: 1 });
+    sqlite.seed({ id: "open", content: "xCAFÉ CAFÉ", createdAt: 2 });
+    sqlite.seed({ id: "none", content: "tea only, cafeteria", createdAt: 3 });
+    const sqls: string[] = [];
+    const prepare = env.DB.prepare.bind(env.DB);
+    (env.DB as { prepare: unknown }).prepare = (sql: string) => { sqls.push(sql); return prepare(sql); };
+    await keywordSearch(["cat", "tea"], env, 500);
+    expect(sqls.filter(s => /^SELECT id, content FROM entries/.test(s))).toEqual([]);
+    sqls.length = 0;
+    const { rows } = await keywordSearch(["café"], env, 500);
+    const reads = sqls.filter(s => /^SELECT id, content FROM entries WHERE id IN/.test(s));
+    expect(reads.length).toBeLessThanOrEqual(1);
+    for (const r of rows) expect(r.hits!.get("café")).toBe(reference({ decided: "café society", open: "xCAFÉ CAFÉ", none: "tea only, cafeteria" }[r.id]!, "café"));
+    expect(rows.find(r => r.id === "open")!.hits!.get("café")).toBe(2);
+  });
 
   it("decides on the first two occurrences of a term: a boundary occurrence only after two inside-word ones reads as inside", async () => {
     const env = await boot(false);

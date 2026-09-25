@@ -9,11 +9,17 @@
  *
  * "Standing as a word" is the fusion's boundary rule, `(?<![\w])term(?![\w])`: the characters either side are not [A-Za-z0-9_].
  * The rule is decided on the first two occurrences of the term: a note whose first two are inside longer words and whose third is
- * a word of its own reads as 1 here and 2 in the old scan. SQLite's lower() folds ASCII only (as LIKE does), so a term with other
- * characters is also looked for in the note's own text in the forms text takes: as typed, lowercase, UPPERCASE and Capitalised
- * ("café" finds "CAFÉ", "москва" finds "МОСКВА", a full-width probe finds itself). A note that mixes cases inside one word
- * ("cAFÉ") reads as absent for such a term, where the old scan lowercased the whole note.
+ * a word of its own reads as 1 here and 2 in the old scan (an accepted approximation for ASCII terms).
+ *
+ * SQLite's lower() folds ASCII only (as LIKE does), so a term with other characters ("café", "москва") cannot be decided in SQL.
+ * The SQL still answers it when it can: it also looks for the term in the note's own text as typed, UPPERCASE and Capitalised,
+ * and a level of 2 from that is exact. Any level below 2 for such a term is settled by `settleWideTerms`, which reads the text of
+ * just those rows by id and applies the old scan's rule (Unicode toLowerCase, the boundary above) in the Worker. A query with
+ * only ASCII terms never reads text.
  */
+import { escapeLikeMeta } from "../constants";
+import { CONTENT_LIKE_ESCAPE } from "../text/like";
+import type { Env } from "../env";
 import type { KeywordRow } from "./types";
 
 export type MatchLevel = 0 | 1 | 2;
@@ -26,6 +32,7 @@ const capitalised = (t: string) => { const [head, ...rest] = Array.from(t.toLowe
 /** The forms of a non-ASCII term to look for in the note's own text, apart from the lowercase one searched in `lc`. */
 const rawForms = (t: string): string[] => [...new Set([t, t.toUpperCase(), capitalised(t)])].filter(v => v !== t.toLowerCase());
 const chars = (t: string) => Array.from(t).length;
+export const isWideTerm = isWide;
 export const rawColumn = (terms: readonly string[], expr: string) => (terms.some(isWide) ? `, ${expr} AS raw` : "");
 
 /** `pos` is a SQL expression holding a 1-based match position (never 0 when this is evaluated). */
@@ -82,4 +89,58 @@ export function rowWithLevels(raw: Record<string, unknown>, terms: readonly stri
   const hits = new Map<string, MatchLevel>();
   terms.forEach((t, i) => hits.set(t, Number(raw[`l${i}`] ?? 0) as MatchLevel));
   return { id: raw.id as string, tags: raw.tags as string, source: raw.source as string, created_at: raw.created_at as number, hits };
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const boundaryOf = new Map<string, RegExp>();
+/** How lowercased text `lc` holds the lowercased term `needle`: the fusion's original scan (0 absent, 1 inside longer words, 2 as a word). */
+export function levelInLower(lc: string, needle: string): MatchLevel {
+  if (!lc.includes(needle)) return 0;
+  let re = boundaryOf.get(needle);
+  if (!re) boundaryOf.set(needle, re = new RegExp(`(?<![\\w])${escapeRegExp(needle)}(?![\\w])`));
+  return re.test(lc) ? 2 : 1;
+}
+
+/**
+ * A LIKE pattern every note holding `term` under any Unicode case fold also matches, so the by-id read can skip notes that
+ * cannot hold it. LIKE folds ASCII case only, so anything a fold can produce from or to a non-ASCII character is a wildcard:
+ * non-ASCII characters, and "k" and "i" (the Kelvin sign and dotted capital I lowercase to them).
+ */
+export function widePrefilter(term: string): string {
+  let out = "%";
+  for (const ch of Array.from(term.toLowerCase())) {
+    const wild = /[^\x00-\x7f]/.test(ch) || ch === "k" || ch === "i";
+    if (wild) { if (!out.endsWith("%")) out += "%"; } else out += escapeLikeMeta(ch);
+  }
+  return out.endsWith("%") ? out : `${out}%`;
+}
+
+/**
+ * Settles the non-ASCII terms the SQL could not decide. Each row's level for such a term below 2 may be wrong (a second occurrence
+ * in another case, a note mixing cases inside a word), so the text of those rows is read by id and the level is worked out as
+ * the old scan did. A note no fold of the term can match (`widePrefilter`) is not read: its level is already 0.
+ */
+export async function settleWideTerms(env: Env, rows: KeywordRow[], terms: readonly string[]): Promise<void> {
+  const wide = terms.filter(isWide);
+  if (!wide.length || !rows.length) return;
+  const open = rows.filter(r => r.hits && wide.some(t => (r.hits?.get(t) ?? 0) < 2));
+  if (!open.length) return;
+  const patterns = wide.map(widePrefilter);
+  // D1 allows 100 bound values in a statement: the patterns and the ids share them.
+  const size = Math.max(1, 90 - patterns.length);
+  const where = patterns.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
+  const chunks: string[][] = [];
+  for (let i = 0; i < open.length; i += size) chunks.push(open.slice(i, i + size).map(r => r.id));
+  // scope-exempt: by-id: every id here came from the scoped keyword read that produced `rows`; the scope clause is left out, as it is for the reranker's by-id read, so SQLite does primary-key lookups
+  const statements = chunks.map(ids => env.DB.prepare(`SELECT id, content FROM entries WHERE id IN (${ids.map(() => "?").join(", ")}) AND (${where})`).bind(...ids, ...patterns));
+  const results = statements.length === 1 ? [await statements[0].all()] : await env.DB.batch(statements);
+  const byId = new Map(open.map(r => [r.id, r]));
+  for (const res of results) {
+    for (const { id, content } of (res.results ?? []) as { id: string; content: string }[]) {
+      const row = byId.get(id);
+      if (!row?.hits) continue;
+      const lc = content.toLowerCase();
+      for (const t of wide) if ((row.hits.get(t) ?? 0) < 2) (row.hits as Map<string, MatchLevel>).set(t, levelInLower(lc, t.toLowerCase()));
+    }
+  }
 }

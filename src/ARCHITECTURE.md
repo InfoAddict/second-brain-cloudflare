@@ -234,9 +234,13 @@ What the SQL does not reproduce, and why it was accepted:
   whose third is a word of its own reads as level 1 (the scan read 2). On core-1k this moves 78 of 1,751 rankings (reranker off),
   none in identifier, rare-word or common-word, and no category regresses (gate: overall MRR@10 +0.0002, multi-hop recall@10
   -0.0033 with a bound of 0.0000).
-- **Case is folded with SQLite's `lower()`, which is ASCII-only** (as `LIKE` is). A term with non-ASCII characters is also looked
-  for in the note's own text as typed, UPPERCASE and Capitalised (`café` finds `CAFÉ`, `москва` finds `МОСКВА`), and the boundary
-  check uses the matched form's length. A word that mixes cases inside itself (`cAFÉ`) reads as absent for such a term.
+- **Case is folded with SQLite's `lower()`, which is ASCII-only** (as `LIKE` is), so a term with non-ASCII characters is not decided
+  in SQL alone. The SQL also looks for it in the note's own text as typed, UPPERCASE and Capitalised, and a 2 from that is exact.
+  Any level below 2 for such a term is settled by `settleWideTerms` (keyword-rows.ts): the text of just those rows is read by id
+  (skipping notes `widePrefilter`'s LIKE says no fold of the term can match, in chunks that share D1's 100 bound values with the
+  patterns) and the level is worked out in the Worker with the old rule (Unicode `toLowerCase`, the boundary above). An ASCII-only
+  query never reads text. The worst case is a non-ASCII query whose candidates are mostly long notes without the term: it reads
+  what the old code read for those rows.
 - **rows_read rises about 8%** on core-1k (2,494 to 2,696 per recall on workerd): the statement's candidate CTE is materialized and
   read once more to compute the levels. The same rows are scanned; no statement was added.
 
