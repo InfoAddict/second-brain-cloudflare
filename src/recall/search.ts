@@ -277,6 +277,15 @@ function mergeTiers(tiers: KeywordRow[][], limit: number): KeywordRow[] {
   return out;
 }
 
+// A keyword row's text is lowercased for fusion (twice: the all-terms view and the lexical view), for the single-word df, and for the
+// reranker's keyword evidence. Notes can be tens of KB and a recall reads up to 500 of them, so it is done once per row.
+const lowerCache = new WeakMap<object, string>();
+const lowerContent = (row: { content: string }): string => {
+  let lc = lowerCache.get(row);
+  if (lc === undefined) lowerCache.set(row, lc = row.content.toLowerCase());
+  return lc;
+};
+
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function fuseDenseAndKeyword(
@@ -296,7 +305,7 @@ export function fuseDenseAndKeyword(
   }
   const denseRanked = [...denseByParent.keys()];
 
-  const kwLower = keywordRows.map(r => ({ row: r, lc: r.content.toLowerCase() }));
+  const kwLower = keywordRows.map(r => ({ row: r, lc: lowerContent(r) }));
 
   // Matched against lowercased content, so lowercased here too. Canonical
   // tokens already are; raw-surface probes (#326) arrive as typed.
@@ -587,7 +596,7 @@ export async function recallEntries(
   if (!distilled.df && keywordRows.length && keywordRows.length < cfg.KEYWORD_CANDIDATE_LIMIT) {
     const total = await scopedEntryTotal(env, scope);
     if (total) {
-      const lowered = keywordRows.map(r => r.content.toLowerCase());
+      const lowered = keywordRows.map(lowerContent);
       const df = new Map([...profile.retrievalTokens, ...tokens].map(t => [t, lowered.filter(c => c.includes(t.toLowerCase())).length] as const));
       corpus = { df, total };
     }
@@ -642,7 +651,7 @@ export async function recallEntries(
   directReranked.forEach((m, i) => { const id = parentOfMatch(m); if (!fusedOrder.has(id)) fusedOrder.set(id, i); });
   const keywordEvidence = async (): Promise<string[]> => {
     if (!tokens.length) return [];
-    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => r.content.toLowerCase().includes(t.toLowerCase())));
+    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => lowerContent(r).includes(t.toLowerCase())));
     // Several terms were already through distillation's saturation filter. One term has no df there, so a common word
     // ("budget") must not count as evidence: apply the same rule (df over the corpus <= QUERY_SATURATION_FRACTION) with
     // the keyword rows holding the term as its df and one entry_counts read for the corpus size. Unknown = not evidence.
