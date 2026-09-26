@@ -9,8 +9,8 @@ describe("tokenizeQuery: the scaffolding an agent wraps around a subject", () =>
   });
 
   it("reduces the named shapes to the name", () => {
-    expect(tokenizeQuery("Tell me all about courtney")).toEqual(["all", "courtney"]);
-    expect(tokenizeQuery("User wants to prepare for a meeting with Courtney — what should I know about her?")).toEqual(["prepare", "meeting", "courtney", "her"]);
+    expect(tokenizeQuery("Tell me all about dana")).toEqual(["all", "dana"]);
+    expect(tokenizeQuery("User wants to prepare for a meeting with Dana — what should I know about her?")).toEqual(["prepare", "meeting", "dana", "her"]);
     expect(tokenizeQuery("help me find the reranker decision")).toEqual(["reranker", "decision"]);
   });
 
