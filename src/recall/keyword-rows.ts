@@ -1,0 +1,133 @@
+/**
+ * Ids first, text last. The keyword arm used to read every candidate note in full (up to KEYWORD_CANDIDATE_LIMIT of them, tens of
+ * KB each) so the Worker could weigh each query term in it, and the Worker paid CPU to parse and scan those bytes. D1 does that
+ * work now: each candidate row comes back with, per term, one number, and no text.
+ *
+ *   0  the term is not in the note
+ *   1  it is, but only inside longer words ("cat" in "concatenate")
+ *   2  it is, standing as a word of its own
+ *
+ * "Standing as a word" is the fusion's boundary rule, `(?<![\w])term(?![\w])`: the characters either side are not [A-Za-z0-9_].
+ * The rule is decided on the first two occurrences of the term: a note whose first two are inside longer words and whose third is
+ * a word of its own reads as 1 here and 2 in the old scan (an accepted approximation for ASCII terms).
+ *
+ * SQLite's lower() folds ASCII only (as LIKE does), so a term with other characters ("café", "москва") cannot be decided in SQL.
+ * The SQL searches the ASCII-lowered text for the lowercased term, and a level of 2 from that is exact (the occurrence is made of
+ * characters lowercase leaves alone). Any level below 2 for such a term is settled by `settleWideTerms`, which reads the text of
+ * just those rows by id and applies the old scan's rule (Unicode toLowerCase, the boundary above) in the Worker. A query with
+ * only ASCII terms never reads text.
+ */
+import { escapeLikeMeta } from "../constants";
+import { CONTENT_LIKE_ESCAPE } from "../text/like";
+import type { Env } from "../env";
+import type { KeywordRow } from "./types";
+
+export type MatchLevel = 0 | 1 | 2;
+
+const WORD_CHAR = `'[A-Za-z0-9_]'`;
+
+/**
+ * Text holding the Kelvin sign (U+212A) or the dotted capital İ (U+0130): SQLite's lower() leaves them, and lowercase turns them into
+ * the ASCII "k" and "i" (plus a mark), so a term or its neighbours read differently there. `content` is the column to test.
+ */
+export const ODD_TEXT = "(instr(content, char(8490)) > 0 OR instr(content, char(304)) > 0)";
+const isWide = (t: string) => /[^\x00-\x7f]/.test(t);
+const chars = (t: string) => Array.from(t).length;
+export const isWideTerm = isWide;
+
+/** `pos` is a SQL expression holding a 1-based match position (never 0 when this is evaluated). */
+const standsAlone = (pos: string, len: string) =>
+  `(substr(lc, ${pos} - 1, 1) NOT GLOB ${WORD_CHAR} AND substr(lc, ${pos} + ${len}, 1) NOT GLOB ${WORD_CHAR})`;
+
+/**
+ * Wraps `inner` (a SELECT that yields `passthrough` columns plus `lc`, the lowercased note text) in the SQL that turns `lc` into
+ * one `l<i>` level column per term. `sql` is a WITH ... SELECT whose rows carry the passthrough columns and `l0..l<n-1>`;
+ * `returned` are the passthrough columns the caller gets back (the rest, such as ranking keys, only order the rows).
+ * `binds` are the terms to bind after `inner`'s own binds: each once, referenced by number.
+ */
+export function withMatchLevels(inner: string, passthrough: string[], terms: readonly string[], orderBy: string, returned: string[] = passthrough): { sql: string; binds: string[] } {
+  const lowered = terms.map(t => t.toLowerCase());
+  const cols = passthrough.join(", ");
+  // Each term is bound once and referenced by number wherever it is used, so a query with 16 terms binds 16, not 3 or 4 apiece:
+  // D1 allows 100 bound values in a statement. Numbers continue after `inner`'s plain placeholders.
+  const base = (inner.match(/\?/g) ?? []).length;
+  const at = (i: number) => `?${base + 1 + i}`;
+  const first = terms.map((_, i) => `instr(lc, ${at(i)}) AS p${i}`).join(", ");
+  const carried = terms.map((_, i) => `p${i}`).join(", ");
+  const second = terms.map((_, i) => `instr(substr(lc, p${i} + 1), ${at(i)}) AS q${i}`).join(", ");
+  const level = terms.map((t, i) =>
+    `CASE WHEN p${i} = 0 THEN 0 WHEN ${standsAlone(`p${i}`, String(chars(lowered[i])))} THEN 2 WHEN q${i} = 0 THEN 1 WHEN ${standsAlone(`(p${i} + q${i})`, String(chars(lowered[i])))} THEN 2 ELSE 1 END AS l${i}`).join(", ");
+  const sql = `WITH s AS MATERIALIZED (${inner})
+    SELECT ${returned.join(", ")}, ${terms.map((_, i) => `l${i}`).join(", ")}, fl FROM (
+      SELECT ${cols}, ${level}, fl FROM (
+        SELECT ${cols}, lc, ${carried}, ${second}, fl FROM (
+          SELECT ${cols}, lc, ${first}, ${ODD_TEXT.replace(/\bcontent\b/g, "lc")} AS fl FROM s
+        )
+      )
+    ) ORDER BY ${orderBy}`;
+  return { sql, binds: lowered };
+}
+
+/** A keyword row as the SQL above returns it: no text, and each term's level. */
+export function rowWithLevels(raw: Record<string, unknown>, terms: readonly string[]): KeywordRow {
+  // A row that already carries its text (a double standing in for D1) is scored from that text, as the tag path's rows are.
+  if (typeof raw.content === "string" && !("l0" in raw)) return raw as unknown as KeywordRow;
+  const hits = new Map<string, MatchLevel>();
+  terms.forEach((t, i) => hits.set(t, Number(raw[`l${i}`] ?? 0) as MatchLevel));
+  return { id: raw.id as string, tags: raw.tags as string, source: raw.source as string, created_at: raw.created_at as number, hits, odd: Number(raw.fl) === 1 };
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const boundaryOf = new Map<string, RegExp>();
+/** How lowercased text `lc` holds the lowercased term `needle`: the fusion's original scan (0 absent, 1 inside longer words, 2 as a word). */
+export function levelInLower(lc: string, needle: string): MatchLevel {
+  if (!lc.includes(needle)) return 0;
+  let re = boundaryOf.get(needle);
+  if (!re) boundaryOf.set(needle, re = new RegExp(`(?<![\\w])${escapeRegExp(needle)}(?![\\w])`));
+  return re.test(lc) ? 2 : 1;
+}
+
+/**
+ * A LIKE pattern every note holding `term` under any Unicode case fold also matches, so the by-id read can skip notes that
+ * cannot hold it. LIKE folds ASCII case only, so anything a fold can produce from or to a non-ASCII character is a wildcard:
+ * non-ASCII characters, and "k" and "i" (the Kelvin sign and dotted capital I lowercase to them).
+ */
+export function widePrefilter(term: string): string {
+  let out = "%";
+  for (const ch of Array.from(term.toLowerCase())) {
+    const wild = /[^\x00-\x7f]/.test(ch) || ch === "k" || ch === "i";
+    if (wild) { if (!out.endsWith("%")) out += "%"; } else out += escapeLikeMeta(ch);
+  }
+  return out.endsWith("%") ? out : `${out}%`;
+}
+
+/**
+ * Settles the levels the SQL could not decide, from the text of just those rows, read by id:
+ *   - a term with non-ASCII characters whose level is below 2 (a second occurrence in another case, a note mixing cases inside a
+ *     word, a fold that changes length): a note no fold of the term can match (`widePrefilter`) is not read, its level is 0;
+ *   - every term of a note holding U+212A or U+0130 (`ODD_TEXT`), which lowercase turns into ASCII the SQL never saw.
+ * Either way the level is worked out as the old scan did (Unicode toLowerCase, the boundary above). Other rows keep the SQL's.
+ */
+export async function settleLevels(env: Env, rows: KeywordRow[], terms: readonly string[]): Promise<void> {
+  const wide = terms.filter(isWide);
+  const open = rows.filter(r => r.hits && (r.odd || wide.some(t => (r.hits!.get(t) ?? 0) < 2)));
+  if (!open.length) return;
+  const patterns = wide.map(widePrefilter);
+  // D1 allows 100 bound values in a statement: the patterns and the ids share them.
+  const size = Math.max(1, 90 - patterns.length);
+  const where = [...patterns.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`), ODD_TEXT].join(" OR ");
+  const chunks: string[][] = [];
+  for (let i = 0; i < open.length; i += size) chunks.push(open.slice(i, i + size).map(r => r.id));
+  // scope-exempt: by-id: every id here came from the scoped keyword read that produced `rows`; the scope clause is left out, as it is for the reranker's by-id read, so SQLite does primary-key lookups
+  const statements = chunks.map(ids => env.DB.prepare(`SELECT id, content FROM entries WHERE id IN (${ids.map(() => "?").join(", ")}) AND (${where})`).bind(...ids, ...patterns));
+  const results = statements.length === 1 ? [await statements[0].all()] : await env.DB.batch(statements);
+  const byId = new Map(open.map(r => [r.id, r]));
+  for (const res of results) {
+    for (const { id, content } of (res.results ?? []) as { id: string; content: string }[]) {
+      const row = byId.get(id);
+      if (!row?.hits) continue;
+      const lc = content.toLowerCase();
+      for (const t of row.odd ? terms : wide) if (row.odd || (row.hits.get(t) ?? 0) < 2) (row.hits as Map<string, MatchLevel>).set(t, levelInLower(lc, t.toLowerCase()));
+    }
+  }
+}

@@ -15,7 +15,8 @@ import { distillToRareTerms } from "../../src/recall/distill";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
-import { resetFtsReadyMemo } from "../../src/recall/fts";
+import { ftsShortToken, resetFtsReadyMemo } from "../../src/recall/fts";
+import { tokenizeQuery } from "../../src/text/tokenize";
 import { FTS_READY_KV_KEY, QUERY_SATURATION_FRACTION } from "../../src/constants";
 import type { Env } from "../../src/env";
 import type { Identity } from "../../src/lib/identity";
@@ -118,7 +119,10 @@ describe("T-0059 equivalence: FTS-counted distillation vs the LIKE scan it repla
 
       const label = `trial#${n} seed=${seedBase + n} pool=${trial.poolName} query=${JSON.stringify(trial.query)}`;
 
-      if (ftsOut.query !== likeOut.query) {
+      // T-0074: a short token's df is sampled, not counted, so the two paths may rank it differently
+      // (by design: it can only fill a slot the counted terms leave, see distill-short-token-skew.test.ts).
+      const hasShortToken = tokenizeQuery(trial.query).some(ftsShortToken);
+      if (!hasShortToken && ftsOut.query !== likeOut.query) {
         divergences.push(`${label}: rebuilt query differs — like=${JSON.stringify(likeOut.query)} fts=${JSON.stringify(ftsOut.query)}`);
         continue;
       }
@@ -137,7 +141,13 @@ describe("T-0059 equivalence: FTS-counted distillation vs the LIKE scan it repla
             // saturation cap (rows stay in the tens; the cap floors at
             // FTS_MATCH_BUDGET+1 = 2001), so every term here is UNCAPPED —
             // this branch is exactly the equivalence bar the task requires.
-            if (ftsDf !== likeDf) {
+            // T-0074: a term under the trigram floor cannot be counted through the
+            // index; its df is a Laplace-smoothed sample of the newest rows, which
+            // covers every row of these corpora, so it lands on the exact count or
+            // one above it.
+            const tolerance = ftsShortToken(term) ? 1 : 0;
+            const drift = ftsDf - (likeDf ?? 0);
+            if (drift < 0 || drift > tolerance) {
               divergences.push(`${label}: df("${term}") differs — like=${likeDf} fts=${ftsDf}`);
             }
           }
@@ -400,7 +410,7 @@ describe("T-0059 ranking effect: a saturated (capped) term still gets dropped, s
     expect(ftsOut.query).toBe(likeOut.query);
 
     sqlite.close();
-  });
+  }, 30000); // 8,000-row real-SQLite corpus; timed out at the 5s default under parallel-suite load.
 });
 
 describe("T-0059 all-saturated fallback: capped counts that cannot rank fall back to LIKE", () => {

@@ -1,16 +1,74 @@
 import { describe, expect, it } from "vitest";
 import {
+  graphSeedCeiling,
   graphSeedLimit,
+  lexicalSeedLimit,
   queryCoverage,
   relatedSlotLimit,
   scoreLinkedEvidence,
 } from "../../src/recall/neighborhood";
 
 describe("graph-aware recall neighborhood policy", () => {
-  it("bounds graph seeds at the existing overfetch scale and Vectorize ceiling", () => {
+  it("bounds the dense arm's graph seeds at its overfetch scale and the Vectorize ceiling", () => {
     expect(graphSeedLimit(5, 40)).toBe(15);
     expect(graphSeedLimit(20, 90)).toBe(50);
     expect(graphSeedLimit(5, 8)).toBe(8);
+  });
+
+  // T-0083.6: one budget over the fused pool let keyword-only rows outbid the bottom of
+  // the dense fetch, because fusion pays a keyword hit its matched IDF and a dense hit
+  // only 1/(k + rank). The arms are counted separately now.
+  it("does not spend the dense arm's seats on rows the dense arm never returned", () => {
+    // 40 dense rows and 400 keyword-only ones: the dense arm still seats its whole window.
+    expect(graphSeedLimit(5, 40)).toBe(15);
+    expect(lexicalSeedLimit(5, 400, 15)).toBe(5);
+  });
+
+  it("gives the keyword arm the lexical view's share of the dense window, not a matching budget", () => {
+    expect(lexicalSeedLimit(5, 400, 15)).toBe(5);   // ceil(15 * 0.3)
+    expect(lexicalSeedLimit(10, 400, 30)).toBe(9);  // ceil(30 * 0.3)
+    expect(lexicalSeedLimit(5, 2, 15)).toBe(2);     // never more than exist
+  });
+
+  it("keeps both arms' seats under the edge-scan ceiling", () => {
+    expect(graphSeedLimit(50, 200) + lexicalSeedLimit(50, 200, 50)).toBe(graphSeedCeiling(0));
+    expect(lexicalSeedLimit(50, 200, 50)).toBe(0);
+  });
+
+  // Review finding 1: with the dense arm empty — Vectorize down, a member with no
+  // vectors, the keyword-only ablation — every root is keyword-only, and an allowance
+  // alone would seat 9 of them at topK 10 where the old shared budget seated 30.
+  it("hands the keyword arm the dense window the dense arm leaves unused", () => {
+    expect(lexicalSeedLimit(10, 400, 0)).toBe(39);  // 30 unused + ceil(30 * 0.3)
+    expect(lexicalSeedLimit(5, 400, 0)).toBe(20);   // 15 unused + ceil(15 * 0.3)
+  });
+
+  it("gives back only the part of the window the dense arm did not fill", () => {
+    expect(lexicalSeedLimit(10, 400, 30)).toBe(9);  // dense filled its window: allowance only
+    expect(lexicalSeedLimit(10, 400, 20)).toBe(19); // 10 unused + 9
+    expect(lexicalSeedLimit(10, 400, 29)).toBe(10); // 1 unused + 9
+  });
+
+  it("keeps the total the same whichever arm fills it", () => {
+    for (const denseCount of [0, 1, 7, 29, 30, 400]) {
+      const dense = graphSeedLimit(10, denseCount);
+      expect(dense + lexicalSeedLimit(10, 400, dense)).toBe(39);
+    }
+  });
+
+  // expandGraph binds each frontier id twice, and a scoped caller's bindings come out
+  // of the same budget, so the ceiling is the edge scan's own batch size.
+  it("sizes the seed ceiling from the bound-parameter budget the edge scan has left", () => {
+    expect(graphSeedCeiling(0)).toBe(50);
+    expect(graphSeedCeiling(2)).toBe(49);
+    expect(graphSeedCeiling(3)).toBe(48);
+  });
+
+  it("keeps a scoped caller's seats inside one edge-scan statement", () => {
+    for (const bindings of [0, 1, 2, 3, 5]) {
+      const dense = graphSeedLimit(20, 200, bindings);
+      expect(dense + lexicalSeedLimit(20, 200, dense, bindings)).toBeLessThanOrEqual(graphSeedCeiling(bindings));
+    }
   });
 
   it("reserves no related slot for tiny result sets and at most two otherwise", () => {
@@ -276,6 +334,13 @@ describe("deterministic linked-evidence scoring", () => {
 });
 
 describe("query coverage details", () => {
+  it("requires literal underscore and percent matches", () => {
+    const corpus = { df: new Map([["err_tls_90412", 1], ["50%_off", 1]]), total: 100 };
+    const tokens = ["err_tls_90412", "50%_off"];
+    expect(queryCoverage("ERR_TLS_90412 has 50%_off", tokens, corpus).score).toBe(1);
+    expect(queryCoverage("ERRXTLSX90412 has 50Xoff", tokens, corpus).score).toBe(0);
+  });
+
   it("labels only exact rare token matches as high-IDF", () => {
     const corpus = { df: new Map([["dotnet", 10]]), total: 100 };
 

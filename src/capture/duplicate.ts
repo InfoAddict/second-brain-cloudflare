@@ -5,11 +5,13 @@ import {
   // applies no minimum-score cutoff, so surfacing this would imply a recall
   // control that does not exist.
   CANDIDATE_SCORE_THRESHOLD,
+  WRITE_PATH_TOPK,
   CONTRADICTION_MAX_TOKENS,
   SMART_MERGE_MAX_TOKENS,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
 import { embed, readStreamText } from "../lib/ai";
+import { nearestParents } from "../vectorize/parents";
 import { queryVectorizeScoped, singleWorkspaceFilter } from "../vectorize/scope";
 
 type DuplicateResult =
@@ -64,6 +66,7 @@ export async function checkDuplicateAndContradiction(
   // on deployments the read path already serves keyword-only (recall/search.ts).
   let matches: VectorizeMatch[] = [];
   try {
+    let hits: VectorizeMatch[];
     if (workspaceId !== undefined) {
       // Dedupe/contradiction compare against the WRITE TARGET's workspace only:
       // a private note must not collide with a colleague's shared one, and
@@ -74,13 +77,14 @@ export async function checkDuplicateAndContradiction(
               .catch((e: unknown) => console.error("Vectorize filter-degradation marker write failed (non-fatal):", e)),
           )
         : undefined;
-      const { matches: filtered } = await queryVectorizeScoped<VectorizeMatch>(
-        env.VECTORIZE, values, { topK: 5, filter: singleWorkspaceFilter(workspaceId).filter, onDegrade },
-      );
-      matches = filtered;
+      ({ matches: hits } = await queryVectorizeScoped<VectorizeMatch>(
+        env.VECTORIZE, values, { topK: WRITE_PATH_TOPK, filter: singleWorkspaceFilter(workspaceId).filter, onDegrade },
+      ));
     } else {
-      ({ matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" }));
+      ({ matches: hits } = await env.VECTORIZE.query(values, { topK: WRITE_PATH_TOPK, returnMetadata: "all" }));
     }
+    // One long note is several vectors; keep the best hit of each of the five nearest distinct notes.
+    matches = nearestParents(hits);
   } catch (e) {
     console.error("Vectorize query failed (capturing without duplicate/contradiction checks):", e);
   }
@@ -128,7 +132,7 @@ export async function checkDuplicateAndContradiction(
       const writerWorkspaceId = workspaceId ?? "";
       const placeholders = parentIds.map(() => "?").join(", ");
       const { results: rows } = await env.DB.prepare(
-        `SELECT id, content FROM entries WHERE id IN (${placeholders}) AND workspace_id = ?`
+        `SELECT id, content FROM entries WHERE id IN (${placeholders}) AND +workspace_id = ?`
       ).bind(...parentIds, writerWorkspaceId).all() as { results: { id: string; content: string }[] };
 
       if (rows.length) {

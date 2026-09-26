@@ -1,9 +1,10 @@
 import type { Env } from "../env";
 import { DEFAULTS, type Config } from "../config";
-import { D1_MAX_BOUND_PARAMS } from "../constants";
+import { D1_MAX_BOUND_PARAMS, WRITE_PATH_TOPK } from "../constants";
+import { nearestParents } from "../vectorize/parents";
 import { getKind } from "../memory/kind";
 import { getStatus } from "../memory/status";
-import { layerOf, scopeWhereForRead } from "../lib/scope";
+import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { resolveActorLabel } from "../lib/actors";
 import type { Identity } from "../lib/identity";
 import { projectFilterSql } from "../projects/filter";
@@ -86,9 +87,15 @@ export const GRAPH_VIEW_MAX_NODES = 1500;
  */
 const MACHINE_AUTHORED_TAGS = new Set(["auto-pattern", "auto-insight", "synthesized"]);
 export const GRAPH_HOP_DECAY = 0.6;
-// Edge-fetch batches bind each id twice (source and target), so a batch's real
-// cost is 2 ids + any scope bindings against D1_MAX_BOUND_PARAMS — computed at
-// each loop rather than as a fixed constant, because scoping changes the budget.
+/**
+ * Ids one edge-fetch batch can carry. Each binds TWICE (source_id IN (…) OR
+ * target_id IN (…)), and a scoped caller's workspace bindings come out of the
+ * same D1_MAX_BOUND_PARAMS budget, so scoping shrinks it. Exported because it
+ * is also the ceiling on how many seeds recall may hand this function before a
+ * hop costs two statements instead of one (src/recall/neighborhood.ts).
+ */
+export const edgeScanBatchSize = (scopeBindings: number): number =>
+  Math.max(1, Math.floor((D1_MAX_BOUND_PARAMS - scopeBindings) / 2));
 
 /**
  * Two verdicts about a hop's candidate ids, from ONE scoped statement: which of
@@ -110,7 +117,7 @@ async function readableAndDeprecatedAmong(
   teamId?: string,
 ): Promise<{ readable: Set<string>; deprecated: Set<string> }> {
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
-  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const take = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   const readable = new Set<string>();
@@ -118,7 +125,7 @@ async function readableAndDeprecatedAmong(
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
-    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results } = await env.DB.prepare(
       `SELECT id, tags FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
@@ -167,9 +174,7 @@ export async function expandGraph(
 
   for (let hop = 1; hop <= hops && frontier.length && out.length < maxNodes; hop++) {
     const edgeRows: { source_id: string; target_id: string; type: string; weight: number; provenance: EdgeProvenance; created_at: number }[] = [];
-    // The double-sided IN binds each id twice, so scope bindings eat into the
-    // same bound-parameter budget — shrink the batch rather than overflow it.
-    const edgeTake = Math.max(1, Math.floor((D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0)) / 2));
+    const edgeTake = edgeScanBatchSize(scope?.bindings.length ?? 0);
     for (let i = 0; i < frontier.length; i += edgeTake) {
       const batch = frontier.slice(i, i + edgeTake);
       const ph = batch.map(() => "?").join(", ");
@@ -230,13 +235,13 @@ export async function expandGraph(
 async function hydrateGraphEntries(ids: string[], env: Env, identity?: Identity, only?: "personal" | "company", teamId?: string): Promise<Map<string, Record<string, any>>> {
   const map = new Map<string, Record<string, any>>();
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
-  const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const take = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
-    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results } = await env.DB.prepare(
       `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${ph})${scopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
@@ -343,7 +348,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
   // statement, an unqualified `workspace_id` is a clause a reader (and the scope
   // checker) has to resolve by knowing which table has the column.
   const nodeScope = identity ? scopeWhereForRead(identity, { layer: opts.only, teamId: opts.teamId }, "e.workspace_id") : null;
-  const nodeScopeSql = nodeScope ? ` AND ${nodeScope.clause}` : "";
+  const nodeScopeSql = nodeScope ? ` AND ${scopeWhereForIdRead(nodeScope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const nodeTake = D1_MAX_BOUND_PARAMS - (nodeScope?.bindings.length ?? 0);
   for (let i = 0; i < nodeIds.length; i += nodeTake) {
@@ -359,7 +364,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     // Keep the annotation below immediately above the statement: it is spent by
     // the first query within five lines of it, and prose in between silently
     // pushes the statement out of that window.
-    // scope-checked: the caller's clause IS applied — nodeScopeSql is built as ` AND ${nodeScope.clause}` above, against the `e` alias, and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. The joined `users` rows are labels for the entries this clause already admitted, never a second source of rows. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: nodeScopeSql applies the caller's clause to e through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. The users join supplies labels only
     const { results } = await env.DB.prepare(
       `SELECT e.id, e.content, e.tags, e.importance_score, e.created_at,
               e.workspace_id, e.actor_id, e.source, u.name AS actor_display_name
@@ -415,7 +420,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
   const edgeSeen = new Set<string>();
   const edges: GraphView["edges"] = [];
   // Same bound-parameter arithmetic as expandGraph: ids bound twice plus scope.
-  const edgeTake = Math.max(1, Math.floor((D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0)) / 2));
+  const edgeTake = edgeScanBatchSize(scope?.bindings.length ?? 0);
   for (let i = 0; i < presentIds.length; i += edgeTake) {
     const batch = presentIds.slice(i, i + edgeTake);
     const ph = batch.map(() => "?").join(", ");
@@ -438,11 +443,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
 }
 
 export async function neighborsFromVectorQuery(values: number[], env: Env): Promise<{ id: string; score: number }[]> {
-  const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
-  const scores = new Map<string, number>();
-  for (const m of matches) {
-    const pid = (m.metadata as any)?.parentId ?? m.id;
-    scores.set(pid, Math.max(scores.get(pid) ?? 0, m.score));
-  }
-  return [...scores.entries()].map(([id, score]) => ({ id, score }));
+  // A wider window collapsed to five distinct notes: one long note is several vectors and could fill topK 5 alone.
+  const { matches } = await env.VECTORIZE.query(values, { topK: WRITE_PATH_TOPK, returnMetadata: "all" });
+  return nearestParents(matches).map(m => ({ id: ((m.metadata as any)?.parentId ?? m.id) as string, score: m.score }));
 }

@@ -6,6 +6,8 @@ on:
   # A filter here silently skips CI for PRs targeting a release branch, which
   # is exactly when the checks matter most.
   pull_request:
+  # The full eval (golden-set replays, the workerd lock) is manual only; see eval-full below.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +16,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The default suite runs in about 2 minutes locally on two workers (the long golden-set eval replays are opt-in, see
+    # eval-full below); with them it took 9 minutes and the old 10-minute limit cancelled a run. 15 leaves headroom for a
+    # slower runner plus install, coverage, typecheck and the two bundle checks.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
@@ -48,6 +53,25 @@ jobs:
       - name: Post coverage comment on PR
         if: github.event_name == 'pull_request'
         uses: davelosert/vitest-coverage-report-action@v2
+
+  # The full eval replays the golden set (1,751 queries on core-1k) in sqlite and on workerd (wrangler's local miniflare, the
+  # only source of a real rows_read), and takes well over an hour on a runner. It does not run on pull requests: the default
+  # suite above carries only a fast synthetic smoke check of the harness (test/eval/smoke.test.ts). Run it here by hand
+  # (Actions > CI > Run workflow), or locally with `npm run test:eval:full`, before merging any ranking change.
+  # Everything is local: getPlatformProxy boots a workerd in the runner, with no Cloudflare account, no secrets, and no remote
+  # binding. The public-corpora download test (about 1 GB and dataset licenses) is deliberately NOT part of it.
+  eval-full:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - run: npm run test:eval:full
 
   # The desktop app is Rust, and nothing above compiles it — the suite, the
   # wrangler dry-run and the worker bundle are all JavaScript. Without this job

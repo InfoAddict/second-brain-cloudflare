@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanTemp } from "../helpers/tmp";
+
+afterEach(cleanTemp);
 
 // The real scripts, not mirrors. The previous version of this file re-implemented
 // the helpers inside the test and passed for the entire life of bug #327.

@@ -8,10 +8,9 @@
  * full recallEntries path against the sqlite-d1 facade — d1-mock branches on
  * query strings and ignores bindings, which is exactly what scoping lives in.
  *
- * The dense arm is forced down (VECTORIZE.query rejects) so the keyword arm's
- * SQL is the whole candidate source, and the facade's `issued` array pins the
- * byte-for-byte contract: absent an Identity, every statement is exactly what
- * it was before v3.
+ * Most cases force the dense arm down so the keyword arm's SQL is the whole
+ * candidate source. The dense-arm matrix exercises the leak-catcher directly.
+ * The facade's `issued` array pins the byte-for-byte unscoped SQL contract.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { recallEntries } from "../../src/recall/search";
@@ -89,6 +88,38 @@ describe("recallEntries with an Identity", () => {
     expect(ids).not.toContain("foreign");
   });
 
+  it.each([
+    ["member", "member", undefined, undefined, ["own", "co", "co-2"]],
+    ["admin including legacy", "admin", undefined, undefined, ["own", "co", "co-2", "legacy"]],
+    ["personal layer", "member", "personal", undefined, ["own"]],
+    ["company layer", "member", "company", undefined, ["co", "co-2"]],
+    ["named team", "member", undefined, "ws-co", ["co"]],
+  ] as const)("rejects unreadable dense ids for %s", async (_name, role, workspaceFilter, teamId, expected) => {
+    for (const [id, workspace] of [
+      ["own", "ws-a"], ["co", "ws-co"], ["co-2", "ws-co-2"],
+      ["legacy", ""], ["foreign", "ws-b"],
+    ] as const) seedIn(sqlite, id, workspace, `dense result ${id}`);
+    const denseIds = ["own", "co", "co-2", "legacy", "foreign"];
+    const query = vi.fn().mockResolvedValue({
+      matches: denseIds.map((id, i) => ({ id, score: 0.95 - i * 0.01, metadata: { parentId: id } })),
+    });
+    const denseEnv = recallEnv(sqlite, { query });
+    const identity: Identity = {
+      ...memberOf("ws-a"), role, companyWorkspaceIds: ["ws-co", "ws-co-2"],
+    };
+    const diagnostics: NonNullable<RecallInternalOptions["diagnostics"]> = {};
+    const { ctx } = makeCtx();
+
+    const result = await recallEntries(
+      { query: "alpha", topK: 10, synthesize: false }, denseEnv, ctx, undefined,
+      { identity, workspaceFilter, teamId, diagnostics },
+    );
+
+    expect(query).toHaveBeenCalled();
+    expect(diagnostics.denseIds).toContain("foreign");
+    expect(result.matches.map(match => match.id).sort()).toEqual([...expected].sort());
+  });
+
   it("keeps unreadable rows out of a multi-keyword candidate window without date bounds", async () => {
     seedIn(sqlite, "own-answer", "ws-a", "alpha beta decision", 1000);
     for (let i = 0; i < 4; i++) {
@@ -113,7 +144,7 @@ describe("recallEntries with an Identity", () => {
     expect(diagnostics.keywordIds!.some(id => id.startsWith("foreign-"))).toBe(false);
     const keywordSql = sqlite.issued.find(s => s.includes("ORDER BY created_at DESC LIMIT"));
     expect(keywordSql).toContain(
-      "WHERE (content LIKE ? OR content LIKE ?) AND workspace_id IN (?, ?)",
+      "WHERE (content LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') AND workspace_id IN (?, ?)",
     );
   });
 
@@ -122,12 +153,13 @@ describe("recallEntries with an Identity", () => {
     const { ctx } = makeCtx();
     const keywordSql = () => sqlite.issued.find(s => s.includes("ORDER BY created_at DESC LIMIT"));
 
-    // Absent identity: the pre-tenancy string, verbatim. (The hydration
+    // Absent identity: the unscoped statement. (The hydration
     // projection now carries workspace_id so matches can report their layer —
     // what must never appear unscoped is the workspace_id *clause*.)
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx);
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?`,
+    // The keyword arm returns match levels, not text (src/recall/keyword-rows.ts): its candidate SELECT is the CTE's body.
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`,
     );
     expect(sqlite.issued.some(s => s.includes("FROM entries") && s.includes("workspace_id IN"))).toBe(false);
 
@@ -135,14 +167,14 @@ describe("recallEntries with an Identity", () => {
     sqlite.issued.length = 0;
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a") });
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? AND workspace_id IN (?, ?) ORDER BY created_at DESC LIMIT ?`,
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?, ?) ORDER BY created_at DESC LIMIT ?`,
     );
     // Both hydration steps carry the clause too — the candidate-signal read is
     // the leak-catcher for unscoped vectorize hits until namespaces land (P3).
     const hydrations = sqlite.issued.filter(s => s.includes("FROM entries WHERE id IN"));
     expect(hydrations.length).toBeGreaterThan(0);
-    for (const sql of hydrations) expect(sql).toContain("AND workspace_id IN (?, ?)");
+    for (const sql of hydrations) expect(sql).toContain("AND +(workspace_id IN (?, ?))");
     // The recall_count bump stays by-id: those ids came from already-scoped rows.
     expect(sqlite.issued.some(s => s.includes("UPDATE entries SET recall_count") && s.includes("workspace_id")))
       .toBe(false);
@@ -186,16 +218,16 @@ describe("recallEntries with an Identity", () => {
     // Layer filter: only the personal workspace is bound.
     await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a"), workspaceFilter: "personal" });
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? AND workspace_id IN (?) ORDER BY created_at DESC LIMIT ?`,
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id IN (?) ORDER BY created_at DESC LIMIT ?`,
     );
 
     // Team filter: exactly one workspace id, and the result set is that team's row.
     sqlite.issued.length = 0;
     const res = await recallEntries({ query: "alpha", topK: 10, synthesize: false }, env, ctx, undefined,
       { identity: memberOf("ws-a"), teamId: "ws-co" });
-    expect(keywordSql()).toBe(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE content LIKE ? AND workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
+    expect(keywordSql()).toContain(
+      `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE content LIKE ? ESCAPE '\\' AND workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
     );
     expect(res.matches.map(m => m.id)).toEqual(["co"]);
   });

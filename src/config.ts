@@ -36,6 +36,13 @@ export const DEFAULTS = {
   KEYWORD_CANDIDATE_LIMIT: 500,
   SUBSTRING_MATCH_WEIGHT: 0.25,
 
+  // ── Cross-encoder reranker (src/recall/model-reranker.ts) ──
+  // "off" never calls the model; "on" reranks every eligible recall; "auto"
+  // reranks only when the top two heuristic scores are close. Any mode also
+  // needs the readiness latch the model probe writes, so an unverified model
+  // never runs. A model failure always falls back to the un-reranked order.
+  RERANK_MODE: "auto",
+
   // ── Graph expansion (src/graph/traverse.ts) ──
   // Hard cap on traversal depth. Deliberately not surfaced as a user control
   // (#246) — it bounds fanout, it is not a preference.
@@ -190,6 +197,8 @@ export const RULES: Record<ConfigKey, Rule> = {
   TAG_BOOST_MAX: { kind: "number", min: 1, max: 5 },
   CONTRADICTION_IMPORTANCE_STEP: { kind: "number", min: 0, max: 5 },
 
+  RERANK_MODE: { kind: "string" },
+
   LLM_MODEL: { kind: "string" },
   EMBEDDING_MODEL: { kind: "string" },
   INSIGHT_LLM_MODEL: { kind: "string" },
@@ -216,6 +225,10 @@ function isValidTimeZone(value: string): boolean {
     return false;
   }
 }
+
+export const RERANK_MODES = ["off", "on", "auto"] as const;
+export type RerankMode = (typeof RERANK_MODES)[number];
+export const isRerankMode = (value: unknown): value is RerankMode => (RERANK_MODES as readonly unknown[]).includes(value);
 
 /** RFC 8292 section 2's two accepted VAPID `sub` shapes. */
 function isValidPushContact(value: string): boolean {
@@ -260,6 +273,10 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
         return { value: fallback, note: `${key}: expected empty, a mailto:<address>, or an https:// URL, got ${JSON.stringify(value)}` };
       }
       return { value: value as Config[ConfigKey] };
+    }
+    // A closed enum: an unknown stored value reads as "off" (never the model), not as the default.
+    if (key === "RERANK_MODE" && !isRerankMode(value)) {
+      return { value: "off" as Config[ConfigKey], note: `${key}: expected off, on or auto, got ${JSON.stringify(value)}; reranking stays off` };
     }
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };
@@ -371,6 +388,7 @@ function validateStrict(key: string, value: unknown): string | null {
         ? null
         : `${key} must be empty, a mailto:<address>, or an https:// URL`;
     }
+    if (key === "RERANK_MODE") return isRerankMode(value) ? null : `${key} must be one of ${RERANK_MODES.join(", ")}`;
     if (typeof value !== "string" || value.trim() === "") return `${key} must be a non-empty string`;
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;

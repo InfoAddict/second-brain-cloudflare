@@ -4,6 +4,10 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
+    // 5 s (the default) is too tight for tests that boot a sqlite-backed corpus or the eval CLI on a CI runner under coverage:
+    // two of them timed out there at 5 s though each takes about a second locally.
+    testTimeout: 30_000,
+    globalSetup: ["./vitest.global-setup.ts"],
     setupFiles: ["./vitest.setup.ts"],
     // .worktrees/ is where this repo's .gitignore expects git worktrees to live.
     // Without this, a checkout with any worktree present runs the whole suite once

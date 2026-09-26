@@ -54,6 +54,8 @@ export interface RecallDiagnostics {
   finalIds?: string[];
   rejections?: { id: string; reason: string }[];
   operations?: RecallOperationDiagnostics;
+  /** Observation anomalies, e.g. a first() statement that returned more than one row. Absent when there are none. */
+  warnings?: string[];
   stageMs?: Partial<Record<RecallStage, number>>;
   /** #326 visibility: how many tokens reached keywordSearch, and whether it was skipped for want of any. */
   retrievalTokenCount?: number;
@@ -63,10 +65,18 @@ export interface RecallDiagnostics {
   /** Whether the FTS5 path served the keyword rows (false = LIKE, including any degrade-on-error). */
   ftsUsed?: boolean;
   /** Why the keyword arm served FTS or LIKE on the last recall; memberFirst recalls never reach keywordSearch. */
-  ftsRoute?: "fts" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first";
+  ftsRoute?: "fts" | "fts-bounded" | "like-not-ready" | "like-ineligible-token" | "like-match-budget" | "like-error" | "like-member-first" | "skipped-by-variant";
   /** T-0059: how df/total were obtained on the last recall's term distillation. */
   distillSource?: "fts" | "like" | "shortcut";
+  /** What the cross-encoder step did on the last recall; "applied" means one model call reordered the candidates. */
+  rerankRoute?: RerankRoute;
+  /** Set when single-term keyword evidence was withheld: the term is too common (df over the saturation fraction, or the keyword window filled) or the corpus size was unavailable. */
+  rerankEvidence?: "suppressed-saturated" | "suppressed-no-total";
+  /** Wall time of the model call, when one was made. */
+  rerankMs?: number;
 }
+
+export type RerankRoute = "off" | "not-ready" | "too-few" | "exact-id" | "clear-leader" | "attempted" | "applied" | "error" | "timeout";
 
 export type RecallStage = "setup" | "querySignals" | "candidateGeneration" | "candidateHydration"
   | "graphExpansion" | "finalHydration" | "selection" | "synthesis" | "total";
@@ -81,6 +91,22 @@ export interface RecallOperationDiagnostics {
   d1RowsWritten: number | null;
   kvReads: number;
   kvWrites: number;
+}
+
+/** Eval-only switches. Future variants add optional fields here; absent means default recall. */
+export interface RecallVariantFlags {
+  /** Tag and project recalls use both arms regardless of this ablation. */
+  arms?: "both" | "dense-only" | "keyword-only";
+  /** true forces the reranker on for the run (still subject to tenancy and the exact-identifier skip); no route sets it. */
+  rerank?: boolean;
+  /** Eval-only overrides of the reranker's blend weight, batch size and excerpt length; absent means the shipped values. */
+  rerankTuning?: RerankTuning;
+}
+
+export interface RerankTuning {
+  weight?: number; floor?: number; maxCandidates?: number; excerptChars?: number;
+  /** Eval-only: how long one reranker call may take before recall falls back. `prepare`'s record pass raises it because local CPU inference can exceed the production budget; replay and gate runs never set it. */
+  timeoutMs?: number;
 }
 
 export interface RecallInternalOptions {
@@ -107,14 +133,21 @@ export interface RecallInternalOptions {
    * Task 3's candidate-selection change (FTS-ready but bm25 order disabled).
    */
   keywordPreRankedOverride?: boolean;
+  /** Eval-only experiment switches; no route or MCP tool sets these. */
+  variant?: RecallVariantFlags;
 }
 
 export interface KeywordRow {
   id: string;
-  content: string;
+  /** The note's text. Absent on rows the keyword arm reads: it returns `hits` instead and never the text (see keyword-rows.ts). */
+  content?: string;
   tags: string;
   source: string;
   created_at: number;
+  /** Per query term, how the note holds it: 0 not at all, 1 only inside longer words, 2 as a word of its own. */
+  hits?: ReadonlyMap<string, 0 | 1 | 2>;
+  /** The note holds U+212A or U+0130, which lowercase turns into ASCII: its `hits` are settled from the text (keyword-rows.ts). */
+  odd?: boolean;
 }
 
 export type { VectorizeMatch } from "./math";

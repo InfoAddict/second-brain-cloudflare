@@ -30,6 +30,9 @@ import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { makeAIMock, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import type { Env } from "../../src/env";
+import { cleanTemp } from "../helpers/tmp";
+
+afterAll(cleanTemp);
 
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as unknown as ExecutionContext;
 

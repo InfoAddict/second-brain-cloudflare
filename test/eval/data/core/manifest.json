@@ -1,0 +1,230 @@
+{
+  "corpus": "core",
+  "persona": "Avery Lindqvist (fictional)",
+  "authoredBy": "Claude Sonnet 5 (claude-sonnet-5), 2026-09-23",
+  "files": {
+    "needles.jsonl": "ad7fd55c2bc3069b957160def1b320e0908e28190b9612dc048706627221c1cd",
+    "edges.jsonl": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f",
+    "queries.jsonl": "d16c392f67b735d9a700afc61bc42859e69106d4b0ae32c3fa5aab4163082225",
+    "haystack.jsonl": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc"
+  },
+  "counts": {
+    "needles": 1735,
+    "queries": 1751,
+    "needlesByPurpose": {
+      "identifier": 179,
+      "rare-word": 156,
+      "common-word": 140,
+      "short-word": 100,
+      "paraphrase": 440,
+      "cjk": 110,
+      "multi-hop": 300,
+      "long-context": 310,
+      "agent-framed": 0
+    },
+    "byCategory": {
+      "identifier": 214,
+      "rare-word": 201,
+      "common-word": 140,
+      "short-word": 100,
+      "paraphrase": 440,
+      "cjk": 130,
+      "multi-hop": 150,
+      "long-context": 310,
+      "agent-framed": 66
+    },
+    "clustersByCategory": {
+      "identifier": 150,
+      "rare-word": 132,
+      "common-word": 85,
+      "short-word": 100,
+      "paraphrase": 440,
+      "cjk": 110,
+      "multi-hop": 150,
+      "long-context": 310,
+      "agent-framed": 66
+    }
+  },
+  "history": [
+    {
+      "date": "2026-09-23T22:45:26.349Z",
+      "reason": "genesis",
+      "files": {
+        "needles.jsonl": {
+          "old": "",
+          "new": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af"
+        },
+        "edges.jsonl": {
+          "old": "",
+          "new": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec"
+        },
+        "queries.jsonl": {
+          "old": "",
+          "new": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193"
+        }
+      }
+    },
+    {
+      "date": "2026-09-24T08:43:27.767Z",
+      "reason": "retire gap:T-0072: underscore identifiers are fixed by 9b2016c",
+      "files": {
+        "queries.jsonl": {
+          "old": "3a2213408efb931a254196e209b3538b9b3877c40ecc8ecf901358f9c14d8193",
+          "new": "1b44f8385717e98b74c3e649d2c77137605eecb6dbfb8748fa9126499abb3637"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 338,
+        "recall5": 0.75,
+        "recall10": 0.7825443786982249,
+        "mrr10": 0.770733539964309,
+        "ndcg10": 0.723336649147895,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-24T10:09:29.996Z",
+      "reason": "T-0073/T-0074 fixed by the router: the 20 fixed queries untagged (known-gap, gap:T-0073, gap:T-0074 removed), ten q-budget queries tagged over-budget, and the correlated AND-tier guard (n-corr-001, q-corr-001, correlated haystack rows at 5k/20k) added",
+      "files": {
+        "needles.jsonl": {
+          "old": "fc233f6b44b4220d2d32708f1befec135ae200649bd4f24168bfeab4926851af",
+          "new": "3251d63fcf7dedcdba18dee7ac502e80d7d4bbc26afc48e0253f0167666b431c"
+        },
+        "queries.jsonl": {
+          "old": "1b44f8385717e98b74c3e649d2c77137605eecb6dbfb8748fa9126499abb3637",
+          "new": "19f902175b345247607822824be61ecb6cae38ef842768cf8d22cedae4b6e964"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 339,
+        "recall5": 0.7507374631268436,
+        "recall10": 0.7831858407079646,
+        "mrr10": 0.7678278784473472,
+        "ndcg10": 0.7214541871917717,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-24T16:04:26.567Z",
+      "reason": "correlated AND-tier guard (n-corr-001/q-corr-001), six subset OR-tier guards (n-sub-001..006/q-sub-001..006) with over-budget/subset tags, corpus rows inserted oldest-first so rowids follow time, T-0073/T-0074 queries untagged",
+      "files": {
+        "needles.jsonl": {
+          "old": "3251d63fcf7dedcdba18dee7ac502e80d7d4bbc26afc48e0253f0167666b431c",
+          "new": "8f47b5c5c05d06a6e5de0e13ee6ea3aad2fff8e43d95560e62a1882e1f65ee62"
+        },
+        "queries.jsonl": {
+          "old": "19f902175b345247607822824be61ecb6cae38ef842768cf8d22cedae4b6e964",
+          "new": "6c32e122a8afb0f715dde49d47d6792268c34e27fbb50e26ec2da039c2d52385"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 345,
+        "recall5": 0.7492753623188406,
+        "recall10": 0.7768115942028986,
+        "mrr10": 0.7571612606395214,
+        "ndcg10": 0.712665873623376,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-24T21:51:47.904Z",
+      "reason": "expanded golden set (T-0043.6)",
+      "files": {
+        "needles.jsonl": {
+          "old": "8f47b5c5c05d06a6e5de0e13ee6ea3aad2fff8e43d95560e62a1882e1f65ee62",
+          "new": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c"
+        },
+        "edges.jsonl": {
+          "old": "72f5cac212dd731017910a0f7da7927eed7881b73e931441a8878dbfdf6e7cec",
+          "new": "1dbcc45e19b7c2f0b677c9449ac7ff53cae3d033d0f8515c0bcf0c642d7b933f"
+        },
+        "queries.jsonl": {
+          "old": "6c32e122a8afb0f715dde49d47d6792268c34e27fbb50e26ec2da039c2d52385",
+          "new": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5"
+        },
+        "haystack.jsonl": {
+          "old": "",
+          "new": "a0d5b69cacd7de8694315912cdce2c88a5564ea6d04f5468fc89a1bb298b1adc"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 1683,
+        "recall5": 0.49554367201426025,
+        "recall10": 0.5353535353535354,
+        "mrr10": 0.4922330211545894,
+        "ndcg10": 0.45076027132811625,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-25T05:09:19.602Z",
+      "reason": "Add the agent-framed category (64 queries over existing needles): named (a rare word or identifier framed the way agents ask) and paraphrased subjects. Authored blind, from needle text only; no retrieval was run before they were written.",
+      "files": {
+        "queries.jsonl": {
+          "old": "bc28e86b9595a6c45dcaddb6ac6f8de0b9df9ef8a808a233f6d03bf5a08f25a5",
+          "new": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 1747,
+        "recall5": 0.4911276473955352,
+        "recall10": 0.5306239267315398,
+        "mrr10": 0.485033299715612,
+        "ndcg10": 0.44604545460719275,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    },
+    {
+      "date": "2026-09-25T12:45:57.005Z",
+      "reason": "Add the deep-evidence guard: two 19-23 KB notes whose only lexical evidence (a coined rare word) sits at about 9.9 KB and 14.9 KB, with their bare rare-word queries (generated) and two agent-framed named queries. It guards a cap on the keyword rows' text. No other data changed.",
+      "files": {
+        "needles.jsonl": {
+          "old": "195425ff7f912c4ff4d7f326777075a6d74958647e34b441f6285a12d8430c6c",
+          "new": "ad7fd55c2bc3069b957160def1b320e0908e28190b9612dc048706627221c1cd"
+        },
+        "queries.jsonl": {
+          "old": "e836d5be0e56bda353d4c3c4c377ea0d484f36fffa45b23596f74c3df3966e74",
+          "new": "d16c392f67b735d9a700afc61bc42859e69106d4b0ae32c3fa5aab4163082225"
+        }
+      },
+      "baseline": {
+        "variant": "baseline",
+        "corpus": "core-1k",
+        "embeddingModel": "@cf/baai/bge-small-en-v1.5",
+        "queries": 1751,
+        "recall5": 0.5051399200456882,
+        "recall10": 0.5376927470017133,
+        "mrr10": 0.5317213293084222,
+        "ndcg10": 0.48342242702441685,
+        "errors": 0,
+        "degraded": 0,
+        "leaks": 0
+      }
+    }
+  ]
+}

@@ -26,6 +26,10 @@ import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import type { Env } from "../../src/env";
+import { RECALL_SEED_TOPK, graphSeedLimit } from "../../src/recall/neighborhood";
+
+// The dense arm's graph seats: fixed by RECALL_SEED_TOPK, not by the topK a caller asks for.
+const RECALL_GRAPH_SEEDS = graphSeedLimit(RECALL_SEED_TOPK, 1_000);
 
 // Measured against the Workers runtime for this issue: 119 words recalled, 120
 // (100 tokens) returned a 500, and depth was the limit that bound first.
@@ -85,6 +89,9 @@ const exprDepth = (sql: string) => sql.split(/\s+OR\s+/i).length + 1;
 const keywordStatements = (executed: Executed[]) =>
   executed.filter(e => /FROM entries WHERE \(?content LIKE/.test(e.sql));
 
+const edgeScanStatements = (executed: Executed[]) =>
+  executed.filter(e => /FROM edges WHERE/.test(e.sql));
+
 const hydrationStatements = (executed: Executed[]) =>
   executed.filter(e => e.sql.includes("created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN"));
 
@@ -131,7 +138,9 @@ describe("recall stays inside D1's statement limits", () => {
       expect(frequency?.sql).toContain("WHERE created_at >= ? AND created_at < ?");
       expect(keyword.sql).toContain("AND created_at >= ? AND created_at < ?");
       expect(frequency?.params.slice(-2)).toEqual([day, day + 86400000]);
-      expect(keyword.params.slice(-3, -1)).toEqual([day, day + 86400000]);
+      // the limit is followed by the terms the statement scores (bound once each)
+      const terms = (keyword.sql.match(/ AS p\d+/g) ?? []).length;
+      expect(keyword.params.slice(-3 - terms, -1 - terms)).toEqual([day, day + 86400000]);
     });
 
     it("answers a 120-word query with no memories stored", async () => {
@@ -190,8 +199,9 @@ describe("recall stays inside D1's statement limits", () => {
       // retrieval anchors use the remainder of the existing 16-token budget.
       // The final parameter remains the row limit; between them sit the three
       // workspace-scope bindings (personal, company, legacy '') that v3 adds
-      // whenever an Identity is in play — 16 + 3 + 1 = 20.
-      expect(keywordStatements(executed)[0].params.length).toBe(20);
+      // whenever an Identity is in play — 16 + 3 + 1 = 20 — and then the 16 terms the statement scores for the notes it
+      // selects, each bound once and referenced by number: 36, far under D1's 100.
+      expect(keywordStatements(executed)[0].params.length).toBe(36);
 
       executed.length = 0;
       const short = await worker.fetch(req("GET", "/recall?query=topic0"), env, ctx);
@@ -203,8 +213,8 @@ describe("recall stays inside D1's statement limits", () => {
 
   describe("the hydration id list", () => {
     // Direct recall can exceed the public topK cap when recallEntries is called
-    // internally, while graph-aware recall can hydrate 50 candidate roots plus
-    // 50 expanded nodes. Both paths must leave room for shared filter bindings.
+    // internally, while graph-aware recall hydrates at most RECALL_GRAPH_SEEDS candidate
+    // roots plus 50 expanded nodes. Both paths must leave room for shared filter bindings.
     const N = 150;
     const ids = Array.from({ length: N }, (_, i) => `e${i}`);
 
@@ -269,16 +279,20 @@ describe("recall stays inside D1's statement limits", () => {
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
 
-    it("chunks the maximum graph-root plus expanded-node union with tag and time filters", async () => {
-      const roots = Array.from({ length: 50 }, (_, i) => `root-${i}`);
-      const neighbors = Array.from({ length: 50 }, (_, i) => `neighbor-${i}`);
+    it("keeps the largest graph-root plus expanded-node union inside one statement's budget, with tag and time filters", async () => {
+      // Graph seeds are capped at RECALL_GRAPH_SEEDS whatever topK is, so the union is at most
+      // the direct matches, that many roots and 50 expanded nodes: under one statement's budget.
+      const roots = Array.from({ length: RECALL_GRAPH_SEEDS + 5 }, (_, i) => `root-${i}`);
       for (const [i, id] of roots.entries()) {
         sqlite.seed({ id, content: `topic0 decision root ${i}`, createdAt: 1000 + i, tags: ["work"], vectorIds: [`v-${id}`] });
-        sqlite.seed({ id: neighbors[i], content: `linked evidence ${i}`, createdAt: 1000 + i, tags: ["work"] });
-        await sqlite.db.prepare(
-          `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(`edge-${i}`, id, neighbors[i], "decided", 1, "explicit", "{}", 1, 1).run();
+        for (const n of [0, 1, 2, 3]) {
+          const neighbor = `${id}-neighbor-${n}`;
+          sqlite.seed({ id: neighbor, content: `linked evidence ${i}`, createdAt: 1000 + i, tags: ["work"] });
+          await sqlite.db.prepare(
+            `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).bind(`edge-${id}-${n}`, id, neighbor, "decided", 1, "explicit", "{}", 1, 1).run();
+        }
       }
       const env = envWith(undefined, {
         VECTORIZE: makeVectorizeMock({
@@ -296,13 +310,45 @@ describe("recall stays inside D1's statement limits", () => {
         ctx,
       );
 
-      expect(matches).toHaveLength(20);
-      expect(new Set(matches.map(m => m.id)).size).toBe(20);
+      expect(matches.length).toBeGreaterThanOrEqual(RECALL_GRAPH_SEEDS);
+      expect(new Set(matches.map(m => m.id)).size).toBe(matches.length);
       const hydration = hydrationStatements(executed);
-      expect(hydration.map(h => h.params.length)).toEqual([100, 6]);
+      expect(hydration.length).toBeGreaterThan(0);
       expect(hydration.every(h => h.params.includes('%"work"%'))).toBe(true);
       expect(Math.max(...hydration.map(h => h.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
       expect(executed.length).toBeLessThanOrEqual(30);
+    });
+
+    // expandGraph's edge scan binds every seed TWICE (source_id IN (…) OR target_id
+    // IN (…)), and a scoped caller's workspace bindings come out of the same budget.
+    // A ceiling of 50 is only right for an identity-less caller: scoped, the batch is
+    // floor((100 - bindings) / 2), so a 50-seed hop split into two statements.
+    it("keeps a scoped hop's seeds inside one edge-scan statement", async () => {
+      const identity = {
+        userId: "u-1", role: "member" as const,
+        personalWorkspaceId: "ws-personal", companyWorkspaceIds: ["ws-company"], defaultShare: "" as const,
+      };
+      const ids = Array.from({ length: 60 }, (_, i) => `root-${i}`);
+      for (const [i, id] of ids.entries()) {
+        sqlite.seed({ id, content: `topic0 decision root ${i}`, createdAt: 1000 + i });
+        await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind("ws-personal", id).run();
+      }
+      const env = envWith(undefined, {
+        VECTORIZE: makeVectorizeMock({
+          query: vi.fn().mockResolvedValue({
+            matches: ids.map((id, i) => ({ id, score: 1 - i / 200, metadata: { parentId: id, created_at: 1000 + i } })),
+          }),
+        }),
+      });
+
+      executed.length = 0;
+      await recallEntries(
+        { query: "topic0", topK: 20, hops: 1, synthesize: false }, env, ctx, undefined, { identity },
+      );
+
+      const edges = edgeScanStatements(executed);
+      expect(edges).toHaveLength(1);
+      expect(Math.max(...edges.map(e => e.params.length))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
   });
 });

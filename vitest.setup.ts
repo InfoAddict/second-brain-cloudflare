@@ -1,4 +1,24 @@
-import { vi } from "vitest";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { afterAll, beforeAll, vi } from "vitest";
+
+// Each test file gets its own temp root under the run's (see vitest.global-setup.ts) and fails if it leaves
+// anything in it, after removing what it left so one leak cannot fill /tmp.
+const runRoot = process.env.SB_TEST_TMP_ROOT;
+let fileRoot: string | undefined;
+beforeAll(() => {
+  if (!runRoot) return;
+  fileRoot = mkdtempSync(join(runRoot, "f-"));
+  process.env.TMPDIR = fileRoot;
+});
+afterAll(() => {
+  if (!runRoot || !fileRoot) return;
+  process.env.TMPDIR = runRoot;
+  const left = readdirSync(fileRoot);
+  rmSync(fileRoot, { recursive: true, force: true });
+  if (left.length) throw new Error(`this file leaked ${left.length} temp entries (first: ${left.slice(0, 10).join(", ")}); remove what a test creates in afterEach/afterAll or a finally`);
+});
+
 
 vi.mock("agents/mcp", () => ({
   createMcpHandler: vi.fn().mockReturnValue(() => new Response("mcp")),

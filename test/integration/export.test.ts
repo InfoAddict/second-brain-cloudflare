@@ -35,8 +35,9 @@ describe("GET /export", () => {
     expect(data.version).toBe(3);
     expect(typeof data.exported_at).toBe("number");
     expect(data.entries).toHaveLength(150);
-    // newest first
-    expect(data.entries[0].id).toBe("e149");
+    // oldest first: a restore inserts in this order, and rowids should follow time
+    expect(data.entries[0].id).toBe("e0");
+    expect(data.entries[149].id).toBe("e149");
   });
 
   // updated_at is what a restore needs to put an entry back where it was: recall reads

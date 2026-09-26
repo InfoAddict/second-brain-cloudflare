@@ -2,16 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 import { inferQueryTags } from "../../src/recall/distill";
 import { makeTestEnv, makeTestDb } from "../helpers/make-env";
 
-function makeSseStream(response: string) {
-  return new ReadableStream({
-    start(c) {
-      c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(response)}}\n\n`));
-      c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
-      c.close();
-    },
-  });
-}
-
 describe("inferQueryTags", () => {
   it("returns hashtags extracted from the query without hitting the DB", async () => {
     const db = makeTestDb();
@@ -20,7 +10,7 @@ describe("inferQueryTags", () => {
     const env = makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai });
     const tags = await inferQueryTags("what did I decide about #work today?", env);
     expect(tags).toEqual(["work"]);
-    // Early return — no DB or LLM call
+    // Early return — no DB or AI call
     expect(dbPrepareSpy).not.toHaveBeenCalled();
     expect(aiRun).not.toHaveBeenCalled();
   });
@@ -34,42 +24,24 @@ describe("inferQueryTags", () => {
     expect(tags).toEqual(expect.arrayContaining(["work", "legal"]));
   });
 
-  it("does not call the LLM when keyword matches are found", async () => {
+  it("does not call AI when keyword matches are found", async () => {
     const db = makeTestDb();
     db.entries.push({ id: "e1", content: "Note", tags: '["work"]', source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 });
-    const aiRun = vi.fn().mockResolvedValue(makeSseStream("work"));
+    const aiRun = vi.fn();
     const env = makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai });
     const tags = await inferQueryTags("work meeting notes", env);
     expect(tags).toContain("work");
     expect(aiRun).not.toHaveBeenCalled();
   });
 
-  it("calls the LLM and intersects with known tags when cheap inference finds nothing", async () => {
+  it("returns no inferred tags and makes no AI call when no known tag appears", async () => {
     const db = makeTestDb();
     db.entries.push({ id: "e1", content: "Note", tags: '["work","personal"]', source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 });
-    const aiRun = vi.fn().mockResolvedValue(makeSseStream("work, personal"));
+    const aiRun = vi.fn();
     const env = makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai });
     const tags = await inferQueryTags("quarterly planning session", env);
-    expect(tags).toHaveLength(2);
-    expect(tags).toEqual(expect.arrayContaining(["work", "personal"]));
-    expect(aiRun).toHaveBeenCalledTimes(1);
-  });
-
-  it("filters out unknown tags returned by the LLM (intersects with known set)", async () => {
-    const db = makeTestDb();
-    db.entries.push({ id: "e1", content: "Note", tags: '["work"]', source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 });
-    const aiRun = vi.fn().mockResolvedValue(makeSseStream("work, invented-tag, random"));
-    const env = makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai });
-    const tags = await inferQueryTags("quarterly planning session", env);
-    expect(tags).toEqual(["work"]);
-  });
-
-  it("returns empty array when the LLM throws — never propagates error", async () => {
-    const db = makeTestDb();
-    db.entries.push({ id: "e1", content: "Note", tags: '["work"]', source: "api", created_at: 1000, vector_ids: "[]", recall_count: 0, importance_score: 0 });
-    const aiRun = vi.fn().mockRejectedValue(new Error("AI unavailable"));
-    const env = makeTestEnv(db, { AI: { run: aiRun } as unknown as Ai });
-    await expect(inferQueryTags("quarterly planning session", env)).resolves.toEqual([]);
+    expect(tags).toEqual([]);
+    expect(aiRun).not.toHaveBeenCalled();
   });
 
   it("returns empty array when DB has no entries (no vocabulary to match against)", async () => {

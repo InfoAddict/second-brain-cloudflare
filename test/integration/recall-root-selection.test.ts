@@ -236,7 +236,9 @@ describe("recall root selection", () => {
     const prepare = db.prepare.bind(db);
     (db as any).prepare = (sql: string) => {
       if (sql.includes("AS total") && sql.includes("SUM(CASE WHEN content LIKE")) {
-        return { bind: () => ({ first: async () => ({ total: 100, d0: 90, d1: 15, d2: 80, d3: 85 }) }) };
+        const row = { total: 100, d0: 90, d1: 15, d2: 80, d3: 85 };
+        // The recall observer runs first() as all() to count rows_read, so the double answers both the same way.
+        return { bind: () => ({ first: async () => row, all: async () => ({ results: [row], meta: {} }) }) };
       }
       if (sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT")) {
         const row = db.entries.find(entry => entry.id === "anchor-root")!;

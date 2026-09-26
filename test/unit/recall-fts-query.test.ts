@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsMatchQuery, ftsReady, isFtsLive, isFtsLiveRows, resetFtsReadyMemo } from "../../src/recall/fts";
-import { FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
+import { FTS_LIVENESS_SQL, ftsCountSafeToken, ftsMatchQuery, ftsReady, ftsShortToken, isFtsLive, isFtsLiveRows, planFtsMatch, resetFtsReadyMemo } from "../../src/recall/fts";
+import { FTS_MATCH_BUDGET, KEYWORD_CANDIDATE_LIMIT, FTS_READY_CACHE_MS, FTS_READY_KV_KEY } from "../../src/constants";
 import { tokenizeQuery } from "../../src/text/tokenize";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv } from "../helpers/make-env";
@@ -41,6 +41,69 @@ describe("ftsMatchQuery", () => {
     expect(q).toBe(`"dashboard"`);
     expect(db.prepare(`SELECT rowid FROM probe WHERE probe MATCH ?`).get(q!)).toEqual({ rowid: 1 });
     db.close();
+  });
+});
+
+describe("ftsShortToken", () => {
+  it("is true only for a token the trigram floor excludes, counted in codepoints", () => {
+    for (const t of ["io", "k8", "東京", "a"]) expect(ftsShortToken(t), t).toBe(true);
+    for (const t of ["abc", "東京タ", "k8s"]) expect(ftsShortToken(t), t).toBe(false);
+  });
+  it("leaves a NUL token out: it stays on the LIKE path with the rest of the query", () => {
+    expect(ftsShortToken("a\u0000")).toBe(false);
+  });
+});
+
+describe("planFtsMatch", () => {
+  const LIMIT = KEYWORD_CANDIDATE_LIMIT;
+  const df = (o: Record<string, number>) => new Map(Object.entries(o));
+  it("is one OR over every token when df is unknown, partial, or within the budget", () => {
+    const all = { matches: ['"alpha" OR "beta"'], bounded: false, andTier: false };
+    expect(planFtsMatch(["alpha", "beta"], null, LIMIT)).toEqual(all);
+    expect(planFtsMatch(["alpha", "beta"], df({ alpha: 5 }), LIMIT)).toEqual(all);
+    expect(planFtsMatch(["alpha", "beta"], df({ alpha: FTS_MATCH_BUDGET - 1, beta: 1 }), LIMIT)).toEqual(all);
+  });
+  it("bounds an over-budget query: the AND of every token, then the rarest tokens that fit", () => {
+    const plan = planFtsMatch(["common", "mid", "rare"], df({ common: 3000, mid: 1500, rare: 400 }), LIMIT);
+    expect(plan).toEqual({ matches: ['"common" "mid" "rare"', '"rare" OR "mid"'], bounded: true, andTier: true });
+  });
+  it("stops at the first token that would cross the OR tier's budget rather than skipping to a smaller one", () => {
+    const plan = planFtsMatch(["a1b", "c2d", "e3f"], df({ a1b: 900, c2d: 1200, e3f: 1300 }), LIMIT);
+    expect(plan?.matches[1]).toBe('"a1b"');
+  });
+  it("fits tokens up to FTS_MATCH_BUDGET inclusive, and no further", () => {
+    const at = planFtsMatch(["aaa", "bbb"], df({ aaa: FTS_MATCH_BUDGET, bbb: 5000 }), LIMIT);
+    expect(at?.matches[1]).toBe('"aaa"');
+    const over = planFtsMatch(["aaa", "bbb"], df({ aaa: FTS_MATCH_BUDGET + 1, bbb: 5000 }), LIMIT);
+    expect(over?.matches).toEqual(['"aaa" "bbb"']);
+  });
+  it("keeps only the AND when no token fits alone, and has no plan for a lone over-budget token", () => {
+    expect(planFtsMatch(["widget", "gadget"], df({ widget: 2100, gadget: 2100 }), LIMIT)).toEqual({ matches: ['"widget" "gadget"'], bounded: true, andTier: true });
+    expect(planFtsMatch(["widget"], df({ widget: 2100 }), LIMIT)).toBeNull();
+  });
+  it("keeps a mid-df token in the OR tier: an answer carrying only it stays reachable", () => {
+    // 1200 is past a candidate-limit-sized budget but within FTS_MATCH_BUDGET
+    expect(planFtsMatch(["common", "mid"], df({ common: 5000, mid: 1200 }), LIMIT)?.matches).toEqual(['"common" "mid"', '"mid"']);
+  });
+  it("leaves the AND tier out when the OR tier returns all of its matches: the AND adds no candidate", () => {
+    const d = df({ common: 5000, rare: 100 });
+    expect(planFtsMatch(["common", "rare"], d, 500)).toEqual({ matches: ['"rare"'], bounded: true, andTier: false });
+    expect(planFtsMatch(["common", "rare"], d, 100)?.andTier).toBe(false);
+    expect(planFtsMatch(["common", "rare"], d, 99)).toEqual({ matches: ['"common" "rare"', '"rare"'], bounded: true, andTier: true });
+  });
+  it("keeps the AND tier when there is no OR tier to hold its rows", () => {
+    expect(planFtsMatch(["widget", "gadget"], df({ widget: 2100, gadget: 2100 }), 100_000)?.andTier).toBe(true);
+  });
+  it("has no AND tier for a single token, whose bounded plan is just the fitting OR", () => {
+    expect(planFtsMatch(["only"], df({ only: 10 }), LIMIT)).toEqual({ matches: ['"only"'], bounded: false, andTier: false });
+  });
+  it("drops what a token known to be absent makes pointless: the AND, and the token itself from the OR", () => {
+    expect(planFtsMatch(["widget", "zzzrare"], df({ widget: 2100, zzzrare: 0 }), LIMIT)).toBeNull();
+    expect(planFtsMatch(["widget", "gadget", "zzzrare"], df({ widget: 2100, gadget: 5, zzzrare: 0 }), LIMIT))
+      .toEqual({ matches: ['"gadget"'], bounded: true, andTier: false });
+  });
+  it("doubles internal quotes so user text cannot inject FTS syntax", () => {
+    expect(planFtsMatch(['a"b', "cde"], df({ 'a"b': 3000, cde: 10 }), 5)?.matches).toEqual(['"a""b" "cde"', '"cde"']);
   });
 });
 

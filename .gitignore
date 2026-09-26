@@ -49,3 +49,7 @@ devharness/
 *.db
 *.db-wal
 *.db-shm
+
+# Recall eval caches: replay caches for large corpora, workerd D1 state, the
+# bundled CLI. Local only; a private corpus's derived data must never be tracked.
+.eval-cache/

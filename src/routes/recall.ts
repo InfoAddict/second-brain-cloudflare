@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
-import { LLM_MODEL, SEMANTIC_UNAVAILABLE_DETAIL } from "../constants";
+import { RECALL_MAX_TOP_K, LLM_MODEL, SEMANTIC_UNAVAILABLE_DETAIL } from "../constants";
 import { buildEntryFilterQuery } from "../capture/entry";
 import { compressTag } from "../compression/digest";
 import { CORS_HEADERS, intParam, json, readWorkspaceParam, readTeamQueryParam } from "../lib/http";
@@ -119,7 +119,7 @@ export async function handleRecallRoutes(
     const query = url.searchParams.get("query")?.trim();
     if (!query) return json({ ok: false, error: "query is required" }, 400);
 
-    const topK = intParam(url, "topK", { fallback: 5, min: 1, max: 20 });
+    const topK = intParam(url, "topK", { fallback: 5, min: 1, max: RECALL_MAX_TOP_K });
     if (topK instanceof Response) return topK;
     const tag = url.searchParams.get("tag")?.trim() || undefined;
     const after = intParam(url, "after");

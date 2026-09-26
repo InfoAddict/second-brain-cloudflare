@@ -1,6 +1,21 @@
 export const LLM_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 /**
+ * Escape a literal value before placing it inside a SQL LIKE pattern.
+ * Pair the result with LIKE_ESCAPE: without it, backslashes are literal and
+ * the pattern matches nothing instead of too much.
+ */
+export function escapeLikeMeta(value: string): string {
+  return value.replace(/([%_\\])/g, "\\$1");
+}
+
+/**
+ * Pair with every LIKE pattern built using escapeLikeMeta. Without ESCAPE,
+ * backslashes are literal and the pattern matches nothing instead of too much.
+ */
+export const LIKE_ESCAPE = `ESCAPE '\\'`;
+
+/**
  * Model for `reasonOverPair` (src/insight/reason.ts) only — every other call
  * (classification, contradiction detection, smart merge, digests, recall
  * synthesis) keeps using `LLM_MODEL` above. Insight reasoning is a harder
@@ -47,6 +62,10 @@ export const CONTRADICTION_IMPORTANCE_STEP = 1.0;
 export const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 
 export const CHUNK_MAX_CHARS = 1600;
+// Vectorize's per-call ceiling for a Worker upsert.
+export const VECTORIZE_UPSERT_BATCH = 1000;
+// A write-path neighbor query asks for this many chunk hits and keeps the 5 best distinct notes: one long note can be several hits.
+export const WRITE_PATH_TOPK = 20;
 
 // Sources that mirror an external system rather than record a thought.
 //
@@ -122,6 +141,19 @@ export const SEMANTIC_UNAVAILABLE_DETAIL =
 export const VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY = "vectorize:workspace-filter-unsupported";
 
 export const VECTORIZE_TOP_K_MULTIPLIER = 3;
+// Dense candidate pool for every recall, whatever topK is asked for, so a larger
+// topK only extends the ranked list and never reorders its head. It is what a
+// default topK 5 call always used (3 x 5). A weak best match still widens the
+// dense query to 50.
+export const RECALL_POOL_SIZE = 15;
+// The deeper dense list a call draws on when the diversified one is shorter than its topK, and what a weak best
+// match widens to. 50 is the most Vectorize returns with values and metadata today (it was 20 until March 2026; this code
+// moved to the ceiling with T-0081).
+export const RECALL_DEEP_POOL_SIZE = 50;
+// Results are ordered by score within blocks of this many MMR picks.
+export const RECALL_BLOCK = 5;
+// The most results one recall call can ask for (MCP tool and GET /recall both cap topK here).
+export const RECALL_MAX_TOP_K = 20;
 // getByIds batch size for tag-scoped recall — Vectorize rejects more than 20 IDs
 // per call (VECTOR_GET_ERROR, code 40007)
 export const VECTORIZE_GET_BY_IDS_BATCH = 20;
@@ -168,6 +200,38 @@ export const FTS_MIN_TOKEN_LENGTH = 3;
 // Readiness cache lifetime. Bounds both the KV read rate and how long a warm
 // isolate keeps using FTS after the integrity check clears the flag.
 export const FTS_READY_CACHE_MS = 5 * 60 * 1000;
+// Cross-encoder reranker (src/recall/model-reranker.ts). The readiness latch is
+// written only by the model probe: "1" once the model answers in the documented
+// shape and ranks a known relevant passage first, "0" after a failed probe.
+export const RERANK_MODEL = "@cf/baai/bge-reranker-base";
+export const RERANK_READY_KV_KEY = "reranker:ready:bge-base-v1";
+// A ready verdict is re-proved after a week, a failed one retried after six hours.
+export const RERANK_READY_TTL_S = 7 * 24 * 3600;
+export const RERANK_NOT_READY_TTL_S = 6 * 3600;
+// Warm-isolate cache for the latch, both directions, like FTS_READY_CACHE_MS.
+export const RERANK_READY_CACHE_MS = 5 * 60 * 1000;
+// One batch: up to 25 direct parents plus up to 5 extra graph-root parents.
+export const RERANK_MAX_CANDIDATES = 30;
+export const RERANK_MAX_DIRECT = 25;
+export const RERANK_EXCERPT_CHARS = 400;
+export const RERANK_QUERY_MAX_CHARS = 256;
+// Unverified against Workers AI (no account here). The reranker sits on the recall critical path, and the rest of
+// a recall (embedding, D1, Vectorize) finishes well under a second, so a batch that has not answered in 1.5 s
+// costs more in waiting than a reordering is worth. The circuit breaker below stops paying that wait repeatedly.
+export const RERANK_TIMEOUT_MS = 1500;
+// Consecutive timeouts or errors in one isolate that latch the reranker off (for RERANK_NOT_READY_TTL_S).
+export const RERANK_BREAKER_FAILURES = 3;
+// The probe runs off the hot path and may hit a cold model, so it waits longer than a recall does.
+export const RERANK_PROBE_TIMEOUT_MS = 15000;
+// `auto` reranks only when the runner-up is within this fraction of the leader.
+export const RERANK_AMBIGUITY_MARGIN = 0.15;
+// A scored parent's heuristic score is scaled by max(floor, 1 + weight * (2p - 1)), p the model's rank percentile
+// (1 = best), so nothing is ever multiplied by zero. Only candidates the model saw are reordered: they stay above
+// every candidate it did not see (see blendRerankerScores). Weight and floor were chosen on core-1k from the grid
+// {0.5, 0.75, 1.0} x {0.25, 0.5} pre-registered in the blend commit.
+export const RERANK_BLEND_WEIGHT = 1.0;
+export const RERANK_BLEND_FLOOR = 0.25;
+
 // Rows spot-checked nightly for rowid-mapping drift; newest rows move first.
 export const FTS_INTEGRITY_SPOT_CHECK = 5;
 // Rotating content check: rowid window compared nightly (both directions)
@@ -176,11 +240,23 @@ export const FTS_CONTENT_CHECK_WINDOW = 200;
 // Above this many estimated matches, bm25 must score them all while LIKE
 // stops at KEYWORD_CANDIDATE_LIMIT recency-ordered hits, so LIKE is cheaper.
 export const FTS_MATCH_BUDGET = 2000;
+// Newest rows sampled to estimate a too-short token's df: the index cannot
+// count it and the exact LIKE count reads the whole partition.
+export const FTS_SHORT_TOKEN_SAMPLE = 200;
 export const FTS_CONTENT_CHECK_CURSOR_KV_KEY = "fts:content-check-cursor";
 export const KEYWORD_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "were", "be", "been",
   "i", "me", "my", "we", "you", "it", "this", "that", "these", "those", "with", "about", "from", "at", "as", "by",
   "do", "did", "does", "what", "when", "where", "who", "whom", "how", "why", "which",
+]);
+
+// The scaffolding an agent wraps around a subject ("User wants to X about Y — what should I know?", "tell me all about Y",
+// "what have we tried before", "remind me", "help me", "show me", "find"). It says how to ask, not what to find, and a
+// brain full of notes about sessions, users and requests holds these words in many rows. Kept out of the keyword terms
+// whenever the query has other terms, so a row that only echoes the scaffolding never outranks the one about the subject;
+// a query made only of them ("help", "user") still searches for them.
+export const QUERY_FRAME_WORDS = new Set([
+  "user", "wants", "want", "should", "know", "tried", "tell", "show", "find", "help", "remind", "recommended", "please", "have", "has", "had", "done",
 ]);
 
 // Function words for the scripts Intl.Segmenter splits without spaces (#326).

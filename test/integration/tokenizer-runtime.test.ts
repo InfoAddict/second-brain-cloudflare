@@ -10,6 +10,9 @@ import { Miniflare } from "miniflare";
 import { build } from "esbuild";
 import { resolve } from "node:path";
 import { tokenizeQuery } from "../../src/text/tokenize";
+import { cleanTemp } from "../helpers/tmp";
+
+afterAll(cleanTemp);
 
 const CASES = [
   "認証方式を変更した理由",

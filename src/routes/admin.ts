@@ -1,4 +1,5 @@
 import { hasCapsuleTag } from "../tags/system";
+import { deleteVectorIds } from "../vectorize/batch";
 import type { Env } from "../env";
 import { readOverrides, resetOverride, resolveConfig } from "../config";
 import { SB_VERSION } from "../env";
@@ -6,7 +7,7 @@ import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from
 import { intParam, json } from "../lib/http";
 import { D1_MAX_BOUND_PARAMS, VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY } from "../constants";
 import { requireAdmin, requireIdentity, type Identity } from "../lib/identity";
-import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere } from "../lib/scope";
+import { effectiveWriteTarget, layerOf, primaryCompanyWorkspaceId, readableWorkspaces, scopeWhere, scopeWhereForIdRead } from "../lib/scope";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
@@ -264,7 +265,7 @@ export async function handleAdminRoutes(
       });
       if (result.vectorIds.length) {
         try {
-          await env.VECTORIZE.deleteByIds(result.vectorIds);
+          await deleteVectorIds(env, result.vectorIds);
         } catch (e) {
           // The D1 rows and the audit row are already committed: the removal
           // succeeded. A failed index delete only leaves dead vectors behind,
@@ -1494,7 +1495,7 @@ export async function handleAdminRoutes(
 
     const placeholders = ids.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scope.clause}`,
+      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
     ).bind(...ids, ...scope.bindings).all();
     const found = results as Record<string, any>[];
 
@@ -1568,7 +1569,7 @@ export async function handleAdminRoutes(
 
     if (vectorsToDrop.length) {
       try {
-        await env.VECTORIZE.deleteByIds(vectorsToDrop);
+        await deleteVectorIds(env, vectorsToDrop);
       } catch (e) {
         // D1 already says deprecated and recall filters on that, so the entries
         // are out of recall either way; the index just keeps some dead vectors.

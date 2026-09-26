@@ -639,15 +639,32 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, vector_ids: e.vector_ids ?? "[]", content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("WHERE content LIKE") && s.includes("ORDER BY created_at DESC LIMIT")) {
-          // Keyword (hybrid recall) query: content LIKE ? OR content LIKE ? ... LIMIT ?
-          const limit = Number(args[args.length - 1]);
-          const patterns = args.slice(0, -1).map((a: any) => String(a).replace(/^%/, "").replace(/%$/, "").toLowerCase());
+        if (/WHERE \(?content LIKE/.test(s) && s.includes("ORDER BY created_at DESC LIMIT")) {
+          // Keyword (hybrid recall) query: content LIKE ? OR content LIKE ? ... LIMIT ?. The keyword arm asks for per-term match levels
+          // instead of the text (src/recall/keyword-rows.ts): the binds end with the lowercased terms (each once, referenced by number) after the limit.
+          const nTerms = (s.match(/ AS p\d+/g) ?? []).length;
+          const tail = nTerms;
+          const limit = Number(args[args.length - 1 - tail]);
+          const patterns = args.slice(0, args.length - 1 - tail).map((a: any) => String(a).replace(/^%/, "").replace(/%$/, "").toLowerCase());
+          const terms: string[] = args.slice(args.length - tail).map((a: any) => String(a));
+          const alone = (lc: string, at: number, len: number) => !/\w/.test(lc[at - 1] ?? "") && !/\w/.test(lc[at + len] ?? "");
+          const level = (lc: string, t: string): number => {
+            const first = lc.indexOf(t);
+            if (first < 0) return 0;
+            if (alone(lc, first, t.length)) return 2;
+            const second = lc.indexOf(t, first + 1);
+            return second >= 0 && alone(lc, second, t.length) ? 2 : 1;
+          };
           const rows = [...db.entries]
             .filter((e: any) => patterns.some((p: string) => String(e.content).toLowerCase().includes(p)))
             .sort((a: any, b: any) => b.created_at - a.created_at)
             .slice(0, limit)
-            .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
+            .map((e: any) => {
+              const lc = String(e.content).toLowerCase();
+              const row: Record<string, unknown> = { id: e.id, created_at: e.created_at, tags: e.tags, source: e.source };
+              terms.forEach((t, i) => { row[`l${i}`] = level(lc, t); });
+              return row;
+            });
           return { results: rows };
         }
         if (s.includes("FROM entries") && s.includes("id NOT IN (SELECT source_id FROM edges)")) {
@@ -993,8 +1010,8 @@ export class D1Mock {
             .map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results: rows };
         }
-        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries") && s.includes("ORDER BY created_at DESC") && !s.includes("WHERE id = ?")) {
-          // GET /export: the caller's readable set, newest first, no LIMIT. The
+        if (s.startsWith("SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries") && s.includes("ORDER BY created_at ASC") && !s.includes("WHERE id = ?")) {
+          // GET /export: the caller's readable set, oldest first, no LIMIT. The
           // route appends `WHERE workspace_id IN (?, ?)` (bound to args), so
           // rows outside those workspaces are withheld here too. `last_updated`
           // models the COALESCE, so a row that never had updated_at written
@@ -1002,7 +1019,7 @@ export class D1Mock {
           const workspaces: string[] = args.map((a: any) => String(a));
           const results = [...db.entries]
             .filter((e: any) => !workspaces.length || workspaces.includes(e.workspace_id ?? ""))
-            .sort((a: any, b: any) => b.created_at - a.created_at)
+            .sort((a: any, b: any) => a.created_at - b.created_at)
             .map((e: any) => ({
               id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at,
               last_updated: e.updated_at ?? e.created_at,
