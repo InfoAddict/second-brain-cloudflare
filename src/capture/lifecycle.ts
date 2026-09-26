@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { withStatus, type MemoryStatus } from "../memory/status";
+import { deleteVectorIds } from "../vectorize/batch";
 
 export type ForgetResult =
   | { status: "not_found" }
@@ -27,7 +28,7 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
 
   try {
     if (vectorIds.length) {
-      await env.VECTORIZE.deleteByIds(vectorIds);
+      await deleteVectorIds(env, vectorIds);
     }
   } catch (e) {
     console.error("Vectorize delete failed (non-fatal):", e);
@@ -67,7 +68,7 @@ export async function deprecateEntry(id: string, env: Env): Promise<boolean> {
     .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", id).run();
 
   try {
-    if (vectorIds.length) await env.VECTORIZE.deleteByIds(vectorIds);
+    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
   } catch (e) {
     console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
   }

@@ -113,6 +113,37 @@ jobs:
           printf '%s' "$RELEASE_NOTIFY_TOKEN" \
             | npx wrangler secret put RELEASE_NOTIFY_TOKEN --config wrangler.deploy.json
 
+      - name: Verify live Worker version
+        env:
+          SECOND_BRAIN_URL: ${{ secrets.SECOND_BRAIN_URL }}
+          SECOND_BRAIN_TOKEN: ${{ secrets.SECOND_BRAIN_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { setTimeout } from "node:timers/promises";
+
+          const expected = readFileSync("src/env.ts", "utf8").match(/SB_VERSION\s*=\s*"([^"]+)"/)?.[1];
+          const { SECOND_BRAIN_URL: baseUrl, SECOND_BRAIN_TOKEN: token } = process.env;
+          if (!expected || !baseUrl || !token) throw new Error("Missing live verification configuration");
+
+          for (let attempt = 1; attempt <= 5; attempt++) {
+            try {
+              const response = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, {
+                headers: { Authorization: `Bearer ${token}` },
+                signal: AbortSignal.timeout(10_000),
+              });
+              if (!response.ok) throw new Error(`Live health check returned HTTP ${response.status}`);
+              const { ok, version } = await response.json();
+              if (!ok || version !== expected) throw new Error(`Expected Worker v${expected}; received v${version}`);
+              console.log(`Live Worker verified: v${version}`);
+              break;
+            } catch (error) {
+              if (attempt === 5) throw error;
+              await setTimeout(3_000);
+            }
+          }
+          NODE
+
       - name: Email a manually resolved upstream release
         if: github.event_name == 'push'
         env:

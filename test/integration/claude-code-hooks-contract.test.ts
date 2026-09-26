@@ -19,6 +19,9 @@ import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import type { Env } from "../../src/env";
+import { cleanTemp } from "../helpers/tmp";
+
+afterAll(cleanTemp);
 
 const HOOKS = resolve(import.meta.dirname, "../../integrations/claude-code-hooks");
 const FIXTURE = join(HOOKS, "fixtures/sample-transcript.jsonl");

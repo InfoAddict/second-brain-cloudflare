@@ -511,7 +511,8 @@ async function importProjectsPage(
 }
 
 /**
- * One page of a restore. `offset`/`edgeOffset` are positions in the payload arrays,
+ * One page of a restore. `offset`/`edgeOffset` are positions in the payload arrays (entries in
+ * oldest-first order, see oldestFirst),
  * and a call examines exactly one page: entries[offset .. offset+limit), then — only
  * once the entries array is exhausted — edges[edgeOffset .. edgeOffset+limit).
  *
@@ -528,13 +529,32 @@ async function importProjectsPage(
  * ON CONFLICT upsert makes a re-inserted edge a weight merge rather than an error.
  * Projects page the same way once entries are done, and an existing project is kept.
  */
+/**
+ * Entries in insertion order for a restore: oldest created_at first, ties in file order, a missing
+ * created_at last (it is stamped with now) and an unusable one last too (parseEntryRow will fail it anyway). rowids then follow time on a restored brain,
+ * which the keyword AND tier's newest-first index scan relies on, whatever order the file is in
+ * (exports before that order was fixed are newest first). Pages are positions in this order, so a
+ * client must resend the same file for every page, which every client already does.
+ */
+function oldestFirst(entries: ExportEntry[]): ExportEntry[] {
+  // Mirrors parseCreatedAt: null and undefined are stamped with the current time (newest), and anything
+  // else that is not a finite number is rejected, so its position is moot; all of them sort last.
+  const at = (entry: ExportEntry) => {
+    const value = (entry as { created_at?: unknown } | null)?.created_at;
+    return typeof value === "number" && Number.isFinite(value) ? value : Infinity;
+  };
+  return entries.map((entry, order) => ({ entry, order, at: at(entry) }))
+    .sort((a, b) => a.at - b.at || a.order - b.order)
+    .map(({ entry }) => entry);
+}
+
 export async function importExportPayload(
   env: Env,
   body: ExportPayload,
   opts: ImportOptions = {},
 ): Promise<ImportSummary> {
   const limit = opts.limit ?? IMPORT_DEFAULT_LIMIT;
-  const entries = body.entries;
+  const entries = oldestFirst(body.entries);
   const edges = body.edges ?? [];
   const offset = Math.min(Math.max(opts.offset ?? 0, 0), entries.length);
   const edgeOffset = Math.min(Math.max(opts.edgeOffset ?? 0, 0), edges.length);

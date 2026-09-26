@@ -25,8 +25,9 @@
  *
  * Lives here rather than with any one caller because four modules across three concerns
  * need it, and it is the tag vocabulary's own business how a tag is encoded and matched.
- * Pure by the rules in src/ARCHITECTURE.md — it imports nothing.
+ * Pure by the rules in src/ARCHITECTURE.md — it imports only constants.
  */
+import { escapeLikeMeta } from "../constants";
 
 /**
  * The `tags LIKE` pattern that matches exactly the given tag.
@@ -36,8 +37,8 @@
  * direction, but still wrong, which is why the two are exported together.
  */
 export function tagLikePattern(tag: string): string {
-  return `%"${tag.replace(/([%_\\])/g, "\\$1")}"%`;
+  return `%"${escapeLikeMeta(tag)}"%`;
 }
 
 /** Goes immediately after any `LIKE ?` whose parameter came from tagLikePattern. */
-export const TAG_LIKE_ESCAPE = `ESCAPE '\\'`;
+export { LIKE_ESCAPE as TAG_LIKE_ESCAPE } from "../constants";

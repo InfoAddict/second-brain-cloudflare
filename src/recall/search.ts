@@ -1,32 +1,36 @@
 import type { Env } from "../env";
 import {
   D1_MAX_BOUND_PARAMS,
-  FTS_MATCH_BUDGET,
   KEYWORD_MAX_TOKENS,
+  QUERY_SATURATION_FRACTION,
   VECTORIZE_GET_BY_IDS_BATCH,
-  VECTORIZE_TOP_K_MULTIPLIER,
+  RECALL_BLOCK,
+  RECALL_DEEP_POOL_SIZE,
+  RECALL_POOL_SIZE,
   VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY,
 } from "../constants";
-import { resolveConfig, type Config } from "../config";
+import { isRerankMode, resolveConfig, type Config, type RerankMode } from "../config";
 import { embed } from "../lib/ai";
 import type { Identity } from "../lib/identity";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
-import { layerOf, scopeWhereForRead } from "../lib/scope";
+import { layerOf, scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { expandGraph } from "../graph/traverse";
 import type { GraphNeighbor } from "../graph/types";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { parseTimePhrase } from "../text/temporal";
-import { distillToRareTerms, inferQueryTags, type DistilledQuery, type TimeBounds } from "./distill";
+import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
+import { distillToRareTerms, inferQueryTags, scopedEntryTotal, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
 import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import { computeCompoundStale } from "./compound-stale";
-import { exactQueryMatchCount, graphSeedLimit, relatedSlotLimit, scoreLinkedEvidence } from "./neighborhood";
+import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLimit, lexicalSeedLimit, RECALL_SEED_TOPK, scoreLinkedEvidence } from "./neighborhood";
 import { queryCoverage } from "./neighborhood";
 import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from "./query-profile";
 import { localEvidenceOf } from "./root-candidate";
-import { selectGraphRoots, type RootCandidate } from "./root-selector";
+import { blendRerankerScores, rerankDirectCap, rerankStep } from "./model-reranker";
+import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
 import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
@@ -35,7 +39,27 @@ import { workspaceFilter, queryVectorizeScoped } from "../vectorize/scope";
 import { observeRecallEnv } from "./diagnostics";
 import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescue";
 import { queryRelevantWindow } from "./snippet";
-import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsMatchQuery, ftsReady, isFtsLiveRows } from "./fts";
+import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
+import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
+
+/**
+ * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
+ * a frequency is missing, every term fits, or even the rarest is too common to fit. The df sum over-counts rows that
+ * carry several terms, so the fitted group can never truncate. Same greedy as planFtsMatch's bounded plan.
+ */
+function splitLikeTerms(terms: string[], df: ReadonlyMap<string, number> | null | undefined, limit: number): { rare: string[]; rest: string[] } | null {
+  if (!df || !terms.every(t => df.has(t))) return null;
+  const dfOf = (t: string) => df.get(t) ?? 0;
+  if (terms.reduce((sum, t) => sum + dfOf(t), 0) <= limit) return null;
+  const rare: string[] = [];
+  let spent = 0;
+  for (const t of [...terms].sort((a, b) => dfOf(a) - dfOf(b))) {
+    if (spent + dfOf(t) > limit) break;
+    spent += dfOf(t);
+    rare.push(t);
+  }
+  return rare.length ? { rare, rest: terms.filter(t => !rare.includes(t)) } : null;
+}
 
 async function keywordSearchLike(
   tokens: string[],
@@ -45,6 +69,9 @@ async function keywordSearchLike(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
+  // Corpus df from distillation. With it, rows carrying the rarest terms are kept whole and recency fills the rest;
+  // without it the window is the newest rows matching any term, as before.
+  corpus?: Pick<DistilledQuery, "df" | "total">,
 ): Promise<KeywordRow[]> {
   if (!tokens.length) return [];
   // Capped here rather than at distillation's uncapped exits because this is
@@ -53,7 +80,6 @@ async function keywordSearchLike(
   // order is the only ordering available on those paths: they are exactly the
   // paths where the frequencies that would rank the terms are missing.
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
-  const where = terms.map(() => "content LIKE ?").join(" OR ");
   let timeWhere = "";
   const timeBindings: number[] = [];
   if (bounds.after !== undefined) {
@@ -68,25 +94,63 @@ async function keywordSearchLike(
   // plus strangers' rows truncated by the window.
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
-  // Keep the alternatives as one predicate whenever an AND filter follows.
-  // Without grouping, SQLite applies that filter only to the final LIKE term
-  // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
-  const tokenWhere = terms.length > 1 && (timeWhere || scopeSql) ? `(${where})` : where;
-  const { results } = await env.DB.prepare(
-    `SELECT id, content, tags, source, created_at FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql} ORDER BY created_at DESC LIMIT ?`
-  ).bind(...terms.map(t => `%${t}%`), ...timeBindings, ...(scope?.bindings ?? []), limit).all();
-  return results as unknown as KeywordRow[];
+  // `not` are terms whose rows are excluded (already read whole by an earlier window); `max` is the window's row cap.
+  // The rows come back without their text: each carries, for every term, how the note holds it (see keyword-rows.ts).
+  const windowFor = (subset: string[], max: number, not: string[] = []) => {
+    const where = subset.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ");
+    const exclude = not.length ? ` AND NOT (${not.map(() => `content LIKE ? ${CONTENT_LIKE_ESCAPE}`).join(" OR ")})` : "";
+    // Keep the alternatives as one predicate whenever an AND filter follows.
+    // Without grouping, SQLite applies that filter only to the final LIKE term
+    // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
+    const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
+    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
+    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`;
+    const levels = withMatchLevels(inner, ["id", "created_at", "tags", "source"], terms, "created_at DESC");
+    return env.DB.prepare(levels.sql)
+      .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max, ...levels.binds);
+  };
+  const split = splitLikeTerms(terms, corpus?.df, limit);
+  if (!split) return ((await windowFor(terms, limit).all()).results ?? []).map(r => rowWithLevels(r as Record<string, unknown>, terms));
+  // The window would truncate. A row matching only common words must not push out one matching the rarest: those rows
+  // are read whole (they fit the limit), then the newest rows for the remaining terms fill what is left. The rare rows
+  // number at most their df sum, so the second window asks for no more than the slots that leaves, and skips the rows
+  // the first already holds (they would only take those slots twice).
+  const spent = split.rare.reduce((sum, t) => sum + (corpus?.df?.get(t) ?? 0), 0);
+  const room = limit - spent;
+  const [rare, rest] = room > 0
+    ? await env.DB.batch([windowFor(split.rare, limit), windowFor(split.rest, room, split.rare)])
+    : [await windowFor(split.rare, limit).all(), { results: [] as unknown[] }];
+  const seen = new Set<string>();
+  const out: KeywordRow[] = [];
+  for (const row of [...(rare.results ?? []), ...(rest.results ?? [])].map(r => rowWithLevels(r as Record<string, unknown>, terms))) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 async function keywordSearchFts(
-  match: string,
+  matches: string[],
+  // matches[0] is the plan's AND tier: newest-first by FTS rowid with no bm25
+  // sort, so its LIMIT stops the scan instead of scoring every co-occurring row
+  // (see planFtsMatch).
+  andTier: boolean,
+  // Tokens too short for the index. They cannot retrieve, but they rank: rows
+  // carrying them come first, so the word that makes the query specific ("io"
+  // in "io scheduler") still decides which of the index's matches survive the
+  // LIMIT. Evaluated on rows the MATCH already read, never a scan.
+  shortTerms: string[],
+  // Every term the query searches with (eligible or short): each row reports how it holds each one.
+  terms: string[],
   env: Env,
   limit: number,
   bounds: Readonly<TimeBounds>,
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
-): Promise<KeywordRow[]> {
+): Promise<KeywordRow[][]> {
   let timeWhere = "";
   const timeBindings: number[] = [];
   if (bounds.after !== undefined) { timeWhere += " AND e.created_at >= ?"; timeBindings.push(bounds.after); }
@@ -95,6 +159,22 @@ async function keywordSearchFts(
   // workspace_id exists only on entries, not on entries_fts's id/content
   // columns, so the clause below resolves unambiguously though unqualified.
   const scopeSql = scope ? ` AND ${scope.clause}` : "";
+  const shortHits = shortTerms.map(() => `(e.content LIKE ? ${CONTENT_LIKE_ESCAPE})`).join(" + ");
+  const shortBindings = shortTerms.map(contentLikePattern);
+  // Rows come back without their text, with per-term match levels instead (keyword-rows.ts). `sh` and `rk` carry the ranking
+  // (short-token hits, then bm25) so the outer SELECT keeps the order the LIMIT chose.
+  // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
+  const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       ORDER BY sh DESC, rk, ord LIMIT ?`;
+  // scope-checked: same clause, same reason as above
+  const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, entries_fts.rowid AS ord
+       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       ORDER BY entries_fts.rowid DESC LIMIT ?`;
+  const rankedLevels = withMatchLevels(rankedInner, ["id", "created_at", "tags", "source", "sh", "rk", "ord"], terms, "sh DESC, rk, ord", ["id", "created_at", "tags", "source"]);
+  const andTierLevels = withMatchLevels(andTierInner, ["id", "created_at", "tags", "source", "ord"], terms, "ord DESC", ["id", "created_at", "tags", "source"]);
   // Join on rowid as well as id: rowids are unique, so a stale duplicate FTS
   // row for one id cannot fill two LIMIT slots, and a drifted row (an FTS id
   // at a rowid whose entries.id differs) maps to nothing instead of a wrong entry.
@@ -104,29 +184,56 @@ async function keywordSearchFts(
   // trigger without ever touching KV, leaving a table that still answers
   // MATCH queries — successfully, no exception — but has silently stopped
   // syncing. The liveness check rides in the SAME env.DB.batch() as the FTS
-  // query (one subrequest, one extra statement) so that staleness is caught
+  // queries (one subrequest, one extra statement) so that staleness is caught
   // structurally instead of relying on an error that never comes. Throwing
   // when not live reuses keywordSearch's existing catch-and-fall-back-to-LIKE
   // wiring below, rather than adding a second control path.
-  const [livenessResult, ftsResult] = await env.DB.batch([
+  const statementFor = (match: string, i: number, max: number) => andTier && i === 0
+    ? env.DB.prepare(andTierLevels.sql).bind(match, ...timeBindings, ...(scope?.bindings ?? []), max, ...andTierLevels.binds)
+    : env.DB.prepare(rankedLevels.sql).bind(...shortBindings, match, ...timeBindings, ...(scope?.bindings ?? []), max, ...rankedLevels.binds);
+  const [livenessResult, ...firstTier] = await env.DB.batch([
     // scope-exempt: FTS_LIVENESS_SQL reads sqlite_master (schema catalogue),
     // never entries/edges rows — nothing here to scope by workspace.
     env.DB.prepare(FTS_LIVENESS_SQL),
-    // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
-    env.DB.prepare(
-      `SELECT e.id, e.content, e.tags, e.source, e.created_at
-       FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
-       ORDER BY bm25(entries_fts) LIMIT ?`
-    ).bind(match, ...timeBindings, ...(scope?.bindings ?? []), limit),
+    statementFor(matches[0], 0, limit),
   ]);
   if (!isFtsLiveRows(livenessResult.results as { name: string; sql: string | null }[] | undefined)) {
     throw new Error("entries_fts is not live (missing table, a sync trigger, or a trigger with an unexpected body)");
   }
-  return ftsResult.results as unknown as KeywordRow[];
+  const asRows = (results: unknown) => ((results ?? []) as Record<string, unknown>[]).map(r => rowWithLevels(r, terms));
+  const tiers = [asRows(firstTier[0].results)];
+  // Later tiers only fill what the earlier ones leave under the limit (mergeTiers keeps a row's first tier and stops at
+  // the limit), so each asks for that many rows: a tier that could not fit is not read at all.
+  for (let i = 1; i < matches.length; i++) {
+    const room = limit - new Set(tiers.flat().map(r => r.id)).size;
+    if (room <= 0) break;
+    // The AND tier came back short of its limit, so it holds every AND match: the OR tier excludes those in the index, or
+    // overlap would spend its slots on rows already held and leave other matches unread.
+    const match = andTier ? `(${matches[i]}) NOT (${matches[0]})` : matches[i];
+    const [next] = await env.DB.batch([statementFor(match, i, room)]);
+    tiers.push(asRows(next.results));
+  }
+  return tiers;
 }
 
-async function keywordSearch(
+// Exported for the router tests (test/integration/keyword-router-bounded.test.ts); recallEntries is the only production caller.
+export async function keywordSearch(
+  tokens: string[],
+  env: Env,
+  limit: number,
+  bounds: Readonly<TimeBounds> = {},
+  identity?: Identity,
+  only?: "personal" | "company",
+  teamId?: string,
+  corpus?: Pick<DistilledQuery, "df" | "total">,
+): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
+  const result = await keywordSearchRows(tokens, env, limit, bounds, identity, only, teamId, corpus);
+  // Levels the SQL could not decide (non-ASCII terms, notes with U+212A or U+0130) are settled from the notes' text, for those rows only (keyword-rows.ts).
+  await settleLevels(env, result.rows, tokens.slice(0, KEYWORD_MAX_TOKENS));
+  return result;
+}
+
+async function keywordSearchRows(
   tokens: string[],
   env: Env,
   limit: number,
@@ -138,46 +245,88 @@ async function keywordSearch(
   // Absent (or null) on every path that skipped or lost that scan, in which
   // case the cost estimate below cannot run and routing keeps today's rules.
   corpus?: Pick<DistilledQuery, "df" | "total">,
-): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"] }> {
+): Promise<{ rows: KeywordRow[]; fts: boolean; route: RecallDiagnostics["ftsRoute"]; idfWindow?: number }> {
   if (!tokens.length) return { rows: [], fts: false, route: "like-ineligible-token" };
   const terms = tokens.slice(0, KEYWORD_MAX_TOKENS);
-  // ftsEligibleToken is the single source of truth: any token ftsMatchQuery
-  // would drop means the match silently searches only the survivors and hides
-  // entries matching just that one, so the whole query goes to LIKE.
-  const match = ftsMatchQuery(terms);
-  if (match && terms.every(ftsEligibleToken)) {
-    // Cost-aware routing (T-0058): when distillation's frequency scan covers
-    // every term, its df sum estimates exactly how many rows bm25 would have
-    // to score. Past the budget, LIKE wins — it stops after KEYWORD_CANDIDATE_LIMIT
-    // recency-ordered hits while bm25 scores every match. The scan counts the
-    // deterministic variants retrieval appends too, so a plural query
-    // ("widgets gadgets") estimates like its singular. Any term the scan still
-    // lacks (cap-bound) keeps FTS, as does every single-word query: the distill
-    // shortcut computes no df for one-word inputs, so single-word recall stays
-    // on FTS by design.
-    const df = corpus?.df;
-    if (df && terms.every(t => df.has(t))) {
-      const dfSum = terms.reduce((s, t) => s + (df.get(t) ?? 0), 0);
-      if (dfSum > FTS_MATCH_BUDGET) {
-        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-match-budget" };
-      }
+  // ftsEligibleToken is the single source of truth for what the index can
+  // match. A token that is only too short (T-0074) no longer sends the whole
+  // query to the recency-window LIKE scan: the index serves the eligible
+  // tokens and the short ones are weighed in fusion over the rows it returns.
+  // A query with no eligible token, or one carrying a NUL token, still goes
+  // to LIKE, which is the only arm that can match them.
+  const eligible = terms.filter(ftsEligibleToken);
+  if (eligible.length && terms.every(t => ftsEligibleToken(t) || ftsShortToken(t))) {
+    // Cost-aware routing (T-0058, T-0073): when distillation's frequency scan
+    // covers every eligible term, its df sum estimates how many rows bm25 would
+    // have to score. Past the budget the plan is bounded (planFtsMatch) instead
+    // of falling to the newest-500 LIKE window, which cannot see an old memory
+    // that matches only on common words. Any term the scan lacks (cap-bound)
+    // keeps the full OR, as does every single-word query: the distill shortcut
+    // computes no df for one-word inputs.
+    const plan = planFtsMatch(eligible, corpus?.df, limit);
+    if (!plan) {
+      return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-match-budget" };
     }
     if (await ftsReady(env)) {
       try {
-        return { rows: await keywordSearchFts(match, env, limit, bounds, identity, only, teamId), fts: true, route: "fts" };
+        const tiers = await keywordSearchFts(plan.matches, plan.andTier, terms.filter(ftsShortToken), terms, env, limit, bounds, identity, only, teamId);
+        const rows = tiers.length === 1 ? tiers[0] : mergeTiers(tiers, limit);
+        // A bounded plan that found nothing has not proven the tokens absent:
+        // the recency window is the pre-bounded answer, so keep it as the floor.
+        if (plan.bounded && !rows.length) {
+          return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-match-budget" };
+        }
+        // Without corpus df, fusion estimates IDF from the fetched rows, whose
+        // count is the denominator. LIKE always returned a full recency window
+        // there; the index returns only the matches, so a query that used to be
+        // LIKE-served because of a short token would weigh its keyword arm a
+        // fraction of what it did. Pricing it against the window LIKE would have
+        // filled keeps those weights where they were.
+        const idfWindow = !corpus?.df && eligible.length < terms.length ? limit : undefined;
+        return { rows, fts: true, route: plan.bounded ? "fts-bounded" : "fts", idfWindow };
       } catch (e) {
         console.error("FTS keyword search failed (degrading to LIKE):", e);
-        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-error" };
+        return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-error" };
       }
     }
-    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-not-ready" };
+    return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-not-ready" };
   }
-  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId), fts: false, route: "like-ineligible-token" };
+  return { rows: await keywordSearchLike(tokens, env, limit, bounds, identity, only, teamId, corpus), fts: false, route: "like-ineligible-token" };
 }
 
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Tiers arrive in priority order (the AND tier newest-first, the OR tier by
+// bm25); a row keeps its first, highest-priority position.
+function mergeTiers(tiers: KeywordRow[][], limit: number): KeywordRow[] {
+  const seen = new Set<string>();
+  const out: KeywordRow[] = [];
+  for (const row of tiers.flat()) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
 
-function fuseDenseAndKeyword(
+// A keyword row read by the tag path carries its text; one read by the keyword arm carries per-term match levels instead
+// (keyword-rows.ts). Either way `termLevel` answers how a note holds a term: 0 not at all, 1 only inside longer words, 2 as a word
+// of its own (a token found at a word boundary earns full IDF; found only inside a longer word, "cat" in "concatenate", a fraction).
+// Lookarounds rather than \b so identifier-shaped tokens ("#149", "v1.9") keep matching, \b treats their punctuation as the boundary.
+// Text is lowercased once per row, not once per view and per term: notes can be tens of KB.
+const lowerCache = new WeakMap<object, string>();
+const lowerContent = (row: { content?: string }): string => {
+  let lc = lowerCache.get(row);
+  if (lc === undefined) lowerCache.set(row, lc = (row.content ?? "").toLowerCase());
+  return lc;
+};
+function termLevel(row: KeywordRow, term: string): 0 | 1 | 2 {
+  const known = row.hits?.get(term);
+  if (known !== undefined) return known;
+  return levelInLower(lowerContent(row), term.toLowerCase());
+}
+
+
+export function fuseDenseAndKeyword(
   denseMatches: VectorizeMatch[],
   keywordRows: KeywordRow[],
   tokens: string[],
@@ -185,6 +334,7 @@ function fuseDenseAndKeyword(
   corpus: Pick<DistilledQuery, "df" | "total">,
   substringWeight: number,
   keywordPreRanked = false,
+  idfWindow = 0,
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -192,12 +342,6 @@ function fuseDenseAndKeyword(
     if (!denseByParent.has(pid)) denseByParent.set(pid, m);
   }
   const denseRanked = [...denseByParent.keys()];
-
-  const kwLower = keywordRows.map(r => ({ row: r, lc: r.content.toLowerCase() }));
-
-  // Matched against lowercased content, so lowercased here too. Canonical
-  // tokens already are; raw-surface probes (#326) arrive as typed.
-  const needle = new Map(tokens.map(t => [t, t.toLowerCase()]));
 
   // IDF from the corpus-wide frequencies distillToRareTerms already computed,
   // when they cover every token; otherwise the old estimate from the fetched
@@ -210,23 +354,18 @@ function fuseDenseAndKeyword(
     const { df, total } = corpus;
     idf = t => Math.log(1 + total / ((df.get(t) ?? 0) + 1));
   } else {
-    const kwN = kwLower.length || 1;
-    const kwDf = new Map(tokens.map(t => [t, kwLower.reduce((n, x) => n + (x.lc.includes(needle.get(t)!) ? 1 : 0), 0)]));
+    const kwN = Math.max(keywordRows.length, idfWindow) || 1;
+    const kwDf = new Map(tokens.map(t => [t, keywordRows.reduce((n, r) => n + (termLevel(r, t) > 0 ? 1 : 0), 0)]));
     idf = t => Math.log(1 + kwN / ((kwDf.get(t) ?? 0) + 1));
   }
 
-  // A token found at a word boundary earns full IDF; found only inside a longer
-  // word ("cat" in "concatenate") it earns a configured fraction. Lookarounds
-  // rather than \b so identifier-shaped tokens ("#149", "v1.9") keep matching —
-  // \b treats their punctuation as the boundary itself.
-  const boundary = new Map(tokens.map(t => [t, new RegExp(`(?<![\\w])${escapeRegExp(needle.get(t)!)}(?![\\w])`)]));
-  const tokenWeight = (lc: string, t: string) => {
-    if (!lc.includes(needle.get(t)!)) return 0;
-    return boundary.get(t)!.test(lc) ? idf(t) : idf(t) * substringWeight;
+  const tokenWeight = (row: KeywordRow, t: string) => {
+    const level = termLevel(row, t);
+    return level === 0 ? 0 : level === 2 ? idf(t) : idf(t) * substringWeight;
   };
 
-  const keywordScored = kwLower
-    .map(x => ({ row: x.row, weight: tokens.reduce((s, t) => s + tokenWeight(x.lc, t), 0) }))
+  const keywordScored = keywordRows
+    .map(row => ({ row, weight: tokens.reduce((s, t) => s + tokenWeight(row, t), 0) }))
     .filter(x => x.weight > 0 && (allowKeywordOnly || denseByParent.has(x.row.id)));
   // Combined review of Tasks 4-6 (FIX 3): the JS boundary/coverage weight is
   // the PRIMARY sort key in both paths. In the pre-ranked (FTS) path the
@@ -249,7 +388,7 @@ function fuseDenseAndKeyword(
       out.push({ id: dm.id, score, metadata: dm.metadata, values: dm.values });
     } else {
       const r = keywordRowById.get(pid)!;
-      out.push({ id: pid, score, metadata: { parentId: pid, created_at: r.created_at, tags: JSON.parse(r.tags ?? "[]"), content: r.content, source: r.source } });
+      out.push({ id: pid, score, metadata: { parentId: pid, created_at: r.created_at, tags: JSON.parse(r.tags ?? "[]"), content: r.content ?? "", source: r.source } });
     }
   }
   return out;
@@ -295,6 +434,11 @@ export async function recallEntries(
     : undefined;
   const scope = readScope ? scopeWhereForRead(internal.identity!, readScope) : null;
   const identity = internal.identity;
+  const requestedArms = internal.variant?.arms;
+  if (requestedArms !== undefined && requestedArms !== "both" && requestedArms !== "dense-only" && requestedArms !== "keyword-only") {
+    throw new Error(`Unknown recall variant arms: ${String(requestedArms)}`);
+  }
+  const arms = memberFirst ? "both" : requestedArms ?? "both";
 
   let semanticQuery = query;
   if (after === undefined && before === undefined) {
@@ -323,14 +467,17 @@ export async function recallEntries(
 
   const tokens = profile.lexicalTokens;
   const [values, queryTags] = await Promise.all([
-    embed(embedQuery, env, cfg),
-    inferQueryTags(lexicalQuery, env, cfg, ctx, identity, internal.workspaceFilter, internal.teamId),
+    arms === "keyword-only" ? Promise.resolve([] as number[]) : embed(embedQuery, env, cfg),
+    inferQueryTags(lexicalQuery, env, ctx, identity),
   ]);
   markStage("querySignals");
 
   let keywordRows: KeywordRow[] = [];
+  let keywordIdfWindow = 0;
   let ftsServedKeywords = false; // memberFirst never sets this: tag rows are not bm25-ordered
   let results: { matches: VectorizeMatch[] };
+  // Deeper dense results, fetched only when the diversified list is shorter than topK (see the fill below).
+  let denseFill: (() => Promise<VectorizeMatch[]>) | undefined;
   if (memberFirst) {
     // Tag/project recalls never run keywordSearch (tag rows are not bm25-
     // ordered), so name the route here: ftsRoute is set on every recall path.
@@ -390,7 +537,8 @@ export async function recallEntries(
       })) as VectorizeMatch[],
     };
   } else {
-    const vectorizeTopK = Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, 50);
+    // A fixed pool, so a larger topK only extends the list and never reorders its head.
+    const vectorizeTopK = RECALL_POOL_SIZE;
     // Scoped when an Identity is in play: the workspace filter keeps foreign
     // candidates out of the result slots. queryVectorizeScoped retries
     // unfiltered if Vectorize rejects the filter; hydration below is scoped at
@@ -404,15 +552,19 @@ export async function recallEntries(
       env.OAUTH_KV.put(VECTORIZE_WORKSPACE_FILTER_UNSUPPORTED_KV_KEY, String(Date.now()))
         .catch((e: unknown) => console.error("Vectorize filter-degradation marker write failed (non-fatal):", e)),
     );
+    const denseAt = async (k: number): Promise<{ matches: VectorizeMatch[] }> => {
+      if (wsFilter) {
+        const { matches } = await queryVectorizeScoped<VectorizeMatch>(
+          env.VECTORIZE, values, { topK: k, filter: wsFilter, onDegrade },
+        );
+        return { matches };
+      }
+      return await env.VECTORIZE.query(values, { topK: k, returnMetadata: "all", returnValues: true });
+    };
     const denseQuery = async (): Promise<{ matches: VectorizeMatch[] }> => {
+      if (arms === "keyword-only") return { matches: [] as VectorizeMatch[] };
       try {
-        if (wsFilter) {
-          const { matches } = await queryVectorizeScoped<VectorizeMatch>(
-            env.VECTORIZE, values, { topK: vectorizeTopK, filter: wsFilter, onDegrade },
-          );
-          return { matches };
-        }
-        return await env.VECTORIZE.query(values, { topK: vectorizeTopK, returnMetadata: "all", returnValues: true });
+        return await denseAt(vectorizeTopK);
       } catch (e) {
         console.error("Vectorize query failed (degrading to keyword-only):", e);
         semanticUnavailable = true;
@@ -421,11 +573,14 @@ export async function recallEntries(
     };
     const [denseResults, kw] = await Promise.all([
       denseQuery(),
-      keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
+      arms === "dense-only"
+        ? Promise.resolve({ rows: [] as KeywordRow[], fts: false, route: "skipped-by-variant" as const, idfWindow: undefined })
+        : keywordSearch(profile.retrievalTokens, env, cfg.KEYWORD_CANDIDATE_LIMIT, bounds, identity, internal.workspaceFilter, internal.teamId, distilled),
     ]);
     results = denseResults;
     keywordRows = kw.rows;
     ftsServedKeywords = kw.fts;
+    keywordIdfWindow = kw.idfWindow ?? 0;
     if (internal.diagnostics) internal.diagnostics.ftsRoute = kw.route;
 
     // Governed by its own threshold, not the write-path duplicate flag: the two
@@ -433,17 +588,15 @@ export async function recallEntries(
     // retuned recall widening.
     if (!semanticUnavailable && results.matches.length && results.matches[0].score < cfg.RECALL_WIDEN_THRESHOLD) {
       try {
-        if (wsFilter) {
-          const { matches } = await queryVectorizeScoped<VectorizeMatch>(
-            env.VECTORIZE, values, { topK: 50, filter: wsFilter, onDegrade },
-          );
-          results = { matches };
-        } else {
-          results = await env.VECTORIZE.query(values, { topK: 50, returnMetadata: "all", returnValues: true });
-        }
+        results = await denseAt(RECALL_DEEP_POOL_SIZE);
       } catch (e) {
         console.error("Vectorize widen-query failed (non-fatal, keeping narrow results):", e);
       }
+    }
+    // A full pool means the index has more to give. Already widened: the deep list is in hand.
+    if (!semanticUnavailable && results.matches.length >= vectorizeTopK) {
+      const have = results.matches.length > vectorizeTopK ? results.matches : undefined;
+      denseFill = async () => have ?? (await denseAt(RECALL_DEEP_POOL_SIZE)).matches;
     }
   }
 
@@ -463,8 +616,19 @@ export async function recallEntries(
     });
 
   const keywordPreRanked = internal.keywordPreRankedOverride ?? ftsServedKeywords;
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, distilled, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked);
+  // A one-word query skips distillation's frequency scan, and fusion then prices each word against the rows it fetched: a word
+  // held only by its own matches then weighs about the same whether it is a name or "the". When the fetch holds every match,
+  // the rows holding a word are its df, so weigh it against the corpus size (one entry_counts read) like any counted word.
+  let corpus: Pick<DistilledQuery, "df" | "total"> = distilled;
+  if (!distilled.df && keywordRows.length && keywordRows.length < cfg.KEYWORD_CANDIDATE_LIMIT) {
+    const total = await scopedEntryTotal(env, scope);
+    if (total) {
+      const df = new Map([...profile.retrievalTokens, ...tokens].map(t => [t, keywordRows.filter(r => termLevel(r, t) > 0).length] as const));
+      corpus = { df, total };
+    }
+  }
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
@@ -480,12 +644,12 @@ export async function recallEntries(
   // scope clause here is what stops that id from hydrating into signals. The
   // scope's two bindings count toward D1's bound-parameter ceiling exactly as
   // the ids do, so the batch shrinks by them rather than overrunning.
-  const rcScopeSql = scope ? ` AND ${scope.clause}` : "";
+  const rcScopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   const rcBatchSize = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   for (let i = 0; i < candidateIds.length; i += rcBatchSize) {
     const batch = candidateIds.slice(i, i + rcBatchSize);
     const rcPlaceholders = batch.map(() => "?").join(", ");
-    // scope-checked: the caller's clause IS applied — rcScopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), where the ids come from the already-scoped walk above
+    // scope-checked: rcScopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results: rows } = await env.DB.prepare(
       `SELECT ${candidateSignalProjection} FROM entries WHERE id IN (${rcPlaceholders})${rcScopeSql}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: CandidateSignalRow[] };
@@ -497,7 +661,64 @@ export async function recallEntries(
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
 
-  const directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  let directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  // The root view is computed here, beside the direct one, so a single model batch can cover both.
+  let rootReranked = hops > 0
+    ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
+    : [];
+  const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
+  // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
+  const scopedParents = new Set(rcRows.map(r => r.id));
+  const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
+  const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  // Keyword evidence: rows the keyword arm returned that hold every distilled query term, in fused order. Scoped like
+  // everything else here (inScope), and used only to choose ids: the model reads D1 text.
+  const fusedOrder = new Map<string, number>();
+  directReranked.forEach((m, i) => { const id = parentOfMatch(m); if (!fusedOrder.has(id)) fusedOrder.set(id, i); });
+  const keywordEvidence = async (): Promise<string[]> => {
+    if (!tokens.length) return [];
+    const holding = keywordRows.filter(r => scopedParents.has(r.id) && tokens.every(t => termLevel(r, t) > 0));
+    // Several terms were already through distillation's saturation filter. One term has no df there, so a common word
+    // ("budget") must not count as evidence: apply the same rule (df over the corpus <= QUERY_SATURATION_FRACTION) with
+    // the keyword rows holding the term as its df and one entry_counts read for the corpus size. Unknown = not evidence.
+    if (tokens.length === 1 && !distilled.df) {
+      const outsideHead = holding.some(r => (fusedOrder.get(r.id) ?? Infinity) >= rerankDirectCap(internal.variant?.rerankTuning?.maxCandidates));
+      if (!outsideHead) return [];
+      const total = await scopedEntryTotal(env, scope);
+      if (total === null || total <= 0) { if (internal.diagnostics) internal.diagnostics.rerankEvidence = "suppressed-no-total"; return []; }
+      if (holding.length >= cfg.KEYWORD_CANDIDATE_LIMIT || holding.length / total > QUERY_SATURATION_FRACTION) { if (internal.diagnostics) internal.diagnostics.rerankEvidence = "suppressed-saturated"; return []; }
+    }
+    return holding.map(r => r.id).sort((a, b) => (fusedOrder.get(a) ?? Infinity) - (fusedOrder.get(b) ?? Infinity));
+  };
+  const rerank = await rerankStep({
+    mode: rerankMode, forced: internal.variant?.rerank === true, tuning: internal.variant?.rerankTuning, keywordEvidence, env, ctx, query: semanticQuery,
+    queryTokens: profile.evidenceTokens, evidenceTokens: profile.evidenceTokens, direct: directReranked.filter(inScope), root: rootReranked.filter(inScope),
+    loadContent: async ids => {
+      const known = new Map(rcRows.filter(r => r.content !== undefined).map(r => [r.id, r.content as string]));
+      const need = ids.filter(id => !known.has(id) && scopedParents.has(id));
+      if (need.length) {
+        // scope-exempt: by-id: every id here came from rcRows, the scoped candidate-signal read above (inScope filters to it). The scope clause is left out on purpose: with it SQLite plans a scan of the caller's whole workspace instead of <=30 primary-key lookups, which costs rows_read in proportion to the brain's size on every recall
+        const { results } = await env.DB.prepare(
+          `SELECT id, content FROM entries WHERE id IN (${need.map(() => "?").join(", ")})`
+        ).bind(...need).all() as { results: { id: string; content: string }[] };
+        for (const r of results) known.set(r.id, r.content);
+      }
+      return known;
+    },
+  });
+  if (internal.diagnostics) {
+    internal.diagnostics.rerankRoute = rerank.route;
+    if (rerank.ms !== undefined) internal.diagnostics.rerankMs = rerank.ms;
+  }
+  // Linked-evidence scoring is calibrated on heuristic root scores; a reranker blend rescales them (best x2, worst x0.25),
+  // which would move which linked memories qualify even when the model agrees with the heuristic order. Keep the
+  // pre-blend scores for it; the blend still decides the ORDER of the direct picks and of root selection.
+  const heuristicRootScore = new Map<string, number>();
+  for (const m of rootReranked) if (!heuristicRootScore.has(parentOfMatch(m))) heuristicRootScore.set(parentOfMatch(m), m.score);
+  if (rerank.percentiles) {
+    directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
+    rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
+  }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 
   const seen = new Set<string>();
@@ -507,7 +728,23 @@ export async function recallEntries(
     seen.add(parentId);
     return true;
   });
-  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, topK);
+  // MMR is greedy, so its first n picks do not depend on how many are asked for. Rounding the depth up to whole
+  // blocks (each ordered by score below) keeps every block a topK cuts the same block a larger topK sees, and a
+  // default topK 5 call diversifies and hydrates exactly the five it always did.
+  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK);
+  // A topK larger than the diversified list draws the rest from a deeper dense list, after everything above. The
+  // fetch happens only then, but what it adds is the same whatever topK is, and it only ever follows the list, so the
+  // head of a smaller topK is a prefix of it.
+  const parentOf = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  let fillCandidates: VectorizeMatch[] = [];
+  if (denseFill && topK > directCandidates.length) {
+    try {
+      const taken = new Set(directCandidates.map(parentOf));
+      fillCandidates = (await denseFill()).filter(m => !taken.has(parentOf(m)) && taken.add(parentOf(m)));
+    } catch (e) {
+      console.error("Vectorize deep query failed (non-fatal, returning the shorter list):", e);
+    }
+  }
   markStage("candidateHydration");
 
   if (!directCandidates.length) return { matches: [], insight: "", semanticUnavailable };
@@ -517,7 +754,6 @@ export async function recallEntries(
   let rootCandidates: RootCandidate[] = [];
   if (hops > 0) {
     const candidateContent = new Map(rcRows.map(r => [r.id, r.content ?? ""]));
-    const rootReranked = rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false });
     const rootSeen = new Set<string>();
     rootCandidates = rootReranked.flatMap(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
@@ -528,12 +764,36 @@ export async function recallEntries(
       const tagAlignment = queryTags.length ? tags.filter(value => queryTags.includes(value)).length / queryTags.length : 0;
       const episodicAlignment = ["causal", "chronology"].includes(profile.intent) && tags.includes("kind:episodic") ? 1 : 0;
       const authorityAlignment = ["current", "direct"].includes(profile.intent) && tags.includes("status:canonical") ? 1 : 0;
-      return [{ ...match, parentId, rootScore: match.score, localEvidence, tags,
+      return [{ ...match, parentId, rootScore: match.score, evidenceScore: heuristicRootScore.get(parentId) ?? match.score, localEvidence, tags,
         lexicalCoverage: queryCoverage(localEvidence, tokens, distilled).score,
         metadataAlignment: Math.min(1, .6 * tagAlignment + .2 * episodicAlignment + .2 * authorityAlignment),
         semanticRank: semanticRankByParent.get(parentId) }];
     });
-    selectedRoots = selectGraphRoots(rootCandidates, graphSeedLimit(topK, rootCandidates.length), cfg.MMR_LAMBDA);
+    // Diagnostic only: the graph root arm is a second source of candidates (a multi-hop answer arrives through it), so
+    // a pool measure that ignored it would call reachable golds unreachable. Appended after the direct pool.
+    internal.diagnostics && (internal.diagnostics.candidateIds = [...new Set([...(internal.diagnostics.candidateIds ?? []), ...rootCandidates.map(r => r.parentId)])]);
+    // The seat budgets are sized for RECALL_SEED_TOPK, not the caller's topK, so a larger topK cannot change which
+    // roots are seeded (and with them the head).
+    // One selection per arm, against that arm's own budget: a row the dense arm
+    // never returned has no semantic rank, so it cannot take a seat — or a seat
+    // in the "semantic" view — from a row that does. The keyword arm still gets
+    // the window back when the dense arm does not fill it (lexicalSeedLimit), so
+    // a recall with Vectorize down is seeded from as many roots as a healthy one.
+    //
+    // The second pass labels its picks with the same RootView names, so a
+    // keyword-only row can be tagged selectedBy "semantic" — it topped its own
+    // partition's rootScore order, which for these rows IS the keyword order.
+    // Nothing reads the label as proof of a dense rank: the one consumer,
+    // chooseEvidenceSlot's semantic branch, tests semanticRank !== undefined as
+    // well, which no row in this partition has.
+    const denseRoots = rootCandidates.filter(root => root.semanticRank !== undefined);
+    const lexicalRoots = rootCandidates.filter(root => root.semanticRank === undefined);
+    const scopeBindings = scope?.bindings.length ?? 0;
+    const denseSeats = graphSeedLimit(RECALL_SEED_TOPK, denseRoots.length, scopeBindings);
+    selectedRoots = [
+      ...selectGraphRoots(denseRoots, denseSeats, cfg.MMR_LAMBDA),
+      ...selectGraphRoots(lexicalRoots, lexicalSeedLimit(RECALL_SEED_TOPK, lexicalRoots.length, denseSeats, scopeBindings), cfg.MMR_LAMBDA),
+    ];
   }
   const graphSeedIds = selectedRoots.map(x => x.candidate.parentId);
   if (internal.diagnostics && hops > 0) {
@@ -554,6 +814,7 @@ export async function recallEntries(
   // filters consume bindings in every statement.
   const allParentIds = [...new Set([
     ...directParentIds,
+    ...fillCandidates.map(parentOf),
     ...graphSeedIds,
     ...expanded.map(e => e.id),
   ])];
@@ -576,7 +837,7 @@ export async function recallEntries(
   // when idBatchSize subtracts them from the bound-parameter ceiling — the same
   // accounting every other filter's bindings get.
   if (scope) {
-    d1Filters += ` AND ${scope.clause}`;
+    d1Filters += ` AND ${scopeWhereForIdRead(scope).clause}`;
     filterBindings.push(...scope.bindings);
   }
   const d1Rows: Record<string, any>[] = [];
@@ -585,7 +846,7 @@ export async function recallEntries(
     const batch = allParentIds.slice(i, i + idBatchSize);
     const placeholders = batch.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      // scope-checked: the caller's clause IS applied — d1Filters is built from scope.clause above and appended here; the lexer cannot see into a JS-assembled fragment
+      // scope-checked: d1Filters applies scopeWhereForIdRead(scope) above; the lexer cannot see the leading AND inside that JS fragment
       `SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (${placeholders})${d1Filters}`
     ).bind(...batch, ...filterBindings).all() as { results: Record<string, any>[] };
     d1Rows.push(...results);
@@ -599,7 +860,11 @@ export async function recallEntries(
   const candidateSignalById = new Map(rcRows.map(row => [row.id, row]));
   markStage("finalHydration");
 
-  const directMatches: RecallMatch[] = directCandidates.flatMap((m) => {
+  // Blocks of five in MMR order, each ordered by score: the first block is what a topK 5 call always returned, and a
+  // later block only depends on the picks before it, so no topK can reorder a block it does not cut.
+  const pickBlocks = Array.from({ length: Math.ceil(directCandidates.length / RECALL_BLOCK) }, (_, b) =>
+    directCandidates.slice(b * RECALL_BLOCK, (b + 1) * RECALL_BLOCK).sort((a, c) => c.score - a.score));
+  const directMatchOf = (m: VectorizeMatch, score: number): RecallMatch[] => {
     const meta = m.metadata as Record<string, any>;
     const parentId = (meta?.parentId ?? m.id) as string;
     const row = d1Map.get(parentId);
@@ -607,7 +872,7 @@ export async function recallEntries(
     return [{
       id: parentId,
       content: row.content as string,
-      score: m.score,
+      score,
       createdAt: row.created_at as number,
       updatedAt: (row.updated_at as number | null) ?? (row.created_at as number),
       tags: JSON.parse(row.tags ?? "[]"),
@@ -617,18 +882,27 @@ export async function recallEntries(
       workspace: layerOf(identity, row.workspace_id),
       staleAsOf: hasStaleAsOf(JSON.parse(row.tags ?? "[]")),
     }];
-  }).sort((a, b) => b.score - a.score);
+  };
+  // The direct matches that hydrated, per block. Every position below is decided against these blocks and the picks
+  // that made them, never against how many of them survived, and only a topK past the last block can add one.
+  const blockMatches = pickBlocks.map(block => block.flatMap(m => directMatchOf(m, m.score)));
+  const directMatches: RecallMatch[] = blockMatches.flat();
+  // The deeper matches rank below everything above, in dense order, so their scores step down from the lowest.
+  const fillFloor = directMatches.length ? Math.min(...directMatches.map(m => m.score)) : 0;
+  const fillMatches = fillCandidates.flatMap((m, i) => directMatchOf(m, fillFloor * (1 - 0.01 * (i + 1))));
 
-  const maximumRootScore = Math.max(...selectedRoots.map(x => x.candidate.rootScore));
+  // Linked memories compete with the leading picks only (first block; first two for the second slot), whatever topK
+  // is. They are the picks, not the survivors: a pick that did not hydrate cannot be a linked memory either.
+  const headParentIds = directParentIds.slice(0, RECALL_BLOCK);
+  const leadingParentIds = directParentIds.slice(0, 2 * RECALL_BLOCK);
+  const maximumRootScore = Math.max(...selectedRoots.map(x => evidenceScoreOf(x.candidate)));
   const normalizedRootDivisor = maximumRootScore > 0 ? maximumRootScore : 1;
   const rootById = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate]));
   const rootIdByNode = new Map(selectedRoots.map(x => [x.candidate.parentId, x.candidate.parentId]));
-  const fallbackRootScore = directCandidates.at(-1)?.score ?? 0;
   for (const e of expanded) {
     rootIdByNode.set(e.id, rootIdByNode.get(e.viaFrom) ?? e.viaFrom);
   }
-  const relatedLimit = relatedSlotLimit(topK);
-  const replacement = directMatches[topK - relatedLimit];
+  const replacement = blockMatches[0]?.[GRAPH_SLOT_INDEX];
   const replacementCoverage = replacement ? Math.max(
     queryCoverage(replacement.content, tokens, distilled).score,
     queryCoverage(replacement.content, profile.evidenceTokens, distilled).score,
@@ -637,7 +911,11 @@ export async function recallEntries(
     const row = d1Map.get(e.id);
     if (!row) return [];
     const root = rootById.get(rootIdByNode.get(e.id) ?? "");
-    const rootScore = root ? root.rootScore / normalizedRootDivisor : fallbackRootScore;
+    // Every expanded node descends from a selected seed (expandGraph walks by hop from graphSeedIds and rootIdByNode is filled
+    // in that order), so a root is always found; there is no made-up parent score to fall back on. Checked by throwing at
+    // this point across the integration, frozen-benchmark and unit suites and both eval variants on core-1k: never reached.
+    if (!root) { internal.diagnostics?.rejections?.push({ id: e.id, reason: "no-root" }); return []; }
+    const rootScore = evidenceScoreOf(root) / normalizedRootDivisor;
     const evidence = scoreLinkedEvidence({
       parentScore: rootScore,
       parentContent: root?.localEvidence ?? "",
@@ -688,18 +966,30 @@ export async function recallEntries(
     .sort((a, b) => b.match.score - a.match.score || a.match.id.localeCompare(b.match.id));
   if (internal.diagnostics) {
     internal.diagnostics.eligibleRelatedIds = sortedExpanded
-      .filter(entry => entry.eligible && !directParentIds.includes(entry.match.id))
+      .filter(entry => entry.eligible && !headParentIds.includes(entry.match.id))
       .map(entry => entry.match.id);
   }
-  const selectedRelated = sortedExpanded
-    .filter(e => e.eligible && !directParentIds.includes(e.match.id))
-    .slice(0, relatedLimit)
-    .map(e => e.match);
-  const selectedDirect = directMatches.slice(0, topK - selectedRelated.length);
-  const baselineMatches: RecallMatch[] = [...selectedDirect, ...selectedRelated];
-  let matches = baselineMatches;
-  if (hops > 0 && topK >= 5 && baselineMatches.length >= 5) {
-    const replacementIndex = baselineMatches.length - 1;
+  // The first linked memory must be outside the first block of picks; the second outside the first two.
+  const eligibleRelated = sortedExpanded.filter(e => e.eligible && !headParentIds.includes(e.match.id)).map(e => e.match);
+  const selectedRelated = [
+    ...eligibleRelated.slice(0, 1),
+    ...eligibleRelated.slice(1).filter(match => !leadingParentIds.includes(match.id)).slice(0, GRAPH_SLOT_INDICES.length - 1),
+  ];
+  const [firstRelated, secondRelated] = selectedRelated;
+  const [block1 = [], block2 = [], ...laterBlocks] = blockMatches;
+  // The list is laid out block by block and cut to topK at the end:
+  //  - the window is exactly what a topK 5 call returns: the first block's survivors with the first linked memory in
+  //    the fifth place (or the fifth survivor when there is none);
+  //  - the second block follows, with the second linked memory at rank 10 (or after the block's last item when it
+  //    ends sooner); a linked memory is placed against the blocks, never against how many of their picks survived;
+  //  - later blocks follow, and everything a deeper dense query adds follows them.
+  // A topK past a block only adds that block after everything above it, so a larger topK only appends.
+  const baselineMatches: RecallMatch[] = [...block1.slice(0, firstRelated ? GRAPH_SLOT_INDEX : GRAPH_SLOT_INDEX + 1), ...(firstRelated ? [firstRelated] : [])];
+  let window: RecallMatch[] = baselineMatches;
+  // A direct match the evidence slot pushed out, to be shown where the chosen match used to sit if that was further down.
+  let displaced: RecallMatch | undefined;
+  if (hops > 0 && baselineMatches.length > GRAPH_SLOT_INDEX) {
+    const replacementIndex = GRAPH_SLOT_INDEX;
     const replacementMatch = baselineMatches[replacementIndex];
     const replacementEvidence = queryCoverage(
       replacementMatch.content,
@@ -709,10 +999,9 @@ export async function recallEntries(
     const protectedIds = new Set(baselineMatches.slice(0, replacementIndex).map(match => match.id));
     const matchById = new Map<string, RecallMatch>();
     const candidates: EvidenceSlotCandidate[] = [];
-
     const selectedRootIds = new Set(selectedRoots.map(selection => selection.candidate.parentId));
     const omittedChallenger = rootCandidates
-      .filter(root => !selectedRootIds.has(root.parentId) && !directParentIds.includes(root.parentId))
+      .filter(root => !selectedRootIds.has(root.parentId) && !headParentIds.includes(root.parentId))
       .filter(root => root.semanticRank !== undefined)
       .sort((a, b) => a.semanticRank! - b.semanticRank!
         || b.rootScore - a.rootScore
@@ -723,7 +1012,7 @@ export async function recallEntries(
     ];
 
     for (const { root, semanticEligible } of rootsForEvidence) {
-      if (directParentIds.includes(root.parentId) || protectedIds.has(root.parentId)) continue;
+      if (headParentIds.includes(root.parentId) || protectedIds.has(root.parentId)) continue;
       const row = d1Map.get(root.parentId) ?? candidateSignalById.get(root.parentId);
       if (!row) continue;
       const rowTags = JSON.parse(row.tags ?? "[]") as string[];
@@ -757,15 +1046,16 @@ export async function recallEntries(
         exactHighIdf: supplemental.exactHighIdf,
         exactMatchCount: exactQueryMatchCount(root.localEvidence, profile.evidenceTokens),
         metadataAlignment: root.metadataAlignment,
-        score: root.rootScore,
+        score: evidenceScoreOf(root), // same scale as the linked candidates below (scoreLinkedEvidence reads the pre-blend score)
         source: "omitted-root",
         semanticRank: root.semanticRank,
         semanticEligible,
+        lexicalOnly: root.semanticRank === undefined,
       });
     }
 
     for (const entry of sortedExpanded) {
-      if (!entry.eligible || protectedIds.has(entry.match.id) || directParentIds.includes(entry.match.id)) continue;
+      if (!entry.eligible || protectedIds.has(entry.match.id) || headParentIds.includes(entry.match.id)) continue;
       const precision = queryCoverage(entry.evidenceText, profile.evidenceTokens, distilled);
       matchById.set(entry.match.id, entry.match);
       candidates.push({
@@ -785,8 +1075,29 @@ export async function recallEntries(
       semanticAllowed: replacementMatch.hop === 0,
     }, candidates);
     const chosenMatch = chosen && matchById.get(chosen.id);
-    if (chosenMatch) matches = [...baselineMatches.slice(0, replacementIndex), chosenMatch];
+    if (chosenMatch) {
+      window = [...baselineMatches.slice(0, replacementIndex), chosenMatch];
+      if (replacementMatch.hop === 0) displaced = replacementMatch;
+    }
   }
+  const taken = new Set(window.map(match => match.id));
+  // One pass over what follows the window: drop what the window already shows (it moved up), and put the direct
+  // match the evidence slot displaced where the chosen match used to sit, so nothing is lost.
+  const follow = (list: RecallMatch[]) => list.flatMap(match => {
+    if (!taken.has(match.id)) return [match];
+    return displaced && match.id === window[GRAPH_SLOT_INDEX]?.id && !taken.has(displaced.id) ? [displaced] : [];
+  });
+  const region = follow([...block1.slice(firstRelated ? GRAPH_SLOT_INDEX : GRAPH_SLOT_INDEX + 1), ...block2]);
+  const later = follow(laterBlocks.flat());
+  // The second linked memory belongs to the second block: a call that stops within the first never sees it. It is
+  // the request that decides, not how many picks exist, so a small brain still gets it once topK reaches the block.
+  if (secondRelated && topK > RECALL_BLOCK && !taken.has(secondRelated.id)) {
+    const own = later.findIndex(match => match.id === secondRelated.id);
+    if (own >= 0) later.splice(own, 1); // already listed further down: it moves up to its slot
+    region.splice(Math.min(GRAPH_SLOT_INDICES[1] - window.length, region.length), 0, secondRelated);
+  }
+  const listed = new Set([...window, ...region, ...later].map(match => match.id));
+  const matches = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
   const finalDirectIds = new Set(matches.filter(match => match.hop === 0).map(match => match.id));
   const finalRelated = matches.filter(match => match.hop > 0);
   if (internal.diagnostics) internal.diagnostics.selectedRelatedIds = finalRelated.map(x => x.id);

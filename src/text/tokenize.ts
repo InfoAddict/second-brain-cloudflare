@@ -1,11 +1,15 @@
-import { CJK_STOPWORDS, KEYWORD_MIN_TOKEN_LEN, KEYWORD_STOPWORDS } from "../constants";
+import { CJK_STOPWORDS, KEYWORD_MIN_TOKEN_LEN, KEYWORD_STOPWORDS, QUERY_FRAME_WORDS } from "../constants";
 
-// A chunk that is 7-bit ASCII never reaches the segmenter: it runs the pre-#326
-// pipeline verbatim, which is what keeps every existing query's tokens
-// byte-identical. Only text that needs Unicode handling gets Unicode handling.
+// ASCII chunks bypass the segmenter so ordinary queries keep their existing
+// word boundaries. Only text that needs Unicode handling reaches it.
 const ASCII_ONLY = /^[\x00-\x7F]*$/;
 const HAN = /\p{Script=Han}/u;
-const LIKE_WILDCARDS = /[%_]/g;
+const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+// A run of text that does not separate words with spaces (ideographs, kana,
+// hangul, and their punctuation such as 。、). Splitting a chunk on these runs
+// hands an adjacent ASCII identifier ("SB-024" in "SB-024の決定") to the ASCII
+// pipeline instead of the word segmenter, which would cut it at the hyphen.
+const CJK_RUN = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}\p{scx=Bopomofo}\u3000-\u303F]+)/u;
 
 let segmenter: Intl.Segmenter | undefined;
 function wordsOf(text: string): string[] {
@@ -15,26 +19,31 @@ function wordsOf(text: string): string[] {
   return out;
 }
 
-// The pre-#326 pipeline for one whitespace-delimited chunk: lowercase, trim
-// surrounding punctuation, strip LIKE wildcards, drop stopwords and 1-char
-// tokens. Identifier-shaped chunks ("v1.9", "#149", URLs, paths) survive whole
-// because only their edges are trimmed.
-function asciiToken(chunk: string): string | null {
-  const t = chunk.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "").replace(LIKE_WILDCARDS, "");
-  return t.length >= KEYWORD_MIN_TOKEN_LEN && !KEYWORD_STOPWORDS.has(t) ? t : null;
+// Lowercase each ASCII chunk, trim its edges, and drop stopwords and short
+// tokens. Identifier-shaped chunks ("v1.9", "#149", URLs, paths) survive whole.
+// Interior % and _ stay literal because every content LIKE site escapes them.
+function asciiToken(chunk: string, frame: boolean): string | null {
+  const t = chunk.toLowerCase().replace(/^[^\w#.]+|[^\w#.]+$/g, "");
+  return t.length >= KEYWORD_MIN_TOKEN_LEN && HAS_LETTER_OR_DIGIT.test(t) && !KEYWORD_STOPWORDS.has(t) && !(frame && QUERY_FRAME_WORDS.has(t)) ? t : null;
 }
 
 // Split a query into lexical search tokens (#326). Canonical tokens first, in
 // source order; raw-surface probes last, so every capped consumer drops a probe
 // before it drops a real term.
 export function tokenizeQuery(query: string): string[] {
+  // Scaffolding words ("user wants to", "tell me", "what should I know") are not terms unless nothing else is.
+  const terms = tokenizeTerms(query, true);
+  return terms.length ? terms : tokenizeTerms(query, false);
+}
+
+function tokenizeTerms(query: string, frame: boolean): string[] {
   const tokens: string[] = [];
   const singleHan: string[] = [];
   const probes: string[] = [];
   for (const chunk of query.split(/\s+/)) {
     if (!chunk) continue;
     if (ASCII_ONLY.test(chunk)) {
-      const t = asciiToken(chunk);
+      const t = asciiToken(chunk, frame);
       if (t) tokens.push(t);
       continue;
     }
@@ -44,19 +53,26 @@ export function tokenizeQuery(query: string): string[] {
       // so the chunk exactly as typed is the one term that can reach content
       // saved in its compatibility form. Lowercased by every in-process matcher
       // (fusion, coverage, snippets), never here.
-      const probe = chunk.replace(LIKE_WILDCARDS, "");
-      if (probe.length >= KEYWORD_MIN_TOKEN_LEN) probes.push(probe);
+      if (chunk.length >= KEYWORD_MIN_TOKEN_LEN && HAS_LETTER_OR_DIGIT.test(chunk)) probes.push(chunk);
     }
     if (ASCII_ONLY.test(folded)) {
-      const t = asciiToken(folded);
+      const t = asciiToken(folded, frame);
       if (t) tokens.push(t);
       continue;
     }
-    for (const word of wordsOf(folded)) {
-      const t = word.toLowerCase().replace(LIKE_WILDCARDS, "");
-      if (!t || KEYWORD_STOPWORDS.has(t) || CJK_STOPWORDS.has(t)) continue;
-      if (t.length >= KEYWORD_MIN_TOKEN_LEN) tokens.push(t);
-      else if (HAN.test(t)) singleHan.push(t);
+    for (const run of folded.split(CJK_RUN)) {
+      if (!run) continue;
+      if (ASCII_ONLY.test(run)) {
+        const t = asciiToken(run, frame);
+        if (t) tokens.push(t);
+        continue;
+      }
+      for (const word of wordsOf(run)) {
+        const t = word.toLowerCase();
+        if (!HAS_LETTER_OR_DIGIT.test(t) || KEYWORD_STOPWORDS.has(t) || CJK_STOPWORDS.has(t)) continue;
+        if (t.length >= KEYWORD_MIN_TOKEN_LEN) tokens.push(t);
+        else if (HAN.test(t)) singleHan.push(t);
+      }
     }
   }
   // A query that is nothing but a lone ideograph (夢) still has to reach the

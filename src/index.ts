@@ -84,8 +84,11 @@ export default {
     // cost CPU and D1-cost budget instead of buying it.
     if (event.cron === INTEGRATION_SYNC_CRON) {
       job("integration sync", (async () => {
+        // Read once for the whole run: the sync's writes and the push pass over every workspace take it,
+        // instead of each resolving its own (a KV read apiece).
+        const cfg = await resolveConfig(env);
         try {
-          await runScheduledIntegrationSync(env);
+          await runScheduledIntegrationSync(env, cfg);
         } catch (e) {
           console.error("integration sync failed (non-fatal):", e);
         }
@@ -94,7 +97,7 @@ export default {
         // on the mirror sync's health, and a slow or failing sync must not
         // delay notifications past the hour they were due.
         try {
-          await pushDueItemsAllWorkspaces(env);
+          await pushDueItemsAllWorkspaces(env, cfg);
         } catch (e) {
           console.error("push due items failed (non-fatal):", e);
         }

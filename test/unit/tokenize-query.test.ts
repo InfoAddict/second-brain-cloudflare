@@ -10,8 +10,17 @@ describe("tokenizeQuery()", () => {
     expect(tokenizeQuery("What is the v1.9 release?")).toEqual(["v1.9", "release"]);
   });
 
-  it("strips SQL LIKE wildcards so a token is always a literal substring", () => {
-    expect(tokenizeQuery("foo_bar 100%")).toEqual(["foobar", "100"]);
+  it("keeps identifier punctuation as literal token content", () => {
+    expect(tokenizeQuery("ERR_TLS_90412 DATABASE_URL reconcile_ledger_batch_v2 50%_off 100%"))
+      .toEqual(["err_tls_90412", "database_url", "reconcile_ledger_batch_v2", "50%_off", "100"]);
+  });
+
+  it("keeps the original edge-percent behavior", () => {
+    expect(tokenizeQuery("9% APR 100% %discount")).toEqual(["apr", "100", "discount"]);
+  });
+
+  it("drops tokens made entirely of punctuation", () => {
+    expect(tokenizeQuery("___ %% _% ＿％ useful")).toEqual(["useful"]);
   });
 
   it("deduplicates repeated tokens", () => {

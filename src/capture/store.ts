@@ -1,10 +1,11 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { CHUNK_MAX_CHARS, MIRRORED_SOURCES } from "../constants";
+import { CHUNK_MAX_CHARS, MIRRORED_SOURCES, VECTORIZE_UPSERT_BATCH } from "../constants";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
+import { deleteVectorIds } from "../vectorize/batch";
 import { rememberTags } from "../tags/vocabulary";
 import { applyTagReplacement } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
@@ -82,7 +83,8 @@ export async function storeEntry(
     })
   );
 
-  await env.VECTORIZE.upsert(vectors);
+  // Vectorize accepts at most 1,000 vectors per upsert from a Worker.
+  for (let i = 0; i < vectors.length; i += VECTORIZE_UPSERT_BATCH) await env.VECTORIZE.upsert(vectors.slice(i, i + VECTORIZE_UPSERT_BATCH));
 
   const vectorIds = vectors.map(v => v.id);
 
@@ -103,8 +105,9 @@ export async function storeEntry(
 
 export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: string[]): Promise<void> {
   if (!newIds.length) return;
-  const stale = oldIds.filter(v => !newIds.includes(v));
-  if (stale.length) await env.VECTORIZE.deleteByIds(stale);
+  const keep = new Set(newIds);
+  const stale = oldIds.filter(v => !keep.has(v));
+  if (stale.length) await deleteVectorIds(env, stale);
 }
 
 export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS, writeCtx: WriteContext = OWNER_WRITE_CONTEXT): Promise<StoredEntry> {

@@ -3,6 +3,7 @@ import { DEFAULTS, resolveConfig, type Config } from "../config";
 import { initializeDatabase } from "../db/init";
 import { embed } from "../lib/ai";
 import { inferEdgesOnWrite } from "./edges";
+import { neighborsFromVectorQuery } from "./traverse";
 
 const GRAPH_PASS_BACKFILL_LIMIT = 25;
 
@@ -133,13 +134,7 @@ export async function runGraphPass(
       // Reinstating the filter is a one-line change once vectors are restamped
       // on upgrade (restampVectorWorkspace in src/capture/share.ts already does
       // this for a share) — at which point it is worth it for the slots.
-      const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
-      const scores = new Map<string, number>();
-      for (const m of matches) {
-        const pid = (m.metadata as any)?.parentId ?? m.id;
-        scores.set(pid, Math.max(scores.get(pid) ?? 0, m.score));
-      }
-      const neighbors = [...scores.entries()].map(([id, score]) => ({ id, score }));
+      const neighbors = await neighborsFromVectorQuery(values, env);
       inserted += await inferEdgesOnWrite(entry.id, neighbors, env);
     } catch (e) {
       console.error(`Graph backfill failed for ${entry.id} (non-fatal):`, e);

@@ -81,6 +81,36 @@ describe("brain-agnostic evidence slot", () => {
     ])?.id).toBe("linked");
   });
 
+  // T-0057.7: a 3-word boilerplate row ("<topic> overview.") that the dense arm never
+  // returned used to take this slot off two generic query words, evicting a 0.95-dense
+  // authoritative answer whose own coverage was near zero.
+  it("refuses a keyword-only root that covers a minority of the query", () => {
+    expect(chooseEvidenceSlot(0.014, [candidate("boilerplate", 0.18, { lexicalOnly: true })])).toBeUndefined();
+    expect(chooseEvidenceSlot(0.014, [candidate("boilerplate", 0.49, { lexicalOnly: true })])).toBeUndefined();
+  });
+
+  it("admits a keyword-only root that carries most of the query", () => {
+    expect(chooseEvidenceSlot(0.014, [candidate("decisive", 0.5, { lexicalOnly: true })])?.id).toBe("decisive");
+  });
+
+  it("holds a root the dense arm ranked to the relative test alone", () => {
+    expect(chooseEvidenceSlot(0.014, [candidate("ranked", 0.18, { semanticRank: 9 })])?.id).toBe("ranked");
+  });
+
+  // A linked candidate cleared scoreLinkedEvidence's coverage, precision and gain floors
+  // before it got here; the keyword-only floor stands in for a gate it already passed.
+  it("leaves graph-linked evidence to its own upstream floors", () => {
+    expect(chooseEvidenceSlot(0.014, [candidate("linked", 0.18, { source: "related" })])?.id).toBe("linked");
+  });
+
+  it("does not let a keyword-only root reach the semantic branch", () => {
+    expect(chooseEvidenceSlot({ coverage: 0.6, semanticRank: 8 }, [candidate("keywordOnly", 0.1, {
+      exactMatchCount: 0,
+      semanticEligible: true,
+      lexicalOnly: true,
+    })])).toBeUndefined();
+  });
+
   it("breaks complete ties deterministically by ID", () => {
     expect(chooseEvidenceSlot(0.2, [
       candidate("zeta", 0.8),

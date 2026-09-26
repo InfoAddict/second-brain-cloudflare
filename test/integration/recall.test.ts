@@ -433,7 +433,7 @@ describe("GET /recall", () => {
     expect(data.results[0].id).toBe("entry-episodic");
   });
 
-  it("query with no matching keywords exercises the LLM fallback for tag inference", async () => {
+  it("query with no matching keywords makes no LLM call for tag inference", async () => {
     db.entries.push(
       { id: "entry-1", content: "Office lease renewal", tags: '["work"]', source: "api", created_at: 1000, vector_ids: '["entry-1"]', recall_count: 0, importance_score: 0 },
     );
@@ -457,9 +457,9 @@ describe("GET /recall", () => {
     // "quarterly planning" — no hashtags, "work" is not a whole word in this query
     const res = await worker.fetch(req("GET", "/recall?query=quarterly+planning"), env, ctx);
     expect(res.status).toBe(200);
-    // LLM called at least once (for tag inference); embedding uses BGE model (not counted)
+    // only the embedding runs; tag inference costs no AI call
     const llmCalls = aiRun.mock.calls.filter((args: any[]) => args[0] !== "@cf/baai/bge-small-en-v1.5");
-    expect(llmCalls.length).toBeGreaterThanOrEqual(1);
+    expect(llmCalls).toHaveLength(0);
   });
 
   it("a contradiction survivor outranks an equally-scored contested loser", async () => {

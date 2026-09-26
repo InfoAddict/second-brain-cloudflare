@@ -68,10 +68,8 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
 
     expect(budget).toMatchObject({
       workerRequests: 1,
-      // Existing behavior: one embedding plus one tag-inference LLM because
-      // the warm vocabulary has no literal query match. Recovery may not add a
-      // third call.
-      aiCalls: 2,
+      // One embedding only: tag inference is a literal match, never an LLM call.
+      aiCalls: 1,
       embeddingCalls: 1,
       vectorizeQueries: 1,
       vectorizeGets: 0,
@@ -87,16 +85,17 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     });
     expect(budget.d1Statements).toBe(5);
     expect(budget.d1Statements).toBeLessThanOrEqual(30);
-    // D1's first() response omits metadata, so a complete per-invocation row
-    // total is unknowable and must not be reported as a fabricated number.
+    // The observer runs first() as all() so its meta is seen. This double reports
+    // no rows_read at all, so the read total stays unknown (never a fabricated
+    // number); the writes it does report are now counted rather than nulled.
     expect(budget.d1RowsRead).toBeNull();
-    expect(budget.d1RowsWritten).toBeNull();
+    expect(budget.d1RowsWritten).toBeTypeOf("number");
   });
 
   it("adds graph reads but no extra AI, embedding, or Vectorize path", async () => {
     const budget = await run(1);
 
-    expect(budget.aiCalls).toBe(2);
+    expect(budget.aiCalls).toBe(1);
     expect(budget.embeddingCalls).toBe(1);
     expect(budget.vectorizeQueries).toBe(1);
     expect(budget.vectorizeGets).toBe(0);
@@ -111,7 +110,7 @@ describe("recall stays within the Cloudflare Free operation envelope", () => {
     expect(budget.d1Statements).toBe(7);
     expect(budget.d1Statements).toBeLessThanOrEqual(30);
     expect(budget.d1RowsRead).toBeNull();
-    expect(budget.d1RowsWritten).toBeNull();
+    expect(budget.d1RowsWritten).toBeTypeOf("number");
   });
 
   it("a warm isolate's second recall pays zero readiness KV reads", async () => {

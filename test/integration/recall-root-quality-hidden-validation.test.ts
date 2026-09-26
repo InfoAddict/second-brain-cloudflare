@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULTS } from "../../src/config";
 import { buildQueryProfile } from "../../src/recall/query-profile";
 import { recallEntries } from "../../src/recall/search";
 import type { RecallDiagnostics } from "../../src/recall/types";
@@ -16,6 +17,9 @@ import {
 } from "../fixtures/recall-root-quality";
 import { D1Mock } from "../helpers/d1-mock";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
+
+// This sealed validation pins the pre-reranker pipeline: its mock AI cannot rank passages, and a probe would count as an extra AI call.
+const NO_RERANK = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
 import {
   baselineRecall,
   directTopFourRegressed,
@@ -63,15 +67,17 @@ function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
   (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
     if (sql.includes("SELECT COUNT(*) AS total") && sql.includes("SUM(CASE WHEN content LIKE")) {
       return {
-        bind: (...patterns: string[]) => ({
-          first: async () => c.failureShape === "weak-generic-neighbor"
+        bind: (...patterns: string[]) => {
+          // The recall observer runs first() as all() to count rows_read, so the double answers both the same way.
+          const first = async () => c.failureShape === "weak-generic-neighbor"
             || c.failureShape === "long-parent-pollution"
             ? Promise.reject(new Error("controlled corpus scan unavailable"))
             : Object.fromEntries([
               ["total", 100],
               ...patterns.map((_, index) => [`d${index}`, 2]),
-            ]),
-        }),
+            ]);
+          return { first, all: async () => ({ results: [await first()], meta: {} }) };
+        },
       };
     }
     if (sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT")) {
@@ -148,7 +154,7 @@ async function runCase(c: RootQualityCase): Promise<CaseObservation> {
     { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
     graph.env,
     graph.ctx,
-    undefined,
+    NO_RERANK,
     { diagnostics },
   );
   const acceptableRoots = new Set(c.acceptableRootIds);
@@ -233,6 +239,11 @@ function geometry(c: RootQualityCase) {
   };
 }
 
+// Scope: these run against test/helpers/d1-mock.ts, whose canned keyword rows make them a
+// test of fusion, root selection, and the graph with a controlled candidate pool. They say
+// nothing about the keyword arm. Real-SQL coverage of the same 30 cases (with a baseline
+// that sees the same keyword pool) is test/eval/legacy-parity.test.ts; retrieval quality on
+// corpora large enough to discriminate keyword strategies is `npm run eval:recall` (T-0043).
 describe("hidden recall validation structure", () => {
   it("preserves the sealed manifest digest and recursive freeze", () => {
     expect(HIDDEN_VALIDATION_SERIALIZATION).toBe("UTF-8 JSON.stringify insertion-order v1");

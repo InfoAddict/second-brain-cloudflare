@@ -67,7 +67,10 @@ export async function handleEntriesRoutes(
     return response;
   }
 
-  // GET /export — complete backup: every entry plus the edges and projects tables. Single
+  // GET /export — complete backup, entries oldest first: a restore inserts in this order and
+  // rowids should follow time (the keyword AND tier reads the index newest-rowid-first).
+  // POST /import re-sorts anyway, so files taken before this order still restore correctly.
+  // Complete backup: every entry plus the edges and projects tables. Single
   // unbounded SELECTs are acceptable here: D1 handles tens of thousands of rows in
   // one read and this route runs on explicit user action only. If response size
   // ever becomes a problem, add ?after= cursor support then, not now.
@@ -79,7 +82,7 @@ export async function handleEntriesRoutes(
     const scope = scopeWhere(auth);
 
     const { results: entryRows } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE ${scope.clause} ORDER BY created_at DESC`
+      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE ${scope.clause} ORDER BY created_at ASC`
     ).bind(...scope.bindings).all() as { results: Record<string, any>[] };
     const { results: edgeRows } = await env.DB.prepare(
       `SELECT source_id, target_id, type, weight, provenance, created_at FROM edges WHERE ${scope.clause}`

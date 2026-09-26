@@ -1,0 +1,40 @@
+{
+ "scale-5k": {
+  "q-budget-001": true,
+  "q-budget-002": true,
+  "q-budget-003": true,
+  "q-budget-004": true,
+  "q-budget-005": true,
+  "q-budget-006": true,
+  "q-budget-007": true,
+  "q-budget-008": true,
+  "q-budget-009": true,
+  "q-budget-010": true,
+  "q-corr-001": true,
+  "q-sub-001": true,
+  "q-sub-002": true,
+  "q-sub-003": true,
+  "q-sub-004": true,
+  "q-sub-005": true,
+  "q-sub-006": true
+ },
+ "scale-20k": {
+  "q-budget-001": true,
+  "q-budget-002": true,
+  "q-budget-003": true,
+  "q-budget-004": true,
+  "q-budget-005": true,
+  "q-budget-006": true,
+  "q-budget-007": true,
+  "q-budget-008": true,
+  "q-budget-009": true,
+  "q-budget-010": true,
+  "q-corr-001": true,
+  "q-sub-001": true,
+  "q-sub-002": true,
+  "q-sub-003": true,
+  "q-sub-004": true,
+  "q-sub-005": true,
+  "q-sub-006": true
+ }
+}

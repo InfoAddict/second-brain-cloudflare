@@ -11,6 +11,9 @@ import {
 } from "../fixtures/recall-root-quality";
 import { D1Mock } from "../helpers/d1-mock";
 import { makeTestEnv, makeVectorizeMock } from "../helpers/make-env";
+
+// This frozen benchmark pins the pre-reranker pipeline: its mock AI cannot rank passages, and a probe would count as an extra AI call.
+const NO_RERANK = Object.freeze({ ...DEFAULTS, RERANK_MODE: "off" });
 import {
   baselineRecall,
   directTopFourRegressed,
@@ -57,8 +60,9 @@ function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
   (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
     if (sql.includes("SELECT COUNT(*) AS total") && sql.includes("SUM(CASE WHEN content LIKE")) {
       return {
-        bind: (...patterns: string[]) => ({
-          first: async () => {
+        bind: (...patterns: string[]) => {
+          // The recall observer runs first() as all() to count rows_read, so the double answers both the same way.
+          const first = async () => {
             // Keep the eight-token weak-neighborhood query intact so its two generic
             // matches clear the lexical-count gate but remain below the score threshold.
             if (c.failureShape === "weak-generic-neighbor" || c.failureShape === "long-parent-pollution") {
@@ -68,8 +72,9 @@ function installControlledQueries(db: D1Mock, c: RootQualityCase): void {
               ["total", 100],
               ...patterns.map((_, index) => [`d${index}`, 2]),
             ]);
-          },
-        }),
+          };
+          return { first, all: async () => ({ results: [await first()], meta: {} }) };
+        },
       };
     }
     if (sql.includes("WHERE content LIKE") && sql.includes("ORDER BY created_at DESC LIMIT")) {
@@ -145,7 +150,7 @@ async function runCase(c: RootQualityCase): Promise<CaseObservation> {
     { query: c.query, topK: TOP_K, hops: 1, synthesize: false },
     graph.env,
     graph.ctx,
-    undefined,
+    NO_RERANK,
     { diagnostics },
   );
   const acceptableRoots = new Set(c.acceptableRootIds);
@@ -223,6 +228,11 @@ function expectSplitGates(split: RootQualitySplit, metrics: BenchmarkMetrics, ob
   expect(metrics.extraVectorizeQueries, details).toBe(0);
 }
 
+// Scope: these run against test/helpers/d1-mock.ts, whose canned keyword rows make them a
+// test of fusion, root selection, and the graph with a controlled candidate pool. They say
+// nothing about the keyword arm. Real-SQL coverage of the same 30 cases (with a baseline
+// that sees the same keyword pool) is test/eval/legacy-parity.test.ts; retrieval quality on
+// corpora large enough to discriminate keyword strategies is `npm run eval:recall` (T-0043).
 describe("frozen recall root-quality fixture", () => {
   it("matches every declared intent to the runtime query profiler", () => {
     for (const c of ROOT_QUALITY_CASES) {
@@ -418,7 +428,7 @@ describe("frozen recall root-quality benchmark", () => {
   it("AI and Vectorize parity sentinel keeps the controlled path at one call", async () => {
     const c = ROOT_QUALITY_CASES.find(candidate => candidate.failureShape === "crowded-lexical-root" && candidate.split === "development")!;
     const fixture = buildFixture(c);
-    await recallEntries({ query: c.query, topK: TOP_K, hops: 1, synthesize: false }, fixture.env, fixture.ctx);
+    await recallEntries({ query: c.query, topK: TOP_K, hops: 1, synthesize: false }, fixture.env, fixture.ctx, NO_RERANK);
     expect((fixture.env.AI.run as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])).toEqual([DEFAULTS.EMBEDDING_MODEL]);
     expect(fixture.query).toHaveBeenCalledTimes(1);
   });

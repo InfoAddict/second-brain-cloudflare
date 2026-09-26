@@ -1,12 +1,13 @@
 /**
  * Frozen pre-plan baseline scoring, shared by every recall root-quality
- * benchmark (development/holdout, hidden validation, and the real-SQLite
- * ports of both). Extracted verbatim from the two original mock-based test
+ * benchmark (development/holdout, hidden validation, and their real-SQL
+ * harness in test/eval/legacy/). Extracted verbatim from the two original mock-based test
  * files, which had byte-identical copies of this logic — a single copy
  * means the "frozen baseline" all of them compare against cannot drift
  * between suites.
  */
 import { DEFAULTS } from "../../src/config";
+import { KEYWORD_CANDIDATE_LIMIT, KEYWORD_MAX_TOKENS } from "../../src/constants";
 import { graphSeedLimit, relatedSlotLimit } from "../../src/recall/neighborhood";
 import { mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "../../src/recall/math";
 import type { RootCandidate } from "../../src/recall/root-selector";
@@ -37,13 +38,42 @@ export function frozenBaselineCorpus(c: RootQualityCase, tokens: string[]) {
     : { df: new Map(tokens.map(token => [token, 2])), total: 100 };
 }
 
-export function frozenPrePlanFused(c: RootQualityCase, tokens: string[]): VectorizeMatch[] {
+// SQLite LIKE folds ASCII case only; JS toLowerCase folds Unicode too.
+const asciiLower = (value: string) => value.replace(/[A-Z]/g, ch => ch.toLowerCase());
+
+function assertAsciiTokens(tokens: string[]): void {
+  const bad = tokens.find(token => /[^\x00-\x7f]/.test(token));
+  if (bad !== undefined) throw new Error(`like pool: non-ASCII token ${JSON.stringify(bad)}; SQLite LIKE folds ASCII only, so this baseline cannot mirror it`);
+}
+
+/**
+ * "labels" (default): the keyword pool is the rows the fixture labeled
+ * keywordCandidate, which is what the mock D1 serves. "like": the pool a real
+ * LIKE builds over the tokens the caller passes (the first KEYWORD_MAX_TOKENS,
+ * newest first, capped).
+ *
+ * Callers pass profile.lexicalTokens (recall's queryTokens), the convention of
+ * the frozen pre-plan system (3da4f7a). Production's current LIKE binds the
+ * wider profile.retrievalTokens (evidence, identifier and stem variants), so
+ * the baseline does NOT see exactly what today's pipeline sees. See the note
+ * in test/eval/legacy/gates.ts for the measured sensitivity.
+ */
+export type KeywordPool = "labels" | "like";
+
+export function frozenPrePlanFused(c: RootQualityCase, tokens: string[], pool: KeywordPool = "labels"): VectorizeMatch[] {
   const dense = c.candidates
     .filter((candidate): candidate is CandidateFixture & { denseScore: number } => candidate.denseScore !== undefined)
     .slice()
     .sort((a, b) => b.denseScore - a.denseScore);
   const denseById = new Map(dense.map(candidate => [candidate.id, candidate]));
-  const keyword = c.candidates.filter(candidate => candidate.keywordCandidate);
+  if (pool === "like") assertAsciiTokens(tokens);
+  const likeTerms = tokens.slice(0, KEYWORD_MAX_TOKENS).map(asciiLower);
+  const keyword = pool === "labels"
+    ? c.candidates.filter(candidate => candidate.keywordCandidate)
+    : c.candidates
+        .filter(candidate => likeTerms.some(term => asciiLower(candidate.content).includes(term)))
+        .sort((a, b) => (b.createdAt ?? 1) - (a.createdAt ?? 1))
+        .slice(0, KEYWORD_CANDIDATE_LIMIT);
   const corpus = frozenBaselineCorpus(c, tokens);
   const hasCorpusIdf = !!corpus.df && !!corpus.total && tokens.every(token => corpus.df!.has(token));
   const keywordN = keyword.length || 1;
@@ -87,12 +117,13 @@ export function frozenPrePlanFused(c: RootQualityCase, tokens: string[]): Vector
   });
 }
 
-export function baselineRecall(c: RootQualityCase, tokens: string[], topK: number): { outputIds: string[]; directIds: string[]; rootIds: string[] } {
-  const fixtures = rawCandidates(c);
+export function baselineRecall(c: RootQualityCase, tokens: string[], topK: number, pool: KeywordPool = "labels"): { outputIds: string[]; directIds: string[]; rootIds: string[] } {
+  // A real DB carries recall_count and tags on every row, labeled or not.
+  const fixtures = pool === "like" ? c.candidates : rawCandidates(c);
   const recallCounts = new Map(fixtures.map(candidate => [candidate.id, candidate.recallCount ?? 0]));
   const tags = new Map(fixtures.map(candidate => [candidate.id, [...(candidate.tags ?? [])]]));
   const reranked = rerankWithTimeDecay(
-    frozenPrePlanFused(c, tokens),
+    frozenPrePlanFused(c, tokens, pool),
     recallCounts,
     new Map(),
     [],

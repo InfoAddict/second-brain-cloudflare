@@ -16,8 +16,8 @@ export interface QueryProfile {
   intent: RecallIntent;
 }
 
-function identifierShaped(token: string): boolean {
-  return /[\d#.]/.test(token) || token.includes("-");
+export function identifierShaped(token: string): boolean {
+  return /[\d#._%-]/.test(token);
 }
 
 export function deterministicVariants(query: string, tokens: string[]): string[] {

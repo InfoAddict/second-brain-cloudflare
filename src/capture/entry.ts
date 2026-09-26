@@ -75,6 +75,16 @@ export type CaptureResult =
   | { status: "merged"; id: string }
   | { status: "replaced"; id: string };
 
+/** Content and tags exactly as captureEntry stores them: trimmed, hashtags lifted into tags, tags lowercased and deduped. */
+export function normalizeCaptureInput(rawContent: string, tags: string[]): { content: string; tags: string[] } {
+  const raw = rawContent.trim();
+  const { cleanContent, hashtags } = extractHashtags(raw);
+  return {
+    content: cleanContent || raw,
+    tags: [...new Set([...tags.map(tag => tag.trim().toLowerCase()).filter(Boolean), ...hashtags])],
+  };
+}
+
 export async function captureEntry(
   rawContent: string,
   tags: string[],
@@ -92,10 +102,7 @@ export async function captureEntry(
   // every embed below. Recall and capture must agree on EMBEDDING_MODEL or the
   // vectors they produce are not comparable.
   const cfg = config ?? await resolveConfig(env);
-  const raw = rawContent.trim();
-  const { cleanContent, hashtags } = extractHashtags(raw);
-  const c = cleanContent || raw;
-  const t = [...new Set([...tags.map(tag => tag.trim().toLowerCase()).filter(Boolean), ...hashtags])];
+  const { content: c, tags: t } = normalizeCaptureInput(rawContent, tags);
 
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
 
