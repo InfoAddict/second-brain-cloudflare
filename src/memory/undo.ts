@@ -153,6 +153,27 @@ export async function revertEntry(
       keptIncoming = { id: priorIncoming.id, reason: !incomingRow ? "unreadable" : incomingDenied ? "forbidden" : "changed" };
     }
   }
+
+  // The mirror image (U9): undoing a redo that had trashed a re-created row brings it back, with the
+  // same author-or-admin guard restoring from the trash always uses (U1), and records it again so a
+  // further redo can remove it once more — the two actions stay symmetric indefinitely.
+  const priorRemoved = target.reason === "revert" && typeof (targetMeta.removed_incoming as { id?: unknown } | undefined)?.id === "string"
+    ? targetMeta.removed_incoming as { id: string } : undefined;
+  let restoringIncoming: Awaited<ReturnType<typeof getTrashedEntry>> | undefined;
+  let restoredIncomingSnapshot: { id: string; content: string; workspace_id: string; actor_id: string } | undefined;
+  if (priorRemoved) {
+    const trashedIncoming = await getTrashedEntry(env, identity, priorRemoved.id);
+    const trashedDenied = trashedIncoming ? assertCanMutateEntry(identity, trashedIncoming) : null;
+    if (trashedIncoming && !trashedDenied) {
+      restoringIncoming = trashedIncoming;
+      restoredIncomingSnapshot = {
+        id: priorRemoved.id, content: trashedIncoming.content,
+        workspace_id: trashedIncoming.workspace_id, actor_id: trashedIncoming.actor_id,
+      };
+    }
+  }
+  const metaRecreatedIncoming = recreatedIncomingSnapshot ?? restoredIncomingSnapshot;
+
   // A due version, or an append that carried a when, restores when_* alongside content; so does a
   // full rollback to an older state (toVersion), which returns everything to that point in time.
   const restoreWhen = toVersion !== undefined || target.reason === "due" || targetMeta.when === true;
@@ -212,11 +233,14 @@ export async function revertEntry(
         // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
         // recreated_incoming rides along the same way, with enough of a snapshot (content, workspace,
         // actor) that a redo of this revert (undoing it) can tell whether the row it names is still
-        // safe to remove (U8), not just which row to look at.
+        // safe to remove (U8), not just which row to look at. removed_incoming is its mirror (U9): a
+        // later undo of a redo restores exactly that row from the trash and re-stamps recreated_incoming,
+        // so the pair stays symmetric across as many undo/redo cycles as the caller runs.
         meta: {
           nonce, target_seq: target.seq, reverted_reason: target.reason,
           ...(restoreWhen ? { when: true } : {}),
-          ...(recreatedIncomingSnapshot ? { recreated_incoming: recreatedIncomingSnapshot } : {}),
+          ...(metaRecreatedIncoming ? { recreated_incoming: metaRecreatedIncoming } : {}),
+          ...(removingIncoming ? { removed_incoming: { id: removingIncoming.id } } : {}),
         }, now,
       }),
       // versioning: snapshot
@@ -300,6 +324,23 @@ export async function revertEntry(
     }
   }
   if (keptIncoming) (result as { keptIncoming?: { id: string; reason: string } }).keptIncoming = keptIncoming;
+
+  // The mirror of the removal above (U9): undoing a redo that had trashed a re-created row restores
+  // it, under the same author-or-admin guard POST /restore enforces (U1) — checked before the batch,
+  // above, so this is just carrying out a decision already made.
+  if (restoringIncoming) {
+    try {
+      const restored = await restoreEntry(env, restoringIncoming, change, config);
+      if (restored.status === "restored") {
+        await writeAuditEvents(env, [{
+          entryId: restoringIncoming.id, actorId: change.actorId, event: "restored",
+          payload: { channel: change.channel, edgesRestored: restored.edgesRestored, trashedReason: restored.trashedReason },
+        }]);
+      }
+    } catch (e) {
+      console.error("Undo-merge restore-from-trash failed (non-fatal):", e);
+    }
+  }
 
   return result;
 }
