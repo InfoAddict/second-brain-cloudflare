@@ -338,6 +338,12 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   // Held draft digests (a digest stored because it contradicted a memory a system job may not rewrite):
   // the nightly check for one reads only these rows. Post-column because workspace_id arrives by ALTER.
   idx_entries_conflict_held: `CREATE INDEX IF NOT EXISTS idx_entries_conflict_held ON entries(workspace_id, id) WHERE instr(lower(tags), '"conflict-held"') > 0`,
+  // Agent brief queues (src/brief/compute.ts): each scans only its own rows instead of every
+  // memory. Each WHERE is the instr(...) form the brief queries repeat, so the planner can use it.
+  idx_entries_when: `CREATE INDEX IF NOT EXISTS idx_entries_when ON entries(workspace_id, when_at) WHERE when_at IS NOT NULL`,
+  idx_entries_task: `CREATE INDEX IF NOT EXISTS idx_entries_task ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"task"') > 0`,
+  idx_entries_insight: `CREATE INDEX IF NOT EXISTS idx_entries_insight ON entries(workspace_id, created_at) WHERE instr(lower(tags), '"auto-insight"') > 0`,
+  idx_entries_stale: `CREATE INDEX IF NOT EXISTS idx_entries_stale ON entries(workspace_id, id) WHERE instr(lower(tags), '"stale:as-of"') > 0`,
   prompt_capsule_entry_insert: `CREATE TRIGGER IF NOT EXISTS prompt_capsule_entry_insert
     AFTER INSERT ON entries
     WHEN instr(lower(NEW.tags), '"capsule:') > 0 OR instr(lower(NEW.tags), '"capsule-slot:') > 0

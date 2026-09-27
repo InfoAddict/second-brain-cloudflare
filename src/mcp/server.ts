@@ -30,6 +30,11 @@ import { PROMPT_CAPSULE_MCP_SCHEMA } from "../prompt-capsule/types";
 import { autoCreateProject } from "../projects/autocreate";
 import { listProjects, type ProjectRow } from "../projects/registry";
 import { resolveProjectRead } from "../projects/resolve";
+import { computeAgentBrief } from "../brief/compute";
+import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
+import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { readEntryHistory } from "../memory/history";
+import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -331,6 +336,121 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       return {
         content: [{ type: "text", text: `Projects you can read (${projects.length}):\n\n${lines.join("\n")}\n\nUse the slug as the project argument on remember, recall, and list_recent.` }],
       };
+    },
+  );
+
+  server.registerTool(
+    "brief",
+    {
+      description: "Call once at the start of a session, next to your first recall, and again after the conversation is cleared or compacted. Pass project when you know it. Mention only items that matter to what the user is doing now; if nothing does, say nothing about the brief. Do not read the whole brief back to the user.",
+      inputSchema: {
+        project: projectParam.describe("Known project slug; includes its aliases"),
+        workspace: z.enum(["personal", "company"]).optional().describe("Restrict to one layer"),
+        team: z.string().optional().describe("Team id when reading one shared workspace"),
+      },
+    },
+    async ({ project, workspace, team }) => {
+      if (!identity) return { content: [{ type: "text", text: "Brief requires an authenticated identity." }] };
+      const teamRead = readTeamParam(team, identity, workspace);
+      if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
+      const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
+      if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
+      return { content: [{ type: "text", text: await computeAgentBrief(env, identity, projectRows, workspace, teamRead.teamId) }] };
+    },
+  );
+
+  server.registerTool(
+    "resolve",
+    {
+      description: "Call when the user says something tracked is finished, was never a real task, should come back later, has no date, is still true, or that a suggested insight is right or wrong. Also call after you complete work the user asked you to track. Act only on a clear signal about a specific item; never close several items on your own initiative. Each resolve is recorded in the history with its prior values.",
+      inputSchema: {
+        id: z.string().describe("Exact memory id"),
+        action: z.enum(["done", "not_a_task", "snooze", "clear_date", "confirm_insight", "dismiss_insight", "still_true"]).describe("How to resolve this one item"),
+        until: z.string().optional().describe("Future date for snooze"),
+      },
+    },
+    async ({ id: rawId, action, until }) => {
+      if (!identity) return { content: [{ type: "text", text: "Resolve requires an authenticated identity." }] };
+      const id = rawId.trim();
+      if (!id) return { content: [{ type: "text", text: "id is required" }] };
+      if (action === "confirm_insight" || action === "dismiss_insight") {
+        const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, vector_ids") as (Record<string, any> | null);
+        if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        if (!(JSON.parse(row.tags ?? "[]") as string[]).includes("auto-insight")) {
+          return { content: [{ type: "text", text: "Entry is not a derived insight" }] };
+        }
+        const result = await applyInsightResolution(env, ctx, identity.userId, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss", "mcp");
+        const text = result.resolved.length ? `Resolved ${id}: ${action}` : `Already resolved: ${id}`;
+        return { content: [{ type: "text", text }] };
+      }
+      const result = await resolveEntryAction(env, ctx, identity, id, action, until, "mcp");
+      if (!result.ok) return { content: [{ type: "text", text: result.error }] };
+      return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
+    },
+  );
+
+  server.registerTool(
+    "digest",
+    {
+      description: "Call when the user wants a summary of a project or topic. It returns the most recent automatic summary and its date; follow up with recall for anything newer than that date. It never creates a summary.",
+      inputSchema: {
+        project: projectParam.describe("Known project slug; use exactly one of project or tag"),
+        tag: z.string().optional().describe("Topic tag; use exactly one of project or tag"),
+        workspace: z.enum(["personal", "company"]).optional().describe("Restrict to one layer"),
+        team: z.string().optional().describe("Team id when reading one shared workspace"),
+      },
+    },
+    async ({ project, tag, workspace, team }) => {
+      if (!identity) return { content: [{ type: "text", text: "Digest requires an authenticated identity." }] };
+      const slug = project?.trim();
+      const topic = tag?.trim();
+      if (Boolean(slug) === Boolean(topic)) {
+        return { content: [{ type: "text", text: "Pass exactly one of project or tag." }] };
+      }
+      const teamRead = readTeamParam(team, identity, workspace);
+      if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
+      if (slug) {
+        const projectRows = await resolveProjectArg(slug, workspace, teamRead.teamId);
+        if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
+      }
+      const scope = scopeWhereForRead(identity, { layer: workspace, teamId: teamRead.teamId });
+      const digestTag = slug ? `project:${slug}` : topic!;
+      const row = await env.DB.prepare(
+        `SELECT content, created_at FROM entries
+         WHERE ${scope.clause} AND actor_id = '' AND source = 'system' AND tags NOT LIKE '%"status:deprecated"%'
+           AND tags NOT LIKE '%"status:draft"%' AND tags NOT LIKE '%"conflict-held"%'
+           AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+      ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag))
+        .first<{ content: string; created_at: number }>();
+      if (!row) return { content: [{ type: "text", text: "No digest yet. One is built automatically overnight once there are 10 or more eligible memories. Use recall with project instead." }] };
+      const text = `${STORED_DATA_NOTICE}\nDigest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n----- digest (begin) -----\n${cleanStored(row.content)}\n----- digest (end) -----`;
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  server.registerTool(
+    "history",
+    {
+      description: "Call before you rely on or override a memory that shows [updated], a staleness warning, or 'since changed', and when the user asks why, when or by whom something changed. It shows recorded events and supersedes links. Earlier text is not recorded before 4.0.",
+      inputSchema: {
+        id: z.string().describe("Exact memory id"),
+        limit: z.number().int().min(1).max(50).optional().describe("Recent events to show; default 10"),
+      },
+    },
+    async ({ id: rawId, limit }) => {
+      if (!identity) return { content: [{ type: "text", text: "History requires an authenticated identity." }] };
+      const id = rawId.trim();
+      if (!id) return { content: [{ type: "text", text: "id is required" }] };
+      const history = await readEntryHistory(env, identity, id, limit ?? 10);
+      if (!history) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      const events = history.timeline.length
+        ? history.timeline.map(e => `- ${new Date(e.created_at).toISOString()} ${e.event} by ${e.actor_name} (channel: ${String(e.payload.channel ?? "unknown")}) ${JSON.stringify(e.payload)}`).join("\n")
+        : "No recorded events.";
+      const edges = history.edges.map(e => e.source_id === id
+        ? `- Supersedes ${e.target_id}` : `- Superseded by ${e.source_id}`).join("\n");
+      const text = `History for ${id}\n${events}${edges ? `\n\nLinks\n${edges}` : ""}\n\nEarlier text is not recorded before 4.0.`;
+      return { content: [{ type: "text", text }] };
     },
   );
 

@@ -9,7 +9,7 @@ They are independent of the MCP server. Use either, or both.
 
 | Event | Runs on | Action | Cost |
 |---|---|---|---|
-| `SessionStart` | `startup`, `clear`, `compact` | `GET /recall` for this project, prints up to 5 memories into the session | one recall (~1 s), none on compaction |
+| `SessionStart` | `startup`, `clear`, `compact` | `GET /recall` and `GET /brief` for this project, prints memories and a compact attention brief | two parallel reads, none on cached compaction |
 | `SessionEnd` | every reason (`clear`, `resume`, `logout`, `prompt_input_exit`, `other`) | `POST /capture` with the tail of the conversation | one capture (embedding + often a model call), 30 s hook timeout |
 
 `resume` and `fork` are skipped on start: those transcripts already contain the
@@ -20,7 +20,10 @@ On `startup` and `clear` the block that was printed is cached under
 default). Compaction re-prints that file verbatim and makes no request at all:
 the session id survives compaction and rotates on `/clear`, so a cached block is
 always the current session's context. With no cache, or one older than 24 h,
-compaction falls back to a live recall.
+compaction falls back to live recall and brief requests. Both appear inside one
+6,000-character data frame. The brief is the lean one (due and open commitments
+only), retried without the project when it is not registered. It gets at most 3 s
+after recall answers, and a failed or slow brief does not discard recall.
 
 ## Install, upgrade, check, uninstall
 
@@ -66,10 +69,11 @@ when set.
 Recall:
 
 ```
-GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&tag=<project>
+GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&project=<project>
+GET /brief?lean=1&preview=1&workspace=personal&project=<project>
 ```
 
-with a `tag`-less second attempt if the tagged one returns nothing. With no
+with a project-less second recall attempt if the first returns nothing. With no
 project (a session opened in `$HOME`), one generic query limited to the last 14
 days is sent instead.
 
