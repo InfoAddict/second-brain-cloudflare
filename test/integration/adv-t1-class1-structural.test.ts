@@ -107,7 +107,7 @@ async function callMcpTool(mcpEnv: Env, identity: Identity, name: string, args: 
 interface Case {
   name: string;
   /** Runs the write against a racing env and returns whether the caller saw success. */
-  run: (racingEnv: Env, id: string, adminToken: string) => Promise<{ succeeded: boolean }>;
+  run: (racingEnv: Env, id: string, adminToken: string, admin?: Identity) => Promise<{ succeeded: boolean }>;
 }
 
 const CASES: Case[] = [

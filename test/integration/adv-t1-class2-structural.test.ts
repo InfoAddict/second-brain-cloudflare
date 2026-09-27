@@ -47,7 +47,7 @@ function makeVectorStore() {
     upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, { content: v.metadata?.content }); return { mutationId: "m" } as any; }),
     insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, { content: v.metadata?.content }); return { mutationId: "m" } as any; }),
     deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
-    query: vi.fn(async () => ({ matches: [] })),
+    query: vi.fn(async () => ({ matches: [], count: 0 })),
   });
   return { vec, store };
 }
