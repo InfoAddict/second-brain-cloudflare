@@ -275,7 +275,7 @@ export async function handleEntriesRoutes(
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { timeline, labelMap } = await readEntryTimeline(env, id, auth, String(row.actor_id ?? ""));
+    const { timeline, labelMap } = await readEntryTimeline(env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""));
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,

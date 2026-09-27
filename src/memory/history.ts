@@ -17,7 +17,7 @@ export interface TimelineEvent {
 /** The event timeline used by entry detail and MCP history. The caller checks entry scope first.
  * Reads one indexed statement; the shared-history cut (D-SH, A3) happens in JavaScript below. */
 export async function readEntryTimeline(
-  env: Env, id: string, identity: Identity, entryActorId = "", limit?: number, inlineLabels = false,
+  env: Env, id: string, identity: Identity, entryActorId = "", limit?: number, inlineLabels = false, entryWorkspaceId?: string,
 ): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string> }> {
   const query = inlineLabels
     ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at, u.name AS user_name
@@ -39,9 +39,16 @@ export async function readEntryTimeline(
   }));
 
   // The author sees every event; anyone else sees events from the move that brought the memory
-  // into a workspace they can read (D-SH, A3). isAuthor requires a real, matching actor id —
-  // a system-authored row (actor_id "") never grants it through this path.
-  const isAuthor = entryActorId !== "" && identity.userId === entryActorId;
+  // into a workspace they can read (D-SH, A3). A legacy row (actor_id "") has no author on file,
+  // but its own owner still needs the full timeline of a memory sitting in their own personal
+  // workspace — pre-4.0 move events recorded no fromWorkspaceId, so the D-SH walk below would
+  // otherwise cut them off from their own history (ADV-11). This is narrowly the owner of THIS
+  // row's own personal workspace, not any admin: entryWorkspaceId must match identity's own, or
+  // (the pre-workspace-migration case) be "" and identity be the tenant owner.
+  const isLegacyOwnRow = entryActorId === "" && entryWorkspaceId !== undefined
+    && (entryWorkspaceId === identity.personalWorkspaceId
+      || (entryWorkspaceId === "" && identity.userId === (await ensureTenantBootstrap(env)).ownerUserId));
+  const isAuthor = (entryActorId !== "" && identity.userId === entryActorId) || isLegacyOwnRow;
   let rows = parsedChrono;
   if (!isAuthor) {
     const newestFirst = [...parsedChrono].reverse();
@@ -73,7 +80,7 @@ export async function readEntryHistory(env: Env, identity: Identity, id: string,
   const edgeScope = scopeWhereForRead(identity, undefined, "e.workspace_id");
   const otherScope = scopeWhereForRead(identity, undefined, "o.workspace_id");
   const [timelineResult, edgeResult] = await Promise.all([
-    readEntryTimeline(env, id, identity, String(entry.actor_id ?? ""), limit, true),
+    readEntryTimeline(env, id, identity, String(entry.actor_id ?? ""), limit, true, String(entry.workspace_id ?? "")),
     env.DB.prepare(`SELECT e.source_id, e.target_id FROM edges e
       JOIN entries o ON o.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
       WHERE e.type = 'supersedes' AND (e.source_id = ? OR e.target_id = ?) AND ${edgeScope.clause} AND ${otherScope.clause}

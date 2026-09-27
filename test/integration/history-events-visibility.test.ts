@@ -205,4 +205,17 @@ describe("history visibility follows moves", () => {
     expect(text).toContain("shared");
     expect(text).toContain("updated");
   });
+
+  it("ADV-11: GET /entry shows the owner every event of a legacy memory in their own personal workspace", async () => {
+    // Legacy row: actor_id "" (pre-team author), sitting in the owner's own personal workspace.
+    await seed("l1", { actorId: "" });
+    await bump("l1", "updated", owner.userId, 1000);
+    const roots = await ensureTenantBootstrap(env);
+    await bump("l1", "shared", owner.userId, 2000, { workspaceId: roots.companyWorkspaceId }); // pre-4.0: no fromWorkspaceId
+    await bump("l1", "unshared", owner.userId, 3000, { workspaceId: owner.personalWorkspaceId }); // pre-4.0: no fromWorkspaceId
+
+    const res = await worker.fetch(req("GET", "/entry?id=l1"), env, ctx);
+    const body = await res.json() as any;
+    expect((body.entry ?? body).timeline.map((e: any) => e.event)).toEqual(["updated", "shared", "unshared"]);
+  });
 });
