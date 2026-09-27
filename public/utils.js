@@ -432,7 +432,7 @@ function syncWorkspaceFilterChip(doc, chip, offsetTop) {
  * js/tags.js is gone; its callers pick these up as globals exactly as before.
  */
 
-/** Namespaces the Worker owns. Anything `prefix:value` shaped and reserved. */
+/** Pre-4.0 namespaces the Worker owns. Anything `prefix:value` shaped and reserved. */
 const SYSTEM_TAG_PREFIXES = [
   'kind:',
   'status:',
@@ -442,6 +442,66 @@ const SYSTEM_TAG_PREFIXES = [
   'capsule-slot:',
   'project:',
 ]
+
+/**
+ * Namespaces this 4.0 contract reserved (src/quarantine/tags.ts,
+ * src/tags/t7.ts). Unlike SYSTEM_TAG_PREFIXES above, a tag in one of these is
+ * hidden only when its VALUE also matches the system's own format -- see
+ * isRecognizedNewReservedValue below. A pre-existing user tag that merely
+ * looks like one of these (a genuine `outcome:won` or `confidence:high`
+ * someone tagged before 4.0) shows as an ordinary tag instead. Stored data
+ * is never rewritten either way.
+ */
+const NEW_RESERVED_TAG_PREFIXES = [
+  // Track 4 (self-protecting): src/quarantine/tags.ts
+  'quarantine:',
+  'edited-canonical:',
+  // Track 7 (standing memory, decision ledger, commitments): src/tags/t7.ts
+  'standing:',
+  'ledger:',
+  'confidence-source:',
+  'confidence:',
+  'outcome:',
+  'review-rearms:',
+  'counterparty:',
+]
+
+/** Same slug grammar as PROJECT_SLUG_RE below, and src/tags/t7.ts's T7_SLUG_RE. */
+const T7_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const CONFIDENCE_VALUES = new Set([
+  '0.05', '0.10', '0.15', '0.20', '0.25', '0.30', '0.35', '0.40', '0.45',
+  '0.50', '0.55', '0.60', '0.65', '0.70', '0.75', '0.80', '0.85', '0.90', '0.95',
+])
+
+/**
+ * Mirrors isRecognizedReservedTagFormat (src/tags/system.ts) -- this file
+ * cannot import TypeScript, so the guard test checks the two stay in step.
+ * `t` is already trimmed and lowercased by the caller.
+ */
+function isRecognizedNewReservedValue(t) {
+  if (t.startsWith('quarantine:')) {
+    const v = t.slice('quarantine:'.length)
+    return v === 'instruction' || v === 'hidden' || v === 'burst' || v === 'capsule'
+  }
+  if (t.startsWith('edited-canonical:')) return /^\d{4}-\d{2}-\d{2}$/.test(t.slice('edited-canonical:'.length))
+  if (t.startsWith('standing:')) return t.slice('standing:'.length) === 'active'
+  if (t.startsWith('ledger:')) return t.slice('ledger:'.length) === 'decision'
+  if (t.startsWith('confidence-source:')) {
+    const v = t.slice('confidence-source:'.length)
+    return v === 'stated' || v === 'inferred'
+  }
+  if (t.startsWith('confidence:')) return CONFIDENCE_VALUES.has(t.slice('confidence:'.length))
+  if (t.startsWith('outcome:')) {
+    const v = t.slice('outcome:'.length)
+    return v === 'right' || v === 'wrong' || v === 'mixed' || v === 'unknown'
+  }
+  if (t.startsWith('review-rearms:')) {
+    const v = t.slice('review-rearms:'.length)
+    return v === '1' || v === '2'
+  }
+  if (t.startsWith('counterparty:')) return T7_SLUG_RE.test(t.slice('counterparty:'.length))
+  return false
+}
 
 /** Membership tag written on a memory that belongs to a project: `project:<slug>`. */
 const PROJECT_TAG_PREFIX = 'project:'
@@ -463,6 +523,8 @@ const SYSTEM_TAG_NAMES = new Set([
   'contradiction-resolved',
   'user-edited',
   'conflict-held',
+  // Track 7's inbound-commitment marker: a bare word, not a namespace (P7.3).
+  'owed-to-me',
 ])
 
 /**
@@ -496,7 +558,11 @@ function isSystemTag(tag) {
   if (!t) return true
   if (SYSTEM_TAG_NAMES.has(t)) return true
   if (isMachineIdentifier(t)) return true
-  return SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))
+  if (SYSTEM_TAG_PREFIXES.some((p) => t.startsWith(p))) return true
+  // A 4.0-reserved prefix hides only when the value also matches the
+  // system's own format -- see NEW_RESERVED_TAG_PREFIXES above.
+  if (NEW_RESERVED_TAG_PREFIXES.some((p) => t.startsWith(p))) return isRecognizedNewReservedValue(t)
+  return false
 }
 
 /** The tags worth showing a person, in their original order. */

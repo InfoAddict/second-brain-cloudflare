@@ -14,7 +14,7 @@ import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { rememberTags } from "../tags/vocabulary";
-import { CONFLICT_HELD_TAG, isCapsuleTag, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
+import { CONFLICT_HELD_TAG, isCapsuleTag, stripNewReservedTags, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES } from "../constants";
 import { deleteVectorIds } from "../vectorize/batch";
@@ -77,13 +77,19 @@ export type CaptureResult =
   | { status: "merged"; id: string }
   | { status: "replaced"; id: string };
 
-/** Content and tags exactly as captureEntry stores them: trimmed, hashtags lifted into tags, tags lowercased and deduped. */
+/**
+ * Content and tags exactly as captureEntry stores them: trimmed, hashtags lifted into tags,
+ * tags lowercased and deduped. A caller-supplied tag in a namespace this contract reserved
+ * (quarantine:, standing:, ...) is dropped here -- stripNewReservedTags is the single guard
+ * every caller write path goes through; see test/unit/reserved-tags-write-guard.test.ts.
+ */
 export function normalizeCaptureInput(rawContent: string, tags: string[]): { content: string; tags: string[] } {
   const raw = rawContent.trim();
   const { cleanContent, hashtags } = extractHashtags(raw);
+  const { kept } = stripNewReservedTags(tags.map(tag => tag.trim().toLowerCase()).filter(Boolean));
   return {
     content: cleanContent || raw,
-    tags: [...new Set([...tags.map(tag => tag.trim().toLowerCase()).filter(Boolean), ...hashtags])],
+    tags: [...new Set([...kept, ...hashtags])],
   };
 }
 
