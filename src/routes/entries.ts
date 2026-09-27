@@ -5,7 +5,7 @@ import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
-import { readEntryTimeline, seesPrivateHistory } from "../memory/history";
+import { readEntryTimeline } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
@@ -224,7 +224,7 @@ export async function handleEntriesRoutes(
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { timeline, labelMap } = await readEntryTimeline(env, id, auth.userId, String(row.actor_id ?? ""), undefined, false, !seesPrivateHistory(auth, row));
+    const { timeline, labelMap } = await readEntryTimeline(env, id, auth, String(row.actor_id ?? ""));
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,
@@ -287,7 +287,7 @@ export async function handleEntriesRoutes(
     if (teamRead.error) return json({ ok: false, error: teamRead.error }, 400);
 
     const id = body.id.trim();
-    const result = await moveEntry(id, target, env, auth, teamRead.teamId);
+    const result = await moveEntry(id, target, env, auth, { actorId: auth.userId, channel: "rest" }, teamRead.teamId);
 
     if (result.status === "not_found") {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
@@ -299,14 +299,8 @@ export async function handleEntriesRoutes(
       return json({ ok: true, id, status: "no_change" });
     }
 
-    auditEvent(env, ctx, {
-      entryId: id,
-      actorId: auth.userId,
-      event: result.status,
-      payload: { workspaceId: result.workspaceId, channel: "rest" },
-    });
-    // After the audit event, before the response: the D1 move and the audit
-    // row are both already committed, so a Vectorize outage here can only
+    // The shared/unshared event is written inside moveEntry's own batch (M5): no separate audit here.
+    // Before the response: the D1 move is already committed, so a Vectorize outage here can only
     // cost this cosmetic ranking follow-up, never the state change itself.
     ctx.waitUntil(restampVectorWorkspace(env, result.vectorIds, result.workspaceId));
     return json({ ok: true, id, status: result.status, workspaceId: result.workspaceId });

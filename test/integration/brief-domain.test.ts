@@ -69,9 +69,9 @@ describe("shared entry timeline", () => {
     for (let i = 1; i <= 4; i++) {
       await env.DB.prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, 'e', ?, 'updated', '{}', ?)`).bind(`ev${i}`, auth.userId, i).run();
     }
-    const all = await readEntryTimeline(env, "e", auth.userId);
+    const all = await readEntryTimeline(env, "e", auth);
     expect(all.timeline.map(t => t.created_at)).toEqual([1, 2, 3, 4]);
-    const recent = await readEntryTimeline(env, "e", auth.userId, "", 2, true);
+    const recent = await readEntryTimeline(env, "e", auth, "", 2, true);
     expect(recent.timeline.map(t => t.created_at)).toEqual([3, 4]);
   });
 });

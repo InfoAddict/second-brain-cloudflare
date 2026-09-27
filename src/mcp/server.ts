@@ -742,14 +742,13 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const target = workspace ?? "company";
       const teamRead = readTeamParam(team, identity, target);
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
-      const result = await moveEntry(id, target, env, identity, teamRead.teamId);
+      const result = await moveEntry(id, target, env, identity, mcpChange, teamRead.teamId);
       if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (result.status === "forbidden") return { content: [{ type: "text", text: `Only the entry's author or an admin can un-share ${id}.` }] };
       if (result.status === "no_change") return { content: [{ type: "text", text: `Entry ${id} is already in the ${workspace ?? "company"} workspace.` }] };
-      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: result.status, payload: { workspaceId: result.workspaceId, channel: "mcp" } });
-      // After the audit event, before the response — see moveEntry's own
-      // comment: the D1 move is already committed, so a Vectorize outage
-      // here costs only this cosmetic ranking follow-up.
+      // The shared/unshared event is written inside moveEntry's own batch (M5): no separate audit here.
+      // Before the response — see moveEntry's own comment: the D1 move is already committed, so a
+      // Vectorize outage here costs only this cosmetic ranking follow-up.
       ctx.waitUntil(restampVectorWorkspace(env, result.vectorIds, result.workspaceId));
       return { content: [{ type: "text", text: `Entry ${id} ${result.status} — now in the ${workspace ?? "company"} workspace.` }] };
     }

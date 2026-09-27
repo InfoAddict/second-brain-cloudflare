@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (149 queries, 71 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (150 queries, 72 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1273,7 +1273,9 @@ describe("the checker over the real source tree", () => {
     // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/memory/versions.ts): the snapshot SELECT over entries is by-id,
     // the caller having authorized the entry before it builds the batch.
-    ).toEqual({ queries: 149, exempt: 71, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/capture/share.ts): moveEntry's move-event
+    // INSERT reads the row's own workspace by id, the row having been read above under the caller's scope.
+    ).toEqual({ queries: 150, exempt: 72, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
