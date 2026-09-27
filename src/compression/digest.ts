@@ -51,12 +51,12 @@ State of ${stateOf}:`;
 }
 
 /** Mark digest sources and retry individually if the batch fails. */
-async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): Promise<void> {
+async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, workspaceId: string): Promise<void> {
   if (!ids.length) return;
   const note = `\n\n[Digest: ${digestId}]`;
   const mark = (id: string) => env.DB.prepare(
-    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ?`
-  ).bind(note, id);
+    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ?`
+  ).bind(note, id, workspaceId);
 
   try {
     await env.DB.batch(ids.map(mark));
@@ -71,6 +71,12 @@ async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): P
     }
   }
 }
+
+/** A held draft digest still waiting on the person; the held tag is written by captureEntry. */
+const HELD_DIGEST_SQL = `(tags LIKE '%"conflict-held"%'
+            AND tags NOT LIKE '%"user-edited"%'
+            AND tags NOT LIKE '%"status:canonical"%'
+            AND tags NOT LIKE '%"status:deprecated"%')`;
 
 export interface CompressTagOptions {
   /** When set, roll up only these workspaces and scope the 24h cooldown per workspace. */
@@ -130,6 +136,13 @@ export async function compressTag(
       }
     }
 
+    // A digest held as a draft (it contradicted a memory a system job may not rewrite) is not
+    // retried every cycle: the same sources would be re-summarised, and the model paid for, only
+    // to be held again. So the same one existence check that gates the 24h cooldown also skips the
+    // tag while a held draft is LIVE in this workspace (HELD_DIGEST_SQL), and it releases when the
+    // person acts on the draft: edits it (`user-edited`), confirms it (status canonical),
+    // deprecates it, or forgets it (the row is gone).
+    //
     // The 24h cooldown stays corpus-wide on purpose for the nightly cron: it gates
     // repetition, not visibility, so checking it across workspaces can only ever
     // postpone a digest by a day — it never moves one user's content into another
@@ -141,7 +154,7 @@ export async function compressTag(
         SELECT id FROM entries
         WHERE tags LIKE '%"synthesized"%'
           AND tags LIKE ? ${TAG_LIKE_ESCAPE}
-          AND created_at > ?
+          AND (created_at > ? OR ${HELD_DIGEST_SQL})
           AND workspace_id = ?
         LIMIT 1
       `).bind(tagLikePattern(tag), Date.now() - 86400000, workspaceId).first();
@@ -151,14 +164,15 @@ export async function compressTag(
         SELECT id FROM entries
         WHERE tags LIKE '%"synthesized"%'
           AND tags LIKE ? ${TAG_LIKE_ESCAPE}
-          AND created_at > ?
+          AND (created_at > ? OR (${HELD_DIGEST_SQL} AND workspace_id = ?))
         LIMIT 1
-      `).bind(tagLikePattern(tag), Date.now() - 86400000).first();
+      `).bind(tagLikePattern(tag), Date.now() - 86400000, workspaceId).first();
     }
 
     if (recentSynth) {
       continue;
     }
+
 
     const member = workspaceRows
       ? projectFilterSql(workspaceRows)
@@ -207,7 +221,7 @@ export async function compressTag(
       continue;
     }
 
-    await markSourcesRolledUp(env, rows.map(r => r.id), result.id);
+    await markSourcesRolledUp(env, rows.map(r => r.id), result.id, workspaceId);
 
     // First successful digest defines the returned text/id; counts accumulate across
     // workspaces so a caller still learns how much was compressed tonight.

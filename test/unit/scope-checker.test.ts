@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (140 queries, 69 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (140 queries, 68 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1233,7 +1233,10 @@ describe("the checker over the real source tree", () => {
     // (`AND workspace_id = ?`, writeCtx.workspaceId) instead of trusting the scoped candidate read, so their two
     // by-id exemptions are gone; restoreRowVectors adds one by-id SELECT after a lost compare-and-set.
     // The CAS and deprecation UPDATEs are not counted by the checker.
-    ).toEqual({ queries: 140, exempt: 69, checked: 12, outerJoin: 1 });
+    // Deliberate: -1 scope-exempt for T-0089.4.4: deprecateEntry (src/capture/lifecycle.ts) takes an optional
+    // workspace and pins its read and write to it when captureEntry passes the writer's workspace; that SELECT
+    // now carries the clause in a JS fragment, and the checker no longer needs an exemption for the read it replaced.
+    ).toEqual({ queries: 140, exempt: 68, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

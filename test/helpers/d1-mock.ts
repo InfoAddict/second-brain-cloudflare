@@ -542,8 +542,9 @@ export class D1Mock {
         }
         if (s.includes("WHERE tags LIKE") && s.includes("created_at >")) {
           // Cooldown check: find entries matching arg LIKE patterns + any hardcoded tags in SQL
-          const likePatterns: string[] = args.slice(0, -1).map((a: any) => String(a));
-          const cutoff = args[args.length - 1] as number;
+          // Binds are the LIKE pattern(s), the cutoff, and (since the held-digest clause) the workspace id.
+          const likePatterns: string[] = args.filter((a: any) => typeof a === "string" && a.startsWith("%")).map((a: any) => String(a));
+          const cutoff = args.find((a: any) => typeof a === "number") as number;
           // Extract hardcoded tags from SQL (e.g. '%"synthesized"%')
           const hardcoded = [...s.matchAll(/'%"(\w+)"%'/g)].map(m => m[1]);
           const match = db.entries.find((e: any) => {

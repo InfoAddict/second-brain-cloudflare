@@ -301,7 +301,10 @@ export async function captureEntry(
     // draft and nothing is deprecated, because "we decided X… actually Y" in a
     // session log is not evidence that the memory of X is wrong.
     protectConflict =
-      conflictStatus === "canonical"
+      // The row is no longer in the writer's workspace (moved, shared or forgotten since the scoped
+      // read): whoever wrote it has decided where it lives, and this write may not rule on it.
+      !conflictRow
+      || conflictStatus === "canonical"
       || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source)
       // A system job never rewrites a row it did not write, deprecation included.
       || (opts.systemWrite !== undefined && !isSystemRow({ tags: conflictTags, actor_id: conflictRow?.actor_id, source: conflictSource }, opts.systemWrite));
@@ -366,7 +369,7 @@ export async function captureEntry(
         .bind(JSON.stringify(protectedTags), id).run();
       // A system job's guess must not move the user's row: a win here would make it
       // permanently ineligible for digests (compression/eligibility.ts).
-      if (opts.systemWrite === undefined) {
+      if (opts.systemWrite === undefined && conflictSnapshot) {
         try {
           await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
           await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
@@ -416,23 +419,34 @@ export async function captureEntry(
     }
 
     scheduleIndex(finalTags);
+    // The user path deprecates by id, pinned to the writer's workspace; if the row is no longer
+    // there this was not a contradiction this write may rule on: keep the newcomer, no counters, no edge.
+    let deprecated = deprecatedBySystem;
+    if (!deprecatedBySystem) {
+      try {
+        deprecated = await deprecateEntry(conflictId, env, writeCtx.workspaceId);
+        if (deprecated && opts.channel) {
+          auditEvent(env, ctx, {
+            entryId: conflictId,
+            actorId: writeCtx.actorId,
+            event: "status_changed",
+            payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel },
+          });
+        }
+      } catch (e) {
+        console.error("Contradiction deprecation failed (non-fatal):", e);
+      }
+    }
+    if (!deprecated) {
+      classifyThenInfer(id, c, env, ctx, cfg, kind =>
+        inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
+      return { status: "stored", id, tags: finalTags };
+    }
     try {
       await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
       await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
     } catch (e) {
       console.error("Contradiction count update failed (non-fatal):", e);
-    }
-    try {
-      if (!deprecatedBySystem && await deprecateEntry(conflictId, env) && opts.channel) {
-        auditEvent(env, ctx, {
-          entryId: conflictId,
-          actorId: writeCtx.actorId,
-          event: "status_changed",
-          payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel },
-        });
-      }
-    } catch (e) {
-      console.error("Contradiction deprecation failed (non-fatal):", e);
     }
     try {
       // Stamped with the workspace this capture was written to, for the same
