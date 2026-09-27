@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import type { ProjectRow } from "../projects/registry";
 import { projectFilterSql } from "../projects/filter";
-import { scopeWhere, type ScopeClause } from "../lib/scope";
+import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
@@ -68,12 +68,16 @@ const RESURFACE_RECENT_WINDOW_DAYS = 30;
  */
 const RESURFACE_EXCLUDE_BOUND_CAP = 20;
 
-export async function computeBrief(env: Env, auth: Identity, preview = false, projectRows?: ProjectRow[]) {
-  const baseScope = scopeWhere(auth);
+function briefScope(auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): ScopeClause {
+  const baseScope = scopeWhereForRead(auth, { layer, teamId });
   const project = projectRows ? projectFilterSql(projectRows) : null;
-  const scope: ScopeClause = project
+  return project
     ? { clause: `${baseScope.clause} AND ${project.clause}`, bindings: [...baseScope.bindings, ...project.bindings] }
     : baseScope;
+}
+
+export async function computeBrief(env: Env, auth: Identity, preview = false, projectRows?: ProjectRow[]) {
+  const scope = briefScope(auth, projectRows);
   const now = Date.now();
   const since = now - RECENT_WINDOW_MS;
   const resurfaceBefore = now - RESURFACE_MIN_AGE_MS;
@@ -267,6 +271,33 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
       items: loopItems,
     },
   };
+}
+
+/** Compact attention view for agents. Shares the scope and queue predicates with dashboard brief. */
+export async function computeAgentBrief(env: Env, auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): Promise<string> {
+  const scope = briefScope(auth, projectRows, layer, teamId);
+  const now = Date.now();
+  const [due, loops, stale, insights] = await Promise.all([
+    env.DB.prepare(`SELECT id, content, when_at FROM entries
+      WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause}
+      ORDER BY when_at ASC, id ASC LIMIT 5`).bind(now + DUE_WITHIN_MS, ...scope.bindings).all(),
+    env.DB.prepare(`SELECT id, content FROM entries
+      WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
+      ORDER BY created_at DESC, id DESC LIMIT 5`).bind(...scope.bindings).all(),
+    env.DB.prepare(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${STALE_REVIEW_SQL} AND ${scope.clause}
+      ORDER BY COALESCE(updated_at, created_at) ASC, id ASC LIMIT 2`).bind(...scope.bindings).all(),
+    env.DB.prepare(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${PENDING_INSIGHT_SQL} AND ${scope.clause}
+      ORDER BY created_at DESC, id DESC LIMIT 1`).bind(...scope.bindings).all(),
+  ]);
+  const line = (r: Record<string, any>) => `- ${r.id}: ${String(r.content ?? "").replace(/\s+/g, " ").slice(0, 120)}`;
+  const sections: string[] = [];
+  if (due.results.length) sections.push(`Due\n${(due.results as Record<string, any>[]).map(r => `${line(r)} (${new Date(r.when_at as number).toISOString()})`).join("\n")}`);
+  if (loops.results.length) sections.push(`Open commitments\n${(loops.results as Record<string, any>[]).map(line).join("\n")}`);
+  if (stale.results.length) sections.push(`May be out of date (${(stale.results[0] as Record<string, any>).total})\n${(stale.results as Record<string, any>[]).map(line).join("\n")}`);
+  if (insights.results.length) sections.push(`Pending insights (${(insights.results[0] as Record<string, any>).total})\n${(insights.results as Record<string, any>[]).map(line).join("\n")}`);
+  return sections.join("\n\n") || "Nothing needs attention.";
 }
 
 /** Days since the epoch: changes once a day, stable within it. */

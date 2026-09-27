@@ -19,6 +19,7 @@ import { createMember } from "../../src/lib/team-admin";
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as ExecutionContext;
 
 const EXPECTED_TOOLS = [
+  "brief",
   "remember",
   "recall",
   "list_recent",

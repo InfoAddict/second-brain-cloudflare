@@ -30,6 +30,7 @@ import { PROMPT_CAPSULE_MCP_SCHEMA } from "../prompt-capsule/types";
 import { autoCreateProject } from "../projects/autocreate";
 import { listProjects, type ProjectRow } from "../projects/registry";
 import { resolveProjectRead } from "../projects/resolve";
+import { computeAgentBrief } from "../brief/compute";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -331,6 +332,26 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       return {
         content: [{ type: "text", text: `Projects you can read (${projects.length}):\n\n${lines.join("\n")}\n\nUse the slug as the project argument on remember, recall, and list_recent.` }],
       };
+    },
+  );
+
+  server.registerTool(
+    "brief",
+    {
+      description: "Call at session start alongside recall, and after compaction. Pass project when known. Mention only relevant items; stay silent when none matter. Do not read the whole brief back to the user.",
+      inputSchema: {
+        project: projectParam.describe("Known project slug; includes its aliases"),
+        workspace: z.enum(["personal", "company"]).optional().describe("Restrict to one layer"),
+        team: z.string().optional().describe("Team id when reading one shared workspace"),
+      },
+    },
+    async ({ project, workspace, team }) => {
+      if (!identity) return { content: [{ type: "text", text: "Brief requires an authenticated identity." }] };
+      const teamRead = readTeamParam(team, identity, workspace);
+      if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
+      const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
+      if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
+      return { content: [{ type: "text", text: await computeAgentBrief(env, identity, projectRows, workspace, teamRead.teamId) }] };
     },
   );
 
