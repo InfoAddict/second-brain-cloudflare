@@ -246,6 +246,16 @@ describe("stripToPlainText / titleLine", () => {
     expect(sourceBadge("cli")).toEqual({ icon: "ti-terminal-2", label: "cli" });
   });
 
+  it("badges a deliberate codex or cursor write as Codex/Cursor, not chatgpt", () => {
+    expect(sourceBadge("codex")).toEqual({ icon: "ti-brand-openai", label: "codex" });
+    expect(sourceBadge("cursor")).toEqual({ icon: "ti-code", label: "cursor" });
+  });
+
+  it("badges the Codex CLI / Cursor session-capture hooks distinctly from a deliberate write", () => {
+    expect(sourceBadge("codex-session")).toEqual({ icon: "ti-terminal-2", label: "codex session" });
+    expect(sourceBadge("cursor-session")).toEqual({ icon: "ti-code", label: "cursor session" });
+  });
+
   it("truncates a source that is really a sentence", () => {
     const badge = sourceBadge("User uploaded markdown on 2026-05-30");
     expect(badge.label.length).toBeLessThanOrEqual(18);

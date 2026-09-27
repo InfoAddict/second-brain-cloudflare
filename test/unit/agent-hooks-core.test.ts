@@ -132,6 +132,16 @@ describe("core session cache", () => {
   });
 });
 
+describe("core timing defaults", () => {
+  it("defaults to Claude Code's original 15s recall / 3s brief-grace budget, unchanged", () => {
+    // Any adapter that does not think about timing inherits Claude's own
+    // generous budget — that is deliberate (see the comment above these
+    // constants), but a NEW adapter must override it, not rely on it.
+    expect(core.DEFAULT_RECALL_TIMEOUT_MS).toBe(15000);
+    expect(core.DEFAULT_BRIEF_GRACE_MS).toBe(3000);
+  });
+});
+
 describe("core.performRecall", () => {
   const withStub = async (handler: (url: URL) => { status: number; body: unknown } | null, run: () => Promise<unknown>) => {
     const realFetch = global.fetch;
@@ -247,5 +257,215 @@ describe("core.performRecall", () => {
       expect(out).toBeNull();
     } finally { global.fetch = realFetch; process.exitCode = 0; }
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("core.redactSecrets (capture)", () => {
+  // Assembled at runtime, never written as a literal — see the equivalent
+  // comment in claude-code-hooks' own redactSecrets tests for why.
+  const openai = "sk-" + "A".repeat(24);
+  const ownToken = "own-" + "f".repeat(16);
+
+  it("redacts the caller's own token and provider key shapes", () => {
+    expect(core.redactSecrets(`token is ${ownToken}.`, ownToken)).toBe("token is [redacted].");
+    expect(core.redactSecrets(`key ${openai} here`)).toBe("key [redacted] here");
+  });
+  it("leaves ordinary text alone", () => {
+    expect(core.redactSecrets("a git sha 9f2c1a4e7b3d5f8a and a uuid 550e8400-e29b-41d4-a716-446655440000"))
+      .toBe("a git sha 9f2c1a4e7b3d5f8a and a uuid 550e8400-e29b-41d4-a716-446655440000");
+  });
+});
+
+describe("core.buildSessionCaptureBody", () => {
+  const meta = { hostLabel: "Codex", project: "brain-app", projectName: "brain-app", timestamp: "2026-09-27T10:00:00.000Z", workspace: "personal", source: "codex-session" };
+
+  it("headers with '<hostLabel> session in <project>, <date>', then the kept user turns", () => {
+    const body = core.buildSessionCaptureBody(["first thing said", "second thing said"], meta);
+    expect(body.content.startsWith("Codex session in brain-app, 2026-09-27")).toBe(true);
+    expect(body.content).toContain("User: first thing said");
+    expect(body.content).toContain("User: second thing said");
+    expect(body).toMatchObject({ source: "codex-session", project: "brain-app", workspace: "personal", tags: ["brain-app"] });
+  });
+  it("keeps only the last N user turns", () => {
+    const body = core.buildSessionCaptureBody(["one", "two", "three", "four"], meta, { wantUserTurns: 3 });
+    expect(body.content).not.toContain("User: one");
+    expect(body.content).toContain("User: four");
+  });
+  it("redacts and then applies the hard cap, in that order", () => {
+    const ownToken = "own-" + "f".repeat(16);
+    const turn = `${ownToken} `.repeat(400);
+    const body = core.buildSessionCaptureBody([turn], { ...meta, token: ownToken });
+    expect(body.content).not.toContain(ownToken);
+    expect(body.content.length).toBeLessThanOrEqual(core.CAPTURE_MAX_CONTENT_CHARS);
+  });
+  it("is just the header when there are no user turns", () => {
+    expect(core.buildSessionCaptureBody([], meta).content).toBe("Codex session in brain-app, 2026-09-27");
+  });
+});
+
+describe("core.shouldCaptureSession", () => {
+  it("requires one substantial turn and enough total conversation", () => {
+    expect(core.shouldCaptureSession(["ok"])).toBe(false);
+    expect(core.shouldCaptureSession(["Please move the digest off the shared cron so sync stops starving it, and cap it at 20 entries per run so it never runs away on a busy day. Log a line whenever it stops early so we can tell, and add a quick test for the cap."])).toBe(true);
+    expect(core.shouldCaptureSession([])).toBe(false);
+  });
+});
+
+describe("core marker helpers (hasMarker / setMarker)", () => {
+  it("round-trip and are namespaced independently of the recall/content cache", () => {
+    const dir = tmp();
+    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(false);
+    core.setMarker("codex-captured", "s1", dir);
+    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(true);
+    expect(core.hasMarker("cursor-captured", "s1", dir)).toBe(false);
+  });
+});
+
+describe("core.lastCaptureTime / recordLastCaptureTime", () => {
+  it("records and reads back a timestamp, per namespace", () => {
+    const dir = tmp();
+    expect(core.lastCaptureTime("codex", dir)).toBeNull();
+    core.recordLastCaptureTime("codex", dir, 12345);
+    expect(core.lastCaptureTime("codex", dir)).toBe(12345);
+    expect(core.lastCaptureTime("cursor", dir)).toBeNull();
+  });
+});
+
+describe("core.captureEnabled", () => {
+  it("is on by default, off with the global switch, off with a per-client switch", () => {
+    expect(core.captureEnabled({}, "SECOND_BRAIN_HOOK_CAPTURE_CODEX")).toBe(true);
+    expect(core.captureEnabled({ SECOND_BRAIN_HOOK_CAPTURE: "0" }, "SECOND_BRAIN_HOOK_CAPTURE_CODEX")).toBe(false);
+    expect(core.captureEnabled({ SECOND_BRAIN_HOOK_CAPTURE_CODEX: "0" }, "SECOND_BRAIN_HOOK_CAPTURE_CODEX")).toBe(false);
+    expect(core.captureEnabled({ SECOND_BRAIN_HOOK_CAPTURE_CURSOR: "0" }, "SECOND_BRAIN_HOOK_CAPTURE_CODEX")).toBe(true);
+  });
+});
+
+describe("core.performCapture", () => {
+  const withStub = async (handler: (url: URL, init?: RequestInit) => { status: number; body: unknown } | null, run: () => Promise<unknown>) => {
+    const realFetch = global.fetch;
+    // @ts-expect-error test stub
+    global.fetch = async (url: string, init?: RequestInit) => {
+      const u = new URL(String(url));
+      const hit = handler(u, init);
+      if (!hit) throw new Error("unreachable");
+      return new Response(JSON.stringify(hit.body), { status: hit.status, headers: { "Content-Type": "application/json" } });
+    };
+    try { return await run(); } finally { global.fetch = realFetch; }
+  };
+  const meta = { hostLabel: "Codex", project: "brain-app", projectName: "brain-app", workspace: "personal", source: "codex-session" };
+  const goodTurns = ["Please move the digest off the shared cron so sync stops starving it, and cap it at 20 entries per run so it never runs away on a busy day. Log a line whenever it stops early so we can tell, and add a quick test for the cap."];
+
+  it("does nothing when disabled (global or per-client)", async () => {
+    const out = await core.performCapture({
+      env: { SECOND_BRAIN_HOOK_CAPTURE_CODEX: "0" }, perClientEnvVar: "SECOND_BRAIN_HOOK_CAPTURE_CODEX",
+      userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1",
+    });
+    expect(out).toEqual({ sent: false, reason: "disabled" });
+  });
+
+  it("does nothing without credentials", async () => {
+    const dir = tmp();
+    const out = await core.performCapture({
+      env: {}, configPath: join(dir, "missing.json"), userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1",
+    });
+    expect(out).toEqual({ sent: false, reason: "no-credentials" });
+  });
+
+  it("never captures the same session twice", async () => {
+    const dir = tmp();
+    core.setMarker("codex-captured", "s1", dir);
+    let called = false;
+    const out = await withStub(() => { called = true; return { status: 200, body: { ok: true } }; }, () =>
+      core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+      }));
+    expect(out).toEqual({ sent: false, reason: "already-captured" });
+    expect(called).toBe(false);
+  });
+
+  it("skips capture and notices once when the Worker is older than 3.0", async () => {
+    const dir = tmp();
+    const out = await withStub(
+      (u) => (u.pathname === "/health" ? { status: 200, body: { ok: true, version: "2.4.0" } } : null),
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+      }),
+    );
+    expect(out).toEqual({ sent: false, reason: "worker-too-old" });
+  });
+
+  it("skips capture below the gate", async () => {
+    const dir = tmp();
+    const out = await withStub(
+      (u) => (u.pathname === "/health" ? { status: 200, body: { ok: true, version: "3.1.0" } } : null),
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: ["ok"], meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+      }),
+    );
+    expect(out).toEqual({ sent: false, reason: "below-threshold" });
+  });
+
+  it("dry run prints the body and sends nothing", async () => {
+    const dir = tmp();
+    const write = process.stdout.write.bind(process.stdout);
+    let printed = "";
+    // @ts-expect-error test spy
+    process.stdout.write = (chunk: string) => { printed += String(chunk); return true; };
+    try {
+      const out = await withStub(
+        (u) => (u.pathname === "/health" ? { status: 200, body: { ok: true, version: "3.1.0" } } : null),
+        () => core.performCapture({
+          env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t", SECOND_BRAIN_DRY_RUN: "1" },
+          userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+        }),
+      );
+      expect(out?.sent).toBe(false);
+      expect(out?.reason).toBe("dry-run");
+    } finally { process.stdout.write = write; }
+    expect(JSON.parse(printed)).toMatchObject({ source: "codex-session" });
+    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(false);
+  });
+
+  it("posts to /capture, marks the session captured, and records the last-capture time", async () => {
+    const dir = tmp();
+    const posted: string[] = [];
+    const out = await withStub(
+      (u, init) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") { posted.push(String(init?.body)); return { status: 200, body: { ok: true, id: "new" } }; }
+        return null;
+      },
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+      }),
+    );
+    expect(out.sent).toBe(true);
+    expect(posted).toHaveLength(1);
+    expect(JSON.parse(posted[0])).toMatchObject({ source: "codex-session" });
+    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(true);
+    expect(core.lastCaptureTime("codex", dir)).not.toBeNull();
+  });
+
+  it("fails loudly on a hard HTTP error and posts nothing twice", async () => {
+    const dir = tmp();
+    const out = await withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") return { status: 401, body: { ok: false, code: "unauthorized" } };
+        return null;
+      },
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+      }),
+    );
+    expect(out).toMatchObject({ sent: false, reason: "http-error" });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(false);
   });
 });

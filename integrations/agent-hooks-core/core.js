@@ -28,11 +28,19 @@ const CONFIG_PATH = path.join(HOME, '.config', 'second-brain', 'config.json');
 const CACHE_DIR = path.join(process.env.XDG_CACHE_HOME || path.join(HOME, '.cache'), 'second-brain');
 const HEALTH_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-// Total wall-clock budget for one performRecall() call: recall and brief both
-// race this deadline. 3s keeps a synchronous waiter (Gemini CLI hooks run
-// synchronously; the CLI blocks on them) from stalling the first turn, and is
-// well inside Codex's default hook timeout and Cursor's fire-and-forget window.
-const DEFAULT_CAP_MS = 3000;
+// performRecall()'s default timing is Claude Code's original budget, unchanged:
+// up to 15s for the recall request itself, then up to 3s more of grace for a
+// brief that is still in flight once recall answers. This is deliberately
+// generous — Claude Code's SessionStart hook is not on the kind of tight,
+// synchronous clock Gemini CLI's or Cursor's hosts are, so there is no reason
+// to trade away recall on a slow or cold Worker for those existing users.
+// A NEW adapter must not inherit this silently: pass its own recallTimeoutMs
+// and briefGraceMs (or the capMs shorthand below) sized to its own host's
+// budget. Gemini CLI hooks run synchronously and block the session; Cursor's
+// sessionStart is fire-and-forget against the first model turn — both need a
+// short cap, not this one.
+const DEFAULT_RECALL_TIMEOUT_MS = 15000;
+const DEFAULT_BRIEF_GRACE_MS = 3000;
 const MAX_OUTPUT_CHARS = 6000;
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -246,16 +254,23 @@ async function fetchBrief(creds, project, workspace, signal) {
   } catch { return null; }
 }
 
-/** Starts the brief now; `settle()` waits until `deadline` (a Date.now()-scale timestamp), then abandons it. */
-function startBrief(creds, project, workspace, deadline) {
+/**
+ * Starts the brief now, aborting it after `outerCapMs` regardless of what
+ * calls `settle()`. `settle()` itself waits at most `graceMs` from the moment
+ * it is *called* (not from when the brief started) — the brief never blocks
+ * recall: a failure or timeout there is just no brief. This is the exact
+ * shape Claude Code's original session-start.js used, generalized so every
+ * adapter can supply its own pair of numbers instead of inheriting Claude's.
+ */
+function startBrief(creds, project, workspace, outerCapMs, graceMs) {
   const controller = new AbortController();
-  const cap = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+  const cap = setTimeout(() => controller.abort(), outerCapMs);
   cap.unref();
   const promise = fetchBrief(creds, project, workspace, controller.signal);
   return {
     async settle() {
       let timer;
-      const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now())); });
+      const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), graceMs); });
       const brief = await Promise.race([promise, late]);
       clearTimeout(timer);
       clearTimeout(cap);
@@ -352,7 +367,9 @@ async function performRecall({
   skipSources = new Set(),
   namespace = 'session',
   cacheableSources = new Set(['startup', 'clear']),
-  capMs = DEFAULT_CAP_MS,
+  capMs,
+  recallTimeoutMs = capMs ?? DEFAULT_RECALL_TIMEOUT_MS,
+  briefGraceMs = capMs !== undefined ? 0 : DEFAULT_BRIEF_GRACE_MS,
   cacheDir,
 } = {}) {
   if (env.SECOND_BRAIN_HOOK_RECALL === '0') return '';
@@ -372,17 +389,16 @@ async function performRecall({
   const project = parseProjectName(gitRemoteUrl(cwd), cwd);
   const workspace = resolveWorkspace(env);
   const plan = buildRecallPlan(project, workspace);
-  const deadline = Date.now() + capMs;
-  const brief = startBrief(creds, project, workspace, deadline);
+  const brief = startBrief(creds, project, workspace, recallTimeoutMs, briefGraceMs);
 
   for (const step of plan) {
     let res;
     try {
       res = await fetchWithTimeout(buildRecallUrl(creds.baseUrl, step), {
         headers: { Authorization: `Bearer ${creds.token}` },
-      }, Math.max(0, deadline - Date.now()));
+      }, recallTimeoutMs);
     } catch (e) {
-      fail(`recall failed: ${e?.name === 'TimeoutError' ? `no reply within ${(capMs / 1000).toFixed(1)}s` : e?.message ?? 'network error'}`);
+      fail(`recall failed: ${e?.name === 'TimeoutError' ? `no reply within ${(recallTimeoutMs / 1000).toFixed(1)}s` : e?.message ?? 'network error'}`);
       return null;
     }
     if (!res.ok) {
@@ -406,13 +422,173 @@ async function performRecall({
   return out;
 }
 
+// ── Session capture (4.0: Codex CLI and Cursor only) ─────────────────────────
+//
+// Deliberately NOT a transcript dump. Per the director's UX decision: the last
+// few user turns only, capped, redacted — the same redaction Claude Code's
+// hook uses, moved here so Codex and Cursor never re-implement it. Transcript
+// PARSING stays out of this file, same reasoning as the recall side: an
+// adapter reads its own provider's JSONL shape and hands this a plain array of
+// user-turn strings, oldest first, already extracted.
+
+const REDACTED_TOKEN = '[redacted]';
+const CAPTURE_MAX_CONTENT_CHARS = 2000;
+const CAPTURE_WANT_USER_TURNS = 3;
+const CAPTURE_MIN_USER_TURN_CHARS = 40;
+const CAPTURE_MIN_BODY_CHARS = 200;
+const CAPTURE_TIMEOUT_MS = 20000;
+
+/**
+ * High-confidence secret shapes only, identical to claude-code-hooks'
+ * redactSecrets — copied rather than imported so that file's own tests keep
+ * proving this exact behavior against the exact copy Claude Code ships;
+ * the two are re-synchronized by hand if either ever changes.
+ */
+const SECRET_PATTERNS = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  /\bsk-[A-Za-z0-9_-]{16,}/g,
+  /\bgh[posur]_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bAIza[0-9A-Za-z_-]{35,}/g,
+];
+const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g;
+const ASSIGNMENT_PATTERN =
+  /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd))(\s*[:=]\s*)(["'`]?)([^\s"'`,;]{8,})\3/gi;
+const CODE_REFERENCE = /^(?:process\.env\b|os\.environ\b|import\.meta\.env\b|env\.|Deno\.env\b|\$|<|\{)/;
+
+function redactSecrets(text, token) {
+  let out = String(text ?? '');
+  if (typeof token === 'string' && token.trim().length >= 8) {
+    out = out.split(token.trim()).join(REDACTED_TOKEN);
+  }
+  for (const re of SECRET_PATTERNS) out = out.replace(re, REDACTED_TOKEN);
+  out = out.replace(BEARER_PATTERN, `Bearer ${REDACTED_TOKEN}`);
+  return out.replace(ASSIGNMENT_PATTERN, (m, name, sep, quote, value) =>
+    CODE_REFERENCE.test(value) ? m : `${name}${sep}${quote}${REDACTED_TOKEN}${quote}`);
+}
+
+/** True marker files: presence means "yes", independent of the text cache used for recall blocks. */
+function hasMarker(key, sessionId, dir) { return readSessionCache(key, sessionId, Date.now(), dir) !== null; }
+function setMarker(key, sessionId, dir) { return writeSessionCache(key, sessionId, '1', dir); }
+
+function recordLastCaptureTime(namespace, dir, now = Date.now()) {
+  try { fs.writeFileSync(cachePath(`last-capture-${namespace}`, dir), String(now)); } catch { /* best effort */ }
+}
+/** ms timestamp of the last successful capture for this adapter, or null. Used by `--check`. */
+function lastCaptureTime(namespace, dir) {
+  try { return parseInt(fs.readFileSync(cachePath(`last-capture-${namespace}`, dir), 'utf8'), 10) || null; } catch { return null; }
+}
+
+/** Global off switch plus an optional per-client one, e.g. SECOND_BRAIN_HOOK_CAPTURE_CODEX. */
+function captureEnabled(env, perClientVar) {
+  if (env.SECOND_BRAIN_HOOK_CAPTURE === '0') return false;
+  if (perClientVar && env[perClientVar] === '0') return false;
+  return true;
+}
+
+/**
+ * Header first ("<hostLabel> session in <project>, <date>"), then up to the
+ * last `wantUserTurns` user turns the caller extracted, oldest first. Redacted
+ * after assembly (so a longer token or provider key growing under redaction is
+ * still caught by the final cap), then hard-capped — this is a much smaller
+ * budget than a full transcript, so the cap is a safety net, not the primary
+ * fit like it is in claude-code-hooks' formatSession.
+ */
+function buildSessionCaptureBody(userTurns, meta, { maxChars = CAPTURE_MAX_CONTENT_CHARS, wantUserTurns = CAPTURE_WANT_USER_TURNS } = {}) {
+  const date = (meta.timestamp || new Date().toISOString()).slice(0, 10);
+  const project = meta.projectName ?? meta.project ?? 'an unknown project';
+  const header = `${meta.hostLabel} session in ${project}, ${date}`;
+  const kept = userTurns.slice(-wantUserTurns);
+  const rendered = kept.length ? `${header}\n\n${kept.map((t) => `User: ${t}`).join('\n\n')}` : header;
+  let content = redactSecrets(rendered, meta.token);
+  if (content.length > maxChars) content = content.slice(0, maxChars - 1) + '…';
+  const rawName = meta.projectName ?? meta.project;
+  const body = { content, source: meta.source, tags: rawName ? [rawName] : [], workspace: meta.workspace };
+  if (meta.project) body.project = meta.project;
+  return body;
+}
+
+/** The gate: at least one substantial user turn, and enough conversation overall. */
+function shouldCaptureSession(userTurns, { minUserTurnChars = CAPTURE_MIN_USER_TURN_CHARS, minBodyChars = CAPTURE_MIN_BODY_CHARS } = {}) {
+  const chars = userTurns.reduce((n, t) => n + t.length, 0);
+  return userTurns.some((t) => t.length >= minUserTurnChars) && chars >= minBodyChars;
+}
+
+/**
+ * The whole capture orchestration for the lightweight, user-turns-only
+ * adapters. `userTurns` is already parsed and normalized by the caller —
+ * plain strings, oldest first. `namespace` scopes the "already captured this
+ * session" marker and the last-capture-time record; a session is captured at
+ * most once, ever, regardless of how many times the host's end-of-session
+ * hook fires for it (Codex alone documents four: close, archive, delete, and
+ * 30 minutes idle). Returns `{ sent: boolean, reason?: string, body? }` and
+ * never throws; a hard failure (bad token, Worker down, timeout) still goes to
+ * fail() (stderr + exit 1), same convention as performRecall.
+ */
+async function performCapture({
+  env = process.env,
+  configPath = CONFIG_PATH,
+  userTurns,
+  meta,
+  namespace,
+  sessionId,
+  perClientEnvVar,
+  captureTimeoutMs = CAPTURE_TIMEOUT_MS,
+  cacheDir,
+} = {}) {
+  if (!captureEnabled(env, perClientEnvVar)) return { sent: false, reason: 'disabled' };
+  const creds = loadCredentials(env, configPath);
+  if (!creds) return { sent: false, reason: 'no-credentials' };
+  if (sessionId && hasMarker(`${namespace}-captured`, sessionId, cacheDir)) return { sent: false, reason: 'already-captured' };
+
+  const major = await workerMajorVersion(creds, Date.now(), cacheDir);
+  if (major !== null && major < 3) {
+    noticeOncePerDay(`capture-needs-v3-${namespace}`, `session capture needs Worker 3.0+ (this brain reports ${major}.x); recall still works.`, Date.now(), cacheDir);
+    return { sent: false, reason: 'worker-too-old' };
+  }
+  if (!shouldCaptureSession(userTurns)) return { sent: false, reason: 'below-threshold' };
+
+  const body = buildSessionCaptureBody(userTurns, { ...meta, token: creds.token });
+  if (env.SECOND_BRAIN_DRY_RUN === '1') {
+    process.stdout.write(JSON.stringify(body, null, 2) + '\n');
+    return { sent: false, reason: 'dry-run', body };
+  }
+
+  let res;
+  try {
+    res = await fetchWithTimeout(`${creds.baseUrl}/capture`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, captureTimeoutMs);
+  } catch (e) {
+    fail(`session capture failed: ${e?.name === 'TimeoutError' ? `no reply within ${(captureTimeoutMs / 1000).toFixed(0)}s` : e?.message ?? 'network error'}`);
+    return { sent: false, reason: 'network-error' };
+  }
+  if (!res.ok) {
+    let detail = '';
+    try { const j = await res.json(); detail = String(j?.error ?? j?.code ?? ''); } catch { /* not JSON */ }
+    fail(`session capture failed: HTTP ${res.status}${detail ? ` ${detail}` : ''}${hintFor(res.status)}`);
+    return { sent: false, reason: 'http-error' };
+  }
+  if (sessionId) setMarker(`${namespace}-captured`, sessionId, cacheDir);
+  recordLastCaptureTime(namespace, cacheDir);
+  return { sent: true, body };
+}
+
 module.exports = {
-  CONFIG_PATH, CACHE_DIR, HEALTH_TTL_MS, SESSION_CACHE_TTL_MS, DEFAULT_CAP_MS, MAX_OUTPUT_CHARS,
+  CONFIG_PATH, CACHE_DIR, HEALTH_TTL_MS, SESSION_CACHE_TTL_MS,
+  DEFAULT_RECALL_TIMEOUT_MS, DEFAULT_BRIEF_GRACE_MS, MAX_OUTPUT_CHARS,
   loadCredentials, resolveWorkspace, readStdinJson,
   parseProjectLabel, projectSlug, parseProjectName, gitRemoteUrl,
   fetchWithTimeout, fail, hintFor, cachePath, workerMajorVersion, noticeOncePerDay,
-  sessionCacheFile, writeSessionCache, readSessionCache,
+  sessionCacheFile, writeSessionCache, readSessionCache, hasMarker, setMarker,
   buildRecallPlan, buildRecallUrl, buildBriefUrl, fetchBrief, startBrief,
   cleanSnippet, compactBriefLines, frameOutput,
   performRecall,
+  redactSecrets, buildSessionCaptureBody, shouldCaptureSession, performCapture,
+  recordLastCaptureTime, lastCaptureTime, captureEnabled,
+  CAPTURE_MAX_CONTENT_CHARS, CAPTURE_WANT_USER_TURNS, CAPTURE_TIMEOUT_MS,
 };

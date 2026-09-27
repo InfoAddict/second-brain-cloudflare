@@ -198,6 +198,17 @@ const SOURCE_BADGES = [
   [/claude-code/, 'ti-terminal-2', 'claude code'],
   [/^cli$|command-line|terminal/, 'ti-terminal-2', 'cli'],
   [/git-hook|github|^git$/, 'ti-brand-github', 'github'],
+  // Codex CLI and Cursor: the automatic session-end capture hook and a
+  // deliberate MCP write are different sources on purpose (see
+  // TRANSCRIPT_SOURCES in src/constants.ts) and get distinct labels here too.
+  // These rows must stay ahead of the generic chatgpt/openai/codex row below,
+  // which would otherwise catch every one of them and badge them all
+  // "chatgpt" — that row is for ChatGPT/OpenAI conversation sources, not
+  // Codex CLI or Cursor.
+  [/codex-session/, 'ti-terminal-2', 'codex session'],
+  [/cursor-session/, 'ti-code', 'cursor session'],
+  [/^codex$|codex-cli/, 'ti-brand-openai', 'codex'],
+  [/^cursor$/, 'ti-code', 'cursor'],
   // Mail, branded by provider where we know it.
   [/gmail/, 'ti-brand-google', 'gmail'],
   [/icloud/, 'ti-brand-apple', 'icloud'],
