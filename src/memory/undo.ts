@@ -10,6 +10,7 @@ import { deleteVectorIds } from "../vectorize/batch";
 import { reembedOrDegrade, restoreRowVectors } from "../capture/store";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { Config } from "../config";
+import { getTrashedEntry, restoreEntry } from "./trash";
 import {
   canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
   type VersionRow, type WhenChange,
@@ -49,9 +50,16 @@ export async function revertEntry(
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
   if (!row) {
-    // T-0089.1.2 trash restore lands with builder B's merge: a readable trash row delegates to
-    // restoreEntry (undo of a forget). Until then, a missing live row is simply not_found.
-    return { status: "not_found" };
+    // No live row: undo of a forget, if the trash row is readable (author or admin, same as forget itself).
+    const trashed = await getTrashedEntry(env, identity, id);
+    if (!trashed) return { status: "not_found" };
+    const restored = await restoreEntry(env, trashed, change, config);
+    switch (restored.status) {
+      case "restored": return { status: "restored" };
+      case "reembed_failed": return { status: "reembed_failed" };
+      // A racing restore or purge already claimed the trash row between the read above and the batch.
+      case "not_found": case "conflict": return { status: "not_found" };
+    }
   }
 
   const chain = await loadHistory(env, identity, { id, content: row.content }, config.VERSION_KEEP);

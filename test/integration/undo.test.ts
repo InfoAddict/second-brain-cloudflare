@@ -7,7 +7,7 @@ import { createMember } from "../../src/lib/team-admin";
 import { resolveIdentityByUserId, type Identity } from "../../src/lib/identity";
 import { captureEntry } from "../../src/capture/entry";
 import { appendToEntry, updateEntryContent } from "../../src/capture/store";
-import { applyStatus, deprecateEntry } from "../../src/capture/lifecycle";
+import { applyStatus, deprecateEntry, forgetEntry } from "../../src/capture/lifecycle";
 import { resolveEntryAction, applyInsightResolution } from "../../src/memory/actions";
 import { compressTag } from "../../src/compression/digest";
 import { makeMirrorStore } from "../../src/integrations/mirror";
@@ -159,6 +159,21 @@ describe("undo, one case per reason", () => {
     const r = await revertEntry(mirrorEnv, owner, id, change(), DEFAULTS);
     expect(r.status).toBe("reverted");
     expect(row(id).content).toBe("mirror v1");
+  });
+
+  it("trash: undo of a forgotten memory restores it from the trash", async () => {
+    await seed("trash1", { content: "keep me", tags: ["a"] });
+    const before = row("trash1");
+    const forgotten = await forgetEntry("trash1", env, change(), { reason: "forget", config: DEFAULTS, purge: false });
+    expect(forgotten.status).toBe("deleted");
+    expect(sqlite.rows().find((r: any) => r.id === "trash1")).toBeUndefined();
+    const r = await revertEntry(env, owner, "trash1", change(), DEFAULTS);
+    expect(r.status).toBe("restored");
+    const restored = row("trash1");
+    expect(restored.content).toBe("keep me");
+    expect(JSON.parse(String(restored.tags))).toEqual(["a"]);
+    expect(restored.workspace_id).toBe(before.workspace_id);
+    expect((await env.DB.prepare(`SELECT id FROM entries_trash WHERE id = 'trash1'`).first())).toBeNull();
   });
 
   it("insight dismiss: undo restores the tags and re-embeds", async () => {
