@@ -322,3 +322,21 @@
 .daily-limit-upgrade:hover {
   text-decoration: underline;
 }
+
+/* The banner stays a fixed overlay (it has to survive every screen change),
+ * so it never pushes #app down on its own. #app's own height:100svh/100vh
+ * plus body's overflow:hidden means an unaccounted-for banner just overlaps
+ * whatever is under it instead of scrolling into view, so #app is shrunk by
+ * the banner's real (JS-measured, since wrapped text varies by width and
+ * locale) height whenever it's showing. See daily-limit-banner.js's
+ * updateDailyLimitOffset. */
+body.daily-limit-active #app {
+  margin-top: var(--daily-limit-height, 0px);
+  height: calc(100svh - var(--daily-limit-height, 0px));
+}
+
+@media (min-width: 768px) {
+  body.daily-limit-active #app {
+    height: calc(100vh - var(--daily-limit-height, 0px));
+  }
+}

@@ -48,6 +48,26 @@ function hideDailyLimitBanner() {
   dailyLimitShown = false;
   const el = document.getElementById('daily-limit-banner');
   if (el) el.hidden = true;
+  updateDailyLimitOffset();
+}
+
+/**
+ * The banner is a fixed overlay (it has to survive every screen, and #app's
+ * own height:100vh/100svh would otherwise fight a normal-flow banner for
+ * space, with body's overflow:hidden clipping whichever one loses), so #app
+ * has to be told how tall the banner actually is. Wrapped text (a longer
+ * locale, or a narrow width) can grow the banner to two or three lines, so
+ * this is measured rather than guessed at a fixed height.
+ */
+function updateDailyLimitOffset() {
+  const el = document.getElementById('daily-limit-banner');
+  const height = el && !el.hidden ? el.offsetHeight || 0 : 0;
+  if (document.documentElement && document.documentElement.style) {
+    document.documentElement.style.setProperty('--daily-limit-height', height + 'px');
+  }
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle('daily-limit-active', height > 0);
+  }
 }
 
 /**
@@ -71,6 +91,7 @@ function showDailyLimitBanner(data) {
     : `<span class="daily-limit-ask">${escHtml(t('limits.askOwner'))}</span>`;
   el.innerHTML = `<span class="daily-limit-text">${escHtml(t(key, { time }))}</span>${action}`;
   el.hidden = false;
+  updateDailyLimitOffset();
 }
 
 /**

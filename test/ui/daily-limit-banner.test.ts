@@ -24,6 +24,7 @@ function makeEl(id?: string) {
     hidden: true,
     innerHTML: "",
     className: "",
+    offsetHeight: 64,
     style: {} as Record<string, string>,
     classList: {
       add: (c: string) => void classes.add(c),
@@ -36,11 +37,20 @@ function makeEl(id?: string) {
 
 function load(opts: { admin?: boolean | null; initialResponse?: any } = {}) {
   const els = new Map<string, any>();
+  const bodyClasses = new Set<string>();
   const body = {
     appendChild(node: any) {
       if (node?.id) els.set(node.id, node);
     },
+    classList: {
+      add: (c: string) => void bodyClasses.add(c),
+      remove: (c: string) => void bodyClasses.delete(c),
+      toggle: (c: string, on: boolean) => void (on ? bodyClasses.add(c) : bodyClasses.delete(c)),
+      contains: (c: string) => bodyClasses.has(c),
+    },
   };
+  const rootProps: Record<string, string> = {};
+  const documentElement = { style: { setProperty: (k: string, v: string) => void (rootProps[k] = v) } };
   let nextResponse: any =
     opts.initialResponse ?? { ok: true, status: 200, json: async () => ({ ok: true }) };
 
@@ -51,6 +61,7 @@ function load(opts: { admin?: boolean | null; initialResponse?: any } = {}) {
       getElementById: (id: string) => els.get(id) ?? null,
       createElement: () => makeEl(),
       body,
+      documentElement,
     },
     fetch: async () => nextResponse,
   };
@@ -62,6 +73,8 @@ function load(opts: { admin?: boolean | null; initialResponse?: any } = {}) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;
+  ctx.__bodyClasses = bodyClasses;
+  ctx.__rootProps = rootProps;
   ctx.__setNextResponse = (r: any) => {
     nextResponse = r;
   };
@@ -176,6 +189,32 @@ describe("clears itself once a later call succeeds", () => {
   });
 });
 
+describe("reserves space for the banner instead of overlapping the app below it", () => {
+  it("sets --daily-limit-height to the banner's measured height and marks body active while shown", async () => {
+    const ctx = load();
+    ctx.__setNextResponse(
+      resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
+    );
+    await ctx.fetch("/append");
+    expect(ctx.__rootProps["--daily-limit-height"]).toBe("64px");
+    expect(ctx.__bodyClasses.has("daily-limit-active")).toBe(true);
+  });
+
+  it("resets the offset to 0 and unmarks body once the banner clears", async () => {
+    const ctx = load();
+    ctx.__setNextResponse(
+      resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
+    );
+    await ctx.fetch("/append");
+    expect(ctx.__bodyClasses.has("daily-limit-active")).toBe(true);
+
+    ctx.__setNextResponse({ ok: true, status: 200, clone() { return this; }, json: async () => ({ ok: true }) });
+    await ctx.fetch("/list");
+    expect(ctx.__rootProps["--daily-limit-height"]).toBe("0px");
+    expect(ctx.__bodyClasses.has("daily-limit-active")).toBe(false);
+  });
+});
+
 describe("never a raw error or a generic toast for this case", () => {
   it("does not throw and does not show the banner for an ordinary 429 (not daily_limit)", async () => {
     const ctx = load();
@@ -226,5 +265,18 @@ describe("both locales", () => {
     );
     await ctx.fetch("/append");
     expect(el(ctx, "daily-limit-banner").innerHTML).toContain("Chiedi al proprietario di passare a Workers Paid.");
+  });
+});
+
+describe("CSS: #app makes room for the fixed banner instead of it overlapping the topbar", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+
+  it("shrinks and pushes down #app by the banner's measured height, mobile and desktop", () => {
+    expect(css).toMatch(
+      /body\.daily-limit-active #app\s*{[^}]*margin-top:\s*var\(--daily-limit-height,\s*0px\)[^}]*height:\s*calc\(100svh - var\(--daily-limit-height,\s*0px\)\)/,
+    );
+    const desktopMediaStart = css.lastIndexOf("@media (min-width: 768px)");
+    const desktopBlock = css.slice(desktopMediaStart).match(/body\.daily-limit-active #app\s*{[^}]*}/);
+    expect(desktopBlock?.[0]).toMatch(/height:\s*calc\(100vh - var\(--daily-limit-height,\s*0px\)\)/);
   });
 });
