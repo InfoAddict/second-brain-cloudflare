@@ -13,11 +13,10 @@
 # replaced, everything else in the file is preserved byte-for-byte as JSON,
 # and a malformed file is refused rather than overwritten.
 #
-# Registers sessionStart, beforeSubmitPrompt, sessionEnd and stop. sessionEnd
-# and stop both run session-end.js: the hooks survey found `transcript_path`
-# unconfirmed on either event specifically, and session-end.js already no-ops
-# safely when a payload has none, so registering both costs nothing and
-# maximises the chance capture actually fires. See README.md.
+# Registers sessionStart, stop and sessionEnd. Per Cursor's docs only `stop`
+# carries transcript_path, and stop fires after every agent turn, so stop just
+# records where the transcript is (local, no request) and sessionEnd captures
+# once. Any beforeSubmitPrompt entry left by an older install is removed.
 #
 # Cursor also reads a PROJECT-level hooks.json at .cursor/hooks.json inside a
 # repository; this installer only ever writes the user-level file above. See
@@ -118,9 +117,8 @@ if (MODE !== 'uninstall') {
   const q = (p) => `"${p.replace(/"/g, '\\"')}"`;
   config.version = config.version || 1;
   config.hooks.sessionStart.push({ command: `node ${q(`${HOOKS_DIR}/session-start.js`)}` });
-  config.hooks.beforeSubmitPrompt.push({ command: `node ${q(`${HOOKS_DIR}/before-submit-prompt.js`)}` });
-  config.hooks.sessionEnd.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)}` });
-  config.hooks.stop.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)}` });
+  config.hooks.sessionEnd.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)} --event=sessionEnd` });
+  config.hooks.stop.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)} --event=stop` });
 }
 for (const ev of EVENTS) if (!config.hooks[ev].length) delete config.hooks[ev];
 if (!Object.keys(config.hooks).length) delete config.hooks;
@@ -140,8 +138,8 @@ fi
 echo
 echo "Done. Second Brain hooks installed for Cursor."
 echo "  sessionStart:        recalls context for the current project (fire-and-forget)"
-echo "  beforeSubmitPrompt:  the same recall, run once per session as a synchronous safety net"
-echo "  sessionEnd / stop:    saves the conversation when a transcript is available (needs Worker 3.0+)"
+echo "  stop:                remembers where this conversation's transcript is (local only)"
+echo "  sessionEnd:          saves the last few turns of the conversation, once (needs Worker 3.0+)"
 echo
 echo "Restart Cursor, or reload the window, so it re-reads hooks.json."
 echo "Verify with: bash $HOOKS_DIR/install.sh --check"

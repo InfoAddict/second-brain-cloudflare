@@ -1,16 +1,19 @@
 /**
  * Budget auditor (brief 19), v4/hooks. Cursor's documented hook input
  * (https://cursor.com/docs/agent/hooks, checked 2026-09-27) gives every event `conversation_id`
- * and `generation_id`; only sessionStart and sessionEnd add `session_id`. beforeSubmitPrompt and
- * stop carry `conversation_id` alone.
+ * and `generation_id`; only sessionStart and sessionEnd add `session_id`.
  *
- * before-submit-prompt.js keys its once-per-session marker on normalizeStdin's sessionId, which reads
- * only `sessionId`/`session_id`. On the real payload that is '', no marker file can be named, and
- * every prompt runs a full recall round. Each GET /recall synthesizes by default (one scout call,
- * about 47 neurons at topK 5), so 150 prompts a day is about 7,000 of the 10,000 free neurons.
+ * The original finding: before-submit-prompt.js keyed its once-per-session marker on
+ * `session_id`, which beforeSubmitPrompt never carries, so 25 prompts ran 25 recalls.
+ *
+ * UPDATED (T-0089.8 simplification): the beforeSubmitPrompt fallback is removed, because its
+ * `user_message` only reaches the user when a prompt is blocked, never the model. No Cursor hook
+ * runs per prompt any more. This file now guards the per-conversation costs that remain:
+ * one recall per conversation (sessionStart) and, although `stop` fires after every agent turn,
+ * zero requests from `stop` and exactly one capture from `sessionEnd`.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanTemp } from "../helpers/tmp";
@@ -23,27 +26,50 @@ function countFetches() {
   global.fetch = (async (url: string | URL) => {
     const path = new URL(String(url)).pathname;
     calls.push(path);
-    const body = path === "/recall" ? { ok: true, results: [{ id: "m1", content: "a stored note", score: 0.9 }], insight: "" } : { ok: true };
+    const body = path === "/recall" ? { ok: true, results: [{ id: "m1", content: "a stored note", score: 0.9 }] }
+      : path === "/health" ? { ok: true, version: "4.0.0" } : { ok: true };
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
   return { calls, restore: () => { global.fetch = real; } };
 }
 
-/** The documented beforeSubmitPrompt input: common fields plus `prompt`, no session_id. */
-const promptPayload = (dir: string) => ({
-  conversation_id: "c0ffee-conv-1", generation_id: "gen-1", hook_event_name: "beforeSubmitPrompt",
-  workspace_roots: [dir], transcript_path: null, prompt: "what did we decide about the cache",
-});
-
-describe("Cursor hooks on the documented payload make one recall round per conversation", () => {
-  it("25 prompts in one conversation cost one recall round, not 25", async () => {
-    const cursor = require("../../integrations/cursor-hooks/before-submit-prompt.js");
+describe("Cursor hooks cost one recall and one capture per conversation", () => {
+  it("sessionStart on the documented payload makes one recall round", async () => {
+    const start = require("../../integrations/cursor-hooks/session-start.js");
     const dir = mkdtempSync(join(tmpdir(), "sb-cursor-ids-"));
     const env = { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" };
     const f = countFetches();
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
     try {
-      for (let i = 0; i < 25; i++) await cursor.runBeforeSubmitPrompt(promptPayload(dir), { env, cacheDir: dir });
-    } finally { f.restore(); }
+      await start.runSessionStart({ conversation_id: "c0ffee-conv-1", session_id: "s-1", workspace_roots: [dir] }, { env, cacheDir: dir });
+    } finally { f.restore(); process.stdout.write = write; }
     expect(f.calls.filter(p => p === "/recall").length).toBeLessThanOrEqual(2);
+  });
+
+  it("25 stop events send nothing, and the sessionEnd after them captures exactly once", async () => {
+    const end = require("../../integrations/cursor-hooks/session-end.js");
+    const dir = mkdtempSync(join(tmpdir(), "sb-cursor-stop-"));
+    const root = join(dir, "projects");
+    const transcriptDir = join(root, "app", "agent-transcripts", "c0ffee-conv-1");
+    mkdirSync(transcriptDir, { recursive: true });
+    const transcript = join(transcriptDir, "c0ffee-conv-1.jsonl");
+    const env = { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" };
+    const f = countFetches();
+    try {
+      for (let i = 0; i < 25; i++) {
+        writeFileSync(transcript, Array.from({ length: i + 3 }, (_, n) => JSON.stringify({ role: "user", message: { content: [{ type: "text", text: `turn ${n} ${"x".repeat(90)}` }] } })).join("\n"));
+        await end.runSessionEnd(
+          { conversation_id: "c0ffee-conv-1", hook_event_name: "stop", workspace_roots: [dir], transcript_path: transcript },
+          { event: "stop", transcriptRoot: root, env, cacheDir: dir },
+        );
+      }
+      expect(f.calls).toEqual([]);
+      await end.runSessionEnd(
+        { conversation_id: "c0ffee-conv-1", hook_event_name: "sessionEnd", workspace_roots: [dir] },
+        { event: "sessionEnd", transcriptRoot: root, env, cacheDir: dir },
+      );
+    } finally { f.restore(); }
+    expect(f.calls.filter(p => p === "/capture").length).toBe(1);
   });
 });

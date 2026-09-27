@@ -474,18 +474,8 @@ async function performRecall({
     if (cached) return cached;
   }
 
-  // A fresh session start is also the moment a budget audit picked to retry
-  // whatever session-end capture failed to upload last time (see
-  // flushCaptureSpool's own comment). This costs nothing when the spool is
-  // empty — the common case is one cheap file read, no network call — and
-  // is bounded by this adapter's own declared budget the rest of the time
-  // (whatever capMs leaves once computed below, or a flat 3s for Claude
-  // Code's generous two-phase model, which never captures so this is moot
-  // for it in practice). Only namespaces that ever call performCapture
-  // (codex, cursor) ever have anything queued.
-  if (cacheableSources.has(source)) {
-    await flushCaptureSpool({ env, configPath, namespace, cacheDir, budgetMs: capMs ?? CAPTURE_SPOOL_FLUSH_BUDGET_MS });
-  }
+  // Spool retries are NOT run here: they happen after recall and output, in
+  // the adapter, inside whatever deadline is left (see flushCaptureSpool).
 
   // Shared-deadline mode (capMs given): a review caught the previous version
   // handing every recall attempt AND the brief its own fresh recallTimeoutMs,
@@ -636,57 +626,132 @@ function lastCaptureTime(namespace, dir) {
   try { return parseInt(fs.readFileSync(cachePath(`last-capture-${namespace}`, dir), 'utf8'), 10) || null; } catch { return null; }
 }
 
-// ── Capture spool: a failed upload is kept, not lost ────────────────────────
+// ── Capture spool: one file per failed capture ──────────────────────────────
 //
-// A budget audit found that when a free-plan brain hits its daily D1 cap, the
-// Worker answers with an opaque error and the hook simply logged it and moved
-// on — the session's capture was gone. A network blip or a 5xx does the same.
-// Below, any such failure is spooled to a small local file instead, and the
-// NEXT session-start flushes it: never lose a capture silently, never make
-// the AI tool wait long for a retry that might not even be needed. A bad
-// token (401/403) or any other plain 4xx is NOT spooled here — retrying the
-// same body against the same rejection just grows the spool forever; that
-// class of failure needs the user to act, not a retry.
+// A capture that fails to upload for a transient reason (network error, a
+// 5xx, or a spent daily D1 cap answered as 429) is kept as ONE file in a
+// private directory and retried after a later session start has finished its
+// recall and output. Reviews of an earlier single-array-file design found a
+// flush erasing captures queued while it ran, whole-batch rewrites that
+// re-sent already-uploaded entries after an interruption, and a symlinked
+// spool file overwriting an unrelated file. One file per capture removes all
+// three: each file is created once (O_EXCL | O_NOFOLLOW) in a verified 0700
+// directory and renamed into place, and a retry deletes only its own file,
+// only after its own upload succeeds. A bad token (401/403) or any other
+// plain 4xx is not spooled: retrying it cannot succeed.
 const CAPTURE_SPOOL_MAX_ENTRIES = 20;
 const CAPTURE_SPOOL_MAX_BYTES = 5 * 1024 * 1024;
 const CAPTURE_SPOOL_FLUSH_BUDGET_MS = 3000;
+const CAPTURE_SPOOL_MAX_PER_FLUSH = 2;
+// Rejections of the body itself: no retry can fix these.
+const CAPTURE_PERMANENT_STATUSES = new Set([400, 413, 422]);
+const O_NOFOLLOW = fs.constants.O_NOFOLLOW || 0; // absent on Windows
 
-function spoolFile(namespace, dir) {
-  return cachePath(`capture-spool-${namespace}.json`, dir);
-}
-
-function readCaptureSpool(namespace, dir) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(spoolFile(namespace, dir), 'utf8'));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-
-/** Oldest entries drop first, both on count and on total size, so the file never grows without bound. */
-function writeCaptureSpool(namespace, entries, dir) {
-  let trimmed = entries.slice(-CAPTURE_SPOOL_MAX_ENTRIES);
-  let json = JSON.stringify(trimmed);
-  while (Buffer.byteLength(json, 'utf8') > CAPTURE_SPOOL_MAX_BYTES && trimmed.length > 1) {
-    trimmed = trimmed.slice(1);
-    json = JSON.stringify(trimmed);
+/**
+ * True when `dir` is a real directory (not a symlink), owned by this user
+ * where the platform reports owners, and mode 0700 (tightened if needed).
+ * Creates it when missing.
+ */
+function ensurePrivateDir(dir) {
+  try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (e) { if (e?.code !== 'EEXIST') return false; }
+  let st;
+  try { st = fs.lstatSync(dir); } catch { return false; }
+  if (st.isSymbolicLink() || !st.isDirectory()) return false;
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return false;
+  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) {
+    try { fs.chmodSync(dir, 0o700); st = fs.lstatSync(dir); } catch { return false; }
+    if ((st.mode & 0o077) !== 0) return false;
   }
-  try { writeCacheFile(spoolFile(namespace, dir), json); } catch { /* losing the spool file is not worse than not having one */ }
+  return true;
 }
 
-/** Appends a failed capture body for a later session-start to retry. */
+/** This namespace's verified spool directory, or null when it cannot be made private. */
+function spoolDir(namespace, dir = CACHE_DIR) {
+  let base;
+  try { base = cachePath('capture-spool', dir); } catch { return null; }
+  const ns = path.join(base, String(namespace).replace(/[^A-Za-z0-9._-]+/g, '-'));
+  return ensurePrivateDir(base) && ensurePrivateDir(ns) ? ns : null;
+}
+
+/** Kept capture files, oldest first (names start with a zero-padded timestamp). */
+function spoolFiles(target) {
+  let names;
+  try { names = fs.readdirSync(target); } catch { return []; }
+  return names.filter((n) => n.endsWith('.json') && !n.startsWith('.')).sort().map((n) => path.join(target, n));
+}
+
+/** Drops the oldest kept captures beyond 20 files or 5 MB, and says so. */
+function enforceSpoolCaps(target) {
+  const files = spoolFiles(target).map((f) => {
+    try { const st = fs.lstatSync(f); return st.isFile() ? { f, size: st.size } : null; } catch { return null; }
+  }).filter(Boolean);
+  let total = files.reduce((n, x) => n + x.size, 0);
+  let excess = files.length - CAPTURE_SPOOL_MAX_ENTRIES;
+  let dropped = 0;
+  for (const x of files) {
+    if (excess <= 0 && total <= CAPTURE_SPOOL_MAX_BYTES) break;
+    try { fs.unlinkSync(x.f); } catch { continue; }
+    excess--; total -= x.size; dropped++;
+  }
+  if (dropped) process.stderr.write(`Second Brain: ${dropped} older kept capture(s) removed to keep the retry queue small.\n`);
+}
+
+let spoolSeq = 0;
+/**
+ * Keeps one failed capture for a later retry. Returns true only after the
+ * file has been renamed into place; false means it could not be kept.
+ */
 function spoolCapture(namespace, body, dir) {
-  const entries = readCaptureSpool(namespace, dir);
-  entries.push({ body, queuedAt: Date.now() });
-  writeCaptureSpool(namespace, entries, dir);
+  const target = spoolDir(namespace, dir);
+  if (!target) return false;
+  const stamp = [
+    String(Date.now()).padStart(15, '0'),
+    String(process.pid).padStart(7, '0'),
+    String(++spoolSeq).padStart(6, '0'),
+    crypto.randomBytes(4).toString('hex'),
+  ].join('-');
+  const tmp = path.join(target, `.tmp-${stamp}`);
+  const final = path.join(target, `${stamp}.json`);
+  let fd;
+  try {
+    fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW, 0o600);
+    fs.writeSync(fd, JSON.stringify({ body, queuedAt: Date.now() }));
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tmp, final);
+  } catch {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+    try { fs.unlinkSync(tmp); } catch { /* never created */ }
+    return false;
+  }
+  enforceSpoolCaps(target);
+  return true;
+}
+
+/** Kept captures, oldest first, as `{ file, body, queuedAt }`. Symlinks and unreadable files are skipped. */
+function readCaptureSpool(namespace, dir) {
+  const target = spoolDir(namespace, dir);
+  if (!target) return [];
+  const out = [];
+  for (const file of spoolFiles(target)) {
+    let fd;
+    try {
+      fd = fs.openSync(file, fs.constants.O_RDONLY | O_NOFOLLOW);
+      if (!fs.fstatSync(fd).isFile()) continue;
+      const parsed = JSON.parse(fs.readFileSync(fd, 'utf8'));
+      if (parsed && typeof parsed === 'object' && parsed.body) out.push({ file, body: parsed.body, queuedAt: parsed.queuedAt });
+    } catch { /* skip it */ } finally {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* closed */ } }
+    }
+  }
+  return out;
 }
 
 /**
- * The director's copy deck line for a spent daily D1 cap, verbatim, and a
- * plain generic line for every other spooled failure. Neither goes through
- * fail(): a spooled capture is a handled, non-fatal condition (it will be
- * retried), not the same kind of hard failure fail()'s `[Second Brain]
- * <message>` convention reports elsewhere in this file — so this writes its
- * own line directly, with no double prefix.
+ * The copy deck line for a spent daily D1 cap, verbatim, and a plain line for
+ * every other kept failure. Written directly (no fail()): a kept capture is
+ * handled, so it does not set a failing exit code.
  */
 function logSpooledCapture(isDailyLimit) {
   const line = isDailyLimit
@@ -695,65 +760,71 @@ function logSpooledCapture(isDailyLimit) {
   process.stderr.write(`${line}\n`);
 }
 
+/** A capture that could neither be uploaded nor kept: say so, and exit non-zero. */
+function logLostCapture() {
+  process.stderr.write('Second Brain: could not save this session, and could not keep it on this computer to retry. This capture is lost.\n');
+  process.exitCode = 1;
+}
+
 /**
- * Retries whatever this namespace's spool is holding, at the start of a new
- * session. Bounded by `budgetMs` total (default 3s) so a still-down Worker
- * cannot make a session-start hook wait indefinitely; whatever does not fit
- * in the budget, or still fails, stays spooled for the next attempt. Stops
- * at the first 429 in a run (the daily cap is very unlikely to have cleared
- * one entry into the retry) rather than spending the rest of the budget on
- * attempts almost certain to fail the same way.
+ * Retries kept captures, oldest first. Callers run this AFTER recall and
+ * output, inside whatever is left of their own deadline, so it never delays
+ * what the AI tool is waiting for. At most CAPTURE_SPOOL_MAX_PER_FLUSH per
+ * call; stops at the first failure of any kind, so a still-down Worker costs
+ * one request, not twenty. Each file is deleted only after its own upload
+ * succeeds, so an interruption can at worst resend the one capture that was
+ * in flight (the Worker blocks a byte-identical re-capture as a duplicate).
  */
-async function flushCaptureSpool({ env = process.env, configPath = CONFIG_PATH, namespace, cacheDir, budgetMs = CAPTURE_SPOOL_FLUSH_BUDGET_MS } = {}) {
+async function flushCaptureSpool({
+  env = process.env, configPath = CONFIG_PATH, namespace, cacheDir,
+  deadline, budgetMs = CAPTURE_SPOOL_FLUSH_BUDGET_MS, max = CAPTURE_SPOOL_MAX_PER_FLUSH,
+} = {}) {
+  const end = deadline ?? Date.now() + budgetMs;
   const entries = readCaptureSpool(namespace, cacheDir);
   if (!entries.length) return { flushed: 0, remaining: 0 };
   const creds = loadCredentials(env, configPath);
   if (!creds) return { flushed: 0, remaining: entries.length };
-
-  const deadline = Date.now() + budgetMs;
-  const remaining = [];
   let flushed = 0;
-  for (let i = 0; i < entries.length; i++) {
-    const timeLeft = deadline - Date.now();
-    if (timeLeft <= 0) { remaining.push(...entries.slice(i)); break; }
+  for (const entry of entries.slice(0, max)) {
+    const timeLeft = end - Date.now();
+    if (timeLeft <= 0) break;
     let res;
     try {
       res = await fetchWithTimeout(`${creds.baseUrl}/capture`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(entries[i].body),
+        body: JSON.stringify(entry.body),
       }, timeLeft);
-    } catch {
-      remaining.push(...entries.slice(i)); // still unreachable: keep everything left, try again next time
-      break;
+    } catch { break; }
+    if (res.ok) {
+      try { fs.unlinkSync(entry.file); } catch { /* already gone */ }
+      flushed++;
+      continue;
     }
-    if (res.ok) { flushed++; continue; }
-    if (res.status === 429) { remaining.push(...entries.slice(i)); break; } // daily cap still spent: stop this round
-    remaining.push(entries[i]); // some other error on this one: keep it, try the rest
+    if (CAPTURE_PERMANENT_STATUSES.has(res.status)) {
+      try { fs.unlinkSync(entry.file); } catch { /* already gone */ }
+      process.stderr.write(`Second Brain: a kept capture was refused (HTTP ${res.status}) and removed.\n`);
+    }
+    break;
   }
-  writeCaptureSpool(namespace, remaining, cacheDir);
-  return { flushed, remaining: remaining.length };
+  return { flushed, remaining: readCaptureSpool(namespace, cacheDir).length };
 }
 
 /**
- * Whether `transcriptPath` plausibly belongs to `sessionId` at all, checked
- * the one way available without assuming a specific vendor directory layout
- * (none of Codex's, Cursor's, or any future client's real session storage
- * path is pinned down in the docs these adapters were built from): the
- * host's own hook payload carries both `session_id` and `transcript_path`
- * together, so a transcript for session A should never be handed to us
- * labelled as session B's end event. A review demonstrated exactly that: a
- * capture worker given `cwd` for one project and a `transcript_path` under a
- * completely unrelated one, with nothing to say they belonged together
- * except the caller's own claim. Requiring the session id to appear in the
- * transcript file's own name is a cheap, layout-agnostic check that a
- * mismatched or spoofed path fails and a real one (named after its own
- * session, which every vendor's examples so far do) passes.
+ * The real, symlink-free path of `transcriptPath` when it is a regular file
+ * inside `allowedDir` (the client's own transcript directory), else null.
+ * realpath resolves `..` and every symlink, so neither can walk a path out
+ * of the allowed directory, and a symlink inside it that points outside
+ * resolves outside and is rejected. The file name alone is never trusted.
  */
-function transcriptBelongsToSession(transcriptPath, sessionId) {
-  if (!sessionId) return false; // nothing to check the claim against: refuse rather than trust blindly
-  const name = path.basename(String(transcriptPath ?? ''));
-  return name.includes(sessionId);
+function resolveTranscriptPath(transcriptPath, allowedDir) {
+  if (typeof transcriptPath !== 'string' || !transcriptPath || !allowedDir) return null;
+  let real;
+  let root;
+  try { real = fs.realpathSync(transcriptPath); root = fs.realpathSync(allowedDir); } catch { return null; }
+  const rel = path.relative(root, real);
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+  try { return fs.statSync(real).isFile() ? real : null; } catch { return null; }
 }
 
 /** Global off switch plus an optional per-client one, e.g. SECOND_BRAIN_HOOK_CAPTURE_CODEX. */
@@ -789,6 +860,16 @@ function buildSessionCaptureBody(userTurns, meta, { maxChars = CAPTURE_MAX_CONTE
 function shouldCaptureSession(userTurns, { minUserTurnChars = CAPTURE_MIN_USER_TURN_CHARS, minBodyChars = CAPTURE_MIN_BODY_CHARS } = {}) {
   const chars = userTurns.reduce((n, t) => n + t.length, 0);
   return userTurns.some((t) => t.length >= minUserTurnChars) && chars >= minBodyChars;
+}
+
+/** "Kept" is reported only when the spool file really landed; otherwise the loss is reported. */
+function keepOrLose(namespace, body, cacheDir, isDailyLimit) {
+  if (spoolCapture(namespace, body, cacheDir)) {
+    logSpooledCapture(isDailyLimit);
+    return { sent: false, reason: 'spooled' };
+  }
+  logLostCapture();
+  return { sent: false, reason: 'lost' };
 }
 
 /**
@@ -845,11 +926,8 @@ async function performCapture({
       body: JSON.stringify(body),
     }, captureTimeoutMs);
   } catch (e) {
-    // Network failure: transient by nature, so spool it rather than lose it.
-    // A budget audit's requirement: never lose a capture silently.
-    spoolCapture(namespace, body, cacheDir);
-    logSpooledCapture(false);
-    return { sent: false, reason: 'spooled' };
+    // Network failure: transient, so keep it for a retry rather than lose it.
+    return keepOrLose(namespace, body, cacheDir, false);
   }
   if (!res.ok) {
     let errorCode = '';
@@ -860,9 +938,7 @@ async function performCapture({
     // just fail again identically on retry, so it keeps the original
     // fail()-reported behavior instead of growing the spool forever.
     if (res.status === 429 || res.status >= 500) {
-      spoolCapture(namespace, body, cacheDir);
-      logSpooledCapture(res.status === 429 && errorCode === 'daily_limit');
-      return { sent: false, reason: 'spooled' };
+      return keepOrLose(namespace, body, cacheDir, res.status === 429 && errorCode === 'daily_limit');
     }
     fail(`session capture failed: HTTP ${res.status}${errorCode ? ` ${errorCode}` : ''}${hintFor(res.status)}`);
     return { sent: false, reason: 'http-error' };
@@ -883,8 +959,8 @@ module.exports = {
   performRecall,
   redactSecrets, buildSessionCaptureBody, shouldCaptureSession, performCapture,
   recordLastCaptureTime, lastCaptureTime, captureEnabled,
-  contentDigest, claimCapture, transcriptBelongsToSession,
-  readCaptureSpool, writeCaptureSpool, spoolCapture, flushCaptureSpool, logSpooledCapture,
+  contentDigest, claimCapture,
+  readCaptureSpool, spoolCapture, spoolDir, flushCaptureSpool, logSpooledCapture, logLostCapture, resolveTranscriptPath,
   CAPTURE_MAX_CONTENT_CHARS, CAPTURE_WANT_USER_TURNS, CAPTURE_TIMEOUT_MS,
-  CAPTURE_SPOOL_MAX_ENTRIES, CAPTURE_SPOOL_MAX_BYTES, CAPTURE_SPOOL_FLUSH_BUDGET_MS,
+  CAPTURE_SPOOL_MAX_ENTRIES, CAPTURE_SPOOL_MAX_BYTES, CAPTURE_SPOOL_FLUSH_BUDGET_MS, CAPTURE_SPOOL_MAX_PER_FLUSH,
 };

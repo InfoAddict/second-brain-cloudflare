@@ -10,12 +10,15 @@
 // stdin field casing was not pinned down in the fetched vendor docs, so
 // normalizeStartEvent below reads it defensively rather than assuming Claude's
 // exact names are correct. UNVERIFIED against a real Codex CLI session.
-const { readStdinJson, performRecall, fail } = require('../agent-hooks-core/core');
+const { readStdinJson, performRecall, flushCaptureSpool, fail } = require('../agent-hooks-core/core');
 
 // resume and fork transcripts already carry the earlier injection (same
 // reasoning as every other adapter in this repo). compact reruns SessionStart
 // and discards what was injected before, so it is not skipped.
 const SKIP_SOURCES = new Set(['resume', 'fork']);
+// Kept captures from an earlier failed session-end are retried only after
+// recall has been printed, and only inside this window from the hook's start.
+const RETRY_WINDOW_MS = 3000;
 
 /**
  * Maps a Codex SessionStart stdin payload onto the plain { sessionId, cwd,
@@ -55,6 +58,7 @@ function emitAdditionalContext(text) {
  * nothing to print, matching performRecall's own contract).
  */
 async function runSessionStart(payload, overrides = {}) {
+  const started = Date.now();
   const { sessionId, cwd, source } = normalizeStartEvent(payload);
   const text = await performRecall({
     cwd,
@@ -65,6 +69,10 @@ async function runSessionStart(payload, overrides = {}) {
     ...overrides,
   });
   if (text) emitAdditionalContext(text);
+  await flushCaptureSpool({
+    env: overrides.env, configPath: overrides.configPath, cacheDir: overrides.cacheDir,
+    namespace: 'codex', deadline: started + RETRY_WINDOW_MS,
+  });
   return text;
 }
 
@@ -73,7 +81,7 @@ async function main() {
   await runSessionStart(payload);
 }
 
-module.exports = { SKIP_SOURCES, normalizeStartEvent, emitAdditionalContext, runSessionStart, main };
+module.exports = { SKIP_SOURCES, RETRY_WINDOW_MS, normalizeStartEvent, emitAdditionalContext, runSessionStart, main };
 
 if (require.main === module) {
   main().catch((e) => fail(`recall failed: ${e?.message ?? e}`));

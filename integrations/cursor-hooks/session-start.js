@@ -2,48 +2,33 @@
 'use strict';
 // sessionStart hook for the Cursor editor: recall injection.
 //
-// Per the 2026-09-26 hooks survey and the director's 2026-09-27 spot-check:
-// Cursor's sessionStart can return `additional_context`, but it is explicitly
-// fire-and-forget: the model loop does not wait for it. A recall slower than
-// the first model turn can arrive too late, so this hook runs on a short,
-// explicit cap rather than Claude Code's original 15s/3s budget (see
-// DEFAULT_RECALL_TIMEOUT_MS in agent-hooks-core/core.js). before-submit-
-// prompt.js is the synchronous safety net for the same context, and the two
-// share a "delivered" marker so the context is not sent twice in one session.
+// sessionStart's `additional_context` is the one hook output Cursor's docs
+// say reaches the model: "Additional context to add to the conversation's
+// initial system context" (https://prod.cursor.com/docs/hooks). The hook is
+// fire-and-forget ("the agent loop does not wait for or enforce a blocking
+// response"), so a slow recall can land after the first turn; it runs on a
+// short cap for that reason. There is no second delivery path: the earlier
+// beforeSubmitPrompt fallback was removed, because that event's
+// `user_message` is only "shown to the user when the prompt is blocked" and
+// never reaches the model. The README points users to the MCP `recall` tool
+// as the reliable path.
 //
-// Cursor's sessionStart stdin field names are undocumented; this reads them
-// defensively (sessionId before session_id, cwd as-is). No confirmed
-// source/reason taxonomy for sessionStart was found either, so every call is
-// treated as a fresh startup; there is no skip-list here the way Claude Code
-// and Codex skip resume/fork on their SessionStart, because Cursor's fetched
-// docs never named an equivalent reason for this event. UNVERIFIED against a
-// real Cursor session; see README.md's "Unverified" section.
-const { readStdinJson, performRecall, setMarker, fail } = require('../agent-hooks-core/core');
+// After recall is printed, any kept captures from an earlier failed
+// session-end are retried inside what is left of the same cap; the host is
+// not waiting on this hook, so that retry never delays the conversation.
+const { readStdinJson, performRecall, flushCaptureSpool, fail } = require('../agent-hooks-core/core');
 
 const NAMESPACE = 'cursor';
-// Distinct from NAMESPACE on purpose: this key names the session-start/
-// before-submit-prompt "already delivered" marker, never the recall content
-// cache performRecall keeps under NAMESPACE itself, so the two never collide.
-const DELIVERED_KEY = 'cursor-delivered';
 const CAP_MS = 3000;
 
 /**
  * Cursor's sessionStart stdin payload, normalized.
  *
- * The identity field is `conversation_id`, not `session_id`: verified
- * against https://cursor.com/docs/agent/hooks (checked 2026-09-27), which
- * lists `conversation_id` and `generation_id` as COMMON fields present on
- * every documented hook event (sessionStart, sessionEnd, beforeSubmitPrompt,
- * stop, and the rest), while `session_id` is only added on sessionStart and
- * sessionEnd specifically. A budget audit caught this hook (and
- * before-submit-prompt.js, which shares this function) reading only
- * sessionId/session_id: on the real beforeSubmitPrompt payload, which has
- * neither, the once-per-session marker could never be named, so every
- * prompt ran a full recall. `conversation_id` is used everywhere in this
- * adapter for exactly this reason: it is the one field every event these
- * hooks handle actually carries, so the same logical session always maps to
- * the same marker regardless of which event fired. `session_id`/`sessionId`
- * are kept as a defensive fallback only.
+ * The identity field is `conversation_id`, which the docs list as a common
+ * field on every event (`session_id` is only on sessionStart and sessionEnd).
+ * session-end.js shares this function, so `stop` and `sessionEnd` for one
+ * conversation map to the same cache key and capture marker.
+ * `session_id`/`sessionId` are a defensive fallback only.
  *
  * `cwd` prefers the documented `workspace_roots` input: a review caught this
  * hook falling back to `process.cwd()` even when workspace_roots was
@@ -78,15 +63,12 @@ function emitAdditionalContext(text) {
 }
 
 /**
- * The testable main flow: normalize the payload, run the shared recall on the
- * short cap, mark delivery and emit only when there is something to deliver.
- * `overrides` is forwarded into performRecall (env, configPath, cacheDir …) so
- * a test can supply all of it without touching the real filesystem or network;
- * `overrides.cacheDir` is also used directly for the marker, so a test cache
- * dir applies to both. Returns the recalled text ('' or null for nothing to
- * print, matching performRecall's own contract).
+ * The testable main flow: recall on the short cap, print it, then retry kept
+ * captures inside what is left of the cap. `overrides` (env, configPath,
+ * cacheDir) lets a test run this without the real filesystem or network.
  */
 async function runSessionStart(payload, overrides = {}) {
+  const started = Date.now();
   const { sessionId, cwd } = normalizeStdin(payload);
   const text = await performRecall({
     cwd,
@@ -96,10 +78,11 @@ async function runSessionStart(payload, overrides = {}) {
     capMs: CAP_MS,
     ...overrides,
   });
-  if (text) {
-    setMarker(DELIVERED_KEY, sessionId, overrides.cacheDir);
-    emitAdditionalContext(text);
-  }
+  if (text) emitAdditionalContext(text);
+  await flushCaptureSpool({
+    env: overrides.env, configPath: overrides.configPath, cacheDir: overrides.cacheDir,
+    namespace: NAMESPACE, deadline: started + (overrides.capMs ?? CAP_MS),
+  });
   return text;
 }
 
@@ -109,7 +92,7 @@ async function main() {
 }
 
 module.exports = {
-  NAMESPACE, DELIVERED_KEY, CAP_MS,
+  NAMESPACE, CAP_MS,
   normalizeStdin, emitAdditionalContext, runSessionStart, main,
 };
 

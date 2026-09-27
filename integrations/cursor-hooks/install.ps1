@@ -125,9 +125,8 @@ if (MODE !== 'uninstall') {
   const q = (p) => `"${p.replace(/"/g, '\\"')}"`;
   config.version = config.version || 1;
   config.hooks.sessionStart.push({ command: `node ${q(`${HOOKS_DIR}/session-start.js`)}` });
-  config.hooks.beforeSubmitPrompt.push({ command: `node ${q(`${HOOKS_DIR}/before-submit-prompt.js`)}` });
-  config.hooks.sessionEnd.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)}` });
-  config.hooks.stop.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)}` });
+  config.hooks.sessionEnd.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)} --event=sessionEnd` });
+  config.hooks.stop.push({ command: `node ${q(`${HOOKS_DIR}/session-end.js`)} --event=stop` });
 }
 for (const ev of EVENTS) if (!config.hooks[ev].length) delete config.hooks[ev];
 if (!Object.keys(config.hooks).length) delete config.hooks;
@@ -188,8 +187,8 @@ if ($Mode -eq "uninstall") {
 Write-Host ""
 Write-Host "Done. Second Brain hooks installed for Cursor."
 Write-Host "  sessionStart:        recalls context for the current project (fire-and-forget)"
-Write-Host "  beforeSubmitPrompt:  the same recall, run once per session as a synchronous safety net"
-Write-Host "  sessionEnd / stop:    saves the conversation when a transcript is available (needs Worker 3.0+)"
+Write-Host "  stop:                remembers where this conversation's transcript is (local only)"
+Write-Host "  sessionEnd:          saves the last few turns of the conversation, once (needs Worker 3.0+)"
 Write-Host ""
 Write-Host "Restart Cursor, or reload the window, so it re-reads hooks.json."
 Write-Host "Verify with: powershell -File `"$HooksDir\install.ps1`" -Check"

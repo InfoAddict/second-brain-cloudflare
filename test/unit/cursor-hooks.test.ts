@@ -9,30 +9,30 @@ afterEach(cleanTemp);
 // The real modules, not mirrors: see test/unit/claude-code-hooks.test.ts for
 // why that matters. A mirror can pass while the real file drifts.
 const start = require("../../integrations/cursor-hooks/session-start.js");
-const beforeSubmit = require("../../integrations/cursor-hooks/before-submit-prompt.js");
 const end = require("../../integrations/cursor-hooks/session-end.js");
-const core = require("../../integrations/agent-hooks-core/core.js");
 
 const FIXTURE = join(__dirname, "../../integrations/cursor-hooks/fixtures/sample-transcript.jsonl");
+const REAL_SHAPE = join(__dirname, "../../integrations/cursor-hooks/fixtures/real-shape-transcript.jsonl");
 const tmp = () => mkdtempSync(join(tmpdir(), "sb-cursor-hooks-"));
 
 describe("session-start.normalizeStdin", () => {
-  it("prefers sessionId (camelCase) over session_id, the reverse priority from the Codex/Copilot family", () => {
-    expect(start.normalizeStdin({ sessionId: "camel", session_id: "snake", cwd: "/x" }))
-      .toEqual({ sessionId: "camel", cwd: "/x" });
+  it("keys the session on conversation_id, the id every documented event carries", () => {
+    expect(start.normalizeStdin({ conversation_id: "conv", session_id: "sess", workspace_roots: ["/x"] }))
+      .toEqual({ sessionId: "conv", cwd: "/x" });
   });
 
-  it("falls back to session_id when sessionId is absent", () => {
+  it("falls back to sessionId, then session_id, when conversation_id is absent", () => {
+    expect(start.normalizeStdin({ sessionId: "camel", session_id: "snake", cwd: "/x" }).sessionId).toBe("camel");
     expect(start.normalizeStdin({ session_id: "snake", cwd: "/x" }).sessionId).toBe("snake");
+  });
+
+  it("takes the project from workspace_roots[0], never the hooks directory the process runs in", () => {
+    expect(start.normalizeStdin({ workspace_roots: ["/work/app", "/work/lib"], cwd: "/home/u/.cursor" }).cwd).toBe("/work/app");
   });
 
   it("defaults cwd to process.cwd() when absent or empty", () => {
     expect(start.normalizeStdin({}).cwd).toBe(process.cwd());
-    expect(start.normalizeStdin({ cwd: "" }).cwd).toBe(process.cwd());
-  });
-
-  it("defaults sessionId to an empty string when absent", () => {
-    expect(start.normalizeStdin({}).sessionId).toBe("");
+    expect(start.normalizeStdin({ cwd: "", workspace_roots: [] }).cwd).toBe(process.cwd());
   });
 
   it("tolerates null, non-object and malformed payloads without throwing", () => {
@@ -43,33 +43,7 @@ describe("session-start.normalizeStdin", () => {
   });
 
   it("ignores non-string field values instead of coercing them", () => {
-    expect(start.normalizeStdin({ sessionId: 123, cwd: null })).toEqual({ sessionId: "", cwd: process.cwd() });
-  });
-
-  it("before-submit-prompt.js re-exports the same normalizer", () => {
-    expect(beforeSubmit.normalizeStdin).toBe(start.normalizeStdin);
-  });
-});
-
-describe("before-submit-prompt.emitAdditionalContext (its own output shape, not session-start's)", () => {
-  const captureStdout = (fn: () => void) => {
-    const write = process.stdout.write.bind(process.stdout);
-    let printed = "";
-    process.stdout.write = (chunk: string) => { printed += String(chunk); return true; };
-    try { fn(); } finally { process.stdout.write = write; }
-    return printed;
-  };
-
-  it("writes {continue, user_message}, not sessionStart's flat additional_context", () => {
-    // beforeSubmitPrompt's documented output schema is different from
-    // sessionStart's (https://prod.cursor.com/docs/hooks); a review caught an
-    // earlier version of this file reusing sessionStart's field here, which
-    // beforeSubmitPrompt does not support.
-    const printed = captureStdout(() => { beforeSubmit.emitAdditionalContext("hello world"); });
-    const parsed = JSON.parse(printed.trim());
-    expect(Object.keys(parsed).sort()).toEqual(["continue", "user_message"]);
-    expect(parsed.continue).toBe(true);
-    expect(parsed.user_message).toBe("hello world");
+    expect(start.normalizeStdin({ conversation_id: 123, workspace_roots: [null], cwd: null })).toEqual({ sessionId: "", cwd: process.cwd() });
   });
 });
 
@@ -109,6 +83,20 @@ describe("session-start.emitAdditionalContext (output-shape builder)", () => {
 });
 
 describe("session-end transcript parser", () => {
+  it("reads the real Cursor record shape (message.content blocks) and unwraps <user_query>", () => {
+    const turns = end.readUserTurns(REAL_SHAPE);
+    expect(turns).toHaveLength(3);
+    expect(turns[0]).toMatch(/^Let's wire the nightly digest/);
+    expect(turns[1]).toMatch(/^Also cap it at 25/);
+    expect(turns[2]).toMatch(/^Actually hold off on shipping/);
+    expect(turns.join("\n")).not.toMatch(/<user_query>|<timestamp>/);
+  });
+
+  it("userQueryText keeps only the typed query, or strips the timestamp when there is no wrapper", () => {
+    expect(end.userQueryText("<timestamp>Sun</timestamp>\n<user_query>\nhello there\n</user_query>")).toBe("hello there");
+    expect(end.userQueryText("<timestamp>Sun</timestamp> plain text")).toBe("plain text");
+  });
+
   it("extracts user turns from the fixture, oldest first, skipping the malformed line", () => {
     const turns = end.readUserTurns(FIXTURE);
     expect(turns).toHaveLength(3);
@@ -167,117 +155,5 @@ describe("session-end transcript parser", () => {
     expect(end.turnFromLine("42")).toBeNull();
     expect(end.turnFromLine("null")).toBeNull();
     expect(end.turnFromLine('"just a string"')).toBeNull();
-  });
-});
-
-describe("dedup marker logic (cursor-delivered) in isolation", () => {
-  const withStub = async (handler: (u: URL) => { status: number; body: unknown } | null, run: () => Promise<unknown>) => {
-    const realFetch = global.fetch;
-    // @ts-expect-error test stub
-    global.fetch = async (url: string) => {
-      const u = new URL(String(url));
-      const hit = handler(u);
-      if (!hit) throw new Error("unreachable");
-      return new Response(JSON.stringify(hit.body), { status: hit.status, headers: { "Content-Type": "application/json" } });
-    };
-    try { return await run(); } finally { global.fetch = realFetch; }
-  };
-  const env = { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" };
-
-  it("session-start sets the marker only when it actually delivers something", async () => {
-    const dir = tmp();
-    const text = await withStub(
-      (u) => (u.pathname === "/recall" ? { status: 200, body: { ok: true, results: [], insight: null } }
-        : u.pathname === "/brief" ? { status: 200, body: { ok: true } } : null),
-      () => start.runSessionStart({ sessionId: "s1", cwd: dir }, { env, cacheDir: dir }),
-    );
-    expect(text).toBe("");
-    expect(core.hasMarker("cursor-delivered", "s1", dir)).toBe(false);
-  });
-
-  it("session-start sets the marker when it delivers real context", async () => {
-    const dir = tmp();
-    const text = await withStub(
-      (u) => (u.pathname === "/recall" ? { status: 200, body: { ok: true, results: [{ id: "m1", content: "a remembered thing" }], insight: null } }
-        : u.pathname === "/brief" ? { status: 200, body: { ok: true } } : null),
-      () => start.runSessionStart({ sessionId: "s2", cwd: dir }, { env, cacheDir: dir }),
-    );
-    expect(text).toContain("a remembered thing");
-    expect(core.hasMarker("cursor-delivered", "s2", dir)).toBe(true);
-  });
-
-  it("before-submit-prompt runs once, then is a no-op for every later prompt in the same session", async () => {
-    const dir = tmp();
-    let recallCalls = 0;
-    const realFetch = global.fetch;
-    // @ts-expect-error test stub
-    global.fetch = async (url: string) => {
-      const u = new URL(String(url));
-      if (u.pathname === "/recall") {
-        recallCalls++;
-        return new Response(JSON.stringify({ ok: true, results: [{ id: "m1", content: "a remembered thing" }], insight: null }), { status: 200 });
-      }
-      if (u.pathname === "/brief") return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      return new Response("{}", { status: 404 });
-    };
-    try {
-      const overrides = { env, cacheDir: dir };
-      expect(core.hasMarker("cursor-delivered", "s3", dir)).toBe(false);
-      const first = await beforeSubmit.runBeforeSubmitPrompt({ sessionId: "s3", cwd: dir }, overrides);
-      expect(first).toContain("a remembered thing");
-      expect(core.hasMarker("cursor-delivered", "s3", dir)).toBe(true);
-      expect(recallCalls).toBe(1);
-
-      const second = await beforeSubmit.runBeforeSubmitPrompt({ sessionId: "s3", cwd: dir }, overrides);
-      expect(second).toBeNull();
-      expect(recallCalls).toBe(1); // no second request at all
-    } finally { global.fetch = realFetch; }
-  });
-
-  it("before-submit-prompt does nothing when session-start already delivered, and makes no request", async () => {
-    const dir = tmp();
-    core.setMarker("cursor-delivered", "s4", dir);
-    let calls = 0;
-    const realFetch = global.fetch;
-    global.fetch = async () => { calls++; return new Response("{}", { status: 404 }); };
-    try {
-      const out = await beforeSubmit.runBeforeSubmitPrompt({ sessionId: "s4", cwd: dir }, { env, cacheDir: dir });
-      expect(out).toBeNull();
-      expect(calls).toBe(0);
-    } finally { global.fetch = realFetch; }
-  });
-
-  it("before-submit-prompt sets the marker even when its own recall finds nothing worth printing, so it never retries", async () => {
-    const dir = tmp();
-    let recallCalls = 0;
-    const realFetch = global.fetch;
-    // A result too short for frameOutput to render (filtered at < 4 chars) exits
-    // performRecall's plan loop after the first arm, same as a real "nothing
-    // useful" answer, so this stays a single recall call per invocation.
-    // @ts-expect-error test stub
-    global.fetch = async (url: string) => {
-      const u = new URL(String(url));
-      if (u.pathname === "/recall") { recallCalls++; return new Response(JSON.stringify({ ok: true, results: [{ id: "m1", content: "  " }], insight: null }), { status: 200 }); }
-      if (u.pathname === "/brief") return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      return new Response("{}", { status: 404 });
-    };
-    try {
-      const overrides = { env, cacheDir: dir };
-      const first = await beforeSubmit.runBeforeSubmitPrompt({ sessionId: "s5", cwd: dir }, overrides);
-      expect(first).toBe("");
-      expect(core.hasMarker("cursor-delivered", "s5", dir)).toBe(true);
-      await beforeSubmit.runBeforeSubmitPrompt({ sessionId: "s5", cwd: dir }, overrides);
-      expect(recallCalls).toBe(1);
-    } finally { global.fetch = realFetch; }
-  });
-
-  it("cursor-delivered, cursor (recall cache) and cursor-captured never collide", async () => {
-    const dir = tmp();
-    core.setMarker("cursor-delivered", "s6", dir);
-    core.writeSessionCache("cursor", "s6", "cached recall block", dir);
-    core.setMarker("cursor-captured", "s6", dir);
-    expect(core.hasMarker("cursor-delivered", "s6", dir)).toBe(true);
-    expect(core.readSessionCache("cursor", "s6", Date.now(), dir)).toBe("cached recall block");
-    expect(core.hasMarker("cursor-captured", "s6", dir)).toBe(true);
   });
 });

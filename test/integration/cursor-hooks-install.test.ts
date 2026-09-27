@@ -29,19 +29,19 @@ describe.skipIf(!hasBash)("integrations/cursor-hooks/install.sh", () => {
     });
   const read = () => JSON.parse(readFileSync(hooksFile, "utf8"));
 
-  it("writes all four hook entries, and no token anywhere in hooks.json", () => {
+  it("writes the three hook entries, and no token anywhere in hooks.json", () => {
     const r = run(["https://w.example/", "tok"]);
     expect(r.status, r.stderr).toBe(0);
     const s = read();
     expect(s.version).toBe(1);
     expect(s.hooks.sessionStart).toHaveLength(1);
     expect(s.hooks.sessionStart[0].command).toMatch(/^node ".*\/cursor-hooks\/session-start\.js"$/);
-    expect(s.hooks.beforeSubmitPrompt).toHaveLength(1);
-    expect(s.hooks.beforeSubmitPrompt[0].command).toMatch(/^node ".*\/cursor-hooks\/before-submit-prompt\.js"$/);
+    // No beforeSubmitPrompt: its user_message never reaches the model.
+    expect(s.hooks.beforeSubmitPrompt).toBeUndefined();
     expect(s.hooks.sessionEnd).toHaveLength(1);
-    expect(s.hooks.sessionEnd[0].command).toMatch(/^node ".*\/cursor-hooks\/session-end\.js"$/);
+    expect(s.hooks.sessionEnd[0].command).toMatch(/^node ".*\/cursor-hooks\/session-end\.js" --event=sessionEnd$/);
     expect(s.hooks.stop).toHaveLength(1);
-    expect(s.hooks.stop[0].command).toMatch(/^node ".*\/cursor-hooks\/session-end\.js"$/);
+    expect(s.hooks.stop[0].command).toMatch(/^node ".*\/cursor-hooks\/session-end\.js" --event=stop$/);
     expect(readFileSync(hooksFile, "utf8")).not.toContain("tok");
     // Credentials live in the CLI's shared file, mode 600, trailing slash stripped.
     expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ workerUrl: "https://w.example", authToken: "tok" });
@@ -53,9 +53,21 @@ describe.skipIf(!hasBash)("integrations/cursor-hooks/install.sh", () => {
     expect(run(["https://w.example", "tok"]).status).toBe(0);
     const s = read();
     expect(s.hooks.sessionStart).toHaveLength(1);
-    expect(s.hooks.beforeSubmitPrompt).toHaveLength(1);
     expect(s.hooks.sessionEnd).toHaveLength(1);
     expect(s.hooks.stop).toHaveLength(1);
+  });
+
+  it("an upgrade removes the old beforeSubmitPrompt entry and keeps other tools' entries", () => {
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    writeFileSync(hooksFile, JSON.stringify({ version: 1, hooks: {
+      beforeSubmitPrompt: [{ command: `node "${HOOKS}/before-submit-prompt.js"` }, { command: "echo keep-me" }],
+      stop: [{ command: `node "${HOOKS}/session-end.js"` }],
+    } }));
+    expect(run(["https://w.example", "tok"]).status).toBe(0);
+    const s = read();
+    expect(s.hooks.beforeSubmitPrompt).toEqual([{ command: "echo keep-me" }]);
+    expect(s.hooks.stop).toHaveLength(1);
+    expect(s.hooks.stop[0].command).toContain("--event=stop");
   });
 
   it("preserves an existing hooks.json's other entries and events", () => {

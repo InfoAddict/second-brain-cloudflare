@@ -37,6 +37,12 @@ transcript path exists and that capture is not disabled, then spawns
 worker is not on that clock; it gets a 20s budget of its own to do the actual
 work.
 
+The worker reads the transcript only when its real path (after resolving `..`
+and every symlink) is inside `$CODEX_HOME/sessions/` (default
+`~/.codex/sessions/`), where Codex writes its rollout files. A path anywhere
+else, or a symlink pointing out of that directory, is refused and nothing is
+sent.
+
 **This split is UNVERIFIED against a real Codex CLI install.** Whether Codex
 actually lets a detached, unref'd child outlive the parent hook process once
 Codex reaps it (rather than killing the whole process group) has not been
@@ -188,13 +194,21 @@ A budget audit found that when a free-plan brain hits its daily D1 cap, the
 Worker answers `POST /capture` with `HTTP 429` and `error: "daily_limit"` -
 and the hook was simply logging that and moving on, silently losing the
 session. Any capture that fails to upload (network error, 5xx, or 429) is now
-spooled to a small local file instead (capped at 20 entries or 5 MB, oldest
-dropped first, mode 600 in the 0700 cache directory) and retried at the start
-of the *next* session, bounded so it can never make that session-start hang:
-whatever does not fit in a few seconds, or still fails, just waits for the
-session after that. A bad or expired token (401/403) is not spooled - retrying
-the same request against the same rejection would just grow the spool
-forever; that needs you to fix the token, not a retry.
+kept as one file in `~/.cache/second-brain/capture-spool/codex/`: a 0700
+directory the hook creates and checks is yours and not a symlink, each file
+0600, written to a temporary name and renamed into place. The "kept" line
+prints only after that file exists; if it cannot be written safely you see
+`Second Brain: could not save this session, and could not keep it on this
+computer to retry. This capture is lost.` instead. At most 20 files or 5 MB
+are kept, oldest dropped first.
+
+The next session start retries them only after recall has been printed: at
+most 2, inside what is left of a 3 second window from when the hook started,
+stopping at the first failure. Each file is deleted only after its own upload
+succeeds, so an interrupted retry never loses or duplicates one. A 400/413/422
+drops that file, since it would be refused the same way again. A bad or
+expired token (401/403) is not kept at all: that needs you to fix the token,
+not a retry.
 
 `install.sh --check` reports how many captures are currently waiting to
 retry.

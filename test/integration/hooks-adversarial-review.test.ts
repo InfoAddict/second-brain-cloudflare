@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { cleanTemp } from '../helpers/tmp';
@@ -8,7 +8,6 @@ import { cleanTemp } from '../helpers/tmp';
 const root = resolve(import.meta.dirname, '../..');
 const core = require('../../integrations/agent-hooks-core/core.js');
 const cursorStart = require('../../integrations/cursor-hooks/session-start.js');
-const cursorBefore = require('../../integrations/cursor-hooks/before-submit-prompt.js');
 const codexWorker = require('../../integrations/codex-cli-hooks/capture-worker.js');
 const claudeCurrent = require('../../integrations/claude-code-hooks/session-start.js');
 const claudeGolden = require('../../integrations/claude-code-hooks/fixtures/pre-shared-core.session-start.js');
@@ -45,11 +44,15 @@ describe('hook contract and trust boundary repros', () => {
     expect(settings.hooks.SessionStart[0].hooks[0].timeout).toBeLessThanOrEqual(3000);
   });
 
-  it('Cursor beforeSubmitPrompt stays within its documented output fields', () => {
-    let stdout = '';
-    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: any) => { stdout += String(chunk); return true; });
-    cursorBefore.emitAdditionalContext('private recalled context');
-    expect(Object.keys(JSON.parse(stdout)).every((field) => ['continue', 'user_message'].includes(field))).toBe(true);
+  // Superseded by the director's simplification (T-0089.8): beforeSubmitPrompt's
+  // user_message never reaches the model, so the fallback was removed rather
+  // than reshaped. This now proves it is gone and no longer installed.
+  it('Cursor has no beforeSubmitPrompt fallback at all', () => {
+    const home = mkdtempSync(join(tmpdir(), 'sb-cursor-review-'));
+    install('cursor-hooks', home);
+    const hooks = JSON.parse(readFileSync(join(home, '.cursor/hooks.json'), 'utf8'));
+    expect(hooks.hooks.beforeSubmitPrompt).toBeUndefined();
+    expect(existsSync(join(root, 'integrations/cursor-hooks/before-submit-prompt.js'))).toBe(false);
   });
 
   it('Cursor resolves project from the documented workspace_roots input', () => {

@@ -12,9 +12,11 @@
 // quietly skips anything else; a malformed line or an unrecognized shape must
 // never crash the worker. See README.md's "Unverified" section.
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   performCapture, parseProjectLabel, projectSlug, gitRemoteUrl, resolveWorkspace, fail,
-  transcriptBelongsToSession,
+  resolveTranscriptPath,
 } = require('../agent-hooks-core/core');
 
 const NAMESPACE = 'codex';
@@ -102,6 +104,16 @@ function extractUserTurns(turns, want = WANT_USER_TURNS) {
   return users.slice(-want);
 }
 
+/**
+ * Where Codex keeps session transcripts: `$CODEX_HOME/sessions` (CODEX_HOME
+ * defaults to ~/.codex), laid out as `sessions/YYYY/MM/DD/rollout-*.jsonl`
+ * on a real install. Only a transcript that resolves inside it is read.
+ */
+function codexSessionsDir(env = process.env) {
+  const home = (env.CODEX_HOME || '').trim() || path.join(os.homedir(), '.codex');
+  return path.join(home, 'sessions');
+}
+
 function readTranscript(transcriptPath) {
   try { return fs.readFileSync(transcriptPath, 'utf8'); } catch { return ''; }
 }
@@ -112,13 +124,15 @@ function readTranscript(transcriptPath) {
  * `overrides` is forwarded straight into performCapture so a test can supply
  * env, configPath or cacheDir without touching the real filesystem or network.
  */
-async function run(payload, overrides = {}) {
+async function run(payload, { transcriptRoot, ...overrides } = {}) {
   const { transcriptPath, cwd, sessionId } = payload || {};
-  // A review demonstrated a capture worker handed a transcript_path from an
-  // unrelated project's session: refuse rather than trust the path just
-  // because it was readable. See transcriptBelongsToSession's own comment.
-  if (!transcriptBelongsToSession(transcriptPath, sessionId)) return { sent: false, reason: 'untrusted-transcript-path' };
-  const turns = parseTranscript(readTranscript(transcriptPath));
+  // Reviews showed a worker reading any readable transcript_path, including
+  // one reached through `..` or a symlink. Only a path that resolves inside
+  // Codex's own sessions directory is read. `transcriptRoot` is set only by
+  // check.js and tests.
+  const real = resolveTranscriptPath(transcriptPath, transcriptRoot ?? codexSessionsDir(overrides.env ?? process.env));
+  if (!real) return { sent: false, reason: 'untrusted-transcript-path' };
+  const turns = parseTranscript(readTranscript(real));
   const userTurns = extractUserTurns(turns);
 
   const remote = cwd ? gitRemoteUrl(cwd) : null;
@@ -150,7 +164,7 @@ async function main() {
 }
 
 module.exports = {
-  NAMESPACE, PER_CLIENT_ENV_VAR,
+  NAMESPACE, PER_CLIENT_ENV_VAR, codexSessionsDir,
   extractText, turnFromRecord, parseTranscript, extractUserTurns, run, main,
 };
 

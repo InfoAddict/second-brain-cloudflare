@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import worker from "../../src/index";
@@ -34,7 +34,7 @@ const ctx = { waitUntil: (_: Promise<any>) => {} } as ExecutionContext;
 interface Captured { method: string; url: string; body: string }
 interface StubBehaviour {
   healthVersion?: string; recallStatus?: number; recallResults?: unknown[];
-  briefStatus?: number; captureStatus?: number; delayMs?: number; unknownProject?: boolean;
+  briefStatus?: number; captureStatus?: number; captureError?: string; delayMs?: number; unknownProject?: boolean;
 }
 
 let server: Server;
@@ -67,7 +67,7 @@ beforeAll(async () => {
           return reply(200, { ok: true, attention: { due: 0 }, loops: { open: 0, items: [] } });
         }
         if (req.url === "/capture") {
-          if (behaviour.captureStatus && behaviour.captureStatus >= 400) return reply(behaviour.captureStatus, { ok: false, code: "unauthorized" });
+          if (behaviour.captureStatus && behaviour.captureStatus >= 400) return reply(behaviour.captureStatus, { ok: false, code: "unauthorized", error: behaviour.captureError });
           return reply(200, { ok: true, id: "new-id" });
         }
         return reply(200, { ok: true, id: "new-id" });
@@ -150,13 +150,17 @@ function replay(c: Captured): Promise<Response> {
 }
 
 const startPayload = (source = "startup") => ({ session_id: "s1", cwd: project, hook_event_name: "SessionStart", source });
-// The transcript's own filename must carry its session id (see
-// transcriptBelongsToSession in agent-hooks-core/core.js): a real Codex
-// rollout file is named after its own session, and the worker refuses a
-// transcript_path that is not. Each test gets its own copy so the id can
-// vary per test without the tests stepping on each other's file.
+// Transcripts are only read from inside Codex's own sessions directory
+// ($CODEX_HOME/sessions, default ~/.codex/sessions; HOME is `scratch` in these
+// spawned hooks), resolved with realpath. Each test gets its own copy, laid out
+// the way a real install lays them out.
+function sessionsDir() {
+  const d = join(scratch, ".codex", "sessions", "2026", "09", "27");
+  mkdirSync(d, { recursive: true });
+  return d;
+}
 function transcriptFor(sessionId: string) {
-  const file = join(scratch, `rollout-${sessionId}.jsonl`);
+  const file = join(sessionsDir(), `rollout-${sessionId}.jsonl`);
   copyFileSync(FIXTURE, file);
   return file;
 }
@@ -309,7 +313,7 @@ describe("capture-worker.js", () => {
 
   it("does not capture a transcript with no substantial human text", async () => {
     const { writeFileSync } = await import("node:fs");
-    const empty = join(scratch, "rollout-cx-empty.jsonl");
+    const empty = join(sessionsDir(), "rollout-cx-empty.jsonl");
     writeFileSync(empty, [
       JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] } }),
     ].join("\n") + "\n");
@@ -328,6 +332,41 @@ describe("capture-worker.js", () => {
     const r = await runWorker(workerPayload("cx-dry"), { SECOND_BRAIN_DRY_RUN: "1" });
     expect(r.code, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject({ source: "codex-session" });
+    expect(captured.filter(c => c.url === "/capture")).toHaveLength(0);
+  });
+});
+
+describe("kept captures are resent by the next session start", () => {
+  const spooled = () => {
+    const d = join(scratch, "cache", "second-brain", "capture-spool", "codex");
+    return existsSync(d) ? readdirSync(d).filter(n => n.endsWith(".json")) : [];
+  };
+
+  it("a 429 keeps the capture, then session-start.js resends it after printing recall and clears it", async () => {
+    behaviour.captureStatus = 429;
+    behaviour.captureError = "daily_limit";
+    const end = await runWorker(workerPayload("cx-kept"));
+    expect(end.code, end.stderr).toBe(0);
+    expect(end.stderr).toContain("Second Brain: daily database limit reached (resets 00:00 UTC). Capture kept on this computer to retry.");
+    expect(spooled()).toHaveLength(1);
+
+    behaviour = {};
+    captured = [];
+    const start = await runStart(startPayload());
+    expect(start.code, start.stderr).toBe(0);
+    expect(start.stdout).toContain("Context recalled");
+    const order = captured.map(c => c.url.split("?")[0]);
+    expect(order).toContain("/capture");
+    expect(order.lastIndexOf("/recall")).toBeLessThan(order.indexOf("/capture")); // retry only after recall
+    expect(JSON.parse(captured.find(c => c.url === "/capture")!.body)).toMatchObject({ source: "codex-session" });
+    expect(spooled()).toHaveLength(0);
+  });
+
+  it("a transcript outside ~/.codex/sessions is never read", async () => {
+    const outside = join(scratch, "rollout-cx-outside.jsonl");
+    copyFileSync(FIXTURE, outside);
+    const r = await runWorker({ sessionId: "cx-outside", cwd: project, transcriptPath: outside, reason: "close" });
+    expect(r.code, r.stderr).toBe(0);
     expect(captured.filter(c => c.url === "/capture")).toHaveLength(0);
   });
 });

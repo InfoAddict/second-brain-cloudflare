@@ -1,54 +1,57 @@
 # Cursor editor hooks
 
-Three hooks that connect a Cursor session to your Second Brain: two recall
-paths that cover for each other, and one that saves the conversation when it
-ends.
+Hooks that connect a Cursor conversation to your Second Brain: one recall at
+the start, and one capture when the conversation ends.
 
-They are independent of the MCP server. Use either, or both.
+They are independent of the MCP server. **For recall you can rely on, also
+connect the MCP server and let the model call its `recall` tool** (see
+[Cursor Instructions](https://github.com/rahilp/second-brain-cloudflare/wiki/Cursor-Instructions)).
+The session-start hook is a head start, not a guarantee; the reason is below.
 
 ## What the hooks do
 
 | Event | Runs on | Action | Cost |
 |---|---|---|---|
-| `sessionStart` | every session start (see "Unverified" below) | `GET /recall` and `GET /brief` for this project, returns `additional_context` | one recall + one brief, capped at 3 s |
-| `beforeSubmitPrompt` | the first prompt of a session, only if `sessionStart` has not already delivered context | the same recall as `sessionStart` | zero or one recall + one brief, capped at 3 s |
-| `sessionEnd` / `stop` | session end, whichever event actually carries `transcript_path` | `POST /capture` with the last few user turns | one capture (embedding + often a model call) |
+| `sessionStart` | every new conversation | `GET /recall` and `GET /brief` for this project, returns `additional_context`, then retries up to 2 kept captures in what is left of the 3 s cap | one recall + one brief, capped at 3 s |
+| `stop` | after every agent turn | remembers where this conversation's transcript is, on this computer only | no request |
+| `sessionEnd` | the conversation ends | `POST /capture` with the last three user turns | one capture per conversation |
 
-### Why two recall hooks
+### Recall: one path, and why MCP is the reliable one
 
-Cursor's `sessionStart` can return `additional_context`, but it is
-**fire-and-forget**: Cursor does not wait for it before the model's first
-turn. A slow or cold Worker can lose that race, so `session-start.js` may
-finish after the model has already replied once, with its output never seen.
-`before-submit-prompt.js` is the synchronous safety net: it runs right before
-each prompt is submitted, so if `sessionStart` never delivered anything, this
-hook does the same recall in a place Cursor's model loop cannot skip past.
+Cursor's docs (https://prod.cursor.com/docs/hooks, checked 2026-09-27) say
+sessionStart's `additional_context` is "Additional context to add to the
+conversation's initial system context", which is the one hook output
+documented to reach the model. They also say sessionStart is
+fire-and-forget: "the agent loop does not wait for or enforce a blocking
+response". A slow or cold Worker can therefore land after the first turn,
+and then that conversation gets no recalled context from the hook.
 
-Both hooks share one marker file per session (`cursor-delivered`, distinct
-from the recall content cache) so the context is delivered once, not twice:
+There is no second hook path. An earlier version used `beforeSubmitPrompt` as
+a fallback, but that event's `user_message` is a "Message shown to the user
+when the prompt is blocked": it never reaches the model, so the fallback
+delivered nothing and was removed. Upgrading with `install.sh` removes its old
+entry from `hooks.json`.
 
-- `session-start.js` sets the marker only when it actually has something to
-  print. If it finds nothing (or is still racing when the process exits),
-  the marker stays unset and `before-submit-prompt.js` gets its turn.
-- `before-submit-prompt.js` checks the marker first. If it is already set, it
-  makes no request at all. Otherwise it runs the recall itself and sets the
-  marker unconditionally: this hook is the last resort, so it never retries
-  on a later prompt in the same session even if this attempt found nothing.
+### Capture: why `stop` and `sessionEnd` both run `session-end.js`
 
-This cannot fully prove that Cursor's model loop actually waited for
-`sessionStart` in any given run, only that whichever hook runs first, the
-other one steps aside. See "Unverified" for what is still assumed.
+Per the docs, `sessionEnd` carries no `transcript_path`; `stop` does, and it
+fires after every agent turn. So:
 
-### Why one script for session-end
+- `stop` (`session-end.js --event=stop`) only records the transcript path in
+  your local cache. It never sends anything, so a 25-turn conversation costs
+  nothing extra.
+- `sessionEnd` (`session-end.js --event=sessionEnd`) reads that transcript
+  once and sends one capture. A capture-once marker per conversation stops a
+  repeat.
 
-The hooks survey found `transcript_path` in Cursor's shared base input schema
-but not confirmed specifically on `sessionEnd` or `stop`. Rather than guess
-which one actually carries it, `session-end.js` is registered for **both**
-events and no-ops (exit 0, no request) whenever the payload it gets has none,
-expected when transcript storage is off, or when the event that fired is the
-one without it, not a failure. If both events happen to fire with a
-transcript present for the same session, the capture-once marker
-`performCapture` already keeps prevents a duplicate `/capture`.
+The transcript is read only when its real path (after resolving `..` and
+every symlink) is inside `~/.cursor/projects/`, where Cursor keeps agent
+transcripts. Anything else is refused and nothing is sent. If you have
+transcripts turned off, `transcript_path` is null and capture quietly does
+nothing.
+
+The project name comes from `workspace_roots[0]` in the payload, never from
+the directory the hook runs in (Cursor runs user hooks from `~/.cursor`).
 
 ## Install, upgrade, check, uninstall
 
@@ -91,9 +94,8 @@ project you open in Cursor:
   "version": 1,
   "hooks": {
     "sessionStart": [{ "command": "node \"/absolute/path/to/cursor-hooks/session-start.js\"" }],
-    "beforeSubmitPrompt": [{ "command": "node \"/absolute/path/to/cursor-hooks/before-submit-prompt.js\"" }],
-    "sessionEnd": [{ "command": "node \"/absolute/path/to/cursor-hooks/session-end.js\"" }],
-    "stop": [{ "command": "node \"/absolute/path/to/cursor-hooks/session-end.js\"" }]
+    "sessionEnd": [{ "command": "node \"/absolute/path/to/cursor-hooks/session-end.js\" --event=sessionEnd" }],
+    "stop": [{ "command": "node \"/absolute/path/to/cursor-hooks/session-end.js\" --event=stop" }]
   }
 }
 ```
@@ -123,19 +125,15 @@ line, so the token never appears there or in `ps`. `SECOND_BRAIN_URL` and
 
 ## What is sent
 
-Recall (`sessionStart` and `beforeSubmitPrompt` both send this, at most once
-between them per session):
+Recall (`sessionStart`, once per conversation):
 
 ```
-GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&project=<project>
+GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&project=<project>&synthesize=0
 GET /brief?lean=1&preview=1&workspace=personal&project=<project>
 ```
 
-with a project-less second recall attempt if the first returns nothing. Both
-hooks share the shared `performRecall` plan every adapter in this repo uses,
-capped to 3 seconds total, short on purpose, since `sessionStart` is racing
-the model's first turn and `beforeSubmitPrompt` runs synchronously in front of
-every prompt.
+with a project-less second recall attempt if the first returns nothing, all
+inside one 3 second cap.
 
 Capture: Cursor sessions: saves the last few turns of each session to your brain. You can forget any captured session. Turn off any time.
 
@@ -172,7 +170,7 @@ capture is skipped with one notice per day.
 ## Opt out
 
 ```bash
-SECOND_BRAIN_HOOK_RECALL=0            # no recall on session start or before-submit-prompt
+SECOND_BRAIN_HOOK_RECALL=0            # no recall on session start
 SECOND_BRAIN_HOOK_CAPTURE=0           # no capture on any adapter (global)
 SECOND_BRAIN_HOOK_CAPTURE_CURSOR=0    # no capture from Cursor specifically, recall unaffected
 ```
@@ -193,98 +191,67 @@ reliable channel, matching every other adapter in this repo.
 | `Second Brain: daily database limit reached (resets 00:00 UTC). Capture kept on this computer to retry.` | the free plan's daily D1 cap is spent; capture spooled, not lost |
 | `Second Brain: could not save this session right now. Capture kept on this computer to retry.` | a network error or a 5xx; also spooled |
 
+| `Second Brain: could not save this session, and could not keep it on this computer to retry. This capture is lost.` | the upload failed and the local spool could not be written safely |
+
 Nothing here blocks the session. A failed hook costs you the recall or the
-capture, not the conversation. A capture that fails with a network error, a
-5xx, or a 429 (the daily-cap response) is spooled locally (capped at 20
-entries or 5 MB, mode 600) and retried at the start of the next session,
-bounded so that retry can never make a session hang; `install.sh --check`
-reports how many are waiting. A 401/403 is not spooled - that needs a fixed
-token, not a retry.
+capture, not the conversation.
+
+A capture that fails with a network error, a 5xx, or a 429 (the daily-cap
+response) is kept as one file in `~/.cache/second-brain/capture-spool/cursor/`
+(a 0700 directory the hook creates and checks is yours and not a symlink;
+each file is 0600, written to a temporary name and renamed into place). The
+"kept" line prints only after that file exists; otherwise you see the "lost"
+line. At most 20 files or 5 MB are kept, oldest dropped first.
+
+The next session start retries them after recall has been printed: at most 2,
+inside what is left of its 3 second cap, stopping at the first failure. Each
+file is deleted only after its own upload succeeds, so an interrupted retry
+never loses or duplicates one. A 400/413/422 drops that file, since a retry
+would be refused the same way. A 401/403 is not kept at all; that needs a
+fixed token. `install.sh --check` reports how many are waiting.
 
 ## Unverified: needs a real Cursor smoke test
 
-Everything below was derived from the vendor docs available at the time this
-adapter was written (2026-09-26/27) plus deliberate design choices made to
-cover the gaps those docs left open. None of it has been exercised against a
-real Cursor session:
+Checked against https://prod.cursor.com/docs/hooks on 2026-09-27:
+`conversation_id` and `workspace_roots` are common fields on every event;
+`stop` carries `transcript_path` (null when transcripts are off);
+sessionStart's `additional_context` reaches the model; beforeSubmitPrompt's
+`user_message` does not. The transcript record shape
+(`{role, message: {content: [{type: "text", text}]}}`, with the typed prompt
+inside `<user_query>`) was read from real files on disk and is pinned by
+`fixtures/real-shape-transcript.jsonl`.
 
-- ~~Stdin field names~~ **VERIFIED (2026-09-27) against
-  https://cursor.com/docs/agent/hooks**: the session identity field is
-  `conversation_id`, a common field present on every documented event
-  (`sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `stop`, and the rest).
-  `session_id` exists too but only on `sessionStart`/`sessionEnd`
-  specifically - a budget audit caught an earlier version of this adapter
-  reading only `sessionId`/`session_id`, which `beforeSubmitPrompt`'s payload
-  never carries, so its once-per-session marker could never be named and
-  every prompt ran a full recall (fixed; `conversation_id` is now the primary
-  identity everywhere in this adapter, with `session_id`/`sessionId` kept as
-  a defensive fallback). `workspace_roots[0]` is confirmed as the project
-  path (a common field too). `cwd` on individual events is confirmed to exist
-  on some (e.g. `preToolUse`) but is not listed as a `beforeSubmitPrompt`
-  field, which is why this adapter prefers `workspace_roots` for the project
-  path rather than relying on a per-event `cwd`.
-- **`sessionStart` source/reason taxonomy.** No confirmed vocabulary
-  (equivalent to Claude Code's `startup`/`resume`/`clear`/`compact`) was found
-  for this event, so every call is treated as a fresh `startup` and there is
-  no skip-list. If Cursor does replay `sessionStart` on a resume-like event,
-  this adapter will recall again rather than skip it.
-- ~~`beforeSubmitPrompt` output shape~~ **VERIFIED AND FIXED**: this event
-  does not support `sessionStart`'s flat `additional_context` field; only
-  `continue` and `user_message` are recognized. Fixed in a prior review
-  round.
+Still assumed, not exercised in a live Cursor session:
+
+- **`sessionStart` source/reason taxonomy.** No documented equivalent of
+  Claude Code's `startup`/`resume`/`clear`/`compact`, so every call is
+  treated as a fresh start. If Cursor replays `sessionStart` on resume, this
+  adapter recalls again.
 - **`hooks.json` schema.** The `{"version":1,"hooks":{"<event>":[{"command":
-  "…"}]}}` shape is this adapter's best-effort read of the vendor docs, not a
-  field-by-field confirmed schema. The installer's non-destructive merge
-  should still be safe against a differently-shaped existing file: it
-  refuses anything that is not a JSON object at the top level, but the exact
-  keys it writes may need correcting once wired against a real Cursor client.
-- **`transcript_path` on `sessionEnd`/`stop`.** The director's 2026-09-27
-  spot-check found `transcript_path` in the shared base input schema but not
-  confirmed on either event's own specification. `session-end.js` is
-  registered for both and no-ops safely when it is absent, but which event
-  (if either) actually delivers it in practice is unconfirmed.
-- **Cursor's own transcript JSONL shape.** Entirely undocumented. The parser
-  in `session-end.js` tries several plausible content shapes (a string, an
-  array of `{type:'text',text}` blocks, a single `{text}` object) and skips
-  anything else; it has not been checked against a real transcript file.
-- **Cursor Agent CLI (`cursor-agent`) parity.** Explicitly out of scope. The
-  hooks survey found the CLI's hook parity undocumented beyond a
-  `workspaceOpen` mention; this adapter has not been built or tested against
-  it, and installing these hooks does not claim to cover it.
+  "..."}]}}` shape follows the docs; the installer refuses to overwrite a
+  file that is not a JSON object.
+- **Transcript directory.** The docs do not name one. `~/.cursor/projects/`
+  is where transcripts were found on disk; if Cursor moves them, capture is
+  refused (safe) until this path is updated.
+- **Cursor Agent CLI (`cursor-agent`) parity.** Out of scope; not built or
+  tested against it.
 
 If you run this against a real Cursor session, please correct this section
-with what you actually observed on stdin, in `hooks.json`, and in a real
-transcript file.
+with what you actually observed.
 
 ## Smoke test
 
-A review caught two real bugs since this list was first written: `before-
-submit-prompt.js` was emitting sessionStart's `additional_context` field,
-which beforeSubmitPrompt's own docs do not recognize (it takes `continue` and
-`user_message` instead, fixed now); and `session-start.js` was falling back to
-`process.cwd()` even when the payload's `workspace_roots` named the actual
-project, which is wrong because Cursor's hooks run from `~/.cursor`, never
-from the project - `process.cwd()` there is never the project. Both are fixed;
-steps 3 and 3a below specifically re-check them.
-
 1. `bash install.sh https://your-worker.workers.dev your-token`
 2. `bash install.sh --check`: confirms the Worker is reachable, prints
-   recall/capture status and the last capture time, and runs a live
-   `session-start.js` against your brain.
-3. Open a project in Cursor that has at least one memory stored for it, start
-   a fresh session, and confirm the model's first reply reflects recalled
-   context (or, if it does not, that the very next prompt does, via the
-   `beforeSubmitPrompt` fallback).
-3a. Confirm the recall was actually scoped to THIS project, not to wherever
-   `~/.cursor` happens to be: check your Worker's logs for the `project=`
-   query parameter on the `/recall` call, or temporarily point
-   `SECOND_BRAIN_URL` at a stub and inspect the captured request directly.
-4. Have a short back-and-forth (at least one substantial message), end the
-   session, and confirm a new memory tagged with this project's name appears
-   in your brain within a minute or two.
-5. Re-run step 3 in the same session (a second prompt) and confirm no second
-   recall request is made: check your Worker's logs, or watch
-   `~/.cache/second-brain/session-cursor-delivered-<session-id>.txt` appear
-   after the first prompt and not change after the second.
-6. `bash install.sh --uninstall`, restart Cursor, and confirm no Second Brain
+   recall/capture status, the last capture time and waiting captures, and
+   runs a live `session-start.js` against your brain.
+3. Open a project that has at least one memory stored for it and start a new
+   conversation. If the first reply reflects recalled context, the hook won
+   the race; if not, ask the model to use the MCP `recall` tool.
+3a. Confirm recall was scoped to THIS project: check your Worker's logs for
+   the `project=` parameter on `/recall`.
+4. Have a short back-and-forth (at least one substantial message) and end
+   the conversation. Confirm exactly one new memory tagged with this
+   project's name appears, not one per turn.
+5. `bash install.sh --uninstall`, restart Cursor, and confirm no Second Brain
    hooks remain in `~/.cursor/hooks.json`.

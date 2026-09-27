@@ -37,7 +37,7 @@ async function main() {
   console.log('\n- session-end (capture-worker) dry run against the bundled sample transcript -');
   process.env.SECOND_BRAIN_DRY_RUN = '1';
   const fixture = path.join(__dirname, 'fixtures', 'sample-transcript.jsonl');
-  const result = await worker.run({ transcriptPath: fixture, cwd: process.cwd(), sessionId: 'codex-check' });
+  const result = await worker.run({ transcriptPath: fixture, cwd: process.cwd(), sessionId: 'codex-check' }, { transcriptRoot: path.dirname(fixture) });
   console.log(JSON.stringify({ wouldCapture: result.sent || result.reason === 'dry-run', reason: result.reason }, null, 2));
   if (process.exitCode) process.exit(process.exitCode);
 }

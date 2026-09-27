@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, symlinkSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanTemp } from "../helpers/tmp";
@@ -626,7 +626,7 @@ describe("capture spool: never lose a failed upload silently", () => {
     expect(spool.at(-1).body.content).toBe("capture 24");
   });
 
-  it("end to end: a 429 spools the capture, and the next session start (performRecall) resends it and clears the spool", async () => {
+  it("end to end: a 429 spools the capture, and the next session start resends it after recall and clears the spool", async () => {
     const dir = tmp();
     const posts: string[] = [];
     let captureAttempts = 0;
@@ -646,9 +646,9 @@ describe("capture spool: never lose a failed upload silently", () => {
     expect(captureAttempts).toBe(1);
     expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
 
-    // "Next session start": performRecall, this time the Worker accepts the
-    // capture. No real recall/brief endpoints are hit in this stub beyond
-    // what performRecall itself needs; the point under test is the spool.
+    // "Next session start": recall first, and recall alone never touches the
+    // spool; the adapter flushes afterwards, inside what is left of its deadline.
+    const env = { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" };
     await withStub(
       (u, init) => {
         if (u.pathname === "/recall") return { status: 200, body: { ok: true, results: [] } };
@@ -656,15 +656,113 @@ describe("capture spool: never lose a failed upload silently", () => {
         if (u.pathname === "/capture") { posts.push(String(init?.body)); return { status: 200, body: { ok: true } }; }
         return null;
       },
-      () => core.performRecall({
-        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
-        cwd: "/tmp", sessionId: "next-session", source: "startup", namespace: "codex", cacheDir: dir,
-      }),
+      async () => {
+        await core.performRecall({ env, cwd: "/tmp", sessionId: "next-session", source: "startup", namespace: "codex", cacheDir: dir });
+        expect(posts).toHaveLength(0);
+        return core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir });
+      },
     );
 
     expect(posts).toHaveLength(1);
     expect(JSON.parse(posts[0])).toMatchObject({ source: "codex-session" });
     expect(core.readCaptureSpool("codex", dir)).toHaveLength(0);
+  });
+
+  const env = { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" };
+
+  it("writes one private file per capture, and nothing else is left behind", () => {
+    const dir = tmp();
+    expect(core.spoolCapture("codex", { content: "a" }, dir)).toBe(true);
+    expect(core.spoolCapture("codex", { content: "b" }, dir)).toBe(true);
+    const target = core.spoolDir("codex", dir);
+    const names = readdirSync(target);
+    expect(names).toHaveLength(2);
+    expect(names.every((n: string) => n.endsWith(".json"))).toBe(true);
+    for (const n of names) expect(require("node:fs").statSync(join(target, n)).mode & 0o077).toBe(0);
+  });
+
+  it("refuses to follow a symlinked spool directory, and reports the capture lost instead of kept", async () => {
+    const dir = tmp();
+    const elsewhere = tmp();
+    mkdirSync(join(dir, "capture-spool"), { recursive: true, mode: 0o700 });
+    symlinkSync(elsewhere, join(dir, "capture-spool", "codex"));
+    expect(core.spoolCapture("codex", { content: "x" }, dir)).toBe(false);
+    expect(readdirSync(elsewhere)).toHaveLength(0);
+
+    const { result: out, stderr } = await captureStderr(() => withStub(
+      (u) => (u.pathname === "/health" ? { status: 200, body: { ok: true, version: "3.1.0" } }
+        : u.pathname === "/capture" ? { status: 503, body: { ok: false } } : null),
+      () => core.performCapture({ env, userTurns: goodTurns, meta, namespace: "codex", sessionId: "s-lost", cacheDir: dir }),
+    ));
+    expect(out).toMatchObject({ sent: false, reason: "lost" });
+    expect(stderr).toContain("This capture is lost.");
+    expect(stderr).not.toContain("Capture kept on this computer");
+    expect(readdirSync(elsewhere)).toHaveLength(0);
+    process.exitCode = 0;
+  });
+
+  it("refuses a spool path that is a file, not a directory", () => {
+    const dir = tmp();
+    mkdirSync(join(dir, "capture-spool"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, "capture-spool", "codex"), "not a dir");
+    expect(core.spoolCapture("codex", { content: "x" }, dir)).toBe(false);
+  });
+
+  it("sends at most 2 per flush, deleting each file only after its own upload succeeds", async () => {
+    const dir = tmp();
+    for (let i = 0; i < 5; i++) core.spoolCapture("codex", { content: `capture ${i}` }, dir);
+    const sent: string[] = [];
+    const out = await withStub(
+      (u, init) => { if (u.pathname !== "/capture") return null; sent.push(JSON.parse(String(init?.body)).content); return { status: 200, body: { ok: true } }; },
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir }),
+    );
+    expect(sent).toEqual(["capture 0", "capture 1"]);
+    expect(out).toEqual({ flushed: 2, remaining: 3 });
+    expect(core.readCaptureSpool("codex", dir).map((e: any) => e.body.content)).toEqual(["capture 2", "capture 3", "capture 4"]);
+  });
+
+  it("stops at the first failure: one 5xx is one request, and the unsent files stay", async () => {
+    const dir = tmp();
+    for (let i = 0; i < 3; i++) core.spoolCapture("codex", { content: `capture ${i}` }, dir);
+    let calls = 0;
+    await withStub(
+      () => { calls++; return { status: 502, body: { ok: false } }; },
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir }),
+    );
+    expect(calls).toBe(1);
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(3);
+  });
+
+  it("a success followed by a failure removes only the file that was sent", async () => {
+    const dir = tmp();
+    core.spoolCapture("codex", { content: "first" }, dir);
+    core.spoolCapture("codex", { content: "second" }, dir);
+    let n = 0;
+    await withStub(
+      () => (++n === 1 ? { status: 200, body: { ok: true } } : { status: 500, body: { ok: false } }),
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir }),
+    );
+    expect(core.readCaptureSpool("codex", dir).map((e: any) => e.body.content)).toEqual(["second"]);
+  });
+
+  it("makes no request once the deadline has passed", async () => {
+    const dir = tmp();
+    core.spoolCapture("codex", { content: "queued" }, dir);
+    let calls = 0;
+    await withStub(() => { calls++; return { status: 200, body: { ok: true } }; },
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir, deadline: Date.now() - 1 }));
+    expect(calls).toBe(0);
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
+  });
+
+  it("a capture queued while a flush runs is not erased by it", async () => {
+    const dir = tmp();
+    core.spoolCapture("codex", { content: "old" }, dir);
+    await withStub(
+      () => { core.spoolCapture("codex", { content: "queued mid-flush" }, dir); return { status: 200, body: { ok: true } }; },
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir, max: 1 }),
+    );
+    expect(core.readCaptureSpool("codex", dir).map((e: any) => e.body.content)).toEqual(["queued mid-flush"]);
   });
 
   it("a still-spent daily cap during the retry keeps the entry queued, does not drop it", async () => {
@@ -677,5 +775,46 @@ describe("capture spool: never lose a failed upload silently", () => {
       }),
     );
     expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
+  });
+});
+
+describe("resolveTranscriptPath: only files inside the client's transcript directory", () => {
+  const setup = () => {
+    const base = tmp();
+    const root = join(base, "sessions");
+    mkdirSync(join(root, "2026"), { recursive: true });
+    const inside = join(root, "2026", "rollout-a.jsonl");
+    writeFileSync(inside, "{}");
+    const outside = join(base, "secret.jsonl");
+    writeFileSync(outside, "{}");
+    return { base, root, inside, outside };
+  };
+
+  it("accepts a regular file inside the root and returns its real path", () => {
+    const { root, inside } = setup();
+    expect(core.resolveTranscriptPath(inside, root)).toBe(require("node:fs").realpathSync(inside));
+  });
+
+  it("rejects a path that walks out with ..", () => {
+    const { root } = setup();
+    expect(core.resolveTranscriptPath(join(root, "2026", "..", "..", "secret.jsonl"), root)).toBeNull();
+  });
+
+  it("rejects a symlink inside the root that points outside it", () => {
+    const { root, outside } = setup();
+    const link = join(root, "2026", "rollout-link.jsonl");
+    symlinkSync(outside, link);
+    expect(core.resolveTranscriptPath(link, root)).toBeNull();
+  });
+
+  it("rejects the root itself, a directory, a missing file and a matching name elsewhere", () => {
+    const { base, root } = setup();
+    expect(core.resolveTranscriptPath(root, root)).toBeNull();
+    expect(core.resolveTranscriptPath(join(root, "2026"), root)).toBeNull();
+    expect(core.resolveTranscriptPath(join(root, "nope.jsonl"), root)).toBeNull();
+    mkdirSync(join(base, "other", "sessions", "2026"), { recursive: true });
+    const lookalike = join(base, "other", "sessions", "2026", "rollout-a.jsonl");
+    writeFileSync(lookalike, "{}");
+    expect(core.resolveTranscriptPath(lookalike, root)).toBeNull();
   });
 });
