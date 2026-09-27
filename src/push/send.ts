@@ -22,11 +22,15 @@ const LEDGER_DECISION_TAG = "ledger:decision";
 const MAX_NOTIFICATIONS_PER_RUN = 3;
 /**
  * Each push send is an external fetch, and Workers' free plan allows only 50
- * subrequests per invocation, shared with whatever else the hourly cron does
- * in that same run. Capped well under that (leaving headroom, not chasing
- * the ceiling): a candidate whose subscriptions are not all reached within
- * this budget is left off the pushed-map, so the whole candidate (every one
- * of its subscriptions, not a partial subset) is retried on the next run.
+ * subrequests per INVOCATION — not per workspace. The hourly cron's
+ * pushDueItemsAllWorkspaces covers every subscribed workspace in one
+ * invocation, so this budget is shared across all of them (round-robin
+ * below), not reset per workspace; a lone pushDueItems call (POST
+ * /push/run) still gets the same cap to itself. Capped well under 50,
+ * leaving headroom for whatever else that cron run fetches externally.
+ * A candidate whose subscriptions are not all reached within budget is left
+ * off the pushed-map, so the whole candidate (every one of its
+ * subscriptions, not a partial subset) is retried on the next run.
  */
 const MAX_PUSH_FETCHES_PER_RUN = 40;
 /** Consecutive send failures a subscription tolerates before it is dropped. */
@@ -278,23 +282,26 @@ export interface PushDueItemsResult {
   results: PushOutcome[];
 }
 
+/** A workspace with something to push: candidates and subscriptions already read, ready to queue as send tasks. */
+interface WorkspacePush {
+  workspaceId: string;
+  candidates: DueCandidate[];
+  subs: PushSubscriptionRow[];
+  pushed: Record<string, number>;
+  now: number;
+  timezone: string;
+}
+
+type PreparedWorkspacePush = WorkspacePush | { ready: false; candidateCount: number };
+
 /**
- * Pushes due items (overdue and due today, DUE_SQL) for one workspace to
- * every subscription registered against it. Dedupes against a KV map of the
- * last when_at pushed per entry — re-notifies only when when_at has actually
- * moved (a snooze to a new date), never on every run for the same due date.
- *
- * D1 cost: one SELECT for due candidates, one SELECT for subscriptions, one
- * batch for whatever subscription-state writes the run produced — three
- * statements at most, regardless of how many notifications are sent.
- *
- * External-fetch cost: MAX_PUSH_FETCHES_PER_RUN at most, regardless of how
- * many candidates or subscriptions exist (a candidate not fully covered
- * within that budget is left for the next run — see below).
+ * Reads one workspace's due candidates and subscriptions, applying the
+ * pushed-map dedup — everything pushDueItems needs before it can queue
+ * sends, and exactly what pushDueItemsAllWorkspaces needs to do for every
+ * subscribed workspace before it can round-robin them together. Two D1
+ * SELECTs, same as before; no sends happen here.
  */
-export async function pushDueItems(env: Env, workspaceId: string, resolved?: Readonly<Config>): Promise<PushDueItemsResult> {
-  const now = Date.now();
-  const config = resolved ?? await resolveConfig(env);
+async function prepareWorkspacePush(env: Env, workspaceId: string, now: number, config: Readonly<Config>): Promise<PreparedWorkspacePush> {
   const dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label, tags FROM entries
      WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
@@ -312,60 +319,166 @@ export async function pushDueItems(env: Env, workspaceId: string, resolved?: Rea
       tags: parseTags(r.tags),
     }));
 
-  if (!candidates.length) return { sent: 0, candidates: 0, subscriptions: 0, results: [] };
+  if (!candidates.length) return { ready: false, candidateCount: 0 };
 
   const subs = ((await env.DB.prepare(
     `SELECT id, endpoint_hash, subscription_json, content_free, fail_count FROM push_subscriptions WHERE workspace_id = ?`,
   ).bind(workspaceId).all()).results ?? []) as unknown as PushSubscriptionRow[];
 
-  if (!subs.length) return { sent: 0, candidates: candidates.length, subscriptions: 0, results: [] };
+  if (!subs.length) return { ready: false, candidateCount: candidates.length };
 
-  let sent = 0;
-  let fetchesUsed = 0;
-  let budgetExhausted = false;
-  const outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[] = [];
-  for (const candidate of candidates) {
-    if (budgetExhausted) break;
-    const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree, config.TIMEZONE, now);
-    let candidateComplete = true;
-    for (const sub of subs) {
-      if (fetchesUsed >= MAX_PUSH_FETCHES_PER_RUN) {
-        candidateComplete = false;
-        budgetExhausted = true;
-        break;
-      }
-      const outcome = await sendOne(env, sub, payload(!!sub.content_free));
-      fetchesUsed++;
-      if (outcome.result === "ok") sent++;
-      outcomes.push({ hash: sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: sub.fail_count });
-    }
-    // Only a fully-covered candidate is marked pushed — a candidate cut short by
-    // the fetch budget stays eligible so its remaining subscriptions (not just
-    // the covered ones) are retried in full next run.
-    if (candidateComplete) pushed[candidate.id] = candidate.when_at;
+  return { workspaceId, candidates, subs, pushed, now, timezone: config.TIMEZONE };
+}
+
+/** One external fetch still to make: which workspace, which candidate (by index), to which subscription. */
+interface SendTask {
+  workspaceId: string;
+  candidateIndex: number;
+  sub: PushSubscriptionRow;
+}
+
+/** Every task for one workspace, candidate-major (matches the single-workspace order this always had). */
+function tasksFor(push: WorkspacePush): SendTask[] {
+  const tasks: SendTask[] = [];
+  for (let candidateIndex = 0; candidateIndex < push.candidates.length; candidateIndex++) {
+    for (const sub of push.subs) tasks.push({ workspaceId: push.workspaceId, candidateIndex, sub });
   }
-
-  await applySubscriptionOutcomes(env, outcomes);
-  await env.OAUTH_KV.put(pushedKvKey(workspaceId), JSON.stringify(prunePushedMap(pushed, now)));
-
-  return { sent, candidates: candidates.length, subscriptions: subs.length, results: toReportedOutcomes(outcomes) };
+  return tasks;
 }
 
 /**
- * Runs pushDueItems for every workspace that actually has a subscription,
- * rather than every workspace in the brain: one extra SELECT (DISTINCT
- * workspace_id) plus pushDueItems' own three statements per subscribed
- * workspace. On the common case — one personal brain, one subscribed
- * workspace — that is four D1 statements total for the whole hourly run.
+ * Interleaves every workspace's own task list one position at a time
+ * (workspace A's 1st task, B's 1st, C's 1st, then A's 2nd, B's 2nd, ...) so
+ * a shared fetch budget consumed in this order can never starve a small
+ * workspace behind a large one: a workspace with few tasks finishes early
+ * and simply drops out of later rounds, while a large workspace only ever
+ * claims the rounds a smaller one had nothing left to contribute to.
+ */
+function roundRobinTasks(pushes: readonly WorkspacePush[]): SendTask[] {
+  const perWorkspace = pushes.map(tasksFor);
+  const maxLen = perWorkspace.reduce((max, tasks) => Math.max(max, tasks.length), 0);
+  const interleaved: SendTask[] = [];
+  for (let position = 0; position < maxLen; position++) {
+    for (const tasks of perWorkspace) {
+      if (position < tasks.length) interleaved.push(tasks[position]);
+    }
+  }
+  return interleaved;
+}
+
+interface WorkspaceRunState {
+  sent: number;
+  outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[];
+  /** How many of a candidate's subscriptions were actually attempted, keyed by candidate index. */
+  attempted: Map<number, number>;
+}
+
+/**
+ * Sends tasks in order up to maxFetches shared across every workspace in
+ * `tasks`, then stops — a task past the budget is simply never attempted,
+ * so it can never register as a "failed" send (that would wrongly count
+ * against a subscription's fail_count and risk deleting it, C13's whole
+ * point). Per-workspace state is returned so each workspace can finalize
+ * (mark completed candidates pushed, write subscription outcomes) on its
+ * own, independent of every other workspace's outcome.
+ */
+async function sendTasks(env: Env, pushes: readonly WorkspacePush[], tasks: readonly SendTask[], maxFetches: number): Promise<Map<string, WorkspaceRunState>> {
+  const byWorkspace = new Map(pushes.map(p => [p.workspaceId, p]));
+  const states = new Map<string, WorkspaceRunState>(pushes.map(p => [p.workspaceId, { sent: 0, outcomes: [], attempted: new Map() }]));
+
+  let fetchesUsed = 0;
+  for (const task of tasks) {
+    if (fetchesUsed >= maxFetches) break;
+    const push = byWorkspace.get(task.workspaceId)!;
+    const candidate = push.candidates[task.candidateIndex];
+    const payload = notificationPayload(candidate, !!task.sub.content_free, push.timezone, push.now);
+    const outcome = await sendOne(env, task.sub, payload);
+    fetchesUsed++;
+
+    const state = states.get(task.workspaceId)!;
+    if (outcome.result === "ok") state.sent++;
+    state.outcomes.push({ hash: task.sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: task.sub.fail_count });
+    state.attempted.set(task.candidateIndex, (state.attempted.get(task.candidateIndex) ?? 0) + 1);
+  }
+  return states;
+}
+
+/**
+ * Marks fully-covered candidates pushed (a candidate cut short by the
+ * shared fetch budget stays eligible, so its remaining subscriptions — not
+ * just the ones already reached — are retried in full next run), writes
+ * the subscription-state batch, and persists the pushed map. One D1 batch
+ * and one KV write, regardless of how many workspaces shared the budget.
+ */
+async function finalizeWorkspacePush(env: Env, push: WorkspacePush, state: WorkspaceRunState): Promise<PushDueItemsResult> {
+  for (let candidateIndex = 0; candidateIndex < push.candidates.length; candidateIndex++) {
+    if ((state.attempted.get(candidateIndex) ?? 0) === push.subs.length) {
+      push.pushed[push.candidates[candidateIndex].id] = push.candidates[candidateIndex].when_at;
+    }
+  }
+
+  await applySubscriptionOutcomes(env, state.outcomes);
+  await env.OAUTH_KV.put(pushedKvKey(push.workspaceId), JSON.stringify(prunePushedMap(push.pushed, push.now)));
+
+  return { sent: state.sent, candidates: push.candidates.length, subscriptions: push.subs.length, results: toReportedOutcomes(state.outcomes) };
+}
+
+/**
+ * Pushes due items (overdue and due today, DUE_SQL) for one workspace to
+ * every subscription registered against it. Dedupes against a KV map of the
+ * last when_at pushed per entry — re-notifies only when when_at has actually
+ * moved (a snooze to a new date), never on every run for the same due date.
+ *
+ * D1 cost: one SELECT for due candidates, one SELECT for subscriptions, one
+ * batch for whatever subscription-state writes the run produced — three
+ * statements at most, regardless of how many notifications are sent.
+ *
+ * External-fetch cost: MAX_PUSH_FETCHES_PER_RUN at most (this call's own
+ * budget — see pushDueItemsAllWorkspaces for the shared, multi-workspace
+ * version of this same cap).
+ */
+export async function pushDueItems(env: Env, workspaceId: string, resolved?: Readonly<Config>): Promise<PushDueItemsResult> {
+  const now = Date.now();
+  const config = resolved ?? await resolveConfig(env);
+  const prepared = await prepareWorkspacePush(env, workspaceId, now, config);
+  if (!("candidates" in prepared)) return { sent: 0, candidates: prepared.candidateCount, subscriptions: 0, results: [] };
+
+  const states = await sendTasks(env, [prepared], tasksFor(prepared), MAX_PUSH_FETCHES_PER_RUN);
+  return finalizeWorkspacePush(env, prepared, states.get(workspaceId)!);
+}
+
+/**
+ * Runs every workspace that actually has a subscription, rather than every
+ * workspace in the brain: one extra SELECT (DISTINCT workspace_id) plus two
+ * SELECTs and one batch per subscribed workspace, same as pushDueItems
+ * alone. On the common case — one personal brain, one subscribed workspace
+ * — that is four D1 statements total for the whole hourly run.
+ *
+ * External-fetch cost: MAX_PUSH_FETCHES_PER_RUN for the WHOLE run, shared
+ * across every workspace (round-robin, see roundRobinTasks) rather than
+ * reset per workspace — the free plan's 50-subrequest cap is per
+ * invocation, and this one invocation covers every subscribed workspace.
+ * Without this, a 9-member team with 3 due items on 2 devices each already
+ * makes 54 sends before any other workspace is even counted.
  */
 export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Config>): Promise<{ sent: number }> {
   const rows = ((await env.DB.prepare(
     `SELECT DISTINCT workspace_id FROM push_subscriptions`,
   ).all()).results ?? []) as { workspace_id: string }[];
 
-  let sent = 0;
+  const now = Date.now();
+  const config = resolved ?? await resolveConfig(env);
+  const pushes: WorkspacePush[] = [];
   for (const row of rows) {
-    const result = await pushDueItems(env, row.workspace_id, resolved);
+    const prepared = await prepareWorkspacePush(env, row.workspace_id, now, config);
+    if ("candidates" in prepared) pushes.push(prepared);
+  }
+
+  const states = await sendTasks(env, pushes, roundRobinTasks(pushes), MAX_PUSH_FETCHES_PER_RUN);
+
+  let sent = 0;
+  for (const push of pushes) {
+    const result = await finalizeWorkspacePush(env, push, states.get(push.workspaceId)!);
     sent += result.sent;
   }
   return { sent };

@@ -7,7 +7,7 @@
  * Same real-SQLite harness as test/integration/push-send.test.ts.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { pushDueItems } from "../../src/push/send";
+import { pushDueItems, pushDueItemsAllWorkspaces } from "../../src/push/send";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
@@ -191,5 +191,61 @@ describe("push wording by kind", () => {
 
     expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(40);
     expect(fetchSpy.mock.calls.length).toBeLessThan(50);
+  });
+
+  it("a send skipped for lack of budget is never recorded as a failure or a deletion", async () => {
+    sq = await migrated();
+    for (let i = 0; i < 3; i++) {
+      seedDue(sq, `due-${i}`, `Due item ${i}`, Date.now() - (i + 1) * DAY, `Due item ${i}`, ["task"]);
+    }
+    for (let i = 0; i < 20; i++) {
+      seedSubscription(sq, `sub-${i}`, "", `https://push.example.com/s${i}`);
+    }
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    // 3 due items x 20 subscriptions = 60 possible sends, 20 past the 40-fetch budget.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    await pushDueItems(env, "");
+
+    const rows = (await sq.db.prepare(`SELECT endpoint_hash, fail_count FROM push_subscriptions`).all())
+      .results as { endpoint_hash: string; fail_count: number }[];
+    // Every subscription still exists (MAX_FAIL_COUNT would delete one at 5),
+    // and none has been bumped — a skip is not an attempt, so it cannot look
+    // like one, however many sends never got made.
+    expect(rows.length).toBe(20);
+    expect(rows.every((r) => r.fail_count === 0)).toBe(true);
+  });
+
+  it("shares one fetch budget across every workspace in the hourly all-workspaces run, round-robin so no workspace is starved", async () => {
+    sq = await migrated();
+    // A big team (30 subs) and two small ones (2 subs each) all due at once.
+    seedDue(sq, "big-e0", "Big team item", Date.now() - DAY, "Big team item", ["task"]);
+    sq.db.prepare(`UPDATE entries SET workspace_id = 'ws-big' WHERE id = 'big-e0'`).run();
+    for (let i = 0; i < 30; i++) seedSubscription(sq, `big-sub-${i}`, "ws-big", `https://push.example.com/big-${i}`);
+
+    for (const ws of ["ws-small-1", "ws-small-2"]) {
+      seedDue(sq, `${ws}-e0`, `${ws} item`, Date.now() - DAY, `${ws} item`, ["task"]);
+      sq.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind(ws, `${ws}-e0`).run();
+      for (let i = 0; i < 2; i++) seedSubscription(sq, `${ws}-sub-${i}`, ws, `https://push.example.com/${ws}-${i}`);
+    }
+
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    // 1 candidate each: 30 + 2 + 2 = 34 possible sends, under the 40 budget here,
+    // but every workspace must still be reached in round-robin order, not
+    // big-team-first, so a genuinely over-budget run (see the repro test)
+    // never starves the small ones.
+    await pushDueItemsAllWorkspaces(env);
+
+    expect(fetchSpy.mock.calls.length).toBe(34);
+    const smallSubs = (await sq.db.prepare(
+      `SELECT endpoint_hash FROM push_subscriptions WHERE workspace_id IN ('ws-small-1', 'ws-small-2')`,
+    ).all()).results as { endpoint_hash: string }[];
+    expect(smallSubs.length).toBe(4);
+    const sentEndpoints = new Set(fetchSpy.mock.calls.map((call) => call[0]));
+    for (const ws of ["ws-small-1", "ws-small-2"]) {
+      for (let i = 0; i < 2; i++) expect(sentEndpoints.has(`https://push.example.com/${ws}-${i}`)).toBe(true);
+    }
   });
 });
