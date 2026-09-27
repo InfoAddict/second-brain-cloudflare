@@ -70,8 +70,8 @@ function selectList(p: Params, delta: string, s: { reason: VersionReason; change
        e.tags,
        json_object('when_at', e.when_at, 'when_kind', e.when_kind, 'when_source', e.when_source, 'when_label', e.when_label),
        ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${p.add(JSON.stringify(s.meta ?? {}))},
-       COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id ORDER BY v.seq DESC LIMIT 1),
-                e.updated_at, e.created_at),
+       COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
+                COALESCE(e.updated_at, e.created_at)),
        ${p.add(s.now)}
   FROM entries e`;
 }
