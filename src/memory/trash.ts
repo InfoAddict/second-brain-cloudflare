@@ -109,8 +109,11 @@ export function trashManyStatements(
   if (plan.tier3.length) {
     const p = new Params();
     stmts.push(env.DB.prepare(
-      // scope-exempt: by-id: versions of entries the caller authorized; an oversized entry leaves no history behind
-      `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))`,
+      // scope-exempt: by-id: versions of entries the caller authorized; an oversized entry leaves no history behind.
+      // Guarded on the id not already being trashed: a losing tier-3 forget (its stale size read predates a
+      // shrink that let a racing forget trash the row normally) must not wipe the winner's trashed history.
+      `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))
+         AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)`,
     ).bind(...p.values()));
   }
   const ids = JSON.stringify(all);

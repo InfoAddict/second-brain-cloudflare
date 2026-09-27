@@ -224,3 +224,32 @@ describe("routes", () => {
     expect(res.status).toBe("deleted");
   });
 });
+
+describe("a losing tier-3 forget racing a tier-1 forget of the same id", () => {
+  it("adversary (MINOR): must not wipe the history of the row the winner put in the trash", async () => {
+    t = await makeTrashEnv();
+    t.seed("a", { content: "x".repeat(20_000) });
+    t.version("a", 1); t.version("a", 2);
+    const cfg = await resolveConfig(t.env);
+
+    // Forget #1 sizes the row while it is large (tier 3 under a 10 KB budget). Before its batch,
+    // the row shrinks (an update) and forget #2 trashes it normally, with its history.
+    const realBatch = t.env.DB.batch.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).batch = async (stmts: any[]) => {
+      const sqls = stmts.map((s: any) => String(s?.sourceSql?.() ?? ""));
+      if (!injected && sqls.some((s) => s.startsWith("DELETE FROM entry_versions WHERE entry_id IN"))) {
+        injected = true;
+        await t.sqlite.db.prepare(`UPDATE entries SET content = 'short now' WHERE id = 'a'`).run();
+        const r2 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 });
+        expect(r2).toMatchObject({ status: "deleted", trashed: true });
+      }
+      return realBatch(stmts);
+    };
+    const r1 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 });
+    expect(r1.status).toBe("not_found");
+    expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
+    // The trashed memory's history must be intact (the plan promises versions survive a trash).
+    expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
+  });
+});
