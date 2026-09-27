@@ -21,7 +21,9 @@ default). Compaction re-prints that file verbatim and makes no request at all:
 the session id survives compaction and rotates on `/clear`, so a cached block is
 always the current session's context. With no cache, or one older than 24 h,
 compaction falls back to live recall and brief requests. Both appear inside one
-6,000-character data frame. A failed brief request does not discard recall.
+6,000-character data frame. The brief is the lean one (due and open commitments
+only), retried without the project when it is not registered. It gets at most 3 s
+after recall answers, and a failed or slow brief does not discard recall.
 
 ## Install, upgrade, check, uninstall
 
@@ -68,7 +70,7 @@ Recall:
 
 ```
 GET /recall?query=<project>+decisions+and+context&topK=5&workspace=personal&project=<project>
-GET /brief?project=<project>
+GET /brief?lean=1&preview=1&workspace=personal&project=<project>
 ```
 
 with a project-less second recall attempt if the first returns nothing. With no
