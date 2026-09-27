@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import { ensureTenantBootstrap } from "../lib/tenancy";
+import { getReadableEntry } from "../lib/entry-access";
 import type { Config } from "../config";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { getStatus } from "./status";
@@ -159,5 +160,69 @@ export async function buildEntryHistory(
       kept: config.VERSION_KEEP,
       shared_cut_by: sharedCutBy,
     },
+  };
+}
+
+export type EntryVersionResult =
+  | {
+      ok: true;
+      id: string;
+      seq: number;
+      content: string;
+      tags: string[];
+      status: string | null;
+      at: number;
+      reason: VersionReason;
+      channel: string;
+      client: string | null;
+      actor_name: string;
+    }
+  | {
+      ok: false;
+      /** "pruned": seq once existed but sits below the oldest kept row, and the chain was not cut
+       * by D-SH. "not_visible": D-SH cut the chain before reaching seq, or the entry itself is
+       * unreadable — deliberately one reason, not two, so a caller can never tell "hidden from you"
+       * apart from "doesn't exist" (the same neutrality the rest of versions.ts already keeps).
+       * "no_version": seq was never recorded at all. */
+      reason: "pruned" | "not_visible" | "no_version";
+    };
+
+/**
+ * Contract 4.2 (BE-8, T-0101.1.1/T-0101.3.2): the full text, tags and status one visible version
+ * retired, for `GET /entry/version` and MCP `get(id, version)`. `content` is the text the entry
+ * had BEFORE change `seq` — the same `text(seq)` buildEntryHistory previews, given here in full.
+ * Cost: one entries read (authorize + scope), one entry_versions read (loadHistory), and one
+ * single-row `users` read for the version's own actor — reconstruction runs only for this one seq.
+ */
+export async function readEntryVersion(
+  env: Env, identity: Identity, entryId: string, seq: number, authorizedWorkspaceId: string, config: Config,
+): Promise<EntryVersionResult> {
+  const row = await getReadableEntry(env, identity, entryId, "id, workspace_id, actor_id, content");
+  if (!row || row.workspace_id !== authorizedWorkspaceId) return { ok: false, reason: "not_visible" };
+
+  const chain = await loadHistory(env, identity, { id: row.id, content: row.content ?? "" }, config.VERSION_KEEP);
+  const target = chain.rows.find(r => r.seq === seq);
+  if (!target) {
+    if (chain.truncatedAt === "unreadable") return { ok: false, reason: "not_visible" };
+    const oldestVisibleSeq = chain.rows[chain.rows.length - 1]?.seq;
+    if (oldestVisibleSeq !== undefined && seq > 0 && seq < oldestVisibleSeq) return { ok: false, reason: "pruned" };
+    return { ok: false, reason: "no_version" };
+  }
+
+  const labelMap = await lookupActorLabels(env, [target.actor_id]);
+  const meta = parseJsonObject(target.meta);
+  const tags = parseTags(target.tags);
+  return {
+    ok: true,
+    id: row.id,
+    seq: target.seq,
+    content: chain.text(target.seq),
+    tags,
+    status: getStatus(tags),
+    at: target.created_at,
+    reason: target.reason,
+    channel: target.channel,
+    client: typeof meta.client === "string" ? meta.client : null,
+    actor_name: resolveActorLabel(target.actor_id, labelMap, { viewerId: identity.userId }),
   };
 }
