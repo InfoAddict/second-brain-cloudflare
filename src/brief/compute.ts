@@ -13,6 +13,7 @@ import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { DUE_WITHIN_MS, DUE_SQL } from "../when/input";
 import { parseTags } from "../insight/candidates";
 import { STORED_DATA_NOTICE, storedLine } from "../lib/stored-data";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import {
   excludedIds, readResurfaceState, withShown, writeResurfaceState,
 } from "../runtime/resurface-state";
@@ -49,7 +50,8 @@ const RESURFACE_FILTER = `created_at < ? AND importance_score >= ?
          AND tags NOT LIKE '%"auto-insight"%'
          AND tags NOT LIKE '%"synthesized"%'
          AND tags NOT LIKE '%"kind:episodic"%'
-         AND tags NOT LIKE '%"task:done"%'`;
+         AND tags NOT LIKE '%"task:done"%'
+         AND ${NOT_HELD_SQL}`;
 
 /** How far back "recently shown" reaches when excluding a repeat pick. */
 const RESURFACE_RECENT_WINDOW_DAYS = 30;
@@ -312,16 +314,16 @@ export async function readAgentBrief(
   };
   const queries: Record<BriefPart, () => Promise<BriefSection>> = {
     due: () => run(`SELECT id, content, when_at, COUNT(*) OVER() AS total FROM entries
-      WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause} AND ${mine.clause}
+      WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
       ORDER BY when_at ASC, id ASC LIMIT 5`, 5, [now + DUE_WITHIN_MS]),
     loops: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause} AND ${mine.clause}
+      WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
       ORDER BY created_at DESC, id DESC LIMIT 5`, 5),
     stale: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${STALE_INDEXED} AND ${STALE_REVIEW_SQL} AND ${scope.clause} AND ${mine.clause}
+      WHERE ${STALE_INDEXED} AND ${STALE_REVIEW_SQL} AND ${scope.clause} AND ${mine.clause} AND ${NOT_HELD_SQL}
       ORDER BY COALESCE(updated_at, created_at) ASC, id ASC LIMIT 2`, 2),
     insights: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${INSIGHT_INDEXED} AND ${PENDING_INSIGHT_SQL} AND ${scope.clause}
+      WHERE ${INSIGHT_INDEXED} AND ${PENDING_INSIGHT_SQL} AND ${scope.clause} AND ${NOT_HELD_SQL}
       ORDER BY created_at DESC, id DESC LIMIT 1`, 1, [], false),
   };
   const results = await Promise.all(opts.parts.map(async part => [part, await queries[part]()] as const));

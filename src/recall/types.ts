@@ -58,6 +58,8 @@ export interface RecallMatch {
   viaFrom?: string;               // id of the memory this one was reached from
   /** Present only when the caller asked to explain the ranking. */
   why?: WhyTrace;
+  /** Recurring notices this row's near-duplicate collapse absorbed, newest first, up to 5 (4.4). */
+  similar?: { id: string; createdAt: number }[];
 }
 
 export interface RecallSearchResult {

@@ -5,6 +5,11 @@ import { DEFAULTS, type Config } from "../config";
 import { allowanceFor, snippetOf, truncationNote, type Snippet } from "./snippet";
 import { computeCompoundStale } from "./compound-stale";
 import type { CompoundStaleSignal } from "./types";
+import { sourceClass } from "./source-trust";
+import { editedCanonicalAt } from "../quarantine/tags";
+
+/** How long the canonical-edit label shows after the dated tag (5.7). Expiry is by date at render time; there is no job. */
+export const EDITED_CANONICAL_LABEL_DAYS = 7;
 
 /**
  * The bracketed header every memory-returning MCP tool prints.
@@ -37,8 +42,16 @@ export function memoryHeader(m: {
   const layer = m.workspace === "company"
     ? ` · shared${m.actorName ? ` · ${m.actorName}` : ""}`
     : "";
+  // The AI-edit label (5.7): a canonical row edited through MCP within the
+  // last EDITED_CANONICAL_LABEL_DAYS. Recall names no tool (Q-I) — the
+  // dashboard, brief and history read the newest version's client instead.
+  const editedAt = getStatus(m.tags) === "canonical" ? editedCanonicalAt(m.tags) : null;
+  const editedAgeDays = editedAt ? (Date.now() - Date.parse(`${editedAt}T12:00:00Z`)) / 86_400_000 : Infinity;
+  const editedLabel = editedAt && editedAgeDays <= EDITED_CANONICAL_LABEL_DAYS
+    ? ` · edited via an AI tool on ${new Date(`${editedAt}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : "";
   const tagList = m.tags.length ? ` [${m.tags.join(", ")}]` : "";
-  return `${date}${src}${layer}${tagList}`;
+  return `${date}${src}${layer}${editedLabel}${tagList}`;
 }
 
 export function renderRecallText(
@@ -62,14 +75,21 @@ export function renderRecallText(
     const updateLabel = m.isUpdate ? " [updated]" : "";
     const hopLabel = m.hop > 0 ? ` [related · ${hopProvenance(m, contentById)}]` : "";
     const staleLabel = m.staleAsOf ? ` · ${formatAsOfQualifier(m.updatedAt)}` : "";
+    // Recurring notices the collapse absorbed into this one (4.4): named on
+    // the header line, then listed by id so an agent can fetch one directly.
+    const similarLabel = m.similar?.length
+      ? ` · and ${m.similar.length} similar (${m.similar.map(s => shortDate(s.createdAt)).join(", ")})`
+      : "";
+    const similarIdsLine = m.similar?.length ? `similar ids: ${m.similar.map(s => s.id).join(", ")}\n` : "";
 
     const s: Snippet = opts.full
       ? { text: (m.content ?? "").trim(), truncated: false, fullLength: (m.content ?? "").length }
       : snippetOf(m.content, allowanceFor(i, m.score, cfg), { queryTokens: opts.queryTokens });
     const body = s.truncated ? `${s.text}${truncationNote(m.id, s)}` : s.text;
-    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}\nID: ${m.id}\n${body}`;
+    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${similarLabel}\nID: ${m.id}\n${body}`;
     // The why line rides outside the budget: asking for an explanation must not change which memories come back.
     const whyLine = m.why ? `why: ${whyText(m, m.why, contentById)}\n` : "";
+    const extraLines = `${whyLine}${similarIdsLine}`;
 
     // Stop once the budget is spent, but always return at least one match.
     if (!opts.full && blocks.length && used + block.length > cfg.RECALL_OUTPUT_BUDGET) {
@@ -78,7 +98,7 @@ export function renderRecallText(
     }
     used += block.length;
     renderedMatches.push(m);
-    blocks.push(whyLine ? block.replace(`\nID: ${m.id}\n`, `\nID: ${m.id}\n${whyLine}`) : block);
+    blocks.push(extraLines ? block.replace(`\nID: ${m.id}\n`, `\nID: ${m.id}\n${extraLines}`) : block);
   }
 
   const compoundStale = opts.compoundStale ?? computeCompoundStale(renderedMatches);
@@ -123,6 +143,7 @@ function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>
     else if (mult.importance < 1) parts.push("low importance");
     if (mult.tag_boost > 1) parts.push("tag match");
     if (mult.frequency > 1) parts.push("recalled before");
+    if (mult.source_weight < 1) parts.push(`${sourceClass(m.source, m.tags)} source ×${mult.source_weight}`);
   }
   if (why.rerank_move) parts.push(`reranked ${why.rerank_move}`);
   if (why.graph) {
