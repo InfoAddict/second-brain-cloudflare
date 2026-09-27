@@ -11,7 +11,8 @@ import { getTrashedEntry } from "../memory/trash";
 import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { auditEvent, type ChangeContext } from "../lib/audit";
-import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
+import { channelNoun, lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
+import { readEntryVersion } from "../memory/history-view";
 import { createEdge, deleteEdge, edgeLabel, isValidEdgeType, kindMismatchMessage, kindOfRow, kindsAllowEdge, CROSS_WORKSPACE_LINK_MESSAGE } from "../graph/edges";
 import { EDGE_TYPES } from "../graph/types";
 import { getConnections } from "../graph/traverse";
@@ -117,7 +118,8 @@ const GET_DESCRIPTION =
   + "[truncated …] marker is partial. Call get(id) before you answer, quote, or act on such a result whenever "
   + "the omitted part could materially change the answer — a fact, a number, a decision, a sequence, exact "
   + "wording, a status change, or a later update appended to the entry. You do not have to fetch every "
-  + "truncated result, only the ones you are about to rely on. Get the ID from recall or list_recent.";
+  + "truncated result, only the ones you are about to rely on. Get the ID from recall or list_recent. Pass "
+  + "version to read the text a memory had before one of the changes listed by history.";
 
 const CONNECTIONS_DESCRIPTION =
   "List the memories directly linked to a given entry (its 1-hop neighbors in the relationship graph). Use it "
@@ -974,9 +976,28 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       description: GET_DESCRIPTION,
       inputSchema: {
         id: z.string().describe("Entry ID from recall or list_recent"),
+        version: z.number().int().min(1).optional().describe("Read the text before this change, from history — omit for the current text"),
       },
     },
-    async ({ id }) => {
+    async ({ id, version }) => {
+      if (version !== undefined) {
+        if (!identity) return { content: [{ type: "text", text: "get(id, version) requires an authenticated identity." }] };
+        const config = await resolveConfig(env);
+        const result = await readEntryVersion(env, identity, id, version, config);
+        if (!result.ok) {
+          const messages: Record<typeof result.reason, string> = {
+            pruned: `Version ${version} of entry ${id} is no longer kept (only the last ${config.VERSION_KEEP} changes are). The oldest kept is version ${result.oldestKept}.`,
+            not_visible: `No version ${version} of entry ${id} is visible to you.`,
+            no_version: `Entry ${id} has no version ${version}.`,
+          };
+          return { content: [{ type: "text", text: messages[result.reason] }] };
+        }
+        const date = new Date(result.at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+        const via = result.client ?? channelNoun(result.channel);
+        const text = `[version ${result.seq} of ${result.id} · text before the change on ${date} · ${result.reason} by ${result.actor_name} via ${via}]\nID: ${result.id}\n${result.content}`;
+        return { content: [{ type: "text", text }] };
+      }
+
       const scope = identity ? scopeWhereForRead(identity) : null;
       const row = await env.DB.prepare(
         // scope-exempt: identity-less branch: production MCP always resolves an identity (src/mcp/handler.ts); this arm is unit fixtures only

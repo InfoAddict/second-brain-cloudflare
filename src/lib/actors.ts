@@ -63,6 +63,20 @@ export function resolveActorLabel(
 }
 
 /**
+ * What a version or event's own `channel` is called when there is no client name to show instead
+ * (BE-8/BE-11, T-0101.1.1/T-0101.3.1/T-0101.3.2) — "via {client}" when one is recorded, else
+ * "via {channelNoun(channel)}". Not a full sentence: callers decide their own "via"/"in" wording.
+ */
+export function channelNoun(channel: string): string {
+  if (channel === "mcp") return "an AI tool";
+  if (channel === "rest") return "the dashboard";
+  if (channel === "system:digest") return "the nightly digest";
+  if (channel === "system:insight") return "an automatic insight";
+  if (channel === "system:mirror") return "sync";
+  return channel;
+}
+
+/**
  * The resolved form of an `actor` filter: either one user id to bind, or the
  * message the surface should show. Never a list and never a set of ids, because
  * what reaches SQL has to stay ONE predicate with ONE binding — see below.

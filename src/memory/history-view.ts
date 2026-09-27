@@ -200,6 +200,8 @@ export type EntryVersionResult =
        * apart from "doesn't exist" (the same neutrality the rest of versions.ts already keeps).
        * "no_version": seq was never recorded at all. */
       reason: "pruned" | "not_visible" | "no_version";
+      /** Set only for "pruned": the oldest version still kept, for "the oldest kept is version {m}." */
+      oldestKept?: number;
     };
 
 /**
@@ -218,7 +220,7 @@ export async function readEntryVersionFromRow(
   if (!target) {
     if (chain.truncatedAt === "unreadable") return { ok: false, reason: "not_visible" };
     const oldestVisibleSeq = chain.rows[chain.rows.length - 1]?.seq;
-    if (oldestVisibleSeq !== undefined && seq > 0 && seq < oldestVisibleSeq) return { ok: false, reason: "pruned" };
+    if (oldestVisibleSeq !== undefined && seq > 0 && seq < oldestVisibleSeq) return { ok: false, reason: "pruned", oldestKept: oldestVisibleSeq };
     return { ok: false, reason: "no_version" };
   }
 

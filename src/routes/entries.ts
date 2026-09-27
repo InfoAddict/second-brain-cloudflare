@@ -424,11 +424,14 @@ export async function handleEntriesRoutes(
     const result = await readEntryVersion(env, auth, id, seq, config);
     if (!result.ok) {
       const messages: Record<typeof result.reason, string> = {
-        pruned: `Version ${seq} of entry ${id} is no longer kept.`,
+        pruned: `Version ${seq} of entry ${id} is no longer kept (only the last ${config.VERSION_KEEP} changes are). The oldest kept is version ${result.oldestKept}.`,
         not_visible: `No version ${seq} of entry ${id} is visible to you.`,
         no_version: `Entry ${id} has no version ${seq}.`,
       };
-      return json({ ok: false, error: messages[result.reason], reason: result.reason }, 404);
+      return json({
+        ok: false, error: messages[result.reason], reason: result.reason,
+        ...(result.reason === "pruned" ? { oldest_kept: result.oldestKept } : {}),
+      }, 404);
     }
     return json({
       ok: true, id: result.id, seq: result.seq, content: result.content, tags: result.tags,
