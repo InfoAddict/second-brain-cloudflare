@@ -448,6 +448,10 @@ function rowsWrittenOf(results: Array<{ meta?: { rows_written?: number } } | und
 // ── Restore ──────────────────────────────────────────────────────────────────
 
 export interface TrashedEntryRow {
+  // SQLite's own implicit rowid: `id` is a TEXT PRIMARY KEY, not an INTEGER one, so it is not a
+  // rowid alias — a purged id can be reused by a fresh INSERT, which gets a new rowid. Every
+  // mutation that consumes a row read earlier pins to this, not to `id` alone (adv-final MAJOR 1).
+  rowid: number;
   id: string;
   workspace_id: string;
   actor_id: string;
@@ -470,11 +474,11 @@ export async function getTrashedEntry(env: Env, identity: Identity | undefined, 
     // requireIdentity's `Identity | Response`; revertEntry (memory/undo.ts) is the only other
     // caller, itself unreachable today (POST /undo and the MCP undo tool are T-0089.6.6, backlog).
     // scope-exempt: identity-less branch takes no live request; see above for why
-    return env.DB.prepare(`SELECT * FROM entries_trash WHERE id = ?`).bind(id).first<TrashedEntryRow>();
+    return env.DB.prepare(`SELECT rowid, * FROM entries_trash WHERE id = ?`).bind(id).first<TrashedEntryRow>();
   }
   const scope = scopeWhere(identity);
   return env.DB.prepare(
-    `SELECT * FROM entries_trash WHERE id = ? AND ${scope.clause}`,
+    `SELECT rowid, * FROM entries_trash WHERE id = ? AND ${scope.clause}`,
   ).bind(id, ...scope.bindings).first<TrashedEntryRow>();
 }
 
@@ -564,13 +568,23 @@ export async function restoreEntry(
   // workspace_id comes from the restored entry, not the trashed edge's own snapshot (spec: "taken from the source entry").
   const edgeCols = EDGE_ROW_COLUMNS.map((c) => c === "workspace_id" ? "t.workspace_id" : `json_extract(j.value, '$.${c}')`).join(", ");
   // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder in that statement.
+  // Every statement also pins to the exact physical row `trashed` came from (its rowid and
+  // deleted_at, not just its id): id alone is not a stable row identity (adv-final MAJOR 1) — a
+  // purge can free an id and a different member's forget can reuse it before this batch runs, and
+  // an id-only match would then restore (and delete) THEIR trash row under THIS caller's authorization.
   const insertP = new Params();
   const insertId = insertP.add(trashed.id);
+  const insertRowid = insertP.add(trashed.rowid);
+  const insertDeletedAt = insertP.add(trashed.deleted_at);
   const vecJson = insertP.add(JSON.stringify(vectorIds));
   const edgeP = new Params();
   const edgeId = edgeP.add(trashed.id);
+  const edgeRowid = edgeP.add(trashed.rowid);
+  const edgeDeletedAt = edgeP.add(trashed.deleted_at);
   const deleteP = new Params();
   const deleteId = deleteP.add(trashed.id);
+  const deleteRowid = deleteP.add(trashed.rowid);
+  const deleteDeletedAt = deleteP.add(trashed.deleted_at);
   let results;
   try {
     results = await env.DB.batch([
@@ -579,18 +593,21 @@ export async function restoreEntry(
         // the trash row and any surviving versions already are its history
         // scope-exempt: by-id: the caller authorized the trash row before building this batch
         `INSERT INTO entries (id, ${names}, content, vector_ids)
-         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t WHERE t.id = ${insertId}`,
+         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t
+          WHERE t.id = ${insertId} AND t.rowid = ${insertRowid} AND t.deleted_at = ${insertDeletedAt}`,
       ).bind(...insertP.values()),
       env.DB.prepare(
         // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where the other endpoint still exists
         `INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
          SELECT ${edgeCols}
            FROM entries_trash t, json_each(t.edges_json) j
-          WHERE t.id = ${edgeId}
+          WHERE t.id = ${edgeId} AND t.rowid = ${edgeRowid} AND t.deleted_at = ${edgeDeletedAt}
             AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
       ).bind(...edgeP.values()),
       // scope-exempt: by-id: the trash row the caller authorized before building this batch
-      env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
+      env.DB.prepare(
+        `DELETE FROM entries_trash WHERE id = ${deleteId} AND rowid = ${deleteRowid} AND deleted_at = ${deleteDeletedAt}`,
+      ).bind(...deleteP.values()),
     ]);
   } catch (e) {
     // Vector ids are deterministic (the entry id, or id-chunk-i, store.ts), so a winning restore
@@ -602,10 +619,17 @@ export async function restoreEntry(
   }
 
   if (changedRows(results[2]) === 0) {
-    // The trash row vanished between the read and the batch (a racing restore or purge). If a
-    // racing restore is the winner, it embedded the same deterministic ids — never delete them.
+    // Either genuinely gone (a racing restore or purge won the SAME row — it embedded the same
+    // deterministic ids, never delete them), or a DIFFERENT trash row now lives under this id
+    // (adv-final MAJOR 1: the id was purged and reused). Tell those apart before answering: a
+    // stale read of a row that still exists, just not the one we authorized against, is a
+    // conflict to retry, not a 404 claiming nothing is there.
     await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
-    return { status: "not_found" };
+    const stillP = new Params();
+    const stillId = stillP.add(trashed.id);
+    // scope-exempt: by-id: deciding only whether the id is gone or now belongs to a different row
+    const stillThere = await env.DB.prepare(`SELECT 1 FROM entries_trash WHERE id = ${stillId}`).bind(...stillP.values()).first();
+    return { status: stillThere ? "conflict" : "not_found" };
   }
 
   // The trash row's own stored ids (round 2 adversary): a short append embedded before this

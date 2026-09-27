@@ -104,8 +104,10 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED (T-0100): readTrashCandidates's SQLITE_TOOBIG fallback added ~75 lines above these
   // three sites (two new read-only helpers); same sites, shifted line numbers only.
   { file: 'src/memory/trash.ts', line: 215, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 581, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 719, kind: 'hard-delete' },
+  // MOVED 581 -> 595, 719 -> 743 (T-0089.1.1, adv-final MAJOR 1): restoreEntry's batch grew a
+  // rowid/deleted_at identity guard (new Params lines above each statement); same sites, shifted.
+  { file: 'src/memory/trash.ts', line: 595, kind: 'exempt' },
+  { file: 'src/memory/trash.ts', line: 743, kind: 'hard-delete' },
   { file: 'src/memory/undo.ts', line: 312, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 337, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },

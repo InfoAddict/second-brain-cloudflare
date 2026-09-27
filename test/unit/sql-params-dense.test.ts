@@ -123,7 +123,7 @@ describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () 
 
   it("restoreEntry's batch", async () => {
     const { env, calls } = captureEnv();
-    const trashed = { id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", vector_ids: "[]", deleted_at: 1, reason: "forget" as const };
+    const trashed = { rowid: 1, id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", vector_ids: "[]", deleted_at: 1, reason: "forget" as const };
     await restoreEntry(env, trashed, change, DEFAULTS);
     for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });

@@ -1428,7 +1428,12 @@ describe("the checker over the real source tree", () => {
     // (R4-C1's own fix) — the scanner's heuristic now reads that equality as a self-evident scope
     // clause and no longer flags the query as needing the `scope-exempt` comment it previously
     // carried; the query itself, and its actual scoping, are unchanged.
-    ).toEqual({ queries: 195, exempt: 104, checked: 15, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (195/104/15/1 -> 196/105/15/1) for T-0089.1.1
+    // (adv-final MAJOR 1): restoreEntry's post-miss check now tells a genuinely vanished trash row
+    // apart from one that still exists under the id but no longer matches the rowid/deleted_at the
+    // caller's read authorized (a purge-then-reuse race) — a new by-id read, same exemption shape
+    // as the liveness checks already on this path.
+    ).toEqual({ queries: 196, exempt: 105, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
