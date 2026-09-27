@@ -414,7 +414,7 @@ describe("recall root selection", () => {
       const prepared: string[] = [];
       const prepare = db.prepare.bind(db);
       (db as any).prepare = (sql: string) => {
-        if (sql.includes("recall_count") && sql.includes("WHERE id IN")) prepared.push(sql.replace(/\s+/g, " ").trim());
+        if (sql.startsWith("SELECT") && sql.includes("recall_count") && sql.includes("WHERE id IN")) prepared.push(sql.replace(/\s+/g, " ").trim());
         return prepare(sql);
       };
       const env = makeTestEnv(db, { VECTORIZE: makeVectorizeMock({ query: vi.fn().mockResolvedValue({ matches: [

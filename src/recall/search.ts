@@ -1105,13 +1105,17 @@ export async function recallEntries(
   markStage("selection");
 
   const presentedDirectIds = finalDirectIds;
-  ctx.waitUntil(
-    Promise.all(
-      [...presentedDirectIds].map(id =>
-        env.DB.prepare(`UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?`).bind(id).run()
-      )
-    ).catch(e => console.error("recall_count update failed (non-fatal):", e))
-  );
+  // One statement for every presented id (topK is capped well under D1_MAX_BOUND_PARAMS), so the
+  // bump is one subrequest however many results came back.
+  if (presentedDirectIds.size) {
+    const bumpIds = [...presentedDirectIds];
+    ctx.waitUntil(
+      env.DB.prepare(
+        `UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (${bumpIds.map(() => "?").join(", ")})`
+      ).bind(...bumpIds).run()
+        .catch(e => console.error("recall_count update failed (non-fatal):", e))
+    );
+  }
 
   const maxScore = matches.reduce((mx, m) => Math.max(mx, m.score), 0);
   if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;

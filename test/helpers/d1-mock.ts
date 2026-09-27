@@ -346,10 +346,10 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET recall_count")) {
-          const [id] = args;
-          const row = db.entries.find((e: any) => e.id === id);
-          if (row) row.recall_count = (row.recall_count ?? 0) + 1;
-          return { meta: { changes: row ? 1 : 0 } };
+          // `WHERE id = ?` or `WHERE id IN (?, ...)`: every bound arg is an id.
+          const rows = db.entries.filter((e: any) => args.includes(e.id));
+          for (const row of rows) row.recall_count = (row.recall_count ?? 0) + 1;
+          return { meta: { changes: rows.length } };
         }
         if (s.startsWith("UPDATE entries SET importance_score")) {
           const [score, id] = args;
