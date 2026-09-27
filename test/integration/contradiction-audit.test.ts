@@ -77,9 +77,21 @@ describe("contradiction audit", () => {
     expect(await events()).toHaveLength(0);
   });
 
-  it("systemWrite: a system capture may still supersede a row another system job wrote", async () => {
-    sqlite.db.prepare(`UPDATE entries SET source = 'system' WHERE id = 'old'`).run();
+  it("systemWrite: a system capture may still supersede a row a system job wrote (no actor, system tag)", async () => {
+    sqlite.db.prepare(`UPDATE entries SET source = 'system', tags = '["synthesized"]' WHERE id = 'old'`).run();
     const result = await captureEntry("I moved to LA", [], "system", env, ctx, undefined, { workspaceId: "", actorId: "" }, undefined, { systemWrite: true, channel: "system:digest" });
     expect(result.status).toBe("contradiction");
+  });
+
+  it("systemWrite: a user row that merely carries source 'system' is still left alone", async () => {
+    sqlite.db.prepare(`UPDATE entries SET source = 'system', actor_id = 'u1' WHERE id = 'old'`).run();
+    const result = await captureEntry("I moved to LA", [], "system", env, ctx, undefined, { workspaceId: "", actorId: "" }, undefined, { systemWrite: true, channel: "system:digest" });
+    expect(result.status).toBe("contradiction_protected");
+  });
+
+  it("writes no contradiction event when the caller has no channel (an identity-less MCP call)", async () => {
+    const result = await captureEntry("I moved to LA", [], "api", env, ctx, undefined, { workspaceId: "", actorId: "" });
+    expect(result.status).toBe("contradiction");
+    expect(await events()).toHaveLength(0);
   });
 });

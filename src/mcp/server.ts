@@ -390,7 +390,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           actorId: identity.userId,
         };
       }
-      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, { channel: "mcp" });
+      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, identity ? { channel: "mcp" } : {});
       // Silent, after the write: a lost registry row never fails the memory.
       if (identity && projectSlug && result.status !== "blocked") {
         await autoCreateProject(env, ctx, { workspaceId: targetCtx.workspaceId, actorId: identity.userId, slug: projectSlug });

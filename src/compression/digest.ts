@@ -194,7 +194,11 @@ export async function compressTag(
     const result = await captureEntry(content, ["synthesized", tag], "system", env, ctx, cfg,
       { workspaceId, actorId: "" }, undefined, { systemWrite: true, channel: "system:digest" });
 
-    if (result.status !== "stored") {
+    // Only a blocked capture wrote nothing. Every other status (flagged, contradiction,
+    // contradiction_protected, merged, replaced) left a row that holds these sources'
+    // digest, so they roll up onto it; skipping them would re-digest the same sources
+    // into a fresh near-duplicate every cooldown.
+    if (result.status === "blocked") {
       continue;
     }
 

@@ -88,13 +88,28 @@ export function normalizeCaptureInput(rawContent: string, tags: string[]): { con
 
 export interface CaptureOptions {
   /**
-   * A system job (digest, weekly insight) is writing. It never merges into or
-   * replaces an existing row: a user's or agent's memory is left byte-identical
-   * and the newcomer is stored as its own row, still flagged as a duplicate.
+   * A system job (digest, weekly insight) is writing. It only ever merges into,
+   * replaces or deprecates a row another system job wrote (`isSystemRow`): a
+   * user's or agent's memory is left untouched and the newcomer is stored as its
+   * own row, still flagged as a duplicate.
    */
   systemWrite?: boolean;
-  /** Audit channel for events the domain layer writes itself: "mcp", "rest" or "system:<job>". */
+  /**
+   * Audit channel for events the domain layer writes itself: "mcp", "rest" or
+   * "system:<job>". Absent means the caller has no identity to attribute, and
+   * no such event is written.
+   */
   channel?: string;
+}
+
+const SYSTEM_ROW_TAGS = ["synthesized", "auto-insight"];
+
+/**
+ * A row a system job wrote: no actor AND a system tag. Not the `source` string,
+ * which any client can set to "system" through POST /capture or MCP remember.
+ */
+export function isSystemRow(row: { tags: string[]; actor_id?: unknown }): boolean {
+  return (row.actor_id ?? "") === "" && row.tags.some(t => SYSTEM_ROW_TAGS.includes(t));
 }
 
 export async function captureEntry(
@@ -128,13 +143,13 @@ export async function captureEntry(
 
   // A capsule definition must land as its own row: a merge discards the
   // incoming tags, and the slot tags are the whole point of the write.
-  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule && !opts.systemWrite) {
+  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule) {
     const targetId = mergeAction.target_id;
     const newContent = mergeAction.action === "merge" ? mergeAction.merged_content : c;
 
     const targetRow = await env.DB.prepare(
       // scope-exempt: by-id: the merge target is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
-      `SELECT tags, source, vector_ids, importance_score FROM entries WHERE id = ?`
+      `SELECT tags, source, vector_ids, importance_score, actor_id FROM entries WHERE id = ?`
     ).bind(targetId).first() as Record<string, any> | null;
 
     if (targetRow) {
@@ -151,7 +166,9 @@ export async function captureEntry(
       const protectedTarget =
         (targetRow.importance_score as number) >= 4
         || targetStatus === "canonical"
-        || (TRANSCRIPT_SOURCES.has(source) && existingSource !== source);
+        || (TRANSCRIPT_SOURCES.has(source) && existingSource !== source)
+        // A system job merges only into what a system job wrote.
+        || (opts.systemWrite === true && !isSystemRow({ tags: existingTags, actor_id: targetRow.actor_id }));
 
       if (!protectedTarget) {
         let newVectorIds: string[] | null = null;
@@ -205,9 +222,10 @@ export async function captureEntry(
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictRow = await env.DB.prepare(
       // scope-exempt: by-id: the conflict id is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
-      `SELECT tags, source FROM entries WHERE id = ?`
+      `SELECT tags, source, actor_id FROM entries WHERE id = ?`
     ).bind(contradiction.conflicting_id).first() as Record<string, any> | null;
-    const conflictStatus = conflictRow ? getStatus(JSON.parse(conflictRow.tags ?? "[]")) : null;
+    const conflictTags: string[] = conflictRow ? JSON.parse(conflictRow.tags ?? "[]") : [];
+    const conflictStatus = conflictRow ? getStatus(conflictTags) : null;
     const conflictSource = conflictRow ? String(conflictRow.source ?? "") : "";
     // Canonical memories were always protected here. A transcript gets the same
     // treatment against any memory of another source: the newcomer becomes a
@@ -217,7 +235,7 @@ export async function captureEntry(
       conflictStatus === "canonical"
       || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source)
       // A system job never rewrites a row it did not write, deprecation included.
-      || (opts.systemWrite === true && conflictSource !== source);
+      || (opts.systemWrite === true && !isSystemRow({ tags: conflictTags, actor_id: conflictRow?.actor_id }));
 
   }
 
@@ -271,11 +289,15 @@ export async function captureEntry(
       const protectedTags = withStatus(draftTags, "draft");
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
         .bind(JSON.stringify(protectedTags), id).run();
-      try {
-        await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
-        await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
-      } catch (e) {
-        console.error("Contradiction count update failed (non-fatal):", e);
+      // A system job's guess must not move the user's row: a win here would make it
+      // permanently ineligible for digests (compression/eligibility.ts).
+      if (!opts.systemWrite) {
+        try {
+          await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
+          await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
+        } catch (e) {
+          console.error("Contradiction count update failed (non-fatal):", e);
+        }
       }
       // This path draws no edges, so there is nothing to chain onto.
       scheduleClassifyAndTag(id, c, env, ctx, cfg);
@@ -295,12 +317,12 @@ export async function captureEntry(
       console.error("Contradiction count update failed (non-fatal):", e);
     }
     try {
-      if (await deprecateEntry(conflictId, env)) {
+      if (await deprecateEntry(conflictId, env) && opts.channel) {
         auditEvent(env, ctx, {
           entryId: conflictId,
           actorId: writeCtx.actorId,
           event: "status_changed",
-          payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel ?? "unspecified" },
+          payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel },
         });
       }
     } catch (e) {

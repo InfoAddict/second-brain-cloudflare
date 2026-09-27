@@ -514,14 +514,14 @@ export async function runWeeklyInsights(
       const captured = await captureEntry(content, ["auto-insight"], "system", env, ctx, cfg,
         { workspaceId: insightWorkspace, actorId: "" }, undefined, { systemWrite: true, channel: "system:insight" });
 
-      // A non-stored result means the insight duplicated an earlier one. Mark it
-      // used anyway, or the pass re-proposes and re-pays for this pair forever.
+      // Mark it used either way, or the pass re-proposes and re-pays for this pair forever.
       used.push(candidate.id);
-      if (captured.status === "stored") {
+      // Only a blocked capture wrote nothing. Every other status left a row (created,
+      // flagged, or an earlier system insight merged into), and an edge sourced from
+      // a row that does not exist would dangle, so blocked alone gets none. The edge
+      // carries the insight's own workspace so scoped graph walks can see it.
+      if (captured.status !== "blocked") {
         written++;
-        // Only on a real, created entry — an edge sourced from a capture that
-        // declined to store would point at a row that never exists. The edge
-        // carries the insight's own workspace so scoped graph walks can see it.
         for (const targetId of [candidate.a_id, candidate.b_id]) {
           drawnFromPairs.push({ insightId: captured.id, targetId, workspaceId: insightWorkspace });
         }
