@@ -323,6 +323,11 @@ export function buildChain(
       previous = length;
       const stored = rows[i].prior_length_utf16;
       if (stored == null) { wanted.push(length); continue; }
+      // Cheap, O(1) sanity check before trusting a stamped boundary (R2-1): every codepoint is 1 or
+      // 2 UTF-16 units, so the UTF-16 length can never be fewer than the codepoint count nor more
+      // than twice it. A stamp outside that range is corrupt or describes a different string
+      // entirely — reject it rather than build a chain on top of it, no scan required to catch it.
+      if (stored < length || stored > length * 2) throw new VersionChainError(`version ${rows[i].seq} claims a ${stored}-unit boundary inconsistent with its own ${length}-character length`);
       if (stored > base.length) throw new VersionChainError(`version ${rows[i].seq} claims a boundary past its ${base.length}-unit base`);
       ends.set(rows[i].seq, { base, end: stored });
     }

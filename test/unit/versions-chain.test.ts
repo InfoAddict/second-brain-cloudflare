@@ -54,6 +54,17 @@ describe("buildChain", () => {
     expect(() => buildChain("😀😀", [row(1, { prior_length: 3 })], all).text(1)).toThrow(VersionChainError);
   });
 
+  it("R2-1: a stamped prior_length_utf16 inconsistent with its own prior_length throws, no scan required", () => {
+    // Fewer UTF-16 units than code points is impossible for any string (each code point is 1 or 2
+    // units) — a corrupt or mismatched stamp, caught for O(1) cost before it is ever trusted.
+    expect(() => buildChain("abcdef", [row(1, { prior_length: 4, prior_length_utf16: 3 })], all).text(1)).toThrow(VersionChainError);
+    // More than twice the code point count is equally impossible.
+    expect(() => buildChain("abcdef", [row(1, { prior_length: 4, prior_length_utf16: 9 })], all).text(1)).toThrow(VersionChainError);
+    // A consistent stamp (surrogate pairs: 2 UTF-16 units per code point) still resolves normally.
+    const chain = buildChain("😀😀x", [row(1, { prior_length: 2, prior_length_utf16: 4 })], all);
+    expect(chain.text(1)).toBe("😀😀");
+  });
+
   it("stops at the first seq gap", () => {
     const chain = buildChain("abc", [row(5, { prior_length: 2 }), row(4, { prior_length: 1 }), row(2, { prior_length: 1 })], all);
     expect(chain.rows.map(r => r.seq)).toEqual([5, 4]);
@@ -210,5 +221,25 @@ describe("buildChain", () => {
       if (attempt === 3) { expect(ms).toBeLessThan(10 * scale); return; }
       await new Promise(resolve => setTimeout(resolve, 300));
     }
+  });
+
+  it("ADV-10, deterministic: a stamped delta row causes no scan at all, contention or none", () => {
+    // The CPU test above corroborates this with a wall-cost budget that skips under load; this
+    // asserts the actual claim directly with the same onScan counter "one pass per base" uses above,
+    // so a regression is caught on a busy machine too, not just a quiet one.
+    const memory = (salt: string) => (salt + "😀文a".repeat(200_000)).slice(0, 700_000);
+    const current = memory("now");
+    let above = current;
+    const rows: VersionRow[] = [];
+    for (let i = 0; i < 20; i++) {
+      const full = i % 2 === 1;
+      const text = full ? memory(`v${i}`) : above.slice(0, above.length - 80);
+      rows.push(row(20 - i, { content: full ? text : null, prior_length: full ? null : cp(text), prior_length_utf16: full ? null : text.length }));
+      above = text;
+    }
+    let scans = 0;
+    const chain = buildChain(current, rows, all, { onScan: () => scans++ });
+    for (const r of chain.rows) chain.text(r.seq);
+    expect(scans).toBe(0);
   });
 });
