@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildMcpServer } from "../../src/mcp/server";
@@ -10,6 +10,7 @@ import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity"
 import { createProject } from "../../src/projects/registry";
 import { createMember } from "../../src/lib/team-admin";
 import type { Env } from "../../src/env";
+import * as compression from "../../src/compression/digest";
 
 let sqlite: SqliteD1;
 let env: Env;
@@ -133,5 +134,45 @@ describe("MCP resolve", () => {
     const reader = (await resolveIdentityFromToken(member.token, env))!;
     expect(await call("resolve", { id: "private", action: "done" }, reader)).toContain("No entry found");
     expect(JSON.parse(String(sqlite.rows().find(r => r.id === "private")?.tags))).not.toContain("task:done");
+  });
+});
+
+describe("MCP digest", () => {
+  it("returns the latest existing project digest and never runs compression", async () => {
+    const compress = vi.spyOn(compression, "compressTag");
+    try {
+      await createProject(env.DB, identity.personalWorkspaceId, { id: "site", name: "Site" });
+      sqlite.seed({ id: "older", content: "Older summary", createdAt: 1000, tags: ["synthesized", "project:site"] });
+      sqlite.seed({ id: "latest", content: "Current summary", createdAt: 2000, tags: ["synthesized", "project:site"] });
+      sqlite.seed({ id: "wrong", content: "Wrong summary", createdAt: 3000, tags: ["synthesized", "other"] });
+      sqlite.issued.length = 0;
+      const text = await call("digest", { project: "site" });
+      expect(text).toContain("Current summary");
+      expect(text).toContain("1970-01-01");
+      expect(text).not.toContain("Older summary");
+      expect(text).not.toContain("Wrong summary");
+      expect(sqlite.issued).toHaveLength(2);
+      expect(compress).not.toHaveBeenCalled();
+      expect(env.AI.run).not.toHaveBeenCalled();
+    } finally { compress.mockRestore(); }
+  });
+
+  it("requires exactly one filter and suggests recall when no digest exists", async () => {
+    await createProject(env.DB, identity.personalWorkspaceId, { id: "site", name: "Site" });
+    expect(await call("digest", {})).toContain("exactly one");
+    expect(await call("digest", { tag: "work", project: "site" })).toContain("exactly one");
+    expect(await call("digest", { tag: "work" })).toContain("No digest yet");
+    expect(await call("digest", { project: "missing" })).toContain("Known projects");
+    expect(await call("digest", {}, null)).toContain("authenticated identity");
+  });
+
+  it("matches a topic tag literally in one statement", async () => {
+    sqlite.seed({ id: "match", content: "Quarter three summary", createdAt: 1000, tags: ["synthesized", "q3_2026"] });
+    sqlite.seed({ id: "near", content: "Wrong summary", createdAt: 2000, tags: ["synthesized", "q3-2026"] });
+    sqlite.issued.length = 0;
+    const text = await call("digest", { tag: "q3_2026" });
+    expect(text).toContain("Quarter three summary");
+    expect(text).not.toContain("Wrong summary");
+    expect(sqlite.issued).toHaveLength(1);
   });
 });

@@ -32,6 +32,7 @@ import { listProjects, type ProjectRow } from "../projects/registry";
 import { resolveProjectRead } from "../projects/resolve";
 import { computeAgentBrief } from "../brief/compute";
 import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
+import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -383,6 +384,43 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const result = await resolveEntryAction(env, ctx, identity, id, action, until, "mcp");
       if (!result.ok) return { content: [{ type: "text", text: result.error }] };
       return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
+    },
+  );
+
+  server.registerTool(
+    "digest",
+    {
+      description: "Call when the user wants a summary of a project or topic. Reads the latest existing automatic digest and its date. Follow up with recall for anything newer. Never creates a digest.",
+      inputSchema: {
+        project: projectParam.describe("Known project slug; use exactly one of project or tag"),
+        tag: z.string().optional().describe("Topic tag; use exactly one of project or tag"),
+        workspace: z.enum(["personal", "company"]).optional().describe("Restrict to one layer"),
+        team: z.string().optional().describe("Team id when reading one shared workspace"),
+      },
+    },
+    async ({ project, tag, workspace, team }) => {
+      if (!identity) return { content: [{ type: "text", text: "Digest requires an authenticated identity." }] };
+      const slug = project?.trim();
+      const topic = tag?.trim();
+      if (Boolean(slug) === Boolean(topic)) {
+        return { content: [{ type: "text", text: "Pass exactly one of project or tag." }] };
+      }
+      const teamRead = readTeamParam(team, identity, workspace);
+      if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
+      if (slug) {
+        const projectRows = await resolveProjectArg(slug, workspace, teamRead.teamId);
+        if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
+      }
+      const scope = scopeWhereForRead(identity, { layer: workspace, teamId: teamRead.teamId });
+      const digestTag = slug ? `project:${slug}` : topic!;
+      const row = await env.DB.prepare(
+        `SELECT content, created_at FROM entries
+         WHERE ${scope.clause} AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+      ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag))
+        .first<{ content: string; created_at: number }>();
+      if (!row) return { content: [{ type: "text", text: "No digest yet. One is built automatically overnight once there are 10 or more eligible memories. Use recall with project instead." }] };
+      return { content: [{ type: "text", text: `Digest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n${row.content}` }] };
     },
   );
 

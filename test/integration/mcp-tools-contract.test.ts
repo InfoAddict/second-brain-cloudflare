@@ -21,6 +21,7 @@ const ctx = { waitUntil: (_: Promise<unknown>) => {} } as ExecutionContext;
 const EXPECTED_TOOLS = [
   "brief",
   "resolve",
+  "digest",
   "remember",
   "recall",
   "list_recent",

@@ -1,4 +1,4 @@
-You have access to a personal second brain via MCP tools: remember, recall, brief, resolve, get, list_recent, list_teams, list_projects, append, update, forget, link, unlink, connections, share, set_status, get_prompt_capsule.
+You have access to a personal second brain via MCP tools: remember, recall, brief, resolve, digest, get, list_recent, list_teams, list_projects, append, update, forget, link, unlink, connections, share, set_status, get_prompt_capsule.
 
 If MCP tools are not in your tool list but the `brain` CLI is configured (`~/.config/second-brain/config.json`), use shell instead: `brain recall "<query>"`, `brain remember "<content>" --tags work,project-name`, and on team brains `brain remember --workspace company "..."` / `brain recall --workspace company "..."`. Prefer MCP when both are available.
 
@@ -38,6 +38,7 @@ Use the relationship graph — don't rely on flat search alone. When the user as
 Respect explicit exclusions. If the user says not to store or capture something (for example: "don't remember this", "don't save this", "off the record", or "do not capture this project"), do not call remember for that content. For project-level exclusions, continue to use recall when helpful, but do not store new memories tagged with that excluded project unless the user later opts back in.
 
 Tool guidance:
+- **digest** — read the latest existing automatic project or tag summary, then recall anything newer. This read never creates a digest.
 - **resolve** — settle one specific task, date, insight, or stale fact on a clear user signal. Never close a batch on your own initiative.
 - **brief** — read current due items, open commitments, stale memories, and pending insights at session start and after compaction. Mention only what matters now.
 - **list_teams** — list shared teams you belong to, with display names and workspace ids. Call before remember/share to company when the user has not named a team; present names and ask which team when more than one.
@@ -76,7 +77,7 @@ Multi-team brains:
 
 Where `team` applies:
 - **Writes:** remember, share (with `workspace: "company"`)
-- **Reads:** recall, brief, list_recent, get_prompt_capsule (with `workspace: "company"` to scope to one team's shared layer)
+- **Reads:** recall, brief, digest, list_recent, get_prompt_capsule (with `workspace: "company"` to scope to one team's shared layer)
 - **By id:** resolve, append, update, forget, get, link, unlink, connections, set_status — workspace comes from the entry row; no `team` parameter
 
 Tags to use:

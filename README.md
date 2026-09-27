@@ -81,6 +81,7 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 | `recall` | Find memories by meaning rather than exact wording |
 | `brief` | Show due items, open commitments, stale memories, and pending insights |
 | `resolve` | Settle one tracked task, date, insight, or stale fact |
+| `digest` | Read the latest existing automatic summary for a project or tag |
 | `list_recent` | Browse recently saved memories |
 | `list_teams` | List shared teams you belong to (names and ids). In v3.0.0 this is one team; used by MCP clients for future multi-team support |
 | `list_projects` | List projects in scope, with display names, descriptions, and memory counts |
