@@ -47,11 +47,98 @@ export const PUSHED_KV_PREFIX = "pushed:";
  */
 export const PUSH_CURSOR_KV_KEY = "push:cursor";
 
-export interface PushBudget { fetchesLeft: number }
+/** Short-lived run lease, best effort: see acquireRunLease. */
+export const PUSH_LEASE_KV_KEY = "push:lease";
+const PUSH_LEASE_TTL_SECONDS = 60;
+
+/** Per-invocation state: the fetch budget, and the run lease shared by every workspace call that uses it. */
+export interface PushBudget {
+  fetchesLeft: number;
+  lease?: Promise<LeaseResult>;
+  leaseToken?: string;
+  users?: number;
+  kvWriteFailed?: boolean;
+}
+
+type LeaseResult = "held" | "busy" | "kv_write_failed";
 
 /** One per invocation; pass the same one to every workspace the invocation pushes to. */
 export function newPushBudget(): PushBudget {
   return { fetchesLeft: MAX_PUSH_FETCHES_PER_RUN };
+}
+
+/** Set while a run in this isolate holds the lease: an overlap within one isolate is refused outright. */
+let isolateLeaseHeld = false;
+
+/**
+ * Taken once per invocation, and only when there is something to send, so
+ * a run with nothing new writes nothing. In-isolate overlaps are refused
+ * exactly; across isolates it is best effort, because KV has no atomic
+ * compare-and-set: write a random token, read it back, and back off if
+ * another run's token is there. Two runs that both write before either
+ * reads back can still both proceed, and a run that outlasts the 60-second
+ * TTL loses its protection; the cost of either is one duplicate
+ * notification. The lease write doubles as the KV canary: if it fails (for
+ * example the daily write cap is spent), the run sends nothing.
+ */
+function acquireRunLease(env: Env, budget: PushBudget): Promise<LeaseResult> {
+  budget.lease ??= (async (): Promise<LeaseResult> => {
+    if (isolateLeaseHeld) return "busy";
+    isolateLeaseHeld = true;
+    const token = crypto.randomUUID();
+    try {
+      const existing = parseLease(await env.OAUTH_KV.get(PUSH_LEASE_KV_KEY));
+      if (existing && existing.until > Date.now()) { isolateLeaseHeld = false; return "busy"; }
+      try {
+        await env.OAUTH_KV.put(PUSH_LEASE_KV_KEY, JSON.stringify({ token, until: Date.now() + PUSH_LEASE_TTL_SECONDS * 1000 }), { expirationTtl: PUSH_LEASE_TTL_SECONDS });
+      } catch (e) {
+        isolateLeaseHeld = false;
+        logKvWriteFailure(budget, e);
+        return "kv_write_failed";
+      }
+      const readBack = parseLease(await env.OAUTH_KV.get(PUSH_LEASE_KV_KEY));
+      if (readBack && readBack.token !== token) { isolateLeaseHeld = false; return "busy"; }
+      budget.leaseToken = token;
+      return "held";
+    } catch (e) {
+      isolateLeaseHeld = false;
+      console.error("push: could not read the run lease; skipping this run:", e);
+      return "busy";
+    }
+  })();
+  return budget.lease;
+}
+
+function parseLease(raw: string | null): { token: string; until: number } | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as { token?: unknown; until?: unknown };
+    return typeof value.token === "string" && typeof value.until === "number" ? { token: value.token, until: value.until } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function releaseRunLease(env: Env, budget: PushBudget): Promise<void> {
+  if (!budget.leaseToken) return;
+  const token = budget.leaseToken;
+  budget.leaseToken = undefined;
+  isolateLeaseHeld = false;
+  try {
+    if (parseLease(await env.OAUTH_KV.get(PUSH_LEASE_KV_KEY))?.token === token) await env.OAUTH_KV.delete(PUSH_LEASE_KV_KEY);
+  } catch {
+    // The TTL expires it anyway.
+  }
+}
+
+/** One line per invocation, however many writes fail after it. */
+function logKvWriteFailure(budget: PushBudget, e: unknown): void {
+  if (budget.kvWriteFailed) return;
+  budget.kvWriteFailed = true;
+  console.error(
+    "push: KV write failed (the daily KV write limit may be spent); nothing more is sent this run, so nothing repeats. Push resumes once KV writes succeed:",
+    e,
+  );
 }
 /**
  * Push services require a TTL on every request (RFC 8030 section 5.2); Apple
@@ -241,15 +328,15 @@ function notificationPayload(candidate: DueCandidate, contentFree: boolean, time
  * signs the JWT and is unrelated to the message's encryption key.
  */
 async function sendOne(env: Env, sub: PushSubscriptionRow, payload: Record<string, unknown>): Promise<SendOutcome> {
-  const subscription = JSON.parse(sub.subscription_json) as { endpoint: string; keys: { p256dh: string; auth: string } };
-  const encrypted = await encryptWebPush({
-    plaintext: new TextEncoder().encode(JSON.stringify(payload)),
-    subscriptionPublicKey: fromBase64Url(subscription.keys.p256dh),
-    subscriptionAuthSecret: fromBase64Url(subscription.keys.auth),
-  });
-
   let res: Response;
   try {
+    // Inside the try: a malformed stored subscription is one failed send, never an aborted run.
+    const subscription = JSON.parse(sub.subscription_json) as { endpoint: string; keys: { p256dh: string; auth: string } };
+    const encrypted = await encryptWebPush({
+      plaintext: new TextEncoder().encode(JSON.stringify(payload)),
+      subscriptionPublicKey: fromBase64Url(subscription.keys.p256dh),
+      subscriptionAuthSecret: fromBase64Url(subscription.keys.auth),
+    });
     res = await fetch(subscription.endpoint, {
       method: "POST",
       headers: {
@@ -423,54 +510,89 @@ function computeTasks(push: WorkspacePush): void {
   }
 }
 
+/** Takes the first tasks the shared budget can afford, decrementing it now, so parallel callers cannot overrun it. */
+function reserve(tasks: SendTask[], budget: PushBudget): SendTask[] {
+  const reserved = tasks.slice(0, Math.max(0, budget.fetchesLeft));
+  budget.fetchesLeft -= reserved.length;
+  return reserved;
+}
+
 /**
- * Sends tasks in order while the shared budget lasts and returns the index
- * of the first task it could not afford, or -1. The check and decrement run
- * before the await, so parallel callers sharing one budget cannot overrun it.
+ * Write-ahead: the delivery record gains the reserved sends BEFORE they are
+ * made. A run that overlaps this one reads them as delivered, and if the
+ * write fails nothing is sent, so a failing KV can never cause a resend
+ * storm. The cost is at-most-once delivery if the invocation dies mid-send.
  */
-async function runTasks(env: Env, tasks: SendTask[], budget: PushBudget): Promise<number> {
-  for (let i = 0; i < tasks.length; i++) {
-    if (budget.fetchesLeft <= 0) return i;
-    budget.fetchesLeft--;
-    const { push, candidate, sub } = tasks[i];
-    const outcome = await sendOne(env, sub, notificationPayload(candidate, !!sub.content_free, push.timezone, push.now));
-    push.sends.push({ hash: sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: sub.fail_count });
+async function recordAhead(env: Env, push: WorkspacePush, reserved: SendTask[], budget: PushBudget): Promise<boolean> {
+  if (budget.kvWriteFailed) return false;
+  for (const { candidate, sub } of reserved) {
     const record = push.delivery[candidate.id];
     if (record && record.w === candidate.when_at) record.s.push(sub.endpoint_hash);
     else push.delivery[candidate.id] = { w: candidate.when_at, s: [sub.endpoint_hash] };
   }
-  return -1;
-}
-
-/** Subscription outcomes in one batch, then the delivery record of each workspace that sent anything. */
-async function finishPushes(env: Env, pushes: WorkspacePush[]): Promise<void> {
-  await applySubscriptionOutcomes(env, pushes.flatMap(p => p.sends));
-  for (const push of pushes) {
-    if (!push.sends.length) continue;
-    const hashes = new Set(push.subs.map(s => s.endpoint_hash));
+  const hashes = new Set(push.subs.map(s => s.endpoint_hash));
+  try {
     await env.OAUTH_KV.put(pushedKvKey(push.workspaceId), JSON.stringify(pruneDeliveryMap(push.delivery, push.dueIds, push.windowFull, hashes, push.now)));
+    return true;
+  } catch (e) {
+    logKvWriteFailure(budget, e);
+    return false;
   }
 }
 
+async function sendReserved(env: Env, reserved: SendTask[]): Promise<void> {
+  for (const { push, candidate, sub } of reserved) {
+    const outcome = await sendOne(env, sub, notificationPayload(candidate, !!sub.content_free, push.timezone, push.now));
+    push.sends.push({ hash: sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: sub.fail_count });
+  }
+}
+
+/** Re-reads the delivery record under the lease, so sends a run finished meanwhile are not repeated. */
+async function refreshTasks(env: Env, push: WorkspacePush): Promise<void> {
+  push.delivery = await readDeliveryMap(env, push.workspaceId);
+  computeTasks(push);
+}
+
 const okCount = (sends: SendRecord[]) => sends.filter(s => s.result === "ok").length;
+
+/** Why a run sent nothing although something was due: another run held the lease, or KV writes failed. */
+export type PushSkip = "busy" | "kv_write_failed";
 
 /**
  * Pushes due items (overdue and due today, DUE_SQL) for one workspace to
  * each subscription that has not yet had them at their current when_at.
  * POST /push/run calls this once per readable workspace with one shared
- * budget; alone it gets a budget of its own.
+ * budget, which also carries one shared run lease; alone it gets its own.
  *
- * Cost: at most 3 D1 calls (due SELECT, subscriptions SELECT, one batch),
- * one KV read and one KV write, and budget-limited external fetches.
+ * Cost: at most 3 D1 calls (delivery-aware due SELECT, subscriptions
+ * SELECT, one batch) and budget-limited external fetches. KV is written
+ * only when something is sent: the lease and one delivery record.
  */
 export async function pushDueItems(
   env: Env, workspaceId: string, resolved?: Readonly<Config>, budget: PushBudget = newPushBudget(),
-): Promise<PushDueItemsResult> {
-  const config = resolved ?? await resolveConfig(env);
-  const push = await prepareWorkspacePush(env, workspaceId, Date.now(), config.TIMEZONE);
-  await runTasks(env, push.tasks, budget);
-  await finishPushes(env, [push]);
-  return { sent: okCount(push.sends), candidates: push.candidates.length, subscriptions: push.subs.length, results: toReportedOutcomes(push.sends) };
+): Promise<PushDueItemsResult & { skipped?: PushSkip }> {
+  budget.users = (budget.users ?? 0) + 1;
+  try {
+    const config = resolved ?? await resolveConfig(env);
+    const push = await prepareWorkspacePush(env, workspaceId, Date.now(), config.TIMEZONE);
+    const base = { candidates: push.candidates.length, subscriptions: push.subs.length };
+    if (!push.tasks.length) return { sent: 0, ...base, results: [] };
+
+    const lease = await acquireRunLease(env, budget);
+    if (lease !== "held") return { sent: 0, ...base, results: [], skipped: lease };
+
+    await refreshTasks(env, push);
+    const reserved = reserve(push.tasks, budget);
+    if (reserved.length && await recordAhead(env, push, reserved, budget)) await sendReserved(env, reserved);
+    await applySubscriptionOutcomes(env, push.sends);
+    return {
+      sent: okCount(push.sends), candidates: push.candidates.length, subscriptions: push.subs.length,
+      results: toReportedOutcomes(push.sends), ...(budget.kvWriteFailed ? { skipped: "kv_write_failed" as const } : {}),
+    };
+  } finally {
+    budget.users--;
+    if (budget.users === 0) await releaseRunLease(env, budget);
+  }
 }
 
 /** Up to `limit` ids from the ring, starting strictly after the cursor and wrapping. */
@@ -492,20 +614,22 @@ function interleave(pushes: WorkspacePush[]): SendTask[] {
 
 /**
  * The hourly cron. Reads up to MAX_PUSH_WORKSPACES_PER_RUN subscribed
- * workspaces from the persistent ring cursor, interleaves their pending
- * sends one per workspace per round under one 40-fetch budget, then moves
- * the cursor: to the last workspace read when everything fit, otherwise to
- * just before the workspace whose send the budget could not afford, so the
- * next run starts there. Within a workspace, the delivery record resumes
- * with exactly the subscriptions still missing an item. Together these
- * reach every workspace and subscription within a bounded number of runs.
+ * workspaces from the persistent ring cursor and, only if something is
+ * pending, takes the run lease, re-reads their delivery records, reserves
+ * sends one per workspace per round under one 40-fetch budget, records them
+ * ahead, sends them, then moves the cursor: to the last workspace read when
+ * everything fit, otherwise to just before the workspace the budget stopped
+ * at, so the next run starts there. Together with the per-subscription
+ * delivery record this reaches every workspace and subscription within a
+ * bounded number of runs.
  *
  * Worst case per invocation: 102 D1 calls (1 ring scan + 2 per workspace x
- * 50 + 1 batch), 40 external fetches, 51 KV reads (cursor and one delivery
- * record per workspace) and 41 KV writes (a record per workspace that sent,
- * at most one per fetch, plus the cursor, written only when it moves).
+ * 50 + 1 batch), 40 external fetches, 104 KV reads (cursor, 50 records, 50
+ * re-reads under the lease, 2 lease reads, 1 at release) and 42 KV writes
+ * (lease, at most 40 records, cursor) plus 1 lease delete. A run with
+ * nothing new writes nothing.
  */
-export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Config>): Promise<{ sent: number }> {
+export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Config>): Promise<{ sent: number; skipped?: PushSkip }> {
   const ring = (((await env.DB.prepare(
     `SELECT DISTINCT workspace_id FROM push_subscriptions ORDER BY workspace_id`,
   ).all()).results ?? []) as { workspace_id: string }[]).map(r => r.workspace_id);
@@ -517,19 +641,40 @@ export async function pushDueItemsAllWorkspaces(env: Env, resolved?: Readonly<Co
   const now = Date.now();
   const pushes: WorkspacePush[] = [];
   for (const workspaceId of selection) pushes.push(await prepareWorkspacePush(env, workspaceId, now, config.TIMEZONE));
+  if (!pushes.some(p => p.tasks.length)) return { sent: 0 };
 
-  const tasks = interleave(pushes);
-  const stoppedAt = await runTasks(env, tasks, newPushBudget());
-  await finishPushes(env, pushes);
+  const budget = newPushBudget();
+  const lease = await acquireRunLease(env, budget);
+  if (lease !== "held") return { sent: 0, skipped: lease };
+  try {
+    for (const push of pushes) if (push.tasks.length) await refreshTasks(env, push);
+    const tasks = interleave(pushes);
+    const reserved = reserve(tasks, budget);
 
-  let next: string | null = selection[selection.length - 1];
-  if (stoppedAt !== -1) {
-    const index = selection.indexOf(tasks[stoppedAt].push.workspaceId);
-    next = index > 0 ? selection[index - 1] : cursor;
+    const byPush = new Map<WorkspacePush, SendTask[]>();
+    for (const task of reserved) byPush.set(task.push, [...(byPush.get(task.push) ?? []), task]);
+    const recorded: SendTask[] = [];
+    for (const [push, own] of byPush) {
+      if (!await recordAhead(env, push, own, budget)) break;
+      recorded.push(...own);
+    }
+    await sendReserved(env, reserved.filter(task => recorded.includes(task)));
+    await applySubscriptionOutcomes(env, pushes.flatMap(p => p.sends));
+
+    if (!budget.kvWriteFailed) {
+      let next: string | null = selection[selection.length - 1];
+      if (reserved.length < tasks.length) {
+        const index = selection.indexOf(tasks[reserved.length].push.workspaceId);
+        next = index > 0 ? selection[index - 1] : cursor;
+      }
+      if (next !== null && next !== cursor) {
+        try { await env.OAUTH_KV.put(PUSH_CURSOR_KV_KEY, next); } catch (e) { logKvWriteFailure(budget, e); }
+      }
+    }
+    return { sent: pushes.reduce((n, p) => n + okCount(p.sends), 0), ...(budget.kvWriteFailed ? { skipped: "kv_write_failed" as const } : {}) };
+  } finally {
+    await releaseRunLease(env, budget);
   }
-  if (next !== null && next !== cursor) await env.OAUTH_KV.put(PUSH_CURSOR_KV_KEY, next);
-
-  return { sent: pushes.reduce((n, p) => n + okCount(p.sends), 0) };
 }
 
 /** POST /push/test's fixed notification, bypassing the due query entirely. */

@@ -125,8 +125,10 @@ export async function handlePushRoutes(
     // Capped again here: each workspace's own results are already capped, but
     // several small workspaces together could still exceed the cap.
     const results = perWorkspace.flatMap(r => r.results).slice(0, MAX_REPORTED_PUSH_RUN_RESULTS);
+    // "busy": another run held the lease; "kv_write_failed": nothing was sent, so nothing repeats.
+    const skipped = perWorkspace.find(r => r.skipped)?.skipped;
 
-    return json({ ok: true, sent, candidates, subscriptions, results });
+    return json({ ok: true, sent, candidates, subscriptions, results, ...(skipped ? { skipped } : {}) });
   }
 
   // POST /push/test (admin) — a fixed notification to the caller's own

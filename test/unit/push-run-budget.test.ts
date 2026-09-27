@@ -247,7 +247,7 @@ describe("one budget per invocation on every entry point", () => {
 });
 
 describe("pinned worst case for one cron invocation", () => {
-  it("500 subscribed workspaces: at most 102 D1 calls, 40 external fetches, 51 KV reads and 41 KV writes", async () => {
+  it("500 subscribed workspaces: at most 102 D1 calls, 40 external fetches, 104 KV reads, 42 KV writes and 1 delete", async () => {
     let d1 = 0;
     const db = {
       prepare(sql: string) {
@@ -270,6 +270,7 @@ describe("pinned worst case for one cron invocation", () => {
     const kv = makeMemoryKV();
     const get = vi.spyOn(kv, "get");
     const put = vi.spyOn(kv, "put");
+    const del = vi.spyOn(kv, "delete");
     const env = makeTestEnv(db as any, { OAUTH_KV: kv });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
 
@@ -277,7 +278,101 @@ describe("pinned worst case for one cron invocation", () => {
 
     expect(d1).toBeLessThanOrEqual(102);
     expect(fetchSpy.mock.calls.length).toBe(40);
-    expect(get.mock.calls.length).toBeLessThanOrEqual(51);
-    expect(put.mock.calls.length).toBeLessThanOrEqual(41);
+    expect(get.mock.calls.length).toBeLessThanOrEqual(104);
+    expect(put.mock.calls.length).toBeLessThanOrEqual(42);
+    expect(del.mock.calls.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("KV writes: only on change, and fail safe when they fail", () => {
+  it("a run with nothing new writes no KV at all", async () => {
+    sq = await migrated();
+    seedDue(sq, "due");
+    seedSub(sq, "sub");
+    const kv = makeMemoryKV();
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+    await pushDueItemsAllWorkspaces(env, cfg);
+    await pushDueItems(env, "", cfg);
+
+    const put = vi.spyOn(kv, "put");
+    const del = vi.spyOn(kv, "delete");
+    await pushDueItemsAllWorkspaces(env, cfg);
+    await pushDueItems(env, "", cfg);
+
+    expect(put).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("with KV writes failing, sends nothing, changes no subscription, logs one line per run, and then sends once", async () => {
+    sq = await migrated();
+    for (let i = 0; i < 3; i++) seedDue(sq, `due-${i}`, "", Date.now() - (i + 1) * 60_000);
+    seedSub(sq, "sub", "", 4);
+    const kv = makeMemoryKV();
+    const realPut = kv.put.bind(kv);
+    const put = vi.spyOn(kv, "put").mockRejectedValue(new Error("KV put() limit exceeded for the day."));
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 500 }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    for (let run = 0; run < 3; run++) {
+      const before = log.mock.calls.length;
+      await pushDueItemsAllWorkspaces(env, cfg);
+      expect(log.mock.calls.length - before).toBe(1);
+    }
+    await pushDueItems(env, "", cfg);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const row = await sq.db.prepare("SELECT fail_count FROM push_subscriptions WHERE id = 'sub'").first() as any;
+    expect(row.fail_count).toBe(4);
+    expect(String(log.mock.calls[0][0])).toContain("KV write failed");
+
+    put.mockImplementation(realPut);
+    fetchSpy.mockResolvedValue(new Response(null, { status: 201 }));
+    await pushDueItemsAllWorkspaces(env, cfg);
+    await pushDueItemsAllWorkspaces(env, cfg);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("a delivery-record write failing after the lease sends nothing for that run", async () => {
+    sq = await migrated();
+    seedDue(sq, "due");
+    seedSub(sq, "sub");
+    const kv = makeMemoryKV();
+    const realPut = kv.put.bind(kv);
+    vi.spyOn(kv, "put").mockImplementation(async (key: string, value: any, opts?: any) => {
+      if (key.startsWith("pushed:")) throw new Error("KV put() limit exceeded for the day.");
+      return realPut(key, value, opts);
+    });
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await pushDueItemsAllWorkspaces(env, cfg);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.skipped).toBe("kv_write_failed");
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("overlapping runs", () => {
+  it("a manual run during the cron run is refused rather than sending the same item twice", async () => {
+    sq = await migrated();
+    seedDue(sq, "due");
+    seedSub(sq, "sub");
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => { await gate; return new Response(null, { status: 201 }); });
+
+    const cron = pushDueItemsAllWorkspaces(env, cfg);
+    for (let i = 0; i < 100 && fetchSpy.mock.calls.length < 1; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    const manual = await pushDueItems(env, "", cfg);
+    release();
+    await cron;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(manual.sent).toBe(0);
   });
 });
