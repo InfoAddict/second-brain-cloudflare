@@ -298,7 +298,7 @@ export async function handleIntegrationsRoutes(
       for (const key of batchKeys) {
         const mapped = record.itemMap[key];
         try {
-          const result = await moveEntry(mapped.entryId, target, env, auth);
+          const result = await moveEntry(mapped.entryId, target, env, auth, { actorId: auth.userId, channel: "rest" });
           d1Spent += 1;
           switch (result.status) {
             case "shared":

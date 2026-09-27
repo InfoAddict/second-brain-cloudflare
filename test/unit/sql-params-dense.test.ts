@@ -1,86 +1,130 @@
-/**
- * M1 (dense placeholder numbering): D1 rejects a statement whose numbered placeholders have gaps
- * ("Wrong number of parameter bindings"), while node:sqlite silently accepts them. Every generated
- * statement in src/memory/trash.ts and src/memory/params.ts allocates through Params, so its
- * placeholders always run ?1..?n with n === bindings.length.
- *
- * Builder A's Task 2 owns the shared versions.ts builders and the canonical name for this file;
- * this covers builder B's own builders (trash, purge, disconnect purge, restore, Delete forever)
- * pending that merge — see the builder report for the difference from the spec's single shared file.
- */
 import { describe, it, expect } from "vitest";
-import { Params } from "../../src/memory/params";
-import { planTrash, trashManyStatements, purgeTrash } from "../../src/memory/trash";
-import { captureEnv, assertDenseParams } from "../helpers/dense-params";
+import {
+  Params, buildSnapshot, buildSnapshotMany, buildPrune, buildPruneMany, buildMirrorPrune, ownSnapshotLandedSql,
+  type SnapshotInput,
+} from "../../src/memory/versions";
+import { denseProblem } from "../helpers/sql-dense";
 
-describe("Params", () => {
-  it("numbers the first distinct value ?1, the next ?2, and reuses a repeated value's number", () => {
+const change = { actorId: "u1", channel: "rest" as const };
+const base: SnapshotInput = { entryId: "e1", reason: "update", change, content: { kind: "unchanged" }, nextTags: ["a", "b"], now: 5 };
+
+describe("every generated statement numbers its placeholders densely", () => {
+  const contents: SnapshotInput["content"][] = [{ kind: "unchanged" }, { kind: "suffix" }, { kind: "next", content: "new text" }];
+  for (const content of contents) {
+    for (const withGuard of [false, true]) {
+      for (const withWhen of [false, true]) {
+        for (const withSeq of [false, true]) {
+          it(`snapshot ${content.kind} guard=${withGuard} when=${withWhen} seq=${withSeq}`, () => {
+            const b = buildSnapshot({
+              ...base, content,
+              guard: withGuard ? p => `e.tags = ${p.add("[\"a\"]")} AND e.content = ${p.add("x")}` : undefined,
+              nextWhen: withWhen ? { when_at: 9, when_kind: null, when_source: "cleared", when_label: null } : undefined,
+              expectNewestSeq: withSeq ? 4 : undefined,
+              skipNoOp: withSeq ? false : undefined,
+              meta: { nonce: "n" },
+            });
+            expect(denseProblem(b.sql, b.bindings)).toBeNull();
+          });
+        }
+      }
+    }
+  }
+
+  it("the many-row forms bind one parameter for the ids", () => {
+    const ids = Array.from({ length: 101 }, (_, i) => `e${i}`);
+    for (const b of [buildSnapshotMany({ entryIds: ids, reason: "status", change, content: { kind: "unchanged" }, now: 1 }),
+      buildSnapshotMany({ entryIds: ids, reason: "rollup", change, content: { kind: "suffix" }, now: 1 }),
+      buildPruneMany(ids, 20)]) {
+      expect(denseProblem(b.sql, b.bindings)).toBeNull();
+      expect(b.bindings.filter(v => typeof v === "string" && v.startsWith("[\"e0\""))).toHaveLength(1);
+    }
+  });
+
+  it("prune and mirror prune", () => {
+    for (const b of [buildPrune("e1", 20), buildMirrorPrune("e1", 3)]) expect(denseProblem(b.sql, b.bindings)).toBeNull();
+  });
+
+  it("ownSnapshotLandedSql", () => {
     const p = new Params();
-    expect(p.add("a")).toBe("?1");
-    expect(p.add("b")).toBe("?2");
-    expect(p.add("a")).toBe("?1");
-    expect(p.add("c")).toBe("?3");
-    expect(p.values()).toEqual(["a", "b", "c"]);
+    const sql = `UPDATE entries SET content = ${p.add("c")} WHERE id = ${p.add("e1")} AND ${ownSnapshotLandedSql(p, "e1", 4, "nonce")}`;
+    expect(denseProblem(sql, p.values())).toBeNull();
+  });
+
+  it("Params reuses the number of a repeated value", () => {
+    const p = new Params();
+    expect([p.add("a"), p.add("b"), p.add("a"), p.add(1), p.add(null), p.add(null)]).toEqual(["?1", "?2", "?1", "?3", "?4", "?4"]);
+    expect(p.values()).toEqual(["a", "b", 1, null]);
+  });
+
+  it("a guard returning a bare ? fails the density check", () => {
+    const b = buildSnapshot({ ...base, guard: () => "e.tags = ?" });
+    expect(denseProblem(b.sql, b.bindings)).toBe("bare ? placeholder");
+  });
+
+  it("a gap in the numbering is reported", () => {
+    expect(denseProblem("SELECT ?1, ?3", ["a", "b"])).toMatch(/not 1\.\./);
+    expect(denseProblem("SELECT ?1", ["a", "b"])).toMatch(/bindings/);
   });
 });
 
-describe("trashManyStatements: every builder is dense", () => {
+// ── Builder B's own builders (src/memory/trash.ts), pending their fold into the shared file above ──
+import { captureEnv } from "../helpers/dense-params";
+import { planTrash, trashManyStatements, purgeTrash, deleteForever, restoreEntry } from "../../src/memory/trash";
+import { DEFAULTS } from "../../src/config";
+
+describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () => {
   const change = { actorId: "u", channel: "rest" as const };
 
-  it("tier 1 (with edges)", () => {
-    const { env, calls } = captureEnv();
-    const plan = planTrash([{ id: "a", workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: 10, row_json_bytes: 10, edges_json_bytes: 10 }]);
-    trashManyStatements(env, plan, { reason: "forget", change, now: 1 });
-    for (const c of calls) assertDenseParams(c.sql, c.args);
-  });
-
-  it("tier 2 (without edges)", () => {
-    const { env, calls } = captureEnv();
-    const plan = planTrash([{ id: "a", workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: 10, row_json_bytes: 10, edges_json_bytes: 2_000_000 }]);
-    trashManyStatements(env, plan, { reason: "disconnect", change, now: 1 });
-    for (const c of calls) assertDenseParams(c.sql, c.args);
-  });
-
-  it("tier 3 (hard delete, extra version-delete statement)", () => {
-    const { env, calls } = captureEnv();
-    const plan = planTrash([{ id: "a", workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: 2_000_000, row_json_bytes: 10, edges_json_bytes: 10 }]);
-    trashManyStatements(env, plan, { reason: "forget", change, now: 1 });
-    for (const c of calls) assertDenseParams(c.sql, c.args);
-  });
-
-  it("a mixed batch of all three tiers", () => {
-    const { env, calls } = captureEnv();
-    const rows = [
-      { id: "a", workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: 10, row_json_bytes: 10, edges_json_bytes: 10 },
-      { id: "b", workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: 10, row_json_bytes: 10, edges_json_bytes: 2_000_000 },
-      { id: "c", workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: 2_000_000, row_json_bytes: 10, edges_json_bytes: 10 },
+  it("trashManyStatements: tier 1, tier 2, tier 3 and a mixed batch", () => {
+    const row = (id: string, c: number, r: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: r, edges_json_bytes: e });
+    const cases = [
+      [row("a", 10, 10, 10)],
+      [row("a", 10, 10, 2_000_000)],
+      [row("a", 2_000_000, 10, 10)],
+      [row("a", 10, 10, 10), row("b", 10, 10, 2_000_000), row("c", 2_000_000, 10, 10)],
     ];
-    trashManyStatements(env, planTrash(rows), { reason: "forget", change, now: 1 });
-    for (const c of calls) assertDenseParams(c.sql, c.args);
+    for (const rows of cases) {
+      const { env, calls } = captureEnv();
+      trashManyStatements(env, planTrash(rows), { reason: "forget", change, now: 1 });
+      for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+    }
   });
-});
 
-describe("purgeTrash's builders are dense", () => {
-  it("the candidate read", async () => {
+  it("purgeTrash's candidate read and batch", async () => {
     const { env, calls } = captureEnv();
-    await purgeTrash(env, { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 } as any, { ceiling: 10, rowTarget: 5000, now: Date.now() });
-    for (const c of calls) assertDenseParams(c.sql, c.args);
+    await purgeTrash(env, DEFAULTS, { ceiling: 10, rowTarget: 5000, now: Date.now() });
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });
-});
 
-describe("restoreEntry and deleteForever builders are dense", () => {
+  it("purgeTrash's oversized-row version-trim branch", async () => {
+    // A fake DB whose candidate read returns one row with a version count that alone exceeds the target.
+    const calls: { sql: string; args: unknown[] }[] = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            calls.push({ sql, args });
+            if (/SELECT t\.id, t\.deleted_at/.test(sql)) return { all: async () => ({ results: [{ id: "big", deleted_at: 1, n: 500 }] }) };
+            return { run: async () => ({ meta: { changes: 400 } }), all: async () => ({ results: [] }) };
+          },
+        };
+      },
+      async batch(stmts: unknown[]) { return stmts.map(() => ({ meta: { changes: 0 } })); },
+    };
+    await purgeTrash({ DB: db } as any, DEFAULTS, { ceiling: 10, rowTarget: 100, now: Date.now() });
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+  });
+
   it("deleteForever's batch", async () => {
     const { env, calls } = captureEnv();
-    const { deleteForever } = await import("../../src/memory/trash");
-    await deleteForever(env, { id: "a", vector_ids: "[]" }, { actorId: "u", channel: "rest" });
-    for (const c of calls) assertDenseParams(c.sql, c.args);
+    await deleteForever(env, { id: "a", vector_ids: "[]" }, change);
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });
 
-  it("restoreEntry's batch (deprecated row, so no embed call is needed)", async () => {
+  it("restoreEntry's batch", async () => {
     const { env, calls } = captureEnv();
-    const { restoreEntry } = await import("../../src/memory/trash");
     const trashed = { id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", deleted_at: 1, reason: "forget" as const };
-    await restoreEntry(env, trashed, { actorId: "u", channel: "rest" }, { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 } as any);
-    for (const c of calls) assertDenseParams(c.sql, c.args);
+    await restoreEntry(env, trashed, change, DEFAULTS);
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });
 });

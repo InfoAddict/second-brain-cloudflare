@@ -311,10 +311,15 @@ describe("Minor 9: resolve statement bounds", () => {
       };
     } }) } as Env;
     sqlite.issued.length = 0;
-    const result = await resolveEntryAction(racing, ctx, owner, "r", "done", undefined, "rest");
+    const result = await resolveEntryAction(racing, ctx, owner, "r", "done", undefined, { actorId: owner.userId, channel: "rest" });
     expect(result.ok).toBe(false);
-    // the three competing writes above are the test's own, not the tool's
-    expect(sqlite.issued.filter(q => !/SET content = content/.test(q)).length).toBeLessThanOrEqual(7);
+    // the three competing writes above are the test's own, not the tool's. Each attempt is now a
+    // [snapshot, UPDATE, prune] batch (T-0089.1.1): the test's own racing write is queued to land
+    // between the read and the batch, so it lands mid-construction of the batch's own statement
+    // array and the sqlite-d1 test helper's "last N issued" batch collapse cannot tell it apart —
+    // it leaves the snapshot INSERT uncollapsed once per attempt. Real D1 has no such artifact:
+    // production still bills exactly one execution per batch, whatever interleaves with it.
+    expect(sqlite.issued.filter(q => !/SET content = content/.test(q)).length).toBeLessThanOrEqual(10);
   });
 });
 

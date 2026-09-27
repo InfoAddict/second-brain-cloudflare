@@ -54,7 +54,7 @@ describe("#351: mirror updateEntry stamps vectors from the row's own workspace",
 
     const moveResult = await moveEntry(id!, "company", env, {
       userId: roots.ownerUserId, role: "admin", personalWorkspaceId: roots.ownerPersonalWorkspaceId, companyWorkspaceIds: [roots.companyWorkspaceId],
-    } as any);
+    } as any, { actorId: roots.ownerUserId, channel: "rest" });
     expect(moveResult.status).toBe("shared");
     await restampVectorWorkspace(env, (moveResult as any).vectorIds, roots.companyWorkspaceId);
 

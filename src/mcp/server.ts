@@ -5,10 +5,10 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
-import { appendToEntry, updateEntryContent } from "../capture/store";
+import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
-import { auditEvent } from "../lib/audit";
+import { auditEvent, type ChangeContext } from "../lib/audit";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
 import { createEdge, deleteEdge, edgeLabel, isValidEdgeType, kindMismatchMessage, kindOfRow, kindsAllowEdge, CROSS_WORKSPACE_LINK_MESSAGE } from "../graph/edges";
 import { EDGE_TYPES } from "../graph/types";
@@ -269,6 +269,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   const writeCtx: WriteContext = identity
     ? { workspaceId: scopeWrite(identity), actorId: identity.userId }
     : { workspaceId: "", actorId: "" };
+  // Who and which surface made a change, recorded on the versions it writes.
+  const mcpChange: ChangeContext = { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" };
 
   /**
    * The read-side `project` argument: registry rows, undefined when absent, or the error
@@ -379,11 +381,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         if (!(JSON.parse(row.tags ?? "[]") as string[]).includes("auto-insight")) {
           return { content: [{ type: "text", text: "Entry is not a derived insight" }] };
         }
-        const result = await applyInsightResolution(env, ctx, identity.userId, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss", "mcp");
+        const result = await applyInsightResolution(env, ctx, mcpChange, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss");
         const text = result.resolved.length ? `Resolved ${id}: ${action}` : `Already resolved: ${id}`;
         return { content: [{ type: "text", text }] };
       }
-      const result = await resolveEntryAction(env, ctx, identity, id, action, until, "mcp");
+      const result = await resolveEntryAction(env, ctx, identity, id, action, until, mcpChange);
       if (!result.ok) return { content: [{ type: "text", text: result.error }] };
       return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
     },
@@ -601,21 +603,14 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
 
       let indexed: boolean;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx);
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, mcpChange, whenInput);
       } catch (e) {
+        if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
+        if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
         console.error("Append failed:", e);
         return {
           content: [{ type: "text", text: `Append failed: ${(e as Error).message}` }],
         };
-      }
-
-      // A separate, simple UPDATE rather than threading `when` through
-      // appendToEntry: that function already has two content-rewrite branches
-      // (short append, reembed-on-overflow) and the time anchor is orthogonal
-      // to both — it does not care which one ran.
-      if (whenInput) {
-        await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id = ?`)
-          .bind(whenInput.at, whenInput.kind, id).run();
       }
 
       if (identity) {
@@ -668,7 +663,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx);
+      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, mcpChange);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {
@@ -681,6 +676,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // an empty vector_ids, which a mis-indexed entry does not have (#289).
       if (result.status === "reembed_failed") {
         return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged — please try again.` }] };
+      }
+
+      if (result.status === "conflict") {
+        return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was written. Please try again.` }] };
       }
 
       if (identity && result.status === "updated") {
@@ -718,7 +717,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
-      const ok = await applyStatus(id, status as MemoryStatus, env);
+      const ok = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env));
       if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp" } });
@@ -743,14 +742,13 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const target = workspace ?? "company";
       const teamRead = readTeamParam(team, identity, target);
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
-      const result = await moveEntry(id, target, env, identity, teamRead.teamId);
+      const result = await moveEntry(id, target, env, identity, mcpChange, teamRead.teamId);
       if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (result.status === "forbidden") return { content: [{ type: "text", text: `Only the entry's author or an admin can un-share ${id}.` }] };
       if (result.status === "no_change") return { content: [{ type: "text", text: `Entry ${id} is already in the ${workspace ?? "company"} workspace.` }] };
-      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: result.status, payload: { workspaceId: result.workspaceId, channel: "mcp" } });
-      // After the audit event, before the response — see moveEntry's own
-      // comment: the D1 move is already committed, so a Vectorize outage
-      // here costs only this cosmetic ranking follow-up.
+      // The shared/unshared event is written inside moveEntry's own batch (M5): no separate audit here.
+      // Before the response — see moveEntry's own comment: the D1 move is already committed, so a
+      // Vectorize outage here costs only this cosmetic ranking follow-up.
       ctx.waitUntil(restampVectorWorkspace(env, result.vectorIds, result.workspaceId));
       return { content: [{ type: "text", text: `Entry ${id} ${result.status} — now in the ${workspace ?? "company"} workspace.` }] };
     }

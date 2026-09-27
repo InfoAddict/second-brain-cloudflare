@@ -1110,6 +1110,7 @@ export async function recallEntries(
   if (presentedDirectIds.size) {
     const bumpIds = [...presentedDirectIds];
     ctx.waitUntil(
+      // versioning: exempt: counter, not undoable content
       env.DB.prepare(
         `UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (${bumpIds.map(() => "?").join(", ")})`
       ).bind(...bumpIds).run()

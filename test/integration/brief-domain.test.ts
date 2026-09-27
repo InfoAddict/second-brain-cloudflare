@@ -56,10 +56,10 @@ describe("shared brief domain", () => {
 describe("shared resolution path", () => {
   it("marks done, refuses a missing id with 404 and a missing until with 400", async () => {
     sqlite.seed({ id: "t", content: "Task", createdAt: 1, tags: ["task"] });
-    expect(await resolveEntryAction(env, ctx, auth, "t", "done", undefined, "rest")).toMatchObject({ ok: true, id: "t" });
+    expect(await resolveEntryAction(env, ctx, auth, "t", "done", undefined, { actorId: auth.userId, channel: "rest" })).toMatchObject({ ok: true, id: "t" });
     expect(JSON.parse(String(sqlite.rows()[0].tags))).toContain("task:done");
-    expect(await resolveEntryAction(env, ctx, auth, "nope", "done", undefined, "rest")).toMatchObject({ ok: false, status: 404 });
-    expect(await resolveEntryAction(env, ctx, auth, "t", "snooze", undefined, "rest")).toMatchObject({ ok: false, status: 400 });
+    expect(await resolveEntryAction(env, ctx, auth, "nope", "done", undefined, { actorId: auth.userId, channel: "rest" })).toMatchObject({ ok: false, status: 404 });
+    expect(await resolveEntryAction(env, ctx, auth, "t", "snooze", undefined, { actorId: auth.userId, channel: "rest" })).toMatchObject({ ok: false, status: 400 });
   });
 });
 
@@ -69,9 +69,9 @@ describe("shared entry timeline", () => {
     for (let i = 1; i <= 4; i++) {
       await env.DB.prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, 'e', ?, 'updated', '{}', ?)`).bind(`ev${i}`, auth.userId, i).run();
     }
-    const all = await readEntryTimeline(env, "e", auth.userId);
+    const all = await readEntryTimeline(env, "e", auth);
     expect(all.timeline.map(t => t.created_at)).toEqual([1, 2, 3, 4]);
-    const recent = await readEntryTimeline(env, "e", auth.userId, "", 2, true);
+    const recent = await readEntryTimeline(env, "e", auth, "", 2, true);
     expect(recent.timeline.map(t => t.created_at)).toEqual([3, 4]);
   });
 });

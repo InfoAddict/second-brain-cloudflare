@@ -2,14 +2,15 @@ import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import { isCompanyWorkspace, scopeWhere, scopeWrite } from "../lib/scope";
 import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import type { ChangeContext } from "../lib/audit";
 
 /** Move entries between personal and company workspaces; sharing is not a copy. */
 
 export type ShareTarget = "personal" | "company";
 
 export type ShareResult =
-  | { status: "shared"; workspaceId: string; vectorIds: string[] }
-  | { status: "unshared"; workspaceId: string; vectorIds: string[] }
+  | { status: "shared"; workspaceId: string; vectorIds: string[]; fromWorkspaceId: string }
+  | { status: "unshared"; workspaceId: string; vectorIds: string[]; fromWorkspaceId: string }
   | { status: "no_change"; workspaceId: string; vectorIds: string[] }
   | { status: "not_found" }
   | { status: "forbidden" };
@@ -19,6 +20,7 @@ export async function moveEntry(
   target: ShareTarget,
   env: Env,
   identity: Identity,
+  change: ChangeContext,
   team?: string,
 ): Promise<ShareResult> {
   const scope = scopeWhere(identity);
@@ -42,17 +44,32 @@ export async function moveEntry(
     if (!isActor && identity.role !== "admin") return { status: "forbidden" };
   }
 
-  await env.DB.batch([
+  // The move event is written first, inside this same batch, reading the row's workspace as it
+  // stands in this transaction (M5, L2) — never the JavaScript read above, which a concurrent
+  // move could have already overtaken. A move to the current workspace (raced there first)
+  // writes no event. This is a deliberate exception to the fire-and-forget audit contract: the
+  // event is load-bearing for shared-history visibility, so it commits or fails with the move.
+  const event = target === "company" ? "shared" : "unshared";
+  const results = await env.DB.batch([
+    // scope-exempt: by-id: the row was read above under the caller's own scope
+    env.DB.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+       SELECT ?, e.id, ?, ?, json_object('workspaceId', ?, 'fromWorkspaceId', e.workspace_id, 'channel', ?), ?
+         FROM entries e WHERE e.id = ? AND e.workspace_id <> ?`
+    ).bind(crypto.randomUUID(), change.actorId, event, targetWorkspaceId, change.channel, Date.now(), id, targetWorkspaceId),
+    // versioning: exempt: a move changes location, not content, tags or when_*
     env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind(targetWorkspaceId, id),
     // Edges carry denormalized workspace metadata and must move with the entry.
     env.DB.prepare(`UPDATE edges SET workspace_id = ? WHERE source_id = ? OR target_id = ?`)
       .bind(targetWorkspaceId, id, id),
   ]);
+  const eventWritten = (results[0].meta.changes ?? results[0].meta.rows_written ?? 0) > 0;
 
   return {
-    status: target === "company" ? "shared" : "unshared",
+    status: event,
     workspaceId: targetWorkspaceId,
     vectorIds,
+    fromWorkspaceId: eventWritten ? row.workspace_id : targetWorkspaceId,
   };
 }
 

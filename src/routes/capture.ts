@@ -8,7 +8,7 @@ import { requireIdentity, type Identity } from "../lib/identity";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { scopeWrite, effectiveWriteTarget, readTeamParam, type WriteContext } from "../lib/scope";
 import { captureEntry } from "../capture/entry";
-import { appendToEntry, updateEntryContent } from "../capture/store";
+import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
@@ -192,8 +192,10 @@ export async function handleCaptureRoutes(
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx);
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" });
     } catch (e) {
+      if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
+      if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
 
@@ -256,7 +258,7 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx);
+    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" });
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
@@ -265,6 +267,10 @@ export async function handleCaptureRoutes(
 
     if (result.status === "reembed_failed") {
       return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
+    }
+
+    if (result.status === "conflict") {
+      return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
     }
 
     // Only a write that happened is audited.

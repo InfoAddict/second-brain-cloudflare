@@ -1156,7 +1156,7 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id });
   }
@@ -1223,7 +1223,7 @@ export async function handleAdminRoutes(
       return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
     }
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id, action: body.action });
   }
@@ -1302,7 +1302,7 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id, when_at: result.when_at });
   }
@@ -1322,7 +1322,7 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id });
   }
@@ -1433,7 +1433,7 @@ export async function handleAdminRoutes(
       }
     }
 
-    const result = await applyInsightResolution(env, ctx, auth.userId, found, ids.length, action, "rest");
+    const result = await applyInsightResolution(env, ctx, { actorId: auth.userId, channel: "rest" }, found, ids.length, action);
     return json({
       ok: true,
       action,
@@ -1523,17 +1523,21 @@ export async function handleAdminRoutes(
 
     let processed = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const row of toProcess as Record<string, any>[]) {
       try {
         // cfg carries the user's LLM_MODEL choice; without it this backfill
         // classifies with the shipped default and ignores their setting.
         const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
-        let tags: string[] = JSON.parse(row.tags as string);
+        const readTags: string = row.tags as string;
+        let tags: string[] = JSON.parse(readTags);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
-        await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), row.id).run();
-        processed++;
+        // versioning: exempt: hygiene, compare-and-set on the tags read (T-0089.10); a miss is skipped, not overwritten
+        const res = await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ?`).bind(JSON.stringify(tags), row.id, readTags).run();
+        if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) skipped++;
+        else processed++;
       } catch (e) {
         console.error("Classification backfill failed for entry", row.id, e);
         failed++;
@@ -1545,7 +1549,7 @@ export async function handleAdminRoutes(
       `SELECT COUNT(*) as count FROM entries WHERE ${UNCLASSIFIED_WHERE}`
     ).first() as Record<string, any> | null;
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, skipped, remaining: (remaining?.count as number) ?? 0 });
   }
 
   // POST /insights/accrue, run one accrual pass on demand, right now.

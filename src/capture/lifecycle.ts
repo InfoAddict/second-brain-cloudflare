@@ -3,8 +3,9 @@ import { withStatus, type MemoryStatus } from "../memory/status";
 import { deleteVectorIds } from "../vectorize/batch";
 import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
+import { changesOf, pruneStatement, snapshotStatement } from "../memory/versions";
 import { TRASH_PURGE_ON_FORGET, FORGET_PURGE_ROWS } from "../constants";
-import { changedRows, planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashManyStatements, type TrashReason } from "../memory/trash";
+import { planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashManyStatements, type TrashReason } from "../memory/trash";
 
 export type ForgetResult =
   | { status: "not_found" }
@@ -33,7 +34,7 @@ export async function forgetEntry(id: string, env: Env, change: ChangeContext, o
   const stmts = trashManyStatements(env, plan, { reason: opts.reason, change, now: Date.now() });
   const results = await env.DB.batch(stmts);
   // A racing deleter removed it between the read and the batch: it owns the cleanup and the audit.
-  if (changedRows(results[results.length - 1]) === 0) return { status: "not_found" };
+  if (changesOf(results[results.length - 1]) === 0) return { status: "not_found" };
 
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);
@@ -77,7 +78,14 @@ export const INDEXABLE_SQL = `tags NOT LIKE '%"status:deprecated"%'`;
  * moved since the caller's scoped read is left alone and false is returned. Routes gate with
  * getReadableEntry and omit it.
  */
-export async function deprecateEntry(id: string, env: Env, workspaceId?: string): Promise<boolean> {
+export async function deprecateEntry(
+  id: string,
+  env: Env,
+  change: ChangeContext,
+  config: Readonly<Config>,
+  opts: { workspaceId?: string; meta?: Record<string, unknown> } = {},
+): Promise<boolean> {
+  const { workspaceId } = opts;
   const pinned = workspaceId === undefined ? "" : " AND workspace_id = ?";
   const pin = workspaceId === undefined ? [] : [workspaceId];
   const row = await env.DB.prepare(
@@ -88,10 +96,20 @@ export async function deprecateEntry(id: string, env: Env, workspaceId?: string)
 
   const tags: string[] = JSON.parse(row.tags ?? "[]");
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
+  const deprecatedTags = withStatus(tags, "deprecated");
 
-  const res = await env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?${pinned}`)
-    .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", id, ...pin).run();
-  if (workspaceId !== undefined && (res.meta?.changes ?? res.meta?.rows_written ?? 1) === 0) return false;
+  const results = await env.DB.batch([
+    snapshotStatement(env, {
+      entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags, meta: opts.meta, now: Date.now(),
+      // The UPDATE below is pinned to the writer's workspace; so is its snapshot.
+      guard: workspaceId === undefined ? undefined : p => `e.workspace_id = ${p.add(workspaceId)}`,
+    }),
+    // versioning: snapshot
+    env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?${pinned}`)
+      .bind(JSON.stringify(deprecatedTags), "[]", id, ...pin),
+    pruneStatement(env, id, config.VERSION_KEEP),
+  ]);
+  if (workspaceId !== undefined && changesOf(results[1]) === 0) return false;
 
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);
@@ -101,12 +119,18 @@ export async function deprecateEntry(id: string, env: Env, workspaceId?: string)
   return true;
 }
 
-export async function applyStatus(id: string, status: MemoryStatus, env: Env): Promise<boolean> {
-  if (status === "deprecated") return deprecateEntry(id, env);
+export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>): Promise<boolean> {
+  if (status === "deprecated") return deprecateEntry(id, env, change, config, { meta: { status } });
   // scope-exempt: by-id: routes gate with getReadableEntry before calling
   const row = await env.DB.prepare(`SELECT tags FROM entries WHERE id = ?`).bind(id).first() as Record<string, any> | null;
   if (!row) return false;
-  const tags: string[] = JSON.parse(row.tags ?? "[]");
-  await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(withStatus(tags, status)), id).run();
+  const nextTags = withStatus(JSON.parse(row.tags ?? "[]") as string[], status);
+  // A status set to what the row already has (tags may merely reorder) writes no version.
+  await env.DB.batch([
+    snapshotStatement(env, { entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now: Date.now() }),
+    // versioning: snapshot
+    env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(nextTags), id),
+    pruneStatement(env, id, config.VERSION_KEEP),
+  ]);
   return true;
 }

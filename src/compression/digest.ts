@@ -11,6 +11,8 @@ import {
   compressionEligibilitySql,
   isTopicTag,
 } from "./eligibility";
+import type { ChangeContext } from "../lib/audit";
+import { pruneManyStatement, pruneStatement, snapshotManyStatement, snapshotStatement } from "../memory/versions";
 
 export async function synthesizeDigest(
   tag: string,
@@ -50,21 +52,34 @@ State of ${stateOf}:`;
   return digest.trim();
 }
 
-/** Mark digest sources and retry individually if the batch fails. */
-async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, workspaceId: string): Promise<void> {
+/** Mark digest sources and retry individually if the batch fails. Versioned: a rollup can be undone. */
+async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, workspaceId: string, config: Readonly<Config>): Promise<void> {
   if (!ids.length) return;
   const note = `\n\n[Digest: ${digestId}]`;
+  const change: ChangeContext = { actorId: "", channel: "system:digest" };
+  // versioning: snapshot
   const mark = (id: string) => env.DB.prepare(
     `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ?`
   ).bind(note, id, workspaceId);
+  const now = Date.now();
 
   try {
-    await env.DB.batch(ids.map(mark));
+    await env.DB.batch([
+      snapshotManyStatement(env, { entryIds: ids, reason: "rollup", change, content: { kind: "suffix" }, meta: { digestId }, now }),
+      ...ids.map(mark),
+      pruneManyStatement(env, ids, config.VERSION_KEEP),
+    ]);
   } catch (e) {
     console.error("Batched rolled-up mark failed; retrying per row (non-fatal):", e);
     for (const id of ids) {
       try {
-        await mark(id).run();
+        await env.DB.batch([
+          // nextTags is unused for a "suffix" content kind (the version's tags column comes from
+          // e.tags directly); passed empty rather than reading the row again just for this.
+          snapshotStatement(env, { entryId: id, reason: "rollup", change, content: { kind: "suffix" }, nextTags: [], meta: { digestId }, now }),
+          mark(id),
+          pruneStatement(env, id, config.VERSION_KEEP),
+        ]);
       } catch (err) {
         console.error(`Failed to update source entry ${id} (non-fatal):`, err);
       }
@@ -303,7 +318,7 @@ export async function compressTag(
       continue;
     }
 
-    await markSourcesRolledUp(env, rows.map(r => r.id), result.id, workspaceId);
+    await markSourcesRolledUp(env, rows.map(r => r.id), result.id, workspaceId, cfg);
 
     // First successful digest defines the returned text/id; counts accumulate across
     // workspaces so a caller still learns how much was compressed tonight.

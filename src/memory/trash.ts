@@ -125,6 +125,7 @@ export function trashManyStatements(
   {
     const p = new Params();
     stmts.push(env.DB.prepare(
+      // versioning: trash
       // scope-exempt: by-id delete: callers authorize the entries before building the batch
       `DELETE FROM entries WHERE id IN (SELECT value FROM json_each(${p.add(ids)}))`,
     ).bind(...p.values()));
@@ -408,6 +409,8 @@ export async function restoreEntry(
   try {
     results = await env.DB.batch([
       env.DB.prepare(
+        // versioning: exempt: restore (P8): no version is written coming back from the trash;
+        // the trash row and any surviving versions already are its history
         // scope-exempt: by-id: the caller authorized the trash row before building this batch
         `INSERT INTO entries (id, ${names}, content, vector_ids)
          SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t WHERE t.id = ${insertId}`,
@@ -481,6 +484,7 @@ export async function deleteForever(env: Env, row: { id: string; vector_ids?: st
     byId((id) => `DELETE FROM entry_versions WHERE entry_id = ${id}`),
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
     byId((id) => `DELETE FROM entries_trash WHERE id = ${id}`),
+    // versioning: hard-delete: permanent (T-0089.4.7)
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
     byId((id) => `DELETE FROM entries WHERE id = ${id}`),
   ]);

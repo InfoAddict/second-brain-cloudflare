@@ -160,7 +160,7 @@ function skipLeadingWith(sql: string): string {
   }
 }
 
-function isEntriesWriteSql(sql: string): boolean {
+export function isEntriesWriteSql(sql: string): boolean {
   let stripped = stripLeadingCommentsAndWs(sql);
   if (/^WITH\b/i.test(stripped)) {
     stripped = stripLeadingCommentsAndWs(skipLeadingWith(stripped));

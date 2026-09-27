@@ -92,7 +92,7 @@ describe("system-write races", () => {
     const { sqlite, env, vectors } = await setup(0.9, '{"action":"merge","target_id":"old","merged_content":"new system text"}');
     const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
     db.prepare = (sql: string) => {
-      if (!raced && sql.startsWith("SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id FROM entries WHERE id = ?")) {
+      if (!raced && sql.startsWith("SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id, ")) {
         raced = true;
         sqlite.db.prepare("UPDATE entries SET workspace_id = 'other-workspace' WHERE id = 'old'").run();
       }

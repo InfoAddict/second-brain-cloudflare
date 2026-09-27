@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (159 queries, 78 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (161 queries, 80 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1271,17 +1271,22 @@ describe("the checker over the real source tree", () => {
     // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
     // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
     // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
-    // Deliberate: +8 queries and +5 scope-exempt (148/70 -> 156/75) for T-0089.1.2/T-0089.4.9/T-0089.8
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/memory/versions.ts): the snapshot SELECT over entries is by-id,
+    // the caller having authorized the entry before it builds the batch.
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/capture/share.ts): moveEntry's move-event
+    // INSERT reads the row's own workspace by id, the row having been read above under the caller's scope.
+    // (148/70 -> 150/72 on the foundations branch.)
+    // Deliberate: +8 queries and +5 scope-exempt (150/72 -> 158/77) for T-0089.1.2/T-0089.4.9/T-0089.8
     // (trash, purge, member removal, disconnect purge, restore): src/memory/trash.ts's trash size read
     // (by-id), trash insert x2 (tier 1/2, by-id), purge candidate read and purge batch's INSERT/DELETEs
     // (scope-exempt: retention purge, global by design), the disconnect purge's scoped size read (carries
     // scopeWhere), getTrashedEntry's scoped SELECT (carries scopeWhere), restoreEntry's INSERT/edge-restore
     // (by-id, caller pre-authorized), and src/lib/team-admin.ts's cleanupMemberData reads/deletes
     // (scope-exempt: offboarding, by workspace already resolved to the removed member's own).
-    // Deliberate: +3 queries and +3 scope-exempt (156/75 -> 159/78) for T-0089.4.7 (Delete forever):
+    // Deliberate: +3 queries and +3 scope-exempt (158/77 -> 161/80) for T-0089.4.7 (Delete forever):
     // src/memory/trash.ts's deleteForever issues its edges/versions/trash/entries deletes as four
     // separate by-id statements (each needs its own dense Params, so each carries its own comment).
-    ).toEqual({ queries: 159, exempt: 78, checked: 12, outerJoin: 1 });
+    ).toEqual({ queries: 161, exempt: 80, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

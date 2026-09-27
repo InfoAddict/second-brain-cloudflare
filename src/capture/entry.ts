@@ -6,8 +6,8 @@ import { extractHashtags } from "../text/hashtags";
 import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
-import { auditEvent } from "../lib/audit";
-import { deleteStaleVectors, embedContextForRow, reembedOrThrow, storeEntry } from "./store";
+import { auditEvent, type AuditChannel, type ChangeContext } from "../lib/audit";
+import { deleteStaleVectors, embedContextForRow, reembedOrThrow, restoreRowVectors, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
 import { getVolatility, withVolatility } from "../memory/volatility";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
@@ -16,7 +16,8 @@ import type { ProjectRow } from "../projects/registry";
 import { rememberTags } from "../tags/vocabulary";
 import { CONFLICT_HELD_TAG, isCapsuleTag, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES } from "../constants";
+import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
+import { changesOf, pruneStatement, snapshotStatement } from "../memory/versions";
 import { deleteVectorIds } from "../vectorize/batch";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
@@ -101,7 +102,9 @@ export interface CaptureOptions {
    * "system:<job>". Absent means the caller has no identity to attribute, and
    * no such event is written.
    */
-  channel?: string;
+  channel?: AuditChannel;
+  /** Test seam: the byte budget a merge's version row may use before it drops the incoming text. */
+  versionRowBudgetBytes?: number;
 }
 
 export type SystemJob = keyof typeof SYSTEM_JOB_TAGS;
@@ -123,43 +126,6 @@ export function isSystemRow(row: { tags: string[]; actor_id?: unknown; source?: 
     && getStatus(row.tags) !== "deprecated";
 }
 
-/**
- * A system merge re-embedded a row and then lost it to a concurrent edit: the vectors under
- * that id now describe the system's text. Re-embed the row as it stands now and retire any
- * extra chunks the merge wrote. Best effort: the edit itself is safe in D1 either way.
- */
-async function restoreRowVectors(
-  env: Env, id: string, oldVectorIds: string[], mergedVectorIds: string[], source: string,
-  cfg: Readonly<Config>, writeCtx: WriteContext,
-): Promise<void> {
-  try {
-    const current = await env.DB.prepare(
-      // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-      `SELECT content, tags, workspace_id FROM entries WHERE id = ?`
-    ).bind(id).first() as Record<string, any> | null;
-    if (!current) {
-      // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
-      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
-      return;
-    }
-    const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, embedContextForRow(current, writeCtx));
-    await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
-  } catch (e) {
-    console.error("Restoring vectors after a lost system merge failed (non-fatal):", e);
-    // The row's vector_ids now names vectors holding the system's text. Emptying them makes
-    // /vectorize-pending re-index the row from its own content, and the vectors go best-effort.
-    try {
-      await env.DB.prepare(
-        // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-        `UPDATE entries SET vector_ids = '[]' WHERE id = ?`
-      ).bind(id).run();
-      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
-    } catch (e2) {
-      console.error("Emptying vector_ids after a lost system merge failed (non-fatal):", e2);
-    }
-  }
-}
-
 export async function captureEntry(
   rawContent: string,
   tags: string[],
@@ -178,6 +144,8 @@ export async function captureEntry(
   // every embed below. Recall and capture must agree on EMBEDDING_MODEL or the
   // vectors they produce are not comparable.
   const cfg = config ?? await resolveConfig(env);
+  // Who and which surface made the change, recorded on every version this capture writes.
+  const change: ChangeContext = { actorId: writeCtx.actorId, channel: opts.channel ?? "unspecified" };
   const { content: c, tags: t } = normalizeCaptureInput(rawContent, tags);
 
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
@@ -198,7 +166,7 @@ export async function captureEntry(
     const targetRow = await env.DB.prepare(
       // Pinned to the WRITER's workspace, not read back from the row: a share or move after the
       // scoped candidate read must make this a lost race (null row), never a merge in the new workspace.
-      `SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id FROM entries WHERE id = ? AND workspace_id = ?`
+      `SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id, length(CAST(content AS BLOB)) AS content_bytes, length(CAST(tags AS BLOB)) AS tags_bytes FROM entries WHERE id = ? AND workspace_id = ?`
     ).bind(targetId, writeCtx.workspaceId).first() as Record<string, any> | null;
 
     if (targetRow) {
@@ -237,24 +205,64 @@ export async function captureEntry(
           // 90 days to re-derive anything. The caller judged the content being merged in, so
           // its verdict describes the combined body more recently than the target's does.
           const incomingVerdict = getVolatility(t);
-          const stripped = tagsAfterWrite(existingTags);
-          const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
-          // A person's capture merging into a digest or insight makes it theirs (a system
-          // job merging into its own row does not).
-          const refreshedTags = opts.systemWrite ? verdictTags : withUserEditMarker(verdictTags);
-          const now = Date.now();
-          // A system merge commits only if the row is still what was read: a person's edit can land
-          // during the re-embed above, and their text and `user-edited` marker must not be overwritten.
-          const cas = opts.systemWrite !== undefined;
-          const committed = cas
-            ? await env.DB.prepare(
-              // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
-              `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
-              .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource).run()
-            : await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-              .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
-          if (cas && (committed.meta.changes ?? committed.meta.rows_written ?? 0) === 0) {
-            console.error("System merge lost the row to a concurrent edit — keeping both");
+          // The version keeps the target's prior text and the incoming capture, so a merge can be undone
+          // and the incoming memory re-created. The incoming text is dropped when the row would not fit.
+          const incoming = { incoming: c, incomingTags: t, incomingSource: source };
+          const versionMeta = (targetRow.content_bytes as number) + (targetRow.tags_bytes as number)
+            + new TextEncoder().encode(JSON.stringify(incoming)).length + 1024 <= (opts.versionRowBudgetBytes ?? VERSION_ROW_BUDGET_BYTES)
+            ? incoming
+            : { incomingTruncated: true, incomingBytes: new TextEncoder().encode(c).length };
+          const reason = mergeAction.action === "merge" ? "merge" as const : "replace" as const;
+
+          // A system job merges only through this one attempt, matching prep: its snapshot shares the
+          // same compare-and-set, so a lost merge writes no version and keeps both rows (unversioned).
+          const commitSystem = async (): Promise<boolean> => {
+            const now = Date.now();
+            const stripped = tagsAfterWrite(existingTags);
+            const refreshedTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+            const results = await env.DB.batch([
+              snapshotStatement(env, {
+                entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
+                guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`,
+              }),
+              // versioning: snapshot
+              env.DB.prepare(
+                // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
+                `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
+                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource),
+              pruneStatement(env, targetId, cfg.VERSION_KEEP),
+            ]);
+            return changesOf(results[1]) > 0;
+          };
+
+          // A person's merge compare-and-sets on the content and tags it embedded from (T-0089.10, W2:
+          // a system merge already did, prep 0798b62). A miss means someone else's edit landed during
+          // the re-embed above, so — like the system path — this keeps both rather than overwriting a
+          // concurrent edit with a merge decision that no longer accounts for it.
+          const commitPerson = async (): Promise<boolean> => {
+            const now = Date.now();
+            const stripped = tagsAfterWrite(existingTags);
+            const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+            // A person's capture merging into a digest or insight makes it theirs.
+            const refreshedTags = withUserEditMarker(verdictTags);
+            const results = await env.DB.batch([
+              snapshotStatement(env, {
+                entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
+                guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)}`,
+              }),
+              // versioning: snapshot
+              env.DB.prepare(
+                // scope-exempt: by-id: the merge target this write read, compare-and-set on the tags and content it embedded from
+                `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?`)
+                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent),
+              pruneStatement(env, targetId, cfg.VERSION_KEEP),
+            ]);
+            return changesOf(results[1]) > 0;
+          };
+
+          const landed = opts.systemWrite !== undefined ? await commitSystem() : await commitPerson();
+          if (!landed) {
+            console.error("Merge lost the row to a concurrent edit — keeping both");
             await restoreRowVectors(env, targetId, oldVectorIds, newVectorIds, existingSource, cfg, writeCtx);
           } else {
             try {
@@ -328,6 +336,7 @@ export async function captureEntry(
     return at !== null ? { at, kind: "due" as WhenKind, source: "regex" as WhenSource } : undefined;
   })();
 
+  // versioning: exempt: creation — a new row has no prior state to keep
   await env.DB.prepare(
     `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
@@ -365,13 +374,16 @@ export async function captureEntry(
       const protectedTags = opts.systemWrite !== undefined && !heldTags.includes(CONFLICT_HELD_TAG)
         ? [...heldTags, CONFLICT_HELD_TAG] : heldTags;
       scheduleIndex(protectedTags);
+      // versioning: exempt: protects the newcomer's own uncommitted row before its version chain exists
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
         .bind(JSON.stringify(protectedTags), id).run();
       // A system job's guess must not move the user's row: a win here would make it
       // permanently ineligible for digests (compression/eligibility.ts).
       if (opts.systemWrite === undefined && conflictSnapshot) {
         try {
+          // versioning: exempt: counters, not undoable content
           await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
+          // versioning: exempt: counters, not undoable content
           await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
         } catch (e) {
           console.error("Contradiction count update failed (non-fatal):", e);
@@ -395,14 +407,22 @@ export async function captureEntry(
     let deprecatedBySystem = false;
     if (opts.systemWrite !== undefined && conflictSnapshot) {
       const snap = conflictSnapshot;
-      const res = await env.DB.prepare(
-        // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
-        `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`
-      ).bind(
-        JSON.stringify(withStatus(JSON.parse(snap.tags ?? "[]"), "deprecated")), conflictId,
-        snap.tags ?? "[]", snap.content, writeCtx.workspaceId, snap.source,
-      ).run();
-      if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) return keepAsDraft();
+      const snapTags: string = snap.tags ?? "[]";
+      const deprecatedTags = withStatus(JSON.parse(snapTags), "deprecated");
+      const results = await env.DB.batch([
+        snapshotStatement(env, {
+          entryId: conflictId, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags,
+          meta: { cause: "contradiction", newEntryId: id }, now,
+          guard: p => `e.tags = ${p.add(snapTags)} AND e.content = ${p.add(snap.content)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`,
+        }),
+        // versioning: snapshot
+        env.DB.prepare(
+          // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
+          `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`
+        ).bind(JSON.stringify(deprecatedTags), conflictId, snapTags, snap.content, writeCtx.workspaceId, snap.source),
+        pruneStatement(env, conflictId, cfg.VERSION_KEEP),
+      ]);
+      if (changesOf(results[1]) === 0) return keepAsDraft();
       deprecatedBySystem = true;
       try {
         const oldVectorIds: string[] = JSON.parse(snap.vector_ids ?? "[]");
@@ -423,7 +443,7 @@ export async function captureEntry(
     let deprecated = deprecatedBySystem;
     if (!deprecatedBySystem) {
       try {
-        deprecated = await deprecateEntry(conflictId, env, writeCtx.workspaceId);
+        deprecated = await deprecateEntry(conflictId, env, change, cfg, { workspaceId: writeCtx.workspaceId, meta: { cause: "contradiction", newEntryId: id } });
         if (deprecated && opts.channel) {
           auditEvent(env, ctx, {
             entryId: conflictId,
@@ -440,6 +460,7 @@ export async function captureEntry(
       // Nothing was superseded, so the newcomer is an ordinary memory: `contradiction-resolved` would
       // wrongly claim otherwise and permanently exclude it from insight candidates.
       const keptTags = finalTags.filter(tag => tag !== "contradiction-resolved");
+      // versioning: exempt: protects the newcomer's own uncommitted row before its version chain exists
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(keptTags), id).run();
       scheduleIndex(keptTags);
       classifyThenInfer(id, c, env, ctx, cfg, kind =>
@@ -448,7 +469,9 @@ export async function captureEntry(
     }
     scheduleIndex(finalTags);
     try {
+      // versioning: exempt: counters, not undoable content
       await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
+      // versioning: exempt: counters, not undoable content
       await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
     } catch (e) {
       console.error("Contradiction count update failed (non-fatal):", e);

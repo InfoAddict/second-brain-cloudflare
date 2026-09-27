@@ -1,7 +1,11 @@
-import { expect } from "vitest";
 import type { Env } from "../../src/env";
 
-/** A fake D1 that records every prepared statement's SQL and its bound values. */
+/**
+ * A fake D1 that records every prepared statement's SQL and its bound values, for builders
+ * (src/memory/trash.ts) that call `env.DB.prepare(sql).bind(...)` directly rather than returning
+ * a `{sql, bindings}` pair. Pair each recorded call with `denseProblem` (test/helpers/sql-dense.ts),
+ * the shared density check src/memory/versions.ts's own builder tests use.
+ */
 export function captureEnv(): { env: Env; calls: { sql: string; args: unknown[] }[] } {
   const calls: { sql: string; args: unknown[] }[] = [];
   const db = {
@@ -16,10 +20,4 @@ export function captureEnv(): { env: Env; calls: { sql: string; args: unknown[] 
     async batch(stmts: unknown[]) { return stmts.map(() => ({ meta: { changes: 0 } })); },
   };
   return { env: { DB: db } as unknown as Env, calls };
-}
-
-/** Every `?k` in `sql` is exactly {1..n}, with n === args.length (M1: D1 rejects a gap). */
-export function assertDenseParams(sql: string, args: unknown[]): void {
-  const nums = [...new Set([...sql.matchAll(/\?(\d+)/g)].map((m) => Number(m[1])))].sort((a, b) => a - b);
-  expect(nums).toEqual(Array.from({ length: args.length }, (_, i) => i + 1));
 }
