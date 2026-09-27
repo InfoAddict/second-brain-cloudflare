@@ -9,6 +9,7 @@ import { readEntryTimeline } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
+import { decodeTrashCursor, listTrash } from "../memory/trash-list";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
@@ -245,6 +246,39 @@ export async function handleEntriesRoutes(
       payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
     });
     return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
+  }
+
+  // GET /trash (BE-2, T-0101.2.1, contract 4.3) — the dashboard trash view's page reader.
+  // Q10: listTrash already narrows to what the reader can restore.
+  if (url.pathname === "/trash" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const limitParam = url.searchParams.get("limit");
+    let limit = 20;
+    if (limitParam !== null) {
+      const parsed = Number(limitParam);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+        return json({ ok: false, error: "limit must be an integer between 1 and 50" }, 400);
+      }
+      limit = parsed;
+    }
+
+    const cursorParam = url.searchParams.get("cursor") ?? undefined;
+    if (cursorParam !== undefined && decodeTrashCursor(cursorParam) === null) {
+      return json({ ok: false, error: "cursor is invalid" }, 400);
+    }
+
+    const layerParam = url.searchParams.get("layer") ?? undefined;
+    if (layerParam !== undefined && layerParam !== "personal" && layerParam !== "company") {
+      return json({ ok: false, error: 'layer must be "personal" or "company"' }, 400);
+    }
+
+    const cfg = await resolveConfig(env);
+    const { items, nextCursor } = await listTrash(env, auth, {
+      limit, cursor: cursorParam, layer: layerParam as "personal" | "company" | undefined, config: cfg,
+    });
+    return json({ ok: true, retention_days: cfg.TRASH_RETENTION_DAYS, items, next_cursor: nextCursor });
   }
 
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open
