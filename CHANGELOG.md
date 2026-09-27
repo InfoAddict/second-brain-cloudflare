@@ -8,8 +8,8 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
 - A memory replaced by a newer, contradicting one now records that in its history (status changed to deprecated, with the reason and the newer memory's id).
-- Memories removed by an integration are now recorded in the audit trail: a trashed Notion page, a cancelled or pruned calendar event, or "delete synced memories" on disconnect. Each record names the reason and the integration. The dashboard does not show these records yet. The audit records for a large deletion are written in batches of 50.
-- Every audit record now says where the change came from: `mcp` for an AI assistant, `rest` for the dashboard and API, or `system:<job>` for a background job.
+- Memories removed by an integration are now recorded in the audit trail: a trashed Notion page, a cancelled or pruned calendar event, or "delete synced memories" on disconnect. Each record names the reason and the integration. The dashboard does not show these records yet, and the trail is best effort: if a batch of records fails to write, it is logged and skipped, and the deletion still goes through. The audit records for a large deletion are written in batches of 50.
+- Every memory audit record now says where the change came from: `mcp` for an AI assistant, `rest` for the dashboard and API, or `system:<job>` for a background job.
 
 **Saving**
 
