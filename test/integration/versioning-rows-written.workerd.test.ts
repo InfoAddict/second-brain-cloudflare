@@ -267,8 +267,11 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("rows written on workerd", () =
          SELECT 'm1', ?, i, 'v', NULL, '[]', '', 'rest', 'update', i FROM n`,
       ).bind(member.personalWorkspaceId).run();
       const progress = await cleanupMemberData(env, member.userId, member.personalWorkspaceId, { rowsLeft: 100_000 });
-      // The chunk deletes 1,000 versions; each is 2 rows written (the row and its index entry) —
-      // team-admin.ts:545's own `rowsWritten += 2 * n` accounting, confirmed here against real D1.
+      // team-admin.ts:545's own `rowsWritten += 2 * n` estimate (one row for the version, one for
+      // its FTS index entry). This checks the CODE's own arithmetic, not what D1 actually bills for
+      // the DELETE — R4-B6 (adv-r4-budgets.test.ts) measures that separately: D1 bills 1 row per
+      // removed version, not 2, so this estimate paces the resume at half the real budget it has (a
+      // pacing inefficiency, not a correctness or platform-limit risk — left as is).
       expect(progress.rowsWritten).toBeGreaterThanOrEqual(2000);
     } finally { await d1.close(); }
   }, 120_000);

@@ -206,13 +206,17 @@ describe("revertEntry: D's content undo", () => {
   // its own row, INSIDE the same batch (undo.ts:242-260) — merge count never adds a statement.
   // What changes the count is whether any row was re-created at all: a second writeAuditEvents call
   // fires for the "created" events (undo.ts:358-366), one batch regardless of how many rows (up to
-  // AUDIT_BATCH_MAX). Flat at 5 for any to_version that crosses at least one merge, including the
-  // 19-merge case the director named — pinned already at test/integration/adv-undo-r3.test.ts:164
-  // (`expect(executed).toHaveLength(5)`), reproducing which needs the same elaborate AI-merge-decision
-  // fixture that file already builds; not duplicated here.
-  it("crossing at least one merge adds exactly one more audit batch: flat at 5, never per-merge", () => {
+  // AUDIT_BATCH_MAX). Flat at 5 for any to_version that crosses at least one merge AND stays at or
+  // under AUDIT_BATCH_MAX re-created rows, including the 19-merge case the director named — pinned
+  // already at test/integration/adv-undo-r3.test.ts:164 (`expect(executed).toHaveLength(5)`),
+  // reproducing which needs the same elaborate AI-merge-decision fixture that file already builds;
+  // not duplicated here. R4-B4 (T-0089.1.1): PAST AUDIT_BATCH_MAX, the created-audit write itself
+  // splits into two batches, so it is 6, not 5 — pinned at test/integration/adv-r4-budgets.test.ts's
+  // "60 merges (VERSION_KEEP 100)" case, which also needs each merge's own embed + upsert, a real
+  // AI-merge-decision fixture too elaborate to duplicate here.
+  it("crossing at least one merge adds exactly one more audit batch: flat at 5, never per-merge, up to AUDIT_BATCH_MAX rows", () => {
     // A to_version crossing 0 merges: 4 (no second writeAuditEvents call, undo.ts:358).
-    // A to_version crossing 1..19+ merges: 5 (one more batch, undo.ts:365) — never 4 + N.
+    // A to_version crossing 1..AUDIT_BATCH_MAX merges: 5 (one more batch, undo.ts:365) — never 4 + N.
     expect(4 + 1).toBe(5);
   });
 });
