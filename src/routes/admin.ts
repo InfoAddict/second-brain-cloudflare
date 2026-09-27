@@ -1531,7 +1531,7 @@ export async function handleAdminRoutes(
         let tags: string[] = JSON.parse(readTags);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
-        // exempt: hygiene, compare-and-set on the tags read (T-0089.10); a miss is skipped, not overwritten.
+        // versioning: exempt: hygiene, compare-and-set on the tags read (T-0089.10); a miss is skipped, not overwritten
         const res = await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ?`).bind(JSON.stringify(tags), row.id, readTags).run();
         if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) skipped++;
         else processed++;

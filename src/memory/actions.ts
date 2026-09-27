@@ -43,6 +43,7 @@ export async function resolveEntryAction(
     const nextTags = withoutStaleAsOf(tags);
     await env.DB.batch([
       snapshotStatement(env, { entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { stale_confirmed: true }, now }),
+      // versioning: snapshot
       env.DB.prepare(`UPDATE entries SET tags = ?, updated_at = ?, staleness_checked_at = ? WHERE id = ?`)
         .bind(JSON.stringify(nextTags), now, now, id),
       pruneStatement(env, id, cfg.VERSION_KEEP),
@@ -75,6 +76,7 @@ export async function resolveEntryAction(
         entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { loop_action: action === "done" ? "done" : "not-task" }, now,
         guard: p => `e.tags = ${p.add(row.tags)} AND e.content = ${p.add(row.content)}`,
       });
+      // versioning: snapshot
       statement = env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`)
         .bind(JSON.stringify(nextTags), id, row.tags, row.content);
       payload = { loop_action: action === "done" ? "done" : "not-task", prior: { tags } };
@@ -84,6 +86,7 @@ export async function resolveEntryAction(
         entryId: id, reason: "due", change, content: { kind: "unchanged" }, nextTags: tags, nextWhen, meta: { due_action: "snooze", until }, now,
         guard: p => `e.tags = ${p.add(row.tags)} AND e.content = ${p.add(row.content)}`,
       });
+      // versioning: snapshot
       statement = env.DB.prepare(`UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ? ${whenUnchanged}`)
         .bind(until, id, row.tags, row.content, ...whenBindings);
       payload = { due_action: "snooze", until, prior: priorWhen };
@@ -93,6 +96,7 @@ export async function resolveEntryAction(
         entryId: id, reason: "due", change, content: { kind: "unchanged" }, nextTags: tags, nextWhen, meta: { due_action: "clear" }, now,
         guard: p => `e.tags = ${p.add(row.tags)} AND e.content = ${p.add(row.content)}`,
       });
+      // versioning: snapshot
       statement = env.DB.prepare(`UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ? ${whenUnchanged}`)
         .bind(id, row.tags, row.content, ...whenBindings);
       payload = { due_action: "clear", prior: priorWhen };
@@ -125,8 +129,10 @@ export async function applyInsightResolution(
     if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
     if (action === "confirm") {
       const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
+      // versioning: snapshot (via the snapshotManyStatement batched below)
       statements.push(env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id));
     } else {
+      // versioning: snapshot (via the snapshotManyStatement batched below)
       statements.push(env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?`)
         .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", row.id));
       vectorsToDrop.push(...(JSON.parse(row.vector_ids ?? "[]") as string[]));

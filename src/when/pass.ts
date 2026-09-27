@@ -362,6 +362,7 @@ export async function runWhenExtractPass(
     nextFailure = undefined; // a real verdict landed — any prior streak on an earlier id no longer applies
     whenJudged++;
     if (verdict.outcome === "commitment") {
+      // versioning: exempt: hygiene — fills a missing date; the next due action's snapshot captures whatever this set
       writes.push(
         env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'model', when_label = ? WHERE id = ?`)
           .bind(verdict.dueAt, verdict.kind, verdict.what, candidate.id),

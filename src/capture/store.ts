@@ -94,6 +94,7 @@ export async function storeEntry(
   // deliberately does NOT touch workspace_id: an update edits a row in place and
   // must never move it between workspaces — that is share/unshare's job alone.
   // Restamping here would let any context-less caller silently reset a row to ''.
+  // versioning: exempt: vector bookkeeping
   await env.DB.prepare(
     `UPDATE entries SET vector_ids = ? WHERE id = ?`
   ).bind(JSON.stringify(vectorIds), id).run();
@@ -163,6 +164,7 @@ export async function restoreRowVectors(
     // The row's vector_ids now names vectors holding the loser's text. Emptying them makes
     // /vectorize-pending re-index the row from its own content, and the vectors go best-effort.
     try {
+      // versioning: exempt: vector bookkeeping (L5)
       await env.DB.prepare(
         // scope-exempt: by-id: the merge target this call just read under the write's own workspace
         `UPDATE entries SET vector_ids = '[]' WHERE id = ?`
@@ -308,6 +310,7 @@ export async function updateEntryContent(
         entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
         guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
       }),
+      // versioning: snapshot
       env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?`)
         .bind(finalContent, JSON.stringify(committedTags), now, id, readContent, readTags),
       pruneStatement(env, id, config.VERSION_KEEP),
@@ -430,6 +433,7 @@ export async function appendToEntry(
           entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now,
           guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
         }),
+        // versioning: snapshot
         env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ?${whenSql} WHERE id = ? AND content = ? AND tags = ?`)
           .bind(newContent, JSON.stringify(refreshedTags), now, ...whenBind, id, readContent, readTags),
         pruneStatement(env, id, config.VERSION_KEEP),
@@ -487,6 +491,7 @@ export async function appendToEntry(
         entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta, now,
         guard: p => `e.tags = ${p.add(readTags)}`,
       }),
+      // versioning: snapshot
       env.DB.prepare(
         `UPDATE entries SET content = content || ?, vector_ids = CASE WHEN ? = 1 THEN json_insert(vector_ids, '$[#]', ?) ELSE vector_ids END, tags = ?, updated_at = ?${whenSql} WHERE id = ? AND tags = ?`
       ).bind(suffix, indexed ? 1 : 0, chunkId, JSON.stringify(refreshedTags), now, ...whenBind, id, readTags),

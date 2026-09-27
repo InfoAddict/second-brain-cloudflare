@@ -64,7 +64,7 @@ async function applyClassification(
   env: Env,
   { importance, canonical, kind }: { importance: number; canonical: boolean; kind: MemoryKind | null },
 ): Promise<void> {
-  // exempt: vector bookkeeping — importance is a ranking signal, not undoable content.
+  // versioning: exempt: vector bookkeeping — importance is a ranking signal, not undoable content
   await env.DB.prepare(`UPDATE entries SET importance_score = ? WHERE id = ?`).bind(importance, entryId).run();
   if (!kind && !canonical) return;
   // scope-exempt: by-id: the entry this background pass was queued for
@@ -74,7 +74,7 @@ async function applyClassification(
   let tags: string[] = JSON.parse(readTags);
   if (kind) tags = withKind(tags, kind);
   if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
-  // exempt: hygiene, compare-and-set on the tags read; a miss is never overwriting a concurrent status change.
+  // versioning: exempt: hygiene (T-0089.10), compare-and-set on the tags read; a miss is skipped, not overwritten
   await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ?`).bind(JSON.stringify(tags), entryId, readTags).run();
 }
 

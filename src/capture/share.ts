@@ -57,6 +57,7 @@ export async function moveEntry(
        SELECT ?, e.id, ?, ?, json_object('workspaceId', ?, 'fromWorkspaceId', e.workspace_id, 'channel', ?), ?
          FROM entries e WHERE e.id = ? AND e.workspace_id <> ?`
     ).bind(crypto.randomUUID(), change.actorId, event, targetWorkspaceId, change.channel, Date.now(), id, targetWorkspaceId),
+    // versioning: exempt: a move changes location, not content, tags or when_*
     env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind(targetWorkspaceId, id),
     // Edges carry denormalized workspace metadata and must move with the entry.
     env.DB.prepare(`UPDATE edges SET workspace_id = ? WHERE source_id = ? OR target_id = ?`)

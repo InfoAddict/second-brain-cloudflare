@@ -19,6 +19,7 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
 
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
+  // versioning: hard-delete: forget; moves to entries_trash in Task 7 (T-0089.1.2, builder B) — a hard delete until then
   // scope-exempt: by-id delete: routes gate with getReadableEntry before calling
   const deletion = await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(id).run();
   // A racing deleter removed it between the read and here: it owns the cleanup and the audit.
@@ -90,6 +91,7 @@ export async function deprecateEntry(
       // The UPDATE below is pinned to the writer's workspace; so is its snapshot.
       guard: workspaceId === undefined ? undefined : p => `e.workspace_id = ${p.add(workspaceId)}`,
     }),
+    // versioning: snapshot
     env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?${pinned}`)
       .bind(JSON.stringify(deprecatedTags), "[]", id, ...pin),
     pruneStatement(env, id, config.VERSION_KEEP),
@@ -113,6 +115,7 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   // A status set to what the row already has (tags may merely reorder) writes no version.
   await env.DB.batch([
     snapshotStatement(env, { entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now: Date.now() }),
+    // versioning: snapshot
     env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(nextTags), id),
     pruneStatement(env, id, config.VERSION_KEEP),
   ]);

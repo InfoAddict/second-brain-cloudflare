@@ -21,6 +21,7 @@ export const IMPORT_D1_BATCH_SIZE = 50;
 /** Edge endpoint lookups bind each id twice (source IN + target IN). */
 export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
+// versioning: exempt: creation — an imported row has no prior state to keep
 const ENTRY_INSERT_SQL_TEMPLATE =
   `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 

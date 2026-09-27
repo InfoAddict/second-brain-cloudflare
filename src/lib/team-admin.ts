@@ -472,6 +472,7 @@ export async function removeMember(
       // scope-exempt: offboarding: deletes exactly the edges whose endpoints are in the removed member's workspace, per the two subselects
       `DELETE FROM edges WHERE source_id IN (SELECT id FROM entries WHERE workspace_id = ?) OR target_id IN (SELECT id FROM entries WHERE workspace_id = ?)`,
     ).bind(personal.wid, personal.wid),
+    // versioning: hard-delete: member removal
     env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personal.wid),
     env.DB.prepare(`DELETE FROM memberships WHERE user_id = ?`).bind(userId),
     env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personal.wid),

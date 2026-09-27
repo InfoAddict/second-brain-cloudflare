@@ -225,6 +225,7 @@ export async function captureEntry(
                 entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
                 guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`,
               }),
+              // versioning: snapshot
               env.DB.prepare(
                 // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
                 `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
@@ -249,6 +250,7 @@ export async function captureEntry(
                 entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
                 guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)}`,
               }),
+              // versioning: snapshot
               env.DB.prepare(
                 // scope-exempt: by-id: the merge target this write read, compare-and-set on the tags and content it embedded from
                 `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?`)
@@ -334,6 +336,7 @@ export async function captureEntry(
     return at !== null ? { at, kind: "due" as WhenKind, source: "regex" as WhenSource } : undefined;
   })();
 
+  // versioning: exempt: creation — a new row has no prior state to keep
   await env.DB.prepare(
     `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id, when_at, when_kind, when_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
@@ -371,13 +374,16 @@ export async function captureEntry(
       const protectedTags = opts.systemWrite !== undefined && !heldTags.includes(CONFLICT_HELD_TAG)
         ? [...heldTags, CONFLICT_HELD_TAG] : heldTags;
       scheduleIndex(protectedTags);
+      // versioning: exempt: protects the newcomer's own uncommitted row before its version chain exists
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
         .bind(JSON.stringify(protectedTags), id).run();
       // A system job's guess must not move the user's row: a win here would make it
       // permanently ineligible for digests (compression/eligibility.ts).
       if (opts.systemWrite === undefined && conflictSnapshot) {
         try {
+          // versioning: exempt: counters, not undoable content
           await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
+          // versioning: exempt: counters, not undoable content
           await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
         } catch (e) {
           console.error("Contradiction count update failed (non-fatal):", e);
@@ -409,6 +415,7 @@ export async function captureEntry(
           meta: { cause: "contradiction", newEntryId: id }, now,
           guard: p => `e.tags = ${p.add(snapTags)} AND e.content = ${p.add(snap.content)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`,
         }),
+        // versioning: snapshot
         env.DB.prepare(
           // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
           `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`
@@ -453,6 +460,7 @@ export async function captureEntry(
       // Nothing was superseded, so the newcomer is an ordinary memory: `contradiction-resolved` would
       // wrongly claim otherwise and permanently exclude it from insight candidates.
       const keptTags = finalTags.filter(tag => tag !== "contradiction-resolved");
+      // versioning: exempt: protects the newcomer's own uncommitted row before its version chain exists
       await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(keptTags), id).run();
       scheduleIndex(keptTags);
       classifyThenInfer(id, c, env, ctx, cfg, kind =>
@@ -461,7 +469,9 @@ export async function captureEntry(
     }
     scheduleIndex(finalTags);
     try {
+      // versioning: exempt: counters, not undoable content
       await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
+      // versioning: exempt: counters, not undoable content
       await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
     } catch (e) {
       console.error("Contradiction count update failed (non-fatal):", e);

@@ -57,6 +57,7 @@ async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, wo
   if (!ids.length) return;
   const note = `\n\n[Digest: ${digestId}]`;
   const change: ChangeContext = { actorId: "", channel: "system:digest" };
+  // versioning: snapshot
   const mark = (id: string) => env.DB.prepare(
     `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ?`
   ).bind(note, id, workspaceId);

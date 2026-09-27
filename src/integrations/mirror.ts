@@ -75,6 +75,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       } catch (e) {
         console.error("Mirror classify failed (non-fatal):", e);
       }
+      // versioning: exempt: creation — a new row has no prior state to keep
       await env.DB.prepare(
         `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(id, content, JSON.stringify(finalTags), source, now, now, "[]", importance, writeCtx.workspaceId, writeCtx.actorId).run();
@@ -117,6 +118,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
           entryId: id, reason: "mirror", change: { actorId: writeCtx.actorId, channel: "system:mirror" },
           content: { kind: "next", content }, nextTags: refreshedTags, meta: { provider: providerId }, now,
         }),
+        // versioning: snapshot
         env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
           .bind(content, JSON.stringify(refreshedTags), now, id),
         pruneStatement(env, id, cfg.VERSION_KEEP),
