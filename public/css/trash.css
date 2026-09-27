@@ -103,15 +103,19 @@
   margin-bottom: 8px;
 }
 
+/* Two equal tracks at every width (the director's call: side by side always,
+ * never stacked). A lone button (the defensive Restore-only case; the real
+ * backend does not produce this today) lands in the first track by grid
+ * auto-placement, so it reads as half-width and left-aligned rather than
+ * stretching to fill the row - no separate rule needed for that case. */
 .trash-item-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
   gap: 8px;
 }
 
 .trash-btn {
-  flex: 1 1 130px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -183,13 +187,18 @@
 
 /* ── Brain-version what's-new line ────────────────────────────────────── */
 
+/* Normal flow, not a floating card: the gap above (chips to banner) is
+ * .home's own 8px bottom padding plus #recall-messages' 10px flex gap, so
+ * the 8px margin here plus that same 10px flex gap gives the same 18px
+ * below - no separate "band" of extra space at 1280. */
 .whats-new-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  grid-template-areas: "text see dismiss";
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+  column-gap: 14px;
   padding: 12px 14px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
   background: var(--accent-soft);
   border: 1px solid var(--border-card);
   border-radius: var(--r-card);
@@ -203,10 +212,12 @@
 }
 
 .whats-new-text {
-  flex: 1 1 240px;
+  grid-area: text;
+  min-width: 0;
 }
 
 .whats-new-see {
+  grid-area: see;
   background: none;
   border: none;
   padding: 0;
@@ -216,6 +227,7 @@
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  justify-self: start;
 }
 
 .whats-new-see:hover {
@@ -223,6 +235,7 @@
 }
 
 .whats-new-dismiss {
+  grid-area: dismiss;
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -233,6 +246,23 @@
   min-width: 32px;
   min-height: 32px;
   justify-content: center;
+}
+
+/* Narrow: the x moves to the card's top-right corner (its own row with the
+ * text), and "Open the trash" drops to its own row, left-aligned under the
+ * text - it must never sit next to the dismiss control. */
+@media (max-width: 480px) {
+  .whats-new-line {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "text dismiss"
+      "see see";
+    row-gap: 8px;
+  }
+
+  .whats-new-dismiss {
+    align-self: start;
+  }
 }
 
 .whats-new-dismiss:hover {

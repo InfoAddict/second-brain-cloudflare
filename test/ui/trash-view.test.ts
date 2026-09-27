@@ -503,8 +503,14 @@ describe("the action row keeps a normal button height at every width", () => {
     expect(height).toBeLessThan(48);
   });
 
+  it(".trash-item-actions holds two equal tracks, so a lone button lands half-width, not full-width", () => {
+    const rule = css.match(/\.trash-item-actions\s*{([^}]*)}/s)?.[1] ?? "";
+    expect(rule).toMatch(/display:\s*grid/);
+    expect(rule).toMatch(/grid-template-columns:\s*1fr 1fr/);
+  });
+
   it(".trash-item-actions does not stretch its children to the tallest one", () => {
     const rule = css.match(/\.trash-item-actions\s*{([^}]*)}/s)?.[1] ?? "";
-    expect(rule).toMatch(/align-items:\s*flex-start/);
+    expect(rule).toMatch(/align-items:\s*start/);
   });
 });

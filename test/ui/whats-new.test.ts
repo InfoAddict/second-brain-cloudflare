@@ -1,7 +1,7 @@
 /**
  * The brain-version what's-new line (T-0101.8.4, TR-3).
  *
- * Dismissible, shown for 14 days from history_since, to everyone — owners
+ * Dismissible, shown for 14 days from history_since, to everyone: owners
  * and teammates alike (Q8). There is no static container for it in
  * index.html (this lane's regions are the Memories foot, the menu groups and
  * the two new sheets), so it builds and inserts its own element; this fake
@@ -185,5 +185,32 @@ describe("both locales", () => {
     await ctx.renderWhatsNewLine({ version: "4.0.0", history_since: Date.now() - 5 * DAY });
     expect(line(ctx).innerHTML).toContain("Novità della 4.0");
     expect(line(ctx).innerHTML).toContain("Apri il cestino");
+  });
+});
+
+/**
+ * Layout, read as text (no browser in this runner to lay grid out and
+ * measure it - the same technique the trash-view CSS guard tests use).
+ */
+describe("the banner sits in normal flow with a symmetric gap, and reflows at 390", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+  const rule = (selector: string) => css.match(new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*{([^}]*)}`, "s"))?.[1] ?? "";
+
+  it("the gap below matches #recall-messages' own flex gap plus .home's bottom padding (no extra band)", () => {
+    const line = rule(".whats-new-line");
+    const margin = Number(line.match(/margin-bottom:\s*(\d+)px/)?.[1]);
+    expect(margin).toBe(8); // .home's own padding-bottom - #recall-messages' 10px flex gap supplies the rest
+  });
+
+  it("keeps 'Open the trash' and the dismiss x on the right at the default (1280) width", () => {
+    const line = rule(".whats-new-line");
+    expect(line).toMatch(/display:\s*grid/);
+    expect(line).toContain('grid-template-areas: "text see dismiss"');
+  });
+
+  it("at 390 the x sits in its own top-right slot next to the text, never next to 'Open the trash'", () => {
+    const narrow = css.match(/@media \(max-width: 480px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(narrow).toMatch(/"text dismiss"/);
+    expect(narrow).toMatch(/"see see"/);
   });
 });
