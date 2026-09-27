@@ -563,7 +563,23 @@ async function hydrateView(id) {
     // openView rendered from whatever the caller happened to hold; /entry is
     // the only source that knows whether this is the reader's to change.
     applyAuthorLock(data.entry)
+    syncViewScrollBottomPadding()
   } catch {}
+}
+
+/**
+ * UI review: .view-scroll's bottom padding used to be a flat 4px, nowhere
+ * near the fixed action row's real height, so scrolling to the very end of a
+ * long history still left its last row (and "Show all") flush against the
+ * footer rather than clear of it. Measuring the action row directly keeps
+ * this correct at any width, button wrap, or safe-area inset, rather than a
+ * guessed constant that drifts the next time the row's own height changes.
+ */
+function syncViewScrollBottomPadding() {
+  const scroll = document.querySelector('#view-sheet .view-scroll')
+  const actions = document.querySelector('#view-sheet .view-actions')
+  if (!scroll || !actions || typeof actions.getBoundingClientRect !== 'function') return
+  scroll.style.paddingBottom = `${Math.ceil(actions.getBoundingClientRect().height)}px`
 }
 
 /**
@@ -742,6 +758,7 @@ function openView(entry, cardElement) {
   }
   applyAuthorLock(entry)
   document.getElementById('view-sheet').classList.add('open')
+  syncViewScrollBottomPadding()
 }
 function closeView() {
   document.getElementById('view-sheet').classList.remove('open')

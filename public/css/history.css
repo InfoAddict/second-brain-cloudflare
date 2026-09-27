@@ -106,12 +106,15 @@
    action row, with nothing to say it was scrollable rather than broken. Its
    own bounded, visibly scrollable region keeps that clear of the footer and
    stops the rest of the sheet's content competing with it for scroll space. */
+/* No max-height/overflow of its own: a nested scroll region here made "clear
+   of the footer" ambiguous (clear of which box's bottom edge?). One scroll
+   region — .view-scroll, sized dynamically in memory-crud.js's
+   syncViewScrollBottomPadding to the footer's real height — is what
+   "scroll to the bottom and it's clear" can mean unambiguously. */
 .history-list {
   list-style: none;
   margin: 0;
-  padding: 0 0 4px;
-  max-height: 42vh;
-  overflow-y: auto;
+  padding: 0;
 }
 
 .history-item {
@@ -182,17 +185,23 @@
   flex-wrap: wrap;
 }
 
+/* Left-aligned, auto width, at every width: a mobile media query used to
+   stretch this to flex:1 for the 44px tap-target floor, which is what
+   produced the oversized full-width button the trash lane already avoids
+   with its own auto-width Restore. The 44px floor lives in min-height here
+   instead, which does not touch width. */
 .history-action {
   border: 1px solid var(--accent-ink);
   color: var(--accent-ink);
   background: transparent;
   border-radius: var(--r-button);
-  padding: 8px 14px;
+  padding: 10px 16px;
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  min-height: 36px;
+  min-height: 44px;
+  align-self: flex-start;
   transition: background-color var(--dur-feedback) var(--ease-standard);
 }
 
@@ -220,10 +229,3 @@
   padding-top: 0;
 }
 
-@media (max-width: 480px) {
-  .history-action {
-    min-height: 44px;
-    padding: 10px 14px;
-    flex: 1 1 auto;
-  }
-}
