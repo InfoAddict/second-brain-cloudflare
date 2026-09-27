@@ -161,6 +161,66 @@ describe("parseTimePhrase", () => {
     });
   });
 
+  // Cross-vendor review (T-0105.3) found the proper-noun check too coarse: it dropped a real date
+  // preceding a timezone qualifier, and missed a lowercase-styled business name that the earlier
+  // capitalized-word check didn't catch. The fix keys off what precedes the match (an article
+  // means a name; a date preposition means a date, regardless of what follows) rather than only
+  // what follows it.
+  describe("review round: article-preceded names vs preposition-anchored dates", () => {
+    it("keeps a month-day business name with lowercase styling", () => {
+      const query = "What time does the May 5 cafe open?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("keeps a real date followed by a timezone qualifier", () => {
+      const result = parseTimePhrase("What happened on May 5 New York time?", NOW);
+      expect(result.after).toBe(new Date(2026, 4, 5).getTime());
+      expect(result.before).toBe(new Date(2026, 4, 6).getTime());
+    });
+
+    it("keeps a real date introduced by 'since', with no trailing qualifier at all", () => {
+      const query = "open since Jun 3";
+      expect(parseTimePhrase(query, NOW)).toEqual({
+        after: new Date(2026, 5, 3).getTime(),
+        before: new Date(2026, 5, 4).getTime(),
+        cleanQuery: "open",
+      });
+    });
+
+    it("keeps a real date introduced by 'until', followed by a capitalized word", () => {
+      const result = parseTimePhrase("closed until Aug 9 Pacific time", NOW);
+      expect(result.after).toBe(new Date(2026, 7, 9).getTime());
+      expect(result.before).toBe(new Date(2026, 7, 10).getTime());
+    });
+
+    it("keeps a lowercase business name introduced by an indefinite article", () => {
+      const query = "reviewed a dec 2 bakery menu";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("keeps an uppercase business name introduced by an indefinite article", () => {
+      const query = "found an Apr 12 Meridian diner receipt";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("does not normalize a nonexistent around-date into another month", () => {
+      const query = "notes from around Feb 30";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("does not normalize a nonexistent around-date given as an abbreviation", () => {
+      const query = "around Apr 31 plans";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    // Deferred: "as of yesterday" becoming a created-at filter is Track 2 as-of semantics (an
+    // as-of read, not a creation-window filter), not this round's fix. Tracked for T2 lane C.
+    it.skip("does not turn relative as-of language into a created-at filter", () => {
+      const query = "What was true as of yesterday?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+  });
+
   describe("phrasing this parser intentionally does not date-filter yet", () => {
     // "last <weekday>" and a bare "in <month>" are not part of T-0089.2.5's bug (misreading
     // month-day names and "as of" phrasing as filters). Adding either here would also add a new
