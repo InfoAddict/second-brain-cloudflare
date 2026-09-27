@@ -416,6 +416,12 @@ const I18N_EN = {
     saved: 'Saved',
     failed: 'Could not save: {message}',
   },
+  whatsNew: {
+    line: "New in 4.0: every change to a memory is kept, so you can undo it, and forgotten memories wait in the trash for {n} days.",
+    seeTrash: 'See the trash',
+    dismiss: 'Dismiss',
+    dismissLabel: 'Dismiss this note',
+  },
   upkeep: {
     working: 'Working…',
     done: 'Done',
@@ -1460,6 +1466,12 @@ const I18N_IT = {
     adminOnly: 'Solo un amministratore può modificarle.',
     saved: 'Salvato',
     failed: 'Impossibile salvare: {message}',
+  },
+  whatsNew: {
+    line: "Novità della 4.0: ogni modifica a un ricordo viene conservata, quindi puoi annullarla, e i ricordi dimenticati restano nel cestino per {n} giorni.",
+    seeTrash: 'Vai al cestino',
+    dismiss: 'Chiudi',
+    dismissLabel: 'Chiudi questa nota',
   },
   upkeep: {
     working: 'In corso…',
