@@ -41,6 +41,7 @@ import { chooseEvidenceSlot, type EvidenceSlotCandidate } from "./evidence-rescu
 import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
+import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -104,7 +105,7 @@ async function keywordSearchLike(
     // because AND binds more tightly than OR. Leave the unfiltered SQL unchanged.
     const tokenWhere = subset.length > 1 && (timeWhere || scopeSql || exclude) ? `(${where})` : where;
     // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name
-    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} ORDER BY created_at DESC LIMIT ?`;
+    const inner = `SELECT id, created_at, tags, source, lower(content) AS lc FROM entries WHERE ${tokenWhere}${timeWhere}${scopeSql}${exclude} AND ${NOT_HELD_SQL} ORDER BY created_at DESC LIMIT ?`;
     const levels = withMatchLevels(inner, ["id", "created_at", "tags", "source"], terms, "created_at DESC");
     return env.DB.prepare(levels.sql)
       .bind(...subset.map(contentLikePattern), ...timeBindings, ...(scope?.bindings ?? []), ...not.map(contentLikePattern), max, ...levels.binds);
@@ -166,12 +167,12 @@ async function keywordSearchFts(
   // scope-checked: the caller's clause IS applied — scopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus keyword scan
   const rankedInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, ${shortHits || "0"} AS sh, bm25(entries_fts) AS rk, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${NOT_HELD_SQL}
        ORDER BY sh DESC, rk, ord LIMIT ?`;
   // scope-checked: same clause, same reason as above
   const andTierInner = `SELECT e.id, e.created_at, e.tags, e.source, lower(e.content) AS lc, entries_fts.rowid AS ord
        FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid AND e.id = entries_fts.id
-       WHERE entries_fts MATCH ?${timeWhere}${scopeSql}
+       WHERE entries_fts MATCH ?${timeWhere}${scopeSql} AND ${NOT_HELD_SQL}
        ORDER BY entries_fts.rowid DESC LIMIT ?`;
   const rankedLevels = withMatchLevels(rankedInner, ["id", "created_at", "tags", "source", "sh", "rk", "ord"], terms, "sh DESC, rk, ord", ["id", "created_at", "tags", "source"]);
   const andTierLevels = withMatchLevels(andTierInner, ["id", "created_at", "tags", "source", "ord"], terms, "ord DESC", ["id", "created_at", "tags", "source"]);
@@ -515,7 +516,7 @@ export async function recallEntries(
     if (projectFilter) { memberConds.push(projectFilter.clause); memberBindings.push(...projectFilter.bindings); }
     // scope-checked: the caller's clause IS applied — tagScopeSql is built as ` AND ${scope.clause}` above and appended here; the lexer sees only the fragment name, and an allowlist on predicate position cannot see the leading AND inside it. Empty for an identity-less caller (pre-tenancy and unit fixtures), which is the pre-v3 whole-corpus tag scan
     const { results: tagRows } = await env.DB.prepare(
-      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql}`
+      `SELECT id, vector_ids, content, tags, source, created_at FROM entries WHERE ${memberConds.join(" AND ")}${tagScopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...memberBindings, ...(scope?.bindings ?? [])).all();
     if (!tagRows.length) return { matches: [], insight: "", semanticUnavailable };
     keywordRows = tagRows as unknown as KeywordRow[];
@@ -679,16 +680,26 @@ export async function recallEntries(
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
   const d1Sources = new Map(rcRows.filter(r => r.source !== undefined).map(r => [r.id, r.source as string]));
+  // Held rows: dropped here, before rerank, rather than only at hydration. A
+  // held row briefly still carrying vectors (the race window between its hold
+  // commit and its vector delete) would otherwise take a dense or keyword
+  // slot and rank before the model ever runs (5.3).
+  const notHeld = (list: VectorizeMatch[]) => list.filter(m => {
+    const tags = d1Tags.get(((m.metadata as any)?.parentId ?? m.id) as string);
+    return !tags || !isHeld(tags);
+  });
+  const fusedForRerank = notHeld(fusedMatches);
+  const rootFusedForRerank = notHeld(rootFusedMatches);
 
   // The traced variant is for explain only: off, recall runs the plain reranker it always ran.
   const directOptions = { d1Sources };
-  const directTraced = explain ? rerankWithTimeDecayTraced(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions) : undefined;
-  let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions);
+  const directTraced = explain ? rerankWithTimeDecayTraced(fusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions) : undefined;
+  let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions);
   // The root view is computed here, beside the direct one, so a single model batch can cover both.
   const rootOptions = { useRecallFrequency: false, d1Sources };
-  const rootTraced = explain && hops > 0 ? rerankWithTimeDecayTraced(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
+  const rootTraced = explain && hops > 0 ? rerankWithTimeDecayTraced(rootFusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
   let rootReranked = rootTraced.length ? rootTraced.map(t => t.match)
-    : hops > 0 ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
+    : hops > 0 ? rerankWithTimeDecay(rootFusedForRerank, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
   const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
   // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
   const scopedParents = new Set(rcRows.map(r => r.id));
@@ -871,7 +882,7 @@ export async function recallEntries(
     ...graphSeedIds,
     ...expanded.map(e => e.id),
   ])];
-  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'`;
+  let d1Filters = ` AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%' AND ${NOT_HELD_SQL}`;
   const filterBindings: (string | number)[] = [];
   if (tag) {
     d1Filters += ` AND tags LIKE ? ${TAG_LIKE_ESCAPE}`;
@@ -1072,6 +1083,7 @@ export async function recallEntries(
       const rowTags = JSON.parse(row.tags ?? "[]") as string[];
       const normalizedRowTags = rowTags.map(value => value.toLowerCase());
       if (normalizedRowTags.some(value => ["auto-pattern", "auto-insight", "status:deprecated"].includes(value))) continue;
+      if (isHeld(rowTags)) continue;
       if (tag && !normalizedRowTags.includes(tag.toLowerCase())) continue;
       if (projectFilter && !normalizedRowTags.some(value => projectTags.has(value))) continue;
       if (kind && !rowTags.includes(`kind:${kind}`)) continue;

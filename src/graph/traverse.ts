@@ -11,6 +11,7 @@ import { projectFilterSql } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { edgeLabel } from "./edges";
 import type { Connection, EdgeProvenance, GraphNeighbor, GraphView } from "./types";
+import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 
 export const GRAPH_MAX_HOPS = 3;
 const GRAPH_FANOUT_CAP = 8;
@@ -115,13 +116,14 @@ async function readableAndDeprecatedAmong(
   identity?: Identity,
   only?: "personal" | "company",
   teamId?: string,
-): Promise<{ readable: Set<string>; deprecated: Set<string> }> {
+): Promise<{ readable: Set<string>; deprecated: Set<string>; held: Set<string> }> {
   const scope = identity ? scopeWhereForRead(identity, { layer: only, teamId }) : null;
   const scopeSql = scope ? ` AND ${scopeWhereForIdRead(scope).clause}` : "";
   // Scope bindings share the statement's bound-parameter budget with the ids.
   const take = D1_MAX_BOUND_PARAMS - (scope?.bindings.length ?? 0);
   const readable = new Set<string>();
   const deprecated = new Set<string>();
+  const held = new Set<string>();
   for (let i = 0; i < ids.length; i += take) {
     const batch = ids.slice(i, i + take);
     const ph = batch.map(() => "?").join(", ");
@@ -131,10 +133,12 @@ async function readableAndDeprecatedAmong(
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) {
       readable.add(r.id as string);
-      if (getStatus(JSON.parse(r.tags ?? "[]")) === "deprecated") deprecated.add(r.id as string);
+      const tags = JSON.parse(r.tags ?? "[]");
+      if (getStatus(tags) === "deprecated") deprecated.add(r.id as string);
+      if (isHeld(tags)) held.add(r.id as string);
     }
   }
-  return { readable, deprecated };
+  return { readable, deprecated, held };
 }
 
 /**
@@ -210,12 +214,19 @@ export async function expandGraph(
     // also wants deprecated rows has nothing to filter, so it issues no statement
     // and costs exactly what it did before tenancy.
     if (candidates.length && (identity || !opts.includeDeprecated)) {
-      const { readable, deprecated } = await readableAndDeprecatedAmong(
+      // Held is treated exactly like deprecated (5.3): filtered whenever this
+      // statement runs, never released by includeDeprecated. The one case it
+      // does not cover — an identity-less caller that also asked to include
+      // deprecated rows, where the statement is skipped entirely to cost
+      // nothing beyond what a pre-tenancy caller always paid — is not reachable
+      // by an agent; no production caller passes includeDeprecated.
+      const { readable, deprecated, held } = await readableAndDeprecatedAmong(
         [...new Set(candidates.map(c => c.id))], env, identity, opts.only, opts.teamId,
       );
       allowed = candidates.filter(c =>
         (!identity || readable.has(c.id))
-        && (opts.includeDeprecated || !deprecated.has(c.id)));
+        && (opts.includeDeprecated || !deprecated.has(c.id))
+        && !held.has(c.id));
     }
 
     const nextFrontier: string[] = [];
@@ -243,7 +254,7 @@ async function hydrateGraphEntries(ids: string[], env: Env, identity?: Identity,
     const ph = batch.map(() => "?").join(", ");
     // scope-checked: scopeSql applies the caller's clause through scopeWhereForIdRead above; the lexer cannot see the leading AND inside that JS fragment. Empty only for an identity-less caller
     const { results } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${ph})${scopeSql}`
+      `SELECT id, content, tags, source, created_at FROM entries WHERE id IN (${ph})${scopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...batch, ...(scope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) map.set(r.id as string, r);
   }
