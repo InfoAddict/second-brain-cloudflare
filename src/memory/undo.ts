@@ -7,8 +7,9 @@ import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
 import { deleteVectorIds } from "../vectorize/batch";
-import { reembedOrDegrade, restoreRowVectors } from "../capture/store";
+import { reembedOrDegrade, restoreRowVectors, upsertEntryVectors, type StoredEntry } from "../capture/store";
 import { forgetEntry } from "../capture/lifecycle";
+import { isVectorizeUnavailable } from "../vectorize/health";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { Config } from "../config";
 import { getTrashedEntry, restoreEntry } from "./trash";
@@ -41,6 +42,25 @@ const whenEqual = (a: WhenChange, b: WhenChange) =>
   && (a.when_kind ?? null) === (b.when_kind ?? null)
   && (a.when_source ?? null) === (b.when_source ?? null)
   && (a.when_label ?? null) === (b.when_label ?? null);
+
+/**
+ * Same fail-closed / degrade-on-outage contract as `reembedOrDegrade`, but without its own
+ * `UPDATE entries SET vector_ids` — the revert's batch already sets that column itself, and running
+ * both was a fifth, redundant statement the spec's 4-statement budget does not allow (U5).
+ */
+async function reembedForRevert(
+  env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config>, writeCtx: WriteContext,
+): Promise<StoredEntry | null> {
+  try {
+    const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
+    if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
+    return stored;
+  } catch (e) {
+    if (!(await isVectorizeUnavailable(env))) throw e;
+    console.error("Vectorize unavailable — committing content without re-embedding:", e);
+    return null;
+  }
+}
 
 /**
  * Reverses the most recent change to a memory, or a specific earlier version (`toVersion`), or
@@ -127,7 +147,7 @@ export async function revertEntry(
   let newVectorIds: string[] | null = null;
   if (needsReembed) {
     try {
-      newVectorIds = (await reembedOrDegrade(env, id, restoredContent, restoredTags, row.source, config, embedCtx))?.vectorIds ?? null;
+      newVectorIds = (await reembedForRevert(env, id, restoredContent, restoredTags, row.source, config, embedCtx))?.vectorIds ?? null;
     } catch (e) {
       console.error("Undo re-embed failed — entry left unchanged:", e);
       return { status: "reembed_failed" };
