@@ -28,6 +28,10 @@ export interface WhyTrace {
   multipliers: RankMultipliers | null;
   /** The cross-encoder's percentile among what it scored (1 best, 0 worst), null when it did not score this memory. */
   rerank_percentile: number | null;
+  /** Whether blending the model's scores moved this memory up or down the list; null when it did not move or was not scored. */
+  rerank_move: "up" | "down" | null;
+  /** False when the vector carried no created_at, so recency was scored as brand new; null when not scored directly. */
+  age_known: boolean | null;
   graph: { provenance: EdgeProvenance; type: EdgeType; from: string } | null;
   slot: WhySlot;
 }

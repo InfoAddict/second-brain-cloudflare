@@ -25,7 +25,7 @@ describe.each(names)("explain shape: %s", (name) => {
     const on = await runShape(name, true);
     expect(JSON.stringify(stripWhy(on.rest))).toBe(JSON.stringify(want.rest));
     const results = on.rest.results ?? [];
-    for (const r of results) expect(Object.keys(r.why).sort()).toEqual(["dense_rank", "graph", "keyword_terms", "multipliers", "rerank_percentile", "slot"]);
+    for (const r of results) expect(Object.keys(r.why).sort()).toEqual(["age_known", "dense_rank", "graph", "keyword_terms", "multipliers", "rerank_move", "rerank_percentile", "slot"]);
     const lines = on.mcp.split("\n");
     const ids = lines.filter(l => l.startsWith("ID: ")).length;
     expect(lines.filter(l => l.startsWith("why: ")).length).toBe(ids);

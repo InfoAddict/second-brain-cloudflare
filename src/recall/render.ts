@@ -117,14 +117,14 @@ function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>
   if (getStatus(m.tags) === "canonical") parts.push("canonical");
   const mult = why.multipliers;
   if (mult) {
-    if (mult.recency >= 0.95) parts.push(`recent (${shortDate(m.createdAt)})`);
+    if (why.age_known === false) parts.push("age unknown");
+    else if (mult.recency >= 0.95) parts.push(`recent (${shortDate(m.createdAt)})`);
     if (mult.importance > 1) parts.push("high importance");
     else if (mult.importance < 1) parts.push("low importance");
     if (mult.tag_boost > 1) parts.push("tag match");
     if (mult.frequency > 1) parts.push("recalled before");
   }
-  if (why.rerank_percentile !== null && why.rerank_percentile > 0.5) parts.push("reranked up");
-  else if (why.rerank_percentile !== null && why.rerank_percentile < 0.5) parts.push("reranked down");
+  if (why.rerank_move) parts.push(`reranked ${why.rerank_move}`);
   if (why.graph) {
     const from = contentById.get(why.graph.from);
     parts.push(`linked from ${from ? `"${snippet(from)}"` : why.graph.from}`);

@@ -22,7 +22,7 @@ import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
 import { distillToRareTerms, inferQueryTags, scopedEntryTotal, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
-import { cosineSim, mmrRerank, rerankWithTimeDecayTraced, type RankMultipliers, type VectorizeMatch } from "./math";
+import { cosineSim, mmrRerank, rerankWithTimeDecay, rerankWithTimeDecayTraced, type RankMultipliers, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import { computeCompoundStale } from "./compound-stale";
 import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLimit, lexicalSeedLimit, RECALL_SEED_TOPK, scoreLinkedEvidence } from "./neighborhood";
@@ -679,18 +679,33 @@ export async function recallEntries(
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
 
-  const directTraced = rerankWithTimeDecayTraced(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
-  let directReranked = directTraced.map(t => t.match);
+  // The traced variant is for explain only: off, recall runs the plain reranker it always ran.
+  const directTraced = explain ? rerankWithTimeDecayTraced(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg) : undefined;
+  let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
   // The root view is computed here, beside the direct one, so a single model batch can cover both.
-  const rootTraced = hops > 0
-    ? rerankWithTimeDecayTraced(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
-    : [];
-  let rootReranked = rootTraced.map(t => t.match);
+  const rootOptions = { useRecallFrequency: false };
+  const rootTraced = explain && hops > 0 ? rerankWithTimeDecayTraced(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
+  let rootReranked = rootTraced.length ? rootTraced.map(t => t.match)
+    : hops > 0 ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
   const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
   // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
   const scopedParents = new Set(rcRows.map(r => r.id));
   const inScope = (m: VectorizeMatch) => scopedParents.has(((m.metadata as any)?.parentId ?? m.id) as string);
   const parentOfMatch = (m: VectorizeMatch) => ((m.metadata as any)?.parentId ?? m.id) as string;
+  // Explain shows only what the caller's own rows justify: a foreign vector D1 dropped must leave no trace in any rank.
+  const scopedOrder = (list: VectorizeMatch[]) => {
+    const order = new Map<string, number>();
+    for (const m of list) if (inScope(m) && !order.has(parentOfMatch(m))) order.set(parentOfMatch(m), order.size);
+    return order;
+  };
+  const displayedDenseRank = new Map<string, number>();
+  if (explain) {
+    [...results.matches].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).forEach(match => {
+      const id = parentOfMatch(match as VectorizeMatch);
+      if (scopedParents.has(id) && !displayedDenseRank.has(id)) displayedDenseRank.set(id, displayedDenseRank.size + 1);
+    });
+  }
+  const beforeBlend = explain ? { direct: scopedOrder(directReranked), root: scopedOrder(rootReranked) } : undefined;
   // Keyword evidence: rows the keyword arm returned that hold every distilled query term, in fused order. Scoped like
   // everything else here (inScope), and used only to choose ids: the model reads D1 text.
   const fusedOrder = new Map<string, number>();
@@ -738,6 +753,16 @@ export async function recallEntries(
   if (rerank.percentiles) {
     directReranked = blendRerankerScores(directReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
     rootReranked = blendRerankerScores(rootReranked, rerank.percentiles, internal.variant?.rerankTuning?.weight, internal.variant?.rerankTuning?.floor, new Set(rerank.evidence ?? []));
+  }
+  const rerankMove = new Map<string, "up" | "down">();
+  if (beforeBlend) {
+    for (const [before, after] of [[beforeBlend.root, scopedOrder(rootReranked)], [beforeBlend.direct, scopedOrder(directReranked)]] as const) {
+      for (const [id, pos] of after) {
+        const was = before.get(id);
+        if (was !== undefined && was !== pos) rerankMove.set(id, pos < was ? "up" : "down");
+        else if (was !== undefined) rerankMove.delete(id);
+      }
+    }
   }
   internal.diagnostics && (internal.diagnostics.candidateIds = directReranked.map(m => ((m.metadata as any)?.parentId ?? m.id) as string));
 
@@ -1122,10 +1147,10 @@ export async function recallEntries(
   const matches = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
   if (explain) {
     // Only what the stages above already computed: nothing is queried or scored here.
-    const multipliers = new Map<string, RankMultipliers>();
-    for (const t of [...directTraced, ...rootTraced]) {
+    const multipliers = new Map<string, { multipliers: RankMultipliers; ageKnown: boolean }>();
+    for (const t of [...(directTraced ?? []), ...rootTraced]) {
       const id = parentOfMatch(t.match);
-      if (!multipliers.has(id)) multipliers.set(id, t.multipliers);
+      if (!multipliers.has(id)) multipliers.set(id, t);
     }
     const fillIds = new Set(fillMatches.map(match => match.id));
     const r3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -1134,10 +1159,12 @@ export async function recallEntries(
       const percentile = rerank.percentiles?.get(m.id);
       const slot: WhySlot = m.id === evidenceSlotId ? "evidence" : m.hop > 0 ? "linked" : fillIds.has(m.id) ? "deeper" : "direct";
       const why: WhyTrace = {
-        dense_rank: semanticRankByParent.get(m.id) ?? null,
+        dense_rank: displayedDenseRank.get(m.id) ?? null,
         keyword_terms: (keywordTrace?.get(m.id) ?? []).map(t => ({ term: t.term, level: t.level, idf: r3(t.idf) })),
-        multipliers: applied ? { recency: r3(applied.recency), frequency: r3(applied.frequency), importance: r3(applied.importance), tag_boost: r3(applied.tag_boost) } : null,
+        multipliers: applied ? Object.fromEntries(Object.entries(applied.multipliers).map(([k, v]) => [k, r3(v)])) as unknown as RankMultipliers : null,
         rerank_percentile: percentile === undefined ? null : r3(percentile),
+        rerank_move: rerankMove.get(m.id) ?? null,
+        age_known: applied ? applied.ageKnown : null,
         graph: m.hop > 0 && m.viaProvenance && m.viaType && m.viaFrom ? { provenance: m.viaProvenance, type: m.viaType, from: m.viaFrom } : null,
         slot,
       };

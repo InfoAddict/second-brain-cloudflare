@@ -57,12 +57,19 @@ export function cosineSim(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return normA === 0 || normB === 0 ? 0 : dot / Math.sqrt(normA * normB);
 }
 
-/** The multipliers rerankWithTimeDecay applies, reported per match (data only: see WhyTrace in types.ts). */
+/**
+ * The factors rerankWithTimeDecay applied, reported per match (data only: see WhyTrace in types.ts).
+ * combined * importance * tag_boost * append_penalty * rolled_up_penalty is the score's multiplier.
+ */
 export interface RankMultipliers {
   recency: number;
   frequency: number;
+  /** min(1, recency x frequency), the cap the score actually used. */
+  combined: number;
   importance: number;
   tag_boost: number;
+  append_penalty: number;
+  rolled_up_penalty: number;
 }
 
 export function rerankWithTimeDecay(...args: Parameters<typeof rerankWithTimeDecayTraced>): VectorizeMatch[] {
@@ -82,12 +89,13 @@ export function rerankWithTimeDecayTraced(
   // module scope so this stays pure and directly assertable without an env.
   config: Readonly<Config> = DEFAULTS,
   options: Readonly<RerankOptions> = {},
-): { match: VectorizeMatch; multipliers: RankMultipliers }[] {
+): { match: VectorizeMatch; multipliers: RankMultipliers; ageKnown: boolean }[] {
   const now = Date.now();
 
   return matches
     .map(match => {
       const meta = match.metadata as any;
+      const ageKnown = typeof meta?.created_at === "number";
       const createdAt = meta?.created_at ?? now;
       const parentId = (meta?.parentId ?? match.id) as string;
       const metaTags: string[] = Array.isArray(meta?.tags) ? meta.tags : [];
@@ -125,7 +133,8 @@ export function rerankWithTimeDecayTraced(
 
       return {
         match: { ...match, score: match.score * combinedMultiplier * appendPenalty * rolledUpPenalty * importanceMultiplier * tagBoost },
-        multipliers: { recency: recencyMultiplier, frequency: frequencyMultiplier, importance: importanceMultiplier, tag_boost: tagBoost },
+        multipliers: { recency: recencyMultiplier, frequency: frequencyMultiplier, combined: combinedMultiplier, importance: importanceMultiplier, tag_boost: tagBoost, append_penalty: appendPenalty, rolled_up_penalty: rolledUpPenalty },
+        ageKnown,
       };
     })
     .sort((a, b) => b.match.score - a.match.score);

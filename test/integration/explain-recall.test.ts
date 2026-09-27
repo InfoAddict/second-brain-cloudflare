@@ -40,7 +40,7 @@ describe("explain on", () => {
     const on = await restRecall(await fresh(), `${Q}&explain=1`);
     expect(stripWhy(on)).toEqual(golden.rest);
     for (const r of on.results) {
-      expect(Object.keys(r.why).sort()).toEqual(["dense_rank", "graph", "keyword_terms", "multipliers", "rerank_percentile", "slot"]);
+      expect(Object.keys(r.why).sort()).toEqual(["age_known", "dense_rank", "graph", "keyword_terms", "multipliers", "rerank_move", "rerank_percentile", "slot"]);
     }
   });
 
@@ -53,7 +53,7 @@ describe("explain on", () => {
       expect(t.level).toBe(2);
       expect(t.idf).toBeGreaterThan(0);
     }
-    expect(Object.keys(e1.multipliers).sort()).toEqual(["frequency", "importance", "recency", "tag_boost"]);
+    expect(Object.keys(e1.multipliers).sort()).toEqual(["append_penalty", "combined", "frequency", "importance", "recency", "rolled_up_penalty", "tag_boost"]);
     expect(e1.multipliers.frequency).toBeCloseTo(1 + Math.log1p(2), 2);
     expect(e1.multipliers.importance).toBeGreaterThan(1);
     expect(e1.rerank_percentile).toBeNull();
