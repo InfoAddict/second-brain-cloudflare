@@ -180,7 +180,7 @@ export async function restoreRowVectors(
       // scope-exempt: by-id: a faithful repair of the row's OWN vectors to match its OWN current
       // content is harmless regardless of which workspace it moved to since the merge's failed CAS
       // — unlike the destructive fallback below, this never touches content this call did not read.
-      `SELECT content, tags, workspace_id FROM entries WHERE id = ?`
+      `SELECT content, tags, workspace_id, vector_ids FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
     if (!current) {
       // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
@@ -188,9 +188,27 @@ export async function restoreRowVectors(
       return;
     }
     const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, embedContextForRow(current, writeCtx));
-    // versioning: exempt: vector bookkeeping (L5) — reembedOrThrow no longer writes this itself
-    await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify(restored.vectorIds), id).run();
-    await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
+    // R3-3: the row's OWN current vector_ids (read moments ago, above), not the caller's
+    // oldVectorIds/mergedVectorIds, is the stale-deletion candidate set. A short append that won
+    // between this call's callers reading THEIR OWN vector_ids and this read adds a fresh
+    // `id-update-<ts>` chunk this call never heard of; the caller's sets do not name it, so the old
+    // unconditional overwrite below dropped it from vector_ids without ever handing it to
+    // deleteVectorIds — an orphan in Vectorize under no row's list, forget and Delete forever
+    // could never find it again. Reading it from the row itself catches every such chunk, won or
+    // lost, since the fresh re-embed's restored.vectorIds already covers the row's current content
+    // (this same append's text included) and supersedes it either way.
+    const staleCandidates = [...new Set([...JSON.parse(current.vector_ids ?? "[]") as string[], ...oldVectorIds, ...mergedVectorIds])];
+    // Conditional on the content this call actually re-embedded (R3-3): a write here with no guard
+    // at all could still overwrite a vector_ids column describing content ANOTHER write already
+    // moved past, in the gap between the read above and this statement.
+    // versioning: exempt: vector bookkeeping (L5) — reembedOrThrow no longer writes this itself.
+    const written = await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ?`)
+      .bind(JSON.stringify(restored.vectorIds), id, current.content).run();
+    // The stale set is only ever safe to delete once the row's own vector_ids column actually
+    // points at restored.vectorIds instead: a missed guard means some OTHER write's vectors are
+    // live under ids this call still thinks are stale, and deleting them would be exactly the
+    // "delete a live deterministic vector" mistake this whole repair path exists to avoid.
+    if (changesOf(written) > 0) await deleteStaleVectors(env, staleCandidates, restored.vectorIds);
   } catch (e) {
     console.error("Restoring vectors after a lost write failed (non-fatal):", e);
     // The row's vector_ids now names vectors holding the loser's text. Emptying them makes
