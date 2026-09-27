@@ -169,11 +169,14 @@ export async function restoreRowVectors(
 ): Promise<void> {
   try {
     const current = await env.DB.prepare(
-      // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-      `SELECT content, tags, workspace_id FROM entries WHERE id = ?`
-    ).bind(id).first() as Record<string, any> | null;
+      // Pinned to the write's own workspace (recheck ownership): a row that moved out of it since
+      // the merge's failed CAS is no longer this call's to repair, the same reasoning as the merge
+      // guard itself (ADV-2). Wherever it landed owns its own vector_ids now.
+      `SELECT content, tags, workspace_id FROM entries WHERE id = ? AND workspace_id = ?`
+    ).bind(id, writeCtx.workspaceId).first() as Record<string, any> | null;
     if (!current) {
-      // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
+      // Forgotten, or moved out of this write's workspace, during the merge's re-embed: nothing
+      // here is this call's to repair any more, only the orphaned vectors this attempt made.
       await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
       return;
     }
@@ -186,9 +189,9 @@ export async function restoreRowVectors(
     try {
       // versioning: exempt: vector bookkeeping (L5)
       await env.DB.prepare(
-        // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-        `UPDATE entries SET vector_ids = '[]' WHERE id = ?`
-      ).bind(id).run();
+        // Pinned to the write's own workspace, same reasoning as the read above.
+        `UPDATE entries SET vector_ids = '[]' WHERE id = ? AND workspace_id = ?`
+      ).bind(id, writeCtx.workspaceId).run();
       await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
     } catch (e2) {
       console.error("Emptying vector_ids after a lost write failed (non-fatal):", e2);
