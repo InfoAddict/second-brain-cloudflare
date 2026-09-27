@@ -570,6 +570,9 @@ const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]{3,}@/gi;
 const ASSIGNMENT_PATTERN =
   /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd|passphrase|credentials?|private[_-]?key|[_-]key))(\s*[:=]\s*)(["'`]?)([^\s"'`,;]{8,})\3/gi;
 const CODE_REFERENCE = /^(?:process\.env\b|os\.environ\b|import\.meta\.env\b|env\.|Deno\.env\b|\$|<|\{)/;
+// A quoted value may hold spaces: DB_PASSWORD="correct horse battery staple".
+const QUOTED_ASSIGNMENT =
+  /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd|passphrase|credentials?|private[_-]?key|[_-]key))(\s*[:=]\s*)(["'`])([^"'`\n]{4,}?)\3/gi;
 
 function redactSecrets(text, token) {
   let out = String(text ?? '');
@@ -579,6 +582,8 @@ function redactSecrets(text, token) {
   for (const re of SECRET_PATTERNS) out = out.replace(re, REDACTED_TOKEN);
   out = out.replace(BEARER_PATTERN, `Bearer ${REDACTED_TOKEN}`);
   out = out.replace(URL_CREDENTIALS, `$1${REDACTED_TOKEN}@`);
+  out = out.replace(QUOTED_ASSIGNMENT, (m, name, sep, quote, value) =>
+    CODE_REFERENCE.test(value) ? m : `${name}${sep}${quote}${REDACTED_TOKEN}${quote}`);
   return out.replace(ASSIGNMENT_PATTERN, (m, name, sep, quote, value) =>
     CODE_REFERENCE.test(value) ? m : `${name}${sep}${quote}${REDACTED_TOKEN}${quote}`);
 }

@@ -154,9 +154,12 @@ describe("secret redaction, second line of defense", () => {
     "url postgres://app:Hunter2Staging@db.internal/app",
     "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     "rk_live_51Habcdefghijklmnop",
+    'DB_PASSWORD="correct horse battery staple"',
+    "api_key: 'open sesame please'",
   ];
   const secrets = ["aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3z", "abcd1234efgh5678", "correct-horse-battery", "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
-    "AKIAIOSFODNN7EXAMPLE", "Hunter2Staging", "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "rk_live_51Habcdefghijklmnop"];
+    "AKIAIOSFODNN7EXAMPLE", "Hunter2Staging", "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "rk_live_51Habcdefghijklmnop",
+    "correct horse battery staple", "open sesame please"];
 
   it("redacts long tokens, credential-looking key=value lines, URL passwords and JWTs", () => {
     const out = core.redactSecrets(corpus.join("\n"));
