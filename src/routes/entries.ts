@@ -9,7 +9,8 @@ import { readEntryTimeline } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
-import { revertEntry } from "../memory/undo";
+import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
+import { mirrorUndoError } from "../integrations/mirror";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
@@ -285,27 +286,37 @@ export async function handleEntriesRoutes(
     switch (result.status) {
       case "reverted":
         return json({
-          ok: true, id, status: "reverted", targetSeq: result.targetSeq,
+          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result),
           ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
           ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
           ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
         });
       case "restored":
-        return json({ ok: true, id, status: "restored" });
+        return json({
+          ok: true, id, status: "restored", message: restoredMessage(id, result),
+          ...(result.mirrorSource ? { mirrorWarning: true } : {}),
+        });
       case "no_change":
-        return json({ ok: true, id, status: "no_change", changed: false });
-      // A hidden version reads exactly like one that never existed (D-SH): same status, same body.
-      case "not_found":
+        return json({ ok: true, id, status: "no_change", changed: false, message: `Entry ${id} already matches that version; nothing changed.` });
+      // A hidden version reads exactly like one that never existed (D-SH): never reveals whether
+      // history predating a share exists.
       case "unreadable":
+        return json({ ok: false, error: unreadableMessage(id) }, 404);
+      case "pruned":
+        return json({ ok: false, error: prunedMessage(id, toVersion!, result.oldestKept, cfg.VERSION_KEEP), oldestKept: result.oldestKept }, 404);
+      case "not_found":
+        if (result.gone) return json({ ok: false, error: goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS), gone: result.gone }, 404);
         return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
       case "forbidden":
         return json({ ok: false, error: FORBIDDEN_MSG }, 403);
+      case "mirrored":
+        return json({ ok: false, error: mirrorUndoError(result.source) }, 409);
       case "stale":
         return json({ ok: false, error: "Entry changed after you looked at it; check history and try again." }, 409);
       case "nothing_to_undo":
         return json({ ok: false, error: `Entry ${id} has no recorded changes to undo.` }, 409);
       case "reembed_failed":
-        return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
+        return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged; please try again." }, 500);
     }
   }
 

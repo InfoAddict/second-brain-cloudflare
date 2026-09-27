@@ -8,7 +8,7 @@ import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { getTrashedEntry } from "../memory/trash";
-import { revertEntry } from "../memory/undo";
+import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { auditEvent, type ChangeContext } from "../lib/audit";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
@@ -19,7 +19,7 @@ import type { Identity } from "../lib/identity";
 import { assertCanEditContent, assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { listTeamWorkspaces } from "../lib/team-admin";
 import { layerOf, scopeWhereForRead, scopeWrite, effectiveWriteTarget, readTeamParam, readScopeWorkspaces, primaryCompanyWorkspaceId, type WriteContext } from "../lib/scope";
-import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
+import { isManagedMirror, mirrorEditError, mirrorUndoError } from "../integrations/mirror";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
@@ -1009,6 +1009,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       inputSchema: {
         id: z.string().describe("Entry ID from recall or list_recent"),
       },
+      annotations: { destructiveHint: true },
     },
     async ({ id }) => {
       const row = await getReadableEntry(env, identity, id);
@@ -1044,6 +1045,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         id: z.string().describe("Entry ID from recall, list_recent or history"),
         to_version: z.number().int().positive().optional().describe("Roll all the way back to this version number instead of just undoing the latest change. Get version numbers from history. Only reaches versions still within the kept history — the oldest eventually age out, and a permanently deleted memory has none left to reach."),
       },
+      // Reverting a redo lands right back on the change it just reversed (server.ts's own docs on
+      // the tool describe this), so calling it twice does not repeat the first call's effect.
+      annotations: { idempotentHint: false },
     },
     async ({ id, to_version }) => {
       // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of
@@ -1062,17 +1066,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       );
 
       switch (result.status) {
-        case "reverted": {
-          let text = `Reverted entry ${id} to how it was before its last change (version ${result.targetSeq}).`;
-          if (result.incomingTruncated) text += " The memory it had absorbed was too large to bring back.";
-          if (result.recreatedIncomingId) text += ` Restored the memory it had absorbed as ${result.recreatedIncomingId}.`;
-          if (result.keptIncoming?.length) {
-            text += ` (Note: ${result.keptIncoming.map(k => `${k.id} was ${k.reason}`).join(", ")}, not touched by this undo.)`;
-          }
-          return { content: [{ type: "text", text }] };
-        }
+        case "reverted":
+          return { content: [{ type: "text", text: revertedMessage(id, result) }] };
         case "restored":
-          return { content: [{ type: "text", text: `Restored entry ${id} from the trash.` }] };
+          return { content: [{ type: "text", text: restoredMessage(id, result) }] };
         case "no_change":
           return { content: [{ type: "text", text: `Entry ${id} already matches that version; nothing changed.` }] };
         case "nothing_to_undo":
@@ -1081,12 +1078,18 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           return { content: [{ type: "text", text: `Entry ${id} changed after you looked at it; check history and try again.` }] };
         case "forbidden":
           return { content: [{ type: "text", text: FORBIDDEN_MSG }] };
-        // A hidden version reads exactly like one that never existed (D-SH).
-        case "not_found":
+        case "mirrored":
+          return { content: [{ type: "text", text: mirrorUndoError(result.source) }] };
+        case "pruned":
+          return { content: [{ type: "text", text: prunedMessage(id, to_version!, result.oldestKept, cfg.VERSION_KEEP) }] };
+        // A hidden version reads exactly like one that never existed (D-SH): never reveals whether
+        // history predating a share exists.
         case "unreadable":
-          return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+          return { content: [{ type: "text", text: unreadableMessage(id) }] };
+        case "not_found":
+          return { content: [{ type: "text", text: result.gone ? goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS) : `No entry found with ID: ${id}` }] };
         case "reembed_failed":
-          return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged — please try again.` }] };
+          return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged; try again.` }] };
       }
     }
   );
