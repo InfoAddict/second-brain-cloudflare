@@ -86,3 +86,27 @@ describe("explain off does not take the traced path", () => {
     expect(await mcpRecall(f.env, { query: "atlas ledger", topK: 5 })).not.toContain("why:");
   });
 });
+
+describe("dense_rank leaks nothing through the real filter-rejection retry", () => {
+  it("Vectorize rejects the workspace filter, the unfiltered retry returns a foreign vector on top", async () => {
+    const base = await restRecall(f.env, Q);
+    f.close(); f = await makeExplainFixture();
+    const seen: unknown[] = [];
+    (f.env.VECTORIZE.query as any).mockImplementation(async (_v: unknown, opts: any) => {
+      seen.push(opts?.filter);
+      if (opts?.filter) throw new Error("VECTOR_QUERY_ERROR: metadata filter not supported");
+      return { matches: [
+        vec("foreign-private", 0.99, 1, []),
+        vec("e1", 0.9, 2, ["status:canonical", "work"]),
+        vec("e2", 0.8, 100, ["idea"]),
+        vec("e3", 0.7, 10, []),
+      ] };
+    });
+    const leaked = await restRecall(f.env, Q);
+    expect(seen.some(x => x !== undefined), "the filtered attempt happened").toBe(true);
+    expect(seen.some(x => x === undefined), "the unfiltered retry happened").toBe(true);
+    const ranks = (b: any) => Object.fromEntries(b.results.map((r: any) => [r.id, r.why.dense_rank]));
+    expect(ranks(leaked)).toEqual(ranks(base));
+    expect(JSON.stringify(leaked)).not.toContain("foreign-private");
+  });
+});
