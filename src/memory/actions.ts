@@ -15,12 +15,13 @@ export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "s
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number } | { ok: false; error: string; status: number };
 
 type AuditContext = { waitUntil(promise: Promise<unknown>): void };
-const channelPayload = (channel?: "mcp") => channel ? { channel } : {};
+export type AuditChannel = "rest" | "mcp";
+const channelPayload = (channel: AuditChannel) => ({ channel });
 
 /** The REST routes and MCP resolve tool use this same read, guard, write and audit path. */
 export async function resolveEntryAction(
   env: Env, ctx: AuditContext, identity: Identity, id: string,
-  action: ResolveAction, untilInput?: string, channel?: "mcp",
+  action: ResolveAction, untilInput: string | undefined, channel: AuditChannel,
 ): Promise<ActionResult> {
   let until: number | undefined;
   if (action === "snooze") {
@@ -90,7 +91,7 @@ export interface InsightResolution { resolved: string[]; skipped: number }
 /** Apply already scoped insight rows in one D1 batch, also for the one-id MCP form. */
 export async function applyInsightResolution(
   env: Env, ctx: AuditContext, actorId: string,
-  found: Record<string, any>[], requestedCount: number, action: InsightAction, channel?: "mcp",
+  found: Record<string, any>[], requestedCount: number, action: InsightAction, channel: AuditChannel,
 ): Promise<InsightResolution> {
   const statements: D1PreparedStatement[] = [];
   const vectorsToDrop: string[] = [];

@@ -298,7 +298,7 @@ describe("Minor 9: resolve statement bounds", () => {
       };
     } }) } as Env;
     sqlite.issued.length = 0;
-    const result = await resolveEntryAction(racing, ctx, owner, "r", "done");
+    const result = await resolveEntryAction(racing, ctx, owner, "r", "done", undefined, "rest");
     expect(result.ok).toBe(false);
     // the three competing writes above are the test's own, not the tool's
     expect(sqlite.issued.filter(q => !/SET content = content/.test(q)).length).toBeLessThanOrEqual(7);

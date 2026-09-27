@@ -90,7 +90,8 @@ describe("resolve: REST and MCP produce the same state and audit on real SQLite"
       const re = await events("rest-row"), me = await events("mcp-row");
       expect(me.map(e => ({ event: e.event, keys: Object.keys(e.payload).sort() }))).toEqual(re.map(e => ({ event: e.event, keys: Object.keys(e.payload).sort() })));
       if (c.name !== "snooze") expect(me.map(e => e.payload)).toEqual(re.map(e => e.payload));
-      expect(re.every(e => e.channel === undefined)).toBe(true);
+      expect(re.length).toBeGreaterThan(0);
+      expect(re.every(e => e.channel === "rest")).toBe(true);
       expect(me.length).toBeGreaterThan(0);
       expect(me.every(e => e.channel === "mcp")).toBe(true);
     });

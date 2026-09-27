@@ -575,6 +575,7 @@ describe("POST /patterns/resolve — the entry_events record", () => {
     expect(rows[0].event).toBe("insight_confirmed");
     expect(rows[0].entry_id).toBe("p1");
     expect(rows[0].actor_id).toBe(await ownerId(sq));
+    expect(JSON.parse(rows[0].payload)).toEqual({ prior: { tags: ["auto-insight"] }, channel: "rest" });
   });
 
   it("dismiss writes insight_dismissed, a different name and not a payload flag", async () => {
@@ -592,6 +593,7 @@ describe("POST /patterns/resolve — the entry_events record", () => {
     const rows = await eventsOf(sq);
     expect(rows.map(r => r.event)).toEqual(["insight_dismissed"]);
     expect(rows[0].entry_id).toBe("p1");
+    expect(JSON.parse(rows[0].payload)).toEqual({ prior: { tags: ["auto-insight"] }, channel: "rest" });
   });
 
   it("writes one row per RESOLVED id in a bulk call, and none for the ones it skipped", async () => {

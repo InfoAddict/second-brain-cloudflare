@@ -171,6 +171,25 @@ describe("POST /stale/keep", () => {
     expect(queue.total).toBe(0);
   });
 
+  it("records the REST channel and the prior values in the audit event", async () => {
+    sq = await migrated();
+    seedStale(sq, "old-1", "Our deploy target is the staging cluster");
+    const pending: Promise<unknown>[] = [];
+    const c = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as any;
+
+    await worker.fetch(req("POST", "/stale/keep", { body: { id: "old-1" } }), envOf(sq), c);
+    await Promise.all(pending);
+
+    const events = (await sq.db.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = 'old-1'`).all()).results as any[];
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe("updated");
+    expect(JSON.parse(events[0].payload)).toEqual({
+      stale_confirmed: true,
+      prior: { tags: expect.arrayContaining(["stale:as-of"]), updated_at: expect.any(Number), staleness_checked_at: null },
+      channel: "rest",
+    });
+  });
+
   it("refuses an entry that is not flagged", async () => {
     sq = await migrated();
     sq.seed({ id: "fresh", content: "Never flagged", createdAt: 1000, tags: ["work"] });
