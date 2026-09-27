@@ -48,10 +48,9 @@ function renderTrashIntro() {
 /**
  * Who deleted it, and how.
  *
- * GET /trash carries no "is this me" flag. A solo brain has exactly one
- * dashboard actor, so a rest-channel row there is always the viewer's own;
- * a team brain names the actor GET /trash resolved, and only falls back to
- * "you" if the Worker did not send one (an older Worker, say).
+ * `deleted_by_name` is `resolveActorLabel`'s output (src/lib/actors.ts),
+ * which already resolves the viewer's own id to the literal string "You" -
+ * that is the "is this me" signal, not something this view has to guess.
  */
 function trashWhoLine(item) {
   const date = formatDateUI(item.deleted_at, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -60,10 +59,8 @@ function trashWhoLine(item) {
   if (item.channel === 'mcp') {
     return item.client ? t('trash.deletedByClient', { date, client: item.client }) : t('trash.deletedByAgent', { date });
   }
-  if (typeof TEAM_MODE !== 'undefined' && TEAM_MODE && item.deleted_by_name) {
-    return t('trash.deletedByPerson', { date, name: item.deleted_by_name });
-  }
-  return t('trash.deletedByYou', { date });
+  if (item.deleted_by_name === 'You') return t('trash.deletedByYou', { date });
+  return t('trash.deletedByPerson', { date, name: item.deleted_by_name });
 }
 
 function trashDaysLine(item) {

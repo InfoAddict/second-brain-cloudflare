@@ -198,7 +198,7 @@ describe("both entry points open the sheet", () => {
 
 describe("rows render who, date and days left for each reason and channel", () => {
   it("a dashboard forget on a solo brain reads 'by you'", async () => {
-    const ctx = load([{ ok: true, items: [item({ channel: "rest", client: null })], next_cursor: null, retention_days: 14 }]);
+    const ctx = load([{ ok: true, items: [item({ channel: "rest", client: null, deleted_by_name: "You" })], next_cursor: null, retention_days: 14 }]);
     await ctx.loadTrashPage();
     expect(el(ctx, "trash-list").innerHTML).toContain("by you in the dashboard");
   });
@@ -428,7 +428,7 @@ describe("empty state", () => {
 
 describe("both locales", () => {
   it("speaks Italian when the page does", async () => {
-    const ctx = load([{ ok: true, items: [item({ channel: "rest" })], next_cursor: null, retention_days: 14 }]);
+    const ctx = load([{ ok: true, items: [item({ channel: "rest", deleted_by_name: "You" })], next_cursor: null, retention_days: 14 }]);
     ctx.initI18n("it");
     await ctx.loadTrashPage();
     const html = el(ctx, "trash-list").innerHTML;
