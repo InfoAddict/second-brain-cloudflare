@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (156 queries, 75 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (159 queries, 78 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1278,7 +1278,10 @@ describe("the checker over the real source tree", () => {
     // scopeWhere), getTrashedEntry's scoped SELECT (carries scopeWhere), restoreEntry's INSERT/edge-restore
     // (by-id, caller pre-authorized), and src/lib/team-admin.ts's cleanupMemberData reads/deletes
     // (scope-exempt: offboarding, by workspace already resolved to the removed member's own).
-    ).toEqual({ queries: 156, exempt: 75, checked: 12, outerJoin: 1 });
+    // Deliberate: +3 queries and +3 scope-exempt (156/75 -> 159/78) for T-0089.4.7 (Delete forever):
+    // src/memory/trash.ts's deleteForever issues its edges/versions/trash/entries deletes as four
+    // separate by-id statements (each needs its own dense Params, so each carries its own comment).
+    ).toEqual({ queries: 159, exempt: 78, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

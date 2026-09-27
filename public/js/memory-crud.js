@@ -183,6 +183,52 @@ function notifyMemoryResolved(id) {
   if (typeof dropFromStaleQueue === 'function') dropFromStaleQueue(id)
 }
 
+/**
+ * Delete forever (T-0089.4.7): REST-only, `{id, permanent: true, confirm: id}`. Not offered to
+ * agents (there is no MCP tool or parameter for it) — the confirm echo, not a hidden token, is
+ * what keeps this from being one accidental tap away from Forget.
+ */
+function openDeleteForeverConfirm(id, cardElement) {
+  openDangerConfirm({
+    title: t('memories.deleteForeverTitle'),
+    body: t('memories.deleteForeverConfirm'),
+    confirmLabel: t('memories.deleteForever'),
+    onConfirm: async (_checked, done) => {
+      const btn = document.querySelector('#confirm-dialog .btn-delete')
+      if (btn) {
+        btn.disabled = true
+        btn.textContent = t('memories.deletingForever')
+      }
+      try {
+        const res = await fetch(`${WORKER_URL}/forget`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+          body: JSON.stringify({ id, permanent: true, confirm: id }),
+        })
+        const data = await res.json()
+        if (!res.ok || !data.ok) throw new Error(data.error || t('memories.deleteForeverFailed'))
+        done()
+        if (cardElement) {
+          cardElement.style.transition = 'none'
+          cardElement.classList.add('explode-out')
+          setTimeout(() => cardElement?.remove(), 400)
+        }
+        allEntries = allEntries.filter((e) => e.id !== id)
+        notifyMemoryResolved(id)
+        refreshAll({ list: false })
+      } catch (e) {
+        showToast(t('memories.deleteForeverFailed', { message: e.message }))
+        done()
+      } finally {
+        if (btn) {
+          btn.disabled = false
+          btn.textContent = t('memories.deleteForever')
+        }
+      }
+    },
+  })
+}
+
 async function confirmForget(_checked, done) {
   if (!pendingForgetId) return
   // Snapshot BEFORE closing: closing fires this sheet's onClose, which is what
@@ -427,7 +473,7 @@ function renderViewTimeline(entry) {
  * only on readability (src/routes/graph.ts), so a reader may remove a link.
  */
 function applyAuthorLock(entry) {
-  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget', 'view-btn-delete-forever'].map((id) => document.getElementById(id)), 'view-btn--locked')
 }
 
 /**
@@ -518,6 +564,16 @@ function openView(entry, cardElement) {
     forgetBtn.style.display = 'flex'
   } else {
     forgetBtn.style.display = 'none'
+  }
+  const deleteForeverBtn = document.getElementById('view-btn-delete-forever')
+  if (entry.id) {
+    deleteForeverBtn.onclick = () => {
+      closeView()
+      openDeleteForeverConfirm(entry.id, cardElement || null)
+    }
+    deleteForeverBtn.style.display = 'flex'
+  } else {
+    deleteForeverBtn.style.display = 'none'
   }
   const editBtn = document.getElementById('view-btn-edit')
   if (entry.id) {

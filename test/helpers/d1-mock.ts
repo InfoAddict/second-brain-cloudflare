@@ -738,6 +738,14 @@ export class D1Mock {
             }));
           return { results };
         }
+        // The disconnect purge's landed-ids read: which of this batch's ids actually got a trash row.
+        if (s.startsWith("SELECT id FROM entries_trash WHERE reason = 'disconnect' AND deleted_at =")) {
+          const [deletedAt, deletedBy, idsJson] = args;
+          const ids = new Set(JSON.parse(idsJson) as string[]);
+          const results = db.trash.filter((r: any) => r.reason === "disconnect" && r.deleted_at === deletedAt && r.deleted_by === deletedBy && ids.has(r.id))
+            .map((r: any) => ({ id: r.id }));
+          return { results };
+        }
         // The trash size read (trashSizeSelect): sizes are not modelled beyond content, which is enough for tier 1.
         if (s.includes("length(CAST(e.content AS BLOB)) AS content_bytes")) {
           const ids = JSON.parse(args[0]) as string[];

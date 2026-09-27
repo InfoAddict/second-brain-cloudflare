@@ -8,7 +8,7 @@ import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
 import { readEntryTimeline, seesPrivateHistory } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
-import { getTrashedEntry, restoreEntry } from "../memory/trash";
+import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
@@ -172,16 +172,34 @@ export async function handleEntriesRoutes(
     return json(summary);
   }
 
-  // POST /forget — delete-by-id, mirrors the MCP `forget` tool
+  // POST /forget — delete-by-id, mirrors the MCP `forget` tool. With { permanent: true, confirm: id }
+  // it is Delete forever (T-0089.4.7) instead: never offered as an MCP tool or parameter, and it
+  // works on a live memory or one already sitting in the trash.
   if (url.pathname === "/forget" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string };
+    let body: { id?: string; permanent?: unknown; confirm?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
-
     const id = body.id.trim();
+
+    if ("permanent" in body) {
+      if (body.permanent !== true) return json({ ok: false, error: "permanent must be true" }, 400);
+      if (body.confirm !== id) return json({ ok: false, error: "confirm must equal id" }, 400);
+
+      const liveRow = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, vector_ids");
+      const trashedRow = liveRow ? null : await getTrashedEntry(env, auth, id);
+      const row = liveRow ?? trashedRow;
+      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      const denied = assertCanMutateEntry(auth, row);
+      if (denied) return json({ ok: false, error: denied.message }, 403);
+
+      const result = await deleteForever(env, liveRow ?? { id, vector_ids: "[]" }, { actorId: auth.userId, channel: "rest" });
+      if (result.status === "not_found") return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      return json({ ok: true, id, permanent: true, from: result.from, deletedVectors: result.deletedVectors });
+    }
+
     const row = await getReadableEntry(env, auth, id);
     if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
     const denied = assertCanMutateEntry(auth, row);

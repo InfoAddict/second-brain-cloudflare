@@ -167,24 +167,22 @@ export async function trashMirroredEntries(
     const plan = planTrash(allowed, opts.budget);
     const now = Date.now();
     const change = { actorId: auth.userId, channel: "rest" as const };
-    const batch = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now }));
-    const removed = changedRows(batch[batch.length - 1]);
-    let done = allowed;
-    if (removed !== allowed.length) {
-      // A racing deleter took some between the read and the batch: audit only what this batch removed.
-      const p = new Params();
-      const { results: landed } = await env.DB.prepare(
-        // scope-exempt: by-id: the trash rows this batch just wrote, to tell them from a racer's deletes
-        `SELECT id FROM entries_trash WHERE reason = 'disconnect' AND deleted_at = ${p.add(now)} AND deleted_by = ${p.add(auth.userId)}
-            AND id IN (SELECT value FROM json_each(${p.add(JSON.stringify(allowed.map((r) => r.id)))}))`,
-      ).bind(...p.values()).all<{ id: string }>();
-      const landedIds = new Set((landed ?? []).map((r) => r.id));
-      // A hard-deleted (tier 3) row leaves no trash row to find, so it is taken as removed.
-      const hard = new Set(plan.tier3);
-      done = allowed.filter((r) => landedIds.has(r.id) || hard.has(r.id));
-    }
-    purged += removed;
-    skipped += allowed.length - removed;
+    await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now }));
+    // `changes` on a DELETE FROM entries is not a reliable count here: real D1 folds in every
+    // FTS/entry_counts trigger row it fired alongside the entries row (a single delete reported
+    // `changes: 5`), so which of `allowed` actually landed is read back rather than counted.
+    const p = new Params();
+    const { results: landed } = await env.DB.prepare(
+      // scope-exempt: by-id: the trash rows this batch just wrote, to tell them from a racer's deletes
+      `SELECT id FROM entries_trash WHERE reason = 'disconnect' AND deleted_at = ${p.add(now)} AND deleted_by = ${p.add(auth.userId)}
+          AND id IN (SELECT value FROM json_each(${p.add(JSON.stringify(allowed.map((r) => r.id)))}))`,
+    ).bind(...p.values()).all<{ id: string }>();
+    const landedIds = new Set((landed ?? []).map((r) => r.id));
+    // A hard-deleted (tier 3) row leaves no trash row to find, so it is taken as removed.
+    const hard = new Set(plan.tier3);
+    const done = allowed.filter((r) => landedIds.has(r.id) || hard.has(r.id));
+    purged += done.length;
+    skipped += allowed.length - done.length;
 
     const vectorIds = done.flatMap((r) => { try { return JSON.parse(r.vector_ids ?? "[]") as string[]; } catch { return []; } });
     try {
@@ -294,26 +292,32 @@ export async function purgeTrash(
     return { read: candidates.length, purged: 0, trimmed, rowsWritten: rowsWrittenOf([res], 2 * trimmed) };
   }
 
-  const p = new Params();
-  const ids = p.add(JSON.stringify(chosen));
-  const now$ = p.add(now);
+  // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder.
+  const idsJson = JSON.stringify(chosen);
+  const auditP = new Params();
+  const auditIds = auditP.add(idsJson);
+  const auditNow = auditP.add(now);
+  const versionsP = new Params();
+  const versionsIds = versionsP.add(idsJson);
+  const trashP = new Params();
+  const trashIds = trashP.add(idsJson);
   const results3 = await env.DB.batch([
     env.DB.prepare(
       // scope-exempt: retention purge: the audit row of each expired trash row, in the batch that removes it
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
        SELECT lower(hex(randomblob(16))), t.id, '', 'purged',
-              json_object('channel', 'system:purge', 'reason', t.reason, 'deleted_at', t.deleted_at), ${now$}
-         FROM entries_trash t WHERE t.id IN (SELECT value FROM json_each(${ids}))`,
-    ).bind(...p.values()),
+              json_object('channel', 'system:purge', 'reason', t.reason, 'deleted_at', t.deleted_at), ${auditNow}
+         FROM entries_trash t WHERE t.id IN (SELECT value FROM json_each(${auditIds}))`,
+    ).bind(...auditP.values()),
     env.DB.prepare(
       // scope-exempt: retention purge: versions of expired trash rows, never of a live entry
-      `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${ids}))
+      `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${versionsIds}))
          AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = entry_versions.entry_id)`,
-    ).bind(...p.values()),
+    ).bind(...versionsP.values()),
     env.DB.prepare(
       // scope-exempt: retention purge: expired trash rows
-      `DELETE FROM entries_trash WHERE id IN (SELECT value FROM json_each(${ids}))`,
-    ).bind(...p.values()),
+      `DELETE FROM entries_trash WHERE id IN (SELECT value FROM json_each(${trashIds}))`,
+    ).bind(...trashP.values()),
   ]);
   const purged = changedRows(results3[2]);
   const estimate = 4 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
@@ -389,29 +393,34 @@ export async function restoreEntry(
     }
   }
 
-  const p = new Params();
   const { names, exprs } = restoreColumnsSql("t");
-  const id = p.add(trashed.id);
-  const vecJson = p.add(JSON.stringify(vectorIds));
   // workspace_id comes from the restored entry, not the trashed edge's own snapshot (spec: "taken from the source entry").
   const edgeCols = EDGE_ROW_COLUMNS.map((c) => c === "workspace_id" ? "t.workspace_id" : `json_extract(j.value, '$.${c}')`).join(", ");
+  // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder in that statement.
+  const insertP = new Params();
+  const insertId = insertP.add(trashed.id);
+  const vecJson = insertP.add(JSON.stringify(vectorIds));
+  const edgeP = new Params();
+  const edgeId = edgeP.add(trashed.id);
+  const deleteP = new Params();
+  const deleteId = deleteP.add(trashed.id);
   let results;
   try {
     results = await env.DB.batch([
       env.DB.prepare(
         // scope-exempt: by-id: the caller authorized the trash row before building this batch
         `INSERT INTO entries (id, ${names}, content, vector_ids)
-         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t WHERE t.id = ${id}`,
-      ).bind(...p.values()),
+         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t WHERE t.id = ${insertId}`,
+      ).bind(...insertP.values()),
       env.DB.prepare(
         // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where the other endpoint still exists
         `INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
          SELECT ${edgeCols}
            FROM entries_trash t, json_each(t.edges_json) j
-          WHERE t.id = ${id}
-            AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${id} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
-      ).bind(...p.values()),
-      env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${id}`).bind(...p.values()),
+          WHERE t.id = ${edgeId}
+            AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
+      ).bind(...edgeP.values()),
+      env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
     ]);
   } catch (e) {
     if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
@@ -431,4 +440,59 @@ export async function restoreEntry(
     trashedReason: trashed.reason,
     vectorCount: vectorIds.length,
   };
+}
+
+// ── Delete forever ───────────────────────────────────────────────────────────
+
+export type DeleteForeverResult =
+  | { status: "not_found" }
+  | { status: "deleted"; from: "live" | "trash"; deletedVectors: number };
+
+/**
+ * Delete forever (T-0089.4.7, human-only in the sense of "not offered to agents": REST uses the
+ * same bearer token agents hold; there is no MCP tool or parameter). Hard deletes a live or
+ * trashed row, its edges, all its versions and any trash copy, then its vectors. The `purged`
+ * audit row is written inside the batch, only when there is something to delete. A racing forget
+ * that lands first is still a success, reported `from: "trash"`.
+ */
+export async function deleteForever(env: Env, row: { id: string; vector_ids?: string }, change: ChangeContext): Promise<DeleteForeverResult> {
+  const now = Date.now();
+  const auditP = new Params();
+  const auditId = auditP.add(row.id);
+  const auditChannel = auditP.add(change.channel);
+  const auditNow = auditP.add(now);
+  const byId = (sql: (id: string) => string) => {
+    const p = new Params();
+    const id = p.add(row.id);
+    return env.DB.prepare(sql(id)).bind(...p.values());
+  };
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+       SELECT lower(hex(randomblob(16))), ${auditId}, '', 'purged',
+              json_object('reason', 'permanent', 'channel', ${auditChannel}, 'from', CASE WHEN EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) THEN 'live' ELSE 'trash' END),
+              ${auditNow}
+        WHERE EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) OR EXISTS (SELECT 1 FROM entries_trash WHERE id = ${auditId})`,
+    ).bind(...auditP.values()),
+    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+    byId((id) => `DELETE FROM edges WHERE source_id = ${id} OR target_id = ${id}`),
+    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+    byId((id) => `DELETE FROM entry_versions WHERE entry_id = ${id}`),
+    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+    byId((id) => `DELETE FROM entries_trash WHERE id = ${id}`),
+    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+    byId((id) => `DELETE FROM entries WHERE id = ${id}`),
+  ]);
+  const trashChanges = changedRows(results[3]);
+  const entryChanges = changedRows(results[4]);
+  if (entryChanges === 0 && trashChanges === 0) return { status: "not_found" };
+
+  const vectorIds: string[] = (() => { try { return JSON.parse(row.vector_ids ?? "[]"); } catch { return []; } })();
+  try {
+    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+  } catch (e) {
+    console.error("Vectorize delete failed during Delete forever (non-fatal):", e);
+  }
+  return { status: "deleted", from: entryChanges > 0 ? "live" : "trash", deletedVectors: vectorIds.length };
 }
