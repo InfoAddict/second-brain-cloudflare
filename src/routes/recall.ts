@@ -12,6 +12,7 @@ import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { recallEntries } from "../recall/search";
 import { readProjectParam } from "./project-param";
 import { allowanceFor, snippetOf } from "../recall/snippet";
+import { editedCanonicalAt } from "../quarantine/tags";
 
 /** Add the caller's workspace predicate before ORDER BY and LIMIT. */
 function scopeEntryFilterQuery(
@@ -186,6 +187,8 @@ export async function handleRecallRoutes(
           via_type: m.viaType ?? null,
           linked_at: m.viaLinkedAt ?? null,
           related_to: m.viaFrom ?? null,
+          similar: m.similar?.map(s => ({ id: s.id, created_at: s.createdAt })) ?? [],
+          edited_canonical_at: editedCanonicalAt(m.tags),
           ...(explain ? { why: m.why ?? null } : {}),
         };
       }),

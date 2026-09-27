@@ -25,7 +25,9 @@
     "via_provenance": null,
     "via_type": null,
     "linked_at": null,
-    "related_to": null
+    "related_to": null,
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e3",
@@ -45,7 +47,9 @@
     "via_provenance": null,
     "via_type": null,
     "linked_at": null,
-    "related_to": null
+    "related_to": null,
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e2",
@@ -67,7 +71,9 @@
     "via_provenance": null,
     "via_type": null,
     "linked_at": null,
-    "related_to": null
+    "related_to": null,
+    "similar": [],
+    "edited_canonical_at": null
    }
   ],
   "insight": "3",
@@ -99,7 +105,9 @@
     "via_provenance": null,
     "via_type": null,
     "linked_at": null,
-    "related_to": null
+    "related_to": null,
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e3",
@@ -119,7 +127,9 @@
     "via_provenance": null,
     "via_type": null,
     "linked_at": null,
-    "related_to": null
+    "related_to": null,
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e2",
@@ -141,7 +151,9 @@
     "via_provenance": null,
     "via_type": null,
     "linked_at": null,
-    "related_to": null
+    "related_to": null,
+    "similar": [],
+    "edited_canonical_at": null
    }
   ],
   "insight": "3",

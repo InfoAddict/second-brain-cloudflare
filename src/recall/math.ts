@@ -2,6 +2,7 @@ import { CHUNK_OVERLAP_CHARS } from "../constants";
 import { getStatus } from "../memory/status";
 import { getVolatility } from "../memory/volatility";
 import { DEFAULTS, type Config } from "../config";
+import { sourceClass, sourceWeight } from "./source-trust";
 
 export interface VectorizeMatch {
   id: string;
@@ -12,6 +13,8 @@ export interface VectorizeMatch {
 
 export interface RerankOptions {
   useRecallFrequency?: boolean;
+  /** D1's source column, keyed by parentId. Wins over Vectorize metadata's `source`, exactly as d1Tags wins over metadata tags (4.2). */
+  d1Sources?: Map<string, string>;
 }
 
 // Recency-decay floors: the minimum fraction of its semantic relevance a memory
@@ -70,6 +73,8 @@ export interface RankMultipliers {
   tag_boost: number;
   append_penalty: number;
   rolled_up_penalty: number;
+  /** The source-class demotion (4.2); 1.0 for direct and for any canonical row regardless of class. */
+  source_weight: number;
 }
 
 type RerankArgs = [
@@ -139,7 +144,10 @@ function scoredMultiplier(
   const overlap = queryTags.length ? tags.filter(t => queryTags.includes(t)).length : 0;
   const tagBoost = overlap ? Math.min(config.TAG_BOOST_MAX, 1 + overlap * config.TAG_BOOST_STEP) : 1.0;
 
-  return { factor: combined * appendPenalty * rolledUpPenalty * importance * tagBoost, recency, frequency, combined, importance, tagBoost, appendPenalty, rolledUpPenalty, ageKnown };
+  const source = options.d1Sources?.get(parentId) ?? (typeof meta?.source === "string" ? meta.source : undefined);
+  const srcWeight = getStatus(tags) === "canonical" ? 1.0 : sourceWeight(sourceClass(source, tags), config);
+
+  return { factor: combined * appendPenalty * rolledUpPenalty * importance * tagBoost * srcWeight, recency, frequency, combined, importance, tagBoost, appendPenalty, rolledUpPenalty, ageKnown, srcWeight };
 }
 
 /**
@@ -164,7 +172,7 @@ export function rerankWithTimeDecayTraced(...args: Partial<RerankArgs>): { match
       const m = scoredMultiplier(match, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, config, options);
       return {
         match: { ...match, score: match.score * m.factor },
-        multipliers: { recency: m.recency, frequency: m.frequency, combined: m.combined, importance: m.importance, tag_boost: m.tagBoost, append_penalty: m.appendPenalty, rolled_up_penalty: m.rolledUpPenalty },
+        multipliers: { recency: m.recency, frequency: m.frequency, combined: m.combined, importance: m.importance, tag_boost: m.tagBoost, append_penalty: m.appendPenalty, rolled_up_penalty: m.rolledUpPenalty, source_weight: m.srcWeight },
         ageKnown: m.ageKnown,
       };
     })
