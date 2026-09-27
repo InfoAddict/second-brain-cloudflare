@@ -138,6 +138,54 @@ export function snapshotManyStatement(env: Env, s: SnapshotManyInput): D1Prepare
   return env.DB.prepare(b.sql).bind(...b.bindings);
 }
 
+export interface GuardedSnapshotManyInput {
+  /**
+   * Per-row identity check: matches only if the live row's own values still equal these.
+   * `rowVersion` is the caller's COALESCE(updated_at, created_at) at read time — entries.updated_at
+   * is NULL until first edit (updated-at-coalesced.test.ts), so a raw read would silently fail to
+   * guard every never-edited row.
+   */
+  entries: { id: string; rowVersion: number; contentBytes: number }[];
+  workspaceId: string;
+  reason: VersionReason;
+  change: ChangeContext;
+  content: { kind: "unchanged" | "suffix" };
+  meta?: Record<string, unknown>;
+  now: number;
+}
+
+/**
+ * Many-row snapshot with a per-row compare-and-set, one statement regardless of row count. The
+ * guard is a cheap proxy for "still exactly the row the caller read" — workspace_id (shared: every
+ * row here belongs to one caller-known workspace) plus each row's own (rowVersion, byte length of
+ * content) — rather than the row's full content: rebinding a whole row's text into the guard is
+ * what this exists to avoid (digest.ts's markSourcesRolledUp, measured at ~100 MB in one batch for
+ * 50 sources of up to 1 MB each on real workerd D1). The tuple list is one JSON parameter, whatever
+ * its length — same shape as buildSnapshotMany's id list, extended with the two extra guard columns
+ * per row. Never skips a no-op, like buildSnapshotMany.
+ */
+export function buildGuardedSnapshotMany(s: GuardedSnapshotManyInput): BuiltStatement {
+  const p = new Params();
+  const list = selectList(p, `instr(e.content, char(0)) = 0`, s);
+  const ws = p.add(s.workspaceId);
+  const tuples = p.add(JSON.stringify(s.entries.map(e => [e.id, e.rowVersion, e.contentBytes])));
+  return {
+    sql: `${INSERT_COLUMNS}\n${list}\n WHERE e.workspace_id = ${ws}
+       AND EXISTS (
+         SELECT 1 FROM json_each(${tuples}) t
+         WHERE json_extract(t.value, '$[0]') = e.id
+           AND json_extract(t.value, '$[1]') = COALESCE(e.updated_at, e.created_at)
+           AND json_extract(t.value, '$[2]') = length(CAST(e.content AS BLOB))
+       )`,
+    bindings: p.values(),
+  };
+}
+
+export function guardedSnapshotManyStatement(env: Env, s: GuardedSnapshotManyInput): D1PreparedStatement {
+  const b = buildGuardedSnapshotMany(s);
+  return env.DB.prepare(b.sql).bind(...b.bindings);
+}
+
 /** Bottom-up: keeps exactly the `keep` newest versions, never leaving a gap above the oldest kept. */
 export function buildPrune(entryId: string, keep: number): BuiltStatement {
   const p = new Params();
