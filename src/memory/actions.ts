@@ -33,27 +33,43 @@ export async function resolveEntryAction(
     if (until <= Date.now()) return { ok: false, error: "until must be in the future", status: 400 };
   }
   if (action === "still_true") {
-    const row = await getReadableEntry(env, identity, id, `id, workspace_id, actor_id, tags, COALESCE(updated_at, created_at) AS prior_updated_at, staleness_checked_at`) as (EntryAccessRow & Record<string, any> | null);
-    if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
-    const denied = assertCanEditContent(identity, row);
-    if (denied) return { ok: false, error: denied.message, status: 403 };
-    const tags: string[] = JSON.parse(row.tags ?? "[]");
-    if (!hasStaleAsOf(tags)) return { ok: false, error: "Entry is not flagged as out of date", status: 400 };
-    const now = Date.now();
-    const nextTags = withoutStaleAsOf(tags);
-    await env.DB.batch([
-      snapshotStatement(env, { entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { stale_confirmed: true }, now }),
-      // versioning: snapshot
-      env.DB.prepare(`UPDATE entries SET tags = ?, updated_at = ?, staleness_checked_at = ? WHERE id = ?`)
-        .bind(JSON.stringify(nextTags), now, now, id),
-      pruneStatement(env, id, cfg.VERSION_KEEP),
-    ]);
-    auditEvents(env, ctx, [{ entryId: id, actorId: identity.userId, event: "updated", payload: {
-      stale_confirmed: true,
-      prior: { tags, updated_at: row.prior_updated_at, staleness_checked_at: row.staleness_checked_at ?? null },
-      ...channelPayload(change),
-    } }]);
-    return { ok: true, id, action };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const row = await getReadableEntry(env, identity, id, `id, workspace_id, actor_id, tags, COALESCE(updated_at, created_at) AS prior_updated_at, staleness_checked_at`) as (EntryAccessRow & Record<string, any> | null);
+      if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
+      const denied = assertCanEditContent(identity, row);
+      if (denied) return { ok: false, error: denied.message, status: 403 };
+      const tags: string[] = JSON.parse(row.tags ?? "[]");
+      if (!hasStaleAsOf(tags)) return { ok: false, error: "Entry is not flagged as out of date", status: 400 };
+      const now = Date.now();
+      const nextTags = withoutStaleAsOf(tags);
+      // Guarded on tags and workspace_id (buildCasGuard, spec P3, ADV-1/ADV-2): a concurrent edit
+      // (a user-edited tag, say) between this read and the write must be kept, not overwritten by a
+      // confirm that no longer describes the row as it stands, and a row moved out of this caller's
+      // workspace must miss rather than commit there.
+      const casColumns = { tags: row.tags, workspace_id: row.workspace_id };
+      const p = new Params();
+      const tagsIdx = p.add(JSON.stringify(nextTags));
+      const nowIdx = p.add(now);
+      const idIdx = p.add(id);
+      const results = await env.DB.batch([
+        snapshotStatement(env, {
+          entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { stale_confirmed: true }, now,
+          guard: p2 => buildCasGuard(p2, casColumns),
+        }),
+        // versioning: snapshot
+        env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, updated_at = ${nowIdx}, staleness_checked_at = ${nowIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
+          .bind(...p.values()),
+        pruneStatement(env, id, cfg.VERSION_KEEP),
+      ]);
+      if (changesOf(results[1]) === 0) continue;
+      auditEvents(env, ctx, [{ entryId: id, actorId: identity.userId, event: "updated", payload: {
+        stale_confirmed: true,
+        prior: { tags, updated_at: row.prior_updated_at, staleness_checked_at: row.staleness_checked_at ?? null },
+        ...channelPayload(change),
+      } }]);
+      return { ok: true, id, action };
+    }
+    return { ok: false, error: "Could not resolve, try again", status: 409 };
   }
 
   for (let attempt = 0; attempt < 3; attempt++) {
