@@ -258,6 +258,27 @@ describe("renderHistory — change and event rows", () => {
     expect(tl.innerHTML).toContain("&lt;img");
   });
 
+  it('renders the viewer\'s own change as "you" in team mode, via memoryAuthors', () => {
+    const ctx = load();
+    ctx.memoryAuthors = { you: "u1", members: [{ userId: "u1", name: "Rahil" }] };
+    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+    expect(tl.innerHTML).toContain("by you via Claude");
+    expect(tl.innerHTML).not.toContain("by Rahil via Claude");
+  });
+
+  it("keeps the real name when memoryAuthors is absent (solo brain)", () => {
+    const ctx = load();
+    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+    expect(tl.innerHTML).toContain("by Rahil via Claude");
+  });
+
+  it("keeps the real name for a change that is not the viewer's own", () => {
+    const ctx = load();
+    ctx.memoryAuthors = { you: "u2", members: [{ userId: "u1", name: "Rahil" }, { userId: "u2", name: "Ana" }] };
+    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+    expect(tl.innerHTML).toContain("by Rahil via Claude");
+  });
+
   it("every history string exists in both locales", () => {
     const ctx = load();
     const en = vm.runInContext("I18N_EN", ctx).history;
