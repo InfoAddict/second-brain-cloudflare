@@ -22,7 +22,7 @@ import { CONTENT_LIKE_ESCAPE, contentLikePattern } from "../text/like";
 import { distillToRareTerms, inferQueryTags, scopedEntryTotal, type DistilledQuery, type TimeBounds } from "./distill";
 import { synthesizeInsight } from "./insight";
 import { hasStaleAsOf } from "../memory/stale";
-import { cosineSim, mmrRerank, rerankWithTimeDecay, type VectorizeMatch } from "./math";
+import { cosineSim, mmrRerank, rerankWithTimeDecayTraced, type RankMultipliers, type VectorizeMatch } from "./math";
 import { rrfFuse } from "./rrf";
 import { computeCompoundStale } from "./compound-stale";
 import { exactQueryMatchCount, GRAPH_SLOT_INDEX, GRAPH_SLOT_INDICES, graphSeedLimit, lexicalSeedLimit, RECALL_SEED_TOPK, scoreLinkedEvidence } from "./neighborhood";
@@ -31,7 +31,7 @@ import { buildQueryProfile, DEFAULT_EMBEDDING_QUERY_MODE, embeddingInput } from 
 import { localEvidenceOf } from "./root-candidate";
 import { blendRerankerScores, rerankDirectCap, rerankStep } from "./model-reranker";
 import { evidenceScoreOf, selectGraphRoots, type RootCandidate } from "./root-selector";
-import type { KeywordRow, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage } from "./types";
+import type { KeywordRow, KeywordTermTrace, RecallDiagnostics, RecallInternalOptions, RecallMatch, RecallSearchResult, RecallStage, WhySlot, WhyTrace } from "./types";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql, projectMemberTags } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
@@ -335,6 +335,8 @@ export function fuseDenseAndKeyword(
   substringWeight: number,
   keywordPreRanked = false,
   idfWindow = 0,
+  // Explain only: filled with each matched row's per-term level and idf, computed here already.
+  keywordTrace?: Map<string, KeywordTermTrace[]>,
 ): VectorizeMatch[] {
   const denseByParent = new Map<string, VectorizeMatch>();
   for (const m of [...denseMatches].sort((a, b) => b.score - a.score)) {
@@ -378,6 +380,17 @@ export function fuseDenseAndKeyword(
     ? keywordScored.sort((a, b) => b.weight - a.weight)
     : keywordScored.sort((a, b) => b.weight - a.weight || b.row.created_at - a.row.created_at || (a.row.id < b.row.id ? -1 : 1));
 
+  if (keywordTrace) {
+    for (const { row } of keywordRanked) {
+      const terms: KeywordTermTrace[] = [];
+      for (const t of tokens) {
+        const level = termLevel(row, t);
+        if (level !== 0) terms.push({ term: t, level, idf: idf(t) });
+      }
+      keywordTrace.set(row.id, terms);
+    }
+  }
+
   const fused = rrfFuse(denseRanked, keywordRanked.map(x => ({ id: x.row.id, weight: x.weight })));
   const keywordRowById = new Map(keywordRows.map(r => [r.id, r]));
 
@@ -395,7 +408,7 @@ export function fuseDenseAndKeyword(
 }
 
 export async function recallEntries(
-  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[] },
+  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[]; explain?: boolean },
   env: Env,
   ctx: ExecutionContext,
   // Resolved once at request entry by the route/MCP caller and threaded down.
@@ -417,6 +430,8 @@ export async function recallEntries(
   const cfg = config ?? await resolveConfig(env);
   const { query, topK } = params;
   const synthesize = params.synthesize ?? true;
+  // Off: nothing below records or attaches a trace, so results are what they were before explain existed.
+  const explain = params.explain === true;
   let { tag, after, before, kind } = params;
   // A project narrows exactly like a tag: candidates come from the members first (the tag
   // or any alias), and the same OR group is re-applied at hydration and in the JS re-check.
@@ -627,9 +642,12 @@ export async function recallEntries(
       corpus = { df, total };
     }
   }
-  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
-  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow);
+  const rootKeywordTrace = explain ? new Map<string, KeywordTermTrace[]>() : undefined;
+  const lexicalKeywordTrace = explain ? new Map<string, KeywordTermTrace[]>() : undefined;
+  const rootFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, profile.retrievalTokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow, rootKeywordTrace);
+  const lexicalFusedMatches = fuseDenseAndKeyword(results.matches as VectorizeMatch[], keywordRows, tokens, !memberFirst || semanticUnavailable, corpus, cfg.SUBSTRING_MATCH_WEIGHT, keywordPreRanked, keywordIdfWindow, lexicalKeywordTrace);
   const fusedMatches = lexicalFusedMatches.length ? lexicalFusedMatches : rootFusedMatches;
+  const keywordTrace = lexicalFusedMatches.length ? lexicalKeywordTrace : rootKeywordTrace;
   if (!rootFusedMatches.length && !fusedMatches.length) return { matches: [], insight: "", semanticUnavailable };
 
   const candidateIds = [...new Set([...fusedMatches, ...rootFusedMatches].map(m => (m.metadata as any)?.parentId ?? m.id))] as string[];
@@ -661,11 +679,13 @@ export async function recallEntries(
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
 
-  let directReranked = rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  const directTraced = rerankWithTimeDecayTraced(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  let directReranked = directTraced.map(t => t.match);
   // The root view is computed here, beside the direct one, so a single model batch can cover both.
-  let rootReranked = hops > 0
-    ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
+  const rootTraced = hops > 0
+    ? rerankWithTimeDecayTraced(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, { useRecallFrequency: false })
     : [];
+  let rootReranked = rootTraced.map(t => t.match);
   const rerankMode: RerankMode = internal.variant?.rerank === true ? "on" : internal.variant?.rerank === false ? "off" : isRerankMode(cfg.RERANK_MODE) ? cfg.RERANK_MODE : "off";
   // Only parents the scoped D1 read returned may reach the model: a foreign Vectorize hit has no row here.
   const scopedParents = new Set(rcRows.map(r => r.id));
@@ -988,6 +1008,7 @@ export async function recallEntries(
   let window: RecallMatch[] = baselineMatches;
   // A direct match the evidence slot pushed out, to be shown where the chosen match used to sit if that was further down.
   let displaced: RecallMatch | undefined;
+  let evidenceSlotId: string | undefined;
   if (hops > 0 && baselineMatches.length > GRAPH_SLOT_INDEX) {
     const replacementIndex = GRAPH_SLOT_INDEX;
     const replacementMatch = baselineMatches[replacementIndex];
@@ -1076,6 +1097,7 @@ export async function recallEntries(
     }, candidates);
     const chosenMatch = chosen && matchById.get(chosen.id);
     if (chosenMatch) {
+      evidenceSlotId = chosenMatch.id;
       window = [...baselineMatches.slice(0, replacementIndex), chosenMatch];
       if (replacementMatch.hop === 0) displaced = replacementMatch;
     }
@@ -1098,6 +1120,30 @@ export async function recallEntries(
   }
   const listed = new Set([...window, ...region, ...later].map(match => match.id));
   const matches = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
+  if (explain) {
+    // Only what the stages above already computed: nothing is queried or scored here.
+    const multipliers = new Map<string, RankMultipliers>();
+    for (const t of [...directTraced, ...rootTraced]) {
+      const id = parentOfMatch(t.match);
+      if (!multipliers.has(id)) multipliers.set(id, t.multipliers);
+    }
+    const fillIds = new Set(fillMatches.map(match => match.id));
+    const r3 = (n: number) => Math.round(n * 1000) / 1000;
+    for (const m of matches) {
+      const applied = multipliers.get(m.id);
+      const percentile = rerank.percentiles?.get(m.id);
+      const slot: WhySlot = m.id === evidenceSlotId ? "evidence" : m.hop > 0 ? "linked" : fillIds.has(m.id) ? "deeper" : "direct";
+      const why: WhyTrace = {
+        dense_rank: semanticRankByParent.get(m.id) ?? null,
+        keyword_terms: (keywordTrace?.get(m.id) ?? []).map(t => ({ term: t.term, level: t.level, idf: r3(t.idf) })),
+        multipliers: applied ? { recency: r3(applied.recency), frequency: r3(applied.frequency), importance: r3(applied.importance), tag_boost: r3(applied.tag_boost) } : null,
+        rerank_percentile: percentile === undefined ? null : r3(percentile),
+        graph: m.hop > 0 && m.viaProvenance && m.viaType && m.viaFrom ? { provenance: m.viaProvenance, type: m.viaType, from: m.viaFrom } : null,
+        slot,
+      };
+      m.why = why;
+    }
+  }
   const finalDirectIds = new Set(matches.filter(match => match.hop === 0).map(match => match.id));
   const finalRelated = matches.filter(match => match.hop > 0);
   if (internal.diagnostics) internal.diagnostics.selectedRelatedIds = finalRelated.map(x => x.id);

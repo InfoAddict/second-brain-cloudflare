@@ -57,7 +57,20 @@ export function cosineSim(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return normA === 0 || normB === 0 ? 0 : dot / Math.sqrt(normA * normB);
 }
 
-export function rerankWithTimeDecay(
+/** The multipliers rerankWithTimeDecay applies, reported per match (data only: see WhyTrace in types.ts). */
+export interface RankMultipliers {
+  recency: number;
+  frequency: number;
+  importance: number;
+  tag_boost: number;
+}
+
+export function rerankWithTimeDecay(...args: Parameters<typeof rerankWithTimeDecayTraced>): VectorizeMatch[] {
+  return rerankWithTimeDecayTraced(...args).map(t => t.match);
+}
+
+/** Same ordering and scores as rerankWithTimeDecay, with the multipliers that shaped each score alongside it. */
+export function rerankWithTimeDecayTraced(
   matches: VectorizeMatch[],
   recallCounts: Map<string, number> = new Map(),
   importanceScores: Map<string, number> = new Map(),
@@ -69,7 +82,7 @@ export function rerankWithTimeDecay(
   // module scope so this stays pure and directly assertable without an env.
   config: Readonly<Config> = DEFAULTS,
   options: Readonly<RerankOptions> = {},
-): VectorizeMatch[] {
+): { match: VectorizeMatch; multipliers: RankMultipliers }[] {
   const now = Date.now();
 
   return matches
@@ -110,9 +123,12 @@ export function rerankWithTimeDecay(
       const overlap = queryTags.length ? tags.filter(t => queryTags.includes(t)).length : 0;
       const tagBoost = overlap ? Math.min(config.TAG_BOOST_MAX, 1 + overlap * config.TAG_BOOST_STEP) : 1.0;
 
-      return { ...match, score: match.score * combinedMultiplier * appendPenalty * rolledUpPenalty * importanceMultiplier * tagBoost };
+      return {
+        match: { ...match, score: match.score * combinedMultiplier * appendPenalty * rolledUpPenalty * importanceMultiplier * tagBoost },
+        multipliers: { recency: recencyMultiplier, frequency: frequencyMultiplier, importance: importanceMultiplier, tag_boost: tagBoost },
+      };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.match.score - a.match.score);
 }
 
 export function mmrRerank<T extends VectorizeMatch>(candidates: T[], lambda: number, k: number): T[] {

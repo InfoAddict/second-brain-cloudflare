@@ -1,11 +1,35 @@
 import type { EdgeProvenance, EdgeType } from "../graph/types";
 import type { Identity } from "../lib/identity";
 import type { EmbeddingQueryMode } from "./query-profile";
+import type { RankMultipliers } from "./math";
 import type { RootView } from "./root-selector";
 
 export interface CompoundStaleSignal {
   count: number;
   oldestUpdatedAt: number;
+}
+
+/** How one query term matched a note: level 2 = as a word of its own, 1 = only inside a longer word. */
+export interface KeywordTermTrace {
+  term: string;
+  level: 1 | 2;
+  idf: number;
+}
+
+/** Where in the returned list a memory was seated. */
+export type WhySlot = "direct" | "linked" | "evidence" | "deeper";
+
+/** Why one memory came back: data recall had already computed, returned only when `explain` is asked for. */
+export interface WhyTrace {
+  /** 1-based rank in the dense (meaning) arm, null when that arm did not return it. */
+  dense_rank: number | null;
+  keyword_terms: KeywordTermTrace[];
+  /** Null on memories that were not scored through the direct ranking (linked ones). */
+  multipliers: RankMultipliers | null;
+  /** The cross-encoder's percentile among what it scored (1 best, 0 worst), null when it did not score this memory. */
+  rerank_percentile: number | null;
+  graph: { provenance: EdgeProvenance; type: EdgeType; from: string } | null;
+  slot: WhySlot;
 }
 
 export interface RecallMatch {
@@ -28,6 +52,8 @@ export interface RecallMatch {
   viaType?: EdgeType;
   viaLinkedAt?: number;           // when the edge was formed
   viaFrom?: string;               // id of the memory this one was reached from
+  /** Present only when the caller asked to explain the ranking. */
+  why?: WhyTrace;
 }
 
 export interface RecallSearchResult {
@@ -150,4 +176,4 @@ export interface KeywordRow {
   odd?: boolean;
 }
 
-export type { VectorizeMatch } from "./math";
+export type { RankMultipliers, VectorizeMatch } from "./math";
