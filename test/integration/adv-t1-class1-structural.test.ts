@@ -159,13 +159,8 @@ const CASES: Case[] = [
       return { succeeded: res.status === 200 };
     },
   },
-  {
-    name: "REST /forget permanent (Delete forever, R3-1)",
-    run: async (racingEnv, id, adminToken) => {
-      const res = await worker.fetch(req("POST", "/forget", { body: { id, permanent: true, confirm: id }, token: adminToken }), racingEnv, ctx);
-      return { succeeded: res.status === 200 };
-    },
-  },
+  // REST /forget permanent (Delete forever, R3-1) is gone from this list: it never reads or touches a
+  // live row any more, only a trash row pinned by nonce (delete-forever-nonce-only.test.ts).
   {
     name: "MCP update",
     run: async (racingEnv, id, _adminToken, admin?: Identity) => {

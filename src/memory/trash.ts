@@ -665,8 +665,7 @@ export async function restoreEntry(
 
 export type DeleteForeverResult =
   | { status: "not_found" }
-  | { status: "conflict" }
-  | { status: "deleted"; from: "live" | "trash"; deletedVectors: number };
+  | { status: "deleted"; deletedVectors: number };
 
 /**
  * The same deterministic ids store.ts's storeEntry would have produced for this content and
@@ -683,113 +682,67 @@ function deterministicVectorIds(id: string, content: string, source: string): st
 }
 
 /**
- * Delete forever (T-0089.4.7, human-only in the sense of "not offered to agents": REST uses the
- * same bearer token agents hold; there is no MCP tool or parameter). Hard deletes a live or
- * trashed row, its edges, all its versions and any trash copy, then its vectors. The `purged`
- * audit row is written inside the batch, only when there is something to delete. A racing forget
- * that lands first is still a success, reported `from: "trash"`.
+ * Delete forever (T-0089.4.7): hard deletes ONE trash row, named by its id and the nonce it got at
+ * trash time, plus its history, any leftover edges, the `purged` audit row and its vectors. A live
+ * memory is never deleted here: it is forgotten into the trash first (T-0089.1.1 close-out).
  *
- * The vectors to delete are read from the batch's own RETURNING clauses, not from a caller-supplied
- * row read earlier: a race (a restore bringing the id back to life between the caller's own read
- * and this call, or a transient Vectorize failure during an earlier forget) means neither the
- * live row's real vector_ids nor the trash row's content are safe to trust from outside this batch.
+ * Every statement is pinned to that exact physical row (id + authorized workspace + nonce), so a
+ * request authorized against a row that was since purged, restored or replaced under a reused id
+ * deletes nothing. History, edges and vectors are keyed by id alone, so they are also skipped when a
+ * live row holds the same id: those belong to the live row.
  *
- * Every statement below also checks the row still belongs to `authorizedWorkspaceId` (Class 1,
- * R3-1): the caller's own scoped read authorized this id in one workspace, and an unshare landing
- * in the gap before this batch runs must not let it touch the row wherever it ended up instead — a
- * live row moved to a personal workspace the caller cannot reach is exactly what an admin's
- * "permanent" forget must never be able to delete. Checked fresh, in the same statement that would
- * do the deleting, not from a read made moments earlier.
+ * Not offered to agents: REST uses the same bearer token agents hold; there is no MCP tool.
  */
 export async function deleteForever(
   env: Env, id: string, change: ChangeContext,
-  /** The workspace the caller's own scoped read authorized (Class 1) — a live row's, or a trashed
-   * row's for an id already forgotten. Required: every DELETE below is pinned to it. */
+  /** The trash row's workspace, from the caller's own scoped read. */
   authorizedWorkspaceId: string,
-  /** The trash row's own nonce (adv-final MAJOR 1), when the caller's read found this id in the
-   * trash rather than live: undefined for a live row (nothing to pin), '' for a row that predates
-   * the nonce column (fails closed below, the same rule restoreEntry applies), otherwise the exact
-   * physical row the caller authorized, not just its id. */
-  authorizedTrashNonce?: string,
+  /** The trash row's own nonce. '' (a row from before the column) or a missing value deletes nothing. */
+  nonce: string,
 ): Promise<DeleteForeverResult> {
-  if (authorizedTrashNonce === "") return { status: "conflict" };
+  if (typeof nonce !== "string" || nonce === "") return { status: "not_found" };
   const now = Date.now();
-  // Live or trashed: whichever this id currently is, checked against the SAME workspace value in
-  // both branches (a row is never both at once). Trash rows never change workspace_id once written
-  // (nothing updates entries_trash after the trash insert), so this half is defensive, not a race
-  // this codebase can actually trigger today — confirmed by test.
-  const homeGuard = (p: Params, bid: string) => {
-    const ws = p.add(authorizedWorkspaceId);
-    const nonceClause = authorizedTrashNonce === undefined ? "" : ` AND h.nonce = ${p.add(authorizedTrashNonce)}`;
-    return `(EXISTS (SELECT 1 FROM entries h WHERE h.id = ${bid} AND h.workspace_id = ${ws}) OR EXISTS (SELECT 1 FROM entries_trash h WHERE h.id = ${bid} AND h.workspace_id = ${ws}${nonceClause}))`;
-  };
-
-  const auditP = new Params();
-  const auditId = auditP.add(id);
-  const auditActor = auditP.add(change.actorId);
-  const auditChannel = auditP.add(change.channel);
-  const auditNow = auditP.add(now);
-  const auditGuard = homeGuard(auditP, auditId);
-  const byId = (sql: (id: string, guard: string) => string) => {
+  const trashRow = (p: Params, bid: string) =>
+    `EXISTS (SELECT 1 FROM entries_trash h WHERE h.id = ${bid} AND h.workspace_id = ${p.add(authorizedWorkspaceId)} AND h.nonce = ${p.add(nonce)})`;
+  const noLiveRow = (bid: string) =>
+    // scope-exempt: existence probe only, any workspace: a live row with this id owns its history and vectors
+    `NOT EXISTS (SELECT 1 FROM entries l WHERE l.id = ${bid})`;
+  const byId = (sql: (bid: string, p: Params) => string) => {
     const p = new Params();
     const bid = p.add(id);
-    return env.DB.prepare(sql(bid, homeGuard(p, bid))).bind(...p.values());
+    return env.DB.prepare(sql(bid, p)).bind(...p.values());
   };
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
-      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
-       SELECT lower(hex(randomblob(16))), ${auditId}, ${auditActor}, 'purged',
-              json_object('reason', 'permanent', 'channel', ${auditChannel}, 'from', CASE WHEN EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) THEN 'live' ELSE 'trash' END),
-              ${auditNow}
-        WHERE ${auditGuard}`,
-    ).bind(...auditP.values()),
-    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
-    byId((bid, guard) => `DELETE FROM edges WHERE (source_id = ${bid} OR target_id = ${bid}) AND ${guard}`),
-    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
-    byId((bid, guard) => `DELETE FROM entry_versions WHERE entry_id = ${bid} AND ${guard}`),
-    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1).
-    // RETURNING vector_ids too: the trash row's own stored ids (round 2 adversary) cover a short
-    // append's id-update-<ts> chunk, which content+source alone can't rederive — content/source
-    // stay as a best-effort fallback for a trash row from before this column existed.
-    byId((bid, guard) => `DELETE FROM entries_trash WHERE id = ${bid} AND ${guard} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
-    // RETURNING vector_ids: this statement's own value at the moment it runs, never a caller's stale
-    // read — a restore racing this call embeds under the same deterministic ids (ADV-trash-4).
-    // versioning: hard-delete: permanent (T-0089.4.7)
-    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
-    byId((bid, guard) => `DELETE FROM entries WHERE id = ${bid} AND ${guard} RETURNING vector_ids`),
-  ]);
-  const trashRow = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string } | undefined;
-  const entryRow = results[4].results?.[0] as { vector_ids?: string } | undefined;
-  const trashChanges = changedRows(results[3]);
-  const entryChanges = changedRows(results[4]);
-  if (entryChanges === 0 && trashChanges === 0) {
-    // Either genuinely gone, or it exists but no longer in the workspace the caller authorized
-    // (the guard above refused either way) — the caller needs to tell those apart: a conflict, to
-    // retry against whatever is authorized now, not a 404 claiming nothing is there for anyone.
-    // scope-exempt: by-id: deciding only which of the two already-refused outcomes this is
-    const stillThere = await env.DB.prepare(
-      `SELECT 1 AS ok FROM entries WHERE id = ?1 UNION ALL SELECT 1 AS ok FROM entries_trash WHERE id = ?1 LIMIT 1`,
-    ).bind(id).first();
-    return { status: stillThere ? "conflict" : "not_found" };
-  }
 
+  const results = await env.DB.batch([
+    // scope-exempt: by-id, pinned to the authorized trash row's nonce
+    byId((bid, p) => `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
+       SELECT lower(hex(randomblob(16))), ${bid}, ${p.add(change.actorId)}, 'purged',
+              json_object('reason', 'permanent', 'channel', ${p.add(change.channel)}, 'from', 'trash'), ${p.add(now)}
+        WHERE ${trashRow(p, bid)}`),
+    // scope-exempt: by-id, pinned to the authorized trash row's nonce
+    byId((bid, p) => `DELETE FROM edges WHERE (source_id = ${bid} OR target_id = ${bid}) AND ${trashRow(p, bid)} AND ${noLiveRow(bid)}`),
+    // scope-exempt: by-id, pinned to the authorized trash row's nonce
+    byId((bid, p) => `DELETE FROM entry_versions WHERE entry_id = ${bid} AND ${trashRow(p, bid)} AND ${noLiveRow(bid)}`),
+    // RETURNING the stored vector ids (they cover a short append's id-update-<ts> chunk) plus content
+    // and source to rederive the rest for a row stored before that column existed.
+    // scope-exempt: by-id, pinned to the authorized trash row's nonce
+    byId((bid, p) => `DELETE FROM entries_trash WHERE id = ${bid} AND workspace_id = ${p.add(authorizedWorkspaceId)} AND nonce = ${p.add(nonce)}
+       RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids, ${noLiveRow(bid)} AS vectors_free`),
+  ]);
+  if (changedRows(results[3]) === 0) return { status: "not_found" };
+
+  const row = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string; vectors_free?: number } | undefined;
   let vectorIds: string[] = [];
-  if (entryRow) {
-    try { vectorIds = JSON.parse(entryRow.vector_ids ?? "[]"); } catch { vectorIds = []; }
-  } else if (trashRow?.content !== undefined) {
-    // Union of the ids actually stored at trash time with the ids the content alone would
-    // derive: a short append's chunk (id-update-<ts>) is only in the stored set, but the
-    // derived set still catches a pre-column trash row (stored defaults to '[]').
+  // Vector ids are deterministic per id: a live row holding this id owns them, so leave them.
+  if (row?.content !== undefined && row.vectors_free) {
     let stored: string[] = [];
-    try { stored = JSON.parse(trashRow.vector_ids ?? "[]"); } catch { stored = []; }
-    const derived = deterministicVectorIds(id, trashRow.content, trashRow.source ?? "api");
-    vectorIds = [...new Set([...stored, ...derived])];
+    try { stored = JSON.parse(row.vector_ids ?? "[]"); } catch { stored = []; }
+    vectorIds = [...new Set([...stored, ...deterministicVectorIds(id, row.content, row.source ?? "api")])];
   }
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);
   } catch (e) {
     console.error("Vectorize delete failed during Delete forever (non-fatal):", e);
   }
-  return { status: "deleted", from: entryChanges > 0 ? "live" : "trash", deletedVectors: vectorIds.length };
+  return { status: "deleted", deletedVectors: vectorIds.length };
 }

@@ -33,7 +33,8 @@ it("a live-authorized Delete forever cannot consume another teammate's later tra
   await forgetEntry("reused-company", t.env, { actorId: bob.userId, channel: "rest" },
     { reason: "forget", config: DEFAULTS, purge: false }, company);
 
-  const pendingAliceDelete = await deleteForever(t.env, "reused-company", change, company);
+  // The live-authorized request carried no trash nonce; the API no longer accepts one without it.
+  const pendingAliceDelete = await deleteForever(t.env, "reused-company", change, company, undefined as unknown as string);
   expect(pendingAliceDelete.status).not.toBe("deleted");
   expect(await t.one<{ actor_id: string }>("SELECT actor_id FROM entries_trash WHERE id = ?", "reused-company"))
     .toMatchObject({ actor_id: bob.userId });

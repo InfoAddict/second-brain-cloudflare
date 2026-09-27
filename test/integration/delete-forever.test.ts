@@ -17,31 +17,24 @@ const post = (body: unknown) =>
   worker.fetch(new Request("http://localhost/forget", { method: "POST", headers, body: JSON.stringify(body) }), t.env, ctx);
 const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
 const count = async (sql: string, ...a: unknown[]) => ((await t.one<any>(sql, ...a))!.n as number);
+/** Delete forever of the trash row currently under `id`, with that row's own nonce (the trash view's request). */
+const nonceOf = async (id: string) => (await t.one<{ nonce: string }>(`SELECT nonce FROM entries_trash WHERE id = ?`, id))?.nonce ?? "none";
+const permanent = async (id: string) => post({ id, permanent: true, confirm: id, nonce: await nonceOf(id) });
 
 describe("Delete forever", () => {
-  it("of a live memory removes the row, edges, all versions and any trash row, then the vectors", async () => {
-    const deleteByIds = vi.fn().mockResolvedValue({});
-    t = await makeTrashEnv({ VECTORIZE: makeVectorizeMock({ deleteByIds }) });
+  it("of a live memory is refused; forgotten first, it removes the trash row and all versions", async () => {
+    t = await makeTrashEnv();
     t.seed("a", { vector_ids: '["v1"]' }); t.seed("b");
     t.edge("e1", "a", "b"); t.version("a", 1); t.version("a", 2);
-    const res = await post({ id: "a", permanent: true, confirm: "a" });
+    expect((await post({ id: "a", permanent: true, confirm: "a" })).status).toBe(400);
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).not.toBeNull();
+    await forget("a");
+    const res = await permanent("a");
     const data = await res.json() as any;
     expect(res.status).toBe(200);
-    expect(data).toMatchObject({ ok: true, id: "a", permanent: true, from: "live", deletedVectors: 1 });
-    expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).toBeNull();
-    expect(await t.all(`SELECT id FROM edges`)).toHaveLength(0);
-    expect(await count(`SELECT COUNT(*) n FROM entry_versions WHERE entry_id = 'a'`)).toBe(0);
-    expect(deleteByIds).toHaveBeenCalledWith(["v1"]);
-  });
-
-  it("of a trashed memory removes the trash row and all versions", async () => {
-    t = await makeTrashEnv();
-    t.seed("a"); t.version("a", 1);
-    await forget("a");
-    const res = await post({ id: "a", permanent: true, confirm: "a" });
-    const data = await res.json() as any;
-    expect(data).toMatchObject({ ok: true, from: "trash" });
+    expect(data).toMatchObject({ ok: true, id: "a", permanent: true });
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).toBeNull();
+    expect(await t.all(`SELECT id FROM edges`)).toHaveLength(0);
     expect(await count(`SELECT COUNT(*) n FROM entry_versions WHERE entry_id = 'a'`)).toBe(0);
   });
 
@@ -63,34 +56,18 @@ describe("Delete forever", () => {
     expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).not.toBeNull();
   });
 
-  it("a forget that commits just before the permanent batch still reports deleted, from trash, and leaves nothing behind", async () => {
-    t = await makeTrashEnv();
-    t.seed("a");
-    // getReadableEntry sees it live; a racing forget wins before the permanent batch runs.
-    const realBatch = t.sqlite.db.batch.bind(t.sqlite.db);
-    let first = true;
-    (t.sqlite.db as any).batch = async (stmts: unknown[]) => {
-      if (first && stmts.length === 5) { first = false; await forget("a"); }
-      return realBatch(stmts as any);
-    };
-    const res = await post({ id: "a", permanent: true, confirm: "a" });
-    const data = await res.json() as any;
-    expect(res.status).toBe(200);
-    expect(data).toMatchObject({ ok: true, from: "trash" });
-    expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).toBeNull();
-    expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).toBeNull();
-  });
-
   it("the purged audit row is written in the same batch, names the actor, and no audit row is written when nothing was deleted", async () => {
     t = await makeTrashEnv();
     t.seed("a");
-    await post({ id: "a", permanent: true, confirm: "a" });
+    await forget("a");
+    const nonce = await nonceOf("a");
+    await post({ id: "a", permanent: true, confirm: "a", nonce });
     const ev = await t.one<any>(`SELECT actor_id, payload FROM entry_events WHERE entry_id = 'a' AND event = 'purged'`);
     // adversary (MINOR): the audit event must name who deleted it forever, not ''.
     expect(ev!.actor_id).toBe(t.roots.ownerUserId);
-    expect(JSON.parse(ev!.payload)).toMatchObject({ reason: "permanent", channel: "rest", from: "live" });
+    expect(JSON.parse(ev!.payload)).toMatchObject({ reason: "permanent", channel: "rest", from: "trash" });
     // A second call: nothing left to delete, so no second purged row.
-    const res2 = await post({ id: "a", permanent: true, confirm: "a" });
+    const res2 = await post({ id: "a", permanent: true, confirm: "a", nonce });
     expect(res2.status).toBe(404);
     expect(await count(`SELECT COUNT(*) n FROM entry_events WHERE event = 'purged'`)).toBe(1);
   });
@@ -99,7 +76,7 @@ describe("Delete forever", () => {
     t = await makeTrashEnv();
     t.seed("a");
     await forget("a");
-    await post({ id: "a", permanent: true, confirm: "a" });
+    await permanent("a");
     const ev = await t.one<any>(`SELECT payload FROM entry_events WHERE entry_id = 'a' AND event = 'purged'`);
     expect(JSON.parse(ev!.payload)).toMatchObject({ reason: "permanent", channel: "rest", from: "trash" });
   });
@@ -111,16 +88,17 @@ describe("Delete forever", () => {
     const postAs = (h: typeof headers, body: unknown) =>
       worker.fetch(new Request("http://localhost/forget", { method: "POST", headers: h, body: JSON.stringify(body) }), t.env, ctx);
 
-    // A company row Ada did not write: forbidden, not deleted.
+    // A trashed company row Ada did not write: forbidden, not deleted.
     t.seed("company-row", { workspace_id: t.roots.companyWorkspaceId, actor_id: t.roots.ownerUserId });
-    const denied = await postAs(adaHeaders, { id: "company-row", permanent: true, confirm: "company-row" });
+    await forgetEntry("company-row", t.env, { actorId: t.roots.ownerUserId, channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.companyWorkspaceId);
+    const denied = await postAs(adaHeaders, { id: "company-row", permanent: true, confirm: "company-row", nonce: await nonceOf("company-row") });
     expect(denied.status).toBe(403);
-    expect(await t.one(`SELECT id FROM entries WHERE id = 'company-row'`)).not.toBeNull();
+    expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'company-row'`)).not.toBeNull();
 
     // The owner's own trashed memory: outside Ada's readable scope entirely, so it 404s rather than 403 (never leaks that it exists).
     t.seed("owner-private");
     await forget("owner-private");
-    const unreachable = await postAs(adaHeaders, { id: "owner-private", permanent: true, confirm: "owner-private" });
+    const unreachable = await postAs(adaHeaders, { id: "owner-private", permanent: true, confirm: "owner-private", nonce: await nonceOf("owner-private") });
     expect(unreachable.status).toBe(404);
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'owner-private'`)).not.toBeNull();
   });
@@ -129,13 +107,14 @@ describe("Delete forever", () => {
     t = await makeTrashEnv();
     t.seed("src");
     await t.sqlite.db.prepare(`INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES ('digest1', 'the digest text stands on its own', '["digest"]', 'system', 1, 1, '[]', ?, '')`).bind(t.roots.ownerPersonalWorkspaceId).run();
-    await post({ id: "src", permanent: true, confirm: "src" });
+    await forget("src");
+    await permanent("src");
     expect((await t.one<any>(`SELECT content FROM entries WHERE id = 'digest1'`))!.content).toBe("the digest text stands on its own");
   });
 
   it("an unknown id is 404", async () => {
     t = await makeTrashEnv();
-    const res = await post({ id: "nope", permanent: true, confirm: "nope" });
+    const res = await permanent("nope");
     expect(res.status).toBe(404);
   });
 
@@ -158,7 +137,7 @@ function statefulVectorize() {
 }
 
 describe("adversary: Delete forever racing a restore (ADV-trash-4)", () => {
-  it("Delete forever of a trashed memory that a racing restore brought back leaves no vector (content) behind", async () => {
+  it("a restore that commits after authorization wins: Delete forever deletes nothing and the restored memory stays whole", async () => {
     const vz = statefulVectorize();
     t = await makeTrashEnv({ VECTORIZE: vz.index });
     t.seed("a", { content: "secret text that must be gone" });
@@ -178,11 +157,13 @@ describe("adversary: Delete forever racing a restore (ADV-trash-4)", () => {
       }
       return realBatch(stmts);
     };
-    const res = await post({ id: "a", permanent: true, confirm: "a" });
-    expect(res.status).toBe(200);
-    expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).toBeNull();
-    // Nothing of the memory may remain: its vector metadata carries the text.
-    expect([...vz.store.values()].map((m) => m.content)).not.toContain("secret text that must be gone");
+    const res = await permanent("a");
+    expect(injected).toBe(true);
+    expect(res.status).toBe(404);
+    // The restored row is live again, with its own vectors: the stale trash request touched nothing.
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).not.toBeNull();
+    expect([...vz.store.values()].map((m) => m.content)).toContain("secret text that must be gone");
+    expect(await count(`SELECT COUNT(*) n FROM entry_events WHERE event = 'purged'`)).toBe(0);
   });
 });
 
@@ -199,7 +180,7 @@ describe("adversary: Delete forever after a failed vector delete (ADV-trash-5)",
     (vz.index as any).deleteByIds = del;
     expect(vz.store.has("a")).toBe(true);
 
-    expect((await post({ id: "a", permanent: true, confirm: "a" })).status).toBe(200);
+    expect((await permanent("a")).status).toBe(200);
     expect(vz.store.has("a")).toBe(false);
   });
 
@@ -220,7 +201,7 @@ describe("adversary: Delete forever after a failed vector delete (ADV-trash-5)",
     expect(vz.store.has("a-chunk-0")).toBe(true);
     expect(vz.store.has("a-chunk-1")).toBe(true);
 
-    expect((await post({ id: "a", permanent: true, confirm: "a" })).status).toBe(200);
+    expect((await permanent("a")).status).toBe(200);
     expect(vz.store.has("a-chunk-0")).toBe(false);
     expect(vz.store.has("a-chunk-1")).toBe(false);
   });
@@ -245,7 +226,7 @@ describe("round 2 adversary: Delete forever from the trash after a failed forget
     expect((await post({ id })).status).toBe(200);
     (vz.index as any).deleteByIds = del;
 
-    expect((await post({ id, permanent: true, confirm: id })).status).toBe(200);
+    expect((await permanent(id)).status).toBe(200);
     const leftovers = [...vz.store.entries()].filter(([, m]) => m.parentId === id).map(([k, m]) => `${k}: ${m.content}`);
     expect(leftovers).toEqual([]);
   });
@@ -267,24 +248,20 @@ function afterFirstRead(base: any, pattern: RegExp, mutate: () => Promise<void>)
   } } };
 }
 
-describe("round 3 adversary (MAJOR): Delete forever destroys a memory that moved out of the caller's scope after its check (R3-1)", () => {
-  it("an admin's Delete forever does not delete Bob's memory after Bob unshares it", async () => {
+describe("round 3 adversary (MAJOR, R3-1), superseded by nonce-only Delete forever", () => {
+  it("an admin's Delete forever cannot reach Bob's live company memory at all", async () => {
     t = await makeTrashEnv();
     const adminTok = (await createMember(t.env, { name: "Ada", role: "admin" })).token;
-    const { token: bobTok, member: bob } = await createMember(t.env, { name: "Bob" });
+    const { member: bob } = await createMember(t.env, { name: "Bob" });
     t.seed("x1", { content: "Bob's note", workspace_id: t.roots.companyWorkspaceId, actor_id: bob.userId });
-    const racing = afterFirstRead(t.env, /^SELECT id, workspace_id, actor_id FROM entries WHERE id = \? AND/, async () => {
-      await t.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'x1'`).bind(bob.personalWorkspaceId).run();
-    });
-    const res = await worker.fetch(new Request("http://localhost/forget", {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminTok}` },
-      body: JSON.stringify({ id: "x1", permanent: true, confirm: "x1" }),
-    }), racing, ctx);
-    const row = await t.one<any>(`SELECT workspace_id FROM entries WHERE id = 'x1'`);
-    // The race must have fired — otherwise this test proves nothing.
-    expect(row?.workspace_id).toBe(bob.personalWorkspaceId);
-    expect(res.status).not.toBe(200);
-    void bobTok;
+    for (const nonce of [undefined, "guess"]) {
+      const res = await worker.fetch(new Request("http://localhost/forget", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminTok}` },
+        body: JSON.stringify({ id: "x1", permanent: true, confirm: "x1", nonce }),
+      }), t.env, ctx);
+      expect(res.status).not.toBe(200);
+    }
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'x1'`)).not.toBeNull();
   });
 });
 

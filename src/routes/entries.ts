@@ -176,14 +176,14 @@ export async function handleEntriesRoutes(
     return json(summary);
   }
 
-  // POST /forget — delete-by-id, mirrors the MCP `forget` tool. With { permanent: true, confirm: id }
-  // it is Delete forever (T-0089.4.7) instead: never offered as an MCP tool or parameter, and it
-  // works on a live memory or one already sitting in the trash.
+  // POST /forget — delete-by-id, mirrors the MCP `forget` tool. With { permanent: true, confirm: id,
+  // nonce } it is Delete forever (T-0089.4.7) instead: it acts only on the trash row with that nonce
+  // (the trash view's row), never on a live memory, and is never offered as an MCP tool or parameter.
   if (url.pathname === "/forget" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string; permanent?: unknown; confirm?: unknown };
+    let body: { id?: string; permanent?: unknown; confirm?: unknown; nonce?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     const id = body.id.trim();
@@ -191,18 +191,19 @@ export async function handleEntriesRoutes(
     if ("permanent" in body) {
       if (body.permanent !== true) return json({ ok: false, error: "permanent must be true" }, 400);
       if (body.confirm !== id) return json({ ok: false, error: "confirm must equal id" }, 400);
+      const nonce = body.nonce;
+      if (typeof nonce !== "string" || nonce === "") {
+        return json({ ok: false, error: "nonce is required: Delete forever works on a trash row only. Forget the memory first, then delete it from the trash." }, 400);
+      }
 
-      const liveRow = await getReadableEntry(env, auth, id);
-      const trashedRow = liveRow ? null : await getTrashedEntry(env, auth, id);
-      const row = liveRow ?? trashedRow;
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanMutateEntry(auth, row);
+      const trashed = await getTrashedEntry(env, auth, id);
+      if (!trashed || trashed.nonce !== nonce) return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+      const denied = assertCanMutateEntry(auth, trashed);
       if (denied) return json({ ok: false, error: denied.message }, 403);
 
-      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" }, row.workspace_id as string, trashedRow?.nonce);
-      if (result.status === "not_found") return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      if (result.status === "conflict") return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
-      return json({ ok: true, id, permanent: true, from: result.from, deletedVectors: result.deletedVectors });
+      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" }, trashed.workspace_id, nonce);
+      if (result.status === "not_found") return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+      return json({ ok: true, id, permanent: true, deletedVectors: result.deletedVectors });
     }
 
     const row = await getReadableEntry(env, auth, id);

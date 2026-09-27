@@ -14,6 +14,7 @@ import { resolveIdentityByUserId, resolveIdentityFromToken, type Identity } from
 import { appendToEntry, storeEntry, updateEntryContent } from "../../src/capture/store";
 import { deprecateEntry, forgetEntry } from "../../src/capture/lifecycle";
 import { deleteForever } from "../../src/memory/trash";
+import { trashNonce } from "../helpers/trash-env";
 import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
 
@@ -98,7 +99,7 @@ describe("R4-V1 (MAJOR): a restore whose content CAS misses never retires the lo
     await expect(update(losing, "a1", DRAFT)).rejects.toThrow(/transient/);
     expect((await live("a1")).content).toBe("winner text");
     expect((await forgetEntry("a1", e, change(), { reason: "forget", config: DEFAULTS, purge: false }, wctx().workspaceId)).status).toBe("deleted");
-    expect((await deleteForever(e, "a1", change(), wctx().workspaceId)).status).toBe("deleted");
+    expect((await deleteForever(e, "a1", change(), wctx().workspaceId, await trashNonce(e, "a1"))).status).toBe("deleted");
     // FAILS: ["a1-chunk-0","a1-chunk-1","a1-chunk-2"] (LOSER-DRAFT text) outlive Delete forever.
     expect(under("a1")).toEqual([]);
   });
@@ -112,7 +113,7 @@ describe("R4-V1 (MAJOR): a restore whose content CAS misses never retires the lo
     } });
     await expect(update(losing, "a2", DRAFT)).rejects.toThrow(/transient/);
     expect(await live("a2")).toBeNull();
-    expect((await deleteForever(e, "a2", change(), wctx().workspaceId)).status).toBe("deleted");
+    expect((await deleteForever(e, "a2", change(), wctx().workspaceId, await trashNonce(e, "a2"))).status).toBe("deleted");
     // FAILS: the loser's three chunks survive (the CAS misses on the gone row, so nothing is deleted).
     expect(under("a2")).toEqual([]);
   });
@@ -191,7 +192,7 @@ describe("R4-V4 (MAJOR): the failure branch drops a short append's chunk from ve
     const row = await live("c1");
     await storeEntry(e, "c1", row.content, JSON.parse(row.tags), row.source, row.created_at, DEFAULTS, wctx());
     expect((await forgetEntry("c1", e, change(), { reason: "forget", config: DEFAULTS, purge: false }, wctx().workspaceId)).status).toBe("deleted");
-    expect((await deleteForever(e, "c1", change(), wctx().workspaceId)).status).toBe("deleted");
+    expect((await deleteForever(e, "c1", change(), wctx().workspaceId, await trashNonce(e, "c1"))).status).toBe("deleted");
     // FAILS: ["c1-update-<ts>"] ("PRIVATE ADDITION") outlives Delete forever.
     expect(under("c1")).toEqual([]);
   });

@@ -13,6 +13,7 @@ import { applyStatus, forgetEntry } from "../../src/capture/lifecycle";
 import { moveEntry } from "../../src/capture/share";
 import { resolveEntryAction } from "../../src/memory/actions";
 import { deleteForever } from "../../src/memory/trash";
+import { trashNonce } from "../helpers/trash-env";
 import { D1_ROW_MAX_BYTES } from "../../src/constants";
 import { revertEntry } from "../../src/memory/undo";
 import { DEFAULTS } from "../../src/config";
@@ -196,7 +197,8 @@ describe("ADV-U16 (MINOR, superseded by the round-3 simplification): a user-remo
     const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
     // The user removes the re-created row for good, deliberately — not through redo, which never
     // touches it at all any more.
-    await deleteForever(e, x, change(), owner.personalWorkspaceId);
+    await forgetEntry(x, e, change(), { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
+    expect((await deleteForever(e, x, change(), owner.personalWorkspaceId, await trashNonce(e, x))).status).toBe("deleted");
 
     const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(redo.status).toBe("reverted");

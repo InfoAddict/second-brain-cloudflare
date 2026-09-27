@@ -16,6 +16,7 @@ import { updateEntryContent, appendToEntry } from "../../src/capture/store";
 import { applyStatus, forgetEntry } from "../../src/capture/lifecycle";
 import { resolveEntryAction, applyInsightResolution } from "../../src/memory/actions";
 import { restoreEntry, deleteForever, getTrashedEntry, trashMirroredEntries } from "../../src/memory/trash";
+import { trashNonce } from "../helpers/trash-env";
 import { revertEntry } from "../../src/memory/undo";
 import { moveEntry } from "../../src/capture/share";
 import { markSourcesRolledUp } from "../../src/compression/digest";
@@ -176,12 +177,14 @@ describe("forget: baseline, POST /forget", () => {
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(2);
   });
 
-  it("POST /forget permanent (deleteForever) is one batch: five statements, via RETURNING, not a separate guard/vectors read", async () => {
+  it("POST /forget permanent (deleteForever) is one batch: four statements, via RETURNING, not a separate guard/vectors read", async () => {
     t = await makeTrashEnv();
     t.seed("e1");
+    await forgetEntry("e1", t.env, change(), { reason: "forget", config: DEFAULTS, purge: false }, t.roots.ownerPersonalWorkspaceId);
+    const nonce = await trashNonce(t.env, "e1");
     t.sqlite.issued.length = 0;
-    const r = await deleteForever(t.env, "e1", change(), t.roots.ownerPersonalWorkspaceId);
-    expect(r).toMatchObject({ status: "deleted", from: "live" });
+    const r = await deleteForever(t.env, "e1", change(), t.roots.ownerPersonalWorkspaceId, nonce);
+    expect(r).toMatchObject({ status: "deleted" });
     // Spec said "guard + vectors read + 1 batch + audit"; the current code folds the guard, the
     // vectors read AND the audit insert into ONE batch via RETURNING clauses (trash.ts:591-614).
     // Measured: 1 execution, not 4.

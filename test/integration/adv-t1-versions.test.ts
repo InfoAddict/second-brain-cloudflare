@@ -714,24 +714,17 @@ function afterFirstRead(base: Env, pattern: RegExp, mutate: () => Promise<void>)
 }
 
 describe("R3-1 (MAJOR): Delete forever destroys a memory that moved out of the caller's scope after its check", () => {
-  // routes/entries.ts POST /forget {permanent}: getReadableEntry + assertCanMutateEntry, then deleteForever(env, id)
-  // (memory/trash.ts:579) whose every statement is by id with no workspace pin. CLASS 1 threaded
-  // authorizedWorkspaceId into forgetEntry but not into deleteForever. An unshare in that gap lets an admin
-  // permanently delete a member's now-private memory, its versions and its links: irreversible, cross-member.
-  it("an admin's Delete forever does not delete Bob's memory after Bob unshares it", async () => {
+  // Superseded by nonce-only Delete forever (T-0089.1.1 close-out): a live memory is never deleted
+  // forever, so an unshare racing the check has nothing to exploit.
+  it("an admin's Delete forever cannot reach Bob's live company memory at all", async () => {
     const worker = (await import("../../src/index")).default;
     const { req } = await import("../helpers/make-request");
     const adminTok = (await createMember(env, { name: "Ada", role: "admin" })).token;
     const author = await member("Bob");
     await seed("x1", { content: "Bob's note", workspaceId: companyWs, actorId: author.userId });
-    const racing = afterFirstRead(env, /^SELECT id, workspace_id, actor_id FROM entries WHERE id = \? AND/, async () => {
-      await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'x1'`).bind(author.personalWorkspaceId).run();
-    });
-    const res = await worker.fetch(req("POST", "/forget", { body: { id: "x1", permanent: true, confirm: "x1" }, token: adminTok }), racing, ctx);
-    const row = await live("x1");
-    // FAILS: 200 and the row (now in Bob's personal workspace) is gone for good.
-    expect(row?.workspace_id).toBe(author.personalWorkspaceId);
-    expect(res.status).not.toBe(200);
+    const res = await worker.fetch(req("POST", "/forget", { body: { id: "x1", permanent: true, confirm: "x1" }, token: adminTok }), env, ctx);
+    expect(res.status).toBe(400);
+    expect((await live("x1"))?.workspace_id).toBe(companyWs);
   });
 });
 

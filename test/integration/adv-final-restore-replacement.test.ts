@@ -48,7 +48,7 @@ it("same-millisecond Delete forever and ID reuse cannot pass the stale restore r
   const ownerRowid = (await t.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "same-ms"))!.rowid;
 
   expect((await deleteForever(t.env, "same-ms", { actorId: owner.userId, channel: "rest" },
-    owner.personalWorkspaceId)).status).toBe("deleted");
+    owner.personalWorkspaceId, ownerRead.nonce)).status).toBe("deleted");
   t.seed("same-ms", { content: "Bob's private memory", actor_id: bob.userId,
     workspace_id: bob.personalWorkspaceId });
   await forgetEntry("same-ms", t.env, { actorId: bob.userId, channel: "rest" },
