@@ -1,17 +1,18 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import type { ProjectRow } from "../projects/registry";
-import { projectFilterSql } from "../projects/filter";
+import { projectFilterJsonSql } from "../projects/filter";
 import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
-import { STALE_REVIEW_SQL } from "../memory/stale";
+import { STALE_REVIEW_SQL, STALE_AS_OF } from "../memory/stale";
 import { OPEN_LOOP_SQL } from "../memory/loops";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
 import { DUE_WITHIN_MS, DUE_SQL } from "../when/input";
 import { parseTags } from "../insight/candidates";
+import { STORED_DATA_NOTICE, storedLine } from "../lib/stored-data";
 import {
   excludedIds, readResurfaceState, withShown, writeResurfaceState,
 } from "../runtime/resurface-state";
@@ -70,7 +71,7 @@ const RESURFACE_EXCLUDE_BOUND_CAP = 20;
 
 function briefScope(auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): ScopeClause {
   const baseScope = scopeWhereForRead(auth, { layer, teamId });
-  const project = projectRows ? projectFilterSql(projectRows) : null;
+  const project = projectRows ? projectFilterJsonSql(projectRows) : null;
   return project
     ? { clause: `${baseScope.clause} AND ${project.clause}`, bindings: [...baseScope.bindings, ...project.bindings] }
     : baseScope;
@@ -273,31 +274,89 @@ export async function computeBrief(env: Env, auth: Identity, preview = false, pr
   };
 }
 
+// Each term repeats a LIKE predicate as the instr(...) expression its partial index is defined on
+// (src/db/init.ts), so the planner scans only the matching rows instead of every memory.
+const TASK_INDEXED = `instr(lower(tags), '"task"') > 0`;
+const INSIGHT_INDEXED = `instr(lower(tags), '"auto-insight"') > 0`;
+const STALE_INDEXED = `instr(lower(tags), '"${STALE_AS_OF}"') > 0`;
+
+/**
+ * Rows the caller may change, which resolve enforces: a teammate's company row is theirs to
+ * settle, so listing it as the caller's own item sends them to a refusal. Admins may act on all.
+ */
+function actionable(auth: Identity): ScopeClause {
+  if (auth.role === "admin") return { clause: "1 = 1", bindings: [] };
+  return { clause: "(workspace_id = ? OR actor_id = ?)", bindings: [auth.personalWorkspaceId, auth.userId] };
+}
+
+export type BriefPart = "due" | "loops" | "stale" | "insights";
+export interface BriefRow { id: string; content: string; when_at?: number }
+export interface BriefSection { total: number; items: BriefRow[] }
+export type AgentBriefData = Partial<Record<BriefPart, BriefSection>>;
+
+/** The four agent-brief reads, each optional and each one bounded statement. */
+export async function readAgentBrief(
+  env: Env, auth: Identity,
+  opts: { parts: BriefPart[]; projectRows?: ProjectRow[]; layer?: "personal" | "company"; teamId?: string },
+): Promise<AgentBriefData> {
+  const scope = briefScope(auth, opts.projectRows, opts.layer, opts.teamId);
+  const mine = actionable(auth);
+  const now = Date.now();
+  // Pending insights carry no author lock, so their query omits the actionable clause and bindings.
+  const run = async (sql: string, cap: number, extra: unknown[] = [], withMine = true): Promise<BriefSection> => {
+    const { results } = await env.DB.prepare(sql).bind(...extra, ...scope.bindings, ...(withMine ? mine.bindings : [])).all();
+    const rows = results as unknown as (BriefRow & { total: number })[];
+    return { total: rows[0]?.total ?? 0, items: rows.slice(0, cap).map(({ id, content, when_at }) => ({ id, content, ...(when_at != null ? { when_at } : {}) })) };
+  };
+  const queries: Record<BriefPart, () => Promise<BriefSection>> = {
+    due: () => run(`SELECT id, content, when_at, COUNT(*) OVER() AS total FROM entries
+      WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause} AND ${mine.clause}
+      ORDER BY when_at ASC, id ASC LIMIT 5`, 5, [now + DUE_WITHIN_MS]),
+    loops: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${TASK_INDEXED} AND ${OPEN_LOOP_SQL} AND ${scope.clause} AND ${mine.clause}
+      ORDER BY created_at DESC, id DESC LIMIT 5`, 5),
+    stale: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${STALE_INDEXED} AND ${STALE_REVIEW_SQL} AND ${scope.clause} AND ${mine.clause}
+      ORDER BY COALESCE(updated_at, created_at) ASC, id ASC LIMIT 2`, 2),
+    insights: () => run(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
+      WHERE ${INSIGHT_INDEXED} AND ${PENDING_INSIGHT_SQL} AND ${scope.clause}
+      ORDER BY created_at DESC, id DESC LIMIT 1`, 1, [], false),
+  };
+  const results = await Promise.all(opts.parts.map(async part => [part, await queries[part]()] as const));
+  return Object.fromEntries(results) as AgentBriefData;
+}
+
+/** Text for the MCP tool: sections omitted when empty, stored text framed as data. */
+export function formatAgentBrief(data: AgentBriefData): string {
+  const line = (r: BriefRow) => `- ${storedLine(r.id, 64)}: ${storedLine(r.content, 120)}`;
+  const sections: string[] = [];
+  const add = (title: string, part: BriefSection | undefined, render: (r: BriefRow) => string = line) => {
+    if (part?.items.length) sections.push(`${title}\n${part.items.map(render).join("\n")}`);
+  };
+  add("Due", data.due, r => `${line(r)} (${new Date(r.when_at as number).toISOString()})`);
+  add("Open commitments", data.loops);
+  add(`May be out of date (${data.stale?.total ?? 0})`, data.stale);
+  add(`Pending insights (${data.insights?.total ?? 0})`, data.insights);
+  return sections.length ? `${STORED_DATA_NOTICE}\n\n${sections.join("\n\n")}` : "Nothing needs attention.";
+}
+
 /** Compact attention view for agents. Shares the scope and queue predicates with dashboard brief. */
 export async function computeAgentBrief(env: Env, auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): Promise<string> {
-  const scope = briefScope(auth, projectRows, layer, teamId);
-  const now = Date.now();
-  const [due, loops, stale, insights] = await Promise.all([
-    env.DB.prepare(`SELECT id, content, when_at FROM entries
-      WHERE ${DUE_SQL} AND when_at <= ? AND ${scope.clause}
-      ORDER BY when_at ASC, id ASC LIMIT 5`).bind(now + DUE_WITHIN_MS, ...scope.bindings).all(),
-    env.DB.prepare(`SELECT id, content FROM entries
-      WHERE ${OPEN_LOOP_SQL} AND ${scope.clause}
-      ORDER BY created_at DESC, id DESC LIMIT 5`).bind(...scope.bindings).all(),
-    env.DB.prepare(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${STALE_REVIEW_SQL} AND ${scope.clause}
-      ORDER BY COALESCE(updated_at, created_at) ASC, id ASC LIMIT 2`).bind(...scope.bindings).all(),
-    env.DB.prepare(`SELECT id, content, COUNT(*) OVER() AS total FROM entries
-      WHERE ${PENDING_INSIGHT_SQL} AND ${scope.clause}
-      ORDER BY created_at DESC, id DESC LIMIT 1`).bind(...scope.bindings).all(),
-  ]);
-  const line = (r: Record<string, any>) => `- ${r.id}: ${String(r.content ?? "").replace(/\s+/g, " ").slice(0, 120)}`;
-  const sections: string[] = [];
-  if (due.results.length) sections.push(`Due\n${(due.results as Record<string, any>[]).map(r => `${line(r)} (${new Date(r.when_at as number).toISOString()})`).join("\n")}`);
-  if (loops.results.length) sections.push(`Open commitments\n${(loops.results as Record<string, any>[]).map(line).join("\n")}`);
-  if (stale.results.length) sections.push(`May be out of date (${(stale.results[0] as Record<string, any>).total})\n${(stale.results as Record<string, any>[]).map(line).join("\n")}`);
-  if (insights.results.length) sections.push(`Pending insights (${(insights.results[0] as Record<string, any>).total})\n${(insights.results as Record<string, any>[]).map(line).join("\n")}`);
-  return sections.join("\n\n") || "Nothing needs attention.";
+  return formatAgentBrief(await readAgentBrief(env, auth, { parts: ["due", "loops", "stale", "insights"], projectRows, layer, teamId }));
+}
+
+/**
+ * The session-start hook's brief: due and open commitments only, in the shape GET /brief uses for
+ * them. No resurface, topics or activity, so it reads only the rows those two queues hold.
+ */
+export async function computeLeanBrief(env: Env, auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string) {
+  const { due, loops } = await readAgentBrief(env, auth, { parts: ["due", "loops"], projectRows, layer, teamId });
+  return {
+    ok: true,
+    lean: true,
+    attention: { due: due?.total ?? 0 },
+    loops: { open: loops?.total ?? 0, items: (loops?.items ?? []).slice(0, 3).map(({ id, content }) => ({ id, content })) },
+  };
 }
 
 /** Days since the epoch: changes once a day, stable within it. */

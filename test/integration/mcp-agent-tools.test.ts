@@ -157,12 +157,12 @@ describe("MCP resolve audit parity with REST", () => {
     await call("resolve", { id: "i1", action: "confirm_insight" });
     await call("resolve", { id: "i2", action: "dismiss_insight" });
     await Promise.all(pending);
-    expect(await events("t1")).toEqual([{ event: "status_changed", payload: { loop_action: "not-task", channel: "mcp" } }]);
-    expect(await events("t2")).toEqual([{ event: "status_changed", payload: { due_action: "snooze", until: expect.any(Number), channel: "mcp" } }]);
-    expect(await events("t3")).toEqual([{ event: "status_changed", payload: { due_action: "clear", channel: "mcp" } }]);
-    expect(await events("s1")).toEqual([{ event: "updated", payload: { stale_confirmed: true, channel: "mcp" } }]);
-    expect(await events("i1")).toEqual([{ event: "insight_confirmed", payload: { channel: "mcp" } }]);
-    expect(await events("i2")).toEqual([{ event: "insight_dismissed", payload: { channel: "mcp" } }]);
+    expect(await events("t1")).toEqual([{ event: "status_changed", payload: { loop_action: "not-task", prior: { tags: ["task"] }, channel: "mcp" } }]);
+    expect(await events("t2")).toEqual([{ event: "status_changed", payload: { due_action: "snooze", until: expect.any(Number), prior: expect.any(Object), channel: "mcp" } }]);
+    expect(await events("t3")).toEqual([{ event: "status_changed", payload: { due_action: "clear", prior: expect.any(Object), channel: "mcp" } }]);
+    expect(await events("s1")).toEqual([{ event: "updated", payload: { stale_confirmed: true, prior: expect.any(Object), channel: "mcp" } }]);
+    expect(await events("i1")).toEqual([{ event: "insight_confirmed", payload: { prior: { tags: ["auto-insight"] }, channel: "mcp" } }]);
+    expect(await events("i2")).toEqual([{ event: "insight_dismissed", payload: { prior: { tags: ["auto-insight"] }, channel: "mcp" } }]);
   });
 
   it("rejects insight actions on a memory that is not an insight and leaves it untouched", async () => {
@@ -178,9 +178,9 @@ describe("MCP digest", () => {
     const compress = vi.spyOn(compression, "compressTag");
     try {
       await createProject(env.DB, identity.personalWorkspaceId, { id: "site", name: "Site" });
-      sqlite.seed({ id: "older", content: "Older summary", createdAt: 1000, tags: ["synthesized", "project:site"] });
-      sqlite.seed({ id: "latest", content: "Current summary", createdAt: 2000, tags: ["synthesized", "project:site"] });
-      sqlite.seed({ id: "wrong", content: "Wrong summary", createdAt: 3000, tags: ["synthesized", "other"] });
+      sqlite.seed({ id: "older", content: "Older summary", createdAt: 1000, tags: ["synthesized", "project:site"], source: "system" });
+      sqlite.seed({ id: "latest", content: "Current summary", createdAt: 2000, tags: ["synthesized", "project:site"], source: "system" });
+      sqlite.seed({ id: "wrong", content: "Wrong summary", createdAt: 3000, tags: ["synthesized", "other"], source: "system" });
       sqlite.issued.length = 0;
       const text = await call("digest", { project: "site" });
       expect(text).toContain("Current summary");
@@ -203,8 +203,8 @@ describe("MCP digest", () => {
   });
 
   it("matches a topic tag literally in one statement", async () => {
-    sqlite.seed({ id: "match", content: "Quarter three summary", createdAt: 1000, tags: ["synthesized", "q3_2026"] });
-    sqlite.seed({ id: "near", content: "Wrong summary", createdAt: 2000, tags: ["synthesized", "q3-2026"] });
+    sqlite.seed({ id: "match", content: "Quarter three summary", createdAt: 1000, tags: ["synthesized", "q3_2026"], source: "system" });
+    sqlite.seed({ id: "near", content: "Wrong summary", createdAt: 2000, tags: ["synthesized", "q3-2026"], source: "system" });
     sqlite.issued.length = 0;
     const text = await call("digest", { tag: "q3_2026" });
     expect(text).toContain("Quarter three summary");

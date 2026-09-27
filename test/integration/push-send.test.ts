@@ -85,6 +85,20 @@ describe("pushDueItems", () => {
     expect((init as RequestInit).headers).toMatchObject({ "Content-Encoding": "aes128gcm" });
   });
 
+  it("does not push a task that is already done", async () => {
+    sq = await migrated();
+    seedDue(sq, "done-1", "Send the invoice", Date.now() - DAY, "Send the invoice");
+    sq.db.prepare(`UPDATE entries SET tags = '["task","task:done"]' WHERE id = 'done-1'`).run();
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = mockFetchAlways(201);
+
+    const result = await pushDueItems(env, "");
+
+    expect(result.sent).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("sends TTL and Urgency headers on every push POST — Apple's push service requires TTL", async () => {
     sq = await migrated();
     seedDue(sq, "e1", "File the report", Date.now() - DAY, "File the report");

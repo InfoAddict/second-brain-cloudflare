@@ -34,6 +34,7 @@ import { computeAgentBrief } from "../brief/compute";
 import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { readEntryHistory } from "../memory/history";
+import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -361,7 +362,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "resolve",
     {
-      description: "Call when the user says something tracked is finished, was never a real task, should come back later, has no date, is still true, or that a suggested insight is right or wrong. Also call after you complete work the user asked you to track. Act only on a clear signal about a specific item; never close several items on your own initiative. Every resolve can be undone.",
+      description: "Call when the user says something tracked is finished, was never a real task, should come back later, has no date, is still true, or that a suggested insight is right or wrong. Also call after you complete work the user asked you to track. Act only on a clear signal about a specific item; never close several items on your own initiative. Each resolve is recorded in the history with its prior values.",
       inputSchema: {
         id: z.string().describe("Exact memory id"),
         action: z.enum(["done", "not_a_task", "snooze", "clear_date", "confirm_insight", "dismiss_insight", "still_true"]).describe("How to resolve this one item"),
@@ -416,12 +417,14 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const digestTag = slug ? `project:${slug}` : topic!;
       const row = await env.DB.prepare(
         `SELECT content, created_at FROM entries
-         WHERE ${scope.clause} AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+         WHERE ${scope.clause} AND actor_id = '' AND source = 'system' AND tags NOT LIKE '%"status:deprecated"%'
+           AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
          ORDER BY created_at DESC, id DESC LIMIT 1`,
       ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag))
         .first<{ content: string; created_at: number }>();
       if (!row) return { content: [{ type: "text", text: "No digest yet. One is built automatically overnight once there are 10 or more eligible memories. Use recall with project instead." }] };
-      return { content: [{ type: "text", text: `Digest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n${row.content}` }] };
+      const text = `${STORED_DATA_NOTICE}\nDigest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n----- digest (begin) -----\n${cleanStored(row.content)}\n----- digest (end) -----`;
+      return { content: [{ type: "text", text }] };
     },
   );
 
