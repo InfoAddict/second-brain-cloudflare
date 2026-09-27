@@ -74,6 +74,14 @@ State of ${stateOf}:`;
  * parameter regardless of source count, so the whole batch is 3 statements, not 2N+1 — the D1
  * bound-parameter cap (100 per statement) is also why: an OR-chain of per-source scalar guards
  * would need 2 placeholders per source and blow that cap on its own past ~50 sources.
+ *
+ * The mark itself bumps updated_at (below) for exactly this reason: every writer of
+ * entries.content has to, or rowVersion stops tracking "last touched" for whoever reads it next,
+ * and a same-length edit could then slip past this guard at any time, not only within the same
+ * millisecond the narrowing above accepts. Audited elsewhere (mirror.ts's CAS update, store.ts's
+ * updateEntryContent/appendToEntry, capture/entry.ts's contradiction-resolution writes) — all
+ * already do; this was the one that did not, inherited unchanged from #278 through both adversary
+ * rounds until now.
  */
 export async function markSourcesRolledUp(env: Env, sources: { id: string; content: string; rowVersion: number }[], digestId: string, workspaceId: string, config: Readonly<Config>): Promise<void> {
   if (!sources.length) return;
@@ -86,11 +94,12 @@ export async function markSourcesRolledUp(env: Env, sources: { id: string; conte
     const entries = batch.map(s => ({ id: s.id, rowVersion: s.rowVersion, contentBytes: new TextEncoder().encode(s.content).length }));
     const p = new Params();
     const notep = p.add(note);
+    const nowp = p.add(now);
     const ws = p.add(workspaceId);
     const tuples = p.add(JSON.stringify(entries.map(e => [e.id, e.rowVersion, e.contentBytes])));
     // versioning: snapshot
     const mark = env.DB.prepare(
-      `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ${notep}
+      `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ${notep}, updated_at = ${nowp}
        WHERE workspace_id = ${ws}
          AND EXISTS (
            SELECT 1 FROM json_each(${tuples}) t

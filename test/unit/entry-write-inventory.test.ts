@@ -87,7 +87,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: "src/capture/store.ts", line: 334, kind: "snapshot" },
   { file: "src/capture/store.ts", line: 457, kind: "snapshot" },
   { file: "src/capture/store.ts", line: 516, kind: "snapshot" },
-  { file: "src/compression/digest.ts", line: 93, kind: "snapshot" },
+  { file: "src/compression/digest.ts", line: 102, kind: "snapshot" },
   { file: "src/entries/import.ts", line: 26, kind: "exempt" },
   { file: "src/integrations/mirror.ts", line: 80, kind: "exempt" },
   { file: "src/integrations/mirror.ts", line: 130, kind: "snapshot" },

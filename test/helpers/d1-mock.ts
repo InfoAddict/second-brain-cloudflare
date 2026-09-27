@@ -375,7 +375,7 @@ export class D1Mock {
           // digest.ts's markSourcesRolledUp (many-row, guarded on workspace_id + each source's own
           // (rowVersion = COALESCE(updated_at, created_at), byte length of content) — a JSON tuple
           // list, not a literal id per statement.
-          const [addition, workspaceId, tuplesJson] = args;
+          const [addition, now, workspaceId, tuplesJson] = args;
           const tuples = JSON.parse(tuplesJson) as [string, number, number][];
           let changes = 0;
           for (const [id, rowVersion, contentBytes] of tuples) {
@@ -388,6 +388,7 @@ export class D1Mock {
             if (!tags.includes("rolled-up")) tags.push("rolled-up");
             row.tags = JSON.stringify(tags);
             row.content = row.content + addition;
+            row.updated_at = now;
             changes++;
           }
           return { meta: { changes } };
