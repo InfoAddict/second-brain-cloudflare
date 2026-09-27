@@ -432,6 +432,9 @@ export async function handleIntegrationsRoutes(
               event: "deleted",
               payload: { reason: "disconnect", provider: provider.id, deletedVectors: r.vectorCount, channel: "rest" },
             });
+          } else {
+            // Gone already (a racing sync or delete): not ours to count or audit, but the totals must add up.
+            skipped++;
           }
         } catch (e) {
           console.error("Mirror purge failed (non-fatal):", e);

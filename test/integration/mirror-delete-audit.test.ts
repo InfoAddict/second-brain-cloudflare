@@ -187,6 +187,24 @@ describe("disconnect purge audit", () => {
     expect(await trail()).toHaveLength(60);
   });
 
+  it("a row a racing deleter already removed is counted as skipped, so purged + kept adds up", async () => {
+    await connectWithItems(3);
+    const db = env.DB as any;
+    const realPrepare = db.prepare.bind(db);
+    // The DELETE for page-1 finds nothing: another deleter got there between the read and the delete.
+    db.prepare = (sql: string) => {
+      const stmt = realPrepare(sql);
+      if (!sql.startsWith("DELETE FROM entries")) return stmt;
+      return { bind: (...args: unknown[]) => args[0] === "page-1"
+        ? { run: async () => ({ meta: { changes: 0 } }) }
+        : stmt.bind(...args) };
+    };
+    const body = await (await disconnect()).json() as any;
+    expect(body.purged).toBe(2);
+    expect(body.kept).toBe(1);
+    expect((await trail()).map(r => r.entry_id)).toEqual(["page-0", "page-2"]);
+  });
+
   it("writes no trail for rows a purge skipped or that keep memories", async () => {
     await connectWithItems(2);
     const res = await worker.fetch(new Request("http://localhost/integrations/notion/disconnect", {

@@ -8,12 +8,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
 - A memory replaced by a newer, contradicting one now records that in its history (status changed to deprecated, with the reason and the newer memory's id).
-- Memories removed by an integration are now recorded in the audit trail: a trashed Notion page, a cancelled or pruned calendar event, or "delete synced memories" on disconnect. Each record names the reason and the integration. The dashboard does not show these records yet. Large deletions are written in batches of 50, so a big prune or disconnect stays within the free plan's database limits.
+- Memories removed by an integration are now recorded in the audit trail: a trashed Notion page, a cancelled or pruned calendar event, or "delete synced memories" on disconnect. Each record names the reason and the integration. The dashboard does not show these records yet. The audit records for a large deletion are written in batches of 50.
 - Every audit record now says where the change came from: `mcp` for an AI assistant, `rest` for the dashboard and API, or `system:<job>` for a background job.
 
 **Saving**
 
-- The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched (they still merge into their own earlier digests and insights). If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated.
+- The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched (a digest merges only into an earlier digest, and an insight only into an earlier insight, and never into one you have edited). If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated.
 
 **Search**
 
