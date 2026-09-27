@@ -178,33 +178,56 @@ export function applyOccupancyCap<T extends OccupancyCandidate>(
 
 // ── Near-duplicate collapse (4.4) ──
 
-/**
- * A first non-empty line, lowercased, with amounts/dates/digits/ids folded to
- * `#`, then whitespace collapsed and the source appended. Two mail rows with
- * the same signature are the same recurring notice at different moments.
- */
-export function templateSignature(content: string, source: string | undefined): string {
+/** Amounts, dates, digits and 6+-character ids folded to `#`, whitespace collapsed. Shared by the signature and the body check below. */
+function foldVariableParts(text: string): string {
+  let s = text;
+  // Currency amounts first, while the digits are still intact: "$1,234.56", "€12".
+  s = s.replace(/[$€£]\s?\d[\d,]*(\.\d+)?/g, "#");
+  // ISO dates: "2026-08-11".
+  s = s.replace(/\b\d{4}-\d{2}-\d{2}\b/g, "#");
+  // Spelled dates: "Aug 11", "Sep 3rd".
+  s = s.replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(st|nd|rd|th)?\b/g, "#");
+  // Slash dates: "11/08", "12/25/2026".
+  s = s.replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, "#");
+  // Reference/order ids: 6+ alphanumerics containing at least one digit.
+  s = s.replace(/\b(?=[a-z0-9]*\d)[a-z0-9]{6,}\b/g, "#");
+  // Whatever digits remain (short amounts, counts).
+  s = s.replace(/\d+/g, "#");
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** The first non-empty line (or, after a `From:` header, the `Subject:` line), lowercased. */
+function firstMeaningfulLine(content: string): string {
   const lines = content.split("\n").map(l => l.trim()).filter(l => l.length > 0);
   let line = lines[0] ?? "";
   if (/^from:/i.test(line)) {
     const subject = lines.find(l => /^subject:/i.test(l));
     if (subject) line = subject;
   }
-  let sig = line.toLowerCase();
-  // Currency amounts first, while the digits are still intact: "$1,234.56", "€12".
-  sig = sig.replace(/[$€£]\s?\d[\d,]*(\.\d+)?/g, "#");
-  // ISO dates: "2026-08-11".
-  sig = sig.replace(/\b\d{4}-\d{2}-\d{2}\b/g, "#");
-  // Spelled dates: "Aug 11", "Sep 3rd".
-  sig = sig.replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(st|nd|rd|th)?\b/g, "#");
-  // Slash dates: "11/08", "12/25/2026".
-  sig = sig.replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, "#");
-  // Reference/order ids: 6+ alphanumerics containing at least one digit.
-  sig = sig.replace(/\b(?=[a-z0-9]*\d)[a-z0-9]{6,}\b/g, "#");
-  // Whatever digits remain (short amounts, counts).
-  sig = sig.replace(/\d+/g, "#");
-  sig = sig.replace(/\s+/g, " ").trim();
-  return `${sig}|${source ?? ""}`;
+  return line.toLowerCase();
+}
+
+/**
+ * A first non-empty line, lowercased, with amounts/dates/digits/ids folded to
+ * `#`, then whitespace collapsed and the source appended. Two mail rows with
+ * the same signature are the SAME SHAPE of recurring notice — a statement, a
+ * booking confirmation — but the shape alone is not enough to collapse them:
+ * see `bodiesNearIdentical` below, which the same-subject case (two distinct
+ * emails that happen to share a subject line) needs.
+ */
+export function templateSignature(content: string, source: string | undefined): string {
+  return `${foldVariableParts(firstMeaningfulLine(content))}|${source ?? ""}`;
+}
+
+/**
+ * True when two candidates' full bodies are the same template with only the
+ * variable parts (amounts, dates, ids) differing. A shared subject line is
+ * not enough on its own: "Reception details / Venue: North Hall" and
+ * "Reception details / Venue: South Hall" have the same templateSignature
+ * but answer the question differently, and must never collapse into one.
+ */
+function bodiesNearIdentical(a: string, b: string): boolean {
+  return foldVariableParts(a.toLowerCase()) === foldVariableParts(b.toLowerCase());
 }
 
 export interface CollapseCandidate {
@@ -235,26 +258,32 @@ export interface CollapseResult<T> {
  * caller refills freed positions from its own lookahead (4.4, 4.5).
  */
 export function collapseNearDuplicates<T extends CollapseCandidate>(candidates: readonly T[]): CollapseResult<T> {
-  const groups = new Map<string, number[]>();
+  // Same template signature, in rank order: a shape bucket, not yet a
+  // collapse decision. Within a bucket, only rows whose full body is also
+  // near-identical to the bucket's best-ranked (first) member actually merge
+  // into it — distinct content sharing a subject line stays distinct.
+  const buckets = new Map<string, number[]>();
   candidates.forEach((c, i) => {
     if (sourceClass(c.source, c.tags) !== "mirror") return;
     const sig = templateSignature(c.content, c.source);
-    const arr = groups.get(sig);
-    if (arr) arr.push(i); else groups.set(sig, [i]);
+    const arr = buckets.get(sig);
+    if (arr) arr.push(i); else buckets.set(sig, [i]);
   });
   const dropped = new Set<number>();
   const similarById = new Map<string, CollapseSimilar[]>();
-  for (const idxs of groups.values()) {
+  for (const idxs of buckets.values()) {
     if (idxs.length < 2) continue;
-    const [keepIdx, ...restIdx] = idxs;
-    const kept = candidates[keepIdx];
-    const similar = restIdx
+    const [leadIdx, ...restIdx] = idxs;
+    const lead = candidates[leadIdx];
+    const matchingIdx = restIdx.filter(i => bodiesNearIdentical(candidates[i].content, lead.content));
+    if (!matchingIdx.length) continue;
+    const similar = matchingIdx
       .map(i => candidates[i])
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 5)
       .map(c => ({ id: c.id, createdAt: c.createdAt }));
-    similarById.set(kept.id, similar);
-    for (const i of restIdx) dropped.add(i);
+    similarById.set(lead.id, similar);
+    for (const i of matchingIdx) dropped.add(i);
   }
   const kept = candidates.filter((_, i) => !dropped.has(i));
   return { kept, similarById };

@@ -381,7 +381,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
               e.workspace_id, e.actor_id, e.source, u.name AS actor_display_name
        FROM entries e
        LEFT JOIN users u ON u.id = e.actor_id AND (u.removed_at IS NULL OR u.removed_at = 0)
-       WHERE e.id IN (${ph})${nodeScopeSql}`
+       WHERE e.id IN (${ph})${nodeScopeSql} AND ${NOT_HELD_SQL}`
     ).bind(...batch, ...(nodeScope?.bindings ?? [])).all() as { results: Record<string, any>[] };
     for (const r of results) {
       nodeRows.set(r.id as string, r);
@@ -396,7 +396,7 @@ export async function buildGraph(opts: { seed?: string; limit?: number; only?: "
     const r = nodeRows.get(id);
     if (!r) continue;
     const tags: string[] = JSON.parse(r.tags ?? "[]");
-    if (tags.some(t => MACHINE_AUTHORED_TAGS.has(t))) continue;
+    if (tags.some(t => MACHINE_AUTHORED_TAGS.has(t)) || isHeld(tags)) continue;
     // Exactly GET /list's layer rule, because it is that function: the canvas
     // and the list badge the same row the same way. Without an Identity there
     // is no personal or company layer to be in — the cron and unit callers get
