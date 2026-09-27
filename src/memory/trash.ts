@@ -423,6 +423,7 @@ export async function restoreEntry(
           WHERE t.id = ${edgeId}
             AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
       ).bind(...edgeP.values()),
+      // scope-exempt: by-id: the trash row the caller authorized before building this batch
       env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
     ]);
   } catch (e) {

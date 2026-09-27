@@ -1050,6 +1050,42 @@ describe("scanSource, a scoped table reached by an OUTER join", () => {
   });
 });
 
+describe("scanSource, entry_versions and entries_trash (Task 12)", () => {
+  it("flags an unscoped SELECT from entry_versions", () => {
+    const r = scanSource("const q = `SELECT id, seq FROM entry_versions WHERE entry_id = ?`;");
+    expect(r.violations.length).toBe(1);
+    expect(r.violations[0].snippet).toContain("FROM entry_versions");
+  });
+
+  it("flags an unscoped SELECT from entries_trash", () => {
+    const r = scanSource("const q = `SELECT id FROM entries_trash WHERE deleted_at < ?`;");
+    expect(r.violations.length).toBe(1);
+    expect(r.violations[0].snippet).toContain("FROM entries_trash");
+  });
+
+  it("accepts scope-exempt and scope-checked on either", () => {
+    const exempt = scanSource([
+      "// scope-exempt: by-id, the id came from a scoped read",
+      "const a = `SELECT * FROM entry_versions WHERE entry_id = ?`;",
+    ].join("\n"));
+    expect(exempt.violations).toEqual([]);
+    expect(exempt.exceptions.length).toBe(1);
+
+    const checked = scanSource([
+      "// scope-checked: readability enforced per row by buildChain (D-SH)",
+      "const b = `SELECT * FROM entries_trash WHERE id IN (${ph})${rcScopeSql}`;",
+    ].join("\n"));
+    expect(checked.violations).toEqual([]);
+    expect(checked.exceptions.length).toBe(1);
+
+    // And a real scope clause passes on the merits, exactly like `entries`.
+    const scoped = scanSource("const q = `SELECT * FROM entry_versions WHERE ${scope.clause}`;");
+    expect(scoped.violations).toEqual([]);
+    const literal = scanSource("const q = `SELECT * FROM entries_trash WHERE workspace_id = ?`;");
+    expect(literal.violations).toEqual([]);
+  });
+});
+
 describe("the checker over the real source tree", () => {
   it("exits 0, so a future unscoped query fails the suite as well as CI", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
@@ -1184,7 +1220,55 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (162 queries, 81 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  // MOVED 162/81/12/1 -> 186/102/13/1 by Task 12 (scope checker covers history and trash):
+  // entry_versions and entries_trash joined entries/edges in the table alternation
+  // (scripts/check-scope.mjs:277, :281 — now CORPUS_TABLE_ALT), so every existing query on
+  // either table is swept for the first time. Every one of them was read, not rubber-stamped:
+  //
+  // +20 queries, +20 scope-exempt, each already carrying (or now given) a by-id, cron/retention,
+  // offboarding or identity-less reason:
+  //   src/entries/import.ts:269 entries_trash, :280 entry_versions — by-id dedupe/orphan-cleanup
+  //     reads on ids from the import payload; never returned, only tested for existence.
+  //   src/lib/team-admin.ts:521, :526 — offboarding: cleanupMemberData prunes only the removed
+  //     member's own versions, oldest first, by id list.
+  //   src/memory/trash.ts:113 (tier-3 version delete), :178 (trash rows this call just wrote,
+  //     read back by its own actor+timestamp), :259 (purge candidate read — a system job keyed
+  //     on deleted_at, not caller identity), :308/:320 (purge batch: audit + trash delete for the
+  //     candidates the same purge call chose above), :351 (identity-less branch, scoped arm is
+  //     the line below), :415/:427 (restoreEntry's insert and delete: the trash row getTrashedEntry
+  //     already scoped for this caller), :485/:487 (deleteForever: the live-or-trashed row
+  //     getReadableEntry/getTrashedEntry already scoped, assertCanMutateEntry already checked).
+  //   src/memory/versions.ts:65 (NEWEST_SEQ: correlated to entries e, which every embedding
+  //     caller pins by id first), :157/:172/:189 (buildPrune/buildPruneMany/buildMirrorPrune:
+  //     prune only the entry(ies) just snapshotted), :226 (ownSnapshotLandedSql: entryId is the
+  //     row revertEntry's own UPDATE ... WHERE id = ... already pins), :241 (getVersionsSince:
+  //     a deployment-wide bootstrap scalar, one cursor shared by every workspace, not a caller read).
+  //
+  // +1 query, +1 scope-checked: src/memory/versions.ts:393, loadHistory. Already carried
+  // `// scope-checked: readability enforced per row by buildChain (D-SH)` before Task 12; the
+  // table just was not swept yet for the marker to be spent on.
+  //
+  // +3 queries needing no annotation at all, scoped on their own merits once swept:
+  // src/lib/team-admin.ts:500 (`WHERE workspace_id = ?1`) and :577 (`WHERE workspace_id = ?`),
+  // src/memory/trash.ts:355 (getTrashedEntry's identified branch, `WHERE id = ? AND ${scope.clause}`).
+  // (team-admin.ts:500 still carries a comment from before Task 12; it was never spent, on either
+  // side of this change — the query needed no licence then and needs none now.)
+  //
+  // +1 more scope-exempt with NO change to the query count: src/lib/team-admin.ts:567. That
+  // statement was already swept and already passing before Task 12, on the strength of its two
+  // real per-subquery `workspace_id = ?1` predicates matching its `entries` and `entry_versions`
+  // references. Task 12 adds a THIRD table reference to the same statement (`entries_trash`, the
+  // second UNION arm) with no third predicate to match it, so the checker's alias-less pool
+  // (limitation 4: an unattributed clause joins a shared pool, consumed in the order references
+  // are found) now leaves one reference unmatched. The statement's own scope-exempt comment
+  // (unchanged, "offboarding: leftover versions of the removed member's rows and trash rows")
+  // now answers a real finding instead of sitting unspent. Net: queries unchanged, +1 exempt.
+  //
+  // Read every one of the 24 newly-swept queries and the 1 converted one by hand (not just their
+  // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
+  // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
+  // hold up; nothing here needed a code fix beyond the annotations themselves.
+  it("reports the checker's pinned totals (186 queries, 102 exceptions, 13 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1288,7 +1372,7 @@ describe("the checker over the real source tree", () => {
     // separate by-id statements (each needs its own dense Params, so each carries its own comment).
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts): revertEntry's post-miss
     // liveness check is by-id, the row having been read above under the caller's own scope.
-    ).toEqual({ queries: 162, exempt: 81, checked: 12, outerJoin: 1 });
+    ).toEqual({ queries: 186, exempt: 102, checked: 13, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

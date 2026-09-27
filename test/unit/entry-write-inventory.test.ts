@@ -101,7 +101,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 146, kind: 'snapshot' },
   { file: 'src/memory/trash.ts', line: 130, kind: 'trash' },
   { file: 'src/memory/trash.ts', line: 415, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 489, kind: 'hard-delete' },
+  { file: 'src/memory/trash.ts', line: 490, kind: 'hard-delete' },
   { file: 'src/memory/undo.ts', line: 124, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 173, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },

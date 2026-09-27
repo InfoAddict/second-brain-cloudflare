@@ -60,6 +60,8 @@ export interface BuiltStatement { sql: string; bindings: unknown[] }
 
 /** Tag set as SQLite will compare it: sorted, compact JSON, like JSON.stringify of a sorted array. */
 const SORTED_TAGS = `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(e.tags) ORDER BY value))`;
+// scope-exempt: by-id: correlated to entries e, which every embedding caller (buildSnapshot,
+// buildSnapshotMany) restricts to an already-authorized id before this fragment runs
 const NEWEST_SEQ = `COALESCE((SELECT MAX(v.seq) FROM entry_versions v WHERE v.entry_id = e.id), 0)`;
 
 const INSERT_COLUMNS = `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, prior_length_utf16, tags, state, actor_id, channel, reason, meta, valid_from, created_at)`;
@@ -151,6 +153,7 @@ export function buildPrune(entryId: string, keep: number): BuiltStatement {
   const p = new Params();
   const id = p.add(entryId);
   return {
+    // scope-exempt: by-id: pruneStatement's caller prunes only the entry it just snapshotted, already authorized
     sql: `DELETE FROM entry_versions WHERE entry_id = ${id}
      AND seq <= (SELECT MAX(v.seq) FROM entry_versions v WHERE v.entry_id = ${id}) - ${p.add(keep)}`,
     bindings: p.values(),
@@ -165,6 +168,7 @@ export function pruneStatement(env: Env, entryId: string, keep: number): D1Prepa
 export function buildPruneMany(entryIds: string[], keep: number): BuiltStatement {
   const p = new Params();
   return {
+    // scope-exempt: by-id: pruneManyStatement's caller prunes only the ids it just snapshotted together, already authorized
     sql: `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(entryIds))}))
      AND seq <= (SELECT MAX(v.seq) FROM entry_versions v WHERE v.entry_id = entry_versions.entry_id) - ${p.add(keep)}`,
     bindings: p.values(),
@@ -181,6 +185,7 @@ export function buildMirrorPrune(entryId: string, keep: number): BuiltStatement 
   const p = new Params();
   const id = p.add(entryId);
   return {
+    // scope-exempt: by-id: mirrorPruneStatement's caller prunes only the entry it just snapshotted, already authorized
     sql: `DELETE FROM entry_versions WHERE entry_id = ${id}
      AND seq <= (SELECT MAX(v.seq) FROM entry_versions v WHERE v.entry_id = ${id}) - ${p.add(keep)}
      AND seq < COALESCE((SELECT MIN(v.seq) FROM entry_versions v WHERE v.entry_id = ${id} AND v.reason <> 'mirror'), 9e18)`,
@@ -216,6 +221,8 @@ export function buildCasGuard(p: Params, columns: Record<string, unknown>): stri
  * meta.nonce = nonce). A timestamp is not an identity: Workers' Date.now() only advances after I/O.
  */
 export function ownSnapshotLandedSql(p: Params, entryId: string, expectedNewestSeq: number, nonce: string): string {
+  // scope-exempt: by-id: entryId is the row the enclosing UPDATE's own WHERE id = ... already pins;
+  // revertEntry authorizes it (canRevert) before this guard is ever built
   return `EXISTS (SELECT 1 FROM entry_versions ov WHERE ov.entry_id = ${p.add(entryId)} AND ov.seq = ${p.add(expectedNewestSeq + 1)} AND json_extract(ov.meta, '$.nonce') = ${p.add(nonce)})`;
 }
 
@@ -229,6 +236,8 @@ export async function getVersionsSince(env: Env): Promise<number> {
   const stored = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY);
   const parsed = stored === null ? NaN : Number(stored);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  // scope-exempt: system job: a deployment-wide bootstrap of the versions:since marker, one cursor
+  // shared by every workspace, not driven by any caller's identity — recovery only, run once
   const row = await env.DB.prepare(`SELECT MIN(created_at) AS first FROM entry_versions`).first<{ first: number | null }>();
   const since = row?.first ?? Date.now();
   try {
