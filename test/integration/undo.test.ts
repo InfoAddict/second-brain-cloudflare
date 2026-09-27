@@ -184,7 +184,7 @@ describe("undo, one case per reason", () => {
     }) as Env;
     (insightEnv.VECTORIZE.deleteByIds as any) = vi.fn(async (ids: string[]) => { deletedIds.push(...ids); for (const i of ids) store.delete(i); return { mutationId: "m" }; });
     await seed("i1", { content: "an insight", tags: ["auto-insight"], vectorIds: ["v1"] });
-    await applyInsightResolution(insightEnv, ctx, change(), [{ id: "i1", tags: row("i1").tags, vector_ids: row("i1").vector_ids }], 1, "dismiss");
+    await applyInsightResolution(insightEnv, ctx, change(), [{ id: "i1", tags: row("i1").tags, vector_ids: row("i1").vector_ids, workspace_id: row("i1").workspace_id }], 1, "dismiss");
     expect(row("i1").vector_ids).toBe("[]");
     const r = await revertEntry(insightEnv, owner, "i1", change(), DEFAULTS);
     expect(r.status).toBe("reverted");
@@ -237,7 +237,7 @@ describe("undo mechanics", () => {
     const carol = (await resolveIdentityByUserId(env, (await createMember(env, { name: "Carol" })).member.userId))!;
     const roots = await ensureTenantBootstrap(env);
     await seed("ci1", { tags: ["auto-insight"], workspaceId: roots.companyWorkspaceId, actorId: "" });
-    await applyInsightResolution(env, ctx, change(bob), [{ id: "ci1", tags: String(row("ci1").tags), vector_ids: String(row("ci1").vector_ids) }], 1, "dismiss");
+    await applyInsightResolution(env, ctx, change(bob), [{ id: "ci1", tags: String(row("ci1").tags), vector_ids: String(row("ci1").vector_ids), workspace_id: roots.companyWorkspaceId }], 1, "dismiss");
     const chainBefore = await loadHistory(env, bob, { id: "ci1", content: String(row("ci1").content) }, 10);
     expect(canRevert(bob, { workspace_id: roots.companyWorkspaceId, actor_id: "" }, chainBefore.rows[0], chainBefore.rows[0].seq, chainBefore.rows.map(r => r.seq))).toEqual({ ok: true });
     // Carol makes a further change after Bob's dismissal (dismiss already deprecated the row, so a

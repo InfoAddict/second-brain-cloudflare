@@ -211,12 +211,12 @@ describe("4. A's writers against a row trashed mid-flight", () => {
   it("applyInsightResolution against a row trashed after the caller's own read: no version, no resurrection", async () => {
     t = await makeTrashEnv();
     t.seed("insight1", { tags: '["auto-insight"]' });
-    const rows = await t.all<any>(`SELECT id, tags, vector_ids FROM entries WHERE id = 'insight1'`);
+    const rows = await t.all<any>(`SELECT id, tags, vector_ids, workspace_id FROM entries WHERE id = 'insight1'`);
     await forget("insight1");
     const res = await applyInsightResolution(t.env, ctx, change, rows, 1, "confirm");
-    // It reports the id as resolved (the audit contract accepts a lost/optimistic count on a race),
-    // but nothing was actually written back to a row that no longer exists.
-    expect(res.resolved).toEqual(["insight1"]);
+    // The row's own compare-and-set (workspace_id and tags, ADV-2) misses because it no longer
+    // exists: nothing was written back, and it is not reported as resolved.
+    expect(res.resolved).toEqual([]);
     expect(await t.one(`SELECT id FROM entries WHERE id = 'insight1'`)).toBeNull();
     expect(await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'insight1'`)).toHaveLength(0);
   });

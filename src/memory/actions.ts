@@ -10,7 +10,7 @@ import { resolveConfig } from "../config";
 import { withStatus, getStatus } from "./status";
 import { withKind } from "./kind";
 import { deleteVectorIds } from "../vectorize/batch";
-import { buildCasGuard, changesOf, Params, pruneManyStatement, pruneStatement, snapshotManyStatement, snapshotStatement, type WhenChange } from "./versions";
+import { buildCasGuard, changesOf, Params, pruneManyStatement, pruneStatement, snapshotStatement, type WhenChange } from "./versions";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true";
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number } | { ok: false; error: string; status: number };
@@ -130,33 +130,52 @@ export async function applyInsightResolution(
   found: Record<string, any>[], requestedCount: number, action: InsightAction,
 ): Promise<InsightResolution> {
   const cfg = await resolveConfig(env);
+  const now = Date.now();
   const statements: D1PreparedStatement[] = [];
-  const vectorsToDrop: string[] = [];
-  const resolved: string[] = [];
-  const auditRows: AuditEventInput[] = [];
+  // Each row's own guard equals its own snapshot's guard (buildCasGuard, spec P3, ADV-1) and pins
+  // workspace_id (ADV-2): a row moved out of scope since the caller's own read misses both, instead
+  // of the bulk form's old bare-id UPDATE committing a decision the row no longer accounts for.
+  const rows: { id: string; tags: string[]; vectorIds: string[]; updateAt: number }[] = [];
   for (const row of found) {
     const tags: string[] = JSON.parse(row.tags ?? "[]");
     if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
+    const casColumns = { tags: row.tags ?? "[]", workspace_id: row.workspace_id };
     if (action === "confirm") {
       const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
-      // versioning: snapshot (via the snapshotManyStatement batched below)
-      statements.push(env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id));
+      statements.push(snapshotStatement(env, {
+        entryId: row.id, reason: "status", change, content: { kind: "unchanged" }, nextTags: promoted, meta: { insight_action: action }, now,
+        guard: p => buildCasGuard(p, casColumns),
+      }));
+      const p = new Params();
+      const tagsIdx = p.add(JSON.stringify(promoted));
+      // versioning: snapshot
+      statements.push(env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx} WHERE e.id = ${p.add(row.id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()));
     } else {
-      // versioning: snapshot (via the snapshotManyStatement batched below)
-      statements.push(env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?`)
-        .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", row.id));
-      vectorsToDrop.push(...(JSON.parse(row.vector_ids ?? "[]") as string[]));
+      const deprecated = withStatus(tags, "deprecated");
+      statements.push(snapshotStatement(env, {
+        entryId: row.id, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecated, meta: { insight_action: action }, now,
+        guard: p => buildCasGuard(p, casColumns),
+      }));
+      const p = new Params();
+      const tagsIdx = p.add(JSON.stringify(deprecated));
+      const vecIdx = p.add("[]");
+      // versioning: snapshot
+      statements.push(env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, vector_ids = ${vecIdx} WHERE e.id = ${p.add(row.id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()));
     }
-    resolved.push(row.id as string);
-    auditRows.push({ entryId: row.id as string, actorId: change.actorId, event: action === "confirm" ? "insight_confirmed" : "insight_dismissed", payload: { prior: { tags }, ...channelPayload(change) } });
+    rows.push({ id: row.id as string, tags, vectorIds: JSON.parse(row.vector_ids ?? "[]"), updateAt: statements.length - 1 });
   }
+  const resolved: string[] = [];
+  const auditRows: AuditEventInput[] = [];
+  const vectorsToDrop: string[] = [];
   if (statements.length) {
-    const now = Date.now();
-    await env.DB.batch([
-      snapshotManyStatement(env, { entryIds: resolved, reason: "status", change, content: { kind: "unchanged" }, meta: { insight_action: action }, now }),
-      ...statements,
-      pruneManyStatement(env, resolved, cfg.VERSION_KEEP),
-    ]);
+    statements.push(pruneManyStatement(env, rows.map(r => r.id), cfg.VERSION_KEEP));
+    const results = await env.DB.batch(statements);
+    for (const r of rows) {
+      if (changesOf(results[r.updateAt]) === 0) continue;
+      resolved.push(r.id);
+      auditRows.push({ entryId: r.id, actorId: change.actorId, event: action === "confirm" ? "insight_confirmed" : "insight_dismissed", payload: { prior: { tags: r.tags }, ...channelPayload(change) } });
+      if (action === "dismiss") vectorsToDrop.push(...r.vectorIds);
+    }
   }
   auditEvents(env, ctx, auditRows);
   if (vectorsToDrop.length) {

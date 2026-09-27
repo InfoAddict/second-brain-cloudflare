@@ -1420,7 +1420,7 @@ export async function handleAdminRoutes(
 
     const placeholders = ids.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
-      `SELECT id, tags, vector_ids FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
+      `SELECT id, tags, vector_ids, workspace_id FROM entries WHERE id IN (${placeholders}) AND ${scopeWhereForIdRead(scope).clause}`,
     ).bind(...ids, ...scope.bindings).all();
     const found = results as Record<string, any>[];
 
