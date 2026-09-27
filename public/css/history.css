@@ -11,6 +11,72 @@
   margin: -6px 0 12px;
 }
 
+/* SH-3: the status control. A calm, permanent piece of the sheet, not a rare
+   warning, so all three options (including Wrong) share one selected
+   treatment — the same raised-pill language .theme-toggle already uses for
+   its own segmented control, not a new one. */
+.view-status {
+  margin-bottom: 18px;
+}
+
+.view-status-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.status-control {
+  display: flex;
+  gap: 3px;
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+}
+
+.status-option {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-feedback) var(--ease-standard),
+    color var(--dur-feedback) var(--ease-standard);
+}
+
+/* Trusted, Unconfirmed and Wrong selected all read the same way: this is
+   infrastructure, not an alarm. Color stays out of it on purpose. */
+.status-option[aria-checked='true'] {
+  background: var(--bg-card);
+  color: var(--accent-ink);
+  box-shadow: var(--shadow-card);
+}
+
+.status-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status-option:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+.status-caption {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
 .history-label {
   margin-bottom: 8px;
 }

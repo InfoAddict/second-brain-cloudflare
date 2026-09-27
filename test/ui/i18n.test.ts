@@ -461,7 +461,6 @@ describe("dashboard i18n", () => {
     "common.sourceChat",
     "common.sourceBrowser",
     "common.sourceDashboard",
-    "common.sourceClaudeCode",
     "integrations.nounEmail.one",
     // FORMAT ONLY — URLs the user pastes, and punctuation around a placeholder.
     "integrations.urlPlaceholder",
@@ -565,6 +564,10 @@ describe("dashboard i18n", () => {
     {
       prefix: "history.reason",
       by: "historyReasonLabel() in public/js/history-view.js, keyed by HISTORY_REASON_KEYS[item.reason]",
+    },
+    {
+      keys: ["status.trustedHelp", "status.unconfirmedHelp", "status.wrongHelp"],
+      by: "renderViewStatus() in public/js/memory-crud.js, keyed by STATUS_HELP_KEYS[status]",
     },
     {
       prefix: "common.source",
@@ -784,6 +787,7 @@ describe("dashboard i18n", () => {
       // literal, so the scanner sees one identity twice.
       "public/js/history-view.js t(`history.${key}`)",
       "public/js/history-view.js t(`history.${key}`)",
+      "public/js/memory-crud.js t(STATUS_HELP_KEYS[status] || '')",
     ].sort();
 
     function dynamicIdentity(file: string, fn: string, snippet: string): string {

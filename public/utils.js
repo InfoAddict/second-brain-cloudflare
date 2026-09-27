@@ -180,6 +180,8 @@ function relativeTime(ts) {
  */
 const SOURCE_BADGE_I18N = {
   'claude code': 'common.sourceClaudeCode',
+  'codex session': 'common.sourceCodexSession',
+  'cursor session': 'common.sourceCursorSession',
   cli: 'common.sourceCli',
   email: 'common.sourceEmail',
   chat: 'common.sourceChat',
@@ -196,6 +198,12 @@ const SOURCE_BADGES = [
   // Terminals and code tools. `cli` is the Second Brain CLI; an earlier version
   // of this table matched it to GitHub, which was simply wrong.
   [/claude-code/, 'ti-terminal-2', 'claude code'],
+  // Session captures (an AI coding session's own excerpt, saved automatically)
+  // are more specific than the generic assistant patterns below, and must be
+  // checked first: "codex-session" would otherwise match /codex/ and read as
+  // a plain "chatgpt" badge.
+  [/codex-session/, 'ti-brand-openai', 'codex session'],
+  [/cursor-session/, 'ti-terminal-2', 'cursor session'],
   [/^cli$|command-line|terminal/, 'ti-terminal-2', 'cli'],
   [/git-hook|github|^git$/, 'ti-brand-github', 'github'],
   // Mail, branded by provider where we know it.

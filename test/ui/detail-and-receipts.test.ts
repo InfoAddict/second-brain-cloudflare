@@ -198,7 +198,7 @@ describe("the auto-save note (sheet only)", () => {
     const ctx = load();
     ctx.initI18n("it");
     ctx.renderViewAutoSaveNote({ source: "cursor-session" });
-    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Salvato automaticamente alla fine di una sessione Cursor.");
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Salvato automaticamente alla fine di una sessione di Cursor.");
   });
 });
 

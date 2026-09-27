@@ -297,7 +297,8 @@ function viewKindLabel(kind) {
 function viewStatusLabel(status) {
   if (status === 'canonical') return t('memories.statusTrusted')
   if (status === 'draft') return t('memories.statusUnconfirmed')
-  if (status === 'deprecated') return t('memories.statusSuperseded')
+  // SH-3: "Wrong" everywhere the sheet shows status, replacing "Superseded".
+  if (status === 'deprecated') return t('status.wrong')
   return status
 }
 
@@ -357,7 +358,7 @@ function renderViewAutoSaveNote(entry) {
     el.textContent = ''
     return
   }
-  el.textContent = t('history.autoSaved', { tool })
+  el.textContent = t('memories.sessionSaved', { tool })
   el.style.display = ''
 }
 
@@ -414,6 +415,80 @@ function renderViewBrain(entry) {
   el.innerHTML = `<div class="view-brain-label">${escHtml(t('memories.brainLabel'))}</div>${rows.join('')}`
 }
 
+const STATUS_HELP_KEYS = {
+  canonical: 'status.trustedHelp',
+  draft: 'status.unconfirmedHelp',
+  deprecated: 'status.wrongHelp',
+}
+
+/**
+ * SH-3: POST /status immediately (no confirm), toast with Undo, re-hydrate.
+ * `wasStatus` is read fresh rather than trusted from closure, since a slow
+ * click racing a re-render should not fire on a status the sheet no longer
+ * shows.
+ */
+async function selectViewStatus(status, entry) {
+  const group = document.getElementById('view-status')
+  const buttons = Array.from(group.querySelectorAll('.status-option'))
+  const wasStatus = tagValue(entry.tags || [], 'status:') || 'canonical'
+  if (status === wasStatus) return
+  buttons.forEach((b) => (b.disabled = true))
+  try {
+    const res = await fetch(`${WORKER_URL}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: entry.id, status }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
+    let message = t('undo.marked', { status: viewStatusLabel(status).toLowerCase() })
+    if (data.indexed === false) message += ' ' + t('status.keywordOnly')
+    undoToast(message, entry.id, {
+      onUndone: () => {
+        if (typeof hydrateView === 'function') hydrateView(entry.id)
+      },
+    })
+    if (typeof hydrateView === 'function') hydrateView(entry.id)
+  } catch (e) {
+    showToast(t('status.failed', { message: e.message || '' }))
+    buttons.forEach((b) => (b.disabled = false))
+  }
+}
+
+/** Roving arrow keys over the three options, per the WAI-ARIA radiogroup pattern: moving also selects. */
+function wireViewStatusButton(btn, entry) {
+  btn.onclick = () => {
+    if (!btn.disabled) return selectViewStatus(btn.dataset.status, entry)
+  }
+  btn.onkeydown = (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
+    e.preventDefault()
+    const opts = Array.from(document.querySelectorAll('#view-status .status-option'))
+    const idx = opts.indexOf(btn)
+    const dir = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1
+    const next = opts[(idx + dir + opts.length) % opts.length]
+    if (next && !next.disabled) {
+      next.focus()
+      selectViewStatus(next.dataset.status, entry)
+    }
+  }
+}
+
+function renderViewStatus(entry) {
+  const group = document.getElementById('view-status')
+  const caption = document.getElementById('view-status-caption')
+  if (!group || !caption) return
+  const status = tagValue(entry.tags || [], 'status:') || 'canonical'
+  const options = Array.from(group.querySelectorAll('.status-option'))
+  options.forEach((btn) => {
+    const checked = btn.dataset.status === status
+    btn.setAttribute('aria-checked', String(checked))
+    btn.tabIndex = checked ? 0 : -1
+    wireViewStatusButton(btn, entry)
+  })
+  caption.textContent = t(STATUS_HELP_KEYS[status] || '')
+}
+
 /**
  * Fill in what the caller could not know.
  *
@@ -432,6 +507,7 @@ async function hydrateView(id) {
     renderViewMeta(data.entry)
     renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
+    renderViewStatus(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
     // the only source that knows whether this is the reader's to change.
@@ -518,6 +594,7 @@ function renderViewTimeline(entry) {
  */
 function applyAuthorLock(entry) {
   lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, Array.from(document.querySelectorAll('#view-status .status-option')), 'status-option--locked')
 }
 
 /**
@@ -572,6 +649,7 @@ function openView(entry, cardElement) {
   renderViewMeta(entry)
   renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
+  renderViewStatus(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
   tagsContainer.innerHTML = ''

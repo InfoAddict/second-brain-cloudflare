@@ -30,6 +30,11 @@ async function apiUndo(id, toVersion) {
  * across Worker versions; `data.reason` (BE-4's honest 404/409 detail: pruned,
  * gone, mirror) is read where present but nothing here requires it, so this
  * degrades to the server's own message on a Worker that predates BE-4.
+ *
+ * `opts.provider`, when the caller has it (the entry's own source, read the
+ * same way history rows read {provider} for a sync row), fills the mirror
+ * toast's template. BE-4's 409 body carries no provider field of its own, so
+ * without one this falls back to the server's own sentence.
  */
 function undoResultToast(result, opts = {}) {
   const data = result.data || {}
@@ -39,7 +44,7 @@ function undoResultToast(result, opts = {}) {
       return { changed: false }
     }
     if (data.recreatedIncomingId) {
-      showToast(t('undo.revertedRecreated'), {
+      showToast(t('undo.recreated'), {
         action: t('undo.open'),
         onAction: () => {
           if (typeof opts.onOpen === 'function') opts.onOpen(data.recreatedIncomingId)
@@ -64,9 +69,7 @@ function undoResultToast(result, opts = {}) {
     return { changed: false }
   }
   if (result.status === 409 && data.reason === 'mirror') {
-    // No {provider} field is promised on this body (BE-4's contract omits
-    // one), and the server's own sentence already names the source.
-    showToast(data.error || t('team.actionFailed'))
+    showToast(opts.provider ? t('undo.mirror', { provider: opts.provider }) : data.error || t('team.actionFailed'))
     return { changed: false }
   }
   if (result.status === 404 && data.reason === 'gone') {

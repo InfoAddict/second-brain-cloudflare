@@ -700,6 +700,15 @@
           <div class="view-content" id="view-content-text"></div>
           <div class="view-tags" id="view-tags-container"></div>
           <div class="view-brain" id="view-brain" style="display: none"></div>
+          <div class="view-status" id="view-status-block">
+            <div class="view-status-title" data-i18n="status.label">Status</div>
+            <div id="view-status" class="status-control" role="radiogroup" aria-label="Status">
+              <button type="button" class="status-option" data-status="canonical" role="radio" aria-checked="false" data-i18n="status.trusted">Trusted</button>
+              <button type="button" class="status-option" data-status="draft" role="radio" aria-checked="false" data-i18n="status.unconfirmed">Unconfirmed</button>
+              <button type="button" class="status-option" data-status="deprecated" role="radio" aria-checked="false" data-i18n="status.wrong">Wrong</button>
+            </div>
+            <div class="status-caption" id="view-status-caption"></div>
+          </div>
           <div class="view-timeline" id="view-timeline" style="display: none"></div>
           <div class="view-related" id="view-related" style="display: none"></div>
         </div>

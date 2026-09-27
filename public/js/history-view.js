@@ -40,14 +40,31 @@ function historyReasonLabel(item, index, items, entry) {
   return t(`history.${key}`)
 }
 
+/** {provider} for a synced-source row: the entry's own source, read the same way everywhere it is shown. */
+function historyProvider(entry) {
+  return (typeof sourceBadge === 'function' ? sourceBadge(entry.source).label : entry.source) || ''
+}
+
+/**
+ * "you" for the viewer's own change, in team mode only — a solo brain has no
+ * one else to distinguish from, so it keeps showing the real name there, the
+ * same as the rest of the sheet does. `memoryAuthors` (recent.js) is the
+ * app's one existing source for "which member am I"; a page that has not
+ * loaded it (or a solo brain, which never does) leaves names untouched.
+ */
+function historyActorDisplay(name) {
+  if (typeof memoryAuthors !== 'undefined' && memoryAuthors && memoryAuthors.you && name) {
+    const me = (memoryAuthors.members || []).find((m) => m.userId === memoryAuthors.you)
+    if (me && me.name === name) return t('history.actorYou')
+  }
+  return name || ''
+}
+
 function historyWhoLabel(item, entry) {
   if (item.channel === 'system:digest') return t('history.byDigest')
   if (item.channel === 'system:insight') return t('history.byInsight')
-  if (item.channel === 'system:mirror') {
-    const provider = (typeof sourceBadge === 'function' ? sourceBadge(entry.source).label : entry.source) || ''
-    return t('history.bySync', { provider })
-  }
-  const actor = item.actor_name || ''
+  if (item.channel === 'system:mirror') return t('history.bySync', { provider: historyProvider(entry) })
+  const actor = historyActorDisplay(item.actor_name)
   if (item.client) return t('history.byClient', { actor, client: item.client })
   if (item.channel === 'mcp') return t('history.byAgent', { actor })
   return t('history.byDashboard', { actor })
@@ -152,7 +169,7 @@ function wireHistoryRow(li, item, entry) {
       undoBtn.disabled = true
       try {
         const result = await apiUndo(entry.id)
-        undoResultToast(result)
+        undoResultToast(result, { provider: historyProvider(entry) })
       } finally {
         await historyRehydrateAndFocus(entry.id)
       }
@@ -169,7 +186,7 @@ function wireHistoryRow(li, item, entry) {
         tone: 'primary',
         onConfirm: async (_checked, done) => {
           const result = await apiUndo(entry.id, item.seq)
-          undoResultToast(result)
+          undoResultToast(result, { provider: historyProvider(entry) })
           done()
           await historyRehydrateAndFocus(entry.id)
         },
