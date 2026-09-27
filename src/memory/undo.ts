@@ -19,7 +19,7 @@ import {
 } from "./versions";
 
 export type UndoResult =
-  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true }
+  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string } }
   | { status: "restored" }
   | { status: "no_change" }
   | { status: "nothing_to_undo" }
@@ -113,17 +113,46 @@ export async function revertEntry(
 
   const targetState = JSON.parse(target.state || "{}") as WhenChange;
   const targetMeta = JSON.parse(target.meta || "{}") as Record<string, unknown>;
+
+  // What a merge/replace revert recorded about the row it re-created, so a later redo can tell
+  // whether that row is still exactly what this call left behind (U8).
+  const isIncomingSnapshot = (v: unknown): v is { id: string; content: string; workspace_id: string; actor_id: string } =>
+    !!v && typeof v === "object"
+    && typeof (v as Record<string, unknown>).id === "string" && typeof (v as Record<string, unknown>).content === "string"
+    && typeof (v as Record<string, unknown>).workspace_id === "string" && typeof (v as Record<string, unknown>).actor_id === "string";
+
   // Rolling back to (or past) a merge/replace pulls its absorbed text out of the live row, wherever
   // that target sits in the chain — not only when it is the newest change (U4): a to_version rollback
   // past a merge must re-create the incoming row exactly as a plain undo of that merge would. The id
   // is minted now, before the batch, so it can ride in this revert's own version meta.
   const recreatesIncoming = (target.reason === "merge" || target.reason === "replace") && ("incoming" in targetMeta || targetMeta.incomingTruncated === true);
   const recreatedIncomingId = recreatesIncoming && targetMeta.incomingTruncated !== true ? crypto.randomUUID() : undefined;
+  const recreatedIncomingSnapshot = recreatedIncomingId
+    ? { id: recreatedIncomingId, content: String(targetMeta.incoming ?? ""), workspace_id: row.workspace_id, actor_id: target.actor_id }
+    : undefined;
+
   // Undoing a revert that itself re-created an incoming row (a redo) must remove that row again, so
-  // the fact does not end up live in two places (U4). Removed through the trash, not a hard delete,
-  // so the removal is itself reversible.
-  const removesRecreatedIncomingId = target.reason === "revert" && typeof targetMeta.recreated_incoming_id === "string"
-    ? targetMeta.recreated_incoming_id as string : undefined;
+  // the fact does not end up live in two places (U4) — but only when it is still safe to (U8): still
+  // readable and mutable by this undoer, and unchanged since this mechanism created it. A row moved
+  // out of the undoer's reach, edited by someone else, or no longer theirs to forget is left alone,
+  // and the result says so rather than silently keeping (or losing) it.
+  const priorIncoming = target.reason === "revert" && isIncomingSnapshot(targetMeta.recreated_incoming)
+    ? targetMeta.recreated_incoming : undefined;
+  let removingIncoming: typeof priorIncoming;
+  let keptIncoming: { id: string; reason: string } | undefined;
+  if (priorIncoming) {
+    const incomingRow = await getReadableEntry(env, identity, priorIncoming.id, "id, workspace_id, actor_id, content");
+    const incomingDenied = incomingRow ? assertCanMutateEntry(identity, incomingRow) : null;
+    const incomingUnchanged = !!incomingRow
+      && incomingRow.content === priorIncoming.content
+      && incomingRow.workspace_id === priorIncoming.workspace_id
+      && incomingRow.actor_id === priorIncoming.actor_id;
+    if (incomingRow && !incomingDenied && incomingUnchanged) {
+      removingIncoming = priorIncoming;
+    } else {
+      keptIncoming = { id: priorIncoming.id, reason: !incomingRow ? "unreadable" : incomingDenied ? "forbidden" : "changed" };
+    }
+  }
   // A due version, or an append that carried a when, restores when_* alongside content; so does a
   // full rollback to an older state (toVersion), which returns everything to that point in time.
   const restoreWhen = toVersion !== undefined || target.reason === "due" || targetMeta.when === true;
@@ -181,12 +210,13 @@ export async function revertEntry(
         nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
         // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
         // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
-        // recreated_incoming_id rides along the same way, so a redo of this revert (undoing it) knows
-        // which row to remove again (U4).
+        // recreated_incoming rides along the same way, with enough of a snapshot (content, workspace,
+        // actor) that a redo of this revert (undoing it) can tell whether the row it names is still
+        // safe to remove (U8), not just which row to look at.
         meta: {
           nonce, target_seq: target.seq, reverted_reason: target.reason,
           ...(restoreWhen ? { when: true } : {}),
-          ...(recreatedIncomingId ? { recreated_incoming_id: recreatedIncomingId } : {}),
+          ...(recreatedIncomingSnapshot ? { recreated_incoming: recreatedIncomingSnapshot } : {}),
         }, now,
       }),
       // versioning: snapshot
@@ -255,13 +285,21 @@ export async function revertEntry(
 
   // A redo (undoing a revert that had re-created an incoming row) removes that row again, through
   // the trash so the removal is itself reversible, rather than leaving the fact live in two places.
-  if (removesRecreatedIncomingId) {
+  // Only ever reached when the guards above (readable, mutable, unchanged) already passed (U8).
+  if (removingIncoming) {
     try {
-      await forgetEntry(removesRecreatedIncomingId, env, change, { reason: "forget", config, purge: false });
+      const forgotten = await forgetEntry(removingIncoming.id, env, change, { reason: "forget", config, purge: false });
+      if (forgotten.status === "deleted") {
+        await writeAuditEvents(env, [{
+          entryId: removingIncoming.id, actorId: change.actorId, event: "deleted",
+          payload: { channel: change.channel, trash: forgotten.trashed, reason: "forget", cause: "undo_merge_redo" },
+        }]);
+      }
     } catch (e) {
       console.error("Undo-merge redo cleanup failed (non-fatal):", e);
     }
   }
+  if (keptIncoming) (result as { keptIncoming?: { id: string; reason: string } }).keptIncoming = keptIncoming;
 
   return result;
 }
