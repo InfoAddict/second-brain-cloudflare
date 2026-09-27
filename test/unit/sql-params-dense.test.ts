@@ -66,3 +66,65 @@ describe("every generated statement numbers its placeholders densely", () => {
     expect(denseProblem("SELECT ?1", ["a", "b"])).toMatch(/bindings/);
   });
 });
+
+// ── Builder B's own builders (src/memory/trash.ts), pending their fold into the shared file above ──
+import { captureEnv } from "../helpers/dense-params";
+import { planTrash, trashManyStatements, purgeTrash, deleteForever, restoreEntry } from "../../src/memory/trash";
+import { DEFAULTS } from "../../src/config";
+
+describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () => {
+  const change = { actorId: "u", channel: "rest" as const };
+
+  it("trashManyStatements: tier 1, tier 2, tier 3 and a mixed batch", () => {
+    const row = (id: string, c: number, r: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: r, edges_json_bytes: e });
+    const cases = [
+      [row("a", 10, 10, 10)],
+      [row("a", 10, 10, 2_000_000)],
+      [row("a", 2_000_000, 10, 10)],
+      [row("a", 10, 10, 10), row("b", 10, 10, 2_000_000), row("c", 2_000_000, 10, 10)],
+    ];
+    for (const rows of cases) {
+      const { env, calls } = captureEnv();
+      trashManyStatements(env, planTrash(rows), { reason: "forget", change, now: 1 });
+      for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+    }
+  });
+
+  it("purgeTrash's candidate read and batch", async () => {
+    const { env, calls } = captureEnv();
+    await purgeTrash(env, DEFAULTS, { ceiling: 10, rowTarget: 5000, now: Date.now() });
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+  });
+
+  it("purgeTrash's oversized-row version-trim branch", async () => {
+    // A fake DB whose candidate read returns one row with a version count that alone exceeds the target.
+    const calls: { sql: string; args: unknown[] }[] = [];
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            calls.push({ sql, args });
+            if (/SELECT t\.id, t\.deleted_at/.test(sql)) return { all: async () => ({ results: [{ id: "big", deleted_at: 1, n: 500 }] }) };
+            return { run: async () => ({ meta: { changes: 400 } }), all: async () => ({ results: [] }) };
+          },
+        };
+      },
+      async batch(stmts: unknown[]) { return stmts.map(() => ({ meta: { changes: 0 } })); },
+    };
+    await purgeTrash({ DB: db } as any, DEFAULTS, { ceiling: 10, rowTarget: 100, now: Date.now() });
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+  });
+
+  it("deleteForever's batch", async () => {
+    const { env, calls } = captureEnv();
+    await deleteForever(env, { id: "a", vector_ids: "[]" }, change);
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+  });
+
+  it("restoreEntry's batch", async () => {
+    const { env, calls } = captureEnv();
+    const trashed = { id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", deleted_at: 1, reason: "forget" as const };
+    await restoreEntry(env, trashed, change, DEFAULTS);
+    for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
+  });
+});

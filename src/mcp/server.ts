@@ -998,7 +998,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "forget",
     {
-      description: "Permanently delete an entry from your second brain by ID. Only call when the user explicitly asks to delete something. Confirm the entry ID using recall or list_recent first. This action cannot be undone.",
+      description: "Delete an entry from your second brain by ID. Only call when the user explicitly asks to delete something. Confirm the entry ID using recall or list_recent first. Deleted entries go to the trash and are removed for good after the retention period (14 days unless the owner changed it).",
       inputSchema: {
         id: z.string().describe("Entry ID from recall or list_recent"),
       },
@@ -1009,14 +1009,20 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
-      const result = await forgetEntry(id, env);
+      const cfg = await resolveConfig(env);
+      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, { reason: "forget", config: cfg });
       if (result.status === "not_found") {
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "deleted", payload: { deletedVectors: result.vectorCount, channel: "mcp" } });
+        auditEvent(env, ctx, {
+          entryId: id, actorId: identity.userId, event: "deleted",
+          payload: { deletedVectors: result.vectorCount, channel: "mcp", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
+        });
       }
-      return { content: [{ type: "text", text: `Deleted entry ${id} and ${result.vectorCount} vector(s)` }] };
+      return { content: [{ type: "text", text: result.trashed
+        ? `Moved entry ${id} to the trash; it is removed for good after ${cfg.TRASH_RETENTION_DAYS} days.`
+        : `Deleted entry ${id} and ${result.vectorCount} vector(s). It was too large for the trash, so it cannot be restored.` }] };
     }
   );
 

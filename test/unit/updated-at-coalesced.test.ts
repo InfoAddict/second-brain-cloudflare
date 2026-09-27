@@ -45,6 +45,20 @@ const HYDRATION_EXEMPTION = {
   marker: "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN",
 };
 
+/**
+ * Statements whose `updated_at` is genuinely another table's column, not `entries.updated_at`,
+ * but which also mention `entries` (so the table-based `edges`/`projects` exemption above does
+ * not apply) — restore's edge-recreation reads `entries` only to check the other endpoint still
+ * exists, and both its raw mentions of `updated_at` (the INSERT's column list and the SELECT
+ * projection's `json_extract`) are the trashed edge's own snapshot, declared NOT NULL on `edges`.
+ */
+const OTHER_TABLE_EXEMPTIONS = [
+  {
+    file: "src/memory/trash.ts",
+    marker: "INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)",
+  },
+];
+
 type Finding = { kind: string; detail: string };
 
 /**
@@ -110,6 +124,7 @@ function rawSqlReads(sql: string, relPath: string): Finding[] {
     // In a SET clause and followed by `=` — an assignment target.
     if (inAny(i, setClauses) && /^\s*=/.test(sql.slice(i + "updated_at".length))) continue;
     if (relPath.replace(/\\/g, "/") === HYDRATION_EXEMPTION.file && sql.includes(HYDRATION_EXEMPTION.marker)) continue;
+    if (OTHER_TABLE_EXEMPTIONS.some(e => relPath.replace(/\\/g, "/") === e.file && sql.includes(e.marker))) continue;
 
     const at = sql.slice(Math.max(0, i - 45), i + 45);
     const clause = /\bORDER\s+BY\b/i.test(sql.slice(0, i)) ? "ORDER BY"
@@ -164,6 +179,10 @@ describe("entries.updated_at is never read without a created_at fallback", () =>
       // Registry rows carry their own nullable updated_at (null until first edit) and
       // surface it as-is; it is not entries.updated_at.
       if (/^src\/(projects\/|routes\/projects\.ts$)/.test(relative(ROOT, file).replace(/\\/g, "/"))) continue;
+      // Column NAME metadata, not a row read: ENTRY_ROW_COLUMNS/EDGE_ROW_COLUMNS declare
+      // "updated_at" as a string literal (the column this code builds SQL around), never
+      // reading a row's value in JavaScript.
+      if (relative(ROOT, file).replace(/\\/g, "/") === "src/memory/entry-columns.ts") continue;
       for (const read of rawTsReads(readFileSync(file, "utf8"))) {
         if (read.coalesced) continue;
         offenders.push(`${relative(ROOT, file)} — uncoalesced read: ${read.text.slice(0, 110)}`);

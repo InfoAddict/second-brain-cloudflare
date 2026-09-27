@@ -335,7 +335,9 @@ describe("nightly cron D1 subrequest cost", () => {
     // runFtsBackfill's liveness check, ready GET, cursor GET, rowid SELECT,
     // and ready PUT" (8); it now reads liveness, integrity-check, ready
     // GET, cursor GET, rowid SELECT, latch-guard batch, ready PUT (7).
-    expect(statements.length).toBe(22);
+    // MOVED 22 -> 24 (T-0089.1.2): +1 trash purge candidate read, +1 pending-member-removal probe.
+    // The purge resolves the config only when something is old enough to purge, so it adds no KV read.
+    expect(statements.length).toBe(24);
   });
 
   it("keeps a sweep night (the weekly dangling-edge sweep runs) inside the free-plan D1 budget", async () => {
@@ -356,7 +358,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // Exact pin: the same 22 as an ordinary night, plus the ONE dangling-edge
     // DELETE the sweep adds once a week. If this number moves, say why in the
     // same commit, see the scope-checker test's convention for this pattern.
-    expect(statements.length).toBe(23);
+    // MOVED 23 -> 25 (T-0089.1.2): the same two statements.
+    expect(statements.length).toBe(25);
   });
 
   // The other FTS night shape: ready already latched, so the backfill is
@@ -396,7 +399,8 @@ describe("nightly cron D1 subrequest cost", () => {
     // drifted rows, and the T-0065 parity batch above finds no per-workspace
     // drift either, so its own repair batch never fires. If this number
     // moves, say why in the same commit.
-    expect(statements.length).toBe(24);
+    // MOVED 24 -> 26 (T-0089.1.2): the trash purge read and the pending-removal probe.
+    expect(statements.length).toBe(26);
   });
 
   it("still leaves the staleness pass room to run after the other jobs", async () => {

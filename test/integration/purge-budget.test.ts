@@ -1,7 +1,11 @@
 /**
  * QA measurement: D1 calls issued by one POST /integrations/notion/disconnect that purges 200
- * mirrored rows. A batch is one call (the sqlite double records it as "BATCH"). The audit share
- * is pinned. Measured 2026-09-26 at 3e978d0: 807 D1 calls in all (4 per purged row: read, read vectors, DELETE entry, DELETE edges), 4 of them audit batches; the per-row loop predates the audit.
+ * mirrored rows. A batch is one call (the sqlite double records it as "BATCH").
+ * MOVED 807 -> 18 (T-0089.4.9): measured 2026-09-26 at 3e978d0, the per-row loop made 807 D1 calls (4 per purged
+ * row: read, read vectors, DELETE entry, DELETE edges) plus 4 audit batches. The purge now goes through the trash in
+ * chunks of 50: per chunk one scoped read, one trash batch, one landed-ids read (D1's `changes` on a DELETE FROM
+ * entries folds in every FTS/entry_counts trigger row it fired, so what actually landed is read back rather than
+ * counted) and one audit batch (16), plus identity resolution (2). One call, at most 50.
  */
 import { describe, it, expect, vi } from "vitest";
 import worker from "../../src/index";
@@ -16,7 +20,7 @@ const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
 const auth = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
 
 describe("disconnect purge D1 calls", () => {
-  it("200 rows: audit costs 4 batches of 50; total calls are measured", async () => {
+  it("200 rows: one call of at most 50 D1 calls trashes all of them with reason disconnect", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: any) => {
       const url = typeof input === "string" ? input : input.url;
       if (url.endsWith("/users/me")) return new Response(JSON.stringify({ object: "user", type: "bot", name: "SB", bot: { workspace_name: "Acme" } }), { status: 200 });
@@ -42,13 +46,17 @@ describe("disconnect purge D1 calls", () => {
 
     sqlite.issued.length = 0; sizes.length = 0;
     const res = await worker.fetch(new Request("http://localhost/integrations/notion/disconnect", { method: "POST", headers: auth, body: JSON.stringify({ purge: true }) }), env, ctx);
-    expect(((await res.json()) as any).purged).toBe(200);
+    expect(((await res.json()) as any)).toMatchObject({ purged: 200, done: true });
+    const d1Calls = sqlite.issued.length;
     const auditInserts = ((await env.DB.prepare(`SELECT COUNT(*) n FROM entry_events WHERE event='deleted'`).first()) as any).n;
 
     expect(auditInserts).toBe(200);
-    // Everything but the audit: 4 calls per row, so the audit adds 4 calls, not 200.
-    expect(sqlite.issued.length).toBeLessThan(820);
+    expect(d1Calls).toBe(18);
+    expect(d1Calls).toBeLessThanOrEqual(50);
+    // The audit is still four batches of 50, one per chunk.
     expect(sizes.filter(n => n === 50)).toHaveLength(4);
+    const trashed = ((await env.DB.prepare(`SELECT COUNT(*) n FROM entries_trash WHERE reason = 'disconnect'`).first()) as any).n;
+    expect(trashed).toBe(200);
     sqlite.close(); vi.unstubAllGlobals();
   });
 });

@@ -312,7 +312,7 @@ describe("team member administration", () => {
       expect(await resolveIdentityFromToken(token, env)).toBeNull();
 
       const retried = await removeMember(env, roots.ownerUserId, member.userId);
-      expect(retried).toEqual({ removedEntries: 1, vectorIds: ["retry-vector"] });
+      expect(retried).toMatchObject({ done: true, removedEntries: 1, vectorIds: ["retry-vector"] });
       expect(await env.DB.prepare(
         `SELECT id FROM workspaces WHERE id = ?`,
       ).bind(member.personalWorkspaceId).first()).toBeNull();

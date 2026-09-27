@@ -154,6 +154,18 @@ function openConfirm(id, btnOrCard) {
   })
   pendingForgetId = id
   pendingForgetCard = card
+  // The default-phrased body renders immediately; if the owner changed the retention
+  // period, GET /config's answer (shared with team.js's settings reads) replaces it in place.
+  if (typeof readTeamConfig === 'function') {
+    readTeamConfig()
+      .then((cfg) => {
+        const days = cfg?.TRASH_RETENTION_DAYS
+        if (typeof days !== 'number' || pendingForgetId !== id) return
+        const body = document.getElementById('confirm-body')
+        if (body) body.textContent = t('memories.confirmBodyRetention', { n: days })
+      })
+      .catch(() => {})
+  }
 }
 /**
  * Tell any open list that this memory has been dealt with.
@@ -169,6 +181,52 @@ function openConfirm(id, btnOrCard) {
  */
 function notifyMemoryResolved(id) {
   if (typeof dropFromStaleQueue === 'function') dropFromStaleQueue(id)
+}
+
+/**
+ * Delete forever (T-0089.4.7): REST-only, `{id, permanent: true, confirm: id}`. Not offered to
+ * agents (there is no MCP tool or parameter for it) — the confirm echo, not a hidden token, is
+ * what keeps this from being one accidental tap away from Forget.
+ */
+function openDeleteForeverConfirm(id, cardElement) {
+  openDangerConfirm({
+    title: t('memories.deleteForeverTitle'),
+    body: t('memories.deleteForeverConfirm'),
+    confirmLabel: t('memories.deleteForever'),
+    onConfirm: async (_checked, done) => {
+      const btn = document.querySelector('#confirm-dialog .btn-delete')
+      if (btn) {
+        btn.disabled = true
+        btn.textContent = t('memories.deletingForever')
+      }
+      try {
+        const res = await fetch(`${WORKER_URL}/forget`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+          body: JSON.stringify({ id, permanent: true, confirm: id }),
+        })
+        const data = await res.json()
+        if (!res.ok || !data.ok) throw new Error(data.error || t('memories.deleteForeverFailed'))
+        done()
+        if (cardElement) {
+          cardElement.style.transition = 'none'
+          cardElement.classList.add('explode-out')
+          setTimeout(() => cardElement?.remove(), 400)
+        }
+        allEntries = allEntries.filter((e) => e.id !== id)
+        notifyMemoryResolved(id)
+        refreshAll({ list: false })
+      } catch (e) {
+        showToast(t('memories.deleteForeverFailed', { message: e.message }))
+        done()
+      } finally {
+        if (btn) {
+          btn.disabled = false
+          btn.textContent = t('memories.deleteForever')
+        }
+      }
+    },
+  })
 }
 
 async function confirmForget(_checked, done) {
@@ -363,6 +421,8 @@ function timelineEventLabel(event) {
     shared: 'memories.evShared',
     unshared: 'memories.evUnshared',
     reverted: 'memories.evReverted',
+    restored: 'memories.evRestored',
+    purged: 'memories.evPurged',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }
@@ -414,7 +474,7 @@ function renderViewTimeline(entry) {
  * only on readability (src/routes/graph.ts), so a reader may remove a link.
  */
 function applyAuthorLock(entry) {
-  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget', 'view-btn-delete-forever'].map((id) => document.getElementById(id)), 'view-btn--locked')
 }
 
 /**
@@ -505,6 +565,16 @@ function openView(entry, cardElement) {
     forgetBtn.style.display = 'flex'
   } else {
     forgetBtn.style.display = 'none'
+  }
+  const deleteForeverBtn = document.getElementById('view-btn-delete-forever')
+  if (entry.id) {
+    deleteForeverBtn.onclick = () => {
+      closeView()
+      openDeleteForeverConfirm(entry.id, cardElement || null)
+    }
+    deleteForeverBtn.style.display = 'flex'
+  } else {
+    deleteForeverBtn.style.display = 'none'
   }
   const editBtn = document.getElementById('view-btn-edit')
   if (entry.id) {

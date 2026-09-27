@@ -123,6 +123,8 @@ export interface ImportSummary {
   ok: true;
   imported: number;
   skipped: number;
+  /** Of `skipped`, ids that sit in the trash: restore them instead of importing over them. */
+  skipped_in_trash: number;
   failed: number;
   edges_imported: number;
   edges_skipped: number;
@@ -249,9 +251,10 @@ export function parseImportLimit(raw: string | null): number {
   return Math.min(n, IMPORT_MAX_LIMIT);
 }
 
-async function loadExistingIds(env: Env, ids: string[]): Promise<Set<string>> {
-  const found = new Set<string>();
-  if (!ids.length) return found;
+/** Ids already present, split into live entries and trashed ones (a trashed id is restored, never overwritten). */
+async function loadExistingIds(env: Env, ids: string[], withTrash = true): Promise<{ live: Set<string>; trashed: Set<string> }> {
+  const live = new Set<string>();
+  const trashed = new Set<string>();
   for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMS) {
     const batch = ids.slice(i, i + D1_MAX_BOUND_PARAMS);
     const placeholders = batch.map(() => "?").join(", ");
@@ -259,9 +262,23 @@ async function loadExistingIds(env: Env, ids: string[]): Promise<Set<string>> {
       // scope-exempt: by-id: primary-key existence check for dedupe; a collision is skipped, never read
       `SELECT id FROM entries WHERE id IN (${placeholders})`,
     ).bind(...batch).all() as { results: { id: string }[] };
-    for (const row of results) found.add(row.id);
+    for (const row of results) live.add(row.id);
+    if (!withTrash) continue;
+    const { results: inTrash } = await env.DB.prepare(
+      // scope-exempt: by-id: primary-key existence check for dedupe; a trashed id is skipped, never read
+      `SELECT id FROM entries_trash WHERE id IN (${placeholders})`,
+    ).bind(...batch).all() as { results: { id: string }[] };
+    for (const row of inTrash) trashed.add(row.id);
   }
-  return found;
+  return { live, trashed };
+}
+
+/** Versions left behind by an earlier life of an id are dropped in the same batch that inserts it. */
+function orphanVersionsDelete(env: Env, ids: string[]) {
+  return env.DB.prepare(
+    // scope-exempt: by-id: history of ids this batch inserts fresh; an imported row starts with none
+    `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?1))`,
+  ).bind(JSON.stringify(ids));
 }
 
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
@@ -340,7 +357,7 @@ async function flushInsertBatch(
 ): Promise<void> {
   if (!batch.length) return;
 
-  const stmts = batch.map(row => bindInsert(env, row, writeCtx));
+  const stmts = [orphanVersionsDelete(env, batch.map(row => row.id)), ...batch.map(row => bindInsert(env, row, writeCtx))];
   try {
     await env.DB.batch(stmts);
     for (const row of batch) {
@@ -351,7 +368,7 @@ async function flushInsertBatch(
   } catch {
     for (const row of batch) {
       try {
-        await bindInsert(env, row, writeCtx).run();
+        await env.DB.batch([orphanVersionsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
         existingIds.add(row.id);
         counters.imported++;
         results.push({ id: row.id, status: "imported" });
@@ -583,7 +600,8 @@ export async function importExportPayload(
   }
 
   const pageIds = [...new Set(parsedPage.flatMap(p => ("row" in p ? [p.row.id] : [])))];
-  const existingIds = await loadExistingIds(env, pageIds);
+  const { live: existingIds, trashed: trashedIds } = await loadExistingIds(env, pageIds);
+  let skipped_in_trash = 0;
 
   const pendingBatch: PendingInsert[] = [];
   const batchCounters = { imported: 0, failed: 0 };
@@ -591,6 +609,12 @@ export async function importExportPayload(
     if ("failure" in p) {
       failed++;
       results.push(p.failure);
+      continue;
+    }
+    if (trashedIds.has(p.row.id)) {
+      skipped++;
+      skipped_in_trash++;
+      results.push({ id: p.row.id, status: "skipped", reason: "in_trash" });
       continue;
     }
     if (existingIds.has(p.row.id)) {
@@ -637,7 +661,7 @@ export async function importExportPayload(
       ...new Set(parsedEdges.flatMap(p => ("edge" in p ? [p.edge.source_id, p.edge.target_id] : []))),
     ];
     const unknown = endpoints.filter(id => !existingIds.has(id));
-    for (const id of await loadExistingIds(env, unknown)) existingIds.add(id);
+    for (const id of (await loadExistingIds(env, unknown, false)).live) existingIds.add(id);
     const existingEdgeKeys = await loadExistingEdgeKeys(env, endpoints);
 
     const pendingEdgeBatch: PendingEdge[] = [];
@@ -683,6 +707,7 @@ export async function importExportPayload(
     ok: true,
     imported,
     skipped,
+    skipped_in_trash,
     failed,
     edges_imported,
     edges_skipped,

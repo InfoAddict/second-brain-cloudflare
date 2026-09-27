@@ -19,7 +19,9 @@ export type EntryEventName =
   | "unshared"
   | "insight_confirmed"
   | "insight_dismissed"
-  | "reverted";
+  | "reverted"
+  | "restored"
+  | "purged";
 
 /** Where a change came from. Recorded on every version and on the events the domain layer writes. */
 export type AuditChannel = "rest" | "mcp" | `system:${string}` | "unspecified";

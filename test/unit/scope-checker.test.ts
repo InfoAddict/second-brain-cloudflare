@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (151 queries, 73 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (162 queries, 81 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1275,9 +1275,20 @@ describe("the checker over the real source tree", () => {
     // the caller having authorized the entry before it builds the batch.
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.1, src/capture/share.ts): moveEntry's move-event
     // INSERT reads the row's own workspace by id, the row having been read above under the caller's scope.
+    // (148/70 -> 150/72 on the foundations branch.)
+    // Deliberate: +8 queries and +5 scope-exempt (150/72 -> 158/77) for T-0089.1.2/T-0089.4.9/T-0089.8
+    // (trash, purge, member removal, disconnect purge, restore): src/memory/trash.ts's trash size read
+    // (by-id), trash insert x2 (tier 1/2, by-id), purge candidate read and purge batch's INSERT/DELETEs
+    // (scope-exempt: retention purge, global by design), the disconnect purge's scoped size read (carries
+    // scopeWhere), getTrashedEntry's scoped SELECT (carries scopeWhere), restoreEntry's INSERT/edge-restore
+    // (by-id, caller pre-authorized), and src/lib/team-admin.ts's cleanupMemberData reads/deletes
+    // (scope-exempt: offboarding, by workspace already resolved to the removed member's own).
+    // Deliberate: +3 queries and +3 scope-exempt (158/77 -> 161/80) for T-0089.4.7 (Delete forever):
+    // src/memory/trash.ts's deleteForever issues its edges/versions/trash/entries deletes as four
+    // separate by-id statements (each needs its own dense Params, so each carries its own comment).
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts): revertEntry's post-miss
     // liveness check is by-id, the row having been read above under the caller's own scope.
-    ).toEqual({ queries: 151, exempt: 73, checked: 12, outerJoin: 1 });
+    ).toEqual({ queries: 162, exempt: 81, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

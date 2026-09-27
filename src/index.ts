@@ -13,6 +13,7 @@ import { pushDueItemsAllWorkspaces } from "./push/send";
 import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
+import { runNightlyCleanup } from "./memory/cleanup";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -217,6 +218,13 @@ export default {
         await runFtsMaintenance(env);
       } catch (e) {
         console.error("FTS maintenance failed (non-fatal):", e);
+      }
+
+      // Trash purge and the resume of a pending member removal, on one rows-written budget.
+      try {
+        await runNightlyCleanup(env);
+      } catch (e) {
+        console.error("Nightly cleanup failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing

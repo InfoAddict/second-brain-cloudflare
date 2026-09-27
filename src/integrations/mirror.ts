@@ -143,13 +143,13 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       return true;
     },
     async deleteEntry(id) {
-      const r = await forgetEntry(id, env);
+      const r = await forgetEntry(id, env, { actorId: writeCtx.actorId, channel: "system:mirror" }, { reason: "mirror", config: await config(), purge: false });
       if (r.status !== "deleted") return;
       auditBuffer.push({
         entryId: id,
         actorId: writeCtx.actorId,
         event: "deleted",
-        payload: { reason: "mirror", provider: providerId ?? null, deletedVectors: r.vectorCount, channel: "system:mirror" },
+        payload: { reason: "mirror", provider: providerId ?? null, deletedVectors: r.vectorCount, trash: r.trashed, channel: "system:mirror" },
       });
       if (auditBuffer.length >= AUDIT_BATCH_MAX) await flushAudit();
     },
@@ -224,7 +224,8 @@ export async function runScheduledIntegrationSync(env: Env, resolved?: Readonly<
   let dueSince = Infinity;
   for (const provider of Object.values(INTEGRATION_PROVIDERS)) {
     const record = await loadIntegration(env, provider.id);
-    if (!record) continue;
+    // A record being disconnected is mid-purge: syncing it would re-create what the purge just trashed.
+    if (!record || record.disconnecting) continue;
     // Strict <, so registry order breaks ties deterministically — which is what
     // orders the first run after two providers are connected together.
     const touchedAt = record.updatedAt ?? 0;

@@ -253,6 +253,9 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     try {
       const result = await removeMember(env, auth.userId, body.id.trim());
+      // History remains: nothing is audited or deleted from the index yet. The dashboard calls
+      // again, and the nightly run resumes it if nobody does.
+      if (!result.done) return json({ ok: true, done: false, id: body.id.trim(), remaining: result.remaining }, 202);
       // Audited before the Vectorize delete, not after: the D1 rows are already
       // gone by here, so a Vectorize failure must not also cost the record of the
       // destruction. The counts, never the content, this is the one
@@ -275,7 +278,7 @@ export async function handleAdminRoutes(
           console.error("Vectorize deleteByIds failed during member removal (non-fatal):", e);
         }
       }
-      return json({ ok: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors: result.vectorIds.length });
+      return json({ ok: true, done: true, id: body.id.trim(), removedEntries: result.removedEntries, removedVectors: result.vectorIds.length });
     } catch (e) {
       if (e instanceof TeamAdminError) return json({ ok: false, error: e.message }, e.status);
       throw e;

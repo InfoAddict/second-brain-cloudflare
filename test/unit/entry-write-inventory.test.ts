@@ -79,20 +79,19 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: "src/capture/entry.ts", line: 464, kind: "exempt" },
   { file: "src/capture/entry.ts", line: 473, kind: "exempt" },
   { file: "src/capture/entry.ts", line: 475, kind: "exempt" },
-  { file: "src/capture/lifecycle.ts", line: 24, kind: "hard-delete" },
-  { file: "src/capture/lifecycle.ts", line: 95, kind: "snapshot" },
-  { file: "src/capture/lifecycle.ts", line: 119, kind: "snapshot" },
+  { file: "src/capture/lifecycle.ts", line: 108, kind: "snapshot" },
+  { file: "src/capture/lifecycle.ts", line: 132, kind: "snapshot" },
   { file: "src/capture/share.ts", line: 61, kind: "exempt" },
-  { file: "src/capture/store.ts", line: 99, kind: "exempt" },
-  { file: "src/capture/store.ts", line: 170, kind: "exempt" }, // row 29: restoreRowVectors' vector_ids = '[]' (L5)
-  { file: "src/capture/store.ts", line: 314, kind: "snapshot" },
-  { file: "src/capture/store.ts", line: 437, kind: "snapshot" },
-  { file: "src/capture/store.ts", line: 496, kind: "snapshot" },
+  { file: "src/capture/store.ts", line: 53, kind: "exempt" },
+  { file: "src/capture/store.ts", line: 190, kind: "exempt" },
+  { file: "src/capture/store.ts", line: 334, kind: "snapshot" },
+  { file: "src/capture/store.ts", line: 457, kind: "snapshot" },
+  { file: "src/capture/store.ts", line: 516, kind: "snapshot" },
   { file: "src/compression/digest.ts", line: 62, kind: "snapshot" },
   { file: "src/entries/import.ts", line: 26, kind: "exempt" },
   { file: "src/integrations/mirror.ts", line: 80, kind: "exempt" },
   { file: "src/integrations/mirror.ts", line: 122, kind: "snapshot" },
-  { file: "src/lib/team-admin.ts", line: 476, kind: "hard-delete" },
+  { file: "src/lib/team-admin.ts", line: 576, kind: "hard-delete" },
   { file: "src/lib/tenancy.ts", line: 128, kind: "exempt" },
   { file: "src/memory/undo.ts", line: 116, kind: "snapshot" },
   { file: "src/memory/undo.ts", line: 165, kind: "exempt" },
@@ -102,8 +101,11 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: "src/memory/actions.ts", line: 100, kind: "snapshot" },
   { file: "src/memory/actions.ts", line: 133, kind: "snapshot" },
   { file: "src/memory/actions.ts", line: 136, kind: "snapshot" },
+  { file: "src/memory/trash.ts", line: 130, kind: "trash" },
+  { file: "src/memory/trash.ts", line: 415, kind: "exempt" },
+  { file: "src/memory/trash.ts", line: 489, kind: "hard-delete" },
   { file: "src/recall/search.ts", line: 1115, kind: "exempt" },
-  { file: "src/routes/admin.ts", line: 1535, kind: "exempt" },
+  { file: "src/routes/admin.ts", line: 1538, kind: "exempt" },
   { file: "src/staleness/pass.ts", line: 86, kind: "exempt" },
   { file: "src/staleness/pass.ts", line: 96, kind: "exempt" },
   { file: "src/when/pass.ts", line: 367, kind: "exempt" },
@@ -118,7 +120,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
   "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1535", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1538", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   "src/capture/entry.ts:378", "src/capture/entry.ts:464",
@@ -126,6 +128,7 @@ const HYGIENE_EXEMPT = new Set([
 
 describe("write-path inventory guard", () => {
   const sites = scanInventory();
+
 
   it("every write to entries carries a versioning marker", () => {
     const unmarked = sites.filter(s => s.markerKind === null).map(s => `${s.file}:${s.line}`);

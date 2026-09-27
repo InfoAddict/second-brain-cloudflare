@@ -75,6 +75,8 @@ const SCHEMA_PROBE_RESULTS = [
 export class D1Mock {
   entries: any[] = [];
   edges: any[] = [];
+  /** entries_trash rows written by the forget batch (the statements the mock models are the trash ones only). */
+  trash: any[] = [];
   // Tenancy rows, populated by the real ensureTenantBootstrap when a route's
   // requireIdentity runs against this double. The statements it issues are
   // modelled just faithfully enough for the owner identity to resolve; member
@@ -413,6 +415,32 @@ export class D1Mock {
           const row = db.entries.find((e: any) => e.id === id);
           if (row) row.importance_score = score;
           return { meta: { changes: row ? 1 : 0 } };
+        }
+        // The trash batch (src/memory/trash.ts trashManyStatements): every id list is one JSON parameter.
+        if (s.startsWith("INSERT OR REPLACE INTO entries_trash")) {
+          const [idsJson, now, by, channel, reason] = args;
+          const withEdges = s.includes("json_group_array");
+          const rows = db.entries.filter((e: any) => (JSON.parse(idsJson) as string[]).includes(e.id));
+          for (const e of rows) {
+            const { id, content, vector_ids, ...rest } = e;
+            const edges = withEdges ? db.edges.filter((g: any) => g.source_id === id || g.target_id === id) : [];
+            db.trash = db.trash.filter((t: any) => t.id !== id);
+            db.trash.push({ id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", content, row_json: JSON.stringify(rest), edges_json: JSON.stringify(edges), deleted_at: now, deleted_by: by, channel, reason });
+          }
+          return { meta: { changes: rows.length } };
+        }
+        if (s.startsWith("DELETE FROM entry_versions")) return { meta: { changes: 0 } };
+        if (s.startsWith("DELETE FROM edges WHERE source_id IN (SELECT value FROM json_each")) {
+          const ids = new Set(JSON.parse(args[0]) as string[]);
+          const before = db.edges.length;
+          db.edges = db.edges.filter((e: any) => !ids.has(e.source_id) && !ids.has(e.target_id));
+          return { meta: { changes: before - db.edges.length } };
+        }
+        if (s.startsWith("DELETE FROM entries WHERE id IN (SELECT value FROM json_each")) {
+          const ids = new Set(JSON.parse(args[0]) as string[]);
+          const before = db.entries.length;
+          db.entries = db.entries.filter((e: any) => !ids.has(e.id));
+          return { meta: { changes: before - db.entries.length } };
         }
         if (s.startsWith("DELETE FROM entries WHERE id")) {
           const [id] = args;
@@ -768,6 +796,23 @@ export class D1Mock {
               created_at: e.created_at ?? 0,
               source: e.source ?? "api",
             }));
+          return { results };
+        }
+        // The disconnect purge's landed-ids read: which of this batch's ids actually got a trash row.
+        if (s.startsWith("SELECT id FROM entries_trash WHERE reason = 'disconnect' AND deleted_at =")) {
+          const [deletedAt, deletedBy, idsJson] = args;
+          const ids = new Set(JSON.parse(idsJson) as string[]);
+          const results = db.trash.filter((r: any) => r.reason === "disconnect" && r.deleted_at === deletedAt && r.deleted_by === deletedBy && ids.has(r.id))
+            .map((r: any) => ({ id: r.id }));
+          return { results };
+        }
+        // The trash size read (trashSizeSelect): sizes are not modelled beyond content, which is enough for tier 1.
+        if (s.includes("length(CAST(e.content AS BLOB)) AS content_bytes")) {
+          const ids = JSON.parse(args[0]) as string[];
+          const results = db.entries.filter((e: any) => ids.includes(e.id)).map((e: any) => ({
+            id: e.id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", vector_ids: e.vector_ids ?? "[]",
+            content_bytes: Buffer.byteLength(e.content ?? ""), row_json_bytes: 300, edges_json_bytes: 2,
+          }));
           return { results };
         }
         if (s.includes("SELECT id FROM entries WHERE id IN")) {
