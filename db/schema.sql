@@ -282,7 +282,9 @@ CREATE TABLE IF NOT EXISTS entry_versions (
   workspace_id TEXT NOT NULL DEFAULT '',      -- the entry's workspace at change time; decides who may read it
   seq          INTEGER NOT NULL,              -- 1, 2, 3 per entry, newest highest, no gaps above the oldest kept
   content      TEXT,                          -- full prior text, or NULL when prior_length is set
-  prior_length INTEGER,                       -- prior text = first N characters of the next newer state
+  prior_length INTEGER,                       -- prior text = first N (Unicode) characters of the next newer state
+  prior_length_utf16 INTEGER,                 -- same boundary in UTF-16 units, when the writer had it to give (T-0089.1.1, ADV-10);
+                                               -- NULL on a full copy, or on a delta an older writer left the JS-side boundary out of
   tags         TEXT NOT NULL,                 -- prior tags (JSON), always full
   state        TEXT NOT NULL DEFAULT '{}',    -- prior non-text state (JSON): when_at, when_kind, when_source, when_label
   actor_id     TEXT NOT NULL DEFAULT '',      -- who made the change that retired this state
@@ -291,7 +293,8 @@ CREATE TABLE IF NOT EXISTS entry_versions (
   meta         TEXT NOT NULL DEFAULT '{}',
   valid_from   INTEGER,                       -- when the prior state became current
   created_at   INTEGER NOT NULL,              -- when the prior state was retired
-  CHECK ((content IS NULL) <> (prior_length IS NULL))
+  CHECK ((content IS NULL) <> (prior_length IS NULL)),
+  CHECK (prior_length_utf16 IS NULL OR prior_length IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_versions_entry ON entry_versions(entry_id, seq);

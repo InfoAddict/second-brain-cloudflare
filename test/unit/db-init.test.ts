@@ -40,6 +40,11 @@ const ADMIN_EVENTS_ALTERS: [column: string, alter: string][] = [
   ["target_user_id", `ALTER TABLE admin_events ADD COLUMN target_user_id TEXT NOT NULL DEFAULT ''`],
   ["workspace_id", `ALTER TABLE admin_events ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`],
 ];
+// entry_versions shipped without prior_length_utf16; a brain that wrote a version before it
+// existed has the narrow table (T-0089.1.1, ADV-10).
+const ENTRY_VERSIONS_ALTERS: [column: string, alter: string][] = [
+  ["prior_length_utf16", `ALTER TABLE entry_versions ADD COLUMN prior_length_utf16 INTEGER`],
+];
 const ALL_COLUMNS = MIGRATION.map(([column]) => column);
 const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../../db/schema.sql"), "utf8").matchAll(/CREATE TRIGGER IF NOT EXISTS (\w+)[\s\S]*?END;/g)].map(m => [m[1], m[0].slice(0, -1)]));
 const PROMPT_CAPSULE_TRIGGERS = [
@@ -88,6 +93,7 @@ const FULLY_MIGRATED = {
   edgeColumns: TENANCY_EDGE_ALTERS.map(([c]) => c),
   userColumns: USERS_ALTERS.map(([c]) => c),
   adminEventColumns: ADMIN_EVENTS_ALTERS.map(([c]) => c),
+  entryVersionColumns: ENTRY_VERSIONS_ALTERS.map(([c]) => c),
 };
 
 /** The catalogue read that opens every init. Spelled out so tests can exclude it by name. */
@@ -105,11 +111,12 @@ type Row = { created_at: number; updated_at?: number | null };
 // `objects` defaults from the columns: a brain carrying migration columns necessarily has
 // the table they sit on, and a brain carrying none is the fresh case where nothing exists.
 // Pass it explicitly for anything in between.
-function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], existingObjects?: string[], existingEdgeColumns: string[] = [], existingUserColumns: string[] = [], existingAdminEventColumns: string[] = []) {
+function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], existingObjects?: string[], existingEdgeColumns: string[] = [], existingUserColumns: string[] = [], existingAdminEventColumns: string[] = [], existingEntryVersionColumns: string[] = []) {
   const columns = new Set(existingColumns.length ? [...BASE_COLUMNS, ...existingColumns] : []);
   const edgeColumns = new Set(existingEdgeColumns);
   const userColumns = new Set(existingUserColumns);
   const adminEventColumns = new Set(existingAdminEventColumns);
+  const entryVersionColumns = new Set(existingEntryVersionColumns);
   const objects = new Set(existingObjects ?? (existingColumns.length ? ALL_OBJECTS : []));
   const execd: string[] = [];
   const prepared: string[] = [];
@@ -124,6 +131,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
     if (created[1] === "edges") TENANCY_EDGE_ALTERS.forEach(([c]) => edgeColumns.add(c));
     if (created[1] === "users") USERS_ALTERS.forEach(([c]) => userColumns.add(c));
     if (created[1] === "admin_events") ADMIN_EVENTS_ALTERS.forEach(([c]) => adminEventColumns.add(c));
+    if (created[1] === "entry_versions") ENTRY_VERSIONS_ALTERS.forEach(([c]) => entryVersionColumns.add(c));
   };
 
   const DB = {
@@ -134,7 +142,8 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
         const [, table, column] = altered;
         const target = table === "edges" ? edgeColumns
           : table === "users" ? userColumns
-            : table === "admin_events" ? adminEventColumns : columns;
+            : table === "admin_events" ? adminEventColumns
+              : table === "entry_versions" ? entryVersionColumns : columns;
         if (target.has(column)) throw new Error(`D1_EXEC_ERROR: duplicate column name: ${column}`);
         target.add(column);
         if (table === "entries" && column === "updated_at") rows.forEach(r => { r.updated_at = null; });
@@ -161,6 +170,7 @@ function makeMigrationDb(existingColumns: string[] = [], rows: Row[] = [], exist
               ...[...edgeColumns].map(name => ({ kind: "edge_column", name })),
               ...[...userColumns].map(name => ({ kind: "user_column", name })),
               ...[...adminEventColumns].map(name => ({ kind: "admin_event_column", name })),
+              ...[...entryVersionColumns].map(name => ({ kind: "entry_version_column", name })),
             ]
             : [],
         }),
@@ -224,7 +234,7 @@ describe("initializeDatabase updated_at migration", () => {
   describe("cost on a migrated brain", () => {
     it("costs one statement and issues no DDL when the schema is already complete", async () => {
       const { env, execd, prepared } = makeMigrationDb(
-        FULLY_MIGRATED.entryColumns, rowsAged(1), FULLY_MIGRATED.objects, FULLY_MIGRATED.edgeColumns, FULLY_MIGRATED.userColumns, FULLY_MIGRATED.adminEventColumns,
+        FULLY_MIGRATED.entryColumns, rowsAged(1), FULLY_MIGRATED.objects, FULLY_MIGRATED.edgeColumns, FULLY_MIGRATED.userColumns, FULLY_MIGRATED.adminEventColumns, FULLY_MIGRATED.entryVersionColumns,
       );
 
       await initializeDatabase(env);
@@ -268,7 +278,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 61 -> 62 (T-0089.4.4) by idx_entries_conflict_held, the partial index behind the digest's held-draft check.
       // MOVED 62 -> 66 (T-0089.6.1) by the four partial indexes behind the agent brief.
       // MOVED 66 -> 70 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
-      expect(migrated).toBe(70); // 31 base objects + 18 ALTERs + 15 post-column objects + the email-index CREATE
+      // MOVED 70 -> 71 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER.
+      expect(migrated).toBe(71); // 31 base objects + 19 ALTERs + 15 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -285,6 +296,7 @@ describe("initializeDatabase updated_at migration", () => {
         ...TENANCY_EDGE_ALTERS,
         ...USERS_ALTERS,
         ...ADMIN_EVENTS_ALTERS,
+        ...ENTRY_VERSIONS_ALTERS,
       ].map(([, alter]) => alter);
       expect(execd).toEqual(missingAlters);
       expect(prepared).toHaveLength(1);
@@ -604,7 +616,9 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 55 -> 56 (T-0089.4.4) by idx_entries_conflict_held.
     // MOVED 56 -> 60 (T-0089.6.1) by the four partial indexes behind the agent brief.
     // MOVED 60 -> 64 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
-    expect(cold).toBe(64); // one probe, then the 63 statements a new brain needs
+    // MOVED 64 -> 65 (T-0089.1.1, ADV-10) by the prior_length_utf16 ALTER — wasted on a fresh brain
+    // (the CREATE above already has the column), same as every other ALTER a fresh CREATE subsumes.
+    expect(cold).toBe(65); // one probe, then the 64 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

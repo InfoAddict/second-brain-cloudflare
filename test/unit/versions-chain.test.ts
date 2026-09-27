@@ -3,7 +3,7 @@ import { cpus, loadavg } from "node:os";
 import { buildChain, VersionChainError, type VersionRow } from "../../src/memory/versions";
 
 const row = (seq: number, over: Partial<VersionRow>): VersionRow => ({
-  seq, workspace_id: "w", content: null, prior_length: null, tags: "[]", state: "{}", actor_id: "u", channel: "rest",
+  seq, workspace_id: "w", content: null, prior_length: null, prior_length_utf16: null, tags: "[]", state: "{}", actor_id: "u", channel: "rest",
   reason: "update", meta: "{}", valid_from: null, created_at: seq, ...over,
 });
 const all = () => true;
@@ -152,6 +152,62 @@ describe("buildChain", () => {
         expect(emojiMs).toBeLessThan(10 * scale);
         return;
       }
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  });
+
+  it("CPU: ADV-10 — an alternating full-copy/delta chain does not pay a full scan per delta", async (ctx) => {
+    // Every run in "one pass per base" above shares its base across many deltas; an edit/append/edit/
+    // append chain never does — each delta is the only member of its own run, over a fresh ~1.4 MB
+    // emoji-heavy base every time. Without a stored boundary that is 20 O(base length) scans, not one.
+    const scale = Number(process.env.VERSIONS_CPU_SCALE ?? 1);
+    const memory = (salt: string) => (salt + "😀文a".repeat(200_000)).slice(0, 700_000);
+    const current = memory("now");
+    const buildRows = (): VersionRow[] => {
+      const rows: VersionRow[] = [];
+      let above = current;
+      for (let i = 0; i < 20; i++) {
+        const full = i % 2 === 1; // an update (full copy), then an append (delta), alternating
+        // Trims a small UTF-16 suffix, 80 units (a whole number of "😀文a" blocks) off the end — the
+        // shape a real append/edit retires, and what store.ts's writers persist as prior_length_utf16.
+        const text = full ? memory(`v${i}`) : above.slice(0, above.length - 80);
+        rows.push(row(20 - i, { content: full ? text : null, prior_length: full ? null : cp(text), prior_length_utf16: full ? null : text.length }));
+        above = text;
+      }
+      return rows;
+    };
+    const rows = buildRows();
+    const median = (fn: () => void) => {
+      const t: number[] = [];
+      for (let i = 0; i < 7; i++) {
+        const before = process.cpuUsage();
+        fn();
+        const after = process.cpuUsage(before);
+        t.push((after.user + after.system) / 1000);
+      }
+      return t.sort((a, b) => a - b)[3];
+    };
+    const build = () => {
+      const chain = buildChain(current, rows, all);
+      for (const r of chain.rows) chain.text(r.seq);
+    };
+    const cores = cpus().length;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const before = loadavg()[0] / cores;
+      const ms = median(build);
+      const after = loadavg()[0] / cores;
+      const contended = Math.max(before, after) > 1;
+      if (ms < 10 * scale) { expect(ms).toBeLessThan(10 * scale); return; }
+      if (contended) {
+        ctx.skip(
+          true,
+          `runner load average ${(Math.max(before, after) * cores).toFixed(1)} across ${cores} cores ` +
+          `(measured ${ms.toFixed(2)} ms against a 10 ms budget) — a CPU-time budget cannot mean anything ` +
+          `when the machine itself is this oversubscribed`,
+        );
+        return;
+      }
+      if (attempt === 3) { expect(ms).toBeLessThan(10 * scale); return; }
       await new Promise(resolve => setTimeout(resolve, 300));
     }
   });

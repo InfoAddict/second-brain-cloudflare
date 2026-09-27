@@ -70,6 +70,9 @@ const SCHEMA_PROBE_RESULTS = [
   // whose audit trail cannot record what an action was done TO.
   { kind: "admin_event_column", name: "target_user_id" },
   { kind: "admin_event_column", name: "workspace_id" },
+  // entry_versions.prior_length_utf16 arrives by ALTER on brains created before it existed and
+  // lives in the base CREATE on fresh ones (T-0089.1.1, ADV-10) — a migrated brain reports it either way.
+  { kind: "entry_version_column", name: "prior_length_utf16" },
 ];
 
 /**

@@ -43,6 +43,10 @@ export interface SnapshotInput {
   nextTags: string[];
   nextWhen?: WhenChange;
   meta?: Record<string, unknown>;
+  /** This write's own prior content, read moments ago in JS — its native UTF-16 length, so a later
+   * reconstruction never has to re-derive the boundary by scanning (ADV-10). Ignored (and left NULL)
+   * on a row that lands as a full copy rather than a delta; only store.ts's writers have it to give. */
+  priorLengthUtf16?: number;
   /** e.-qualified copy of the UPDATE's compare-and-set predicate; values only through p. */
   guard?: (p: Params) => string;
   /** Revert only: snapshot only if MAX(seq) still equals this. */
@@ -58,15 +62,19 @@ export interface BuiltStatement { sql: string; bindings: unknown[] }
 const SORTED_TAGS = `(SELECT json_group_array(value) FROM (SELECT value FROM json_each(e.tags) ORDER BY value))`;
 const NEWEST_SEQ = `COALESCE((SELECT MAX(v.seq) FROM entry_versions v WHERE v.entry_id = e.id), 0)`;
 
-const INSERT_COLUMNS = `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at)`;
+const INSERT_COLUMNS = `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, prior_length_utf16, tags, state, actor_id, channel, reason, meta, valid_from, created_at)`;
 
 /** SELECT list shared by the one-row and many-row snapshots. `delta` is a SQL boolean over e.content. */
-function selectList(p: Params, delta: string, s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; now: number }): string {
+function selectList(
+  p: Params, delta: string,
+  s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; now: number; priorLengthUtf16?: number },
+): string {
   // scope-exempt: by-id: callers authorize the entry (or entries) before building the batch
   return `SELECT e.id, e.workspace_id,
        ${NEWEST_SEQ} + 1,
        CASE WHEN ${delta} THEN NULL ELSE e.content END,
        CASE WHEN ${delta} THEN length(e.content) ELSE NULL END,
+       CASE WHEN ${delta} THEN ${s.priorLengthUtf16 !== undefined ? p.add(s.priorLengthUtf16) : "NULL"} ELSE NULL END,
        e.tags,
        json_object('when_at', e.when_at, 'when_kind', e.when_kind, 'when_source', e.when_source, 'when_label', e.when_label),
        ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${p.add(JSON.stringify(s.meta ?? {}))},
@@ -238,6 +246,8 @@ export interface VersionRow {
   workspace_id: string;
   content: string | null;
   prior_length: number | null;
+  /** UTF-16 boundary into the base, when the writer had it to give (ADV-10); null falls back to a scan. */
+  prior_length_utf16: number | null;
   tags: string;
   state: string;
   actor_id: string;
@@ -289,34 +299,48 @@ export function buildChain(
     // The base of a run whose newest member is not at index 0 is the full copy just above it.
     let previous = Infinity;
     const wanted: number[] = [];
+    // A run this size only ever happens once per shared base, so it is cheap regardless; the case
+    // this exists for is a chain that ALTERNATES full copies and deltas, where every run has exactly
+    // one member and each pays its own base's full length — 20 versions, 20 walks of ~1 MB, not one
+    // (ADV-10). A row whose writer had its own prior content in hand (store.ts) already stamped the
+    // UTF-16 boundary directly (prior_length_utf16): trust it and skip scanning for that row entirely.
+    // A version with no such hint (an older write, or one of the writers that never reads content into
+    // JS) still gets it the slow way below.
     for (let i = from; i <= to; i++) {
       const length = rows[i].prior_length!;
       if (length > previous) throw new VersionChainError(`version ${rows[i].seq} claims ${length} characters of a ${previous}-character state`);
       previous = length;
-      wanted.push(length);
+      const stored = rows[i].prior_length_utf16;
+      if (stored == null) { wanted.push(length); continue; }
+      if (stored > base.length) throw new VersionChainError(`version ${rows[i].seq} claims a boundary past its ${base.length}-unit base`);
+      ends.set(rows[i].seq, { base, end: stored });
     }
-    const resolved = new Map<number, number>();
-    if (!SURROGATES.test(base)) {
-      for (const length of wanted) {
-        if (length > base.length) throw new VersionChainError(`version claims ${length} characters of a ${base.length}-character base`);
-        resolved.set(length, length);
-      }
-    } else {
-      // Lengths are non-increasing, so walk once, ascending.
-      let unit = 0;
-      let count = 0;
-      for (const length of [...new Set(wanted)].sort((a, b) => a - b)) {
-        while (count < length) {
-          if (unit >= base.length) throw new VersionChainError(`version claims ${length} characters of a shorter base`);
-          const c = base.charCodeAt(unit);
-          unit += c >= 0xd800 && c <= 0xdbff && unit + 1 < base.length && (base.charCodeAt(unit + 1) & 0xfc00) === 0xdc00 ? 2 : 1;
-          count++;
+    if (wanted.length) {
+      const resolved = new Map<number, number>();
+      if (!SURROGATES.test(base)) {
+        for (const length of wanted) {
+          if (length > base.length) throw new VersionChainError(`version claims ${length} characters of a ${base.length}-character base`);
+          resolved.set(length, length);
         }
-        resolved.set(length, unit);
+      } else {
+        // Lengths are non-increasing, so walk once, ascending.
+        let unit = 0;
+        let count = 0;
+        for (const length of [...new Set(wanted)].sort((a, b) => a - b)) {
+          while (count < length) {
+            if (unit >= base.length) throw new VersionChainError(`version claims ${length} characters of a shorter base`);
+            const c = base.charCodeAt(unit);
+            unit += c >= 0xd800 && c <= 0xdbff && unit + 1 < base.length && (base.charCodeAt(unit + 1) & 0xfc00) === 0xdc00 ? 2 : 1;
+            count++;
+          }
+          resolved.set(length, unit);
+        }
+        opts.onScan?.(unit);
       }
-      opts.onScan?.(unit);
+      for (let i = from; i <= to; i++) {
+        if (rows[i].prior_length_utf16 == null) ends.set(rows[i].seq, { base, end: resolved.get(rows[i].prior_length!)! });
+      }
     }
-    for (let i = from; i <= to; i++) ends.set(rows[i].seq, { base, end: resolved.get(rows[i].prior_length!)! });
   };
 
   return {
@@ -348,7 +372,7 @@ export function workspaceReadable(reader: Identity | undefined, ws: string, owne
   return readableWorkspaces(reader).includes(ws);
 }
 
-const HISTORY_COLUMNS = `seq, workspace_id, content, prior_length, tags, state, actor_id, channel, reason, meta, valid_from, created_at`;
+const HISTORY_COLUMNS = `seq, workspace_id, content, prior_length, prior_length_utf16, tags, state, actor_id, channel, reason, meta, valid_from, created_at`;
 
 /** The one read of an entry's versions. Readability is enforced per row by buildChain (D-SH). */
 export async function loadHistory(

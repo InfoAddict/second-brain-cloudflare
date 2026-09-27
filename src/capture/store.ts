@@ -364,6 +364,10 @@ export async function updateEntryContent(
     const committed = await env.DB.batch([
       snapshotStatement(env, {
         entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
+        // ADV-10: readContent is this write's own base, right here in JS — its UTF-16 length is the
+        // exact boundary a later reconstruction needs, at zero cost. Stored only when this row
+        // actually lands as a delta (buildSnapshot nulls it out on a full copy, same as prior_length).
+        priorLengthUtf16: readContent.length,
         guard: p2 => buildCasGuard(p2, casColumns),
       }),
       // versioning: snapshot
@@ -510,6 +514,8 @@ export async function appendToEntry(
       const committed = await env.DB.batch([
         snapshotStatement(env, {
           entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now,
+          // ADV-10: see updateEntryContent's identical reasoning above.
+          priorLengthUtf16: readContent.length,
           guard: p2 => buildCasGuard(p2, longCasColumns),
         }),
         // versioning: snapshot — vector_ids set here, atomically with content, under the same guard (ADV-4).
@@ -585,6 +591,8 @@ export async function appendToEntry(
     const committed = await env.DB.batch([
       snapshotStatement(env, {
         entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta, now,
+        // ADV-10: see updateEntryContent's identical reasoning above.
+        priorLengthUtf16: readContent.length,
         guard: p => buildCasGuard(p, shortCasColumns),
       }),
       // versioning: snapshot
