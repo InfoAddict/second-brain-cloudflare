@@ -227,8 +227,10 @@ export async function revertEntry(
     ? `, when_at = ${p.add(nextWhen!.when_at ?? null)}, when_kind = ${p.add(nextWhen!.when_kind ?? null)}, when_source = ${p.add(nextWhen!.when_source ?? null)}, when_label = ${p.add(nextWhen!.when_label ?? null)}`
     : "";
   const vectorIdsSet = nextVectorIds !== undefined ? `, vector_ids = ${p.add(nextVectorIds)}` : "";
+  // updated_at clamped strictly past its own previous value (the digest mark guard trusts it
+  // plus byte length; a same-millisecond, same-length revert with no clamp would leave it unmoved).
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}${vectorIdsSet}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = MAX(${p.add(now)}, COALESCE(e.updated_at, e.created_at) + 1)${vectorIdsSet}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   // Embedded before the batch, like the main content above, so the insert below can carry its own
   // vector_ids the way restoreEntry does (U14). Each insert is guarded by the SAME "this request's own

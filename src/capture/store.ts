@@ -410,8 +410,11 @@ export async function updateEntryContent(
           priorLengthUtf16: readContent.length,
           guard: p2 => buildCasGuard(p2, casColumns),
         }),
+        // updated_at clamped strictly past its own previous value (the digest mark guard,
+        // src/compression/digest.ts, trusts COALESCE(updated_at, created_at) plus byte length as
+        // its change signal; a same-millisecond, same-length edit with no clamp would leave it unmoved).
         // versioning: snapshot
-        env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
+        env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE(e.updated_at, e.created_at) + 1), vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
           .bind(...p.values()),
         pruneStatement(env, id, config.VERSION_KEEP),
       ]);
@@ -576,13 +579,10 @@ export async function appendToEntry(
             priorLengthUtf16: readContent.length,
             guard: p2 => buildCasGuard(p2, longCasColumns),
           }),
-          // R2-6: updated_at clamped to at least the version this same batch's snapshot just landed
-          // (already clamped itself), the same reasoning as buildSnapshot's own created_at floor —
-          // this UPDATE runs after that INSERT in the same batch, so it sees the fresh row.
+          // updated_at clamped strictly past its own previous value, same reasoning as
+          // updateEntryContent above (the digest mark guard trusts it plus byte length).
           // versioning: snapshot — vector_ids set here, atomically with content, under the same guard (ADV-4).
-          // scope-exempt: by-id: the clamp's entry_versions subquery is correlated to this same
-          // row's id, the same id the outer UPDATE's own WHERE clause already pins.
-          env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE((SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = ${idIdx}), 0)), vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
+          env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE(e.updated_at, e.created_at) + 1), vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
             .bind(...p.values()),
           pruneStatement(env, id, config.VERSION_KEEP),
         ]);
@@ -666,10 +666,9 @@ export async function appendToEntry(
           // shorter than what this version actually retires. buildChain falls back to its scan.
           guard: p => buildCasGuard(p, shortCasColumns),
         }),
-        // versioning: snapshot — R2-6: updated_at clamped, same reasoning as the long branch above.
-        // scope-exempt: by-id: same correlated-subquery reasoning as the long branch above.
+        // versioning: snapshot — updated_at clamped, same reasoning as the long branch above.
         env.DB.prepare(
-          `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = MAX(${shortNowIdx}, COALESCE((SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = ${shortIdIdx}), 0))${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
+          `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = MAX(${shortNowIdx}, COALESCE(e.updated_at, e.created_at) + 1)${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
         ).bind(...shortP.values()),
         pruneStatement(env, id, config.VERSION_KEEP),
       ]);

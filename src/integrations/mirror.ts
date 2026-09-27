@@ -142,8 +142,10 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
             content: { kind: "next", content }, nextTags: refreshedTags, meta: { provider: providerId }, now,
             guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
           }),
-          // versioning: snapshot
-          env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?`)
+          // versioning: snapshot — updated_at clamped strictly past its own previous value (the
+          // digest mark guard trusts it plus byte length; a same-millisecond, same-length sync
+          // with no clamp would leave it unmoved and invisible to it).
+          env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = MAX(?, COALESCE(updated_at, created_at) + 1) WHERE id = ? AND content = ? AND tags = ?`)
             .bind(content, JSON.stringify(refreshedTags), now, id, readContent, readTags),
           pruneStatement(env, id, cfg.VERSION_KEEP),
           mirrorPruneStatement(env, id, Math.min(MIRROR_VERSION_KEEP, cfg.VERSION_KEEP)),
