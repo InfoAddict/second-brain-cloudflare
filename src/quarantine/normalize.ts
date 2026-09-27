@@ -4,9 +4,12 @@
 // splitting, markdown wrapping, diacritics, fullwidth forms) before any
 // signal pattern runs. Pure, no I/O.
 //
-// Cost model: a 200 KB write must score in well under 2 ms, and every full
-// pass over the text costs roughly 0.3 ms, so steps that cannot change the
-// result are skipped:
+// Cost model: the first call in a fresh isolate (no JIT yet) must fit the
+// free plan's 10 ms CPU per invocation with the rest of the write, so:
+// - Only a byte budget is scored (director, 2026-09-27): the first 24 KB and
+//   the last 8 KB of UTF-16 code units. Anything longer is scored `partial`;
+//   text in the unscored middle escapes inline scoring, and Lane W queues it
+//   for a bounded background pass.
 // - A one-byte (Latin-1) string cannot hold zero-width, bidi, tag or
 //   Cyrillic/Greek characters, so the hidden counts and the Unicode fold are
 //   skipped for it. V8 answers WIDE_RE on such a string without scanning.
@@ -14,8 +17,27 @@
 //   (score.ts's tokenizer reports it), since NFKD maps some of those
 //   (ª, º, superscripts, accented letters) onto ASCII.
 
-/** How much of the normalized text a family pattern is run against. */
-export const QUARANTINE_SCAN_CHARS = 200_000;
+export const QUARANTINE_SCORE_HEAD_CHARS = 24 * 1024;
+export const QUARANTINE_SCORE_TAIL_CHARS = 8 * 1024;
+export const QUARANTINE_SCORE_CHARS = QUARANTINE_SCORE_HEAD_CHARS + QUARANTINE_SCORE_TAIL_CHARS;
+// Joins head and tail. Not whitespace and not a word character, so no \s+ or
+// \b pattern matches across it, and the tokenizer splits on it.
+const SEAM = "\u0000";
+// The seam plus a surrogate pair kept whole at each cut.
+const BUDGET_SLACK = 3;
+
+const isHighSurrogate = (c: number) => c >= 0xD800 && c <= 0xDBFF;
+const isLowSurrogate = (c: number) => c >= 0xDC00 && c <= 0xDFFF;
+
+/** The text the scorer reads: all of it within the budget, else head + seam + tail and `partial`. */
+export function budgetSlice(text: string): { text: string; partial: boolean } {
+  if (text.length <= QUARANTINE_SCORE_CHARS) return { text, partial: false };
+  let headEnd = QUARANTINE_SCORE_HEAD_CHARS;
+  if (isHighSurrogate(text.charCodeAt(headEnd - 1))) headEnd++;
+  let tailStart = text.length - QUARANTINE_SCORE_TAIL_CHARS;
+  if (isLowSurrogate(text.charCodeAt(tailStart))) tailStart--;
+  return { text: text.slice(0, headEnd) + SEAM + text.slice(tailStart), partial: true };
+}
 
 const WIDE_RE = /[^\x00-\xff]/;
 // U+200B-U+200D zero width space/non-joiner/joiner, U+2060-U+2064 word
@@ -114,13 +136,15 @@ export function foldText(text: string): string {
   return text.replace(NON_ASCII_RUN_RE, foldRun);
 }
 
-/** The first QUARANTINE_SCAN_CHARS of the text, folded when `fold` is set. */
-export function scanView(text: string, fold: boolean): string {
-  // Slice before folding so a multi-megabyte note is never decomposed whole;
-  // NFKD can lengthen text, so slice again after.
-  const head = text.length > QUARANTINE_SCAN_CHARS ? text.slice(0, QUARANTINE_SCAN_CHARS) : text;
-  const folded = fold ? foldText(head) : head;
-  return folded.length > QUARANTINE_SCAN_CHARS ? folded.slice(0, QUARANTINE_SCAN_CHARS) : folded;
+/**
+ * The already-budgeted text, folded when `fold` is set. NFKD can lengthen
+ * text (U+FDFA becomes 18 characters), so an expanded result is budgeted
+ * again, keeping its own head and tail, and reported `truncated`.
+ */
+export function scanView(budgeted: string, fold: boolean): { view: string; truncated: boolean } {
+  const folded = fold ? foldText(budgeted) : budgeted;
+  if (folded.length <= QUARANTINE_SCORE_CHARS + BUDGET_SLACK) return { view: folded, truncated: false };
+  return { view: budgetSlice(folded).text, truncated: true };
 }
 
 export interface ScanText {
@@ -139,12 +163,16 @@ export function buildScan(view: string): ScanText {
 }
 
 export interface NormalizedText extends ScanText {
-  /** Hidden-character counts from the full, untruncated input. */
+  /** Hidden-character counts over the budgeted text. */
   hidden: HiddenCharCounts;
+  /** Part of the input was not scored (over the budget, or expanded past it by folding). */
+  partial: boolean;
 }
 
 /** The whole normalization, eagerly. scoreWrite uses the pieces above so it can skip what it does not need. */
 export function normalizeForScoring(text: string): NormalizedText {
-  const fold = isWide(text) || /[\x80-\xff]/.test(text);
-  return { ...buildScan(scanView(text, fold)), hidden: countHidden(text) };
+  const budget = budgetSlice(text);
+  const fold = isWide(budget.text) || /[\x80-\xff]/.test(budget.text);
+  const { view, truncated } = scanView(budget.text, fold);
+  return { ...buildScan(view), hidden: countHidden(budget.text), partial: budget.partial || truncated };
 }

@@ -9,7 +9,7 @@
 // literal the regex needs), so it can only skip work, never hide a match.
 // Ordinary prose trips no gate and scores in one pass.
 import {
-  buildScan, countHidden, isWide, scanView,
+  budgetSlice, buildScan, countHidden, isWide, scanView,
   type HiddenCharCounts, type ScanText,
 } from "./normalize";
 import type { HoldReason } from "./tags";
@@ -54,6 +54,11 @@ export interface ScoreResult {
   /** Every family group that fired, largest contribution first. reasons[0] is the primary reason shown to people. */
   reasons: HoldReason[];
   signals: SignalHit[];
+  /**
+   * Only the byte budget was scored (normalize.ts): the first 24 KB and last
+   * 8 KB. The caller owes the unscored middle a background pass (Lane W).
+   */
+  partial: boolean;
 }
 
 // One line: config-threading-complete.test.ts accepts a tunable's name at module scope only on an `export type` line.
@@ -309,15 +314,18 @@ function hasCapsuleTag(tags: readonly string[]): boolean {
 type ReasonGroup = HoldReason;
 
 export function scoreWrite(input: ScoreInput, cfg: ScoreConfig): ScoreResult {
-  const { content } = input;
+  const budget = budgetSlice(input.content);
+  const content = budget.text;
   const wide = isWide(content);
   const hidden: HiddenCharCounts = countHidden(content);
-  let view = scanView(content, wide);
-  let tokens = tokenize(view);
+  let sv = scanView(content, wide);
+  let tokens = tokenize(sv.view);
   if (!wide && tokens.sawHigh) {
-    view = scanView(content, true);
-    tokens = tokenize(view);
+    sv = scanView(content, true);
+    tokens = tokenize(sv.view);
   }
+  const view = sv.view;
+  const partial = budget.partial || sv.truncated;
   let lazy: ScanText | null = null;
   const text = (): ScanText => (lazy ??= buildScan(view));
 
@@ -389,5 +397,5 @@ export function scoreWrite(input: ScoreInput, cfg: ScoreConfig): ScoreResult {
   // Stable sort: on a tie the 5.2 order (instruction, hidden, burst, capsule) decides.
   const reasons = groups.filter(g => g.total > 0).sort((a, b) => b.total - a.total).map(g => g.reason);
 
-  return { score, hold: score >= cfg.QUARANTINE_THRESHOLD, reasons, signals };
+  return { score, hold: score >= cfg.QUARANTINE_THRESHOLD, reasons, signals, partial };
 }
