@@ -113,6 +113,28 @@ describe("starvation freedom across runs", () => {
     expect(cursorPuts.length).toBeLessThanOrEqual(1);
   });
 
+  it("sends a newer due item in the first run whatever the backlog of delivered items (100 here)", async () => {
+    sq = await migrated();
+    seedSub(sq, "sub");
+    const kv = makeMemoryKV();
+    const delivered: Record<string, { w: number; s: string[] }> = {};
+    const old = Date.now() - 40 * DAY;
+    for (let i = 0; i < 100; i++) {
+      seedDue(sq, `old-${String(i).padStart(3, "0")}`, "", old + i);
+      delivered[`old-${String(i).padStart(3, "0")}`] = { w: old + i, s: ["sub"] };
+    }
+    seedDue(sq, "new");
+    await kv.put("pushed:", JSON.stringify(delivered));
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: kv });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    await pushDueItems(env, "", cfg);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const stored = JSON.parse((await kv.get("pushed:")) as string);
+    expect(Object.keys(stored)).toHaveLength(101);
+  });
+
   it("does not re-push an item overdue by more than 30 days on every run", async () => {
     sq = await migrated();
     seedDue(sq, "old", "", Date.now() - 40 * DAY);

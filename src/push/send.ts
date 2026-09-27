@@ -119,13 +119,16 @@ function pushedKvKey(workspaceId: string): string {
 
 type DeliveryMap = Record<string, { w: number; s: string[] }>;
 
+/** In a record's hash list: delivered to every subscription (a pre-4.0 record). */
+const ALL_SUBSCRIPTIONS = "*";
+
 /**
  * Per subscription, not per workspace, so a run cut short by the budget
  * resumes with exactly the subscriptions still missing an item. A pre-4.0
  * map stored a bare when_at, meaning every subscription had it: read that
- * as delivered to all current subscriptions, so upgrading re-sends nothing.
+ * as delivered to all, so upgrading re-sends nothing.
  */
-async function readDeliveryMap(env: Env, workspaceId: string, hashes: string[]): Promise<DeliveryMap> {
+async function readDeliveryMap(env: Env, workspaceId: string): Promise<DeliveryMap> {
   const raw = await env.OAUTH_KV.get(pushedKvKey(workspaceId));
   if (!raw) return {};
   let parsed: unknown;
@@ -134,7 +137,7 @@ async function readDeliveryMap(env: Env, workspaceId: string, hashes: string[]):
   const map: DeliveryMap = {};
   for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof value === "number") {
-      map[id] = { w: value, s: [...hashes] };
+      map[id] = { w: value, s: [ALL_SUBSCRIPTIONS] };
     } else if (value && typeof value === "object") {
       const { w, s } = value as { w?: unknown; s?: unknown };
       if (typeof w === "number" && Array.isArray(s)) map[id] = { w, s: s.filter((h): h is string => typeof h === "string") };
@@ -144,17 +147,19 @@ async function readDeliveryMap(env: Env, workspaceId: string, hashes: string[]):
 }
 
 /**
- * Keeps every item still in the due window whatever its age, and drops a
- * record only once its item has left the window and its when_at is over 30
- * days old. Pruning by age alone dropped still-due items overdue by more
- * than 30 days, which were then re-pushed on every run. Hashes of deleted
- * subscriptions are dropped too.
+ * Drops a record only when the due query returned every due item (the
+ * window was not full) and the record's item was not among them and is
+ * over 30 days old: then it is provably no longer due. Pruning by age alone
+ * dropped still-due items overdue by more than 30 days, which were then
+ * re-pushed on every run. Hashes of deleted subscriptions are dropped too.
  */
-function pruneDeliveryMap(map: DeliveryMap, dueIds: Set<string>, hashes: Set<string>, now: number): DeliveryMap {
+function pruneDeliveryMap(map: DeliveryMap, dueIds: Set<string>, windowFull: boolean, hashes: Set<string>, now: number): DeliveryMap {
   const cutoff = now - PUSHED_MAP_PRUNE_AGE_MS;
   const pruned: DeliveryMap = {};
   for (const [id, entry] of Object.entries(map)) {
-    if (dueIds.has(id) || entry.w >= cutoff) pruned[id] = { w: entry.w, s: entry.s.filter(h => hashes.has(h)) };
+    if (windowFull || dueIds.has(id) || entry.w >= cutoff) {
+      pruned[id] = { w: entry.w, s: entry.s.filter(h => h === ALL_SUBSCRIPTIONS || hashes.has(h)) };
+    }
   }
   return pruned;
 }
@@ -353,29 +358,39 @@ interface WorkspacePush {
   candidates: DueCandidate[];
   subs: PushSubscriptionRow[];
   delivery: DeliveryMap;
+  dueRows: Record<string, any>[];
   dueIds: Set<string>;
+  windowFull: boolean;
   tasks: SendTask[];
   sends: SendRecord[];
 }
 
 interface SendTask { push: WorkspacePush; candidate: DueCandidate; sub: PushSubscriptionRow }
 
+const DUE_WINDOW = MAX_NOTIFICATIONS_PER_RUN * 5;
+
 /**
- * Two D1 SELECTs (the subscriptions one only when something is due) and one
- * KV read. Pending tasks are every (item, subscription) pair the delivery
- * record lacks at the item's current when_at, item-major so each device
- * gets the most overdue item first.
+ * One KV read and two D1 SELECTs (the subscriptions one only when something
+ * is due). The due query sorts items with a delivery record at their
+ * current when_at LAST, so a backlog of already-delivered overdue items can
+ * never fill the window and hide a newer one.
  */
 async function prepareWorkspacePush(env: Env, workspaceId: string, now: number, timezone: string): Promise<WorkspacePush> {
   const push: WorkspacePush = {
-    workspaceId, now, timezone, candidates: [], subs: [], delivery: {}, dueIds: new Set(), tasks: [], sends: [],
+    workspaceId, now, timezone, candidates: [], subs: [], delivery: {}, dueRows: [], dueIds: new Set(),
+    windowFull: false, tasks: [], sends: [],
   };
-  const dueRows = ((await env.DB.prepare(
+  push.delivery = await readDeliveryMap(env, workspaceId);
+  const delivered = Object.fromEntries(Object.entries(push.delivery).map(([id, record]) => [id, record.w]));
+  push.dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label, tags FROM entries
      WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
-     ORDER BY when_at ASC LIMIT ?`,
-  ).bind(now, workspaceId, MAX_NOTIFICATIONS_PER_RUN * 5).all()).results ?? []) as Record<string, any>[];
-  if (!dueRows.length) return push;
+     ORDER BY EXISTS (SELECT 1 FROM json_each(?) d WHERE d.key = entries.id AND d.value = entries.when_at), when_at ASC
+     LIMIT ?`,
+  ).bind(now, workspaceId, JSON.stringify(delivered), DUE_WINDOW).all()).results ?? []) as Record<string, any>[];
+  if (!push.dueRows.length) return push;
+  push.dueIds = new Set(push.dueRows.map(r => r.id as string));
+  push.windowFull = push.dueRows.length >= DUE_WINDOW;
 
   push.subs = ((await env.DB.prepare(
     `SELECT id, endpoint_hash, subscription_json, content_free, fail_count FROM push_subscriptions
@@ -383,13 +398,19 @@ async function prepareWorkspacePush(env: Env, workspaceId: string, now: number, 
   ).bind(workspaceId).all()).results ?? []) as unknown as PushSubscriptionRow[];
   if (!push.subs.length) return push;
 
-  push.dueIds = new Set(dueRows.map(r => r.id as string));
-  push.delivery = await readDeliveryMap(env, workspaceId, push.subs.map(s => s.endpoint_hash));
-  for (const row of dueRows) {
+  computeTasks(push);
+  return push;
+}
+
+/** Every (item, subscription) pair the delivery record lacks, item-major so each device gets the most overdue item first. */
+function computeTasks(push: WorkspacePush): void {
+  push.candidates = [];
+  push.tasks = [];
+  for (const row of push.dueRows) {
     if (push.candidates.length >= MAX_NOTIFICATIONS_PER_RUN) break;
     const record = push.delivery[row.id as string];
     const have = new Set(record && record.w === row.when_at ? record.s : []);
-    const missing = push.subs.filter(sub => !have.has(sub.endpoint_hash));
+    const missing = have.has(ALL_SUBSCRIPTIONS) ? [] : push.subs.filter(sub => !have.has(sub.endpoint_hash));
     if (!missing.length) continue;
     const candidate: DueCandidate = {
       id: row.id as string,
@@ -400,7 +421,6 @@ async function prepareWorkspacePush(env: Env, workspaceId: string, now: number, 
     push.candidates.push(candidate);
     for (const sub of missing) push.tasks.push({ push, candidate, sub });
   }
-  return push;
 }
 
 /**
@@ -428,7 +448,7 @@ async function finishPushes(env: Env, pushes: WorkspacePush[]): Promise<void> {
   for (const push of pushes) {
     if (!push.sends.length) continue;
     const hashes = new Set(push.subs.map(s => s.endpoint_hash));
-    await env.OAUTH_KV.put(pushedKvKey(push.workspaceId), JSON.stringify(pruneDeliveryMap(push.delivery, push.dueIds, hashes, push.now)));
+    await env.OAUTH_KV.put(pushedKvKey(push.workspaceId), JSON.stringify(pruneDeliveryMap(push.delivery, push.dueIds, push.windowFull, hashes, push.now)));
   }
 }
 
