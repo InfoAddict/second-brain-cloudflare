@@ -6,8 +6,6 @@ import { calibrationQuery, decisionsActionable, parseDecisionOutcomeRow } from "
 import { makeSqliteD1 } from "../helpers/sqlite-d1";
 import type { Identity } from "../../src/lib/identity";
 import { scopeWhere } from "../../src/lib/scope";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 
 const gates = { CALIBRATION_MIN_N: 10, CALIBRATION_MIN_BUCKET_N: 5, CALIBRATION_MIN_TOPIC_N: 5 };
 const row = (confidence: number, outcome: "right" | "wrong"): DecisionOutcomeRow =>
@@ -63,20 +61,7 @@ describe("Track 7 lane B review reproductions", () => {
     expect(reviewLabel("Review: hiring Dana")).toBe("Review: hiring Dana");
   });
 
-  it("marks a newly stored bare decision label as a review in the due sheet", () => {
-    const script = readFileSync(new URL("../../public/js/due.js", import.meta.url).pathname, "utf8");
-    const rendered = runInNewContext(`${script}\ndueRow({
-      id: 'd1', content: 'hiring Dana', label: 'hiring Dana',
-      tags: ['ledger:decision'], when_at: 1
-    }, false)`, {
-      escHtml: (value: string) => value,
-      escAttr: (value: string) => value,
-      titleLine: (value: string) => value,
-      t: (key: string) => key,
-      formatDateUI: () => "Sep 1",
-    });
-    expect(rendered).toContain("Review: hiring Dana");
-  });
+  // The due-sheet cue for a bare decision label is covered in the SH lane by 690bf50a, which owns public/js/due.js.
 
   it("states that nothing was saved when an explicit review date is invalid", () => {
     const result = buildDecisionCapture(
