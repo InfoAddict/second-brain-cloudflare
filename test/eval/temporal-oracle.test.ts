@@ -37,6 +37,13 @@ describe("simulate and oracleTable", () => {
     const past = { ...spec.queries[0], expectedAsOf: EVAL_NOW - 40 * DAY };
     expect(simulate("supersession", ["old", "recap", "new"], past, byId)).toEqual(["old", "recap"]);
   });
+  it("the oracle places beliefs below valid documents rather than dropping them (T-0089.2.6)", () => {
+    const belief = e("bad", 30, { validUntil: EVAL_NOW - 30 * DAY, retractedAt: EVAL_NOW - 10 * DAY });
+    const byIdWithBelief = new Map([...byId, [belief.id, belief]]);
+    // "bad" is invalid at now (like old/recap) but, unlike them, carries retractedAt: it stays in the ranking,
+    // demoted below the valid "new", instead of being dropped like an ordinary superseded document.
+    expect(simulate("supersession", ["bad", "old", "new"], spec.queries[0], byIdWithBelief)).toEqual(["new", "bad"]);
+  });
   it("recency puts the newest-created document first, which the backdated recap wins", () => {
     expect(simulate("recency", ["old", "new", "recap"], spec.queries[0], byId)).toEqual(["recap", "new", "old"]);
   });

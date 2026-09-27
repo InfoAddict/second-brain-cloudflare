@@ -48,15 +48,29 @@ export function syntheticLines(report: VariantReport): string[] {
   }
 
   if (report.corpus === "temporal") {
+    const corpus = buildSyntheticCorpus("temporal");
     out.push("  supersession oracle (simulated on these rankings; recall@10 / MRR@10). baseline | supersession applied | recency-only reorder:");
-    for (const row of oracleTable(report, buildSyntheticCorpus("temporal"))) out.push(`    ${row.scope.padEnd(40)} n=${String(row.n).padEnd(4)} ${f(row.baseline.recall10)}/${f(row.baseline.mrr10)}  |  ${f(row.supersession.recall10)}/${f(row.supersession.mrr10)}  |  ${f(row.recency.recall10)}/${f(row.recency.mrr10)}`);
+    for (const row of oracleTable(report, corpus)) out.push(`    ${row.scope.padEnd(40)} n=${String(row.n).padEnd(4)} ${f(row.baseline.recall10)}/${f(row.baseline.mrr10)}  |  ${f(row.supersession.recall10)}/${f(row.supersession.mrr10)}  |  ${f(row.recency.recall10)}/${f(row.recency.mrr10)}`);
 
-    // The cancelled move ("bad") is not gold: report how often it still surfaces, a belief-time diagnostic rather
-    // than a metric a change could be judged on.
-    const retracted = report.results.filter(r => subsetsOf(r).includes("retracted-past"));
-    if (retracted.length) {
-      const surfaced = retracted.filter(r => r.rankedIds.slice(0, 10).includes(`tm-retracted-${r.clusterKey.replace("tm-", "")}-bad`)).length;
-      out.push(`  belief-time diagnostic (not gold): the cancelled move surfaced in the top 10 for ${surfaced}/${retracted.length} retracted-past queries`);
+    // Forbidden ids (T-0089.2.6: a retracted belief or a wrong original) are not gold: report how often one still
+    // outranks the actually-true answer in the raw ranking, per subset. Not a metric a change is judged on (scoreQuery
+    // already prices this into mrr10/recall10 via the forbidden cut); a diagnostic of where it is still happening.
+    const queryById = new Map(corpus.queries.map(q => [q.id, q] as const));
+    const bySubset = new Map<string, { above: number; total: number }>();
+    for (const r of report.results) {
+      const q = queryById.get(r.queryId);
+      if (!q?.forbidden?.length) continue;
+      const subset = subsetsOf(r)[0] ?? r.category;
+      const goldIdx = r.rankedIds.findIndex(id => q.gold.some(g => g.id === id));
+      const forbiddenIdx = r.rankedIds.findIndex(id => q.forbidden!.includes(id));
+      const above = forbiddenIdx >= 0 && (goldIdx < 0 || forbiddenIdx < goldIdx);
+      const cur = bySubset.get(subset) ?? { above: 0, total: 0 };
+      cur.total++; if (above) cur.above++;
+      bySubset.set(subset, cur);
+    }
+    if (bySubset.size) {
+      out.push("  forbidden above gold, per subset (not gold; scoreQuery already prices this in via the forbidden cut):");
+      for (const [name, { above, total }] of [...bySubset].sort(([a], [b]) => a.localeCompare(b))) out.push(`    ${name.padEnd(24)} ${above}/${total}`);
     }
   }
 
