@@ -495,7 +495,7 @@ describe("the history of a shared memory", () => {
     const el = ctx.__els.get("view-timeline");
     expect(el.style.display).toBe("");
     expect(el.innerHTML).toContain("Author: Bob");
-    expect(el.innerHTML).toContain("Shared by Bob — only they can edit or delete it");
+    expect(el.innerHTML).toContain("Shared by Bob. Only they can edit or forget it.");
   });
 
   it("still hides History on an empty timeline when the memory is not locked", () => {

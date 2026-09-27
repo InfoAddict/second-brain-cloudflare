@@ -81,10 +81,19 @@
   margin-bottom: 8px;
 }
 
+/* UI review P0: history rows are taller than the plain event list they
+   replaced (a quote block plus an action button per change), so a long
+   history sharing .view-scroll's one page-level scroll with the sheet's meta,
+   brain and status sections cut its last row off right against the fixed
+   action row, with nothing to say it was scrollable rather than broken. Its
+   own bounded, visibly scrollable region keeps that clear of the footer and
+   stops the rest of the sheet's content competing with it for scroll space. */
 .history-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 4px;
+  max-height: 42vh;
+  overflow-y: auto;
 }
 
 .history-item {

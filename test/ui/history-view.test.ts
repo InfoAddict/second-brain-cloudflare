@@ -224,6 +224,32 @@ describe("renderHistory — change and event rows", () => {
     expect(html).not.toContain("history-list");
   });
 
+  // UI review fix: renderHistory used to hide #view-timeline whenever
+  // entry.history.items was empty, before it looked at can_edit, which
+  // silently dropped the lock note for a shared memory with rich history that
+  // nobody has edited yet — the fallback timeline already guards this case.
+  it("shows the lock note alone when history is empty and the memory is locked", () => {
+    const ctx = load();
+    const { tl } = renderAndWire(ctx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [] } });
+    expect(tl.style.display).toBe("");
+    expect(tl.innerHTML).toContain("Shared by Bob. Only they can edit or forget it.");
+    expect(tl.innerHTML).not.toContain("history-list");
+  });
+
+  it("shows the lock note after a real history list too, on a locked memory", () => {
+    const ctx = load();
+    const { tl } = renderAndWire(ctx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [CHANGE_NEWEST] } });
+    expect(tl.innerHTML).toContain("history-list");
+    expect(tl.innerHTML).toContain("Shared by Bob. Only they can edit or forget it.");
+  });
+
+  it("hides history entirely when empty and not locked", () => {
+    const ctx = load();
+    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [] } });
+    expect(tl.style.display).toBe("none");
+    expect(tl.innerHTML).toBe("");
+  });
+
   it("client name is escaped", () => {
     const ctx = load();
     const evil = { ...CHANGE_NEWEST, client: "<img src=x>" };

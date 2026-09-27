@@ -201,14 +201,22 @@ function renderHistory(entry) {
   if (!el) return
   const items = entry.history?.items || []
   const footer = entry.history?.footer
-  if (!items.length) {
+  // Same exception the fallback timeline makes: a shared memory nobody has
+  // edited yet has an empty history, but the lock note explaining why Append,
+  // Edit, Forget and Status are disabled still has to show somewhere.
+  const locked = entry.can_edit === false && !!entry.actor_name
+  if (!items.length && !locked) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
   }
   const rowsHtml = items.map((item, index) => (item.kind === 'change' ? renderHistoryChangeRow(item, index, items, entry) : renderHistoryEventRow(item))).join('')
+  const lockNote = locked ? `<div class="view-timeline-note">${escHtml(t('memories.authorLocked', { name: entry.actor_name }))}</div>` : ''
   el.style.display = ''
-  el.innerHTML = `<div class="view-timeline-label history-label">${escHtml(t('memories.timelineLabel'))}</div><ol class="history-list">${rowsHtml}</ol>${renderHistoryFooters(footer)}`
+  el.innerHTML =
+    `<div class="view-timeline-label history-label">${escHtml(t('memories.timelineLabel'))}</div>` +
+    (items.length ? `<ol class="history-list">${rowsHtml}</ol>${renderHistoryFooters(footer)}` : '') +
+    lockNote
   // Joined by data-seq, not position: the same convention loadRelated uses
   // (row.dataset.id), so wiring does not depend on the DOM giving back rows
   // in array order.
