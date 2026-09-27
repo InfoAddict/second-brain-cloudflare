@@ -72,7 +72,7 @@ describe("dailyLimitRestResponse", () => {
       error: "daily_limit",
       limit: "d1_rows_written",
       resets_at: "2026-09-28T00:00:00.000Z",
-      message: "Cloudflare's free daily database limit is used up, so nothing was saved. It resets at midnight UTC.",
+      message: "Cloudflare's free daily database limit is used up, so nothing was saved. It resets at midnight UTC. Cloudflare's Workers Paid plan raises this limit.",
     });
   });
 
@@ -80,7 +80,7 @@ describe("dailyLimitRestResponse", () => {
     const now = new Date("2026-09-27T14:00:00.000Z").getTime();
     const res = dailyLimitRestResponse("d1_rows_read", now);
     const body = await res.json() as any;
-    expect(body.message).toBe("Cloudflare's free daily database limit is used up, so this could not load. It resets at midnight UTC.");
+    expect(body.message).toBe("Cloudflare's free daily database limit is used up, so this could not load. It resets at midnight UTC. Cloudflare's Workers Paid plan raises this limit.");
     expect(body.limit).toBe("d1_rows_read");
   });
 
@@ -94,15 +94,15 @@ describe("dailyLimitRestResponse", () => {
 });
 
 describe("dailyLimitMcpMessage", () => {
-  it("d1_rows_written: the write sentence, starting \"Not saved.\"", () => {
-    const text = dailyLimitMcpMessage("d1_rows_written");
-    expect(text.startsWith("Not saved.")).toBe(true);
-    expect(text).toContain("free daily database limit");
-    expect(text).toContain("Workers Paid");
+  it("d1_rows_written: the exact write sentence", () => {
+    expect(dailyLimitMcpMessage("d1_rows_written")).toBe(
+      "Not saved. The Cloudflare account running this Second Brain has used up its free daily database limit. It resets at midnight UTC, so try again after that. Cloudflare's Workers Paid plan raises this limit.",
+    );
   });
 
-  it("d1_rows_read: the read sentence, starting \"Could not load memories.\"", () => {
-    const text = dailyLimitMcpMessage("d1_rows_read");
-    expect(text.startsWith("Could not load memories.")).toBe(true);
+  it("d1_rows_read: the exact read sentence", () => {
+    expect(dailyLimitMcpMessage("d1_rows_read")).toBe(
+      "Could not load memories. The Cloudflare account running this Second Brain has used up its free daily database limit. It resets at midnight UTC. Cloudflare's Workers Paid plan raises this limit.",
+    );
   });
 });

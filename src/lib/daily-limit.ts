@@ -32,18 +32,20 @@ export function retryAfterSeconds(resetsAtIso: string, now: number = Date.now())
 }
 
 /**
- * Copy deck 18-copy-deck.md section 6.7 (copywriter-approved, 2026-09-27). Never says "your Second
- * Brain used it up" — the limit belongs to the Cloudflare ACCOUNT, and other D1 databases on it
- * share the same cap.
+ * Copy deck 18-copy-deck.md section 6.7 (copywriter-approved, 2026-09-27, revised to end on the
+ * neutral "Cloudflare's Workers Paid plan raises this limit." rather than naming the owner — a
+ * member reading this has no way to act on "the owner can remove the limit"). Never says "your
+ * Second Brain used it up" — the limit belongs to the Cloudflare ACCOUNT, and other D1 databases
+ * on it share the same cap.
  */
 const REST_MESSAGE: Record<D1DailyLimitKind, string> = {
-  d1_rows_written: "Cloudflare's free daily database limit is used up, so nothing was saved. It resets at midnight UTC.",
-  d1_rows_read: "Cloudflare's free daily database limit is used up, so this could not load. It resets at midnight UTC.",
+  d1_rows_written: "Cloudflare's free daily database limit is used up, so nothing was saved. It resets at midnight UTC. Cloudflare's Workers Paid plan raises this limit.",
+  d1_rows_read: "Cloudflare's free daily database limit is used up, so this could not load. It resets at midnight UTC. Cloudflare's Workers Paid plan raises this limit.",
 };
 
 const MCP_MESSAGE: Record<D1DailyLimitKind, string> = {
-  d1_rows_written: "Not saved. The Cloudflare account running this Second Brain has used up its free daily database limit. It resets at midnight UTC, so try again after that. The owner can remove the limit by moving to Cloudflare's Workers Paid plan.",
-  d1_rows_read: "Could not load memories. The Cloudflare account running this Second Brain has used up its free daily database limit. It resets at midnight UTC.",
+  d1_rows_written: "Not saved. The Cloudflare account running this Second Brain has used up its free daily database limit. It resets at midnight UTC, so try again after that. Cloudflare's Workers Paid plan raises this limit.",
+  d1_rows_read: "Could not load memories. The Cloudflare account running this Second Brain has used up its free daily database limit. It resets at midnight UTC. Cloudflare's Workers Paid plan raises this limit.",
 };
 
 export function dailyLimitMcpMessage(kind: D1DailyLimitKind): string {
