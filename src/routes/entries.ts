@@ -5,6 +5,7 @@ import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
+import { readEntryTimeline, seesPrivateHistory } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
@@ -222,26 +223,13 @@ export async function handleEntriesRoutes(
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { results: eventRows } = await env.DB.prepare(
-      `SELECT actor_id, event, payload, created_at FROM entry_events WHERE entry_id = ? ORDER BY created_at ASC`,
-    ).bind(id).all<{ actor_id: string; event: string; payload: string; created_at: number }>();
-
-    const actorIds = [
-      String(row.actor_id ?? ""),
-      ...(eventRows ?? []).map((e) => e.actor_id),
-    ];
-    const labelMap = await lookupActorLabels(env, actorIds);
+    const { timeline, labelMap } = await readEntryTimeline(env, id, auth.userId, String(row.actor_id ?? ""), undefined, false, !seesPrivateHistory(auth, row));
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,
       source: row.source as string,
     });
-    const timeline = (eventRows ?? []).map((e) => ({
-      event: e.event,
-      created_at: e.created_at,
-      actor_name: resolveActorLabel(e.actor_id, labelMap, { viewerId: auth.userId }),
-      payload: (() => { try { return JSON.parse(e.payload ?? "{}"); } catch { return {}; } })(),
-    }));
+
 
     return json({
       ok: true,

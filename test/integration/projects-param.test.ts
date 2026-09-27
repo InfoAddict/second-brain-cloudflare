@@ -85,6 +85,29 @@ async function createProject(token: string, body: Record<string, unknown>) {
   expect(res.status).toBe(201);
 }
 
+describe("GET /brief with project", () => {
+  it("counts project tags and aliases across the readable scope", async () => {
+    await createProject(ALICE, { id: "site", name: "Site", aliases: ["hosting"] });
+    seed("direct", aliceWs, ["project:site", "task"], { createdAt: Date.now() });
+    seed("alias", aliceWs, ["hosting", "task"], { createdAt: Date.now() });
+    seed("other", aliceWs, ["task"], { createdAt: Date.now() });
+    seed("private", bobWs, ["project:site", "task"], { createdAt: Date.now(), actorId: bobId });
+    const res = await call("GET", "/brief?project=site&preview=1", ALICE);
+    expect(res.status).toBe(200);
+    const data = await jsonOf(res);
+    expect(data.captured).toBe(2);
+    expect(data.loops.open).toBe(2);
+    expect(data.loops.items.map((item: any) => item.id).sort()).toEqual(["alias", "direct"]);
+  });
+
+  it("rejects unknown projects with the known slugs", async () => {
+    await createProject(ALICE, { id: "site", name: "Site" });
+    const res = await call("GET", "/brief?project=nope", ALICE);
+    expect(res.status).toBe(404);
+    expect(await jsonOf(res)).toEqual({ ok: false, error: 'unknown project "nope"', known_projects: ["site"] });
+  });
+});
+
 beforeEach(async () => {
   resetDatabaseInit();
   pending = [];

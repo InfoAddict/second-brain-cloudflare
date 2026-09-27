@@ -47,9 +47,10 @@ export const DUE_WITHIN_MS = 48 * 60 * 60 * 1000;
  * GET /due but never the /brief chip, because the chip alone added the
  * task-tag requirement. Deprecated entries are excluded the same way every
  * other review queue excludes them: dismissing a memory retires it, and
- * asking someone to act on its due date is make-work.
+ * asking someone to act on its due date is make-work. A finished task is the same:
+ * task:done keeps its when_at, and must not stay in Due forever.
  */
-export const DUE_SQL = `when_at IS NOT NULL AND tags NOT LIKE '%"status:deprecated"%'`;
+export const DUE_SQL = `when_at IS NOT NULL AND tags NOT LIKE '%"status:deprecated"%' AND tags NOT LIKE '%"task:done"%'`;
 
 export interface ExplicitWhen {
   at: number;

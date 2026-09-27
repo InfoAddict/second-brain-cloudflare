@@ -24,6 +24,19 @@ export interface CorpusEntry {
   actorId: string;
   /** Classifier score 1-5 (loader default 3, the classifier's own fallback; never 0). */
   importanceScore?: number;
+  /** Last edit time; the loader writes it to entries.updated_at (default: createdAt). */
+  updatedAt?: number;
+  /**
+   * Validity declared per document (T-0089.2 supersession). The entries table has no valid_from/valid_until columns
+   * yet: the loader writes them only when the schema has them (see applyTemporalMetadata) and the oracle reads them
+   * from the spec. Default validFrom is createdAt; default validUntil is open-ended.
+   */
+  validFrom?: number;
+  validUntil?: number;
+  /** When a later correction withdrew this fact; declared like validity, and implies validUntil no later than this. */
+  retractedAt?: number;
+  /** Text before edits, oldest first; declared for the future version-text path, never loaded. */
+  priorVersions?: { at: number; content: string }[];
 }
 
 export interface CorpusEdge {
