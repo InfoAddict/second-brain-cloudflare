@@ -12,7 +12,7 @@ import {
   isTopicTag,
 } from "./eligibility";
 import type { ChangeContext } from "../lib/audit";
-import { pruneManyStatement, pruneStatement, snapshotManyStatement, snapshotStatement } from "../memory/versions";
+import { pruneManyStatement, pruneStatement, snapshotStatement } from "../memory/versions";
 
 export async function synthesizeDigest(
   tag: string,
@@ -52,32 +52,46 @@ State of ${stateOf}:`;
   return digest.trim();
 }
 
-/** Mark digest sources and retry individually if the batch fails. Versioned: a rollup can be undone. */
-async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, workspaceId: string, config: Readonly<Config>): Promise<void> {
-  if (!ids.length) return;
+/**
+ * Mark digest sources and retry individually if the batch fails. Versioned: a rollup can be undone.
+ *
+ * Both the mark's WHERE and the snapshot's guard are built from the same {workspaceId, content}
+ * per source (P3: a snapshot of a CAS-guarded write carries the same guard), so they cannot drift.
+ * `content` is the text this source held when the digest actually read it, before synthesis: a
+ * source that moved workspace mid-run, or whose text changed mid-run, misses the mark AND the
+ * version — a phantom rollup version, stamped with the wrong workspace or over text the digest
+ * never saw, would give it a 0.4x recall penalty and bar it from every future digest.
+ */
+async function markSourcesRolledUp(env: Env, sources: { id: string; content: string }[], digestId: string, workspaceId: string, config: Readonly<Config>): Promise<void> {
+  if (!sources.length) return;
   const note = `\n\n[Digest: ${digestId}]`;
   const change: ChangeContext = { actorId: "", channel: "system:digest" };
-  // versioning: snapshot
-  const mark = (id: string) => env.DB.prepare(
-    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ?`
-  ).bind(note, id, workspaceId);
   const now = Date.now();
+  const ids = sources.map(s => s.id);
+  const mark = (id: string, content: string) => env.DB.prepare(
+    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ? AND content = ?`
+  ).bind(note, id, workspaceId, content);
+  // nextTags is unused for a "suffix" content kind (the version's tags column comes from e.tags
+  // directly); passed empty rather than reading the row again just for this.
+  const snapshotFor = (id: string, content: string) => snapshotStatement(env, {
+    entryId: id, reason: "rollup", change, content: { kind: "suffix" }, nextTags: [], meta: { digestId }, now,
+    guard: p => `e.workspace_id = ${p.add(workspaceId)} AND e.content = ${p.add(content)}`,
+  });
 
   try {
     await env.DB.batch([
-      snapshotManyStatement(env, { entryIds: ids, reason: "rollup", change, content: { kind: "suffix" }, meta: { digestId }, now }),
-      ...ids.map(mark),
+      // versioning: snapshot
+      ...sources.flatMap(({ id, content }) => [snapshotFor(id, content), mark(id, content)]),
       pruneManyStatement(env, ids, config.VERSION_KEEP),
     ]);
   } catch (e) {
     console.error("Batched rolled-up mark failed; retrying per row (non-fatal):", e);
-    for (const id of ids) {
+    for (const { id, content } of sources) {
       try {
         await env.DB.batch([
-          // nextTags is unused for a "suffix" content kind (the version's tags column comes from
-          // e.tags directly); passed empty rather than reading the row again just for this.
-          snapshotStatement(env, { entryId: id, reason: "rollup", change, content: { kind: "suffix" }, nextTags: [], meta: { digestId }, now }),
-          mark(id),
+          // versioning: snapshot
+          snapshotFor(id, content),
+          mark(id, content),
           pruneStatement(env, id, config.VERSION_KEEP),
         ]);
       } catch (err) {
@@ -318,7 +332,7 @@ export async function compressTag(
       continue;
     }
 
-    await markSourcesRolledUp(env, rows.map(r => r.id), result.id, workspaceId, cfg);
+    await markSourcesRolledUp(env, rows, result.id, workspaceId, cfg);
 
     // First successful digest defines the returned text/id; counts accumulate across
     // workspaces so a caller still learns how much was compressed tonight.
