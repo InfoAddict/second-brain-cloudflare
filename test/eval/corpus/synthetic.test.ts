@@ -64,10 +64,17 @@ describe("temporal", () => {
     }
     expect(byTag(c.queries, "subset:phrase-dated").every(q => /as of \w+ \d+, 2026/.test(q.text))).toBe(true);
   });
-  it("has month-day controls that a date parser must not read as a question date", () => {
+  it("has month-day controls that a date parser must not read as a question date, tagged out of the temporal target", () => {
     const controls = byTag(c.queries, "subset:control-not-asof");
     expect(controls.length).toBeGreaterThanOrEqual(30);
-    for (const q of controls) { expect(q.text).toMatch(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/); expect(q.asOf).toBeUndefined(); expect(q.expectedAsOf).toBeUndefined(); }
+    for (const q of controls) {
+      expect(q.text).toMatch(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/);
+      expect(q.asOf).toBeUndefined();
+      expect(q.expectedAsOf).toBeUndefined();
+      // Baseline already misreads these (0/0), so a delta-from-baseline gate can never see them get worse; excluded from
+      // the headline via the known-gap mechanism instead of being averaged into the temporal category.
+      expect(q.tags).toContain("gap:temporal-month-day-controls");
+    }
   });
   it("meets the gate's power floors per category", () => {
     for (const cat of ["temporal", "knowledge-update"]) { const qs = c.queries.filter(q => q.category === cat); expect(qs.length).toBeGreaterThanOrEqual(100); expect(clusters(qs)).toBeGreaterThanOrEqual(30); }
