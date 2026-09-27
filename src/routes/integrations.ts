@@ -11,6 +11,7 @@ import {
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
 import { json } from "../lib/http";
+import { auditEvents, type AuditEventInput } from "../lib/audit";
 import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
@@ -179,7 +180,7 @@ export async function handleIntegrationsRoutes(
       // synced overnight landed in two different people's private space.
       const result = await provider.sync(
         env,
-        makeMirrorStore(env, await mirrorWriteContext(env, record)),
+        makeMirrorStore(env, await mirrorWriteContext(env, record), undefined, provider.id),
       );
       return json(result, result.ok ? 200 : 502);
     }
@@ -399,6 +400,7 @@ export async function handleIntegrationsRoutes(
 
     let purged = 0;
     let skipped = 0;
+    const purgeAudit: AuditEventInput[] = [];
     if (body.purge) {
       for (const mapped of Object.values(record.itemMap)) {
         try {
@@ -412,13 +414,24 @@ export async function handleIntegrationsRoutes(
           const row = await getReadableEntry(env, auth, mapped.entryId);
           if (!row || assertCanMutateEntry(auth, row)) { skipped++; continue; }
           const r = await forgetEntry(mapped.entryId, env);
-          if (r.status === "deleted") purged++;
+          if (r.status === "deleted") {
+            purged++;
+            purgeAudit.push({
+              entryId: mapped.entryId,
+              actorId: auth.userId,
+              event: "deleted",
+              payload: { reason: "disconnect", provider: provider.id, deletedVectors: r.vectorCount, channel: "rest" },
+            });
+          }
         } catch (e) {
           console.error("Mirror purge failed (non-fatal):", e);
         }
       }
     }
     await deleteIntegration(env, provider.id);
+    // One batch however many rows the purge removed, so the trail costs one
+    // subrequest rather than one per row.
+    auditEvents(env, ctx, purgeAudit);
     // A separate name rather than integration_connected with a boolean, for the
     // reason member_suspended/member_unsuspended already gives: an auditor
     // scanning for "when did this stop mirroring" should not have to read a
