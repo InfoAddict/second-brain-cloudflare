@@ -110,7 +110,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // restoreEntry's batch grew a nonce identity guard, the trash-insert helper gained a comment
   // above it, and deleteForever grew a nonce param and doc comment; same sites, shifted only.
   { file: 'src/memory/trash.ts', line: 605, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 760, kind: 'hard-delete' },
+  // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
+  // it acts only on a trash row pinned by nonce.
   { file: 'src/memory/undo.ts', line: 312, kind: 'snapshot' },
   // MOVED 337 -> 348 (T-0089.1.1, adv-final MAJOR 2): the merge-recreation loop gained the inline
   // re-embed budget check above this INSERT; same site, shifted line only.
@@ -118,9 +119,12 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.
-  { file: 'src/routes/admin.ts', line: 1544, kind: 'exempt' },
+  // MOVED 1544 -> 1531 (T-0089.1.1 close-out): /vectorize-pending's loop moved into vectorize/pending.ts.
+  { file: 'src/routes/admin.ts', line: 1531, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
+  // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
+  { file: 'src/vectorize/pending.ts', line: 78, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 
@@ -133,7 +137,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
   "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1544", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1531", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   "src/capture/entry.ts:406", "src/capture/entry.ts:497",

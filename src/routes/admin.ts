@@ -12,7 +12,7 @@ import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { graceMs } from "../lib/ai";
 import { classifyEntry } from "../capture/classify";
-import { storeEntry } from "../capture/store";
+import { PENDING_WHERE, indexPendingRow, type PendingRow } from "../vectorize/pending";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
 import { STALE_REVIEW_SQL, hasStaleAsOf, withoutStaleAsOf } from "../memory/stale";
@@ -1460,31 +1460,18 @@ export async function handleAdminRoutes(
     const { results: toProcess } = await env.DB.prepare(
       // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
       `SELECT id, content, tags, source, created_at, workspace_id, actor_id FROM entries
-       WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}
+       WHERE ${PENDING_WHERE}
        ORDER BY created_at DESC LIMIT 25`
-    ).bind(graceCutoff).all();
+    ).bind(graceCutoff).all<PendingRow>();
 
     let processed = 0;
     let failed = 0;
 
-    for (const row of toProcess as Record<string, any>[]) {
+    for (const row of toProcess) {
       try {
-        await storeEntry(
-          env,
-          row.id as string,
-          row.content as string,
-          JSON.parse(row.tags as string),
-          row.source as string,
-          row.created_at as number,
-          // Without this the backfill embeds with DEFAULTS.EMBEDDING_MODEL while
-          // capture and recall use the configured one, writing vectors from the
-          // wrong model into the index, scores go quietly wrong, nothing throws.
-          cfg,
-          // This route repairs OTHER members' rows by design, the context comes
-          // from the row, never from `auth`. Stamping the admin's workspace here
-          // would move every repaired vector into the admin's own space.
-          { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
-        );
+        // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
+        // workspace and author, never the admin's.
+        await indexPendingRow(env, row, cfg);
         processed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);

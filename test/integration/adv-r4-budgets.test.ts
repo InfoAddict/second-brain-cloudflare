@@ -154,9 +154,11 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // Real measured cost of the busiest realistic night, on real SQLite: 65-69 D1 executions (a
     // batch counts as one; the exact figure is sensitive to which other tests already ran in this
     // process) + 22 KV calls, well under the platform's real 1,000-subrequest ceiling either way.
+    // MOVED 70 -> 72 (T-0089.1.1 close-out): the nightly vectorize-pending pass, a read plus one write batch.
     expect(L.calls.length).toBeGreaterThanOrEqual(60);
-    expect(L.calls.length).toBeLessThanOrEqual(70);
-    expect(L.kv.length).toBe(22);
+    expect(L.calls.length).toBeLessThanOrEqual(72);
+    // MOVED 22 -> 23: the pass resolves config (one KV read) only on a night with deferred rows.
+    expect(L.kv.length).toBe(23);
     // The cron makes no external (non-Cloudflare) fetches at all, so it is nowhere near the
     // separate 50-external-fetch cap either.
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -170,8 +172,9 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     await runMaintenanceCron(env);
     // d1-mock measures 62 (45 D1 + 17 KV) on the same fixture; real SQLite measures 68 (49 D1 + 19
     // KV) — the mock skips calls real SQL makes, but both are far under the real 1,000 ceiling.
-    expect(L.calls.length).toBe(49);
-    expect(L.kv.length).toBe(19);
+    // MOVED 49 -> 51 (T-0089.1.1 close-out): the nightly vectorize-pending read and write batch.
+    expect(L.calls.length).toBe(51);
+    expect(L.kv.length).toBe(20);
   });
 });
 

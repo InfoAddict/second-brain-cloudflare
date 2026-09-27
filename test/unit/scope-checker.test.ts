@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (195 queries, 105 exceptions, 15 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (195 queries, 103 exceptions, 15 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1433,7 +1433,11 @@ describe("the checker over the real source tree", () => {
     // apart from one that still exists under the id but no longer matches the rowid/deleted_at the
     // caller's read authorized (a purge-then-reuse race) — a new by-id read, same exemption shape
     // as the liveness checks already on this path.
-    ).toEqual({ queries: 196, exempt: 105, checked: 15, outerJoin: 1 });
+    // Deliberate: -1 query and -2 scope-exempt (196/105 -> 195/103) for the T-0089.1.1 close-out:
+    // deleteForever became trash-only (its live-row delete and its post-miss by-id probe are gone;
+    // one existence probe for a live row with the same id is added), and the nightly vectorize-pending
+    // read (src/vectorize/pending.ts) is new.
+    ).toEqual({ queries: 195, exempt: 103, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

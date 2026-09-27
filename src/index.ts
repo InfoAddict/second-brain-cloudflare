@@ -14,6 +14,7 @@ import { runStalenessPass } from "./staleness/pass";
 import { runWhenExtractPass } from "./when/pass";
 import { runFtsMaintenance } from "./db/fts-backfill";
 import { runNightlyCleanup } from "./memory/cleanup";
+import { runNightlyVectorizePending } from "./vectorize/pending";
 import { nextWorkspace } from "./runtime/rotation";
 import { recordNightSummary } from "./runtime/night-summary";
 import { runInsightAccrual } from "./insight/candidates";
@@ -225,6 +226,14 @@ export default {
         await runNightlyCleanup(env);
       } catch (e) {
         console.error("Nightly cleanup failed (non-fatal):", e);
+      }
+
+      // Deferred indexing (rows left at vector_ids '[]', e.g. an undo past its inline re-embed
+      // budget): a small bounded slice each night, so none waits on a caller. No cron of its own.
+      try {
+        await runNightlyVectorizePending(env, () => resolveConfig(env));
+      } catch (e) {
+        console.error("Nightly vectorize-pending failed (non-fatal):", e);
       }
 
       // No single workspace to attribute the summary to: an empty corpus (nothing
