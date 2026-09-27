@@ -221,6 +221,11 @@ describe("capturing into a project", () => {
       expect(receiptHtml).toContain(
         "Too long to save as one memory (about 20,000 words at most). Your text is still here, so you can split it.",
       );
+      // Not the monospace receipt card: a full sentence in that font reads
+      // like a debug log, not a message. Same inline treatment settings'
+      // save error uses.
+      expect(receiptHtml).toContain('class="inline-error"');
+      expect(receiptHtml).not.toContain("receipt-headline");
     });
 
     it("speaks Italian when the page does", async () => {
