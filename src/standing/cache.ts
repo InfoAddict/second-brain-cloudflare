@@ -11,8 +11,20 @@ export type StandingCacheConfig = { STANDING_MAX: number; EMBEDDING_DIM: number 
 export const STANDING_KV_PREFIX = "standing:v1:";
 export const STANDING_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const STANDING_ISOLATE_MEMO_MS = 60_000;
-const STANDING_RETRY_AFTER_MS = 10 * 60 * 1000;
 const KV_WRITE_RETRY_DELAY_MS = 1_100;
+
+// Retry backoff for a row that failed to resolve a vector (budget audit dab677a5: a flat 10-minute retry, with
+// no backoff, cost a permanently unresolved memory up to 144 KV writes a day). A row less than 30 minutes old
+// retries at 10 minutes, tolerating Vectorize's ordinary async-upsert lag; past that it is probably stuck, not
+// lagging, and backs off to 6 hours, bounding a stuck memory's writes to a handful a day.
+const RETRY_FAST_MS = 10 * 60 * 1000;
+const RETRY_FAST_WINDOW_MS = 30 * 60 * 1000;
+const RETRY_SLOW_MS = 6 * 60 * 60 * 1000;
+const retryDelayFor = (ageMs: number): number => (ageMs < RETRY_FAST_WINDOW_MS ? RETRY_FAST_MS : RETRY_SLOW_MS);
+
+/** True when two builds would write the identical cache (ignoring `builtAt`, which always advances). */
+const sameContent = (a: StandingCacheV1, b: StandingCacheV1 | null): boolean =>
+  !!b && a.retryAt === b.retryAt && JSON.stringify(a.items) === JSON.stringify(b.items);
 
 /** "" is the pre-tenancy legacy workspace; KV keys cannot be empty. */
 export const standingKvKey = (workspaceId: string): string => `${STANDING_KV_PREFIX}${workspaceId || "-"}`;
@@ -23,14 +35,35 @@ const projectsOf = (tags: readonly string[]): string[] =>
 interface EntryRow { id: string; tags: string; vector_ids: string; created_at: number }
 
 /**
- * Builds (and writes) the standing cache for one workspace (Design 2.4). One D1 statement, at most
- * ceil(rows/20) Vectorize `getByIds` calls, and one KV write (with one retry on failure). Always runs off the
- * response path (the caller's `ctx.waitUntil`), never here.
+ * Builds the standing cache for one workspace (Design 2.4). One D1 statement, at most ceil(rows/20) Vectorize
+ * `getByIds` calls, and at most one KV write (with one retry on failure), skipped entirely when the result
+ * matches what is already stored. Always runs off the response path (the caller's `ctx.waitUntil`), never here.
+ *
+ * Single-flight per key within this isolate (budget audit dab677a5): concurrent calls for the same workspace
+ * share one build, so its D1 and Vectorize cost is paid once, not once per caller. A caller's own `known`
+ * vector is used only if it is the one that starts the shared build; a caller who loses the race to an
+ * in-flight build simply does not contribute its `known` vector to that round, which P7.4 already tolerates
+ * (a miss only delays a new fire, bounded by the next revalidation).
  */
-export async function buildStandingCache(
+export function buildStandingCache(
   env: Env, cfg: StandingCacheConfig, workspaceId: string,
   known: readonly { id: string; vector: number[] }[] = [],
   opts: { retryDelayMs?: number; now?: number } = {},
+): Promise<StandingCacheV1> {
+  const key = standingKvKey(workspaceId);
+  const existing = inFlightBuilds.get(key);
+  if (existing) return existing;
+  const promise = buildStandingCacheNow(env, cfg, workspaceId, known, opts)
+    .finally(() => { if (inFlightBuilds.get(key) === promise) inFlightBuilds.delete(key); });
+  inFlightBuilds.set(key, promise);
+  return promise;
+}
+const inFlightBuilds = new Map<string, Promise<StandingCacheV1>>();
+
+async function buildStandingCacheNow(
+  env: Env, cfg: StandingCacheConfig, workspaceId: string,
+  known: readonly { id: string; vector: number[] }[],
+  opts: { retryDelayMs?: number; now?: number },
 ): Promise<StandingCacheV1> {
   const now = opts.now ?? Date.now();
   const { results } = await env.DB.prepare(
@@ -67,7 +100,7 @@ export async function buildStandingCache(
     for (const v of await env.VECTORIZE.getByIds(batch)) if (v.values) fetched.set(v.id, v.values);
   }
 
-  let dropped = false;
+  const droppedAges: number[] = [];
   const items: StandingCacheItem[] = [];
   for (const { row, chunkIds } of rowChunks) {
     const prevItem = prevItemById.get(row.id);
@@ -81,23 +114,30 @@ export async function buildStandingCache(
       const stale = prevItem?.vecs[i];
       if (stale) vecs.push(stale);
     });
-    if (!vecs.length) { dropped = true; continue; }
+    if (!vecs.length) { droppedAges.push(now - row.created_at); continue; }
     items.push({ id: row.id, projects: projectsOf(JSON.parse(row.tags) as string[]), createdAt: row.created_at, vecs });
   }
 
   const cache: StandingCacheV1 = {
     v: 1, model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM, builtAt: now,
-    ...(dropped && { retryAt: now + STANDING_RETRY_AFTER_MS }),
+    ...(droppedAges.length && { retryAt: now + Math.min(...droppedAges.map(retryDelayFor)) }),
     items,
   };
 
-  const value = JSON.stringify(cache);
   const key = standingKvKey(workspaceId);
-  try {
-    await env.OAUTH_KV.put(key, value);
-  } catch {
-    await new Promise(resolve => setTimeout(resolve, opts.retryDelayMs ?? KV_WRITE_RETRY_DELAY_MS));
-    try { await env.OAUTH_KV.put(key, value); } catch { /* give up; the next revalidation repairs it (P7.4) */ }
+  // Tolerates a race with another isolate building the same key (budget audit dab677a5): a fresh read right
+  // before writing, separate from `prev` above, catches a result another build already landed while this one
+  // was running. Any valid computation is as good as any other (P7.4), so skipping a redundant identical write
+  // loses nothing.
+  const justWritten = parseStandingCache(await env.OAUTH_KV.get(key, "json"), { model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM });
+  if (!sameContent(cache, justWritten)) {
+    const value = JSON.stringify(cache);
+    try {
+      await env.OAUTH_KV.put(key, value);
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, opts.retryDelayMs ?? KV_WRITE_RETRY_DELAY_MS));
+      try { await env.OAUTH_KV.put(key, value); } catch { /* give up; the next revalidation repairs it (P7.4) */ }
+    }
   }
   return cache;
 }
@@ -111,6 +151,7 @@ const lastScheduledBuild = new Map<string, number>();
 export function resetStandingIsolateState(): void {
   isolateMemo.clear();
   lastScheduledBuild.clear();
+  inFlightBuilds.clear();
 }
 
 function clearStandingMemo(workspaceIds: readonly string[]): void {

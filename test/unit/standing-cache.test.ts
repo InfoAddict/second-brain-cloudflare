@@ -143,16 +143,96 @@ describe("buildStandingCache", () => {
     expect(vi.mocked(kv.put).mock.calls).toHaveLength(2);
   });
 
-  it("writes builtAt even when items are unchanged from the previous cache", async () => {
+  it("does not write to KV a second time when nothing changed (budget audit dab677a5)", async () => {
     insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
     const { vectorize } = makeStandingVectorize({ m: [1, 1] });
     const { kv, puts } = makeStandingKV();
-    await buildStandingCache(envFor(sqlite, vectorize, kv), cfg, "ws-a", [], { now: 1000 });
-    await buildStandingCache(envFor(sqlite, vectorize, kv), cfg, "ws-a", [], { now: 2000 });
+    const env = envFor(sqlite, vectorize, kv);
+    await buildStandingCache(env, cfg, "ws-a", [], { now: 1000 });
+    expect(puts).toHaveLength(1);
+    await buildStandingCache(env, cfg, "ws-a", [], { now: 2000 }); // same D1 rows, same Vectorize state, no pending retry
+    expect(puts).toHaveLength(1); // the second build's result matched what was already stored, so it was not written
+  });
+
+  it("writes again once the content genuinely changes", async () => {
+    insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
+    const { vectorize } = makeStandingVectorize({ m: [1, 1] });
+    const { kv, puts } = makeStandingKV();
+    const env = envFor(sqlite, vectorize, kv);
+    await buildStandingCache(env, cfg, "ws-a", [], { now: 1000 });
+    insertEntry(sqlite, { id: "m2", createdAt: 2, vectorIds: ["m2"] });
+    const { vectorize: vectorize2 } = makeStandingVectorize({ m: [1, 1], m2: [2, 2] });
+    await buildStandingCache(envFor(sqlite, vectorize2, kv), cfg, "ws-a", [], { now: 2000 });
     expect(puts).toHaveLength(2);
-    expect((puts[0].value as StandingCacheV1).builtAt).toBe(1000);
-    expect((puts[1].value as StandingCacheV1).builtAt).toBe(2000);
-    expect((puts[0].value as StandingCacheV1).items).toEqual((puts[1].value as StandingCacheV1).items);
+  });
+
+  it("backs off a permanently unresolved row, bounding a day's writes to a small constant instead of one every 10 minutes (budget audit dab677a5)", async () => {
+    insertEntry(sqlite, { id: "stuck", createdAt: 0, vectorIds: ["stuck"] });
+    const { vectorize } = makeStandingVectorize({}); // never resolves: simulates a memory that never gets indexed
+    const { kv, puts } = makeStandingKV();
+    const env = envFor(sqlite, vectorize, kv);
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    let now = 0;
+    let cache = await buildStandingCache(env, cfg, "ws-a", [], { now });
+    let builds = 1;
+    // Jump straight to when readStandingCaches would next schedule a build (its own retryAt), the same way
+    // production driving through the day would, and count how many land inside one 24-hour window.
+    while (cache.retryAt !== undefined && cache.retryAt < ONE_DAY) {
+      now = cache.retryAt;
+      cache = await buildStandingCache(env, cfg, "ws-a", [], { now });
+      builds++;
+    }
+    expect(cache.retryAt).toBeDefined(); // still never resolved, so still retrying, just far less often
+    expect(builds).toBeLessThanOrEqual(10); // was 144 (a flat 10-minute retry with no backoff)
+    expect(puts.length).toBeLessThanOrEqual(10);
+  });
+
+  it("shares one in-flight build across concurrent calls for the same workspace (single-flight, budget audit dab677a5)", async () => {
+    insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
+    const { vectorize, calls } = makeStandingVectorize({ m: [1, 1] });
+    const { kv, puts } = makeStandingKV();
+    const env = envFor(sqlite, vectorize, kv);
+    const [a, b, c] = await Promise.all([
+      buildStandingCache(env, cfg, "ws-a"),
+      buildStandingCache(env, cfg, "ws-a"),
+      buildStandingCache(env, cfg, "ws-a"),
+    ]);
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+    expect(calls).toHaveLength(1); // Vectorize was asked once, not three times
+    expect(puts).toHaveLength(1); // and KV was written once, not three times
+  });
+
+  it("single-flight does not leak across separate calls once the first one finishes", async () => {
+    insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
+    const { vectorize, calls } = makeStandingVectorize({ m: [1, 1] });
+    const { kv } = makeStandingKV();
+    const env = envFor(sqlite, vectorize, kv);
+    await buildStandingCache(env, cfg, "ws-a");
+    await buildStandingCache(env, cfg, "ws-a");
+    expect(calls).toHaveLength(2); // two genuinely separate (sequential, non-overlapping) builds
+  });
+
+  it("tolerates a cross-isolate race: a fresh pre-write read catches a value another build already wrote (budget audit dab677a5)", async () => {
+    insertEntry(sqlite, { id: "m", createdAt: 1, vectorIds: ["m"] });
+    const { vectorize } = makeStandingVectorize({ m: [1, 1] });
+    const { kv, puts } = makeStandingKV(); // starts empty
+    const env = envFor(sqlite, vectorize, kv);
+    const raceWinner: StandingCacheV1 = {
+      v: 1, model: cfg.EMBEDDING_MODEL, dim: cfg.EMBEDDING_DIM, builtAt: 999,
+      items: [{ id: "m", projects: [], createdAt: 1, vecs: [encodeVector([1, 1])] }],
+    };
+    let getCalls = 0;
+    kv.get = vi.fn(async () => {
+      getCalls++;
+      // Nothing there yet on this build's own initial read; by the time it is ready to write, another isolate
+      // (this test simulates it directly, since single-flight is per-isolate and cannot dedupe across isolates)
+      // has already written the identical result.
+      return getCalls === 1 ? null : raceWinner;
+    }) as unknown as KVNamespace["get"];
+    await buildStandingCache(env, cfg, "ws-a", [], { now: 1000 });
+    expect(getCalls).toBeGreaterThanOrEqual(2); // proves there is a fresh read right before writing, not just the initial one
+    expect(puts).toHaveLength(0); // and the race was caught: no redundant write over the winner's identical result
   });
 });
 
