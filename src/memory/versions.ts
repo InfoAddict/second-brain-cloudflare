@@ -389,7 +389,10 @@ export async function loadHistory(
 ): Promise<VersionChain> {
   const capped = Math.min(500, Math.max(1, Math.floor(limit)));
   const { results } = await env.DB.prepare(
-    // scope-checked: readability enforced per row by buildChain (D-SH)
+    // scope-checked: readability enforced per row by buildChain (D-SH). loadHistory's only
+    // caller is revertEntry (memory/undo.ts), which itself has no caller yet: POST /undo and the
+    // MCP undo tool (T-0089.6.6) are still backlog, so today this read runs from tests only, not
+    // from any live request. When T-0089.6.6 wires it up, that route resolves identity first.
     `SELECT ${HISTORY_COLUMNS} FROM entry_versions WHERE entry_id = ? ORDER BY seq DESC LIMIT ?`,
   ).bind(row.id, capped).all<VersionRow>();
   const rows = results ?? [];
