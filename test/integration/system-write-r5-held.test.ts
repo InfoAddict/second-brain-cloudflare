@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { compressTag } from "../../src/compression/digest";
+import { compressTag, HELD_DIGESTS_READ_LIMIT } from "../../src/compression/digest";
 import { runNightlyCompression } from "../../src/compression/nightly";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
@@ -131,6 +131,28 @@ describe("held drafts", () => {
     sqlite.db.prepare(`UPDATE entries SET tags = json_insert(tags, '$[#]', 'user-edited') WHERE id = ?`).bind(workHeld.id).run();
     await nightly();
     expect(calls()).toBe(3); // work digested again, home still held
+    sqlite.close();
+  });
+
+  it("a held read that comes back full is treated as unknown: the run falls back to exact per-tag checks", async () => {
+    const { sqlite, env, nightly, held, calls } = await world(true);
+    await nightly();
+    expect(held()).toHaveLength(2);
+    const prepared: string[] = [];
+    const db = env.DB as any;
+    const realPrepare = db.prepare.bind(db);
+    db.prepare = (sql: string) => { prepared.push(sql); return realPrepare(sql); };
+    // The batch's third statement (the held read) returns a full page, as a very large brain's would.
+    const realBatch = db.batch.bind(db);
+    db.batch = async (stmts: unknown[]) => {
+      const out = await realBatch(stmts);
+      if (Array.isArray(out) && out.length === 3) out[2] = { ...out[2], results: Array.from({ length: HELD_DIGESTS_READ_LIMIT }, () => ({ workspace_id: "", tags: "[]" })) };
+      return out;
+    };
+    await nightly();
+    // Per-tag checks ran (the per-tag form has a LIMIT 1 and a tag pattern), and both holds still skip the digest.
+    expect(prepared.filter(q => q.includes("idx_entries_conflict_held") && q.includes("LIMIT 1")).length).toBe(2);
+    expect(calls()).toBe(2);
     sqlite.close();
   });
 });

@@ -112,10 +112,13 @@ async function hasHeldDigest(env: Env, workspaceId: string, tag: string): Promis
 /** The key `heldDigestSet` holds a (workspace, tag) pair under. */
 export const heldKey = (workspaceId: string, tag: string): string => `${workspaceId}\u0000${tag}`;
 
+/** Most held digests one read returns. A read that comes back full may be incomplete, so callers treat it as unknown. */
+export const HELD_DIGESTS_READ_LIMIT = 500;
+
 /**
  * The read behind `heldDigestSet`: the held digests that are still live, as (workspace, tags) rows.
  * `workspaceId` narrows it to that workspace's slice; null reads every workspace (the corpus-wide
- * cron scan). Bounded: a held digest is at most one per tag and workspace, and the person clears them.
+ * cron scan). Bounded by HELD_DIGESTS_READ_LIMIT: a held digest is at most one per tag and workspace, but holds never expire on their own.
  * Exported so the nightly run can ride it in the batch it already sends for its candidates.
  */
 export function prepareHeldDigests(env: Env, workspaceId: string | null, indexed = true): D1PreparedStatement {
@@ -127,7 +130,7 @@ export function prepareHeldDigests(env: Env, workspaceId: string | null, indexed
       AND tags NOT LIKE '%"user-edited"%'
       AND tags NOT LIKE '%"status:canonical"%'
       AND tags NOT LIKE '%"status:deprecated"%'${workspaceId === null ? "" : "\n      AND workspace_id = ?"}
-    LIMIT 500`;
+    LIMIT ${HELD_DIGESTS_READ_LIMIT}`;
   return env.DB.prepare(sql).bind(...(workspaceId === null ? [] : [workspaceId]));
 }
 
