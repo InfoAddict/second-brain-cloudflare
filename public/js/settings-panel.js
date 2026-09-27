@@ -28,6 +28,28 @@ const SETTINGS_RESET_BTN_ID = {
   VERSION_KEEP: 'setting-version-keep-reset',
 };
 
+const SETTINGS_ERROR_ID = {
+  TRASH_RETENTION_DAYS: 'setting-trash-retention-error',
+  VERSION_KEEP: 'setting-version-keep-error',
+};
+
+/** A failed save reads right next to the control it failed on, not in a
+ * toast the reader may have already looked away from. Cleared on the
+ * control's next successful write. */
+function showSettingError(key, message) {
+  const el = document.getElementById(SETTINGS_ERROR_ID[key]);
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = false;
+}
+
+function clearSettingError(key) {
+  const el = document.getElementById(SETTINGS_ERROR_ID[key]);
+  if (!el) return;
+  el.hidden = true;
+  el.textContent = '';
+}
+
 /** The effective value each select currently shows, for Undo's "prior value". */
 const settingsCurrent = { TRASH_RETENTION_DAYS: null, VERSION_KEEP: null };
 
@@ -95,6 +117,8 @@ async function loadSettingsPanel() {
     settingsCurrent.VERSION_KEEP = cfg.VERSION_KEEP;
     renderSettingsOptions('setting-trash-retention', SETTINGS_CHOICES.TRASH_RETENTION_DAYS, cfg.TRASH_RETENTION_DAYS, retentionDaysLabel);
     renderSettingsOptions('setting-version-keep', SETTINGS_CHOICES.VERSION_KEEP, cfg.VERSION_KEEP);
+    clearSettingError('TRASH_RETENTION_DAYS');
+    clearSettingError('VERSION_KEEP');
     // No visible stub until T-0089.5.5 gives the Worker a RECALL_LOG default;
     // presence in `defaults` is what turns this row on.
     const recallLogRow = document.getElementById('setting-recall-log-row');
@@ -113,7 +137,9 @@ async function patchSetting(key, value) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) {
-    const err = new Error(data.error || t('settingsPanel.failed', { message: String(res.status) }));
+    // Always the copy deck's "Could not save: {message}" lead, never the
+    // server's own reason standing alone.
+    const err = new Error(t('settingsPanel.failed', { message: data.error || String(res.status) }));
     err.status = res.status;
     throw err;
   }
@@ -128,6 +154,7 @@ async function onSettingChange(selectId, key) {
     await patchSetting(key, value);
     settingsCurrent[key] = value;
     updateResetVisibility(key, value);
+    clearSettingError(key);
     showToast(t('settingsPanel.saved'), {
       action: t('team.undo'),
       onAction: async () => {
@@ -136,6 +163,7 @@ async function onSettingChange(selectId, key) {
           settingsCurrent[key] = previous;
           renderSettingsOptions(selectId, SETTINGS_CHOICES[key], previous, SETTINGS_LABEL[key]);
           updateResetVisibility(key, previous);
+          clearSettingError(key);
         } catch (e) {
           showToast(e.message || t('team.actionFailed'));
         }
@@ -151,7 +179,7 @@ async function onSettingChange(selectId, key) {
       // than assume this was a stale admin flag.
       applySettingsRole(false);
     } else {
-      showToast(e.message || t('settingsPanel.failed', { message: '' }));
+      showSettingError(key, e.message || t('settingsPanel.failed', { message: '' }));
     }
   }
 }
@@ -169,12 +197,13 @@ async function resetSetting(key) {
       headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) throw new Error(data.error || t('settingsPanel.failed', { message: String(res.status) }));
+    if (!res.ok || !data.ok) throw new Error(t('settingsPanel.failed', { message: data.error || String(res.status) }));
     settingsCurrent[key] = SETTINGS_DEFAULT[key];
     renderSettingsOptions(selectId, SETTINGS_CHOICES[key], SETTINGS_DEFAULT[key], SETTINGS_LABEL[key]);
     updateResetVisibility(key, SETTINGS_DEFAULT[key]);
+    clearSettingError(key);
     showToast(t('settingsPanel.wasReset'));
   } catch (e) {
-    showToast(e.message || t('settingsPanel.failed', { message: '' }));
+    showSettingError(key, e.message || t('settingsPanel.failed', { message: '' }));
   }
 }

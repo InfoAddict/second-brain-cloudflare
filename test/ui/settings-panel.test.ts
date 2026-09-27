@@ -258,6 +258,40 @@ describe("Reset to default", () => {
 
     expect(el(ctx, "setting-trash-retention").value).toBe("30");
     expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(false);
-    expect(ctx.__toasts[0].message).toBe("server error");
+    expect(ctx.__toasts).toHaveLength(0);
+    expect(el(ctx, "setting-trash-retention-error").hidden).toBe(false);
+    expect(el(ctx, "setting-trash-retention-error").textContent).toBe("Could not save: server error");
+  });
+});
+
+describe("a failed save reports inline, next to the control", () => {
+  it("shows 'Could not save' with the reason next to the select that failed, not as a toast", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    ctx.__patchResponse = () => ({ ok: false, status: 500, json: async () => ({ ok: false, error: "search did not update" }) });
+
+    el(ctx, "setting-trash-retention").value = "30";
+    await ctx.onSettingChange("setting-trash-retention", "TRASH_RETENTION_DAYS");
+
+    expect(ctx.__toasts).toHaveLength(0);
+    expect(el(ctx, "setting-trash-retention-error").hidden).toBe(false);
+    expect(el(ctx, "setting-trash-retention-error").textContent).toBe("Could not save: search did not update");
+    // The other control's error slot is untouched.
+    expect(el(ctx, "setting-version-keep-error").hidden).toBe(true);
+  });
+
+  it("clears once the same control saves successfully", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    ctx.__patchResponse = () => ({ ok: false, status: 500, json: async () => ({ ok: false, error: "server error" }) });
+    el(ctx, "setting-trash-retention").value = "30";
+    await ctx.onSettingChange("setting-trash-retention", "TRASH_RETENTION_DAYS");
+    expect(el(ctx, "setting-trash-retention-error").hidden).toBe(false);
+
+    ctx.__patchResponse = undefined;
+    el(ctx, "setting-trash-retention").value = "30";
+    await ctx.onSettingChange("setting-trash-retention", "TRASH_RETENTION_DAYS");
+
+    expect(el(ctx, "setting-trash-retention-error").hidden).toBe(true);
   });
 });

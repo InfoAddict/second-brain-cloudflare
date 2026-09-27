@@ -109,6 +109,18 @@
   gap: 8px;
 }
 
+/* At 390px the two buttons technically fit side by side, but narrow enough
+ * to crowd the 44px tap target the house rules ask for. Stack instead. */
+@media (max-width: 480px) {
+  .trash-item-actions {
+    flex-direction: column;
+  }
+
+  .trash-btn {
+    flex: 1 1 auto;
+  }
+}
+
 .trash-btn {
   flex: 1 1 130px;
   display: flex;
@@ -159,6 +171,25 @@
 
 .settings-row-note {
   margin: -4px 0 14px;
+}
+
+.settings-row-error {
+  margin: -4px 0 14px;
+  color: var(--danger);
+}
+
+/* main.css's .team-select-wrap has no :disabled rule (its only other user,
+ * team.js, never disables a select), so a member's read-only selects fell
+ * back to the browser default, which barely reads as disabled in most
+ * themes. Scoped to this sheet rather than added to main.css. */
+#settings-sheet select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--surface-muted);
+}
+
+#settings-sheet select:disabled + .ti {
+  opacity: 0.5;
 }
 
 /* ── Brain-version what's-new line ────────────────────────────────────── */
