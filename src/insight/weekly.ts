@@ -512,7 +512,7 @@ export async function runWeeklyInsights(
       // actorId stays "": the insight is system-authored regardless of whose
       // workspace it inherits.
       const captured = await captureEntry(content, ["auto-insight"], "system", env, ctx, cfg,
-        { workspaceId: insightWorkspace, actorId: "" });
+        { workspaceId: insightWorkspace, actorId: "" }, undefined, { systemWrite: true, channel: "system:insight" });
 
       // A non-stored result means the insight duplicated an earlier one. Mark it
       // used anyway, or the pass re-proposes and re-pays for this pair forever.

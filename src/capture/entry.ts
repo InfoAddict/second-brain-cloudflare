@@ -128,7 +128,7 @@ export async function captureEntry(
 
   // A capsule definition must land as its own row: a merge discards the
   // incoming tags, and the slot tags are the whole point of the write.
-  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule) {
+  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule && !opts.systemWrite) {
     const targetId = mergeAction.target_id;
     const newContent = mergeAction.action === "merge" ? mergeAction.merged_content : c;
 

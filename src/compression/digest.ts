@@ -192,7 +192,7 @@ export async function compressTag(
     // The digest inherits the partition's workspace and keeps actor "" — system-
     // authored, like every pre-team pipeline row.
     const result = await captureEntry(content, ["synthesized", tag], "system", env, ctx, cfg,
-      { workspaceId, actorId: "" });
+      { workspaceId, actorId: "" }, undefined, { systemWrite: true, channel: "system:digest" });
 
     if (result.status !== "stored") {
       continue;
