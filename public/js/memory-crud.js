@@ -484,7 +484,7 @@ function renderViewTimeline(entry) {
  * only on readability (src/routes/graph.ts), so a reader may remove a link.
  */
 function applyAuthorLock(entry) {
-  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget', 'view-btn-delete-forever'].map((id) => document.getElementById(id)), 'view-btn--locked')
+  lockAuthoredControls(entry, ['view-btn-append', 'view-btn-edit', 'view-btn-forget'].map((id) => document.getElementById(id)), 'view-btn--locked')
 }
 
 /**
@@ -575,16 +575,6 @@ function openView(entry, cardElement) {
     forgetBtn.style.display = 'flex'
   } else {
     forgetBtn.style.display = 'none'
-  }
-  const deleteForeverBtn = document.getElementById('view-btn-delete-forever')
-  if (entry.id) {
-    deleteForeverBtn.onclick = () => {
-      closeView()
-      openDeleteForeverConfirm(entry.id, cardElement || null)
-    }
-    deleteForeverBtn.style.display = 'flex'
-  } else {
-    deleteForeverBtn.style.display = 'none'
   }
   const editBtn = document.getElementById('view-btn-edit')
   if (entry.id) {

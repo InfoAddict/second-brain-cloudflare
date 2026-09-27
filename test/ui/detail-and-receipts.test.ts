@@ -372,6 +372,19 @@ it("gives the view sheet's close button an accessible name", () => {
   expect(btn).toContain('aria-label="Close"');
 });
 
+// SH-4 (T-0101.2.3): Delete forever lives in the trash view only (Q11). The
+// memory sheet's action row must not carry a way to reach it.
+it("the memory sheet has no Delete forever control", () => {
+  const html = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
+  expect(html).not.toContain("view-btn-delete-forever");
+  expect(html).not.toContain("deleteForever");
+});
+
+it("openDeleteForeverConfirm still exists, for the trash view to call", () => {
+  const ctx = load();
+  expect(typeof ctx.openDeleteForeverConfirm).toBe("function");
+});
+
 /**
  * The history line on a shared memory, and who is allowed to change it.
  *
