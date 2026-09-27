@@ -47,7 +47,7 @@ const SCHEMA_PROBE_RESULTS = [
     "idx_entry_events_entry", "idx_entry_events_created", "idx_admin_events_created",
     "idx_projects_workspace", "idx_entries_project", "idx_entries_conflict_held", "idx_push_subscriptions_workspace",
     "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
-    "idx_entry_versions_entry", "idx_entries_trash_deleted"]
+    "idx_entry_versions_entry", "idx_entries_trash_deleted", "idx_entries_trash_workspace_deleted"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
