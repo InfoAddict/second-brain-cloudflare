@@ -8,6 +8,7 @@ import {
   PROJECT_TAG_PREFIX,
   projectTagError,
 } from "../../src/tags/system";
+import { COUNTERPARTY_TAG_PREFIX, LEDGER_TAG, OWED_TO_ME_TAG, STANDING_TAG, T7_TAG_PREFIXES } from "../../src/tags/t7";
 
 describe("Prompt Capsule system tags", () => {
   it("reserves capsule namespaces case-insensitively", () => {
@@ -101,5 +102,41 @@ describe("project tag namespace", () => {
     expect(isWorkerOwnedTag("project:website")).toBe(false);
     expect(applyTagReplacement(["project:website", "kind:semantic", "old"], ["new"])).toEqual(["kind:semantic", "new"]);
     expect(applyTagReplacement(["project:website"], ["project:other"])).toEqual(["project:other"]);
+  });
+});
+
+// Track 7 (standing memory, decision ledger, commitments): the namespaces are
+// worker-owned so they survive applyTagReplacement, but the bare words
+// "decision" and "standing" stay ordinary user tags (P7.2).
+describe("Track 7 reserved tag namespaces", () => {
+  it("reserves every T7 prefix, case-insensitively", () => {
+    for (const prefix of T7_TAG_PREFIXES) {
+      expect(isWorkerOwnedTag(`${prefix}sample`), prefix).toBe(true);
+      expect(isWorkerOwnedTag(`${prefix.toUpperCase()}SAMPLE`), prefix).toBe(true);
+    }
+  });
+
+  it("reserves the bare owed-to-me marker", () => {
+    expect(isWorkerOwnedTag(OWED_TO_ME_TAG)).toBe(true);
+    expect(isWorkerOwnedTag("OWED-TO-ME")).toBe(true);
+  });
+
+  it("an ordinary user tag named decision or standing is not reserved", () => {
+    expect(isWorkerOwnedTag("decision")).toBe(false);
+    expect(isWorkerOwnedTag("standing")).toBe(false);
+  });
+
+  it("applyTagReplacement keeps standing:active and ledger:decision through a replacement", () => {
+    expect(applyTagReplacement([STANDING_TAG, LEDGER_TAG, "old-topic"], ["new-topic"]))
+      .toEqual([STANDING_TAG, LEDGER_TAG, "new-topic"]);
+  });
+
+  it("a caller-supplied counterparty: tag cannot be injected through a replacement", () => {
+    // Fixed after the Codex cross-vendor review (T-0102): applyTagReplacement
+    // now drops any tag in a namespace this contract reserved from the
+    // replacement list, via stripNewReservedTags (src/tags/system.ts). See
+    // test/unit/reserved-tags-write-guard.test.ts for the structural guard
+    // across every caller write path.
+    expect(applyTagReplacement(["old"], [`${COUNTERPARTY_TAG_PREFIX}priya`])).toEqual([]);
   });
 });

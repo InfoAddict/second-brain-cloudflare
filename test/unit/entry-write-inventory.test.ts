@@ -66,19 +66,25 @@ function scanInventory(): Site[] {
  * forms Tasks 3a and 4a added and row 29's vector-bookkeeping exempt, L5). Frozen: a writer that
  * moves, is added, or is removed must update this list by hand, which is the point.
  */
+// MOVED to real --inventory output (merge of bd04512a, release/v4 into v4/t1-foundations,
+// T-0089.1.1): several other tracks' work (explain, quarantine, reserved tags, t7) landed on
+// src/capture/entry.ts and src/recall/search.ts between this table's last update and this merge,
+// shifting lines this branch's own commits never touched. Recomputed against the real scanner
+// output after combining rather than hand-reconciling two independently-tracked line sets, same
+// reasoning as every prior cross-track merge this table records — see the history further below.
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 244, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 283, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 369, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 406, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 413, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 415, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 453, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 497, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 506, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 508, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 250, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 289, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 375, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 412, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 419, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 421, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 459, kind: 'snapshot' },
+  { file: 'src/capture/entry.ts', line: 503, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 512, kind: 'exempt' },
+  { file: 'src/capture/entry.ts', line: 514, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 127, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 195, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
@@ -101,23 +107,12 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 172, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 183, kind: 'snapshot' },
-  // MOVED (T-0100): readTrashCandidates's SQLITE_TOOBIG fallback added ~75 lines above these
-  // three sites (two new read-only helpers); same sites, shifted line numbers only.
-  // MOVED 215 -> 218 (T-0089.1.1, adv-final MAJOR 1): the nonce comment above trashManyStatements'
-  // insert() helper.
   { file: 'src/memory/trash.ts', line: 218, kind: 'trash' },
-  // MOVED 581 -> 595 -> 605, 719 -> 743 -> 753 -> 760 (T-0089.1.1, adv-final MAJOR 1):
-  // restoreEntry's batch grew a nonce identity guard, the trash-insert helper gained a comment
-  // above it, and deleteForever grew a nonce param and doc comment; same sites, shifted only.
   { file: 'src/memory/trash.ts', line: 605, kind: 'exempt' },
   { file: 'src/memory/trash.ts', line: 760, kind: 'hard-delete' },
   { file: 'src/memory/undo.ts', line: 312, kind: 'snapshot' },
-  // MOVED 337 -> 348 (T-0089.1.1, adv-final MAJOR 2): the merge-recreation loop gained the inline
-  // re-embed budget check above this INSERT; same site, shifted line only.
   { file: 'src/memory/undo.ts', line: 348, kind: 'exempt' },
-  { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },
-  // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
-  // retryAfterMs rework added lines above this site; same site, shifted only.
+  { file: 'src/recall/search.ts', line: 1194, kind: 'exempt' },
   { file: 'src/routes/admin.ts', line: 1544, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
@@ -136,7 +131,7 @@ const HYGIENE_EXEMPT = new Set([
   "src/capture/classify.ts:78", "src/routes/admin.ts:1544", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
-  "src/capture/entry.ts:406", "src/capture/entry.ts:497",
+  "src/capture/entry.ts:412", "src/capture/entry.ts:503",
 ]);
 
 describe("write-path inventory guard", () => {

@@ -3,7 +3,7 @@ import { CORPUS_IDS } from "./corpus/build";
 import { fingerprintKey } from "./lock";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { minimumDetectableEffect, pairedBootstrap, type BootstrapCI, type BootstrapOptions } from "./stats";
-import { VARIANT_ADDED_MODELS, METRIC_NAMES, QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
+import { VARIANT_ADDED_MODELS, METRIC_NAMES, ALL_QUERY_CATEGORIES, RUNNER_VERSION, producersKey, type MetricName, type QueryCategory, type QueryResult, type VariantReport } from "./types";
 
 export interface GateThresholds {
   headlineTolerance: number;
@@ -213,7 +213,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
     if (row.ci.mean <= -t.headlineTolerance || row.ci.hi < 0) regressions.push(`overall ${metric} ${row.ci.mean.toFixed(4)}`);
   }
   const skipped: string[] = [];
-  for (const category of QUERY_CATEGORIES) {
+  for (const category of ALL_QUERY_CATEGORIES) {
     const subset = regressionPairs.filter(p => p.c.category === category);
     if (subset.length < t.minCategoryQueries) {
       if (subset.length) skipped.push(`${category} (n=${subset.length})`);
@@ -229,7 +229,7 @@ export function evaluateGate(base: VariantReport, cand: VariantReport, opts: Gat
   // Report-only: a category split by a `subset:<name>` tag (a second construction of the same kind of query) shows each
   // part, and the untagged remainder, as its own row. No rule reads these rows.
   const subsetOf = (p: Pair) => (p.c.tags ?? []).find(tag => tag.startsWith("subset:"));
-  for (const category of QUERY_CATEGORIES) {
+  for (const category of ALL_QUERY_CATEGORIES) {
     const inCategory = regressionPairs.filter(p => p.c.category === category);
     const names = [...new Set(inCategory.map(subsetOf).filter((name): name is string => !!name))].sort();
     for (const name of names) {
