@@ -145,3 +145,13 @@ describe("history: edge scope", () => {
     expect(text).not.toContain("Supersedes");
   });
 });
+
+describe("digest: scope", () => {
+  it("never returns another member's personal digest", async () => {
+    const other = await createMember(env, { name: "Other" });
+    sqlite.seed({ id: "theirs", content: "Their private digest", createdAt: 5, tags: ["synthesized", "work"] });
+    await env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'theirs'`).bind(other.member.personalWorkspaceId).run();
+    const reader = (await resolveIdentityFromToken((await createMember(env, { name: "Reader" })).token, env))!;
+    expect(await mcp("digest", { tag: "work" }, reader)).toContain("No digest yet");
+  });
+});
