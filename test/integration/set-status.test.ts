@@ -31,9 +31,9 @@ describe("applyStatus()", () => {
     });
   });
 
-  it("canonical: returns true, sets status:canonical tag, vectors untouched", async () => {
+  it("canonical: returns ok/indexed, sets status:canonical tag, vectors untouched", async () => {
     const result = await applyStatus("entry-1", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toBe(true);
+    expect(result).toEqual({ status: "ok", indexed: true });
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);
@@ -48,7 +48,7 @@ describe("applyStatus()", () => {
 
     // Now set to draft
     const result = await applyStatus("entry-1", "draft", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toBe(true);
+    expect(result).toEqual({ status: "ok", indexed: true });
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);
@@ -61,7 +61,7 @@ describe("applyStatus()", () => {
 
   it("deprecated: deletes vectors, clears vector_ids, sets status:deprecated", async () => {
     const result = await applyStatus("entry-1", "deprecated", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toBe(true);
+    expect(result).toEqual({ status: "ok", indexed: false });
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);
@@ -70,9 +70,9 @@ describe("applyStatus()", () => {
     expect(deleteByIdsMock).toHaveBeenCalledWith(["v1"]);
   });
 
-  it("returns false for a missing id", async () => {
+  it("returns not_found for a missing id", async () => {
     const result = await applyStatus("missing-id", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
-    expect(result).toBe(false);
+    expect(result).toEqual({ status: "not_found" });
   });
 });
 
@@ -108,6 +108,9 @@ describe("POST /status", () => {
     const data = await res.json() as any;
     expect(data.ok).toBe(true);
     expect(data.status).toBe("canonical");
+    // BE-9 (T-0101.8.2): whether recall can find it, so the dashboard can say so without a
+    // separate GET /entry round trip after every status change.
+    expect(data.indexed).toBe(true);
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
     const tags: string[] = JSON.parse(row.tags);

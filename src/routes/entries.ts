@@ -499,14 +499,17 @@ export async function handleEntriesRoutes(
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const ok = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
+    const result = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
 
-    if (!ok) {
+    if (result.status === "not_found") {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    }
+    if (result.status === "reembed_failed") {
+      return json({ ok: false, error: "Could not change the status: re-indexing failed. Nothing changed. Try again." }, 502);
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
-    return json({ ok: true, id, status });
+    return json({ ok: true, id, status, indexed: result.indexed });
   }
 
   return null;

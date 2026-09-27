@@ -714,7 +714,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "set_status",
     {
-      description: "Set a memory's lifecycle status. 'canonical' = confirmed/authoritative (protected from auto-overwrite), 'draft' = tentative, 'deprecated' = no longer accurate (removed from recall, kept for audit). Get the entry ID from recall or list_recent first.",
+      description: "Set a memory's lifecycle status. 'canonical' = confirmed/authoritative (protected from auto-overwrite), 'draft' = tentative, 'deprecated' = wrong or not to be used (hidden from recall, kept in history). Get the entry ID from recall or list_recent first.",
       inputSchema: {
         id: z.string().describe("Entry ID — from recall or list_recent"),
         status: z.enum([...STATUS_VALUES] as [string, ...string[]]).describe("canonical | draft | deprecated"),
@@ -726,12 +726,23 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
-      const ok = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env), row.workspace_id as string);
-      if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      const result = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env), row.workspace_id as string);
+      if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      if (result.status === "reembed_failed") {
+        return { content: [{ type: "text", text: "Could not change the status: re-indexing failed. Nothing changed. Try again." }] };
+      }
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp" } });
       }
-      return { content: [{ type: "text", text: status === "deprecated" ? `Entry ${id} deprecated — removed from recall, kept for audit.` : `Entry ${id} marked ${status}.` }] };
+      // BE-12 (T-0101.8.2): names the meaning, not the mechanism — "wrong" is what a member acts
+      // on; "removed from recall, kept for audit" is implementation detail moved into the tool's
+      // own description instead of repeated on every reply.
+      const replies: Record<MemoryStatus, string> = {
+        deprecated: `Marked entry ${id} as wrong: it is hidden from recall and kept in its history. Undo is available.`,
+        canonical: `Marked entry ${id} as trusted.`,
+        draft: `Marked entry ${id} as unconfirmed.`,
+      };
+      return { content: [{ type: "text", text: replies[status as MemoryStatus] }] };
     }
   );
 
