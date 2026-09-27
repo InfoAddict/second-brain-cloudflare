@@ -290,9 +290,9 @@ const I18N_EN = {
     volDurable: 'Durable',
     volDurableGloss: 'Not expected to change.',
     volCurrent: 'Current',
-    volCurrentGloss: 'True for now — assistants verify this before relying on it.',
+    volCurrentGloss: 'True for now. Your AI tools verify it before relying on it.',
     volShortLived: 'Short-lived',
-    volShortLivedGloss: 'True only briefly — assistants treat it as possibly stale.',
+    volShortLivedGloss: 'True only briefly. Your AI tools treat it as possibly stale.',
     disagreed: {
       one: 'Something newer has disagreed with this {n} time.',
       other: 'Something newer has disagreed with this {n} times.',
@@ -1428,9 +1428,9 @@ const I18N_IT = {
     volDurable: 'Durevole',
     volDurableGloss: 'Non dovrebbe cambiare.',
     volCurrent: 'Attuale',
-    volCurrentGloss: 'Vero per ora — gli assistenti lo verificano prima di farci affidamento.',
+    volCurrentGloss: 'Vero per ora. I tuoi strumenti di IA lo verificano prima di farci affidamento.',
     volShortLived: 'Effimero',
-    volShortLivedGloss: 'Vero solo per poco — gli assistenti lo trattano come possibilmente datato.',
+    volShortLivedGloss: 'Vero solo per poco. I tuoi strumenti di IA lo trattano come possibilmente datato.',
     disagreed: {
       one: 'Qualcosa di più recente è in disaccordo con questo {n} volta.',
       other: 'Qualcosa di più recente è in disaccordo con questo {n} volte.',
