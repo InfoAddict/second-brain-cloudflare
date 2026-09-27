@@ -56,10 +56,10 @@ describe("shared brief domain", () => {
 describe("shared resolution path", () => {
   it("marks done, refuses a missing id with 404 and a missing until with 400", async () => {
     sqlite.seed({ id: "t", content: "Task", createdAt: 1, tags: ["task"] });
-    expect(await resolveEntryAction(env, ctx, auth, "t", "done", undefined, "rest")).toMatchObject({ ok: true, id: "t" });
+    expect(await resolveEntryAction(env, ctx, auth, "t", "done", undefined, { actorId: auth.userId, channel: "rest" })).toMatchObject({ ok: true, id: "t" });
     expect(JSON.parse(String(sqlite.rows()[0].tags))).toContain("task:done");
-    expect(await resolveEntryAction(env, ctx, auth, "nope", "done", undefined, "rest")).toMatchObject({ ok: false, status: 404 });
-    expect(await resolveEntryAction(env, ctx, auth, "t", "snooze", undefined, "rest")).toMatchObject({ ok: false, status: 400 });
+    expect(await resolveEntryAction(env, ctx, auth, "nope", "done", undefined, { actorId: auth.userId, channel: "rest" })).toMatchObject({ ok: false, status: 404 });
+    expect(await resolveEntryAction(env, ctx, auth, "t", "snooze", undefined, { actorId: auth.userId, channel: "rest" })).toMatchObject({ ok: false, status: 400 });
   });
 });
 

@@ -381,11 +381,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         if (!(JSON.parse(row.tags ?? "[]") as string[]).includes("auto-insight")) {
           return { content: [{ type: "text", text: "Entry is not a derived insight" }] };
         }
-        const result = await applyInsightResolution(env, ctx, identity.userId, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss", "mcp");
+        const result = await applyInsightResolution(env, ctx, mcpChange, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss");
         const text = result.resolved.length ? `Resolved ${id}: ${action}` : `Already resolved: ${id}`;
         return { content: [{ type: "text", text }] };
       }
-      const result = await resolveEntryAction(env, ctx, identity, id, action, until, "mcp");
+      const result = await resolveEntryAction(env, ctx, identity, id, action, until, mcpChange);
       if (!result.ok) return { content: [{ type: "text", text: result.error }] };
       return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
     },

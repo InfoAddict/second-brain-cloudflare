@@ -21,6 +21,8 @@ import { rememberTags } from "../tags/vocabulary";
 import { OWNER_WRITE_CONTEXT, scopeWrite, type WriteContext } from "../lib/scope";
 import { resolveIdentityByUserId } from "../lib/identity";
 import { ensureTenantBootstrap } from "../lib/tenancy";
+import { MIRROR_VERSION_KEEP } from "../constants";
+import { mirrorPruneStatement, pruneStatement, snapshotStatement } from "../memory/versions";
 
 export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_CONTEXT, resolved?: Readonly<Config>, providerId?: string): MirrorStore & { flushAudit(): Promise<void> } {
   // The write context is a property of the store rather than of each method because
@@ -105,10 +107,21 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
 
       const refreshedTags = tagsAfterWrite(tags);
       const now = Date.now();
-
-      await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-        .bind(content, JSON.stringify(refreshedTags), now, id).run();
       const cfg = await config();
+
+      // Versioned, keeping the last MIRROR_VERSION_KEEP (D1.1): the normal prune caps the row
+      // at VERSION_KEEP whatever it holds, and the mirror prune below brings it back to 3 once
+      // no user version remains in the window (N1) — both bottom-up, so the chain stays contiguous.
+      await env.DB.batch([
+        snapshotStatement(env, {
+          entryId: id, reason: "mirror", change: { actorId: writeCtx.actorId, channel: "system:mirror" },
+          content: { kind: "next", content }, nextTags: refreshedTags, meta: { provider: providerId }, now,
+        }),
+        env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+          .bind(content, JSON.stringify(refreshedTags), now, id),
+        pruneStatement(env, id, cfg.VERSION_KEEP),
+        mirrorPruneStatement(env, id, Math.min(MIRROR_VERSION_KEEP, cfg.VERSION_KEEP)),
+      ]);
       // The sync's write context decides where a NEW mirror goes (createEntry).
       // An UPDATE refreshes a row whose home is already decided and may have moved
       // since this batch's context was resolved (#351) — stamp from the row itself,

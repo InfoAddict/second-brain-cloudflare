@@ -1153,7 +1153,7 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id });
   }
@@ -1220,7 +1220,7 @@ export async function handleAdminRoutes(
       return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
     }
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id, action: body.action });
   }
@@ -1299,7 +1299,7 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id, when_at: result.when_at });
   }
@@ -1319,7 +1319,7 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, "rest");
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date", undefined, { actorId: auth.userId, channel: "rest" });
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, id: result.id });
   }
@@ -1430,7 +1430,7 @@ export async function handleAdminRoutes(
       }
     }
 
-    const result = await applyInsightResolution(env, ctx, auth.userId, found, ids.length, action, "rest");
+    const result = await applyInsightResolution(env, ctx, { actorId: auth.userId, channel: "rest" }, found, ids.length, action);
     return json({
       ok: true,
       action,

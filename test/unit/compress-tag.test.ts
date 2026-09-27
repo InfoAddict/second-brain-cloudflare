@@ -320,9 +320,14 @@ describe("compressTag()", () => {
   /** Counts subrequests the way D1 bills them: a batch is one, whatever it carries. */
   function countingDb(db: D1Mock, failBatch = false, failRowIds: string[] = []) {
     const calls = { batches: 0, batchedStatements: 0, individualRuns: 0 };
+    // Fires once: it stands in for the whole 15-row batch hitting a transient D1 rejection,
+    // not every batch call forever — the per-row fallback batches must be free to succeed.
+    let armFailBatch = failBatch;
     const wrap = (stmt: any, boundId?: string): any => ({
-      // the row id is a bound arg, no longer the last one (the statement also binds the workspace)
+      // the row id is a bound arg, no longer the last one (the statement also binds the workspace);
+      // a version snapshot binds the same id too, so this still tags the right statement either way.
       bind: (...args: any[]) => wrap(stmt.bind(...args), args.find(a => failRowIds.includes(a))),
+      boundId,
       run: async () => {
         calls.individualRuns++;
         if (boundId && failRowIds.includes(boundId)) throw new Error(`row ${boundId} rejected`);
@@ -338,7 +343,10 @@ describe("compressTag()", () => {
       batch: (stmts: any[]) => {
         calls.batches++;
         calls.batchedStatements += stmts.length;
-        if (failBatch) throw new Error("batch rejected");
+        if (armFailBatch) { armFailBatch = false; throw new Error("batch rejected"); }
+        // D1 batches are all-or-nothing: a single bad row anywhere in the batch fails the whole thing.
+        const failing = stmts.find((s: any) => s.boundId && failRowIds.includes(s.boundId));
+        if (failing) throw new Error(`row ${failing.boundId} rejected`);
         return db.batch(stmts.map(s => s.__inner ?? s));
       },
     } as unknown as D1Database;
@@ -358,7 +366,8 @@ describe("compressTag()", () => {
 
     expect(result.synthesizedId).not.toBeNull();
     expect(calls.batches).toBe(1);
-    expect(calls.batchedStatements).toBe(15);
+    // 15 marks plus the version snapshot and the prune, all in the same batch as the change.
+    expect(calls.batchedStatements).toBe(17);
     expect(rolledUp(db)).toHaveLength(15);
   });
 
@@ -374,7 +383,8 @@ describe("compressTag()", () => {
     await drain();
 
     expect(result.synthesizedId).not.toBeNull();
-    expect(calls.batches).toBe(1);
+    // The rejected big batch, plus one small [snapshot, mark, prune] batch per row on the fallback.
+    expect(calls.batches).toBe(16);
     expect(rolledUp(db)).toHaveLength(15);
   });
 
