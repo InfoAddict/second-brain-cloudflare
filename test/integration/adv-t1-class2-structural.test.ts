@@ -43,13 +43,14 @@ const live = async (id: string) => (await sqlite.db.prepare(`SELECT * FROM entri
 /** A Vectorize double that tracks every upserted/inserted vector's content by id. */
 function makeVectorStore() {
   const store = new Map<string, { content: string }>();
+  const deleteByIds = vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; });
   const vec = makeVectorizeMock({
     upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, { content: v.metadata?.content }); return { mutationId: "m" } as any; }),
     insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, { content: v.metadata?.content }); return { mutationId: "m" } as any; }),
-    deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
+    deleteByIds,
     query: vi.fn(async () => ({ matches: [], count: 0 })),
   });
-  return { vec, store };
+  return { vec, store, deleteByIds };
 }
 
 /**
@@ -69,10 +70,17 @@ async function assertLiveVectorsMatchContent(id: string, store: Map<string, { co
 }
 
 describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, the row's own vectors", () => {
-  it("updateEntryContent: a concurrent tag write between the read and the commit loses the first attempt", async () => {
+  // The final state alone cannot tell a correct recovery apart from a blind delete followed by
+  // some LATER step papering over it (this same function's own exhaustion cleanup, or the next
+  // attempt's own fresh embed, both already existed before the R2-2 fix and would restore the id
+  // regardless). The id a lost attempt's own embed and the row's real, live content BOTH share is
+  // deterministic (the id itself here, single-chunk content); a blind delete of it, even one that
+  // gets overwritten again moments later, is exactly the mistake R2-2 found — asserted directly
+  // against the Vectorize mock's own call history, not inferred from where things end up.
+  it("updateEntryContent: a concurrent content change abandons the first attempt's own re-embed", async () => {
     const { updateEntryContent } = await import("../../src/capture/store");
     const { DEFAULTS } = await import("../../src/config");
-    const { store, vec } = makeVectorStore();
+    const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
       AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
     await seed("u1", "Original content");
@@ -84,7 +92,12 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
       if (raced || !sql.startsWith("SELECT content, tags, source, vector_ids, workspace_id FROM entries")) return st;
       return { bind: (...a: unknown[]) => ({ first: async () => {
         const r = await st.bind(...a).first();
-        if (!raced) { raced = true; await raw.prepare(`UPDATE entries SET tags = '["concurrent"]' WHERE id = 'u1'`).run(); }
+        // A tags-only race never abandons this attempt's own re-embed at all: updateEntryContent
+        // only re-embeds again when the CONTENT it embedded from has moved (embeddedFrom !==
+        // readContent), so the SAME embed just gets reused and committed on the next attempt,
+        // never cleaned up either way. Changing content here is what actually exercises the
+        // abandoned-embed cleanup path.
+        if (!raced) { raced = true; await raw.prepare(`UPDATE entries SET content = 'Concurrent content' WHERE id = 'u1'`).run(); }
         return r;
       } }) };
     } } } as unknown as Env;
@@ -93,12 +106,13 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const r = await updateEntryContent(racing, "u1", "Updated content", DEFAULTS, undefined, undefined, wctx, change, ws);
     expect(r.status).toBe("updated");
     await assertLiveVectorsMatchContent("u1", store);
+    expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).not.toContain("u1");
   });
 
   it("appendToEntry, long branch: a concurrent tag write loses the first attempt's oversized re-embed", async () => {
     const { appendToEntry } = await import("../../src/capture/store");
     const { DEFAULTS } = await import("../../src/config");
-    const { store, vec } = makeVectorStore();
+    const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
       AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
     const longBody = "x".repeat(1700);
@@ -119,6 +133,12 @@ describe("CLASS 2 structural: a compare-and-set loss re-embeds, never deletes, t
     const change = { actorId: owner.userId, channel: "rest" as const };
     await appendToEntry(racing, "u2", "", "more text", [], "api", DEFAULTS, undefined, wctx, change, undefined, ws);
     await assertLiveVectorsMatchContent("u2", store);
+    // Multi-chunk content (over CHUNK_MAX_CHARS) names its chunks "u2-chunk-0"/"u2-chunk-1", not
+    // bare "u2" — the seed row's own "u2" (single, unchunked) legitimately goes stale once this
+    // append re-embeds a chunked result, and deleting IT is correct, not the bug. "u2-chunk-0" is
+    // the id both the lost first attempt and the eventual winner compute identically (same
+    // content, same deterministic scheme) — a blind delete of it on the loss is the R2-2 mistake.
+    expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).not.toContain("u2-chunk-0");
   });
 });
 
@@ -146,7 +166,7 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
   it("appendToEntry, short branch: the batch throws after the chunk embed already landed in Vectorize", async () => {
     const { appendToEntry } = await import("../../src/capture/store");
     const { DEFAULTS } = await import("../../src/config");
-    const { store, vec } = makeVectorStore();
+    const { store, vec, deleteByIds } = makeVectorStore();
     const env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
       AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
     await seed("t2", "Original content");
@@ -158,6 +178,16 @@ describe("CLASS 2 structural: a thrown commit batch re-embeds the row as it stan
     await expect(appendToEntry(throwing, "t2", "", "an addition", [], "api", DEFAULTS, undefined, wctx, change, undefined, ws)).rejects.toThrow();
     const row = await live("t2");
     expect(row.content).toBe("Original content");
+    // The row's own "t2" vector was never touched by this attempt (the batch threw before any of
+    // it committed), so checking only what vector_ids already references proves nothing here —
+    // that stays correct by construction either way. The chunk this attempt's OWN embed inserted
+    // under its own unique `t2-update-<ts>` id, BEFORE the throw, is the one thing this attempt
+    // controls and must not leave dangling: never added to any row's vector_ids (the batch never
+    // committed), so nothing else will ever ask Vectorize to delete it.
+    const chunkId = (vec.insert as any).mock.calls[0][0][0].id as string;
+    expect(chunkId).toMatch(/^t2-update-\d+$/);
+    expect(store.has(chunkId), `${chunkId}: orphaned in Vectorize, retireChunk did not run on the thrown batch`).toBe(false);
+    expect(deleteByIds.mock.calls.flatMap((c: any) => c[0])).toContain(chunkId);
     await assertLiveVectorsMatchContent("t2", store);
   });
 });
