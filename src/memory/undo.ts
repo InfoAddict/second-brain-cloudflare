@@ -227,6 +227,35 @@ export async function revertEntry(
   // versioning: snapshot
   const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}${vectorIdsSet}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
+  // Embedded before the batch, like the main content above, so the insert below can carry its own
+  // vector_ids the way restoreEntry does (U14). Each insert is guarded by the SAME "this request's own
+  // snapshot landed" condition as the UPDATE, and runs INSIDE the revert's own batch, not a separate
+  // one after it: the row and the meta that records it now commit together or not at all — a thrown
+  // or lost insert can no longer leave the record saying a row exists that was never created, which
+  // would otherwise block every future rollback from ever trying again (U18).
+  const insertedAt = Date.now();
+  const incomingInserts: { id: string; vectorIds: string[]; actorId: string }[] = [];
+  const incomingStatements: D1PreparedStatement[] = [];
+  for (const create of mergesToCreate) {
+    const incoming = String(create.meta.incoming ?? "");
+    const incomingTags: string[] = Array.isArray(create.meta.incomingTags) ? create.meta.incomingTags as string[] : [];
+    const incomingSource = String(create.meta.incomingSource ?? row.source);
+    let vectorIds: string[] = [];
+    try {
+      vectorIds = (await reembedForRevert(env, create.id, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: create.merge.actor_id }))?.vectorIds ?? [];
+    } catch (e) {
+      console.error("Undo-merge re-embed failed (non-fatal):", e);
+    }
+    incomingInserts.push({ id: create.id, vectorIds, actorId: create.merge.actor_id });
+    const ip = new Params();
+    // versioning: exempt: creation — a re-created row has no prior state to keep
+    incomingStatements.push(env.DB.prepare(
+      `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id)
+       SELECT ${ip.add(create.id)}, ${ip.add(incoming)}, ${ip.add(JSON.stringify(incomingTags))}, ${ip.add(incomingSource)}, ${ip.add(insertedAt)}, ${ip.add(insertedAt)}, ${ip.add(JSON.stringify(vectorIds))}, ${ip.add(row.workspace_id)}, ${ip.add(create.merge.actor_id)}
+        WHERE ${ownSnapshotLandedSql(ip, id, newest.seq, nonce)}`,
+    ).bind(...ip.values()));
+  }
+
   // Row budget (U13, same rule the merge writer applies to its own version row, P16): a rollback from
   // a long, merged state back to a short one cannot use the delta encoding (that needs the CURRENT
   // text to be a PREFIX of what replaces it, never true going from longer to shorter), so the version
@@ -264,6 +293,7 @@ export async function revertEntry(
       }),
       // versioning: snapshot
       env.DB.prepare(updateSql).bind(...p.values()),
+      ...incomingStatements,
       pruneStatement(env, id, config.VERSION_KEEP),
     ]);
   } catch (e) {
@@ -272,6 +302,10 @@ export async function revertEntry(
     // until the next write touched it. Re-embed from the row as it actually stands (U6) — never
     // delete under those ids, which are the row's live vectors (the rule ADV proved broken elsewhere).
     if (needsReembed) await restoreRowVectors(env, id, oldVectorIds, newVectorIds ?? [], row.source, config, embedCtx);
+    // The incoming rows never landed either (same batch, same guard, and now nothing to undo — the
+    // INSERTs are gone with the rest of the transaction). Their vectors are fresh, deterministic ids
+    // under no row, not a live row's own, so cleaning them up here breaks no rule (U18).
+    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e2) { console.error("Orphan vector cleanup failed (non-fatal):", e2); } } }
     throw e;
   }
 
@@ -283,12 +317,17 @@ export async function revertEntry(
     if (!stillThere) {
       // The row is truly gone: the fresh vectors this undo wrote describe a row nothing owns now.
       if (newVectorIds) { try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+      // The incoming inserts share the UPDATE's own guard, so they missed too: nothing landed for
+      // them either, and their fresh vectors are equally orphaned.
+      for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
       return { status: "not_found" };
     }
     // The row is still there, committed by someone else. Never delete under the deterministic ids
     // this undo re-embedded onto (the class rule R2-2 proved broken elsewhere): re-embed from the row
     // as it actually stands instead, which restoreRowVectors does under those same ids.
     if (needsReembed) await restoreRowVectors(env, id, oldVectorIds, newVectorIds ?? [], row.source, config, embedCtx);
+    // Same shared guard, same miss: the incoming inserts landed nowhere, so their vectors are orphans.
+    for (const ins of incomingInserts) { if (ins.vectorIds.length) { try { await deleteVectorIds(env, ins.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } } }
     return { status: "stale" };
   }
 
@@ -306,39 +345,19 @@ export async function revertEntry(
 
   // Undo of a merge or replace re-creates the incoming memory it absorbed, as its own row — never
   // through captureEntry, which could merge it right back in. Fires for every merge a to_version
-  // rollback crosses, not only when a merge is the newest change (U4, U10). Every insert, embed and
-  // audit for however many merges this call covers is batched together, so the cost stays flat
-  // instead of growing 3 statements per merge (U14): one batch for the rows, one for their audits.
+  // rollback crosses, not only when a merge is the newest change (U4, U10). Reaching this point means
+  // the batch above landed, so every incoming insert landed with it (same guard, same transaction):
+  // only the audits, which are fire-and-forget by contract anyway, remain to be written here (U18).
   if (anyIncomingTruncated) (result as { incomingTruncated?: true }).incomingTruncated = true;
-  if (mergesToCreate.length) {
-    const insertedAt = Date.now();
-    const inserts: D1PreparedStatement[] = [];
-    const createdEvents: { entryId: string; actorId: string; event: "created"; payload: Record<string, unknown> }[] = [];
-    for (const create of mergesToCreate) {
-      const incoming = String(create.meta.incoming ?? "");
-      const incomingTags: string[] = Array.isArray(create.meta.incomingTags) ? create.meta.incomingTags as string[] : [];
-      const incomingSource = String(create.meta.incomingSource ?? row.source);
-      let vectorIds: string[] = [];
-      try {
-        vectorIds = (await reembedForRevert(env, create.id, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: create.merge.actor_id }))?.vectorIds ?? [];
-      } catch (e) {
-        console.error("Undo-merge re-embed failed (non-fatal):", e);
-      }
-      // versioning: exempt: creation — a re-created row has no prior state to keep
-      inserts.push(env.DB.prepare(
-        `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(create.id, incoming, JSON.stringify(incomingTags), incomingSource, insertedAt, insertedAt, JSON.stringify(vectorIds), row.workspace_id, create.merge.actor_id));
+  if (incomingInserts.length) {
+    const createdEvents = incomingInserts.map(ins => ({
+      entryId: ins.id, actorId: change.actorId, event: "created" as const,
       // The undoer performs the recreation, so the undoer is credited and the undo's own channel
       // rides along, the same as every other audit this function writes (U17).
-      createdEvents.push({ entryId: create.id, actorId: change.actorId, event: "created", payload: { cause: "undo_merge", from: id, channel: change.channel } });
-    }
-    try {
-      await env.DB.batch(inserts);
-      await writeAuditEvents(env, createdEvents);
-      (result as { recreatedIncomingId?: string }).recreatedIncomingId = mergesToCreate[0].id;
-    } catch (e) {
-      console.error("Undo-merge recreation failed (non-fatal):", e);
-    }
+      payload: { cause: "undo_merge", from: id, channel: change.channel },
+    }));
+    await writeAuditEvents(env, createdEvents);
+    (result as { recreatedIncomingId?: string }).recreatedIncomingId = incomingInserts[0].id;
   }
   if (keptIncoming.length) (result as { keptIncoming?: { id: string; reason: string }[] }).keptIncoming = keptIncoming;
 

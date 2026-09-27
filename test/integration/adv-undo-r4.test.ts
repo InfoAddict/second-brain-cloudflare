@@ -116,31 +116,28 @@ function counting(base: Env) {
 }
 
 
-describe("ADV-U18 (MINOR): a failed re-creation batch is recorded as done, so the fact can never be re-created", () => {
-  it("after the insert batch fails, the result says so or a later rollback still brings the fact back", async () => {
+// T-0089.1.3 round 4: the re-creation insert used to run in its own batch after the revert batch had
+// already committed, so a failure there was silent and the revert's own meta already recorded the id
+// as re-created, blocking every future rollback from trying again. Fixed by folding the insert into
+// the revert's own batch, guarded by the same "this request's own snapshot landed" condition as the
+// UPDATE, so the row and its record commit together or not at all. There is no longer a separate,
+// all-INSERT batch to fail on its own — this asserts that structurally, and that the row still lands.
+describe("ADV-U18 (MINOR): the re-creation insert can no longer fail separately from the revert it belongs to", () => {
+  it("the incoming row's insert lands in the same batch as the revert, not a separate one that can fail alone", async () => {
     const e = mergingEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
-    const mergeSeq = (await versions("old"))[0].seq;
     const raw = e.DB as any;
-    let failed = false;
-    const flaky = { ...e, DB: { ...raw, prepare: (sql: string) => raw.prepare(sql), batch: async (stmts: any[]) => {
-      // the re-creation INSERT batch, which runs after the revert batch has committed
-      if (!failed && stmts.every(s => s.sourceSql?.().startsWith("INSERT INTO entries (id, content"))) { failed = true; throw new Error("D1_ERROR: Network connection lost."); }
+    let sawSeparateInsertBatch = false;
+    const watched = { ...e, DB: { ...raw, prepare: (sql: string) => raw.prepare(sql), batch: async (stmts: any[]) => {
+      if (stmts.length && stmts.every(s => s.sourceSql?.().startsWith("INSERT INTO entries (id, content"))) sawSeparateInsertBatch = true;
       return raw.batch(stmts);
     } } } as unknown as Env;
-    const r = await revertEntry(flaky, owner, "old", change(), DEFAULTS);
-    expect(failed).toBe(true);
+    const r = await revertEntry(watched, owner, "old", change(), DEFAULTS);
     expect(r.status).toBe("reverted");
-    expect(row("old").content).toBe("Old text");
-    expect(live("Incoming fact")).toHaveLength(0);
-    const told = (r as any).recreatedIncomingId ?? (r as any).keptIncoming ?? (r as any).incomingTruncated;
-    if (told === undefined) {
-      // Silent. The revert's meta already records the id, so "at most once" now blocks every retry.
-      await revertEntry(e, owner, "old", change(), DEFAULTS); // redo
-      await revertEntry(e, owner, "old", change(), DEFAULTS, mergeSeq); // roll back to the merge again
-      expect(live("Incoming fact")).toHaveLength(1); // actual: 0 — the fact is only in history, which prunes at 20
-    }
+    expect((r as any).recreatedIncomingId).toBeDefined();
+    expect(sawSeparateInsertBatch).toBe(false);
+    expect(live("Incoming fact")).toHaveLength(1);
   });
 });
 

@@ -157,9 +157,11 @@ describe("ADV-U14 (MINOR): statements grow with every merge a rollback crosses",
     const r = await revertEntry(counted, owner, "hub19", change(), DEFAULTS, first);
     expect(r.status).toBe("reverted");
     for (let i = 0; i < 19; i++) expect(live(`fact ${i}`)).toHaveLength(1);
-    // read + history read + revert batch + one batch of 19 inserts + one batch of 19 audits + the
-    // revert's own "reverted" audit: flat at 6, however many merges the rollback crosses (U14).
-    expect(executed).toHaveLength(6);
+    // read + history read + one batch (snapshot, UPDATE, 19 inserts, prune) + one batch of 19 created
+    // audits + the revert's own "reverted" audit: flat at 5, however many merges the rollback crosses
+    // (U14). The 19 inserts moved into the revert's own batch in round 4 (U18), so this is one lower
+    // than round 3's pin of 6 — no separate insert batch remains to count.
+    expect(executed).toHaveLength(5);
   });
 });
 

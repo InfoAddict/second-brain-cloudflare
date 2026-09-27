@@ -103,7 +103,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/trash.ts', line: 415, kind: 'exempt' },
   { file: 'src/memory/trash.ts', line: 489, kind: 'hard-delete' },
   { file: 'src/memory/undo.ts', line: 228, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 329, kind: 'exempt' },
+  { file: 'src/memory/undo.ts', line: 253, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },
   { file: 'src/routes/admin.ts', line: 1538, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
