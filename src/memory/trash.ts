@@ -9,7 +9,7 @@ import { assertCanMutateEntry } from "../lib/entry-access";
 import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteVectorIds } from "../vectorize/batch";
 import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
-import { upsertEntryVectors, deleteStaleVectors } from "../capture/store";
+import { upsertEntryVectors, deleteStaleVectors, restoreRowVectors } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
@@ -402,19 +402,27 @@ export type RestoreResult =
 
 /**
  * A losing restore's cleanup. Vector ids are deterministic (the entry id, or `id-chunk-i`,
- * store.ts), so when this attempt's own batch did not land, the ids it just upserted are only
- * safe to delete if `id` is genuinely not live: a winning restore of the SAME trash row embedded
- * the identical content and got the identical ids, and deleting them would blind the live row
- * (spec, Restore step 4: "delete the fresh vectors only if the id is not in entries").
+ * store.ts), so a winning restore of the SAME trash row embeds the identical content and gets
+ * the identical ids — nothing to reconcile there. But a slow loser can lose to something else
+ * live under the same id by the time its own upsert finally lands (checklist 36g): this
+ * attempt's own embed already overwrote the vector with ITS text, which the live row does not
+ * hold. Reconcile by re-embedding from whatever the live row now says, same as a lost
+ * compare-and-set elsewhere (store.ts's restoreRowVectors) — a bare delete would just leave the
+ * live row's real vectors on the ids it just clobbered.
  */
-async function deleteOrphanedRestoreVectors(env: Env, id: string, vectorIds: string[]): Promise<void> {
+async function deleteOrphanedRestoreVectors(
+  env: Env, id: string, vectorIds: string[], source: string, cfg: Readonly<Config>, writeCtx: { workspaceId: string; actorId: string },
+): Promise<void> {
   if (!vectorIds.length) return;
   try {
     const p = new Params();
     const liveId = p.add(id);
-    // scope-exempt: by-id: only decides whether THIS attempt's own vectors are safe to delete
+    // scope-exempt: by-id: only decides whether THIS attempt's own vectors are safe to delete outright
     const live = await env.DB.prepare(`SELECT 1 FROM entries WHERE id = ${liveId}`).bind(...p.values()).first();
-    if (live) return;
+    if (live) {
+      await restoreRowVectors(env, id, vectorIds, [], source, cfg, writeCtx);
+      return;
+    }
     await deleteVectorIds(env, vectorIds);
   } catch (e) {
     console.error("Orphaned restore vector cleanup failed (non-fatal):", e);
@@ -449,11 +457,13 @@ export async function restoreEntry(
     }
   }
 
+  const source = String(row.source ?? "api");
+  const cfg = config ?? await resolveConfig(env);
+  const writeCtx = { workspaceId: trashed.workspace_id, actorId: trashed.actor_id };
   let vectorIds: string[] = [];
   if (!deprecated) {
     try {
-      const cfg = config ?? await resolveConfig(env);
-      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, String(row.source ?? "api"), Date.now(), cfg, { workspaceId: trashed.workspace_id, actorId: trashed.actor_id });
+      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, source, Date.now(), cfg, writeCtx);
       vectorIds = stored.vectorIds;
     } catch (e) {
       if (!(await isVectorizeUnavailable(env))) return { status: "reembed_failed" };
@@ -497,7 +507,7 @@ export async function restoreEntry(
     // Vector ids are deterministic (the entry id, or id-chunk-i, store.ts), so a winning restore
     // racing the same trash row upserted these SAME ids: deleting them here without checking would
     // delete the WINNER's live vectors too. Only clean up if this attempt's id truly lost.
-    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds);
+    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
     if (isPrimaryKeyConflict(e)) return { status: "conflict" };
     throw e;
   }
@@ -505,7 +515,7 @@ export async function restoreEntry(
   if (changedRows(results[2]) === 0) {
     // The trash row vanished between the read and the batch (a racing restore or purge). If a
     // racing restore is the winner, it embedded the same deterministic ids — never delete them.
-    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds);
+    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
     return { status: "not_found" };
   }
 

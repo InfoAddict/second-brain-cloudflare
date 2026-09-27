@@ -281,3 +281,34 @@ describe("POST /restore route", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("round 2 adversary: a slow losing restore (checklist 36g)", () => {
+  it("a losing restore whose embed lands after the winner's row was edited must not leave the old text in the live vector", async () => {
+    const vz = statefulVectorize();
+    t = await makeTrashEnv({ VECTORIZE: vz.index });
+    t.seed("a", { content: "old text from the trash" });
+    await forget("a");
+    const cfg = await resolveConfig(t.env);
+    const stale = await getTrashedEntry(t.env, undefined, "a");
+
+    // The loser's upsert is held until after the winner restored and the user edited the memory.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const upsert = (vz.index as any).upsert;
+    let calls = 0;
+    (vz.index as any).upsert = async (vs: any[]) => { if (++calls === 1) await gate; return upsert(vs); };
+
+    const loser = restoreEntry(t.env, stale!, { actorId: "u", channel: "rest" }, cfg);
+    await new Promise((r) => setTimeout(r, 20)); // the loser is past its liveness check, waiting on Vectorize
+    expect((await restoreEntry(t.env, stale!, { actorId: "u", channel: "rest" }, cfg)).status).toBe("restored");
+    const upd = await post("/update", { id: "a", content: "new text after restore" });
+    expect(upd.status).toBe(200);
+    expect(vz.store.get("a")?.content).toBe("new text after restore");
+    release();
+    expect(["conflict", "not_found"]).toContain((await loser).status);
+
+    const live = await t.one<any>(`SELECT content FROM entries WHERE id = 'a'`);
+    expect(live.content).toBe("new text after restore");
+    expect(vz.store.get("a")?.content).toBe(live.content);
+  });
+});
