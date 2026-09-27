@@ -119,6 +119,17 @@ export function edgeEndpointsReadableSql(source: string, target: string, readabl
 }
 
 /**
+ * Options for an automatic edge (capture, inference, the insight pass, import): stamped with ONE
+ * workspace and both endpoints required to live in it. Only an explicit link, from a person, passes
+ * their readable workspaces instead, and the link surfaces already refuse a cross-workspace pair.
+ * An automatic edge between two workspaces a person can read would show a personal id to everyone
+ * else who reads the company one.
+ */
+export function sameWorkspaceEdge(workspaceId: string): { workspaceId: string; readableWorkspaceIds: string[] } {
+  return { workspaceId, readableWorkspaceIds: [workspaceId] };
+}
+
+/**
  * The INSERT createEdge issues, prepared and bound but not run, so a caller
  * with several edges to write can hand them all to env.DB.batch(...) as one
  * subrequest instead of paying one subrequest per createEdge call.
@@ -386,7 +397,7 @@ export async function inferEdgesOnWrite(
          WHERE ((source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?))
            AND type = 'relates_to' AND provenance = 'inferred'`,
       ).bind(newId, n.id, n.id, newId));
-      const typed = edgeInsertStatement(newId, n.id, "follows", { weight: n.score, provenance: "inferred", workspaceId, readableWorkspaceIds: [workspaceId] }, env);
+      const typed = edgeInsertStatement(newId, n.id, "follows", { weight: n.score, provenance: "inferred", ...sameWorkspaceEdge(workspaceId) }, env);
       if (typed) { statements.push(typed); inserted++; }
       continue;
     }
@@ -394,7 +405,7 @@ export async function inferEdgesOnWrite(
     // Guarded: a later write touching a pair that already has a typed edge,
     // an edit, an append, the nightly backfill, falls to this branch outside
     // the follows window and would otherwise stack relates_to on top of it.
-    const generic = edgeInsertStatement(newId, n.id, "relates_to", { weight: n.score, provenance: "inferred", workspaceId, readableWorkspaceIds: [workspaceId], onlyIfNoTypedEdge: true }, env);
+    const generic = edgeInsertStatement(newId, n.id, "relates_to", { weight: n.score, provenance: "inferred", ...sameWorkspaceEdge(workspaceId), onlyIfNoTypedEdge: true }, env);
     if (generic) { statements.push(generic); inserted++; }
   }
 

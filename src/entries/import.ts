@@ -126,9 +126,6 @@ export interface ImportOptions {
    * that have a real Identity must pass one resolved at the edge.
    */
   writeCtx?: WriteContext;
-  /** Workspaces the importer can read (readableWorkspaces). An edge is written only between entries
-   * in them; any other endpoint is skipped like a missing one. Defaults to writeCtx's workspace. */
-  readableWorkspaceIds?: string[];
 }
 
 export interface ImportSummary {
@@ -623,7 +620,9 @@ export async function importExportPayload(
   const projects = body.projects ?? [];
   const projectOffset = Math.min(Math.max(opts.projectOffset ?? 0, 0), projects.length);
   const writeCtx = opts.writeCtx ?? OWNER_WRITE_CONTEXT;
-  const readable = opts.readableWorkspaceIds ?? [writeCtx.workspaceId];
+  // Import edges are automatic (round 5): both endpoints in the importer's own workspace, where the
+  // imported entries land and the edge is stamped. Anything else is skipped like a missing endpoint.
+  const readable = [writeCtx.workspaceId];
 
   const results: ImportResultItem[] = [];
   let imported = 0;

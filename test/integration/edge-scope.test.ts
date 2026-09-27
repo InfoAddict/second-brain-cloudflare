@@ -26,7 +26,7 @@ describe("import edges", () => {
     t.seed("secret", { actor_id: bob.userId, workspace_id: bob.personalWorkspaceId });
     const mine = t.roots.ownerPersonalWorkspaceId;
     const summary = await importExportPayload(t.env, { entries: [], edges: [edge("mine", "secret"), edge("mine", "nowhere")] },
-      { writeCtx: { workspaceId: mine, actorId: t.roots.ownerUserId }, readableWorkspaceIds: [mine, t.roots.companyWorkspaceId] });
+      { writeCtx: { workspaceId: mine, actorId: t.roots.ownerUserId } });
     expect(summary).toMatchObject({ edges_imported: 0, edges_skipped: 2, edges_failed: 0 });
     expect(JSON.stringify(summary.results)).not.toMatch(/secret|nowhere/);
     expect(await edgeRows()).toEqual([]);
@@ -48,8 +48,32 @@ describe("import edges", () => {
       return realBatch(stmts);
     };
     await importExportPayload(t.env, { entries: [], edges: [edge("a", "b")] },
-      { writeCtx: { workspaceId: mine, actorId: t.roots.ownerUserId }, readableWorkspaceIds: [mine] });
+      { writeCtx: { workspaceId: mine, actorId: t.roots.ownerUserId } });
     expect(moved).toBe(true);
+    expect(await edgeRows()).toEqual([]);
+  });
+});
+
+describe("automatic edges stay inside one workspace (round 5)", () => {
+  it("import skips an edge to an entry in another workspace the importer CAN read (its company one)", async () => {
+    t = await makeTrashEnv();
+    const mine = t.roots.ownerPersonalWorkspaceId;
+    t.seed("p"); t.seed("c", { workspace_id: t.roots.companyWorkspaceId }); t.seed("p2");
+    void mine;
+    const worker = (await import("../../src/index")).default;
+    const res = await worker.fetch(new Request("http://localhost/import", { method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+      body: JSON.stringify({ version: 2, entries: [], edges: [edge("p", "c"), edge("p", "p2")] }) }), t.env, { waitUntil: () => {} } as unknown as ExecutionContext);
+    expect(await res.json()).toMatchObject({ edges_imported: 1, edges_skipped: 1 });
+    expect(await edgeRows()).toEqual([{ source_id: "p", target_id: "p2" }]);
+  });
+
+  it("sameWorkspaceEdge refuses a pair across two workspaces, even ones the same person reads", async () => {
+    t = await makeTrashEnv();
+    const { sameWorkspaceEdge } = await import("../../src/graph/edges");
+    t.seed("p"); t.seed("c", { workspace_id: t.roots.companyWorkspaceId });
+    await createEdge("p", "c", "supersedes", { provenance: "system", ...sameWorkspaceEdge(t.roots.ownerPersonalWorkspaceId) }, t.env);
+    await createEdge("c", "p", "supersedes", { provenance: "system", ...sameWorkspaceEdge(t.roots.companyWorkspaceId) }, t.env);
     expect(await edgeRows()).toEqual([]);
   });
 });
@@ -102,9 +126,24 @@ describe("structural: every edge insert checks endpoint readability in the same 
     for (const s of sites) expect(s.sql, s.file).toMatch(/\$\{edgeEndpointsReadableSql\(/);
   });
 
+  it("automatic edge writers go through sameWorkspaceEdge; only the explicit link surfaces pass a reader's workspaces", () => {
+    const calls: { file: string; args: string }[] = [];
+    for (const f of files(SRC).map((p) => ({ file: p.slice(SRC.length + 1), src: readFileSync(p, "utf8") }))) {
+      for (const m of f.src.matchAll(/(?<!function )\b(?:createEdge|edgeInsertStatement)\(([^;]*?)\},\s*env\s*,?\s*\)/g)) calls.push({ file: f.file, args: m[1] });
+    }
+    const explicit = new Set(["routes/graph.ts", "mcp/server.ts"]);
+    expect(calls.length).toBeGreaterThanOrEqual(7);
+    for (const c of calls) {
+      if (explicit.has(c.file)) expect(c.args, c.file).toMatch(/readableWorkspaceIds: identity \? readableWorkspaces\(identity\)|readableWorkspaceIds: readableWorkspaces\(auth\)/);
+      else expect(c.args, `${c.file}: ${c.args.slice(0, 120)}`).toMatch(/\.\.\.sameWorkspaceEdge\(/);
+    }
+    // Import edges are automatic too: one workspace, the importer's own.
+    expect(readFileSync(join(SRC, "entries/import.ts"), "utf8")).toMatch(/const readable = \[writeCtx\.workspaceId\];/);
+  });
+
   it("the writers that take an actor require its readable workspaces", () => {
     const edges = readFileSync(join(SRC, "graph/edges.ts"), "utf8");
     expect(edges).toMatch(/readableWorkspaceIds: string\[\];/);
-    expect(readFileSync(join(SRC, "entries/import.ts"), "utf8")).toMatch(/readableWorkspaceIds\?: string\[\]/);
+    // Import is an automatic writer (round 5): one workspace, pinned below in the same-workspace test.
   });
 });

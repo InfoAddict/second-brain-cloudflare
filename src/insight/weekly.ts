@@ -15,7 +15,7 @@ import { initializeDatabase } from "../db/init";
 import { captureEntry } from "../capture/entry";
 import { reasonOverPair, restatesRecent } from "./reason";
 import { PENDING_INSIGHT_SQL, WRITTEN_INSIGHT_SQL } from "../memory/patterns";
-import { edgeInsertStatement, kindsAllowEdge } from "../graph/edges";
+import { edgeInsertStatement, kindsAllowEdge, sameWorkspaceEdge } from "../graph/edges";
 import { getKind } from "../memory/kind";
 import type { TypedRelationship } from "./reason";
 import { isEligiblePair, parseTags } from "./candidates";
@@ -556,7 +556,7 @@ export async function runWeeklyInsights(
         `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from' AND provenance = 'system'`).bind(id)),
       ...drawnFromPairs
         .map(({ insightId, targetId, workspaceId }) => edgeInsertStatement(
-          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId, readableWorkspaceIds: [workspaceId] }, env,
+          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, ...sameWorkspaceEdge(workspaceId) }, env,
         ))
         .filter((stmt): stmt is D1PreparedStatement => stmt !== null),
       ...typedEdges
@@ -567,7 +567,7 @@ export async function runWeeklyInsights(
           // is why the DELETE comes last rather than first.
           edgeInsertStatement(sourceId, targetId, type, {
             provenance: "system", weight: INSIGHT_EDGE_WEIGHT,
-            metadata: { via: "insight-reasoning" }, workspaceId, readableWorkspaceIds: [workspaceId],
+            metadata: { via: "insight-reasoning" }, ...sameWorkspaceEdge(workspaceId),
           }, env),
           // WEIGHTS ARE HIGH-WATER MARKS, and this step propagates that into
           // typed edges. `max(weight, excluded.weight)` on the upsert (which

@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
-import { createEdge, inferEdgesOnWrite } from "../graph/edges";
+import { createEdge, inferEdgesOnWrite, sameWorkspaceEdge } from "../graph/edges";
 import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
 import { extractHashtags } from "../text/hashtags";
 import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
@@ -523,7 +523,7 @@ export async function captureEntry(
       // there is one the member whose capture drew it can never see in their own
       // graph. writeCtx is already the resolved answer to "which workspace did
       // this entry land in", so no second lookup is needed.
-      await createEdge(id, conflictId, "supersedes", { provenance: "system", weight: 1.0, workspaceId: writeCtx.workspaceId, readableWorkspaceIds: [writeCtx.workspaceId] }, env);
+      await createEdge(id, conflictId, "supersedes", { provenance: "system", weight: 1.0, ...sameWorkspaceEdge(writeCtx.workspaceId) }, env);
     } catch (e) {
       console.error("Supersedes edge creation failed (non-fatal):", e);
     }
