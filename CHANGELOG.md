@@ -21,6 +21,8 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Agents**
 
+- The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
+
 - Agents can inspect who changed a memory, through which channel, and its supersedes links.
 
 - Agents can read the latest existing project or tag digest without starting a new summary or model call.

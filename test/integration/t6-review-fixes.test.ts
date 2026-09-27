@@ -16,6 +16,7 @@ import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { createMember } from "../../src/lib/team-admin";
 import { resolveEntryAction } from "../../src/memory/actions";
+import { readAgentBrief } from "../../src/brief/compute";
 import type { Env } from "../../src/env";
 
 let sqlite: SqliteD1;
@@ -275,5 +276,25 @@ describe("Minor 12: company author lock on resolve", () => {
     expect(JSON.parse(String(row("t1").tags))).not.toContain("task:done");
     expect(await call("resolve", { id: "t2", action: "done" }, a)).toContain("Resolved t2");
     expect(await call("resolve", { id: "t3", action: "done" }, owner)).toContain("Resolved t3");
+  });
+});
+
+describe("M3 brief queries use their partial indexes", () => {
+  it("each agent-brief read plans onto its own index, with and without a project filter", async () => {
+    // Seed enough rows for the planner to prefer the partial indexes over a scan.
+    for (let i = 0; i < 200; i++) sqlite.seed({ id: `n${i}`, content: `note ${i}`, createdAt: i, tags: ["work"] });
+    for (const project of [undefined, [{ id: "work", workspace_id: owner.personalWorkspaceId, name: "Work", description: "", status: "active", aliases: ["hosting"], created_at: 1, updated_at: null }]]) {
+      sqlite.issued.length = 0;
+      await readAgentBrief(env, owner, { parts: ["due", "loops", "stale", "insights"], projectRows: project });
+      const reads = sqlite.issued.filter(q => /^SELECT id, content/.test(q));
+      expect(reads).toHaveLength(4);
+      const wanted = ["idx_entries_when", "idx_entries_task", "idx_entries_stale", "idx_entries_insight"];
+      const plans = await Promise.all(reads.map(async q => {
+        const binds = Array(((q.match(/\?/g)) ?? []).length).fill("x");
+        const rows = (await sqlite.db.prepare(`EXPLAIN QUERY PLAN ${q}`).bind(...binds).all()).results as { detail: string }[];
+        return rows.map(r => r.detail).join(" | ");
+      }));
+      for (const idx of wanted) expect(plans.some(p => p.includes(idx)), `${idx} in ${plans.join("\n")}`).toBe(true);
+    }
   });
 });
