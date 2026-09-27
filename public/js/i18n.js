@@ -422,9 +422,9 @@ const I18N_EN = {
     errorOffline: "Couldn't reach your Second Brain. Check your connection and try again.",
     errorServer: "Your Second Brain couldn't save it. Try again in a moment.",
     errorRejected: "Your Second Brain didn't accept that value.",
-    reset: 'Reset',
-    resetAria: 'Reset to the default',
-    wasReset: 'Reset to default',
+    reset: 'Use default',
+    resetAria: 'Use the default value',
+    wasReset: 'Back to the default',
   },
   whatsNew: {
     line: {
@@ -1486,9 +1486,9 @@ const I18N_IT = {
     errorOffline: 'Impossibile raggiungere il tuo Second Brain. Controlla la connessione e riprova.',
     errorServer: 'Il tuo Second Brain non è riuscito a salvarlo. Riprova tra poco.',
     errorRejected: 'Il tuo Second Brain non ha accettato questo valore.',
-    reset: 'Reimposta',
-    resetAria: 'Reimposta al valore predefinito',
-    wasReset: 'Ripristinato al valore predefinito',
+    reset: 'Usa il predefinito',
+    resetAria: 'Usa il valore predefinito',
+    wasReset: 'Tornato al valore predefinito',
   },
   whatsNew: {
     line: {

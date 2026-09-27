@@ -247,7 +247,7 @@ describe("Reset to default", () => {
     expect(ctx.__patches[0]).toMatchObject({ method: "DELETE", url: "https://example.test/config/TRASH_RETENTION_DAYS" });
     expect(el(ctx, "setting-trash-retention").value).toBe("14");
     expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(true);
-    expect(ctx.__toasts[0].message).toBe("Reset to default");
+    expect(ctx.__toasts[0].message).toBe("Back to the default");
   });
 
   it("reports a failed reset without changing the effective value", async () => {
