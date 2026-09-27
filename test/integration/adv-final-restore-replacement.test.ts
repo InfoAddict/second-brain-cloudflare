@@ -1,13 +1,13 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
 import { createMember } from "../../src/lib/team-admin";
 import { resolveIdentityByUserId } from "../../src/lib/identity";
 import { forgetEntry } from "../../src/capture/lifecycle";
-import { getTrashedEntry, restoreEntry } from "../../src/memory/trash";
+import { deleteForever, getTrashedEntry, restoreEntry } from "../../src/memory/trash";
 import { DEFAULTS } from "../../src/config";
 
 let t: TrashEnv;
-afterEach(() => t?.close());
+afterEach(() => { t?.close(); vi.restoreAllMocks(); });
 
 it("a stale restore cannot restore a different member's new trash row with the same id", async () => {
   t = await makeTrashEnv();
@@ -31,4 +31,29 @@ it("a stale restore cannot restore a different member's new trash row with the s
   expect(result.status).not.toBe("restored");
   expect(await t.one<{ workspace_id: string }>("SELECT workspace_id FROM entries_trash WHERE id = ?", "reused"))
     .toMatchObject({ workspace_id: bob.personalWorkspaceId });
+});
+
+it("same-millisecond Delete forever and ID reuse cannot pass the stale restore rowid guard", async () => {
+  t = await makeTrashEnv();
+  vi.spyOn(Date, "now").mockReturnValue(1_000_000_000);
+  const owner = (await resolveIdentityByUserId(t.env, t.roots.ownerUserId))!;
+  const { member: bob } = await createMember(t.env, { name: "Bob" });
+  t.seed("same-ms", { content: "owner's memory" });
+  await forgetEntry("same-ms", t.env, { actorId: owner.userId, channel: "rest" },
+    { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
+  const ownerRead = (await getTrashedEntry(t.env, owner, "same-ms"))!;
+
+  expect((await deleteForever(t.env, "same-ms", { actorId: owner.userId, channel: "rest" },
+    owner.personalWorkspaceId)).status).toBe("deleted");
+  t.seed("same-ms", { content: "Bob's private memory", actor_id: bob.userId,
+    workspace_id: bob.personalWorkspaceId });
+  await forgetEntry("same-ms", t.env, { actorId: bob.userId, channel: "rest" },
+    { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
+  const bobTrash = (await t.one<{ rowid: number; deleted_at: number }>(
+    "SELECT rowid, deleted_at FROM entries_trash WHERE id = ?", "same-ms"))!;
+  expect(bobTrash).toMatchObject({ rowid: ownerRead.rowid, deleted_at: ownerRead.deleted_at });
+
+  const result = await restoreEntry(t.env, ownerRead, { actorId: owner.userId, channel: "rest" }, DEFAULTS);
+  expect(result.status).not.toBe("restored");
+  expect(await t.one("SELECT id FROM entries WHERE id = ?", "same-ms")).toBeNull();
 });
