@@ -11,7 +11,7 @@ import { restoreRowVectors, upsertEntryVectors, type StoredEntry } from "../capt
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { Config } from "../config";
-import { VERSION_ROW_BUDGET_BYTES } from "../constants";
+import { VERSION_ROW_BUDGET_BYTES, UNDO_MERGE_REEMBED_INLINE } from "../constants";
 import { getTrashedEntry, restoreEntry } from "./trash";
 import { isManagedMirror, mirrorRestoreWarning } from "../integrations/mirror";
 import {
@@ -20,7 +20,7 @@ import {
 } from "./versions";
 
 export type UndoResult =
-  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[] }
+  | { status: "reverted"; targetSeq: number; recreatedIncomingId?: string; incomingTruncated?: true; keptIncoming?: { id: string; reason: string }[]; deferredIncoming?: number }
   | { status: "restored"; mirrorSource?: string }
   | { status: "no_change" }
   | { status: "nothing_to_undo" }
@@ -320,15 +320,26 @@ export async function revertEntry(
   const insertedAt = Date.now();
   const incomingInserts: { id: string; vectorIds: string[]; actorId: string }[] = [];
   const incomingStatements: D1PreparedStatement[] = [];
+  let deferredIncoming = 0;
   for (const create of mergesToCreate) {
     const incoming = String(create.meta.incoming ?? "");
     const incomingTags: string[] = Array.isArray(create.meta.incomingTags) ? create.meta.incomingTags as string[] : [];
     const incomingSource = String(create.meta.incomingSource ?? row.source);
     let vectorIds: string[] = [];
-    try {
-      vectorIds = (await reembedForRevert(env, create.id, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: create.merge.actor_id }))?.vectorIds ?? [];
-    } catch (e) {
-      console.error("Undo-merge re-embed failed (non-fatal):", e);
+    // Only the first UNDO_MERGE_REEMBED_INLINE re-created rows are embedded in this request: a
+    // to_version rollback can cross hundreds of merges at once (up to VERSION_KEEP of them), and
+    // one AI plus one Vectorize call per row would blow past the per-invocation service subrequest
+    // limit long before D1 or KV even enter the count. The rest still get their own row here (the
+    // fact is never lost), just with vector_ids left at '[]', same as POST /import defers embedding
+    // (routes/entries.ts) — POST /vectorize-pending backfills them afterward.
+    if (incomingInserts.length < UNDO_MERGE_REEMBED_INLINE) {
+      try {
+        vectorIds = (await reembedForRevert(env, create.id, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: create.merge.actor_id }))?.vectorIds ?? [];
+      } catch (e) {
+        console.error("Undo-merge re-embed failed (non-fatal):", e);
+      }
+    } else {
+      deferredIncoming++;
     }
     incomingInserts.push({ id: create.id, vectorIds, actorId: create.merge.actor_id });
     const ip = new Params();
@@ -447,6 +458,7 @@ export async function revertEntry(
     (result as { recreatedIncomingId?: string }).recreatedIncomingId = incomingInserts[0].id;
   }
   if (keptIncoming.length) (result as { keptIncoming?: { id: string; reason: string }[] }).keptIncoming = keptIncoming;
+  if (deferredIncoming) (result as { deferredIncoming?: number }).deferredIncoming = deferredIncoming;
 
   return result;
 }
@@ -462,6 +474,9 @@ export function revertedMessage(id: string, result: Extract<UndoResult, { status
   if (result.incomingTruncated) text += " The text that was merged in was too large to keep, so it could not be re-created.";
   if (result.recreatedIncomingId) text += ` The text that was merged in is now its own memory, ${result.recreatedIncomingId}.`;
   if (result.keptIncoming?.length) text += ` Memory ${result.keptIncoming.map(k => k.id).join(", ")}, which an earlier undo re-created, was kept.`;
+  if (result.deferredIncoming) {
+    text += ` ${result.deferredIncoming} of the memories this restored are still being indexed for semantic search (findable by keyword in the meantime); POST /vectorize-pending until remaining is 0.`;
+  }
   return text;
 }
 

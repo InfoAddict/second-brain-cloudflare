@@ -292,6 +292,7 @@ export async function handleEntriesRoutes(
           ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
           ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
           ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
+          ...(result.deferredIncoming ? { deferredIncoming: result.deferredIncoming } : {}),
         });
       case "restored":
         return json({

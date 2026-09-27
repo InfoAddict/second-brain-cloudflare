@@ -17,7 +17,7 @@ import { revertEntry } from "../../src/memory/undo";
 import { createMember } from "../../src/lib/team-admin";
 import { STALENESS_AGE_MS } from "../../src/staleness/pass";
 import { DEFAULTS } from "../../src/config";
-import { WRITE_CAS_ATTEMPTS } from "../../src/constants";
+import { WRITE_CAS_ATTEMPTS, UNDO_MERGE_REEMBED_INLINE } from "../../src/constants";
 import { AUDIT_BATCH_MAX } from "../../src/lib/audit";
 import worker from "../../src/index";
 import type { Identity } from "../../src/lib/identity";
@@ -235,7 +235,7 @@ describe("R4-B3 (MINOR): a compare-and-set miss on a CONTENT race costs +4 per r
 describe("R4-B4 (MINOR): a to_version revert crossing more than AUDIT_BATCH_MAX merges is not flat at 5", () => {
   // Contradicts test/integration/versioning-budget.test.ts:213-217, which asserts `expect(4 + 1).toBe(5)` and never
   // calls revertEntry: "flat at 5 for any to_version that crosses at least one merge ... never 4 + N".
-  it("60 merges (VERSION_KEEP 100): the created-audit write splits into 2 batches, and each merge costs an embed + upsert", async () => {
+  it("60 merges (VERSION_KEEP 100): the created-audit write splits into 2 batches, and every row is re-created, but only UNDO_MERGE_REEMBED_INLINE are embedded inline", async () => {
     t = await makeTrashEnv();
     const M = 60;
     t.seed("hub", { content: "Hub" + Array.from({ length: M }, (_, i) => ` fact ${i}`).join("") });
@@ -248,13 +248,49 @@ describe("R4-B4 (MINOR): a to_version revert crossing more than AUDIT_BATCH_MAX 
     const { env, L } = counted(t.env);
     const r = await revertEntry(env, identity(), "hub", change(), { ...DEFAULTS, VERSION_KEEP: 100 }, 1, t.roots.ownerPersonalWorkspaceId);
     expect(r.status).toBe("reverted");
+    // Every merge still gets its own row (the fact is never lost) — only embedding is bounded.
     expect((await t.one<{ n: number }>(`SELECT COUNT(*) AS n FROM entries WHERE content LIKE 'fact %'`))!.n).toBe(M);
-    // 61 Workers AI embeds + 61 Vectorize upserts: 122 subrequests the D1 pin does not see (about 1,000 at VERSION_KEEP 500).
-    expect(ai.mock.calls.length + upsert.mock.calls.length - before).toBe(2 * (M + 1));
+    // adv-final MAJOR 2: capped at UNDO_MERGE_REEMBED_INLINE merges plus the main row, not one
+    // embed + upsert per merge (that was 122 subrequests here, ~1,000 at VERSION_KEEP 500 — over
+    // the platform's real per-invocation service subrequest ceiling).
+    expect(ai.mock.calls.length + upsert.mock.calls.length - before).toBe(2 * (UNDO_MERGE_REEMBED_INLINE + 1));
+    const deferred = (r as { deferredIncoming?: number }).deferredIncoming;
+    expect(deferred).toBe(M - UNDO_MERGE_REEMBED_INLINE);
+    expect((await t.one<{ n: number }>(`SELECT COUNT(*) AS n FROM entries WHERE content LIKE 'fact %' AND vector_ids = '[]'`))!.n).toBe(deferred);
     expect(AUDIT_BATCH_MAX).toBe(50);
     // Read, history read, revert batch of 63 statements, "reverted" audit, then 50 + 10 created audits split into 2 batches.
     expect(L.calls).toHaveLength(6);
   });
+});
+
+describe("adv-final MAJOR 2: to_version at VERSION_KEEP's real ceiling stays inside the platform's service subrequest limit", () => {
+  // test/integration/adv-final-undo-budget.test.ts pins the AI + Vectorize half alone (<= 1,000,
+  // the actual platform ceiling those two service types share). This pins every call type this
+  // codebase itself counts against its own tighter self-imposed budget, on real SQLite, at the
+  // Director's named worst case: 500 merges is VERSION_KEEP's own ceiling (canRevert refuses a
+  // to_version once more than VERSION_KEEP versions separate it from the newest), so this is the
+  // largest to_version crossing a single request can ever be asked to do.
+  it("500 merges (VERSION_KEEP 500): D1 + KV + AI + Vectorize together land near UNDO_MERGE_REEMBED_INLINE, about 200, not near 1,002", async () => {
+    t = await makeTrashEnv();
+    const M = 500;
+    t.seed("hub", { content: "hub " + "x".repeat(M) });
+    for (let i = 0; i < M; i++) {
+      t.version("hub", i + 1, {
+        content: "hub " + "x".repeat(i), reason: "merge",
+        meta: JSON.stringify({ incoming: `fact ${i}`, incomingTags: [], incomingSource: "api" }),
+        created_at: 2000 + i,
+      });
+    }
+    const ai = (t.env.AI as any).run; const upsert = (t.env.VECTORIZE as any).upsert;
+    const before = ai.mock.calls.length + upsert.mock.calls.length;
+    const { env, L } = counted(t.env);
+    const r = await revertEntry(env, identity(), "hub", change(), { ...DEFAULTS, VERSION_KEEP: M }, 1, t.roots.ownerPersonalWorkspaceId);
+    expect(r.status).toBe("reverted");
+    const aiAndVectorize = ai.mock.calls.length + upsert.mock.calls.length - before;
+    expect(aiAndVectorize).toBe(2 * (UNDO_MERGE_REEMBED_INLINE + 1));
+    const total = aiAndVectorize + L.calls.length + L.kv.length;
+    expect(total).toBeLessThanOrEqual(200);
+  }, 30000);
 });
 
 describe("R4-B5 (MINOR): insight resolution at the route's real maximum adds N+1 statements to the batch", () => {
