@@ -884,4 +884,36 @@ describe("R4-2 (MINOR): /vectorize-pending racing an edit lists vectors of text 
     // FAILS: "the original text": the repair's stale upsert and unconditional vector_ids write won.
     for (const id of listed) expect(store.get(id)?.metadata?.content, id).toBe("the corrected text");
   });
+
+  it("after /migration/reembed and a concurrent update, the row's listed vector describes its committed content", async () => {
+    const worker = (await import("../../src/index")).default;
+    const { req } = await import("../helpers/make-request");
+    const { updateEntryContent } = await import("../../src/capture/store");
+    const { DEFAULTS } = await import("../../src/config");
+    const store = new Map<string, any>();
+    const vec = makeVectorizeMock({
+      upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
+      insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
+      deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
+    });
+    const plain = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
+      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+    let raced = false;
+    const repairEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
+      AI: { run: vi.fn(async () => {
+        // The author edits the memory while the migration batch is embedding its old text.
+        if (!raced) { raced = true; await updateEntryContent(plain, "rb1", "the corrected text", DEFAULTS, undefined, undefined,
+          { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, { actorId: owner.userId, channel: "rest" }, owner.personalWorkspaceId); }
+        return { data: [new Array(384).fill(0.1)] };
+      }) } as any }) as Env;
+    await seed("rb1", { content: "the original text", vectorIds: [], createdAt: 1000 });
+    const res = await worker.fetch(req("POST", "/migration/reembed"), repairEnv, ctx);
+    expect(res.status).toBe(200);
+    const row = await live("rb1");
+    expect(row.content).toBe("the corrected text");
+    const listed = JSON.parse(row.vector_ids) as string[];
+    expect(listed.length).toBeGreaterThan(0); // so the ledger does not stay stuck describing stale text
+    // FAILS pre-fix: "the original text": the batch's stale upsert and unconditional vector_ids write won.
+    for (const id of listed) expect(store.get(id)?.metadata?.content, id).toBe("the corrected text");
+  });
 });

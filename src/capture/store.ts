@@ -48,10 +48,20 @@ export async function storeEntry(
   // deliberately does NOT touch workspace_id: an update edits a row in place and
   // must never move it between workspaces — that is share/unshare's job alone.
   // Restamping here would let any context-less caller silently reset a row to ''.
+  // Compare-and-set on content (R4-2): a concurrent edit that commits while this
+  // call's embed was in flight must not have its vectors overwritten by ids
+  // describing text the row no longer holds.
   // versioning: exempt: vector bookkeeping
-  await env.DB.prepare(
-    `UPDATE entries SET vector_ids = ? WHERE id = ?`
-  ).bind(JSON.stringify(stored.vectorIds), id).run();
+  const result = await env.DB.prepare(
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ?`
+  ).bind(JSON.stringify(stored.vectorIds), id, content).run();
+
+  if (changesOf(result) === 0) {
+    // Lost the race: this call's own upsert already ran under storeEntry's deterministic ids,
+    // which the winner's own vectors may share, so it can have clobbered them with stale text.
+    // restoreRowVectors re-embeds the row as it now stands and repairs exactly that.
+    await restoreRowVectors(env, id, [], stored.vectorIds, source, config, writeCtx);
+  }
 
   return stored;
 }
