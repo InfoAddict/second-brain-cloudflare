@@ -38,10 +38,21 @@ async function saveAppend() {
   btn.textContent = t('memories.saving')
   try {
     const appendedId = pendingAppendId
-    await apiMcp('append', { id: appendedId, addition })
+    // REST, not the MCP tool: MCP's channel reads as "via an AI tool" on the
+    // history timeline, which is false for a person's own dashboard append.
+    const res = await fetch(`${WORKER_URL}/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: appendedId, addition }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || '')
     closeAppend()
     notifyMemoryResolved(appendedId)
     refreshAll()
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.added'), appendedId, { onUndone: () => notifyMemoryRestored(appendedId) })
+    }
   } catch (e) {
     showToast(t('memories.appendFailed', { message: e.message }))
   } finally {
@@ -126,6 +137,9 @@ async function saveEdit() {
     closeEdit()
     notifyMemoryResolved(editedId)
     refreshAll()
+    if (typeof undoToast === 'function') {
+      undoToast(t('undo.saved'), editedId, { onUndone: () => notifyMemoryRestored(editedId) })
+    }
   } catch (e) {
     showToast(t('memories.editFailed', { message: e.message }))
   } finally {
@@ -181,6 +195,11 @@ function openConfirm(id, btnOrCard) {
  */
 function notifyMemoryResolved(id) {
   if (typeof dropFromStaleQueue === 'function') dropFromStaleQueue(id)
+}
+
+/** notifyMemoryResolved's sibling: a row an undo brought back reappears in the lists that dropped it. */
+function notifyMemoryRestored(id) {
+  if (typeof refreshAll === 'function') refreshAll()
 }
 
 /**
@@ -268,7 +287,13 @@ async function confirmForget(_checked, done) {
     // above have already handled — reloading it here would swap the element out
     // from under its own exit animation.
     refreshAll({ list: false })
-    if (data.trash === false) showToast(t('memories.forgetHardDeleted'))
+    if (data.trash === false) {
+      // Tier 3: too large for the trash, hard-deleted. There is no version to
+      // undo to, the same reason Delete forever never gets a toast either.
+      showToast(t('memories.forgetHardDeleted'))
+    } else if (typeof undoToast === 'function') {
+      undoToast(t('undo.trashed'), idToForget, { onUndone: () => notifyMemoryRestored(idToForget) })
+    }
   } catch (e) {
     showToast(t('memories.forgetFailed', { message: e.message }))
   } finally {

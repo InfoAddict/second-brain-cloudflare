@@ -353,9 +353,20 @@ const I18N_EN = {
     footerSharedCut: 'Earlier changes are visible only to {name}.',
   },
   undo: {
-    // SH-2's write-site toast: "Marked as {status}" with a lowercase label
-    // ("Marked as wrong"). SH-3's status control is the first caller.
+    // SH-2's write-site toasts: one per action, action label "Undo" on all.
+    trashed: 'Moved to the trash',
+    saved: 'Saved',
+    added: 'Added',
+    // "Marked as {status}" with a lowercase label ("Marked as wrong").
     marked: 'Marked as {status}',
+    done: 'Marked done',
+    notTask: 'No longer a task',
+    snoozed: 'Snoozed until {date}',
+    dateRemoved: 'Date removed',
+    keptTrue: 'Kept as still true',
+    insightConfirmed: 'Insight confirmed',
+    insightDismissed: 'Insight dismissed',
+    insightsUpdated: { one: '{n} insight updated', other: '{n} insights updated' },
     undone: 'Undone',
     recreated: 'Undone. The text that was merged in is now its own memory.',
     open: 'Open',
@@ -951,7 +962,6 @@ const I18N_EN = {
     sourceCodexSession: 'codex session',
     sourceCursorSession: 'cursor session',
     invalidResponse: 'Invalid response',
-    mcpError: 'MCP error',
   },
   danger: {
     removeLinkTitle: 'Remove this link?',
@@ -1409,7 +1419,18 @@ const I18N_IT = {
     footerSharedCut: 'Le modifiche precedenti sono visibili solo a {name}.',
   },
   undo: {
+    trashed: 'Spostato nel cestino',
+    saved: 'Salvato',
+    added: 'Aggiunto',
     marked: 'Segnato come {status}',
+    done: 'Segnato come fatto',
+    notTask: "Non è più un'attività",
+    snoozed: 'Posticipato al {date}',
+    dateRemoved: 'Data rimossa',
+    keptTrue: 'Confermato come ancora valido',
+    insightConfirmed: 'Insight confermato',
+    insightDismissed: 'Insight ignorato',
+    insightsUpdated: { one: '{n} insight aggiornato', other: '{n} insight aggiornati' },
     undone: 'Annullato',
     recreated: 'Annullato. Il testo che era stato unito ora è un ricordo a sé.',
     open: 'Apri',
@@ -1986,7 +2007,6 @@ const I18N_IT = {
     sourceCodexSession: 'sessione codex',
     sourceCursorSession: 'sessione cursor',
     invalidResponse: 'Risposta non valida',
-    mcpError: 'Errore MCP',
   },
   danger: {
     removeLinkTitle: 'Rimuovere questo collegamento?',

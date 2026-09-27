@@ -49,7 +49,6 @@ function load() {
     setTimeout: (fn: () => void) => fn(),
     clearTimeout: () => {},
     refreshAll: () => {},
-    apiMcp: async () => ({}),
     // A save failure now reports through the app's toast; a browser alert
     // would block the page and could not be translated.
     alert: () => {
