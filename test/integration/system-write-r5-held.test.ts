@@ -93,4 +93,13 @@ describe("held drafts", () => {
     expect(String(moved.content)).not.toContain("[Digest:");
     sqlite.close();
   });
+
+  it("still answers on a brain that has not built the held-draft index yet", async () => {
+    const { sqlite, cycle, held, calls } = await world();
+    sqlite.db.prepare(`DROP INDEX idx_entries_conflict_held`).run();
+    await cycle(); await cycle();
+    expect(held()).toHaveLength(1);
+    expect(calls()).toBe(1);
+    sqlite.close();
+  });
 });

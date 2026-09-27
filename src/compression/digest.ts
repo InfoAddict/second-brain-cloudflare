@@ -72,11 +72,42 @@ async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, wo
   }
 }
 
-/** A held draft digest still waiting on the person; the held tag is written by captureEntry. */
-const HELD_DIGEST_SQL = `(tags LIKE '%"conflict-held"%'
-            AND tags NOT LIKE '%"user-edited"%'
-            AND tags NOT LIKE '%"status:canonical"%'
-            AND tags NOT LIKE '%"status:deprecated"%')`;
+/**
+ * A digest held as a draft (it contradicted a memory a system job may not rewrite) that is still
+ * LIVE in one workspace for one tag. Bound: workspace id, then the tag's LIKE pattern.
+ *
+ * The `instr(lower(tags), '"conflict-held"') > 0` predicate is what makes the partial index
+ * idx_entries_conflict_held usable, so the check reads only held rows, never the workspace
+ * (test/unit/compress-held-plan.test.ts). It runs only on the path that would otherwise pay for a
+ * model call, after the cooldown and the source count, so a tag that has nothing to digest costs
+ * nothing extra.
+ *
+ * It releases when the person acts on the draft: edits it (`user-edited`), confirms it (status
+ * canonical), deprecates it, or forgets it (the row is gone).
+ */
+export const heldDigestSql = (indexed: boolean): string => `
+  SELECT id FROM entries${indexed ? " INDEXED BY idx_entries_conflict_held" : ""}
+  WHERE instr(lower(tags), '"conflict-held"') > 0
+    AND workspace_id = ?
+    AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+    AND tags NOT LIKE '%"user-edited"%'
+    AND tags NOT LIKE '%"status:canonical"%'
+    AND tags NOT LIKE '%"status:deprecated"%'
+  LIMIT 1`;
+
+/**
+ * Is a held draft for this tag still waiting on the person? Forced onto the partial index, which
+ * SQLite will not otherwise pick over the workspace index; a brain that has not built it yet
+ * (`no such index`) retries once without the hint, as GET /projects does.
+ */
+async function hasHeldDigest(env: Env, workspaceId: string, tag: string): Promise<boolean> {
+  try {
+    return Boolean(await env.DB.prepare(heldDigestSql(true)).bind(workspaceId, tagLikePattern(tag)).first());
+  } catch (e) {
+    if (!/no such index: idx_entries_conflict_held/i.test(String((e as Error)?.message ?? e))) throw e;
+    return Boolean(await env.DB.prepare(heldDigestSql(false)).bind(workspaceId, tagLikePattern(tag)).first());
+  }
+}
 
 export interface CompressTagOptions {
   /** When set, roll up only these workspaces and scope the 24h cooldown per workspace. */
@@ -136,13 +167,6 @@ export async function compressTag(
       }
     }
 
-    // A digest held as a draft (it contradicted a memory a system job may not rewrite) is not
-    // retried every cycle: the same sources would be re-summarised, and the model paid for, only
-    // to be held again. So the same one existence check that gates the 24h cooldown also skips the
-    // tag while a held draft is LIVE in this workspace (HELD_DIGEST_SQL), and it releases when the
-    // person acts on the draft: edits it (`user-edited`), confirms it (status canonical),
-    // deprecates it, or forgets it (the row is gone).
-    //
     // The 24h cooldown stays corpus-wide on purpose for the nightly cron: it gates
     // repetition, not visibility, so checking it across workspaces can only ever
     // postpone a digest by a day — it never moves one user's content into another
@@ -154,7 +178,7 @@ export async function compressTag(
         SELECT id FROM entries
         WHERE tags LIKE '%"synthesized"%'
           AND tags LIKE ? ${TAG_LIKE_ESCAPE}
-          AND (created_at > ? OR ${HELD_DIGEST_SQL})
+          AND created_at > ?
           AND workspace_id = ?
         LIMIT 1
       `).bind(tagLikePattern(tag), Date.now() - 86400000, workspaceId).first();
@@ -164,9 +188,9 @@ export async function compressTag(
         SELECT id FROM entries
         WHERE tags LIKE '%"synthesized"%'
           AND tags LIKE ? ${TAG_LIKE_ESCAPE}
-          AND (created_at > ? OR (${HELD_DIGEST_SQL} AND workspace_id = ?))
+          AND created_at > ?
         LIMIT 1
-      `).bind(tagLikePattern(tag), Date.now() - 86400000, workspaceId).first();
+      `).bind(tagLikePattern(tag), Date.now() - 86400000).first();
     }
 
     if (recentSynth) {
@@ -193,6 +217,12 @@ export async function compressTag(
     `).bind(...member.bindings, Date.now() - cfg.COMPRESSION_MIN_AGE_MS, workspaceId).all();
 
     if (rawEntries.length < 10) {
+      continue;
+    }
+
+    // A held draft for this tag is not retried every cycle: the same sources would be re-summarised,
+    // and the model paid for, only to be held again. See heldDigestSql for when it releases.
+    if (await hasHeldDigest(env, workspaceId, tag)) {
       continue;
     }
 
