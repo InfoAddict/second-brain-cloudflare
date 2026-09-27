@@ -28,6 +28,8 @@ const DAILY_LIMIT_WRITE_KEYS = new Set(['rows_written', 'd1_rows_written']);
 const DAILY_LIMIT_PRICING_URL = 'https://developers.cloudflare.com/workers/platform/pricing/';
 
 let dailyLimitShown = false;
+/** Kept so ensureDailyLimitBanner only ever creates one, for the element's lifetime. */
+let dailyLimitResizeObserver = null;
 
 function ensureDailyLimitBanner() {
   let el = document.getElementById('daily-limit-banner');
@@ -38,6 +40,17 @@ function ensureDailyLimitBanner() {
   el.setAttribute('role', 'status');
   el.hidden = true;
   if (document.body) document.body.appendChild(el);
+  // The synchronous measurement right after a show can run before fonts and
+  // wrapped-text layout have settled to their real size - seen at 390px,
+  // where a banner that ends up 3 lines tall still measured as 2, so #app's
+  // margin under-reserved and the banner's own bottom border landed on the
+  // header underneath it. A ResizeObserver re-measures whenever the box's
+  // actual size changes, not just once, right after this script decides it
+  // is probably done - covering a font swap or a locale/text change too.
+  if (typeof ResizeObserver !== 'undefined') {
+    dailyLimitResizeObserver = new ResizeObserver(() => updateDailyLimitOffset());
+    dailyLimitResizeObserver.observe(el);
+  }
   return el;
 }
 

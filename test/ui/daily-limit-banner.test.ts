@@ -35,6 +35,24 @@ function makeEl(id?: string) {
   };
 }
 
+/**
+ * A minimal stand-in for the real ResizeObserver, which does not exist in
+ * this VM. Its whole job in these tests is to prove daily-limit-banner.js
+ * actually registers one on the banner element and re-measures from its
+ * callback, not only from the one synchronous call right after a show.
+ */
+class FakeResizeObserver {
+  cb: () => void;
+  observed: any[] = [];
+  constructor(cb: () => void) {
+    this.cb = cb;
+  }
+  observe(target: any) {
+    this.observed.push(target);
+  }
+  disconnect() {}
+}
+
 function load(opts: { admin?: boolean | null; initialResponse?: any } = {}) {
   const els = new Map<string, any>();
   const bodyClasses = new Set<string>();
@@ -57,6 +75,7 @@ function load(opts: { admin?: boolean | null; initialResponse?: any } = {}) {
   const ctx: any = {
     console,
     teamIsAdmin: opts.admin === undefined ? null : opts.admin,
+    ResizeObserver: FakeResizeObserver,
     document: {
       getElementById: (id: string) => els.get(id) ?? null,
       createElement: () => makeEl(),
@@ -212,6 +231,34 @@ describe("reserves space for the banner instead of overlapping the app below it"
     await ctx.fetch("/list");
     expect(ctx.__rootProps["--daily-limit-height"]).toBe("0px");
     expect(ctx.__bodyClasses.has("daily-limit-active")).toBe(false);
+  });
+
+  /**
+   * A 390px owner banner (3 lines: the lead sentence, the paid-plan note,
+   * and its link) once measured its own height before fonts and wrapping had
+   * settled, so #app's margin under-reserved and the banner's bottom border
+   * landed on the header underneath it. A ResizeObserver on the banner
+   * element is what catches that later, real size.
+   */
+  it("registers a ResizeObserver on the banner and re-measures from its callback, not only right after showing", async () => {
+    const ctx = load();
+    ctx.__setNextResponse(
+      resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
+    );
+    await ctx.fetch("/append");
+    const banner = el(ctx, "daily-limit-banner");
+    expect(ctx.__rootProps["--daily-limit-height"]).toBe("64px");
+
+    const observer = vm.runInContext("dailyLimitResizeObserver", ctx);
+    expect(observer).toBeTruthy();
+    expect(observer.observed).toContain(banner);
+
+    // Layout settles to a taller box after the synchronous measurement ran
+    // (a font swap, or wrapped text growing a third line) - the observer's
+    // own callback is what has to catch this, not a one-shot call.
+    banner.offsetHeight = 96;
+    observer.cb();
+    expect(ctx.__rootProps["--daily-limit-height"]).toBe("96px");
   });
 });
 
