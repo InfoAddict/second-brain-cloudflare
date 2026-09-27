@@ -548,6 +548,7 @@ export async function restoreEntry(
 
 export type DeleteForeverResult =
   | { status: "not_found" }
+  | { status: "conflict" }
   | { status: "deleted"; from: "live" | "trash"; deletedVectors: number };
 
 /**
@@ -575,48 +576,79 @@ function deterministicVectorIds(id: string, content: string, source: string): st
  * row read earlier: a race (a restore bringing the id back to life between the caller's own read
  * and this call, or a transient Vectorize failure during an earlier forget) means neither the
  * live row's real vector_ids nor the trash row's content are safe to trust from outside this batch.
+ *
+ * Every statement below also checks the row still belongs to `authorizedWorkspaceId` (Class 1,
+ * R3-1): the caller's own scoped read authorized this id in one workspace, and an unshare landing
+ * in the gap before this batch runs must not let it touch the row wherever it ended up instead — a
+ * live row moved to a personal workspace the caller cannot reach is exactly what an admin's
+ * "permanent" forget must never be able to delete. Checked fresh, in the same statement that would
+ * do the deleting, not from a read made moments earlier.
  */
-export async function deleteForever(env: Env, id: string, change: ChangeContext): Promise<DeleteForeverResult> {
+export async function deleteForever(
+  env: Env, id: string, change: ChangeContext,
+  /** The workspace the caller's own scoped read authorized (Class 1) — a live row's, or a trashed
+   * row's for an id already forgotten. Required: every DELETE below is pinned to it. */
+  authorizedWorkspaceId: string,
+): Promise<DeleteForeverResult> {
   const now = Date.now();
+  // Live or trashed: whichever this id currently is, checked against the SAME workspace value in
+  // both branches (a row is never both at once). Trash rows never change workspace_id once written
+  // (nothing updates entries_trash after the trash insert), so this half is defensive, not a race
+  // this codebase can actually trigger today — confirmed by test.
+  const homeGuard = (p: Params, bid: string) => {
+    const ws = p.add(authorizedWorkspaceId);
+    return `(EXISTS (SELECT 1 FROM entries h WHERE h.id = ${bid} AND h.workspace_id = ${ws}) OR EXISTS (SELECT 1 FROM entries_trash h WHERE h.id = ${bid} AND h.workspace_id = ${ws}))`;
+  };
+
   const auditP = new Params();
   const auditId = auditP.add(id);
   const auditActor = auditP.add(change.actorId);
   const auditChannel = auditP.add(change.channel);
   const auditNow = auditP.add(now);
-  const byId = (sql: (id: string) => string) => {
+  const auditGuard = homeGuard(auditP, auditId);
+  const byId = (sql: (id: string, guard: string) => string) => {
     const p = new Params();
     const bid = p.add(id);
-    return env.DB.prepare(sql(bid)).bind(...p.values());
+    return env.DB.prepare(sql(bid, homeGuard(p, bid))).bind(...p.values());
   };
   const results = await env.DB.batch([
     env.DB.prepare(
-      // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+      // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
        SELECT lower(hex(randomblob(16))), ${auditId}, ${auditActor}, 'purged',
               json_object('reason', 'permanent', 'channel', ${auditChannel}, 'from', CASE WHEN EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) THEN 'live' ELSE 'trash' END),
               ${auditNow}
-        WHERE EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) OR EXISTS (SELECT 1 FROM entries_trash WHERE id = ${auditId})`,
+        WHERE ${auditGuard}`,
     ).bind(...auditP.values()),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((bid) => `DELETE FROM edges WHERE source_id = ${bid} OR target_id = ${bid}`),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((bid) => `DELETE FROM entry_versions WHERE entry_id = ${bid}`),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch.
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
+    byId((bid, guard) => `DELETE FROM edges WHERE (source_id = ${bid} OR target_id = ${bid}) AND ${guard}`),
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
+    byId((bid, guard) => `DELETE FROM entry_versions WHERE entry_id = ${bid} AND ${guard}`),
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1).
     // RETURNING vector_ids too: the trash row's own stored ids (round 2 adversary) cover a short
     // append's id-update-<ts> chunk, which content+source alone can't rederive — content/source
     // stay as a best-effort fallback for a trash row from before this column existed.
-    byId((bid) => `DELETE FROM entries_trash WHERE id = ${bid} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
+    byId((bid, guard) => `DELETE FROM entries_trash WHERE id = ${bid} AND ${guard} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
     // RETURNING vector_ids: this statement's own value at the moment it runs, never a caller's stale
     // read — a restore racing this call embeds under the same deterministic ids (ADV-trash-4).
     // versioning: hard-delete: permanent (T-0089.4.7)
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((bid) => `DELETE FROM entries WHERE id = ${bid} RETURNING vector_ids`),
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
+    byId((bid, guard) => `DELETE FROM entries WHERE id = ${bid} AND ${guard} RETURNING vector_ids`),
   ]);
   const trashRow = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string } | undefined;
   const entryRow = results[4].results?.[0] as { vector_ids?: string } | undefined;
   const trashChanges = changedRows(results[3]);
   const entryChanges = changedRows(results[4]);
-  if (entryChanges === 0 && trashChanges === 0) return { status: "not_found" };
+  if (entryChanges === 0 && trashChanges === 0) {
+    // Either genuinely gone, or it exists but no longer in the workspace the caller authorized
+    // (the guard above refused either way) — the caller needs to tell those apart: a conflict, to
+    // retry against whatever is authorized now, not a 404 claiming nothing is there for anyone.
+    // scope-exempt: by-id: deciding only which of the two already-refused outcomes this is
+    const stillThere = await env.DB.prepare(
+      `SELECT 1 AS ok FROM entries WHERE id = ?1 UNION ALL SELECT 1 AS ok FROM entries_trash WHERE id = ?1 LIMIT 1`,
+    ).bind(id).first();
+    return { status: stillThere ? "conflict" : "not_found" };
+  }
 
   let vectorIds: string[] = [];
   if (entryRow) {

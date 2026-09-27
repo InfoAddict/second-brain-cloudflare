@@ -166,7 +166,7 @@ describe("ADV-U20 (MINOR): keptIncoming says a row is kept after it has been del
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
     const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
-    await deleteForever(e, x, change());
+    await deleteForever(e, x, change(), owner.personalWorkspaceId);
     const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(row(x)).toBeUndefined();
     // Task 15 will turn this into user-facing text; it must not claim a memory exists that does not.

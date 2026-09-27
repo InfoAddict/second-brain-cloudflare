@@ -251,6 +251,43 @@ describe("round 2 adversary: Delete forever from the trash after a failed forget
   });
 });
 
+/** Runs `mutate` (awaited) right after the FIRST read matching `pattern` returns. */
+function afterFirstRead(base: any, pattern: RegExp, mutate: () => Promise<void>) {
+  const raw = base.DB as any;
+  let fired = false;
+  return { ...base, DB: { ...raw, prepare(sql: string) {
+    const st = raw.prepare(sql);
+    if (fired || !pattern.test(sql)) return st;
+    return { bind: (...a: unknown[]) => ({ first: async () => {
+      const r = await st.bind(...a).first();
+      fired = true;
+      await mutate();
+      return r;
+    } }) };
+  } } };
+}
+
+describe("round 3 adversary (MAJOR): Delete forever destroys a memory that moved out of the caller's scope after its check (R3-1)", () => {
+  it("an admin's Delete forever does not delete Bob's memory after Bob unshares it", async () => {
+    t = await makeTrashEnv();
+    const adminTok = (await createMember(t.env, { name: "Ada", role: "admin" })).token;
+    const { token: bobTok, member: bob } = await createMember(t.env, { name: "Bob" });
+    t.seed("x1", { content: "Bob's note", workspace_id: t.roots.companyWorkspaceId, actor_id: bob.userId });
+    const racing = afterFirstRead(t.env, /^SELECT id, workspace_id, actor_id FROM entries WHERE id = \? AND/, async () => {
+      await t.sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'x1'`).bind(bob.personalWorkspaceId).run();
+    });
+    const res = await worker.fetch(new Request("http://localhost/forget", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminTok}` },
+      body: JSON.stringify({ id: "x1", permanent: true, confirm: "x1" }),
+    }), racing, ctx);
+    const row = await t.one<any>(`SELECT workspace_id FROM entries WHERE id = 'x1'`);
+    // The race must have fired — otherwise this test proves nothing.
+    expect(row?.workspace_id).toBe(bob.personalWorkspaceId);
+    expect(res.status).not.toBe(200);
+    void bobTok;
+  });
+});
+
 async function withMcp(env: any, run: (client: any) => Promise<void>) {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");

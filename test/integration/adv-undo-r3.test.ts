@@ -196,7 +196,7 @@ describe("ADV-U16 (MINOR, superseded by the round-3 simplification): a user-remo
     const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
     // The user removes the re-created row for good, deliberately — not through redo, which never
     // touches it at all any more.
-    await deleteForever(e, x, change());
+    await deleteForever(e, x, change(), owner.personalWorkspaceId);
 
     const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(redo.status).toBe("reverted");

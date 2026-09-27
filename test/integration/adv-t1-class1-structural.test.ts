@@ -160,6 +160,13 @@ const CASES: Case[] = [
     },
   },
   {
+    name: "REST /forget permanent (Delete forever, R3-1)",
+    run: async (racingEnv, id, adminToken) => {
+      const res = await worker.fetch(req("POST", "/forget", { body: { id, permanent: true, confirm: id }, token: adminToken }), racingEnv, ctx);
+      return { succeeded: res.status === 200 };
+    },
+  },
+  {
     name: "MCP update",
     run: async (racingEnv, id, _adminToken, admin?: Identity) => {
       const result = await callMcpTool(racingEnv, admin!, "update", { id, content: "admin rewrite" });
