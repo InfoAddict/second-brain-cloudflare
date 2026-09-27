@@ -4,8 +4,10 @@ import type { Identity } from "../lib/identity";
 import { getReadableEntry } from "../lib/entry-access";
 import { scopeWhereForRead } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
-import { workspaceReadable } from "./versions";
+import { resolveConfig } from "../config";
+import { loadHistory, workspaceReadable } from "./versions";
 import { visibleTimeline } from "./history-visibility";
+import { buildEntryHistoryFromReads } from "./history-view";
 
 export interface TimelineEvent {
   event: string;
@@ -92,28 +94,35 @@ export async function readEntryTimeline(
 }
 
 /**
- * Scoped basic history: events (shared-history rule, D-SH/A3) and supersedes links. A supersedes
- * link is shown only when its other endpoint is readable too, the way `connections` omits an
- * unreadable neighbour.
+ * Scoped basic history for chat's `history` tool (BE-11, T-0101.3.1): contract 4.1's merged
+ * changes-and-events (buildEntryHistoryFromReads) plus supersedes links. A supersedes link is
+ * shown only when its other endpoint is readable too, the way `connections` omits an unreadable
+ * neighbour.
  *
- * BE-11 (T-0101.3.1) will rewire this onto `buildEntryHistory` (history-view.ts, contract 4.1) so
- * the MCP `history` tool lists versions too — deferred until that tool's own file
- * (mcp/server.ts:434-455) is wireable (Builder B's tip, spec 5.3's file-region order), because
- * swapping the read here without also swapping the tool's rendering would either break the tool
- * or double every statement this function's own budget test pins.
+ * One entry_events read, like `/entry`'s own wiring: readEntryTimeline runs once, unbounded, with
+ * the versions' own actor ids folded in as extraLabelActorIds, so the one users read it already
+ * makes covers version actors too.
  */
-export async function readEntryHistory(env: Env, identity: Identity, id: string, limit = 10) {
-  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id");
+export async function readEntryHistory(env: Env, identity: Identity, id: string) {
+  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, created_at");
   if (!entry) return null;
   const edgeScope = scopeWhereForRead(identity, undefined, "e.workspace_id");
   const otherScope = scopeWhereForRead(identity, undefined, "o.workspace_id");
+  const rawEntry = entry as unknown as Record<string, unknown>;
+  const historyRow = {
+    id: entry.id, workspace_id: String(entry.workspace_id ?? ""), actor_id: String(entry.actor_id ?? ""),
+    content: String(entry.content ?? ""), created_at: Number(rawEntry.created_at ?? 0),
+  };
+  const config = await resolveConfig(env);
+  const chain = await loadHistory(env, identity, { id: historyRow.id, content: historyRow.content }, config.VERSION_KEEP);
   const [timelineResult, edgeResult] = await Promise.all([
-    readEntryTimeline(env, id, identity, String(entry.actor_id ?? ""), limit, true, String(entry.workspace_id ?? "")),
+    readEntryTimeline(env, id, identity, historyRow.actor_id, undefined, false, historyRow.workspace_id, chain.rows.map(r => r.actor_id)),
     env.DB.prepare(`SELECT e.source_id, e.target_id FROM edges e
       JOIN entries o ON o.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
       WHERE e.type = 'supersedes' AND (e.source_id = ? OR e.target_id = ?) AND ${edgeScope.clause} AND ${otherScope.clause}
       ORDER BY e.created_at DESC`)
       .bind(id, id, id, ...edgeScope.bindings, ...otherScope.bindings).all<{ source_id: string; target_id: string }>(),
   ]);
-  return { timeline: timelineResult.timeline, edges: edgeResult.results };
+  const history = await buildEntryHistoryFromReads(env, identity, historyRow, config, chain, timelineResult);
+  return { history, edges: edgeResult.results };
 }

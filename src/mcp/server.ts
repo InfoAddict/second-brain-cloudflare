@@ -264,6 +264,63 @@ async function labelsForRows(
       : null;
 }
 
+/** "2026-09-26 09:14 UTC" — a fixed-offset stamp for the `history` tool's own rows, one clock for
+ * every reader regardless of timezone. */
+function historyRowDate(at: number): string {
+  return `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/** "via {client}" when one is recorded; "in the dashboard" for rest (no "via", BE-11's own
+ * wording); "via {channelNoun}" otherwise. */
+function historyActorVia(client: string | null, channel: string): string {
+  if (client) return `via ${client}`;
+  if (channel === "rest") return "in the dashboard";
+  return `via ${channelNoun(channel)}`;
+}
+
+const HISTORY_REASON_LABELS: Record<string, string> = {
+  update: "edited", append: "appended", merge: "merged", replace: "replaced",
+  rollup: "rolled up", status: "status changed", due: "due date changed",
+  mirror: "synced", revert: "undone",
+};
+
+/** BE-11 (T-0101.3.1): renders contract 4.1's history for the `history` tool's own reply. Every
+ * separator is a middot, not an em dash — the tool's own "no em dash" rule. */
+function formatHistoryReply(
+  id: string, history: { items: any[]; footer: any }, edges: { source_id: string; target_id: string }[],
+): string {
+  const changes = history.items.filter((i) => i.kind === "change");
+  const events = history.items.filter((i) => i.kind === "event");
+
+  const changeLines = changes.map((c) => {
+    const before = `before: "${c.before_preview}"`;
+    return `- v${c.seq} · ${historyRowDate(c.at)} · ${HISTORY_REASON_LABELS[c.reason] ?? c.reason} · by ${c.actor_name} ${historyActorVia(c.client, c.channel)} · ${before}`;
+  });
+  const eventLines = events.map((e) => `- ${historyRowDate(e.at)} · ${e.event} by ${e.actor_name}`);
+  const edgeLines = edges.map((e) => e.source_id === id ? `- Supersedes ${e.target_id}` : `- Superseded by ${e.source_id}`);
+
+  const sections: string[] = [`History for ${id}`];
+  if (changeLines.length) sections.push(`Changes (newest first):\n${changeLines.join("\n")}`);
+  if (eventLines.length) sections.push(`Events:\n${eventLines.join("\n")}`);
+  if (edgeLines.length) sections.push(`Links\n${edgeLines.join("\n")}`);
+
+  const footers: string[] = [];
+  if (history.footer.pruned) footers.push(`Older changes are not kept (the last ${history.footer.kept} are).`);
+  if (history.footer.not_recorded_before !== null) {
+    footers.push(`Changes before ${new Date(history.footer.not_recorded_before).toISOString().slice(0, 10)} were not recorded.`);
+  }
+  if (history.footer.shared_cut_by !== null) footers.push(`Earlier history belongs to ${history.footer.shared_cut_by}.`);
+  if (footers.length) sections.push(footers.join("\n"));
+
+  if (changes.length) {
+    sections.push(
+      `To reverse the latest change call undo(id). To put back the text shown as "before" on version N, `
+      + `call undo(id, to_version: N). get(id, version: N) shows that text in full.`,
+    );
+  }
+  return sections.join("\n");
+}
+
 export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Identity): McpServer {
   const server = new McpServer({ name: "second-brain", version: "1.0.0" });
 
@@ -438,24 +495,18 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "history",
     {
-      description: "Call before you rely on or override a memory that shows [updated], a staleness warning, or 'since changed', and when the user asks why, when or by whom something changed. It shows recorded events and supersedes links. Earlier text is not recorded before 4.0.",
+      description: "Call before you rely on or override a memory that shows [updated], a staleness warning, or 'since changed', and when the user asks why, when or by whom something changed, or wants an older version back. It lists recorded changes with the text before each one, events, and supersedes links.",
       inputSchema: {
         id: z.string().describe("Exact memory id"),
-        limit: z.number().int().min(1).max(50).optional().describe("Recent events to show; default 10"),
       },
     },
-    async ({ id: rawId, limit }) => {
+    async ({ id: rawId }) => {
       if (!identity) return { content: [{ type: "text", text: "History requires an authenticated identity." }] };
       const id = rawId.trim();
       if (!id) return { content: [{ type: "text", text: "id is required" }] };
-      const history = await readEntryHistory(env, identity, id, limit ?? 10);
+      const history = await readEntryHistory(env, identity, id);
       if (!history) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
-      const events = history.timeline.length
-        ? history.timeline.map(e => `- ${new Date(e.created_at).toISOString()} ${e.event} by ${e.actor_name} (channel: ${String(e.payload.channel ?? "unknown")}) ${JSON.stringify(e.payload)}`).join("\n")
-        : "No recorded events.";
-      const edges = history.edges.map(e => e.source_id === id
-        ? `- Supersedes ${e.target_id}` : `- Superseded by ${e.source_id}`).join("\n");
-      const text = `History for ${id}\n${events}${edges ? `\n\nLinks\n${edges}` : ""}\n\nEarlier text is not recorded before 4.0.`;
+      const text = formatHistoryReply(id, history.history, history.edges);
       return { content: [{ type: "text", text }] };
     },
   );

@@ -137,7 +137,8 @@ describe("3. Versions against trash", () => {
 
     const adaIdentity: Identity = { userId: member.userId, role: "member", personalWorkspaceId: member.personalWorkspaceId, companyWorkspaceIds: [C], defaultShare: "" };
     const beforeTrash = await readEntryHistory(t.env, adaIdentity, "shared-mem");
-    expect(beforeTrash!.timeline.some((e: any) => e.event === "shared")).toBe(true);
+    const eventsOf = (h: typeof beforeTrash) => h!.history.items.filter((i: any) => i.kind === "event");
+    expect(eventsOf(beforeTrash).some((e: any) => e.event === "shared")).toBe(true);
 
     // Trash it, restore it: the non-author teammate must still see exactly the post-share slice, no more.
     await forgetEntry("shared-mem", t.env, { actorId: t.roots.ownerUserId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, C);
@@ -146,7 +147,7 @@ describe("3. Versions against trash", () => {
     expect(restored.status).toBe("restored");
 
     const afterRestore = await readEntryHistory(t.env, adaIdentity, "shared-mem");
-    expect(afterRestore!.timeline.map((e: any) => e.event)).toEqual(beforeTrash!.timeline.map((e: any) => e.event));
+    expect(eventsOf(afterRestore).map((e: any) => e.event)).toEqual(eventsOf(beforeTrash).map((e: any) => e.event));
 
     // The version chain itself: Ada must not see the personal-era text, before or after the round trip.
     const row = await t.one<any>(`SELECT id, content FROM entries WHERE id = 'shared-mem'`);

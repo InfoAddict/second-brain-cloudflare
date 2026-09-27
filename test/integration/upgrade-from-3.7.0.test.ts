@@ -340,7 +340,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     const bob = (await resolveIdentityFromToken(token, env))!;
 
     const history = await readEntryHistory(env, bob, "p1");
-    const events = (history?.timeline ?? []).map((e) => e.event);
+    const events = (history?.history.items.filter((i: any) => i.kind === "event") ?? []).map((e: any) => e.event);
     expect(events).not.toContain("created");
     expect(events).toContain("shared");
     expect(events).toContain("updated");
