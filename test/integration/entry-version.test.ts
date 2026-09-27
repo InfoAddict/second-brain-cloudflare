@@ -69,7 +69,7 @@ describe("readEntryVersion", () => {
     await seedRow("e1", "first text");
     await edit("e1", "second text", { now: 1000, channel: "mcp", meta: { client: "Claude" }, tags: ["work", "status:canonical"] });
     const config = await resolveConfig(env);
-    const result = await readEntryVersion(env, owner, "e1", 1, owner.personalWorkspaceId, config);
+    const result = await readEntryVersion(env, owner, "e1", 1, config);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.content).toBe("first text");
@@ -85,7 +85,7 @@ describe("readEntryVersion", () => {
     await seedRow("e2", "v0");
     await edit("e2", "v1", { now: 1000 });
     const config = await resolveConfig(env);
-    const result = await readEntryVersion(env, owner, "e2", 99, owner.personalWorkspaceId, config);
+    const result = await readEntryVersion(env, owner, "e2", 99, config);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("no_version");
@@ -98,7 +98,7 @@ describe("readEntryVersion", () => {
       await edit("e3", `v${i}`, { now: 1000 + i, keep: config.VERSION_KEEP });
     }
     // seq 1 existed once but is below the oldest kept row after VERSION_KEEP+3 edits.
-    const result = await readEntryVersion(env, owner, "e3", 1, owner.personalWorkspaceId, config);
+    const result = await readEntryVersion(env, owner, "e3", 1, config);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("pruned");
@@ -108,8 +108,8 @@ describe("readEntryVersion", () => {
     const other = await member("Dana");
     await seedRow("e4", "v0", { workspaceId: other.personalWorkspaceId, actorId: other.userId });
     const config = await resolveConfig(env);
-    expect((await readEntryVersion(env, owner, "missing", 1, owner.personalWorkspaceId, config)).ok).toBe(false);
-    const result = await readEntryVersion(env, owner, "e4", 1, other.personalWorkspaceId, config);
+    expect((await readEntryVersion(env, owner, "missing", 1, config)).ok).toBe(false);
+    const result = await readEntryVersion(env, owner, "e4", 1, config);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("not_visible");
@@ -120,7 +120,7 @@ describe("readEntryVersion", () => {
     await edit("e5", "v1", { now: 1000 });
     await sqlite.db.prepare(`DELETE FROM entries WHERE id = 'e5'`).run();
     const config = await resolveConfig(env);
-    const result = await readEntryVersion(env, owner, "e5", 1, owner.personalWorkspaceId, config);
+    const result = await readEntryVersion(env, owner, "e5", 1, config);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("not_visible");
@@ -138,16 +138,16 @@ describe("readEntryVersion", () => {
     await edit("e6", "state2", { now: 400, actorId: author.userId });
     const config = await resolveConfig(env);
 
-    const visible = await readEntryVersion(env, teammate, "e6", 2, companyWs, config);
+    const visible = await readEntryVersion(env, teammate, "e6", 2, config);
     expect(visible.ok).toBe(true);
 
-    const hidden = await readEntryVersion(env, teammate, "e6", 1, companyWs, config);
+    const hidden = await readEntryVersion(env, teammate, "e6", 1, config);
     expect(hidden.ok).toBe(false);
     if (hidden.ok) return;
     expect(hidden.reason).toBe("not_visible");
 
     // The author themselves can still read the pre-share version.
-    const asAuthor = await readEntryVersion(env, author, "e6", 1, companyWs, config);
+    const asAuthor = await readEntryVersion(env, author, "e6", 1, config);
     expect(asAuthor.ok).toBe(true);
   });
 });

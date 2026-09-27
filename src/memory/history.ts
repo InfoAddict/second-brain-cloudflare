@@ -18,6 +18,12 @@ export interface TimelineEvent {
  * Reads one indexed statement; the shared-history cut (D-SH, A3) happens in JavaScript below. */
 export async function readEntryTimeline(
   env: Env, id: string, identity: Identity, entryActorId = "", limit?: number, inlineLabels = false, entryWorkspaceId?: string,
+  /** BE-7 (T-0101.1.1): extra actor ids to resolve in the SAME `users` read as the events'
+   * own actors — buildEntryHistory's version actors, so a caller merging events and versions
+   * into one view never pays a second label statement for the versions' own names. Ignored when
+   * `inlineLabels` is true: that path resolves labels via a JOIN keyed to entry_events rows, which
+   * has no room for an actor id that never wrote an event on this entry. */
+  extraLabelActorIds: string[] = [],
 ): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string>; cut: boolean }> {
   // ev.rowid breaks a created_at tie by true insertion order (D1/SQLite serializes writes, so rowid
   // assignment IS the real happens-before order), not by whatever order a tied created_at otherwise
@@ -75,7 +81,7 @@ export async function readEntryTimeline(
 
   const labelMap = inlineLabels
     ? new Map(rows.filter(e => e.actor_id && e.user_name).map(e => [e.actor_id, e.user_name!]))
-    : await lookupActorLabels(env, [entryActorId, ...rows.map(e => e.actor_id)]);
+    : await lookupActorLabels(env, [entryActorId, ...rows.map(e => e.actor_id), ...extraLabelActorIds]);
   const timeline = rows.map(e => ({
     event: e.event,
     created_at: e.created_at,

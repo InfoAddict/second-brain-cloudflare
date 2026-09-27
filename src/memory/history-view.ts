@@ -6,7 +6,7 @@ import type { Config } from "../config";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { getStatus } from "./status";
 import {
-  canRevert, loadHistory, getVersionsSince, type VersionReason,
+  canRevert, loadHistory, getVersionsSince, type VersionChain, type VersionReason,
 } from "./versions";
 import { readEntryTimeline } from "./history";
 
@@ -93,26 +93,24 @@ export interface EntryHistoryRow {
 }
 
 /**
- * Contract 4.1: one entry's changes and events, merged into a single newest-first list. Cost is
- * loadHistory's one entry_versions read, readEntryTimeline's one entry_events read (both already
- * paid by today's callers), and one batched `users` read for every distinct actor across both —
- * reconstruction (buildChain's own text(seq)) runs only for the versions actually returned.
+ * Contract 4.1's merge, given reads a caller already made. Split out from `buildEntryHistory` so
+ * a caller that ALSO needs the raw event timeline for its own byte-compatible legacy field (`/entry`'s
+ * `timeline`, T-0101.1.1's wiring) can make that one entry_events read itself and hand the result
+ * here, instead of this function repeating it — the caller's own `readEntryTimeline` call must pass
+ * this entry's version actors as `extraLabelActorIds` so `timelineResult.labelMap` already covers
+ * them; nothing here reads `users` a second time.
  */
-export async function buildEntryHistory(
+export async function buildEntryHistoryFromReads(
   env: Env, identity: Identity, row: EntryHistoryRow, config: Config,
+  chain: VersionChain, timelineResult: Awaited<ReturnType<typeof readEntryTimeline>>,
 ): Promise<EntryHistoryResult> {
-  const [chain, timelineResult, versionsSince] = await Promise.all([
-    loadHistory(env, identity, { id: row.id, content: row.content }, config.VERSION_KEEP),
-    readEntryTimeline(env, row.id, identity, row.actor_id, undefined, false, row.workspace_id),
-    getVersionsSince(env),
-  ]);
-
+  const versionsSince = await getVersionsSince(env);
   const ownerUserId = chain.rows.some(r => r.workspace_id === "")
     ? (await ensureTenantBootstrap(env)).ownerUserId
     : undefined;
   const visibleSeqs = chain.rows.map(r => r.seq);
   const newestSeq = chain.rows[0]?.seq;
-  const labelMap = await lookupActorLabels(env, [row.actor_id, ...chain.rows.map(r => r.actor_id)]);
+  const labelMap = timelineResult.labelMap;
 
   const changeItems: HistoryChangeItem[] = chain.rows.map(r => {
     const meta = parseJsonObject(r.meta);
@@ -163,6 +161,23 @@ export async function buildEntryHistory(
   };
 }
 
+/**
+ * Contract 4.1: one entry's changes and events, merged into a single newest-first list, for a
+ * caller with no event timeline of its own already in hand. Cost: one entry_versions read
+ * (loadHistory), one entry_events read (readEntryTimeline) — its own version actors passed as
+ * `extraLabelActorIds` so the SAME read's `users` lookup covers them, no second label statement —
+ * and reconstruction (buildChain's own text(seq)) only for the versions actually returned.
+ */
+export async function buildEntryHistory(
+  env: Env, identity: Identity, row: EntryHistoryRow, config: Config,
+): Promise<EntryHistoryResult> {
+  const chain = await loadHistory(env, identity, { id: row.id, content: row.content }, config.VERSION_KEEP);
+  const timelineResult = await readEntryTimeline(
+    env, row.id, identity, row.actor_id, undefined, false, row.workspace_id, chain.rows.map(r => r.actor_id),
+  );
+  return buildEntryHistoryFromReads(env, identity, row, config, chain, timelineResult);
+}
+
 export type EntryVersionResult =
   | {
       ok: true;
@@ -188,19 +203,17 @@ export type EntryVersionResult =
     };
 
 /**
- * Contract 4.2 (BE-8, T-0101.1.1/T-0101.3.2): the full text, tags and status one visible version
- * retired, for `GET /entry/version` and MCP `get(id, version)`. `content` is the text the entry
- * had BEFORE change `seq` — the same `text(seq)` buildEntryHistory previews, given here in full.
- * Cost: one entries read (authorize + scope), one entry_versions read (loadHistory), and one
- * single-row `users` read for the version's own actor — reconstruction runs only for this one seq.
+ * Contract 4.2's read, given a row a caller already fetched and authorized — a caller with its
+ * own reason to read the entry first (MCP `get`'s existing single-row read, for instance) hands it
+ * here instead of this function repeating that read. `content` is the text the entry had BEFORE
+ * change `seq` — the same `text(seq)` buildEntryHistory previews, given here in full. Cost: one
+ * entry_versions read (loadHistory) and one single-row `users` read for the version's own actor —
+ * reconstruction runs only for this one seq.
  */
-export async function readEntryVersion(
-  env: Env, identity: Identity, entryId: string, seq: number, authorizedWorkspaceId: string, config: Config,
+export async function readEntryVersionFromRow(
+  env: Env, identity: Identity, row: EntryHistoryRow, seq: number, config: Config,
 ): Promise<EntryVersionResult> {
-  const row = await getReadableEntry(env, identity, entryId, "id, workspace_id, actor_id, content");
-  if (!row || row.workspace_id !== authorizedWorkspaceId) return { ok: false, reason: "not_visible" };
-
-  const chain = await loadHistory(env, identity, { id: row.id, content: row.content ?? "" }, config.VERSION_KEEP);
+  const chain = await loadHistory(env, identity, { id: row.id, content: row.content }, config.VERSION_KEEP);
   const target = chain.rows.find(r => r.seq === seq);
   if (!target) {
     if (chain.truncatedAt === "unreadable") return { ok: false, reason: "not_visible" };
@@ -225,4 +238,20 @@ export async function readEntryVersion(
     client: typeof meta.client === "string" ? meta.client : null,
     actor_name: resolveActorLabel(target.actor_id, labelMap, { viewerId: identity.userId }),
   };
+}
+
+/**
+ * Contract 4.2 (BE-8, T-0101.1.1/T-0101.3.2), for a caller with no earlier read of its own —
+ * `GET /entry/version`. Cost: one entries read (authorize + scope) plus `readEntryVersionFromRow`'s
+ * own reads, three statements total.
+ */
+export async function readEntryVersion(
+  env: Env, identity: Identity, entryId: string, seq: number, config: Config,
+): Promise<EntryVersionResult> {
+  const row = await getReadableEntry(env, identity, entryId, "id, workspace_id, actor_id, content");
+  if (!row) return { ok: false, reason: "not_visible" };
+  return readEntryVersionFromRow(env, identity, {
+    id: row.id, workspace_id: String(row.workspace_id ?? ""), actor_id: String(row.actor_id ?? ""),
+    content: String(row.content ?? ""), created_at: 0,
+  }, seq, config);
 }

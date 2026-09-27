@@ -6,6 +6,8 @@ import { requireIdentity } from "../lib/identity";
 import { assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
 import { readEntryTimeline } from "../memory/history";
+import { loadHistory } from "../memory/versions";
+import { buildEntryHistoryFromReads, readEntryVersion } from "../memory/history-view";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
@@ -348,13 +350,25 @@ export async function handleEntriesRoutes(
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { timeline, labelMap } = await readEntryTimeline(env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""));
+    // BE-7 (T-0101.1.1): history's versions read is the ONE new statement /entry gains. The events
+    // read below is the SAME one `timeline` always made — chain.rows' own actor ids just ride along
+    // as extraLabelActorIds, so the one `users` lookup that call already does covers version actors
+    // too, and buildEntryHistoryFromReads never reads entry_events or users a second time.
+    const config = await resolveConfig(env);
+    const chain = await loadHistory(env, auth, { id: row.id as string, content: row.content as string }, config.VERSION_KEEP);
+    const timelineResult = await readEntryTimeline(
+      env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""), chain.rows.map(r => r.actor_id),
+    );
+    const { timeline, labelMap } = timelineResult;
+    const history = await buildEntryHistoryFromReads(env, auth, {
+      id: row.id as string, workspace_id: String(row.workspace_id ?? ""), actor_id: String(row.actor_id ?? ""),
+      content: row.content as string, created_at: row.created_at as number,
+    }, config, chain, timelineResult);
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,
       source: row.source as string,
     });
-
 
     return json({
       ok: true,
@@ -389,7 +403,37 @@ export async function handleEntriesRoutes(
           actor_id: String(row.actor_id ?? ""),
         }) === null,
         timeline,
+        history,
       },
+    });
+  }
+
+  // GET /entry/version — the full text, tags and status of one visible version, for the
+  // dashboard's "Show all" on a history row (contract 4.2, BE-8, T-0101.1.1).
+  if (url.pathname === "/entry/version" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) return json({ ok: false, error: "id is required" }, 400);
+    const seqParam = url.searchParams.get("seq");
+    const seq = seqParam === null ? NaN : Number(seqParam);
+    if (!Number.isInteger(seq) || seq < 1) return json({ ok: false, error: "seq must be a positive integer" }, 400);
+
+    const config = await resolveConfig(env);
+    const result = await readEntryVersion(env, auth, id, seq, config);
+    if (!result.ok) {
+      const messages: Record<typeof result.reason, string> = {
+        pruned: `Version ${seq} of entry ${id} is no longer kept.`,
+        not_visible: `No version ${seq} of entry ${id} is visible to you.`,
+        no_version: `Entry ${id} has no version ${seq}.`,
+      };
+      return json({ ok: false, error: messages[result.reason], reason: result.reason }, 404);
+    }
+    return json({
+      ok: true, id: result.id, seq: result.seq, content: result.content, tags: result.tags,
+      status: result.status, at: result.at, reason: result.reason, channel: result.channel,
+      client: result.client, actor_name: result.actor_name,
     });
   }
 
