@@ -222,19 +222,20 @@ describe("calibrate: topic", () => {
   });
 });
 
-describe("calibrate: wording", () => {
+describe("calibrate: wording (18-copy-deck.md section 5.3)", () => {
   it("the not-ready line names how many exist and never overclaims", () => {
     const rows = [row(0.7, "stated", "right"), row(0.6, "stated", "wrong")];
     const result = calibrate(rows, GATES);
     expect(result.ready).toBe(false);
     if (!result.ready) {
-      expect(result.line).toBe("Calibration appears after 10 resolved decisions (you have 2).");
+      expect(result.line).toBe("You'll see how your confidence compares with what happened after 10 reviewed decisions. You have 2 so far.");
     }
   });
 
-  it("the ready line (direction over or under) carries n, the stated/inferred split, and says 'so far'", () => {
-    // 9 stated (6 right, 3 wrong) + 5 inferred (all wrong), all at 0.7 confidence:
-    // hit rate 6/14 is well below 0.7, so this is clearly overconfident, not in_line.
+  it("the ready line (direction over or under) carries the headline bucket's own n, says 'so far', and names an estimated-from-wording count only when the bucket has inferred rows", () => {
+    // All 14 at 0.7 confidence, 6 right + 3 wrong stated, 5 wrong inferred:
+    // one bucket (70-79), so its n is also the overall n here — the
+    // bucket-vs-overall distinction is exercised by the honesty-fix test below.
     const rows = [
       ...Array.from({ length: 6 }, () => row(0.7, "stated", "right" as const)),
       ...Array.from({ length: 3 }, () => row(0.7, "stated", "wrong" as const)),
@@ -244,15 +245,62 @@ describe("calibrate: wording", () => {
     expect(result.ready).toBe(true);
     if (result.ready) {
       expect(result.direction).not.toBe("in_line");
-      expect(result.line).toContain("n=14");
-      expect(result.line).toContain("9 stated");
-      expect(result.line).toContain("5 inferred");
-      expect(result.line).toContain("so far");
+      expect(result.line).toBe("So far, your 70% calls came true 43% of the time, based on 14 decisions. For 5 of them, the confidence was estimated from your wording.");
       expect(result.line).not.toMatch(/always|never/i);
+      expect(result.line).not.toMatch(/\bn=/);
+      expect(result.line).not.toContain("inferred");
     }
   });
 
-  it("the in_line line never names over or under, and still carries n", () => {
+  it("drops the second sentence when the headline bucket has no inferred rows", () => {
+    const rows = [
+      ...Array.from({ length: 3 }, () => row(0.9, "stated", "right" as const)),
+      ...Array.from({ length: 7 }, () => row(0.9, "stated", "wrong" as const)),
+    ];
+    const result = calibrate(rows, GATES);
+    expect(result.ready).toBe(true);
+    if (result.ready) {
+      expect(result.direction).not.toBe("in_line");
+      expect(result.line).toBe("So far, your 90% calls came true 30% of the time, based on 10 decisions.");
+    }
+  });
+
+  it("[HONESTY FIX] cites the headline bucket's own n, never the total, next to that bucket's rate", () => {
+    // 5 decisions in the 70% bucket (1 right, 4 wrong) plus 9 more spread
+    // across the other buckets — 14 decisions overall. The old code cited
+    // "(n=14)" next to a rate built from only 5 of them.
+    const bucket70 = [
+      row(0.7, "stated", "right" as const),
+      row(0.7, "stated", "wrong" as const),
+      row(0.7, "stated", "wrong" as const),
+      row(0.7, "stated", "wrong" as const),
+      row(0.7, "stated", "wrong" as const),
+    ];
+    const bucket50 = Array.from({ length: 2 }, () => row(0.5, "stated", "right" as const));
+    const bucket60 = Array.from({ length: 2 }, () => row(0.6, "stated", "right" as const));
+    const bucket80 = Array.from({ length: 2 }, () => row(0.85, "stated", "right" as const));
+    const bucket90 = [
+      row(0.95, "stated", "right" as const),
+      row(0.95, "stated", "wrong" as const),
+      row(0.95, "stated", "wrong" as const),
+    ];
+    const rows = [...bucket70, ...bucket50, ...bucket60, ...bucket80, ...bucket90];
+
+    const result = calibrate(rows, GATES);
+    expect(result.ready).toBe(true);
+    if (result.ready) {
+      expect(result.n).toBe(14);
+      expect(result.headlineBucket).toBe("70-79");
+      const headline = result.buckets.find((b) => b.bucket === "70-79")!;
+      expect(headline.n).toBe(5);
+      expect(result.direction).not.toBe("in_line");
+      expect(result.line).toContain("based on 5 decisions");
+      expect(result.line).not.toContain("based on 14 decisions");
+      expect(result.line).not.toContain("14");
+    }
+  });
+
+  it("the in_line line never names over or under, and cites the overall n (there is no single bucket's rate to misattribute)", () => {
     const rows = [
       ...Array.from({ length: 7 }, () => row(0.7, "stated", "right" as const)),
       ...Array.from({ length: 3 }, () => row(0.7, "stated", "wrong" as const)),
@@ -261,12 +309,12 @@ describe("calibrate: wording", () => {
     expect(result.ready).toBe(true);
     if (result.ready) {
       expect(result.direction).toBe("in_line");
-      expect(result.line).toContain("n=10");
+      expect(result.line).toBe("So far, your confidence roughly matches how things turned out, based on 10 decisions.");
       expect(result.line).not.toMatch(/over|under/i);
     }
   });
 
-  it("the topic line carries n and never a bare percentage", () => {
+  it("the topic line names a direction in plain words, carries n, and never a bare percentage", () => {
     const hiring = [
       row(0.9, "stated", "right" as const, ["hiring"]),
       ...Array.from({ length: 5 }, () => row(0.9, "stated", "wrong" as const, ["hiring"])),
@@ -275,7 +323,8 @@ describe("calibrate: wording", () => {
     const result = calibrate([...hiring, ...other], GATES);
     expect(result.ready).toBe(true);
     if (result.ready && result.topic) {
-      expect(result.topicLine).toContain(`n=${result.topic.n}`);
+      expect(result.topic.direction).toBe("over");
+      expect(result.topicLine).toBe("On hiring, your calls have come true less often than you expected so far, based on 6 decisions.");
       expect(result.topicLine).not.toMatch(/%/);
     }
   });

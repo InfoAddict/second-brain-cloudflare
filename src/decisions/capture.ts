@@ -40,7 +40,7 @@ export interface DecisionCaptureConfig {
 export interface ConfidenceResult {
   value: number;
   /** Present only when the stored value differs from what was passed because it was clamped. */
-  reason?: "the ledger's minimum" | "the ledger's maximum";
+  reason?: "the lowest allowed" | "the highest allowed";
 }
 
 export interface DecisionCaptureResult {
@@ -59,18 +59,18 @@ export interface DecisionCaptureResult {
 export function validateDecisionCapture(input: DecisionCaptureInput): { error: string } | null {
   const decisionOnlyFieldGiven = input.confidence !== undefined || input.confidence_source !== undefined || input.review_by !== undefined;
   if (decisionOnlyFieldGiven && !input.decision) {
-    return { error: "confidence and review_by are only for decisions (decision: true)." };
+    return { error: "confidence and review_by only work with decision: true. Nothing was saved." };
   }
   if (!input.decision) return null;
 
   if (input.standing || input.owed_by !== undefined || input.owed_to !== undefined) {
-    return { error: "A decision can't also be a standing instruction or a commitment." };
+    return { error: "A decision can't also be a standing instruction or a commitment. Nothing was saved." };
   }
   if (input.review_by !== undefined && input.when !== undefined) {
-    return { error: "Use review_by for a decision's review date." };
+    return { error: "Pass the review date as review_by or when, not both. Nothing was saved." };
   }
   if (input.when_kind !== undefined && input.when_kind !== "due") {
-    return { error: "A decision's review date is always due." };
+    return { error: 'A decision\'s review date is always a due date. Leave when_kind out, or use "due". Nothing was saved.' };
   }
   return null;
 }
@@ -78,12 +78,12 @@ export function validateDecisionCapture(input: DecisionCaptureInput): { error: s
 /** Clamped to [0.05, 0.95] and rounded to the nearest 0.05. 0 and anything over 1 are errors. */
 export function roundConfidence(raw: number): ConfidenceResult | { error: string } {
   if (!(raw > 0) || raw > 1) {
-    return { error: "confidence must be greater than 0 and at most 1" };
+    return { error: "confidence must be above 0 and at most 1, for example 0.7 for 70%. Nothing was saved." };
   }
   const clamped = Math.min(0.95, Math.max(0.05, raw));
   const value = Math.round(clamped * 20) / 20;
-  if (raw > 0.95) return { value, reason: "the ledger's maximum" };
-  if (raw < 0.05) return { value, reason: "the ledger's minimum" };
+  if (raw > 0.95) return { value, reason: "the highest allowed" };
+  if (raw < 0.05) return { value, reason: "the lowest allowed" };
   return { value };
 }
 
@@ -100,6 +100,16 @@ export function shortDecision(content: string): string {
   return cut.replace(/[\s.,;:!?-]+$/, "");
 }
 
+/**
+ * "Review: {decision}" — an English-prefixed form for callers that render
+ * straight to a person with no i18n layer of their own (push, English only
+ * for now: src/push/send.ts builds this same prefix itself, since it only
+ * has the stored bare label, not the full content). NOT used for the stored
+ * when_label (see buildDecisionCapture below): a stored English prefix would
+ * be exactly what an Italian dashboard renders unchanged, so the row is
+ * marked as a decision review through its ledger:decision tag instead, and
+ * each reader adds its own localized prefix.
+ */
 export function reviewLabel(content: string): string {
   return `Review: ${shortDecision(content)}`;
 }
@@ -171,7 +181,13 @@ export function buildDecisionCapture(
     when_at: review.at,
     when_kind: "due",
     when_source: "explicit",
-    when_label: reviewLabel(content),
+    // Bare short decision, no "Review:" prefix (18-copy-deck.md section 5,
+    // "Italian on the Due sheet"): the ledger:decision tag already marks the
+    // row as a decision review, so every reader adds its own localized
+    // prefix instead of showing this stored English one unchanged. See
+    // reviewLabel's comment above and src/push/send.ts, the one current
+    // reader that needs the English form.
+    when_label: shortDecision(content),
     confidence,
   };
 }

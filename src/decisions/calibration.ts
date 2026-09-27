@@ -31,6 +31,8 @@ export type CalibrationDirection = "over" | "under" | "in_line";
 export interface CalibrationBucket {
   bucket: string;
   n: number;
+  nStated: number;
+  nInferred: number;
   meanStated: number;
   hitRate: number;
   /** Wilson 80% interval on the folded hit rate, with fractional successes. */
@@ -149,10 +151,14 @@ function buildBuckets(scored: readonly ScoredRow[], minBucketN: number): Calibra
   return BUCKET_ORDER.map((bucket) => {
     const items = groups.get(bucket)!;
     const n = items.length;
-    if (n === 0) return { bucket, n, meanStated: 0, hitRate: 0, ci: [0, 1] as [number, number], shown: false };
+    if (n === 0) {
+      return { bucket, n, nStated: 0, nInferred: 0, meanStated: 0, hitRate: 0, ci: [0, 1] as [number, number], shown: false };
+    }
+    const nStated = items.filter((i) => i.source === "stated").length;
+    const nInferred = items.filter((i) => i.source === "inferred").length;
     const meanStated = mean(items.map((i) => i.pPrime));
     const successes = items.reduce((acc, i) => acc + i.hitPrime, 0);
-    return { bucket, n, meanStated, hitRate: successes / n, ci: wilsonInterval(successes, n), shown: n >= minBucketN };
+    return { bucket, n, nStated, nInferred, meanStated, hitRate: successes / n, ci: wilsonInterval(successes, n), shown: n >= minBucketN };
   });
 }
 
@@ -196,17 +202,25 @@ function findTopic(scored: readonly ScoredRow[], minTopicN: number): Calibration
   return candidates[0];
 }
 
-function mainLine(direction: CalibrationDirection, headline: CalibrationBucket, overall: { n: number; nStated: number; nInferred: number }): string {
+/**
+ * The headline sentence cites the HEADLINE BUCKET's own n and inferred
+ * count, never the overall n (18-copy-deck.md section 5.3, honesty bug): a
+ * rate built from 5 decisions in the 70% bucket must not be captioned with a
+ * count of 14 just because 14 decisions exist overall.
+ */
+function mainLine(direction: CalibrationDirection, headline: CalibrationBucket, overallN: number): string {
   if (direction === "in_line") {
-    return `So far your confidence roughly matches how things turned out (n=${overall.n}).`;
+    return `So far, your confidence roughly matches how things turned out, based on ${overallN} decisions.`;
   }
-  return `Your ${pct(headline.meanStated)}% calls came true ${pct(headline.hitRate)}% of the time so far `
-    + `(n=${overall.n}; ${overall.nStated} stated, ${overall.nInferred} inferred).`;
+  const rate = `So far, your ${pct(headline.meanStated)}% calls came true ${pct(headline.hitRate)}% of the time, `
+    + `based on ${headline.n} decisions.`;
+  if (headline.nInferred === 0) return rate;
+  return `${rate} For ${headline.nInferred} of them, the confidence was estimated from your wording.`;
 }
 
 function topicLineOf(topic: CalibrationTopic): string {
-  const tendency = topic.direction === "over" ? "overconfident" : "underconfident";
-  return `On ${topic.name} you have tended to be ${tendency} (n=${topic.n}).`;
+  const phrase = topic.direction === "over" ? "less often than you expected" : "more often than you expected";
+  return `On ${topic.name}, your calls have come true ${phrase} so far, based on ${topic.n} decisions.`;
 }
 
 /** Calibration for one caller's decisions, already read and scoped by the queries module. Pure: no I/O. */
@@ -218,7 +232,7 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
       ready: false,
       n,
       needed: gates.CALIBRATION_MIN_N,
-      line: `Calibration appears after ${gates.CALIBRATION_MIN_N} resolved decisions (you have ${n}).`,
+      line: `You'll see how your confidence compares with what happened after ${gates.CALIBRATION_MIN_N} reviewed decisions. You have ${n} so far.`,
     };
   }
 
@@ -232,7 +246,6 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
   const buckets = buildBuckets(scored, gates.CALIBRATION_MIN_BUCKET_N);
   const headlineBucket = headlineBucketOf(buckets);
   const topic = findTopic(scored, gates.CALIBRATION_MIN_TOPIC_N);
-  const overall = { n, nStated, nInferred };
 
   return {
     ready: true,
@@ -245,7 +258,7 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
     buckets,
     headlineBucket: headlineBucket.bucket,
     topic,
-    line: mainLine(direction, headlineBucket, overall),
+    line: mainLine(direction, headlineBucket, n),
     topicLine: topic ? topicLineOf(topic) : null,
   };
 }

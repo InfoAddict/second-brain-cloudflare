@@ -2,7 +2,7 @@
  * Decision capture rules (src/decisions/capture.ts): validation, confidence
  * rounding, the review date, and the frozen label. Pure — no D1, no writes.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   validateDecisionCapture,
   buildDecisionCapture,
@@ -11,8 +11,10 @@ import {
   reviewLabel,
   computeReviewAt,
   LEDGER_DECISION_TAG,
+  type DecisionCaptureInput,
 } from "../../src/decisions/capture";
 import { zonedTimeMs } from "../../src/when/timezone";
+import { makeTestEnv } from "../helpers/make-env";
 
 const CFG = { reviewDefaultDays: 90, timezone: "UTC" };
 const NOW = Date.UTC(2026, 8, 27); // 2026-09-27
@@ -23,10 +25,10 @@ describe("roundConfidence", () => {
     expect(roundConfidence(0.73)).toEqual({ value: 0.75 });
   });
 
-  it("clamps to [0.05, 0.95] and names why when it moved", () => {
-    expect(roundConfidence(1)).toEqual({ value: 0.95, reason: "the ledger's maximum" });
-    expect(roundConfidence(0.99)).toEqual({ value: 0.95, reason: "the ledger's maximum" });
-    expect(roundConfidence(0.01)).toEqual({ value: 0.05, reason: "the ledger's minimum" });
+  it("clamps to [0.05, 0.95] and names why when it moved, in plain (non-'ledger') words", () => {
+    expect(roundConfidence(1)).toEqual({ value: 0.95, reason: "the highest allowed" });
+    expect(roundConfidence(0.99)).toEqual({ value: 0.95, reason: "the highest allowed" });
+    expect(roundConfidence(0.01)).toEqual({ value: 0.05, reason: "the lowest allowed" });
   });
 
   it("0 and anything over 1 are errors", () => {
@@ -56,7 +58,7 @@ describe("shortDecision", () => {
   });
 });
 
-describe("reviewLabel", () => {
+describe("reviewLabel: 'Review: ' plus the short form", () => {
   it("is 'Review: ' plus the short form", () => {
     expect(reviewLabel("We're going with Postgres.")).toBe("Review: We're going with Postgres");
   });
@@ -95,28 +97,28 @@ describe("computeReviewAt", () => {
 });
 
 describe("validateDecisionCapture", () => {
-  it("refuses confidence, confidence_source or review_by without decision: true", () => {
-    const msg = "confidence and review_by are only for decisions (decision: true).";
+  it("refuses confidence, confidence_source or review_by without decision: true, and says nothing was saved", () => {
+    const msg = "confidence and review_by only work with decision: true. Nothing was saved.";
     expect(validateDecisionCapture({ confidence: 0.7 })?.error).toBe(msg);
     expect(validateDecisionCapture({ confidence_source: "stated" })?.error).toBe(msg);
     expect(validateDecisionCapture({ review_by: "2026-12-01" })?.error).toBe(msg);
   });
 
-  it("refuses decision combined with standing, owed_by or owed_to", () => {
-    const msg = "A decision can't also be a standing instruction or a commitment.";
+  it("refuses decision combined with standing, owed_by or owed_to, and says nothing was saved", () => {
+    const msg = "A decision can't also be a standing instruction or a commitment. Nothing was saved.";
     expect(validateDecisionCapture({ decision: true, standing: true })?.error).toBe(msg);
     expect(validateDecisionCapture({ decision: true, owed_by: "Priya" })?.error).toBe(msg);
     expect(validateDecisionCapture({ decision: true, owed_to: "Sam" })?.error).toBe(msg);
   });
 
-  it("refuses a decision with both review_by and when", () => {
+  it("refuses a decision with both review_by and when, without implying when alone is refused", () => {
     expect(validateDecisionCapture({ decision: true, review_by: "2026-12-01", when: "2026-11-01" })?.error)
-      .toBe("Use review_by for a decision's review date.");
+      .toBe("Pass the review date as review_by or when, not both. Nothing was saved.");
   });
 
   it("refuses a when_kind other than due on a decision", () => {
     expect(validateDecisionCapture({ decision: true, when_kind: "wake" })?.error)
-      .toBe("A decision's review date is always due.");
+      .toBe('A decision\'s review date is always a due date. Leave when_kind out, or use "due". Nothing was saved.');
   });
 
   it("allows a plain decision, and a decision with when_kind due explicitly", () => {
@@ -142,7 +144,12 @@ describe("buildDecisionCapture", () => {
     expect(result.confidence).toEqual({ value: 0.7, source: "inferred" });
     expect(result.when_kind).toBe("due");
     expect(result.when_source).toBe("explicit");
-    expect(result.when_label).toBe("Review: Decided to hire Dana for the design lead role");
+    // Bare short decision, no "Review:" prefix stored (Italian on the Due
+    // sheet, 18-copy-deck.md section 5): the ledger:decision tag marks it as
+    // a review, and each reader (push, later the dashboard) adds its own
+    // localized prefix instead of showing this stored English one unchanged.
+    expect(result.when_label).toBe("Decided to hire Dana for the design lead role");
+    expect(result.when_label).not.toContain("Review");
   });
 
   it("marks the source stated when given", () => {
@@ -168,16 +175,70 @@ describe("buildDecisionCapture", () => {
   it("surfaces the clamp reason in the returned confidence", () => {
     const result = buildDecisionCapture({ decision: true, confidence: 1 }, content, NOW, CFG);
     if ("error" in result) throw new Error(result.error);
-    expect(result.confidence).toEqual({ value: 0.95, source: "inferred", reason: "the ledger's maximum" });
+    expect(result.confidence).toEqual({ value: 0.95, source: "inferred", reason: "the highest allowed" });
   });
 
   it("propagates a validation error and writes nothing", () => {
     const result = buildDecisionCapture({ decision: true, standing: true }, content, NOW, CFG);
-    expect("error" in result && result.error).toBe("A decision can't also be a standing instruction or a commitment.");
+    expect("error" in result && result.error).toBe("A decision can't also be a standing instruction or a commitment. Nothing was saved.");
   });
 
   it("propagates a bad confidence value as an error", () => {
     const result = buildDecisionCapture({ decision: true, confidence: 0 }, content, NOW, CFG);
     expect("error" in result).toBe(true);
+  });
+});
+
+describe("reviewLabel", () => {
+  it("stays the English-prefixed form, used by callers with no i18n of their own (push)", () => {
+    expect(reviewLabel("hiring Dana")).toBe("Review: hiring Dana");
+  });
+
+  it("is idempotent on an already-short label, so a caller can pass either the full content or the stored bare label", () => {
+    const fullContent = "Decided to hire Dana for the design lead role.";
+    const shortLabel = shortDecision(fullContent);
+    expect(reviewLabel(shortLabel)).toBe(reviewLabel(fullContent));
+  });
+});
+
+describe("every validation-error path fails before any D1 write or Vectorize call", () => {
+  const content = "Decided to hire Dana for the design lead role.";
+  const BAD_INPUTS: DecisionCaptureInput[] = [
+    { confidence: 0.7 },
+    { confidence_source: "stated" },
+    { review_by: "2026-12-01" },
+    { decision: true, standing: true },
+    { decision: true, owed_by: "Priya" },
+    { decision: true, owed_to: "Sam" },
+    { decision: true, review_by: "2026-12-01", when: "2026-11-01" },
+    { decision: true, when_kind: "wake" },
+    { decision: true, confidence: 0 },
+    { decision: true, confidence: 1.5 },
+    { decision: true, confidence: -0.2 },
+  ];
+
+  it("every error ends with 'Nothing was saved.' and touches neither env.DB.prepare nor env.VECTORIZE.getByIds", () => {
+    const env = makeTestEnv();
+    const dbSpy = vi.spyOn(env.DB, "prepare");
+    const vectorizeSpy = vi.spyOn(env.VECTORIZE, "getByIds");
+
+    // Mirrors the shape Task 7 wires for real: buildDecisionCapture is the
+    // gate, and only a result with no `error` ever reaches a write.
+    function simulateCaptureAttempt(input: DecisionCaptureInput) {
+      const result = buildDecisionCapture(input, content, NOW, CFG);
+      if ("error" in result) return result;
+      env.DB.prepare("INSERT INTO entries (id, content, tags) VALUES (?, ?, ?)").bind("id", content, JSON.stringify(result.tags));
+      env.VECTORIZE.getByIds(["id"]);
+      return result;
+    }
+
+    for (const input of BAD_INPUTS) {
+      const result = simulateCaptureAttempt(input);
+      expect("error" in result).toBe(true);
+      if ("error" in result) expect(result.error.endsWith("Nothing was saved.")).toBe(true);
+    }
+
+    expect(dbSpy).not.toHaveBeenCalled();
+    expect(vectorizeSpy).not.toHaveBeenCalled();
   });
 });
