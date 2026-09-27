@@ -23,7 +23,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g2",
@@ -43,7 +44,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g3",
@@ -63,7 +65,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g4",
@@ -83,7 +86,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "gx",
@@ -103,7 +107,8 @@
           "via_provenance": "explicit",
           "via_type": "relates_to",
           "linked_at": 1790251200000,
-          "related_to": "g1"
+          "related_to": "g1",
+          "similar": []
         }
       ],
       "insight": "3",
@@ -135,7 +140,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "l2",
@@ -155,7 +161,8 @@
           "via_provenance": "explicit",
           "via_type": "relates_to",
           "linked_at": 1790251200000,
-          "related_to": "l1"
+          "related_to": "l1",
+          "similar": []
         }
       ],
       "insight": "3",
@@ -187,7 +194,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g2",
@@ -207,7 +215,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g3",
@@ -227,7 +236,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g4",
@@ -247,7 +257,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g5",
@@ -267,7 +278,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g6",
@@ -287,7 +299,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g7",
@@ -307,7 +320,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g8",
@@ -327,7 +341,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g9",
@@ -347,7 +362,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "g10",
@@ -367,7 +383,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         }
       ],
       "insight": "3",
@@ -399,7 +416,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "k2",
@@ -419,7 +437,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "k3",
@@ -439,7 +458,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "k4",
@@ -459,7 +479,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         }
       ],
       "insight": "3",
@@ -491,7 +512,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "d2",
@@ -511,7 +533,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "d3",
@@ -531,7 +554,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         }
       ],
       "insight": "3",
@@ -572,7 +596,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "t2",
@@ -592,7 +617,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "t3",
@@ -612,7 +638,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "t4",
@@ -632,7 +659,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         }
       ],
       "insight": "3",
@@ -669,7 +697,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "s2",
@@ -691,7 +720,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         },
         {
           "id": "s3",
@@ -713,7 +743,8 @@
           "via_provenance": null,
           "via_type": null,
           "linked_at": null,
-          "related_to": null
+          "related_to": null,
+          "similar": []
         }
       ],
       "insight": "3",

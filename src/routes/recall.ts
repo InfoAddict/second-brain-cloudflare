@@ -186,6 +186,7 @@ export async function handleRecallRoutes(
           via_type: m.viaType ?? null,
           linked_at: m.viaLinkedAt ?? null,
           related_to: m.viaFrom ?? null,
+          similar: m.similar?.map(s => ({ id: s.id, created_at: s.createdAt })) ?? [],
           ...(explain ? { why: m.why ?? null } : {}),
         };
       }),

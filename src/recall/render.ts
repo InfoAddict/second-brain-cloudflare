@@ -63,14 +63,21 @@ export function renderRecallText(
     const updateLabel = m.isUpdate ? " [updated]" : "";
     const hopLabel = m.hop > 0 ? ` [related · ${hopProvenance(m, contentById)}]` : "";
     const staleLabel = m.staleAsOf ? ` · ${formatAsOfQualifier(m.updatedAt)}` : "";
+    // Recurring notices the collapse absorbed into this one (4.4): named on
+    // the header line, then listed by id so an agent can fetch one directly.
+    const similarLabel = m.similar?.length
+      ? ` · and ${m.similar.length} similar (${m.similar.map(s => shortDate(s.createdAt)).join(", ")})`
+      : "";
+    const similarIdsLine = m.similar?.length ? `similar ids: ${m.similar.map(s => s.id).join(", ")}\n` : "";
 
     const s: Snippet = opts.full
       ? { text: (m.content ?? "").trim(), truncated: false, fullLength: (m.content ?? "").length }
       : snippetOf(m.content, allowanceFor(i, m.score, cfg), { queryTokens: opts.queryTokens });
     const body = s.truncated ? `${s.text}${truncationNote(m.id, s)}` : s.text;
-    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}\nID: ${m.id}\n${body}`;
+    const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}${similarLabel}\nID: ${m.id}\n${body}`;
     // The why line rides outside the budget: asking for an explanation must not change which memories come back.
     const whyLine = m.why ? `why: ${whyText(m, m.why, contentById)}\n` : "";
+    const extraLines = `${whyLine}${similarIdsLine}`;
 
     // Stop once the budget is spent, but always return at least one match.
     if (!opts.full && blocks.length && used + block.length > cfg.RECALL_OUTPUT_BUDGET) {
@@ -79,7 +86,7 @@ export function renderRecallText(
     }
     used += block.length;
     renderedMatches.push(m);
-    blocks.push(whyLine ? block.replace(`\nID: ${m.id}\n`, `\nID: ${m.id}\n${whyLine}`) : block);
+    blocks.push(extraLines ? block.replace(`\nID: ${m.id}\n`, `\nID: ${m.id}\n${extraLines}`) : block);
   }
 
   const compoundStale = opts.compoundStale ?? computeCompoundStale(renderedMatches);

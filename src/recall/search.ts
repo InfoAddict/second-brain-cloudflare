@@ -42,6 +42,7 @@ import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
 import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
+import { CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates } from "./source-trust";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -439,6 +440,10 @@ export async function recallEntries(
   const projectFilter = params.project?.length ? projectFilterSql(params.project) : null;
   const projectTags = projectMemberTags(params.project ?? []);
   const memberFirst = Boolean(tag) || projectFilter !== null;
+  // Off unless NOTICE_COLLAPSE is on, and off for this one call when the query
+  // or tag names its own source (a source word, a mirror-written tag, or an
+  // enumerating query): a deliberate "show all my emails" must not be thinned (4.4).
+  const collapseActive = cfg.NOTICE_COLLAPSE === "on" && !collapseLift(query, tag);
   const hops = Math.max(0, Math.min(cfg.GRAPH_MAX_HOPS, params.hops ?? cfg.DEFAULT_HOPS));
   const now = Date.now();
   let semanticUnavailable = false;
@@ -789,7 +794,7 @@ export async function recallEntries(
   // MMR is greedy, so its first n picks do not depend on how many are asked for. Rounding the depth up to whole
   // blocks (each ordered by score below) keeps every block a topK cuts the same block a larger topK sees, and a
   // default topK 5 call diversifies and hydrates exactly the five it always did.
-  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK);
+  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK + (collapseActive ? CAP_LOOKAHEAD : 0));
   // A topK larger than the diversified list draws the rest from a deeper dense list, after everything above. The
   // fetch happens only then, but what it adds is the same whatever topK is, and it only ever follows the list, so the
   // head of a smaller topK is a prefix of it.
@@ -1164,7 +1169,16 @@ export async function recallEntries(
     region.splice(Math.min(GRAPH_SLOT_INDICES[1] - window.length, region.length), 0, secondRelated);
   }
   const listed = new Set([...window, ...region, ...later].map(match => match.id));
-  const matches = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))].slice(0, topK);
+  const preCollapse = [...window, ...region, ...later, ...fillMatches.filter(match => !listed.has(match.id))];
+  // Collapse runs before the final cut so duplicates do not use up a result
+  // slot; the lookahead above is what leaves later candidates to fill the
+  // freed position (4.4, 4.5).
+  const { kept: uncollapsed, similarById } = collapseActive ? collapseNearDuplicates(preCollapse) : { kept: preCollapse, similarById: new Map<string, { id: string; createdAt: number }[]>() };
+  for (const m of uncollapsed) {
+    const similar = similarById.get(m.id);
+    if (similar) m.similar = similar;
+  }
+  const matches = uncollapsed.slice(0, topK);
   if (explain) {
     // Only what the stages above already computed: nothing is queried or scored here.
     const multipliers = new Map<string, { multipliers: RankMultipliers; ageKnown: boolean }>();
