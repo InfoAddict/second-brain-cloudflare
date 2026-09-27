@@ -67,7 +67,7 @@ async function member(name: string, role: "admin" | "member" = "member"): Promis
 function raceUnshare(id: string, moveTo: string): Env {
   const raw = env.DB as any;
   let moved = false;
-  const READ = /^SELECT id, workspace_id, actor_id(?:, [\w, ]+)? FROM entries WHERE id = \? AND/;
+  const READ = /^SELECT id, workspace_id, actor_id(?:, [^]+?)? FROM entries WHERE id = \? AND/;
   return {
     ...env,
     DB: {

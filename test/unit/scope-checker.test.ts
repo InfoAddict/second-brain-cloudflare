@@ -1297,6 +1297,15 @@ describe("the checker over the real source tree", () => {
     // non-deprecated branch (previously a bare `WHERE id = ?`) now reads under the same guard —
     // both carry a literal, unconditional `AND workspace_id = ?` the checker recognizes on its
     // own, so the exemption they used to need is gone.
+    // Round 3 (T-0089.1.3, U10/U13 simplification, Builder D's undo.ts): the round-2
+    // findLiveIncomingRecreation liveness read is gone (a merge's incoming is now re-created at
+    // most once by checking meta already in hand, no DB read); D's branch also folded the
+    // merge-recreation INSERT (previously counted separately on this branch, ADV-4 residual) into
+    // the revert's own guarded batch, so no exemption is spent on it here either.
+    // MOVED (T-0089.1.3, merge of 694ec670): recomputed against the real --inventory output after
+    // combining Builder D's undo.ts rewrite with this branch's own R2-3/R2-2 changes, rather than
+    // trying to hand-reconcile two independently-tracked running totals. Lands back at 164/81 —
+    // both branches' changes to undo.ts net out even though neither total moved on its own.
     ).toEqual({ queries: 164, exempt: 81, checked: 12, outerJoin: 1 });
   });
 
