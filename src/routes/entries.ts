@@ -5,7 +5,7 @@ import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
-import { readEntryTimeline } from "../memory/history";
+import { readEntryTimeline, seesPrivateHistory } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
@@ -223,7 +223,7 @@ export async function handleEntriesRoutes(
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { timeline, labelMap } = await readEntryTimeline(env, id, auth.userId, String(row.actor_id ?? ""));
+    const { timeline, labelMap } = await readEntryTimeline(env, id, auth.userId, String(row.actor_id ?? ""), undefined, false, !seesPrivateHistory(auth, row));
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,
