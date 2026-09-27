@@ -765,6 +765,36 @@ describe("capture spool: never lose a failed upload silently", () => {
     expect(core.readCaptureSpool("codex", dir).map((e: any) => e.body.content)).toEqual(["queued mid-flush"]);
   });
 
+  it("a file claimed by another live flush is skipped, and an abandoned claim is recovered after the timeout", async () => {
+    const dir = tmp();
+    core.spoolCapture("codex", { content: "claimed elsewhere" }, dir);
+    const [entry] = core.readCaptureSpool("codex", dir);
+    const fresh = `${entry.file}.inflight-99999-${Date.now()}-abcd`;
+    require("node:fs").renameSync(entry.file, fresh);
+    let calls = 0;
+    await withStub(() => { calls++; return { status: 200, body: { ok: true } }; },
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir }));
+    expect(calls).toBe(0);
+    expect(require("node:fs").existsSync(fresh)).toBe(true);
+
+    const stale = `${entry.file}.inflight-99999-${Date.now() - core.CLAIM_STALE_MS - 1000}-abcd`;
+    require("node:fs").renameSync(fresh, stale);
+    await withStub(() => { calls++; return { status: 200, body: { ok: true } }; },
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir }));
+    expect(calls).toBe(1);
+    expect(readdirSync(core.spoolDir("codex", dir))).toEqual([]);
+  });
+
+  it("a failed upload puts the claimed file back under its spool name", async () => {
+    const dir = tmp();
+    core.spoolCapture("codex", { content: "retry me" }, dir);
+    await withStub(() => ({ status: 503, body: { ok: false } }),
+      () => core.flushCaptureSpool({ env, namespace: "codex", cacheDir: dir }));
+    const names = readdirSync(core.spoolDir("codex", dir));
+    expect(names).toHaveLength(1);
+    expect(names[0]).toMatch(/\.json$/);
+  });
+
   it("a still-spent daily cap during the retry keeps the entry queued, does not drop it", async () => {
     const dir = tmp();
     core.spoolCapture("codex", { content: "queued capture" }, dir);

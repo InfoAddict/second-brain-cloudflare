@@ -80,7 +80,12 @@ describe('spool, session identity, and transcript validation', () => {
     let calls = 0;
     vi.stubGlobal('fetch', vi.fn(async () => {
       calls++;
-      if (calls === 2) persistedAtSecondRequest = core.readCaptureSpool('cursor', scratch).map((entry: any) => entry.body.content);
+      // Every file on disk, including the one claimed (.inflight) for this upload.
+      if (calls === 2) {
+        const dir = core.spoolDir('cursor', scratch);
+        persistedAtSecondRequest = require('node:fs').readdirSync(dir)
+          .map((n: string) => JSON.parse(require('node:fs').readFileSync(join(dir, n), 'utf8')).body.content);
+      }
       return new Response('{}', { status: 200 });
     }));
     await core.flushCaptureSpool({ env: creds, namespace: 'cursor', cacheDir: scratch });

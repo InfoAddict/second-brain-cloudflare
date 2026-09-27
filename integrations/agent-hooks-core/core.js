@@ -795,6 +795,24 @@ function logLostCapture() {
   process.exitCode = 1;
 }
 
+// A claimed spool file is `<name>.json.inflight-<pid>-<claimedAtMs>-<rand>`.
+const CLAIM_MARK = '.inflight-';
+// A claim older than this belongs to a process that died mid-upload.
+const CLAIM_STALE_MS = 5 * 60 * 1000;
+
+/** Renames abandoned claims back to their spool names so a later flush retries them. */
+function recoverStaleClaims(target, now = Date.now()) {
+  let names;
+  try { names = fs.readdirSync(target); } catch { return; }
+  for (const n of names) {
+    const at = n.indexOf(CLAIM_MARK);
+    if (at < 0) continue;
+    const claimedAt = Number(n.slice(at + CLAIM_MARK.length).split('-')[1]);
+    if (!Number.isFinite(claimedAt) || now - claimedAt < CLAIM_STALE_MS) continue;
+    try { fs.renameSync(path.join(target, n), path.join(target, n.slice(0, at))); } catch { /* raced */ }
+  }
+}
+
 /**
  * Retries kept captures, oldest first. Callers run this AFTER recall and
  * output, inside whatever is left of their own deadline, so it never delays
@@ -809,14 +827,23 @@ async function flushCaptureSpool({
   deadline, budgetMs = CAPTURE_SPOOL_FLUSH_BUDGET_MS, max = CAPTURE_SPOOL_MAX_PER_FLUSH,
 } = {}) {
   const end = deadline ?? Date.now() + budgetMs;
+  const target = spoolDir(namespace, cacheDir);
+  if (target) recoverStaleClaims(target);
   const entries = readCaptureSpool(namespace, cacheDir);
   if (!entries.length) return { flushed: 0, remaining: 0 };
   const creds = loadCredentials(env, configPath);
   if (!creds) return { flushed: 0, remaining: entries.length };
   let flushed = 0;
-  for (const entry of entries.slice(0, max)) {
+  let sent = 0;
+  for (const entry of entries) {
+    if (sent >= max) break;
     const timeLeft = end - Date.now();
     if (timeLeft <= 0) break;
+    // Claim by atomic rename: only the process that wins it uploads this file.
+    const claimed = `${entry.file}${CLAIM_MARK}${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    try { fs.renameSync(entry.file, claimed); } catch { continue; }
+    const release = () => { try { fs.renameSync(claimed, entry.file); } catch { /* gone */ } };
+    sent++;
     let res;
     try {
       res = await fetchWithTimeout(`${creds.baseUrl}/capture`, {
@@ -824,15 +851,17 @@ async function flushCaptureSpool({
         headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(entry.body),
       }, timeLeft);
-    } catch { break; }
+    } catch { release(); break; }
     if (res.ok) {
-      try { fs.unlinkSync(entry.file); } catch { /* already gone */ }
+      try { fs.unlinkSync(claimed); } catch { /* already gone */ }
       flushed++;
       continue;
     }
     if (CAPTURE_PERMANENT_STATUSES.has(res.status)) {
-      try { fs.unlinkSync(entry.file); } catch { /* already gone */ }
+      try { fs.unlinkSync(claimed); } catch { /* already gone */ }
       process.stderr.write(`Second Brain: a kept capture was refused (HTTP ${res.status}) and removed.\n`);
+    } else {
+      release();
     }
     break;
   }
@@ -989,7 +1018,7 @@ module.exports = {
   redactSecrets, stripInjectedContext, buildSessionCaptureBody, shouldCaptureSession, performCapture,
   recordLastCaptureTime, lastCaptureTime, captureEnabled,
   contentDigest, claimCapture,
-  readCaptureSpool, spoolCapture, spoolDir, flushCaptureSpool, logSpooledCapture, logLostCapture, resolveTranscriptPath,
+  readCaptureSpool, spoolCapture, spoolDir, flushCaptureSpool, recoverStaleClaims, CLAIM_STALE_MS, logSpooledCapture, logLostCapture, resolveTranscriptPath,
   CAPTURE_MAX_CONTENT_CHARS, CAPTURE_WANT_USER_TURNS, CAPTURE_TIMEOUT_MS,
   CAPTURE_SPOOL_MAX_ENTRIES, CAPTURE_SPOOL_MAX_BYTES, CAPTURE_SPOOL_FLUSH_BUDGET_MS, CAPTURE_SPOOL_MAX_PER_FLUSH,
 };
