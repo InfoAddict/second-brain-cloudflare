@@ -3,6 +3,8 @@ import { initializeDatabase } from "../db/init";
 import type { Identity } from "../lib/identity";
 import { readTeamParam, scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { STATUS_PREFIX } from "../memory/status";
+// NOT_HELD_SQL's instr() twin: this query carries no LIKE pattern (see the 64-character project id test).
+import { QUARANTINE_TAG_PREFIX } from "../quarantine/tags";
 import { readCachedPromptCapsule, writeCachedPromptCapsule } from "./cache";
 import { sha256Hex, strongEtag } from "./etag";
 import { selectPromptCapsuleEntries } from "./select";
@@ -213,6 +215,7 @@ async function buildPromptCapsuleFromD1(
         AND instr(lower(tags), '"capsule:') > 0
         AND instr(lower(tags), ?) > 0
         AND instr(lower(tags), ?) > 0
+        AND instr(lower(tags), '"${QUARANTINE_TAG_PREFIX}') = 0
       ORDER BY id ASC
       LIMIT ?`,
   ).bind(
