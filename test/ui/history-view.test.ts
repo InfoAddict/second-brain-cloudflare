@@ -208,6 +208,38 @@ const CHANGE_SYNCED = {
 };
 
 describe("renderHistory — change and event rows", () => {
+  // UI review: a merge-and-sort bug reached a real screenshot before this
+  // test existed. The history is one timeline, change and event rows
+  // interleaved by time, not a change list with events appended after it
+  // regardless of when they happened — a caller (a hand-built fixture today,
+  // conceivably an edge case the server contract does not anticipate later)
+  // that hands over items out of order must still render correctly.
+  it("sorts change and event rows into one timeline by timestamp, newest first", () => {
+    const ctx = load();
+    const middleAgedEvent = { ...EVENT_SHARED, at: 1789500000000 }; // between CHANGE_OLDER (1789000000000) and CHANGE_NEWEST (1790000000000)
+    const { tl } = renderAndWire(ctx, {
+      id: "e1",
+      // Deliberately out of chronological order: newest change last, the
+      // event (which belongs in the middle) placed after everything.
+      history: { items: [CHANGE_OLDER, CHANGE_NEWEST, middleAgedEvent] },
+    });
+    const html = tl.innerHTML as string;
+    const editedAt = html.indexOf("Edited");
+    const sharedAt = html.indexOf("Shared with the team");
+    const addedAt = html.indexOf("Text added");
+    expect(editedAt).toBeGreaterThanOrEqual(0);
+    expect(sharedAt).toBeGreaterThan(editedAt);
+    expect(addedAt).toBeGreaterThan(sharedAt);
+  });
+
+  it("breaks a timestamp tie by keeping the given order (stable sort)", () => {
+    const ctx = load();
+    const tiedEvent = { ...EVENT_SHARED, at: CHANGE_NEWEST.at };
+    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, tiedEvent] } });
+    const html = tl.innerHTML as string;
+    expect(html.indexOf("Edited")).toBeLessThan(html.indexOf("Shared with the team"));
+  });
+
   it("renders change rows newest first with reason, who and before preview", () => {
     const ctx = load();
     const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER, EVENT_SHARED] } });

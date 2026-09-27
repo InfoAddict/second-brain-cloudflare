@@ -1,5 +1,8 @@
 /* SH-1: the history timeline, and SH-3's status control (same lane, same
-   sheet). Rows read on a hairline, like .related-item — a list, not cards. */
+   sheet). UI review found a hairline-divided list hard to read on mobile:
+   nothing said which entry a trailing action button belonged to. Each entry
+   is now its own card (see .history-item below), so the card edge itself
+   answers that. */
 
 /* A quiet aside, not a claim: a session capture reads differently from
    something the user typed, but it should not compete with the memory text
@@ -115,16 +118,30 @@
   list-style: none;
   margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
+/* UI review: enclosure, not a divider, is what makes "whose button is this"
+   unambiguous on mobile. Radius matches the sheet's own card language
+   (.view-brain's --r-card) rather than introducing a new one. */
 .history-item {
-  padding: 12px 0;
-  border-top: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 12px;
 }
 
-.history-item:first-child {
-  border-top: none;
-  padding-top: 0;
+.history-item--change {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-card);
+}
+
+/* Event-only entries (shared, moved) are cards too, for the same rhythm, but
+   untinted with only a hairline edge — lighter on purpose, so change entries
+   (the ones with something to undo) stand out against them. */
+.history-item--event {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
 }
 
 .history-meta {
@@ -133,9 +150,12 @@
   color: var(--text-secondary);
 }
 
+/* Sits inside a card already tinted --surface-muted, so the quote reuses the
+   sheet's plain card color instead to still read as a distinct well rather
+   than disappearing into the card around it. */
 .history-before {
   margin-top: 8px;
-  background: var(--surface-muted);
+  background: var(--bg-card);
   border-radius: var(--r-input);
   padding: 8px 10px;
 }

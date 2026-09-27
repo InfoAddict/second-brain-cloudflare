@@ -90,20 +90,20 @@ function renderHistoryChangeRow(item, index, items, entry) {
   } else if (item.can_restore) {
     actions.push(`<button type="button" class="history-action" data-action="restore-version">${escHtml(t('history.restoreVersion'))}</button>`)
   }
-  // Actions before the quote: Undo is the one control on this sheet a UI
-  // review found clipped under the footer at 390px, because the taller quote
-  // block used to sit between it and the meta line. The primary action now
-  // needs only one line of scroll to reach, and the reference text (secondary
-  // to the button that acts on it) follows.
+  // UI review: each entry is now its own card (history.css), so the card
+  // edge is what says whose button this is, not the button's position
+  // relative to the row above it. The action moves back to the bottom, after
+  // the quote, which is where it reads best: meta first, then the reference
+  // text it acts on, then the action itself.
   return (
-    `<li class="history-item" data-seq="${escHtml(String(item.seq))}">` +
+    `<li class="history-item history-item--change" data-seq="${escHtml(String(item.seq))}">` +
     `<div class="history-meta">${escHtml(meta)}</div>` +
-    (actions.length ? `<div class="history-item-actions">${actions.join('')}</div>` : '') +
     `<div class="history-before">` +
     `<div class="history-before-label">${escHtml(t('history.before'))}</div>` +
     `<p class="history-before-text" data-preview="${escAttr(item.before_preview || '')}">${escHtml(item.before_preview || '')}</p>` +
     `<button type="button" class="history-link-btn" data-action="show-before">${escHtml(t('history.showAll'))}</button>` +
     `</div>` +
+    (actions.length ? `<div class="history-item-actions">${actions.join('')}</div>` : '') +
     `</li>`
   )
 }
@@ -116,7 +116,7 @@ function renderHistoryEventRow(item) {
   const meta = [typeof timelineEventLabel === 'function' ? timelineEventLabel(item.event) : item.event || '', historyDate(item.at), who]
     .filter(Boolean)
     .join(' · ')
-  return `<li class="history-item" data-event="${escAttr(item.event || '')}"><div class="history-meta">${escHtml(meta)}</div></li>`
+  return `<li class="history-item history-item--event" data-event="${escAttr(item.event || '')}"><div class="history-meta">${escHtml(meta)}</div></li>`
 }
 
 function renderHistoryFooters(footer) {
@@ -220,10 +220,23 @@ function wireHistoryRow(li, item, entry) {
  * sheet, not something History alone should carry, and duplicating it in
  * two sections read as two different explanations for the same thing.
  */
+/**
+ * UI review: change rows and event rows are one timeline, not a change list
+ * with events trailing after it. Contract 4.1 has the Worker deliver them
+ * newest-first already merged, but sorting defensively here means a caller
+ * that hands over an unsorted or partially-merged array (a hand-built
+ * fixture, or a future edge case the contract does not anticipate) still
+ * renders correctly rather than silently reading as broken. Array.sort is
+ * stable since ES2019, so equal timestamps keep the order they arrived in.
+ */
+function sortedHistoryItems(items) {
+  return [...items].sort((a, b) => (b.at || 0) - (a.at || 0))
+}
+
 function renderHistory(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
-  const items = entry.history?.items || []
+  const items = sortedHistoryItems(entry.history?.items || [])
   const footer = entry.history?.footer
   if (!items.length) {
     el.style.display = 'none'
