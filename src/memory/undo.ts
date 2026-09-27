@@ -8,6 +8,7 @@ import { getStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
 import { deleteVectorIds } from "../vectorize/batch";
 import { reembedOrDegrade, restoreRowVectors } from "../capture/store";
+import { forgetEntry } from "../capture/lifecycle";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { Config } from "../config";
 import { getTrashedEntry, restoreEntry } from "./trash";
@@ -92,6 +93,17 @@ export async function revertEntry(
 
   const targetState = JSON.parse(target.state || "{}") as WhenChange;
   const targetMeta = JSON.parse(target.meta || "{}") as Record<string, unknown>;
+  // Rolling back to (or past) a merge/replace pulls its absorbed text out of the live row, wherever
+  // that target sits in the chain — not only when it is the newest change (U4): a to_version rollback
+  // past a merge must re-create the incoming row exactly as a plain undo of that merge would. The id
+  // is minted now, before the batch, so it can ride in this revert's own version meta.
+  const recreatesIncoming = (target.reason === "merge" || target.reason === "replace") && ("incoming" in targetMeta || targetMeta.incomingTruncated === true);
+  const recreatedIncomingId = recreatesIncoming && targetMeta.incomingTruncated !== true ? crypto.randomUUID() : undefined;
+  // Undoing a revert that itself re-created an incoming row (a redo) must remove that row again, so
+  // the fact does not end up live in two places (U4). Removed through the trash, not a hard delete,
+  // so the removal is itself reversible.
+  const removesRecreatedIncomingId = target.reason === "revert" && typeof targetMeta.recreated_incoming_id === "string"
+    ? targetMeta.recreated_incoming_id as string : undefined;
   // A due version, or an append that carried a when, restores when_* alongside content; so does a
   // full rollback to an older state (toVersion), which returns everything to that point in time.
   const restoreWhen = toVersion !== undefined || target.reason === "due" || targetMeta.when === true;
@@ -147,7 +159,13 @@ export async function revertEntry(
       nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
       // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
       // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
-      meta: { nonce, target_seq: target.seq, reverted_reason: target.reason, ...(restoreWhen ? { when: true } : {}) }, now,
+      // recreated_incoming_id rides along the same way, so a redo of this revert (undoing it) knows
+      // which row to remove again (U4).
+      meta: {
+        nonce, target_seq: target.seq, reverted_reason: target.reason,
+        ...(restoreWhen ? { when: true } : {}),
+        ...(recreatedIncomingId ? { recreated_incoming_id: recreatedIncomingId } : {}),
+      }, now,
     }),
     // versioning: snapshot
     env.DB.prepare(updateSql).bind(...p.values()),
@@ -176,15 +194,16 @@ export async function revertEntry(
   const result: UndoResult = { status: "reverted", targetSeq: target.seq };
 
   // Undo of a merge or replace re-creates the incoming memory it absorbed, as its own row — never
-  // through captureEntry, which could merge it right back in.
-  if (target.seq === newest.seq && (target.reason === "merge" || target.reason === "replace") && ("incoming" in targetMeta || targetMeta.incomingTruncated)) {
+  // through captureEntry, which could merge it right back in. Fires for a to_version rollback past
+  // the merge too, not only when the merge is the newest change (U4).
+  if (recreatesIncoming) {
     if (targetMeta.incomingTruncated) {
       (result as { incomingTruncated?: true }).incomingTruncated = true;
     } else {
       const incoming = String(targetMeta.incoming ?? "");
       const incomingTags: string[] = Array.isArray(targetMeta.incomingTags) ? targetMeta.incomingTags as string[] : [];
       const incomingSource = String(targetMeta.incomingSource ?? row.source);
-      const newId = crypto.randomUUID();
+      const newId = recreatedIncomingId!;
       const insertedAt = Date.now();
       try {
         // versioning: exempt: creation — a re-created row has no prior state to keep
@@ -201,6 +220,16 @@ export async function revertEntry(
       } catch (e) {
         console.error("Undo-merge recreation failed (non-fatal):", e);
       }
+    }
+  }
+
+  // A redo (undoing a revert that had re-created an incoming row) removes that row again, through
+  // the trash so the removal is itself reversible, rather than leaving the fact live in two places.
+  if (removesRecreatedIncomingId) {
+    try {
+      await forgetEntry(removesRecreatedIncomingId, env, change, { reason: "forget", config, purge: false });
+    } catch (e) {
+      console.error("Undo-merge redo cleanup failed (non-fatal):", e);
     }
   }
 
