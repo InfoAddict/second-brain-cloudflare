@@ -201,7 +201,7 @@ describe("versioning: insight resolution (A2)", () => {
     await applyInsightResolution(env, ctx, { actorId: bobIdentity.userId, channel: "rest" }, [foundRow], 1, "dismiss");
     const entryRow = { workspace_id: roots.companyWorkspaceId, actor_id: "" };
     let chain = await loadHistory(env, bobIdentity, { id: "ci1", content: String(row("ci1").content) }, 10);
-    expect(canRevert(bobIdentity, entryRow, chain.rows[0], chain.rows[0].seq)).toEqual({ ok: true });
+    expect(canRevert(bobIdentity, entryRow, chain.rows[0], chain.rows[0].seq, chain.rows.map(r => r.seq))).toEqual({ ok: true });
 
     const carolIdentity = (await resolveIdentityFromToken((await createMember(env, { name: "Carol" })).token, env))!;
     await sqlite.db.prepare(`UPDATE entries SET tags = '["kind:semantic","status:canonical"]' WHERE id = 'ci1'`).run();
@@ -210,7 +210,7 @@ describe("versioning: insight resolution (A2)", () => {
     await applyInsightResolution(env, ctx, { actorId: carolIdentity.userId, channel: "rest" }, [carolFound], 1, "confirm");
     chain = await loadHistory(env, bobIdentity, { id: "ci1", content: String(row("ci1").content) }, 10);
     const bobsVersion = chain.rows.find(v => v.actor_id === bobIdentity.userId)!;
-    expect(canRevert(bobIdentity, entryRow, bobsVersion, chain.rows[0].seq)).toEqual({ ok: false, code: "stale" });
+    expect(canRevert(bobIdentity, entryRow, bobsVersion, chain.rows[0].seq, chain.rows.map(r => r.seq))).toEqual({ ok: false, code: "stale" });
   });
 });
 

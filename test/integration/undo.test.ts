@@ -239,7 +239,7 @@ describe("undo mechanics", () => {
     await seed("ci1", { tags: ["auto-insight"], workspaceId: roots.companyWorkspaceId, actorId: "" });
     await applyInsightResolution(env, ctx, change(bob), [{ id: "ci1", tags: String(row("ci1").tags), vector_ids: String(row("ci1").vector_ids) }], 1, "dismiss");
     const chainBefore = await loadHistory(env, bob, { id: "ci1", content: String(row("ci1").content) }, 10);
-    expect(canRevert(bob, { workspace_id: roots.companyWorkspaceId, actor_id: "" }, chainBefore.rows[0], chainBefore.rows[0].seq)).toEqual({ ok: true });
+    expect(canRevert(bob, { workspace_id: roots.companyWorkspaceId, actor_id: "" }, chainBefore.rows[0], chainBefore.rows[0].seq, chainBefore.rows.map(r => r.seq))).toEqual({ ok: true });
     // Carol makes a further change after Bob's dismissal (dismiss already deprecated the row, so a
     // second dismiss is a no-op — this is a distinct status change, e.g. an admin correction).
     const bobSeq = chainBefore.rows[0].seq;

@@ -367,17 +367,27 @@ export async function loadHistory(
 export type RevertVerdict = { ok: true } | { ok: false; code: "forbidden" | "stale" | "unreadable" };
 
 /**
- * May `reader` revert the change version `target` recorded? The author or an admin may (the normal
- * content-edit rule); otherwise the actor of the NEWEST version may revert exactly that one. The
- * caller still guards the write with the newest seq (M4), since this is checked on a read.
+ * May `reader` revert the change version `target` recorded? Rule (1) is "R can read E and V is
+ * visible to R (V is in loadHistory(R, E))" — checking only `target`'s own workspace is not enough
+ * (ADV-6): a company-era version below a personal-era edit is unreadable to a non-author even though
+ * its OWN workspace is one they could otherwise read, because `loadHistory`'s walk stops at the
+ * intervening unreadable row and never reaches it. `visibleSeqs` is the seq set `loadHistory` (or
+ * `revertEntry`'s own chain) actually returned, so this cannot be satisfied by a target the caller
+ * never confirmed was in that walk.
+ *
+ * The author or an admin may revert any visible version (the normal content-edit rule); otherwise
+ * the actor of the NEWEST version may revert exactly that one. The caller still guards the write
+ * with the newest seq (M4), since this is checked on a read.
  */
 export function canRevert(
   reader: Identity | undefined,
   entry: { workspace_id: string; actor_id: string },
   target: Pick<VersionRow, "seq" | "workspace_id" | "actor_id">,
   newestSeq: number,
+  visibleSeqs: Iterable<number>,
   opts: { ownerUserId?: string } = {},
 ): RevertVerdict {
+  if (!new Set(visibleSeqs).has(target.seq)) return { ok: false, code: "unreadable" };
   if (!workspaceReadable(reader, target.workspace_id, opts.ownerUserId)) return { ok: false, code: "unreadable" };
   if (!assertCanEditContent(reader, entry)) return { ok: true };
   if (!reader || target.actor_id === "" || target.actor_id !== reader.userId) return { ok: false, code: "forbidden" };

@@ -70,7 +70,7 @@ export async function revertEntry(
   if (!target) return { status: "unreadable" };
 
   const ownerUserId = target.workspace_id === "" ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
-  const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, target, newest.seq, { ownerUserId });
+  const verdict = canRevert(identity, { workspace_id: row.workspace_id, actor_id: row.actor_id }, target, newest.seq, chain.rows.map(r => r.seq), { ownerUserId });
   if (!verdict.ok) return { status: verdict.code };
 
   const isPerson = change.channel === "rest" || change.channel === "mcp";
