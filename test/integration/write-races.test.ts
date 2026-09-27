@@ -221,6 +221,22 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(described.some(t => t.includes("SECRET-PLAN"))).toBe(false);
   });
 
+  it("ADV-7: a forget during a long append's embed leaves no vector of the forgotten text behind", async () => {
+    await seed("g1", "PRIVATE MEDICAL NOTE ".repeat(80));
+    const raw = env.DB as any;
+    let forgot = false;
+    // The user forgets the memory while the append is embedding: its DELETE lands inside the append's
+    // own batch, right before the guarded UPDATE, so the CAS misses because the row is gone.
+    const racing = { ...env, DB: { ...raw, prepare(sql: string) {
+      if (!forgot && sql.startsWith("INSERT INTO entry_versions")) { forgot = true; raw.prepare(`DELETE FROM entries WHERE id = 'g1'`).run(); }
+      return raw.prepare(sql);
+    } } } as unknown as Env;
+    await expect(appendToEntry(racing, "g1", "", "more", [], "api", DEFAULTS, undefined,
+      { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" })).rejects.toThrow();
+    expect(await live("g1")).toBeNull();
+    expect([...store.values()].filter(v => v.metadata?.parentId === "g1")).toEqual([]);
+  });
+
   it("a lost attempt writes no version", async () => {
     await seed("e1", "base", []);
     let n = 0;
