@@ -13,6 +13,8 @@ import type { DecisionOutcome, DecisionOutcomeRow } from "./calibration";
 // db/schema.sql / src/db/init.ts), so the read stays index-eligible once that
 // index lands.
 const LEDGER_INDEXED = `instr(lower(tags), '"${LEDGER_DECISION_TAG}"') > 0`;
+const OUTCOME_TAG_PREFIX = "outcome:";
+const OUTCOME_VALUES: ReadonlySet<string> = new Set<DecisionOutcome>(["right", "wrong", "mixed", "unknown"]);
 
 export interface SqlWithBindings {
   sql: string;
@@ -31,19 +33,40 @@ export function decisionsActionable(auth: Identity): ScopeClause {
 }
 
 /**
- * Every resolved (outcome:*) decision the caller can score, most recent
- * first, capped at 500 rows — reads only idx_entries_ledger rows (C14).
+ * Collapses a "<col> IN (?, ?, ...)" scope clause into one json_each
+ * binding. A member of many company teams (scopeWhere returns one binding
+ * per readable workspace) combined with decisionsActionable's own two
+ * bindings can otherwise exceed D1's 100 bound-parameter limit per
+ * statement — 99 teams is already 99 + 1 (personal) + 2 (actionable) = 102.
+ * Any other clause shape (a single teamId "= ?" scope, already one binding)
+ * passes through unchanged.
  */
-export function calibrationQuery(scope: ScopeClause, actionable: ScopeClause): SqlWithBindings {
-  const sql = `SELECT tags FROM entries
-    WHERE ${LEDGER_INDEXED} AND tags LIKE '%"outcome:%'
-      AND tags NOT LIKE '%"status:deprecated"%' AND ${scope.clause} AND ${actionable.clause}
-    ORDER BY created_at DESC LIMIT 500`;
-  return { sql, bindings: [...scope.bindings, ...actionable.bindings] };
+function boundedScope(scope: ScopeClause): ScopeClause {
+  const match = scope.clause.match(/^(\w+) IN \(\?(?:,\s*\?)*\)$/);
+  if (!match || scope.bindings.length <= 1) return scope;
+  return { clause: `${match[1]} IN (SELECT value FROM json_each(?))`, bindings: [JSON.stringify(scope.bindings)] };
 }
 
-const OUTCOME_TAG_PREFIX = "outcome:";
-const OUTCOME_VALUES: ReadonlySet<string> = new Set<DecisionOutcome>(["right", "wrong", "mixed", "unknown"]);
+/**
+ * Every resolved (outcome:*) decision the caller can score, capped at 500
+ * rows — reads only idx_entries_ledger rows (C14). Genuinely scored rows
+ * (right/wrong/mixed) sort before outcome:unknown ones regardless of age, so
+ * unknown rows — which can arrive in bulk and skew much younger — never
+ * crowd older scored decisions out of the cap; within each group, newest
+ * first.
+ */
+export function calibrationQuery(scope: ScopeClause, actionable: ScopeClause): SqlWithBindings {
+  // scope-checked: bounded rewrites scope's IN-list into a json_each form when it has more than one
+  // binding; both shapes still scope by workspace_id, only the placeholder count changes.
+  const bounded = boundedScope(scope);
+  const sql = `SELECT tags FROM entries
+    WHERE ${LEDGER_INDEXED} AND tags LIKE '%"outcome:%'
+      AND tags NOT LIKE '%"status:deprecated"%'
+      AND ${bounded.clause} AND ${actionable.clause}
+    ORDER BY (tags LIKE '%"${OUTCOME_TAG_PREFIX}unknown"%') ASC, created_at DESC
+    LIMIT 500`;
+  return { sql, bindings: [...bounded.bindings, ...actionable.bindings] };
+}
 
 function parseTags(tagsJson: string): string[] {
   try {

@@ -64,7 +64,8 @@ export interface CalibrationReady {
   gap: number;
   direction: CalibrationDirection;
   buckets: CalibrationBucket[];
-  headlineBucket: string;
+  /** Null when no bucket clears CALIBRATION_MIN_BUCKET_N: there is nothing to headline yet. */
+  headlineBucket: string | null;
   topic: CalibrationTopic | null;
   /** The read, as a sentence (design 4.3 / 7.4 item 2): never both this and topicLine describe the same fact. */
   line: string;
@@ -162,8 +163,18 @@ function buildBuckets(scored: readonly ScoredRow[], minBucketN: number): Calibra
   });
 }
 
-function headlineBucketOf(buckets: readonly CalibrationBucket[]): CalibrationBucket {
-  return buckets.reduce((best, b) => (b.n > best.n ? b : best), buckets[0]);
+/**
+ * The largest bucket that clears CALIBRATION_MIN_BUCKET_N, or null when none
+ * does — a rate must never be headlined from a bucket the disclosure gate
+ * would otherwise hide (a 2-decision bucket has no business fronting the
+ * line just because it happens to be the biggest of five equally-thin
+ * ones). Ties go to the HIGHER confidence bucket: buckets is already in
+ * BUCKET_ORDER (ascending), so `>=` lets a later, equal-n bucket win.
+ */
+function headlineBucketOf(buckets: readonly CalibrationBucket[]): CalibrationBucket | null {
+  const eligible = buckets.filter((b) => b.shown);
+  if (!eligible.length) return null;
+  return eligible.reduce((best, b) => (b.n >= best.n ? b : best), eligible[0]);
 }
 
 /** Every tag on a scored row that could name a subject: not reserved, not project:, not an axis tag. */
@@ -207,10 +218,17 @@ function findTopic(scored: readonly ScoredRow[], minTopicN: number): Calibration
  * count, never the overall n (18-copy-deck.md section 5.3, honesty bug): a
  * rate built from 5 decisions in the 70% bucket must not be captioned with a
  * count of 14 just because 14 decisions exist overall.
+ *
+ * When no bucket clears CALIBRATION_MIN_BUCKET_N, there is no single rate
+ * honest to show (the disclosure gate exists for exactly this), so the line
+ * says so instead of picking one anyway.
  */
-function mainLine(direction: CalibrationDirection, headline: CalibrationBucket, overallN: number): string {
+function mainLine(direction: CalibrationDirection, headline: CalibrationBucket | null, overallN: number): string {
   if (direction === "in_line") {
     return `So far, your confidence roughly matches how things turned out, based on ${overallN} decisions.`;
+  }
+  if (!headline) {
+    return `You'll see a rate once one confidence range has at least 5 decisions. You have ${overallN} so far.`;
   }
   const rate = `So far, your ${pct(headline.meanStated)}% calls came true ${pct(headline.hitRate)}% of the time, `
     + `based on ${headline.n} decisions.`;
@@ -256,7 +274,7 @@ export function calibrate(rows: readonly DecisionOutcomeRow[], gates: Calibratio
     gap: meanPPrime - meanHitPrime,
     direction,
     buckets,
-    headlineBucket: headlineBucket.bucket,
+    headlineBucket: headlineBucket?.bucket ?? null,
     topic,
     line: mainLine(direction, headlineBucket, n),
     topicLine: topic ? topicLineOf(topic) : null,

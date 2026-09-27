@@ -110,18 +110,35 @@ export function shortDecision(content: string): string {
  * marked as a decision review through its ledger:decision tag instead, and
  * each reader adds its own localized prefix.
  */
+const REVIEW_PREFIX = "Review: ";
+
+/**
+ * An older stored decision row (before the bare-label fix) may still carry
+ * "Review: " baked into its content or label — pushing "Review: Review: X"
+ * if this simply prepended again. Strip an existing prefix defensively.
+ */
 export function reviewLabel(content: string): string {
-  return `Review: ${shortDecision(content)}`;
+  const short = shortDecision(content);
+  return short.startsWith(REVIEW_PREFIX) ? short : `${REVIEW_PREFIX}${short}`;
 }
 
-/** now + days days, at 09:00 in timezone — the calendar date is taken from the approximate instant, then re-anchored at 09:00 in that zone. */
+/**
+ * now + days CALENDAR days in timezone, at 09:00 local. Calendar-day
+ * arithmetic, not a fixed 24h-per-day offset: adding days * 86400000ms to a
+ * UTC instant and then reading the calendar date can land a day off across a
+ * DST transition (a New York review due "in 2 days" from March 7 23:30 would
+ * read back as March 10, not March 9, once spring-forward's missing hour is
+ * added in as if every day were 24 real hours). The day arithmetic below
+ * happens on a date-only value (no timezone, no wall clock, so DST cannot
+ * touch it); only the final anchor at 09:00 goes through the real timezone.
+ */
 function defaultReviewAt(now: number, days: number, timezone: string): number {
-  const approx = now + days * 86400000;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(approx);
+  }).formatToParts(now);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  return zonedTimeMs(get("year"), get("month") - 1, get("day"), 9, 0, 0, timezone);
+  const localDate = new Date(Date.UTC(get("year"), get("month") - 1, get("day")) + days * 86400000);
+  return zonedTimeMs(localDate.getUTCFullYear(), localDate.getUTCMonth(), localDate.getUTCDate(), 9, 0, 0, timezone);
 }
 
 /** review_by, else when, else the default (+DECISION_REVIEW_DEFAULT_DAYS at 09:00 in TIMEZONE). */
@@ -174,7 +191,7 @@ export function buildDecisionCapture(
     timezone: cfg.timezone,
     days: cfg.reviewDefaultDays,
   });
-  if ("error" in review) return review;
+  if ("error" in review) return { error: `${review.error}. Nothing was saved.` };
 
   return {
     tags,

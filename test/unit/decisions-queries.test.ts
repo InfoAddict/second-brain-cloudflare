@@ -47,14 +47,29 @@ function seedDecision(
 }
 
 describe("calibrationQuery", () => {
-  it("uses the ledger tag expression, excludes deprecated rows, and carries both the scope and actionable clauses", () => {
+  it("uses the ledger tag expression, excludes deprecated rows, prioritizes scored outcomes, and carries the actionable clause", () => {
     const { sql, bindings } = calibrationQuery(READ_SCOPE, decisionsActionable(AUTH));
     expect(sql).toContain(`instr(lower(tags), '"ledger:decision"') > 0`);
     expect(sql).toContain(`tags LIKE '%"outcome:%'`);
     expect(sql).toContain(`tags NOT LIKE '%"status:deprecated"%'`);
-    expect(sql).toContain(READ_SCOPE.clause);
+    expect(sql).toContain(`ORDER BY (tags LIKE '%"outcome:unknown"%') ASC, created_at DESC`);
     expect(sql).toContain("(workspace_id IN (?, '') OR actor_id = ?)");
-    expect(bindings).toEqual([...READ_SCOPE.bindings, AUTH.personalWorkspaceId, AUTH.userId]);
+    expect(bindings).toEqual([JSON.stringify(READ_SCOPE.bindings), AUTH.personalWorkspaceId, AUTH.userId]);
+  });
+
+  it("collapses a multi-binding scope IN-list into one json_each binding, so total bindings never grow with team count", () => {
+    const { sql, bindings } = calibrationQuery(READ_SCOPE, decisionsActionable(AUTH));
+    expect(sql).toContain("workspace_id IN (SELECT value FROM json_each(?))");
+    expect(sql).not.toContain(READ_SCOPE.clause);
+    expect(bindings[0]).toBe(JSON.stringify(READ_SCOPE.bindings));
+  });
+
+  it("leaves a single-binding scope clause (a specific teamId) unchanged", () => {
+    const teamScope: ScopeClause = { clause: "workspace_id = ?", bindings: ["ws-company"] };
+    const { sql, bindings } = calibrationQuery(teamScope, decisionsActionable(AUTH));
+    expect(sql).toContain("AND workspace_id = ? AND (workspace_id IN");
+    expect(sql).not.toContain("SELECT value FROM json_each");
+    expect(bindings).toEqual(["ws-company", AUTH.personalWorkspaceId, AUTH.userId]);
   });
 
   it.skip("uses idx_entries_ledger (EXPLAIN QUERY PLAN) — enabled once Task 6 creates the partial index", () => {

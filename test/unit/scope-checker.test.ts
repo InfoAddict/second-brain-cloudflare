@@ -1275,7 +1275,12 @@ describe("the checker over the real source tree", () => {
     // calibration read (src/decisions/queries.ts calibrationQuery). It carries
     // both the read scope and the actionable clause (personal workspace or
     // authored by the caller, P7.7), so it needs no exemption.
-    ).toEqual({ queries: 149, exempt: 70, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 scope-checked (12 -> 13), same query, after the QA review
+    // (18-t7-wow, finding 6): the scope clause is now assembled in JS
+    // (boundedScope collapses a many-team IN-list into one json_each binding
+    // to stay under D1's 100-bound-parameter limit), so the literal
+    // `${scope.clause}` interpolation the checker recognized is gone.
+    ).toEqual({ queries: 149, exempt: 70, checked: 13, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
