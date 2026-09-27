@@ -92,7 +92,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     await (d1.db as any).prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`).bind(roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
-    const r = await updateEntryContent(env, "e1", "I live in Munich now", DEFAULTS, undefined, undefined, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, change);
+    const r = await updateEntryContent(env, "e1", "I live in Munich now", DEFAULTS, undefined, undefined, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, change, roots.ownerPersonalWorkspaceId);
     expect(r.status).toBe("updated");
 
     const versions = (await (d1.db as any).prepare(`SELECT * FROM entry_versions WHERE entry_id = 'e1' ORDER BY seq`).all()).results as any[];
@@ -111,7 +111,7 @@ describe("upgrade from a 3.7.0-shaped database", () => {
     await (d1.db as any).prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 'e1'`).bind(roots.ownerPersonalWorkspaceId, roots.ownerUserId).run();
 
     const change = { actorId: roots.ownerUserId, channel: "rest" as const };
-    const ok = await appendToEntry(env, "e1", "Notes:", "met Sam", [], "api", DEFAULTS, undefined, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, change);
+    const ok = await appendToEntry(env, "e1", "Notes:", "met Sam", [], "api", DEFAULTS, undefined, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, change, undefined, roots.ownerPersonalWorkspaceId);
     expect(ok).toBe(true);
 
     const row = await (d1.db as any).prepare(`SELECT content FROM entries WHERE id = 'e1'`).first();

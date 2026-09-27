@@ -172,6 +172,7 @@ describe("update/append re-embed carries the row workspace, not the caller defau
       undefined,
       { workspaceId: "ws-personal", actorId: "user-a" },
       { actorId: "user-a", channel: "rest" },
+      "ws-company",
     );
     expect(result.status).toBe("updated");
     expect(upsert).toHaveBeenCalledTimes(1);
@@ -208,6 +209,8 @@ describe("update/append re-embed carries the row workspace, not the caller defau
       undefined,
       { workspaceId: "ws-personal", actorId: "user-a" },
       { actorId: "user-a", channel: "rest" },
+      undefined,
+      "ws-company",
     );
 
     expect(upsert).toHaveBeenCalledTimes(1);

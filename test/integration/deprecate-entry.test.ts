@@ -29,7 +29,7 @@ describe("deprecateEntry()", () => {
       vector_ids: JSON.stringify(["v1", "v2"]),
     });
 
-    const result = await deprecateEntry("entry-1", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
+    const result = await deprecateEntry("entry-1", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
 
     expect(result).toBe(true);
 
@@ -50,7 +50,7 @@ describe("deprecateEntry()", () => {
   });
 
   it("returns false for a missing id", async () => {
-    const result = await deprecateEntry("missing-id", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
+    const result = await deprecateEntry("missing-id", env, { actorId: "u1", channel: "rest" }, DEFAULTS, "");
     expect(result).toBe(false);
     expect(deleteByIdsMock).not.toHaveBeenCalled();
   });

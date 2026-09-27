@@ -12,7 +12,7 @@ let t: TrashEnv;
 afterEach(() => t?.close());
 
 async function forget(id: string) {
-  return forgetEntry(id, t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false });
+  return forgetEntry(id, t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
 }
 
 describe("forgetEntry", () => {

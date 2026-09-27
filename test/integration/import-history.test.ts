@@ -14,7 +14,7 @@ describe("import and the trash", () => {
   it("forget, then import an old export of the same id: it is skipped as in_trash and its history is intact", async () => {
     t = await makeTrashEnv();
     t.seed("a", { content: "the newer text" }); t.version("a", 1); t.version("a", 2);
-    await forgetEntry("a", t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false });
+    await forgetEntry("a", t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
     const summary = await importExportPayload(t.env, { entries: [entry("a", "old text")] }, {});
     expect(summary).toMatchObject({ imported: 0, skipped: 1, skipped_in_trash: 1 });
     expect(summary.results).toEqual([{ id: "a", status: "skipped", reason: "in_trash" }]);

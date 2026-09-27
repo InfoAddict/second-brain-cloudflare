@@ -15,7 +15,7 @@ afterEach(() => t?.close());
 
 const post = (body: unknown) =>
   worker.fetch(new Request("http://localhost/forget", { method: "POST", headers, body: JSON.stringify(body) }), t.env, ctx);
-const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false });
+const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
 const count = async (sql: string, ...a: unknown[]) => ((await t.one<any>(sql, ...a))!.n as number);
 
 describe("Delete forever", () => {
@@ -277,9 +277,14 @@ describe("Delete forever is not offered over MCP", () => {
 
   it("calling forget with permanent:true still just trashes it (the MCP SDK drops the unknown key)", async () => {
     const { makeTestEnv, makeTestDb } = await import("../helpers/make-env");
+    const { ensureTenantBootstrap } = await import("../../src/lib/tenancy");
     const db = makeTestDb();
-    db.entries.push({ id: "mcp-a", content: "c", tags: "[]", source: "api", created_at: 1, vector_ids: "[]" });
     const env = makeTestEnv(db);
+    // Seeded with the owner's own workspace, resolved up front: production's ensureDbReady backfills
+    // workspace_id once at cold start, well before any request, so a row this double models as
+    // already on a bootstrapped brain must not depend on this test's own read timing to pick it up.
+    const roots = await ensureTenantBootstrap(env);
+    db.entries.push({ id: "mcp-a", content: "c", tags: "[]", source: "api", created_at: 1, vector_ids: "[]", workspace_id: roots.ownerPersonalWorkspaceId, actor_id: roots.ownerUserId });
     await withMcp(env, async (client) => {
       const res = await client.callTool({ name: "forget", arguments: { id: "mcp-a", permanent: true } });
       expect(String((res.content as any)[0]?.text ?? "")).toMatch(/trash/i);

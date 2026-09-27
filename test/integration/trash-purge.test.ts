@@ -110,7 +110,7 @@ describe("purge", () => {
     t = await makeTrashEnv();
     await seedTrashRows(t, 30);
     t.seed("x");
-    await forgetEntry("x", t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await cfg() });
+    await forgetEntry("x", t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await cfg() }, t.roots.ownerPersonalWorkspaceId);
     // 30 expired rows, ceiling 10 on the forget path; the new trash row is fresh.
     expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(21);
   });
@@ -120,8 +120,8 @@ describe("purge", () => {
     await seedTrashRows(t, 3);
     t.seed("m"); t.seed("d");
     const c = await cfg();
-    await forgetEntry("m", t.env, { actorId: "", channel: "system:mirror" }, { reason: "mirror", config: c, purge: false });
-    await forgetEntry("d", t.env, { actorId: "u", channel: "rest" }, { reason: "disconnect", config: c, purge: false });
+    await forgetEntry("m", t.env, { actorId: "", channel: "system:mirror" }, { reason: "mirror", config: c, purge: false }, t.roots.ownerPersonalWorkspaceId);
+    await forgetEntry("d", t.env, { actorId: "u", channel: "rest" }, { reason: "disconnect", config: c, purge: false }, t.roots.ownerPersonalWorkspaceId);
     expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(5);
     expect((await t.all<any>(`SELECT reason FROM entries_trash WHERE id IN ('m','d') ORDER BY id`)).map((r) => r.reason)).toEqual(["disconnect", "mirror"]);
   });
@@ -130,7 +130,7 @@ describe("purge", () => {
     const { getTrashedEntry, restoreEntry } = await import("../../src/memory/trash");
     t = await makeTrashEnv();
     t.seed("a"); t.version("a", 1); t.version("a", 2);
-    await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false });
+    await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false }, t.roots.ownerPersonalWorkspaceId);
     // Age the trash row past 14 days.
     await t.sqlite.db.prepare(`UPDATE entries_trash SET deleted_at = 1 WHERE id = 'a'`).run();
     const c = await cfg();
@@ -144,7 +144,7 @@ describe("purge", () => {
         // Between the purge's candidate read and its batch: the user restores, then forgets again.
         const trashed = await getTrashedEntry(t.env, undefined, "a");
         expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, c)).status).toBe("restored");
-        expect((await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false })).status).toBe("deleted");
+        expect((await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false }, t.roots.ownerPersonalWorkspaceId)).status).toBe("deleted");
       }
       return realBatch(stmts);
     };
@@ -269,7 +269,7 @@ describe("adversary round 2: the oversized-row trim branch must respect the rete
     t = await makeTrashEnv();
     t.seed("big");
     for (let s = 1; s <= 30; s++) t.version("big", s);
-    await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false });
+    await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false }, t.roots.ownerPersonalWorkspaceId);
     await t.sqlite.db.prepare(`UPDATE entries_trash SET deleted_at = 1 WHERE id = 'big'`).run();
     const c = await cfg();
 
@@ -288,7 +288,7 @@ describe("adversary round 2: the oversized-row trim branch must respect the rete
             injected = true;
             const trashed = await getTrashedEntry(t.env, undefined, "big");
             expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, c)).status).toBe("restored");
-            expect((await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false })).status).toBe("deleted");
+            expect((await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false }, t.roots.ownerPersonalWorkspaceId)).status).toBe("deleted");
             return run();
           };
           return bound;

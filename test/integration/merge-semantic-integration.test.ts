@@ -25,7 +25,7 @@ const headers = { "Content-Type": "application/json", Authorization: "Bearer tes
 let t: TrashEnv;
 afterEach(() => t?.close());
 
-const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false });
+const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
 const post = (path: string, body: unknown) =>
   worker.fetch(new Request(`http://localhost${path}`, { method: "POST", headers, body: JSON.stringify(body) }), t.env, ctx);
 const ownerIdentity = (): Identity => ({
@@ -73,7 +73,7 @@ describe("3. Versions against trash", () => {
     t = await makeTrashEnv();
     t.seed("a");
     // A real content write through the production CAS path, so this is a genuine A-created version.
-    await updateEntryContent(t.env, "a", "v2", DEFAULTS, undefined, undefined, { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId }, change);
+    await updateEntryContent(t.env, "a", "v2", DEFAULTS, undefined, undefined, { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId }, change, t.roots.ownerPersonalWorkspaceId);
     const before = await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`);
     await forget("a");
     const trashed = await getTrashedEntry(t.env, undefined, "a");
@@ -87,10 +87,10 @@ describe("3. Versions against trash", () => {
     t = await makeTrashEnv();
     t.seed("big", { content: "x".repeat(20_000) });
     const ctx2 = { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId };
-    await updateEntryContent(t.env, "big", "x".repeat(20_000) + " v2", DEFAULTS, undefined, undefined, ctx2, change);
-    await updateEntryContent(t.env, "big", "x".repeat(20_000) + " v3", DEFAULTS, undefined, undefined, ctx2, change);
+    await updateEntryContent(t.env, "big", "x".repeat(20_000) + " v2", DEFAULTS, undefined, undefined, ctx2, change, ctx2.workspaceId);
+    await updateEntryContent(t.env, "big", "x".repeat(20_000) + " v3", DEFAULTS, undefined, undefined, ctx2, change, ctx2.workspaceId);
     expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'big'`)).length).toBeGreaterThan(0);
-    const res = await forgetEntry("big", t.env, change, { reason: "forget", config: await resolveConfig(t.env), purge: false, budget: 10_000 });
+    const res = await forgetEntry("big", t.env, change, { reason: "forget", config: await resolveConfig(t.env), purge: false, budget: 10_000 }, t.roots.ownerPersonalWorkspaceId);
     expect(res).toMatchObject({ status: "deleted", trashed: false }); // too large for the 10 KB test budget: tier 3
     expect(await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'big'`)).toHaveLength(0);
   });
@@ -99,8 +99,8 @@ describe("3. Versions against trash", () => {
     t = await makeTrashEnv();
     t.seed("p1");
     const ctx2 = { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId };
-    await updateEntryContent(t.env, "p1", "v2", DEFAULTS, undefined, undefined, ctx2, change);
-    await appendToEntry(t.env, "p1", "v2", "more text", [], "api", DEFAULTS, undefined, ctx2, change);
+    await updateEntryContent(t.env, "p1", "v2", DEFAULTS, undefined, undefined, ctx2, change, ctx2.workspaceId);
+    await appendToEntry(t.env, "p1", "v2", "more text", [], "api", DEFAULTS, undefined, ctx2, change, undefined, ctx2.workspaceId);
     const versionCount = (await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'p1'`)).length;
     expect(versionCount).toBeGreaterThan(0);
     await forget("p1");
@@ -114,7 +114,7 @@ describe("3. Versions against trash", () => {
     t = await makeTrashEnv();
     t.seed("live");
     const ctx2 = { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId };
-    await updateEntryContent(t.env, "live", "v2", DEFAULTS, undefined, undefined, ctx2, change);
+    await updateEntryContent(t.env, "live", "v2", DEFAULTS, undefined, undefined, ctx2, change, ctx2.workspaceId);
     const before = await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'live'`);
     expect(before.length).toBeGreaterThan(0);
     // Import a DIFFERENT, brand-new id in the same batch: its own orphan-delete must not touch "live"'s chain.
@@ -130,17 +130,17 @@ describe("3. Versions against trash", () => {
     const ownerCtx = { workspaceId: P, actorId: t.roots.ownerUserId };
     // Personal edit, then shared, then another edit — the standard D-SH shape.
     t.seed("shared-mem", { workspace_id: P, actor_id: t.roots.ownerUserId });
-    await updateEntryContent(t.env, "shared-mem", "personal-era text", DEFAULTS, undefined, undefined, ownerCtx, change);
+    await updateEntryContent(t.env, "shared-mem", "personal-era text", DEFAULTS, undefined, undefined, ownerCtx, change, ownerCtx.workspaceId);
     const moved = await moveEntry("shared-mem", "company", t.env, ownerIdentity(), change);
     expect(moved.status).toBe("shared");
-    await updateEntryContent(t.env, "shared-mem", "company-era text", DEFAULTS, undefined, undefined, { workspaceId: C, actorId: t.roots.ownerUserId }, change);
+    await updateEntryContent(t.env, "shared-mem", "company-era text", DEFAULTS, undefined, undefined, { workspaceId: C, actorId: t.roots.ownerUserId }, change, C);
 
     const adaIdentity: Identity = { userId: member.userId, role: "member", personalWorkspaceId: member.personalWorkspaceId, companyWorkspaceIds: [C], defaultShare: "" };
     const beforeTrash = await readEntryHistory(t.env, adaIdentity, "shared-mem");
     expect(beforeTrash!.timeline.some((e: any) => e.event === "shared")).toBe(true);
 
     // Trash it, restore it: the non-author teammate must still see exactly the post-share slice, no more.
-    await forgetEntry("shared-mem", t.env, { actorId: t.roots.ownerUserId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false });
+    await forgetEntry("shared-mem", t.env, { actorId: t.roots.ownerUserId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, C);
     const trashed = await getTrashedEntry(t.env, undefined, "shared-mem");
     const restored = await restoreEntry(t.env, trashed!, change, DEFAULTS);
     expect(restored.status).toBe("restored");
@@ -168,7 +168,7 @@ describe("4. A's writers against a row trashed mid-flight", () => {
       if (armed && stmts.length === 3) { armed = false; await forget("race1"); }
       return realBatch(stmts as any);
     };
-    const result = await updateEntryContent(t.env, "race1", "new content", DEFAULTS, undefined, undefined, writeCtx, change);
+    const result = await updateEntryContent(t.env, "race1", "new content", DEFAULTS, undefined, undefined, writeCtx, change, writeCtx.workspaceId);
     expect(result.status).toBe("not_found");
     expect(await t.one(`SELECT id FROM entries WHERE id = 'race1'`)).toBeNull();
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'race1'`)).not.toBeNull();
@@ -181,7 +181,7 @@ describe("4. A's writers against a row trashed mid-flight", () => {
     t.seed("race2");
     await forget("race2");
     const writeCtx = { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId };
-    await expect(appendToEntry(t.env, "race2", "content of race2", "more", [], "api", DEFAULTS, undefined, writeCtx, change))
+    await expect(appendToEntry(t.env, "race2", "content of race2", "more", [], "api", DEFAULTS, undefined, writeCtx, change, undefined, writeCtx.workspaceId))
       .rejects.toBeInstanceOf(EntryGoneError);
     expect(await t.one(`SELECT id FROM entries WHERE id = 'race2'`)).toBeNull();
   });

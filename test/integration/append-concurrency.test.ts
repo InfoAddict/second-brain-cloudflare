@@ -48,7 +48,7 @@ const seed = (id: string, content: string, tags: string[] = []) => d1.db.prepare
 const live = async (id: string) => (await d1.db.prepare(`SELECT * FROM entries WHERE id = ?`).bind(id).first()) as any;
 const versions = async (id: string) => (await d1.db.prepare(`SELECT * FROM entry_versions WHERE entry_id = ? ORDER BY seq`).bind(id).all()).results as any[];
 const append = (e: Env, id: string, addition: string, existing = "") =>
-  appendToEntry(e, id, existing, addition, [], "claude", DEFAULTS, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+  appendToEntry(e, id, existing, addition, [], "claude", DEFAULTS, undefined, { workspaceId: wsId, actorId: ownerId }, change, undefined, wsId);
 
 /** An env whose reads of the appended row are followed by a concurrent write, `times` times. */
 function racingEnv(mutate: () => Promise<void>, times = Infinity): Env {

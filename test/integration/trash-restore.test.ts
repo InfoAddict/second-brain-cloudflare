@@ -14,7 +14,7 @@ const headers = { "Content-Type": "application/json", Authorization: "Bearer tes
 let t: TrashEnv;
 afterEach(() => { t?.close(); vi.restoreAllMocks(); });
 
-const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false });
+const forget = async (id: string) => forgetEntry(id, t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
 
 /** A Vectorize double that keeps state, so "which vectors exist" can be asserted (adversary port). */
 function statefulVectorize() {

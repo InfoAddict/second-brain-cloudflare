@@ -1292,7 +1292,12 @@ describe("the checker over the real source tree", () => {
     // MAJOR fix): restoreEntry's upfront liveness check, and deleteOrphanedRestoreVectors' own
     // liveness check before a losing restore's vector cleanup — both by-id, the caller already
     // authorized the trash row.
-    ).toEqual({ queries: 164, exempt: 83, checked: 12, outerJoin: 1 });
+    // Deliberate: -2 scope-exempt (164/83 -> 164/81) for T-0089.1.1/T-0089.10 (R2-3, round 2
+    // adversary): deprecateEntry's optional workspace became a required one, and applyStatus's
+    // non-deprecated branch (previously a bare `WHERE id = ?`) now reads under the same guard —
+    // both carry a literal, unconditional `AND workspace_id = ?` the checker recognizes on its
+    // own, so the exemption they used to need is gone.
+    ).toEqual({ queries: 164, exempt: 81, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

@@ -190,8 +190,8 @@ describe("versioning: status", () => {
   });
 
   it("set_status canonical then draft writes two status versions", async () => {
-    await applyStatus("e1", "canonical", env, change, DEFAULTS);
-    await applyStatus("e1", "draft", env, change, DEFAULTS);
+    await applyStatus("e1", "canonical", env, change, DEFAULTS, "");
+    await applyStatus("e1", "draft", env, change, DEFAULTS, "");
     const vs = await versions("e1");
     expect(vs.map(v => [v.seq, v.reason, JSON.parse(v.meta).status])).toEqual([[1, "status", "canonical"], [2, "status", "draft"]]);
     expect(JSON.parse(vs[0].tags)).toEqual(["b", "a"]);
@@ -199,16 +199,16 @@ describe("versioning: status", () => {
   });
 
   it("set_status to the current status writes no version even when withStatus reorders the tags", async () => {
-    await applyStatus("e1", "canonical", env, change, DEFAULTS);
+    await applyStatus("e1", "canonical", env, change, DEFAULTS, "");
     expect(await versions("e1")).toHaveLength(1);
     // Stored order differs from what withStatus produces; the set is unchanged.
     sqlite.db.prepare(`UPDATE entries SET tags = '["status:canonical","a","b"]' WHERE id = 'e1'`).run();
-    await applyStatus("e1", "canonical", env, change, DEFAULTS);
+    await applyStatus("e1", "canonical", env, change, DEFAULTS, "");
     expect(await versions("e1")).toHaveLength(1);
   });
 
   it("deprecate records the prior tags and still deletes the vectors", async () => {
-    expect(await deprecateEntry("e1", env, change, DEFAULTS)).toBe(true);
+    expect(await deprecateEntry("e1", env, change, DEFAULTS, "")).toBe(true);
     const [v] = await versions("e1");
     expect(JSON.parse(v.tags)).toEqual(["b", "a"]);
     expect(v.reason).toBe("status");
@@ -218,7 +218,7 @@ describe("versioning: status", () => {
 
   it("a deprecate pinned to another workspace writes neither the change nor a version", async () => {
     sqlite.db.prepare(`UPDATE entries SET workspace_id = 'w-elsewhere' WHERE id = 'e1'`).run();
-    expect(await deprecateEntry("e1", env, change, DEFAULTS, { workspaceId: "" })).toBe(false);
+    expect(await deprecateEntry("e1", env, change, DEFAULTS, "")).toBe(false);
     expect(await versions("e1")).toEqual([]);
     expect(JSON.parse((await row("e1")).tags)).toEqual(["b", "a"]);
   });

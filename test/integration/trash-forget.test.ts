@@ -18,7 +18,7 @@ const post = (path: string, body: unknown) =>
   worker.fetch(new Request(`http://localhost${path}`, { method: "POST", headers, body: JSON.stringify(body) }), t.env, ctx);
 const change = { actorId: "u", channel: "rest" as const };
 async function forget(id: string, budget?: number) {
-  return forgetEntry(id, t.env, change, { reason: "forget", config: await resolveConfig(t.env), purge: false, budget });
+  return forgetEntry(id, t.env, change, { reason: "forget", config: await resolveConfig(t.env), purge: false, budget }, t.roots.ownerPersonalWorkspaceId);
 }
 
 describe("chooseTrashTier", () => {
@@ -225,7 +225,7 @@ describe("routes", () => {
       if (sql.includes("FROM entries_trash t WHERE t.deleted_at")) throw new Error("purge read failed");
       return realPrepare(sql);
     };
-    const res = await forgetEntry("a", t.env, change, { reason: "forget", config: await resolveConfig(t.env) });
+    const res = await forgetEntry("a", t.env, change, { reason: "forget", config: await resolveConfig(t.env) }, t.roots.ownerPersonalWorkspaceId);
     expect(res.status).toBe("deleted");
   });
 });
@@ -246,12 +246,12 @@ describe("a losing tier-3 forget racing a tier-1 forget of the same id", () => {
       if (!injected && sqls.some((s) => s.startsWith("DELETE FROM entry_versions WHERE entry_id IN"))) {
         injected = true;
         await t.sqlite.db.prepare(`UPDATE entries SET content = 'short now' WHERE id = 'a'`).run();
-        const r2 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 });
+        const r2 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 }, t.roots.ownerPersonalWorkspaceId);
         expect(r2).toMatchObject({ status: "deleted", trashed: true });
       }
       return realBatch(stmts);
     };
-    const r1 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 });
+    const r1 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 }, t.roots.ownerPersonalWorkspaceId);
     expect(r1.status).toBe("not_found");
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
     // The trashed memory's history must be intact (the plan promises versions survive a trash).

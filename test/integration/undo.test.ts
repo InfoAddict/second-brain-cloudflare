@@ -69,7 +69,7 @@ const change = (who: Identity = owner, channel: "rest" | "mcp" | `system:${strin
 describe("undo, one case per reason", () => {
   it("update: undo restores the prior content, tags and vectors", async () => {
     await seed("u1", { content: "before", tags: ["a"] });
-    await updateEntryContent(env, "u1", "after", DEFAULTS, undefined, ["b"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "u1", "after", DEFAULTS, undefined, ["b"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const beforeVectorIds = JSON.parse(String(row("u1").vector_ids));
     const r = await revertEntry(env, owner, "u1", change(), DEFAULTS);
     expect(r).toMatchObject({ status: "reverted" });
@@ -81,7 +81,7 @@ describe("undo, one case per reason", () => {
 
   it("append: undo restores the delta's prior text", async () => {
     await seed("a1", { content: "base" });
-    await appendToEntry(env, "a1", "base", "more", [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await appendToEntry(env, "a1", "base", "more", [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId);
     const r = await revertEntry(env, owner, "a1", change(), DEFAULTS);
     expect(r.status).toBe("reverted");
     expect(row("a1").content).toBe("base");
@@ -131,7 +131,7 @@ describe("undo, one case per reason", () => {
 
   it("status: undo un-deprecates and re-embeds", async () => {
     await seed("s1", { content: "some fact", tags: ["work"] });
-    await deprecateEntry("s1", env, change(), DEFAULTS);
+    await deprecateEntry("s1", env, change(), DEFAULTS, owner.personalWorkspaceId);
     expect(JSON.parse(String(row("s1").tags))).toContain("status:deprecated");
     expect(row("s1").vector_ids).toBe("[]");
     const r = await revertEntry(env, owner, "s1", change(), DEFAULTS);
@@ -164,7 +164,7 @@ describe("undo, one case per reason", () => {
   it("trash: undo of a forgotten memory restores it from the trash", async () => {
     await seed("trash1", { content: "keep me", tags: ["a"] });
     const before = row("trash1");
-    const forgotten = await forgetEntry("trash1", env, change(), { reason: "forget", config: DEFAULTS, purge: false });
+    const forgotten = await forgetEntry("trash1", env, change(), { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
     expect(forgotten.status).toBe("deleted");
     expect(sqlite.rows().find((r: any) => r.id === "trash1")).toBeUndefined();
     const r = await revertEntry(env, owner, "trash1", change(), DEFAULTS);
@@ -196,7 +196,7 @@ describe("undo, one case per reason", () => {
 describe("undo mechanics", () => {
   it("undo twice redoes", async () => {
     await seed("r1", { content: "v1" });
-    await updateEntryContent(env, "r1", "v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "r1", "v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const undo1 = await revertEntry(env, owner, "r1", change(), DEFAULTS);
     expect(undo1.status).toBe("reverted");
     expect(row("r1").content).toBe("v1");
@@ -207,9 +207,9 @@ describe("undo mechanics", () => {
 
   it("to_version restores a full older state, including when_*", async () => {
     await seed("t1", { content: "v1", whenAt: 100, whenKind: "due" });
-    await updateEntryContent(env, "t1", "v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "t1", "v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     await resolveEntryAction(env, ctx, owner, "t1", "snooze", new Date(Date.now() + 86400000).toISOString(), change());
-    await updateEntryContent(env, "t1", "v3", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "t1", "v3", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const vs = await versions("t1");
     const targetSeq = vs[0].seq; // the very first retired state: content v1, when_at 100
     const r = await revertEntry(env, owner, "t1", change(), DEFAULTS, targetSeq);
@@ -243,7 +243,7 @@ describe("undo mechanics", () => {
     // Carol makes a further change after Bob's dismissal (dismiss already deprecated the row, so a
     // second dismiss is a no-op — this is a distinct status change, e.g. an admin correction).
     const bobSeq = chainBefore.rows[0].seq;
-    await applyStatus("ci1", "canonical", env, change(carol), DEFAULTS);
+    await applyStatus("ci1", "canonical", env, change(carol), DEFAULTS, roots.companyWorkspaceId);
     // Bob asks for his own version specifically: rule (b) requires it still be the newest, and it no longer is.
     const r = await revertEntry(env, bob, "ci1", change(bob), DEFAULTS, bobSeq);
     expect(r.status).toBe("stale");
@@ -251,7 +251,7 @@ describe("undo mechanics", () => {
 
   it("same-actor same-millisecond reverts: one wins, the other is stale, no unrecorded change", async () => {
     await seed("race1", { content: "one" });
-    await updateEntryContent(env, "race1", "two", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "race1", "two", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const originalNow = Date.now;
     const fixed = originalNow();
     Date.now = () => fixed;
@@ -274,11 +274,11 @@ describe("undo mechanics", () => {
 
   it("a revert whose target equals the current state returns no_change and writes nothing", async () => {
     await seed("nc1", { content: "same", tags: ["a"] });
-    await updateEntryContent(env, "nc1", "same", DEFAULTS, undefined, ["a"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "nc1", "same", DEFAULTS, undefined, ["a"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     // The update above is a no-op (same content, same tags) and writes no version.
     expect(await versions("nc1")).toEqual([]);
-    await updateEntryContent(env, "nc1", "changed", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
-    await updateEntryContent(env, "nc1", "same", DEFAULTS, undefined, ["a"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "nc1", "changed", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
+    await updateEntryContent(env, "nc1", "same", DEFAULTS, undefined, ["a"], { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const before = await versions("nc1");
     const r = await revertEntry(env, owner, "nc1", change(), DEFAULTS, before[0].seq);
     expect(r.status).toBe("no_change");
@@ -287,7 +287,7 @@ describe("undo mechanics", () => {
 
   it("a revert on a row forgotten meanwhile returns not_found and deletes its fresh vectors", async () => {
     await seed("gone1", { content: "before" });
-    await updateEntryContent(env, "gone1", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "gone1", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const raw = env.DB as any;
     let raced = false;
     const racing = { ...env, DB: { ...raw, prepare: (sql: string) => {
@@ -307,11 +307,11 @@ describe("undo mechanics", () => {
     const roots = await ensureTenantBootstrap(env);
     await seed("h1", { content: "personal v1", workspaceId: owner.personalWorkspaceId });
     // A version made while the row was still personal: hidden from Bob once it is shared.
-    await updateEntryContent(env, "h1", "personal v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "h1", "personal v2", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const preShareSeq = (await versions("h1"))[0].seq;
     sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'h1'`).bind(roots.companyWorkspaceId).run();
     // A version made AFTER the share: visible to Bob, so the chain is not simply empty.
-    await updateEntryContent(env, "h1", "company v3", DEFAULTS, undefined, undefined, { workspaceId: roots.companyWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "h1", "company v3", DEFAULTS, undefined, undefined, { workspaceId: roots.companyWorkspaceId, actorId: owner.userId }, change(), roots.companyWorkspaceId);
     const r = await revertEntry(env, bob, "h1", change(bob), DEFAULTS, preShareSeq);
     expect(r.status).toBe("unreadable");
   });
@@ -340,7 +340,7 @@ describe("undo mechanics", () => {
 
   it("reembed_failed leaves the row and its history untouched", async () => {
     await seed("f1", { content: "before" });
-    await updateEntryContent(env, "f1", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change());
+    await updateEntryContent(env, "f1", "after", DEFAULTS, undefined, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), owner.personalWorkspaceId);
     const before = await versions("f1");
     const failingEnv = { ...env, AI: { run: vi.fn(async () => { throw new Error("AI down"); }) } } as unknown as Env;
     const r = await revertEntry(failingEnv, owner, "f1", change(), DEFAULTS);

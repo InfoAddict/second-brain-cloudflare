@@ -204,7 +204,7 @@ describe("ADV systemWrite", () => {
   it("J: appending to a digest also marks it user-edited, so the next digest leaves it alone", async () => {
     const { appendToEntry } = await import("../../src/capture/store");
     sqlite.seed({ id: "old-digest", content: "Older digest", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "system" });
-    await appendToEntry(env, "old-digest", "Older digest", "my addendum", ["synthesized", "work"], "system", undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" });
+    await appendToEntry(env, "old-digest", "Older digest", "my addendum", ["synthesized", "work"], "system", undefined, undefined, { workspaceId: "", actorId: "u1" }, { actorId: "u1", channel: "rest" }, undefined, "");
     expect(JSON.parse(String(sqlite.rows().find(x => x.id === "old-digest")!.tags))).toContain("user-edited");
     target = "old-digest"; score = 0.9;
     decision = () => JSON.stringify({ action: "merge", target_id: "old-digest", merged_content: "combined digest text" });
@@ -232,7 +232,7 @@ describe("ADV systemWrite", () => {
   it("G: an owner-edited digest is no longer a system row, so the next digest leaves the edit alone", async () => {
     const { updateEntryContent } = await import("../../src/capture/store");
     sqlite.seed({ id: "old-digest", content: "Older digest", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "system" });
-    await updateEntryContent(env, "old-digest", "MY OWN CORRECTION: the launch is in March, not May", undefined, undefined, undefined, { workspaceId: "", actorId: "owner" }, { actorId: "owner", channel: "rest" });
+    await updateEntryContent(env, "old-digest", "MY OWN CORRECTION: the launch is in March, not May", undefined, undefined, undefined, { workspaceId: "", actorId: "owner" }, { actorId: "owner", channel: "rest" }, "");
     target = "old-digest"; score = 0.9;
     decision = () => JSON.stringify({ action: "merge", target_id: "old-digest", merged_content: "combined digest text" });
     await compressTag("work", env, ctx);

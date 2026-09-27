@@ -74,7 +74,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
       await d1.db.prepare(`UPDATE entries SET content = 'system merged text' WHERE id = 'e1'`).run();
       await env.VECTORIZE.upsert([{ id: "e1", values: [0.2], metadata: { content: "system merged text" } }]);
     });
-    const r = await updateEntryContent(racing, "e1", "my edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    const r = await updateEntryContent(racing, "e1", "my edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r.status).toBe("updated");
     expect((await live("e1")).content).toBe("my edit");
     // The last vector upsert describes the committed content: "my edit" wins in the index too.
@@ -89,7 +89,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     const racing = racingEnv(async () => {
       await d1.db.prepare(`UPDATE entries SET content = ? WHERE id = 'e1'`).bind(`racing ${++n}`).run();
     }, "every");
-    const r = await updateEntryContent(racing, "e1", "my edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    const r = await updateEntryContent(racing, "e1", "my edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r).toEqual({ status: "conflict" });
     expect(await versions("e1")).toEqual([]);
     const row = await live("e1");
@@ -110,7 +110,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     const racing = { ...racingEnv(async () => {
       await d1.db.prepare(`UPDATE entries SET tags = '["a","b"]' WHERE id = 'e1'`).run();
     }), AI: countingAI } as unknown as Env;
-    const r = await updateEntryContent(racing, "e1", "same text", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    const r = await updateEntryContent(racing, "e1", "same text", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r.status).toBe("updated");
     expect(embeds).toBe(1); // one embed total, not one per attempt
     expect(JSON.parse((await live("e1")).tags)).toEqual(expect.arrayContaining(["a", "b"]));
@@ -206,14 +206,14 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
         // The author replaces the text (removing SECRET-PLAN) right after the append read the row.
         if (++n === 1) {
           const r2 = await updateEntryContent(env, "e3", "short public text", DEFAULTS, undefined, undefined,
-            { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" });
+            { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" }, wsId);
           expect(r2.status).toBe("updated");
         }
         return r;
       } }) };
     } } } as unknown as Env;
     await appendToEntry(racing, "e3", "", "an addition", [], "api", DEFAULTS, undefined,
-      { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" });
+      { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" }, undefined, wsId);
     const finalRow = await live("e3");
     expect(finalRow.content).toContain("short public text");
     expect(finalRow.content).toContain("an addition");
@@ -232,7 +232,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
       return raw.prepare(sql);
     } } } as unknown as Env;
     await expect(appendToEntry(racing, "g1", "", "more", [], "api", DEFAULTS, undefined,
-      { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" })).rejects.toThrow();
+      { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" }, undefined, wsId)).rejects.toThrow();
     expect(await live("g1")).toBeNull();
     expect([...store.values()].filter(v => v.metadata?.parentId === "g1")).toEqual([]);
   });
@@ -246,13 +246,13 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     // Another client's append commits fully while this one is still embedding its own chunk.
     const slowVectorize = makeVectorizeMock({
       insert: vi.fn(async (vs: any[]) => {
-        if (!raced) { raced = true; await new Promise(r => setTimeout(r, 5)); await appendToEntry(plain, "o1", "", "fast one", [], "api", DEFAULTS, undefined, wctx, appendChange); }
+        if (!raced) { raced = true; await new Promise(r => setTimeout(r, 5)); await appendToEntry(plain, "o1", "", "fast one", [], "api", DEFAULTS, undefined, wctx, appendChange, undefined, wsId); }
         for (const v of vs) store.set(v.id, v);
         return { mutationId: "m" } as any;
       }),
     });
     const slow = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), VECTORIZE: slowVectorize, AI: makeAIMock() });
-    await appendToEntry(slow, "o1", "", "slow one", [], "api", DEFAULTS, undefined, wctx, appendChange);
+    await appendToEntry(slow, "o1", "", "slow one", [], "api", DEFAULTS, undefined, wctx, appendChange, undefined, wsId);
     const vs = await versions("o1");
     expect(vs.map((v: any) => v.seq)).toEqual([1, 2]);
     const row = await live("o1");
@@ -267,7 +267,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     await seed("e1", "base", []);
     let n = 0;
     const racing = racingEnv(async () => { await d1.db.prepare(`UPDATE entries SET content = ? WHERE id = 'e1'`).bind(`race${++n}`).run(); });
-    await updateEntryContent(racing, "e1", "final edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    await updateEntryContent(racing, "e1", "final edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     // Only the successful commit (if any) writes a version.
     const vs = await versions("e1");
     expect(vs.length).toBeLessThanOrEqual(1);
@@ -278,7 +278,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     let n = 0;
     const racing = racingEnv(async () => { await d1.db.prepare(`UPDATE entries SET content = ? WHERE id = 'e1'`).bind(`race${++n}`).run(); });
     const failingAI = { run: vi.fn(async () => { throw new Error("AI down"); }) } as unknown as Ai;
-    const r = await updateEntryContent({ ...racing, AI: failingAI } as unknown as Env, "e1", "final edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    const r = await updateEntryContent({ ...racing, AI: failingAI } as unknown as Env, "e1", "final edit", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r.status).toBe("reembed_failed");
   });
 });

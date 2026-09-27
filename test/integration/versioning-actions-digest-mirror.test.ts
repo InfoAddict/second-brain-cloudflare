@@ -209,7 +209,7 @@ describe("versioning: insight resolution (A2)", () => {
     // An admin correction after the dismiss (not another applyInsightResolution call, which reads
     // this row's own current tags and would see it already deprecated): second member's later
     // change bumps the seq.
-    await applyStatus("ci1", "canonical", env, { actorId: carolIdentity.userId, channel: "rest" }, DEFAULTS);
+    await applyStatus("ci1", "canonical", env, { actorId: carolIdentity.userId, channel: "rest" }, DEFAULTS, roots.companyWorkspaceId);
     chain = await loadHistory(env, bobIdentity, { id: "ci1", content: String(row("ci1").content) }, 10);
     const bobsVersion = chain.rows.find(v => v.actor_id === bobIdentity.userId)!;
     expect(canRevert(bobIdentity, entryRow, bobsVersion, chain.rows[0].seq, chain.rows.map(r => r.seq))).toEqual({ ok: false, code: "stale" });

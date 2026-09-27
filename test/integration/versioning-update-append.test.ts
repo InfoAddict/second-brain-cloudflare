@@ -79,7 +79,7 @@ describe("versioning update", () => {
       DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), VECTORIZE: vectorize,
       AI: { run: vi.fn(async () => { throw new Error("overloaded"); }) } as unknown as Ai,
     });
-    const r = await updateEntryContent(failing, "e1", "after", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    const r = await updateEntryContent(failing, "e1", "after", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r.status).toBe("reembed_failed");
     expect(await versions("e1")).toEqual([]);
     expect((await live("e1")).content).toBe("before");
@@ -92,7 +92,7 @@ describe("versioning update", () => {
       await d1.db.prepare(`DELETE FROM entries WHERE id = 'e1'`).run();
       return { mutationId: "m" };
     });
-    const r = await updateEntryContent(env, "e1", "after", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    const r = await updateEntryContent(env, "e1", "after", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r).toEqual({ status: "not_found" });
     expect(deleted.flat()).toContain("e1");
     expect(await versions("e1")).toEqual([]);
@@ -108,14 +108,14 @@ describe("versioning update", () => {
   it("VERSION_KEEP bounds the chain", async () => {
     await seed("e1", "0", []);
     const cfg = { ...DEFAULTS, VERSION_KEEP: 5 };
-    for (let i = 1; i <= 12; i++) await updateEntryContent(env, "e1", `text ${i}`, cfg, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change);
+    for (let i = 1; i <= 12; i++) await updateEntryContent(env, "e1", `text ${i}`, cfg, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect((await versions("e1")).map(v => v.seq)).toEqual([8, 9, 10, 11, 12]);
   });
 });
 
 describe("versioning append", () => {
   const append = (id: string, existing: string, addition: string, when?: { at: number; kind: string }, ch = change) =>
-    appendToEntry(env, id, existing, addition, [], "claude", DEFAULTS, undefined, { workspaceId: wsId, actorId: ownerId }, ch, when);
+    appendToEntry(env, id, existing, addition, [], "claude", DEFAULTS, undefined, { workspaceId: wsId, actorId: ownerId }, ch, when, wsId);
 
   it("append short and long branches store deltas", async () => {
     await seed("short", "base", []);
