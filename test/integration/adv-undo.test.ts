@@ -165,7 +165,7 @@ describe("ADV-U4 (MINOR): merge undo is not symmetric", () => {
     DB: sqlite.db as any, OAUTH_KV: makeMemoryKV(), VECTORIZE: statefulVectorize("old"), AI: decisionAI(decision),
   }) as Env;
 
-  it("undo twice (redo) of a merge does not leave the incoming fact twice", async () => {
+  it("undo twice (redo) of a merge keeps the re-created row and reports it (T-0089.1.3 round 3: redo never removes it)", async () => {
     const e = mergeEnv();
     await seed("old", { content: "Old text", tags: ["work"] });
     expect((await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" })).status).toBe("merged");
@@ -176,8 +176,10 @@ describe("ADV-U4 (MINOR): merge undo is not symmetric", () => {
     const redo = await revertEntry(e, owner, "old", change(), DEFAULTS);
     expect(redo.status).toBe("reverted");
     expect(row("old").content).toBe("Old text. Incoming fact.");
-    // Before the undo there was one row holding the fact; after undo+redo there are two.
-    expect(row(recreated)).toBeUndefined();
+    // Redo restores the merged text but leaves the re-created row exactly alone: the fact now
+    // legitimately lives in both places, and the result says so instead of silently removing one.
+    expect(row(recreated).content).toBe("Incoming fact");
+    expect((redo as any).keptIncoming).toEqual([{ id: recreated, reason: "kept as its own memory" }]);
   });
 
   it("to_version past a merge keeps the incoming fact somewhere live", async () => {

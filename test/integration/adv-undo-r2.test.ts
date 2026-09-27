@@ -87,8 +87,12 @@ const mergeEnv = (target: string) => makeTestEnv(undefined, {
 }) as Env;
 const trashed = async (id: string) => env.DB.prepare(`SELECT id FROM entries_trash WHERE id = ?`).bind(id).first();
 
-describe("ADV-U8 (MAJOR): redo trashes the re-created incoming row whatever has happened to it since", () => {
-  it("redo does not trash a re-created memory its author moved into their own personal workspace", async () => {
+// T-0089.1.3 round 3 (Director decision): redo of a merge undo no longer removes the row that undo
+// created. It restores the merged text and leaves that row exactly alone, always reporting it as
+// keptIncoming, so the U8/U9 scenarios below assert the new semantics rather than the old removal
+// guard (which produced its own regression, ADV-U13).
+describe("ADV-U8 (MAJOR, superseded by the round-3 simplification): redo never touches the re-created row, whatever has happened to it since", () => {
+  it("redo keeps (and reports) a re-created memory its author moved into their own personal workspace", async () => {
     const roots = await ensureTenantBootstrap(env);
     const alice = await member("Alice");
     const bob = await member("Bob");
@@ -103,13 +107,16 @@ describe("ADV-U8 (MAJOR): redo trashes the re-created incoming row whatever has 
     // Bob takes his memory private.
     expect((await moveEntry(x, "personal", env, bob, change(bob))).status).toBe("unshared");
 
-    // Alice redoes. She cannot read Bob's personal workspace, let alone forget in it.
-    expect((await revertEntry(e, alice, "old", change(alice), DEFAULTS)).status).toBe("reverted");
-    expect(row(x)).toBeDefined(); // actual: moved to the trash by Alice's redo
+    // Alice redoes. Redo never touches x at all, so it does not matter that she cannot even read it.
+    const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS);
+    expect(redo.status).toBe("reverted");
+    expect(row(x)).toBeDefined();
+    expect(row(x).workspace_id).toBe(bob.personalWorkspaceId);
     expect(await trashed(x)).toBeNull();
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
   });
 
-  it("redo does not silently trash a re-created memory someone else has since edited", async () => {
+  it("redo keeps (and reports) a re-created memory someone else has since edited", async () => {
     const roots = await ensureTenantBootstrap(env);
     const alice = await member("Alice");
     const bob = await member("Bob");
@@ -121,24 +128,34 @@ describe("ADV-U8 (MAJOR): redo trashes the re-created incoming row whatever has 
     await updateEntryContent(e, x, "Incoming fact, with Bob's follow-up notes", DEFAULTS, undefined, undefined, { workspaceId: roots.companyWorkspaceId, actorId: bob.userId }, change(bob));
     expect(row(x).content).toContain("follow-up");
 
-    await revertEntry(e, alice, "old", change(alice), DEFAULTS);
-    // Bob's notes exist nowhere else; after 14 days in the trash they are gone for good.
-    expect(row(x)?.content).toContain("follow-up"); // actual: row trashed, no event, nothing in the result
+    const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS);
+    expect(redo.status).toBe("reverted");
+    expect(row(x)?.content).toContain("follow-up");
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
   });
 });
 
-describe("ADV-U9 (MINOR): undo, redo, undo leaves the incoming fact in the trash", () => {
-  it("a third undo of a merge brings the incoming row back to life", async () => {
+describe("ADV-U9 (MINOR, superseded by the round-3 simplification): a merge's incoming is re-created at most once", () => {
+  it("undo, redo, undo keeps exactly one live copy of the re-created fact", async () => {
     const e = mergeEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await captureEntry("Incoming fact", [], "api", e, ctx, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, undefined, { channel: "rest" });
-    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS)) as any).recreatedIncomingId as string;
-    await revertEntry(e, owner, "old", change(), DEFAULTS); // redo: x trashed
-    expect(row(x)).toBeUndefined();
-    expect((await revertEntry(e, owner, "old", change(), DEFAULTS)).status).toBe("reverted"); // undo again
+    const undo1 = await revertEntry(e, owner, "old", change(), DEFAULTS);
+    const x = (undo1 as any).recreatedIncomingId as string;
+    expect(row(x).content).toBe("Incoming fact");
+
+    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS); // redo: merged text restored, x kept
+    expect(redo.status).toBe("reverted");
+    expect(row(x)).toBeDefined();
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
+
+    const undo2 = await revertEntry(e, owner, "old", change(), DEFAULTS); // undo again
+    expect(undo2.status).toBe("reverted");
     expect(row("old").content).toBe("Old text");
-    // Same state as after the first undo: the fact is live as its own memory.
-    expect(sqlite.rows().some((r: any) => r.content === "Incoming fact")).toBe(true); // actual: only in entries_trash
+    // Exactly one live copy of the fact throughout: no re-creation happens twice.
+    expect(sqlite.rows().filter((r: any) => r.content === "Incoming fact")).toHaveLength(1);
+    expect((undo2 as any).recreatedIncomingId).toBeUndefined();
+    expect((undo2 as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
   });
 });
 

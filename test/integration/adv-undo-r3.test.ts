@@ -147,6 +147,20 @@ describe("ADV-U14 (MINOR): statements grow with every merge a rollback crosses",
     expect(live("fact 15")).toHaveLength(1);
     expect(executed.length).toBeLessThanOrEqual(50); // actual: 52 = 4 + 3 per merge (INSERT, vector_ids UPDATE, audit batch); 19 merges = 61
   });
+
+  it("pins the exact cost at 19 merges: every re-creation batched, flat regardless of how many merges cross", async () => {
+    const e = mergingEnv("hub19");
+    await seed("hub19", { content: "Hub", tags: ["work"] });
+    for (let i = 0; i < 19; i++) expect((await capture(e, `fact ${i}`)).status).toBe("merged");
+    const first = (await versions("hub19"))[0].seq;
+    const { env: counted, executed } = counting(e);
+    const r = await revertEntry(counted, owner, "hub19", change(), DEFAULTS, first);
+    expect(r.status).toBe("reverted");
+    for (let i = 0; i < 19; i++) expect(live(`fact ${i}`)).toHaveLength(1);
+    // read + history read + revert batch + one batch of 19 inserts + one batch of 19 audits + the
+    // revert's own "reverted" audit: flat at 6, however many merges the rollback crosses (U14).
+    expect(executed).toHaveLength(6);
+  });
 });
 
 describe("ADV-U15 (MINOR): U8's 'unchanged' check ignores tags, status and dates", () => {
@@ -167,20 +181,28 @@ describe("ADV-U15 (MINOR): U8's 'unchanged' check ignores tags, status and dates
   });
 });
 
-describe("ADV-U16 (MINOR): undo of a redo drops the fact silently when the trashed row is gone", () => {
-  it("after the removed row is deleted forever, undoing the redo still leaves the fact live somewhere, or says it cannot", async () => {
+// T-0089.1.3 round 3 (Director decision): redo no longer removes a re-created row, so it can no
+// longer be the thing that puts it in the trash either. This asserts the new semantics: a row the
+// USER deliberately removed is never resurrected, and redo still says something about it rather than
+// going silent — the old scenario's "or the 14-day purge" comment now applies to a user action, not
+// something redo itself did.
+describe("ADV-U16 (MINOR, superseded by the round-3 simplification): a user-removed re-created row is never resurrected, and redo still says something", () => {
+  it("after the re-created row is deleted forever, redo neither resurrects it nor stays silent", async () => {
     const e = mergingEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
     const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS)) as any).recreatedIncomingId as string;
-    await revertEntry(e, owner, "old", change(), DEFAULTS); // redo: x to the trash
-    expect(await env.DB.prepare(`SELECT 1 FROM entries_trash WHERE id = ?`).bind(x).first()).not.toBeNull();
-    await deleteForever(e, { id: x }, change()); // or the 14-day purge
-    const r = await revertEntry(e, owner, "old", change(), DEFAULTS);
-    expect(r.status).toBe("reverted");
-    expect(row("old").content).toBe("Old text");
-    const said = (r as any).keptIncoming ?? (r as any).incomingTruncated ?? (r as any).recreatedIncomingId;
-    expect(live("Incoming fact").length > 0 || said !== undefined).toBe(true); // actual: fact in no live row, result silent
+    // The user removes the re-created row for good, deliberately — not through redo, which never
+    // touches it at all any more.
+    await deleteForever(e, { id: x }, change());
+
+    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS);
+    expect(redo.status).toBe("reverted");
+    expect(row("old").content).toBe("Old text Incoming fact");
+    // Nothing resurrects x, and the result still names it rather than falling silent about a fact
+    // the user can no longer find under that id.
+    expect(row(x)).toBeUndefined();
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
   });
 });
 
