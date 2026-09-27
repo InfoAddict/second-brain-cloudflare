@@ -91,7 +91,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: "src/entries/import.ts", line: 26, kind: "exempt" },
   { file: "src/integrations/mirror.ts", line: 80, kind: "exempt" },
   { file: "src/integrations/mirror.ts", line: 130, kind: "snapshot" },
-  { file: "src/lib/team-admin.ts", line: 576, kind: "hard-delete" },
+  { file: "src/lib/team-admin.ts", line: 587, kind: "hard-delete" },
   { file: "src/lib/tenancy.ts", line: 128, kind: "exempt" },
   { file: "src/memory/actions.ts", line: 47, kind: "snapshot" },
   { file: "src/memory/actions.ts", line: 80, kind: "snapshot" },
