@@ -270,12 +270,15 @@ export async function revertEntry(
     ...(recreatedForMeta.length ? { recreated_incoming: recreatedForMeta } : {}),
   };
   const projectedRowBytes = (contentIsFullCopy ? row.content_bytes : 0) + row.tags_bytes + projectedStateBytes + utf8Bytes(JSON.stringify(metaCandidate)) + 1024;
-  // recreated_incoming is the only optional part of this row (a redo hint, not required history), so
-  // it is the only thing dropped when the row would not fit — the same truncate-the-optional-part
-  // fallback the merge writer applies to its own meta.incoming.
-  const oversized = projectedRowBytes > VERSION_ROW_BUDGET_BYTES && recreatedForMeta.length > 0;
-  if (oversized) console.error("Revert version row exceeds the row budget; dropping recreated_incoming bookkeeping (non-fatal):", { entryId: id, projectedRowBytes });
-  const snapshotMeta = oversized ? { nonce, target_seq: target.seq, reverted_reason: target.reason, ...(restoreWhen ? { when: true } : {}) } : metaCandidate;
+  // recreated_incoming looks like the row's one optional part, the way meta.incoming is optional for
+  // the merge writer's own row — but dropping it is not a safe fallback here (U19): a merge's incoming
+  // is re-created at most once ever, and that promise is kept entirely by this record. A row that lost
+  // it here would let a later rollback past the same merge re-create it a second time, permanently.
+  // Unlike the merge writer's optional text, there is nothing else in this row safe to drop: content
+  // is the row's own required history (shrinking it would corrupt reconstruction), so an oversized
+  // full copy is only ever logged, the same residual risk the spec already accepts for a row that
+  // grows past what a scoped read can predict.
+  if (projectedRowBytes > VERSION_ROW_BUDGET_BYTES) console.error("Revert version row may exceed the row budget (non-fatal, nothing dropped):", { entryId: id, projectedRowBytes });
 
   let results;
   try {
@@ -289,7 +292,7 @@ export async function revertEntry(
         // recreated_incoming carries only ids and which merge each belongs to (never content, never
         // owner fields) — enough to find a row again or tell a merge was already covered, at a
         // constant, tiny cost regardless of how large the fact itself is (U13).
-        meta: snapshotMeta, now,
+        meta: metaCandidate, now,
       }),
       // versioning: snapshot
       env.DB.prepare(updateSql).bind(...p.values()),
