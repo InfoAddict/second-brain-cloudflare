@@ -8,6 +8,7 @@
  * than about a hand-trimmed fixture.
  */
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { makeMemoryKV, makeTestEnv, makeAIMock, makeVectorizeMock } from "../helpers/make-env";
 import { makeSqliteD1, stripSqlComments, splitSchemaStatements, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -18,7 +19,10 @@ import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
 
-const FIXTURE = new URL("../fixtures/schema-3.7.0.sql", import.meta.url);
+// A string path, not new URL(...): a duplicate global URL type (DOM lib vs node:url) makes
+// readFileSync's URL overload unresolvable under this project's tsconfig. Same convention as
+// every other fixture path in test/ (e.g. db-init.test.ts's own schema.sql read).
+const FIXTURE = resolve(import.meta.dirname, "../fixtures/schema-3.7.0.sql");
 
 /** The real SqliteD1 facade (batch, queueing, everything Task 1-6's code relies on), started
  * empty and loaded from the frozen 3.7.0 fixture instead of the current db/schema.sql. */
