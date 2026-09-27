@@ -35,14 +35,14 @@ async function call(name: string, args: Record<string, unknown> = {}, user: Iden
   }
 }
 
-function seedTrash(id: string, deletedAt: number, opts: { content?: string; source?: string } = {}) {
+function seedTrash(id: string, deletedAt: number, opts: { content?: string; source?: string; nonce?: string } = {}) {
   sqlite.db.prepare(
-    `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason)
-     VALUES (?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'mcp', 'forget')`,
+    `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce)
+     VALUES (?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'mcp', 'forget', ?)`,
   ).bind(
     id, identity?.personalWorkspaceId ?? "", identity?.userId ?? "",
     opts.content ?? `content for ${id}`, JSON.stringify({ source: opts.source ?? "api" }),
-    deletedAt, identity?.userId ?? "",
+    deletedAt, identity?.userId ?? "", opts.nonce ?? `nonce-${id}`,
   ).run();
 }
 
@@ -75,6 +75,20 @@ describe("list_recent(in_trash: true)", () => {
     expect(text).toContain("via Cursor");
     expect(text).toContain("notion");
     expect(text).toContain("To bring one back, call undo with its ID.");
+  });
+
+  it("includes each row's nonce, so undo can pin its restore or Delete forever to the exact row", async () => {
+    seedTrash("e1", Date.now(), { nonce: "nonce-abc-123" });
+    const text = await call("list_recent", { in_trash: true });
+    expect(text).toContain("ID: e1");
+    expect(text).toContain("Nonce: nonce-abc-123");
+  });
+
+  it("omits the Nonce line for a legacy row that predates the nonce column", async () => {
+    seedTrash("e1", Date.now(), { nonce: "" });
+    const text = await call("list_recent", { in_trash: true });
+    expect(text).toContain("ID: e1");
+    expect(text).not.toContain("Nonce:");
   });
 
   it("rejects tag, after, before, actor and project alongside in_trash", async () => {

@@ -1021,7 +1021,12 @@ export function buildMcpServer(
             : item.channel === "rest" ? "in the dashboard"
             : "via an AI tool";
           const source = item.source ? ` · ${item.source}` : "";
-          return `${i + 1}. [Deleted ${date} · ${daysLabel} · ${who}${source}]\nID: ${item.id}\n${item.preview}`;
+          // Nonce (Track 1, adv-final MAJOR 1): the trash row's own per-row identity, so undo can
+          // pin a restore or Delete forever to the exact physical row this listing saw, not
+          // whatever now answers to this id after a purge frees it and a fresh forget reuses it.
+          // Omitted for a legacy row (nonce "") — nothing to pin to.
+          const nonceLine = item.nonce ? `\nNonce: ${item.nonce}` : "";
+          return `${i + 1}. [Deleted ${date} · ${daysLabel} · ${who}${source}]\nID: ${item.id}${nonceLine}\n${item.preview}`;
         });
         const footer = "To bring one back, call undo with its ID. Items are removed for good when their days run out.";
         return { content: [{ type: "text", text: `${blocks.join("\n\n")}\n\n${footer}` }] };

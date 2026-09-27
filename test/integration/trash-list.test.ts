@@ -40,16 +40,17 @@ interface TrashSeed {
   channel?: string;
   content?: string;
   source?: string;
+  nonce?: string;
 }
 
 function seedTrash(s: TrashSeed) {
   sqlite.db.prepare(
-    `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason)
-     VALUES (?, ?, ?, ?, ?, '[]', '[]', ?, ?, ?, ?)`,
+    `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce)
+     VALUES (?, ?, ?, ?, ?, '[]', '[]', ?, ?, ?, ?, ?)`,
   ).bind(
     s.id, s.workspaceId, s.actorId, s.content ?? `content for ${s.id}`,
     JSON.stringify({ source: s.source ?? "api" }),
-    s.deletedAt, s.deletedBy, s.channel ?? "rest", s.reason ?? "forget",
+    s.deletedAt, s.deletedBy, s.channel ?? "rest", s.reason ?? "forget", s.nonce ?? `nonce-${s.id}`,
   ).run();
 }
 
@@ -183,6 +184,18 @@ describe("listTrash", () => {
 
     const companyOnly = await listTrash(env, owner, { limit: 20, layer: "company", config: CONFIG });
     expect(companyOnly.items.map((i) => i.id)).toEqual(["owner-company"]);
+  });
+
+  it("includes each row's own nonce, so a caller can pin a later restore or Delete forever to it", async () => {
+    seedTrash({ id: "owner-private", workspaceId: owner.personalWorkspaceId, actorId: owner.userId, deletedBy: owner.userId, deletedAt: 1000, nonce: "abc-123" });
+    const result = await listTrash(env, owner, { limit: 20, config: CONFIG });
+    expect(result.items[0].nonce).toBe("abc-123");
+  });
+
+  it("surfaces an empty nonce as-is for a legacy row (predates the nonce column)", async () => {
+    seedTrash({ id: "legacy-row", workspaceId: owner.personalWorkspaceId, actorId: owner.userId, deletedBy: owner.userId, deletedAt: 1000, nonce: "" });
+    const result = await listTrash(env, owner, { limit: 20, config: CONFIG });
+    expect(result.items[0].nonce).toBe("");
   });
 });
 

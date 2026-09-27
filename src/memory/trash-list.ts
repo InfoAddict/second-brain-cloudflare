@@ -19,6 +19,15 @@ export interface TrashListItem {
   layer: "personal" | "company" | "system";
   can_restore: boolean;
   can_delete_forever: boolean;
+  /**
+   * The trash row's own per-row identity (Track 1, adv-final MAJOR 1): a purge can free `id`
+   * and a fresh forget can reuse it, so restore and Delete forever pin their mutation to this,
+   * not to id alone. Surfaced here so a caller that lists the trash and then acts on a row
+   * moments later is acting on the exact physical row it saw, not whatever now answers to that
+   * id. `""` for a row trashed before this column existed — never treated as a match, only as
+   * a conflict, by the engine that consumes it.
+   */
+  nonce: string;
 }
 
 export interface ListTrashResult {
@@ -58,6 +67,7 @@ interface TrashRow {
   deleted_by: string;
   workspace_id: string;
   source: string | null;
+  nonce: string;
 }
 
 interface DeletedEventRow {
@@ -111,7 +121,7 @@ async function pageForWorkspace(
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, substr(t.content, 1, 400) AS preview, t.deleted_at, t.reason, t.deleted_by, t.workspace_id,
-            json_extract(t.row_json, '$.source') AS source
+            json_extract(t.row_json, '$.source') AS source, t.nonce
        FROM entries_trash t
       WHERE t.workspace_id = ${wsSql} AND ${restoreSql}${cursorSql}
       ORDER BY t.deleted_at DESC, t.id DESC
@@ -211,6 +221,7 @@ export async function listTrash(
       layer: layerOfRow(row),
       can_restore: true,
       can_delete_forever: true,
+      nonce: row.nonce,
     };
   });
 
