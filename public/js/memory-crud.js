@@ -154,6 +154,18 @@ function openConfirm(id, btnOrCard) {
   })
   pendingForgetId = id
   pendingForgetCard = card
+  // The default-phrased body renders immediately; if the owner changed the retention
+  // period, GET /config's answer (shared with team.js's settings reads) replaces it in place.
+  if (typeof readTeamConfig === 'function') {
+    readTeamConfig()
+      .then((cfg) => {
+        const days = cfg?.TRASH_RETENTION_DAYS
+        if (typeof days !== 'number' || pendingForgetId !== id) return
+        const body = document.getElementById('confirm-body')
+        if (body) body.textContent = t('memories.confirmBodyRetention', { n: days })
+      })
+      .catch(() => {})
+  }
 }
 /**
  * Tell any open list that this memory has been dealt with.
@@ -362,6 +374,8 @@ function timelineEventLabel(event) {
     status_changed: 'memories.evStatusChanged',
     shared: 'memories.evShared',
     unshared: 'memories.evUnshared',
+    restored: 'memories.evRestored',
+    purged: 'memories.evPurged',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }

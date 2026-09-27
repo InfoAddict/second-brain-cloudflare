@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (148 queries, 70 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (156 queries, 75 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1271,7 +1271,14 @@ describe("the checker over the real source tree", () => {
     // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
     // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
     // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
-    ).toEqual({ queries: 148, exempt: 70, checked: 12, outerJoin: 1 });
+    // Deliberate: +8 queries and +5 scope-exempt (148/70 -> 156/75) for T-0089.1.2/T-0089.4.9/T-0089.8
+    // (trash, purge, member removal, disconnect purge, restore): src/memory/trash.ts's trash size read
+    // (by-id), trash insert x2 (tier 1/2, by-id), purge candidate read and purge batch's INSERT/DELETEs
+    // (scope-exempt: retention purge, global by design), the disconnect purge's scoped size read (carries
+    // scopeWhere), getTrashedEntry's scoped SELECT (carries scopeWhere), restoreEntry's INSERT/edge-restore
+    // (by-id, caller pre-authorized), and src/lib/team-admin.ts's cleanupMemberData reads/deletes
+    // (scope-exempt: offboarding, by workspace already resolved to the removed member's own).
+    ).toEqual({ queries: 156, exempt: 75, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

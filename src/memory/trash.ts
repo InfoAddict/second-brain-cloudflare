@@ -1,5 +1,4 @@
 import type { Env } from "../env";
-import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
 import {
   TRASH_ROW_BUDGET_BYTES, VERSION_DELETE_CHUNK,
@@ -10,7 +9,11 @@ import { scopeWhere } from "../lib/scope";
 import { assertCanMutateEntry } from "../lib/entry-access";
 import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteVectorIds } from "../vectorize/batch";
-import { edgesJsonSql, rowJsonSql } from "./entry-columns";
+import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
+import { upsertEntryVectors } from "../capture/store";
+import { isVectorizeUnavailable } from "../vectorize/health";
+import { resolveConfig, type Config } from "../config";
+import { getStatus } from "./status";
 import { Params } from "./params";
 
 export type TrashReason = "forget" | "mirror" | "disconnect";
@@ -321,4 +324,111 @@ export async function purgeTrash(
 function rowsWrittenOf(results: Array<{ meta?: { rows_written?: number } } | undefined>, estimate = 0): number {
   const sum = results.reduce((n, r) => n + (r?.meta?.rows_written ?? 0), 0);
   return Math.max(sum, estimate);
+}
+
+// ── Restore ──────────────────────────────────────────────────────────────────
+
+export interface TrashedEntryRow {
+  id: string;
+  workspace_id: string;
+  actor_id: string;
+  content: string;
+  row_json: string;
+  edges_json: string;
+  deleted_at: number;
+  reason: TrashReason | string;
+}
+
+/** Scoped like `getReadableEntry`: an id outside the caller's readable trash reads as missing. */
+export async function getTrashedEntry(env: Env, identity: Identity | undefined, id: string): Promise<TrashedEntryRow | null> {
+  if (!identity) {
+    // scope-exempt: identity-less branch: pre-tenancy callers and unit fixtures
+    return env.DB.prepare(`SELECT * FROM entries_trash WHERE id = ?`).bind(id).first<TrashedEntryRow>();
+  }
+  const scope = scopeWhere(identity);
+  return env.DB.prepare(
+    `SELECT * FROM entries_trash WHERE id = ? AND ${scope.clause}`,
+  ).bind(id, ...scope.bindings).first<TrashedEntryRow>();
+}
+
+function isPrimaryKeyConflict(e: unknown): boolean {
+  return /UNIQUE constraint failed/i.test(String((e as { message?: string })?.message ?? e));
+}
+
+export type RestoreResult =
+  | { status: "not_found" }
+  | { status: "conflict" }
+  | { status: "reembed_failed" }
+  | { status: "restored"; edgesRestored: number; trashedReason: string; vectorCount: number };
+
+/**
+ * Restore a trashed entry with its links: embeds first (so a transient failure leaves it safely in
+ * the trash), then one batch inserts the entries row, restores the edges whose other endpoint still
+ * exists, and removes the trash row. No version is written — restore is the trash's own undo.
+ */
+export async function restoreEntry(
+  env: Env,
+  trashed: TrashedEntryRow,
+  change: ChangeContext,
+  config?: Readonly<Config>,
+): Promise<RestoreResult> {
+  const row = JSON.parse(trashed.row_json) as Record<string, unknown>;
+  const tags: string[] = (() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })();
+  const deprecated = getStatus(tags) === "deprecated";
+
+  let vectorIds: string[] = [];
+  if (!deprecated) {
+    try {
+      const cfg = config ?? await resolveConfig(env);
+      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, String(row.source ?? "api"), Date.now(), cfg, { workspaceId: trashed.workspace_id, actorId: trashed.actor_id });
+      vectorIds = stored.vectorIds;
+    } catch (e) {
+      if (!(await isVectorizeUnavailable(env))) return { status: "reembed_failed" };
+      console.error("Vectorize unavailable — restoring keyword-only:", e);
+      vectorIds = [];
+    }
+  }
+
+  const p = new Params();
+  const { names, exprs } = restoreColumnsSql("t");
+  const id = p.add(trashed.id);
+  const vecJson = p.add(JSON.stringify(vectorIds));
+  // workspace_id comes from the restored entry, not the trashed edge's own snapshot (spec: "taken from the source entry").
+  const edgeCols = EDGE_ROW_COLUMNS.map((c) => c === "workspace_id" ? "t.workspace_id" : `json_extract(j.value, '$.${c}')`).join(", ");
+  let results;
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(
+        // scope-exempt: by-id: the caller authorized the trash row before building this batch
+        `INSERT INTO entries (id, ${names}, content, vector_ids)
+         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t WHERE t.id = ${id}`,
+      ).bind(...p.values()),
+      env.DB.prepare(
+        // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where the other endpoint still exists
+        `INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
+         SELECT ${edgeCols}
+           FROM entries_trash t, json_each(t.edges_json) j
+          WHERE t.id = ${id}
+            AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${id} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
+      ).bind(...p.values()),
+      env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${id}`).bind(...p.values()),
+    ]);
+  } catch (e) {
+    if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
+    if (isPrimaryKeyConflict(e)) return { status: "conflict" };
+    throw e;
+  }
+
+  if (changedRows(results[2]) === 0) {
+    // The trash row vanished between the read and the batch (a racing restore or purge).
+    if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
+    return { status: "not_found" };
+  }
+
+  return {
+    status: "restored",
+    edgesRestored: changedRows(results[1]),
+    trashedReason: trashed.reason,
+    vectorCount: vectorIds.length,
+  };
 }

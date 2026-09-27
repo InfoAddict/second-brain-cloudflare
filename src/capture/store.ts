@@ -40,6 +40,34 @@ export async function storeEntry(
   config: Readonly<Config> = DEFAULTS,
   writeCtx: WriteContext = OWNER_WRITE_CONTEXT
 ): Promise<StoredEntry> {
+  const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx);
+
+  // This UPDATE is the tail of a version write (fresh vectors for the row). It
+  // deliberately does NOT touch workspace_id: an update edits a row in place and
+  // must never move it between workspaces — that is share/unshare's job alone.
+  // Restamping here would let any context-less caller silently reset a row to ''.
+  await env.DB.prepare(
+    `UPDATE entries SET vector_ids = ? WHERE id = ?`
+  ).bind(JSON.stringify(stored.vectorIds), id).run();
+
+  return stored;
+}
+
+/**
+ * Chunk, embed and upsert an entry's vectors, without touching D1. `storeEntry` follows it with the
+ * `vector_ids` UPDATE; a restore from the trash has no row yet, so it upserts first and puts the ids
+ * in the INSERT that brings the row back.
+ */
+export async function upsertEntryVectors(
+  env: Env,
+  id: string,
+  content: string,
+  tags: string[],
+  source: string,
+  now: number,
+  config: Readonly<Config> = DEFAULTS,
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
   // an external system produces vectors whose entire content is templated trailer
@@ -87,14 +115,6 @@ export async function storeEntry(
   for (let i = 0; i < vectors.length; i += VECTORIZE_UPSERT_BATCH) await env.VECTORIZE.upsert(vectors.slice(i, i + VECTORIZE_UPSERT_BATCH));
 
   const vectorIds = vectors.map(v => v.id);
-
-  // This UPDATE is the tail of a version write (fresh vectors for the row). It
-  // deliberately does NOT touch workspace_id: an update edits a row in place and
-  // must never move it between workspaces — that is share/unshare's job alone.
-  // Restamping here would let any context-less caller silently reset a row to ''.
-  await env.DB.prepare(
-    `UPDATE entries SET vector_ids = ? WHERE id = ?`
-  ).bind(JSON.stringify(vectorIds), id).run();
 
   // The first chunk's vector rides back out with the ids. Callers that need to
   // ask "what is this entry near?" straight after writing it — the update path

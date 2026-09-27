@@ -8,6 +8,7 @@ import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
 import { readEntryTimeline, seesPrivateHistory } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
+import { getTrashedEntry, restoreEntry } from "../memory/trash";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
@@ -198,6 +199,34 @@ export async function handleEntriesRoutes(
       payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
     });
     return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS });
+  }
+
+  // POST /restore — bring a memory back from the trash, with its links and index.
+  if (url.pathname === "/restore" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    const id = body.id.trim();
+
+    const trashed = await getTrashedEntry(env, auth, id);
+    if (!trashed) return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+    const denied = assertCanMutateEntry(auth, trashed);
+    if (denied) return json({ ok: false, error: denied.message }, 403);
+
+    const cfg = await resolveConfig(env);
+    const result = await restoreEntry(env, trashed, { actorId: auth.userId, channel: "rest" }, cfg);
+    if (result.status === "not_found") return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+    if (result.status === "conflict") return json({ ok: false, error: `An entry with ID ${id} already exists` }, 409);
+    if (result.status === "reembed_failed") return json({ ok: false, error: "Could not restore: re-indexing failed. Try again." }, 502);
+
+    auditEvent(env, ctx, {
+      entryId: id, actorId: auth.userId, event: "restored",
+      payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
+    });
+    return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
   }
 
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open
