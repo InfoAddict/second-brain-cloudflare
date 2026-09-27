@@ -14,8 +14,28 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
   };
   const ORDINAL_SUFFIX = "(?:st|nd|rd|th)?";
 
+  // Safe failure mode, shared by every handler that can match month-day-shaped text: a wrong
+  // filter hides the right memory; a missing filter only broadens results. So a match only
+  // becomes a filter when nothing else could explain the text right after it: nothing follows, or
+  // what follows (after any run of capitalized words) is a timezone or time expression ("New York
+  // time", "EST"). Any other following text, name or description, capitalized or not, means the
+  // match isn't standing alone as a temporal phrase. Relative phrases below ("yesterday", "last
+  // week") have no such collision risk with a name ("yesterday Cafe" isn't an English business
+  // name the way "Aug 8 Cafe" reads as one) and are intentionally not guarded by this.
+  const isSafeToFilter = (remainder: string): boolean => {
+    if (/^\s+(?:[A-Z][a-zA-Z]*\s+)*(?:time\b|o'?clock\b|[ap]\.?m\.?\b|(?:UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|CET|CEST|BST|JST|IST)\b)/.test(remainder)) return true;
+    return !/^\s+\S/.test(remainder);
+  };
+
   type TimeResult = { after?: number; before?: number };
-  const patterns: Array<[RegExp, (m: RegExpMatchArray) => TimeResult | undefined]> = [
+  type Handler = (m: RegExpMatchArray) => TimeResult | undefined;
+  const guarded = (handler: Handler): Handler => m => {
+    const result = handler(m);
+    if (!result) return undefined;
+    return isSafeToFilter(query.slice((m.index ?? 0) + m[0].length)) ? result : undefined;
+  };
+
+  const patterns: Array<[RegExp, Handler]> = [
     [/\blast\s+(\d+)\s+days?\b/i, m => ({ after: now - parseInt(m[1]) * MS_DAY })],
     [/\blast\s+(\d+)\s+weeks?\b/i, m => ({ after: now - parseInt(m[1]) * MS_WEEK })],
     [/\blast\s+week\b/i, () => ({ after: now - MS_WEEK })],
@@ -32,14 +52,16 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
       return { after: s, before: s + MS_DAY };
     }],
     [/\btoday\b/i, () => ({ after: startOfDay(d) })],
-    [new RegExp(`\\baround\\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s+(\\d{1,2})${ORDINAL_SUFFIX}\\b`, "i"), m => {
+    // The only relative-phrase-array handler that matches month-day text, so the only one here
+    // guarded: "around May 5th Cafe" must not become a six-day filter (T-0105.4).
+    [new RegExp(`\\baround\\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s+(\\d{1,2})${ORDINAL_SUFFIX}\\b`, "i"), guarded(m => {
       const MONTHS: Record<string, number> = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
       const month = MONTHS[m[1].toLowerCase().slice(0, 3)];
       const day = parseInt(m[2]);
       if (!isValidCalendarDate(d.getFullYear(), month, day)) return undefined;
       const center = new Date(d.getFullYear(), month, day).getTime();
       return { after: center - 3 * MS_DAY, before: center + 3 * MS_DAY };
-    }],
+    })],
   ];
 
   for (const [pattern, handler] of patterns) {
@@ -59,23 +81,13 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
   };
   const explicit = new RegExp(`\\b(?:on\\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\s+(\\d{1,2})${ORDINAL_SUFFIX}(?:,\\s*(\\d{4}))?\\b`, "gi");
 
-  // Safe failure mode: a wrong filter hides the right memory; a missing filter only broadens
-  // results. So a month-day match only becomes a same-day filter when nothing else could explain
-  // it, and the checks below all lean toward no filter rather than a guessed one:
-  //  - "as of <date>" is a future as-of read (Track 2 lane C), never a created-on-that-day filter.
-  //  - "by/until/before/after/since/from <date>" name a range or an open end that a same-day
-  //    window would misrepresent; the parser has no range semantics for them, so it produces no
-  //    filter at all for the whole query rather than guess one (a preposition never rescues a
-  //    date the checks below would otherwise reject, and never causes an incorrect one either).
-  //  - Anything else immediately following the date (a name, a description) means it isn't
-  //    standing alone as a temporal adverbial, unless that text is itself a timezone or time
-  //    expression ("New York time", "EST"), which confirms rather than contradicts a real date.
+  // "as of <date>" is a future as-of read (Track 2 lane C), never a created-on-that-day filter.
+  // "by/until/before/after/since/from <date>" name a range or an open end this parser has no
+  // semantics for, so they produce no filter at all rather than guess one: a preposition never
+  // rescues a date isSafeToFilter would otherwise reject, and never causes an incorrect one either.
   const isAsOfPhrase = (index: number) => /\bas\s+of\s*$/i.test(query.slice(0, index));
   const BLOCKED_PREPOSITIONS = "by|until|before|after|since|from";
   const precededByBlockedPreposition = (index: number) => new RegExp(`\\b(?:${BLOCKED_PREPOSITIONS})\\s*$`, "i").test(query.slice(0, index));
-  // Scans past a run of capitalized words ("New York") to find the time-zone or time expression
-  // that confirms them: "New York time" and "New York EST" both count, "New York" alone does not.
-  const followedByTimeWord = (index: number, length: number) => /^\s+(?:[A-Z][a-zA-Z]*\s+)*(?:time\b|o'?clock\b|[ap]\.?m\.?\b|(?:UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|CET|CEST|BST|JST|IST)\b)/.test(query.slice(index + length));
 
   const calendarValid = [...query.matchAll(explicit)].filter(match => {
     const year = match[3] ? Number(match[3]) : d.getFullYear();
@@ -88,12 +100,10 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
     return { cleanQuery: query };
   }
 
-  const genuine = calendarValid.filter(match => {
-    if (match.index === undefined) return false;
-    if (isAsOfPhrase(match.index)) return false;
-    if (followedByTimeWord(match.index, match[0].length)) return true;
-    return !/^\s+\S/.test(query.slice(match.index + match[0].length));
-  });
+  const genuine = calendarValid.filter(match =>
+    match.index !== undefined
+    && !isAsOfPhrase(match.index)
+    && isSafeToFilter(query.slice(match.index + match[0].length)));
 
   if (genuine.length === 1) {
     const match = genuine[0];

@@ -261,4 +261,78 @@ describe("parseTimePhrase", () => {
       expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
     });
   });
+
+  // T-0105.4 found the safe-name-follower guard lived only in the explicit month-day block:
+  // "around May 5th Cafe" still became a six-day filter through the "around" handler, which never
+  // checked what followed its match. The guard belongs to every handler that can match
+  // month-day-shaped text, so a name or description right after it is ambiguous with a business
+  // name the way "yesterday"/"last week" never are ("yesterday Cafe" isn't a name pattern the way
+  // "Aug 8 Cafe" is). This walks each group's own trigger phrasing to prove the guard is shared
+  // (not re-implemented or re-forgotten) where it applies, and confirms it deliberately does not
+  // apply where there is no such ambiguity to guard against.
+  describe("structural: the safe-name-follower guard is shared across month-day handlers", () => {
+    const MONTH_DAY_HANDLERS: Array<[string, string]> = [
+      ["around month-day, ordinal", "around May 5th"],
+      ["on month-day", "on May 5"],
+      ["bare month-day", "May 5"],
+      ["on month-day, ordinal", "on May 5th"],
+    ];
+
+    for (const [label, trigger] of MONTH_DAY_HANDLERS) {
+      describe(label, () => {
+        it("filters on its own, unsuffixed", () => {
+          expect(parseTimePhrase(trigger, NOW).after).toBeDefined();
+        });
+
+        it("gives no filter when followed by a capitalized name", () => {
+          const query = `${trigger} Cafe`;
+          expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+        });
+
+        it("gives no filter when followed by a multi-word capitalized name", () => {
+          const query = `${trigger} Street Fair`;
+          expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+        });
+
+        it("keeps filtering when followed by a 'time' timezone qualifier", () => {
+          const base = parseTimePhrase(trigger, NOW);
+          const withZone = parseTimePhrase(`${trigger} Paris time`, NOW);
+          expect(withZone.after).toBe(base.after);
+          expect(withZone.before).toBe(base.before);
+        });
+
+        it("keeps filtering when followed by an explicit zone abbreviation", () => {
+          const base = parseTimePhrase(trigger, NOW);
+          const withZone = parseTimePhrase(`${trigger} UTC`, NOW);
+          expect(withZone.after).toBe(base.after);
+          expect(withZone.before).toBe(base.before);
+        });
+      });
+    }
+
+    it("reproduces the exact review repro: an ordinal venue name after 'around'", () => {
+      const query = "What is around May 5th Cafe?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    const RELATIVE_PHRASE_HANDLERS: Array<[string, string]> = [
+      ["last N days", "last 7 days"],
+      ["last N weeks", "last 2 weeks"],
+      ["last week", "last week"],
+      ["this week", "this week"],
+      ["last month", "last month"],
+      ["this month", "this month"],
+      ["yesterday", "yesterday"],
+      ["today", "today"],
+    ];
+
+    for (const [label, trigger] of RELATIVE_PHRASE_HANDLERS) {
+      it(`${label}: has no name-collision risk, so a following name does not suppress its filter`, () => {
+        const base = parseTimePhrase(trigger, NOW);
+        const withName = parseTimePhrase(`${trigger} Cafe`, NOW);
+        expect(withName.after).toBe(base.after);
+        expect(withName.before).toBe(base.before);
+      });
+    }
+  });
 });
