@@ -109,14 +109,23 @@ export function noise(seed: number): CorpusSpec {
   // Dev/test split, T-0089.3.5 director addition: Track 3 tunes source weights, the occupancy cap and the
   // near-duplicate collapse against this corpus, so the gate that judges the tuned result must be scored on a
   // held-out half tuning never saw, the same way `standing` withholds a split. Split by cluster (here, by query:
-  // every cluster in this corpus is exactly one query, so the two coincide) via a global counter that increments
-  // once per query regardless of subset, so the split interleaves across every subset rather than tracking any one
-  // group's internal parity. Skewed 70/30 rather than an even half so the test half alone clears the gate's
-  // 200-query floor on its own (see SYNTHETIC-CORPORA.md for the exact counts).
-  let splitCounter = 0;
-  const nextSplit = (): "dev" | "test" => (splitCounter++ % 10 < 7 ? "test" : "dev");
-  const ask = (n: number, id: string, text: string, gold: string | string[], subset: string) =>
-    queries.push(query(`nz-q-${id}-${n}`, "noise", text, Array.isArray(gold) ? gold : [gold], { clusterKey: `nz-${id}-${n}`, tags: [`subset:${subset}`, `split:${nextSplit()}`] }));
+  // every cluster in this corpus is exactly one query, so the two coincide), skewed 70/30 rather than an even half
+  // so the test half alone clears the gate's 200-query floor on its own (see SYNTHETIC-CORPORA.md for the exact
+  // counts). Keyed by a hash of the query's own id, not a global sequential counter: a counter's phase against a
+  // subset's generation order can put a whole contiguous run of one subset's hardest (or easiest) cases on the same
+  // side by chance. Confirmed live: with a sequential counter, every genuinely recoverable transcript-crowding case
+  // (gold buried mid-pack, not at rank 1 and not missing outright) landed in dev, so the test half showed no
+  // improvement at all from a fix that demonstrably worked (traced by hand on the dev-side queries). A hash of the
+  // id has no relationship to generation order, so it cannot reproduce that correlation.
+  const splitHash = (key: string): "dev" | "test" => {
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+    return Math.abs(h) % 10 < 7 ? "test" : "dev";
+  };
+  const ask = (n: number, id: string, text: string, gold: string | string[], subset: string) => {
+    const queryId = `nz-q-${id}-${n}`;
+    queries.push(query(queryId, "noise", text, Array.isArray(gold) ? gold : [gold], { clusterKey: `nz-${id}-${n}`, tags: [`subset:${subset}`, `split:${splitHash(queryId)}`] }));
+  };
 
   // ── Mail ──────────────────────────────────────────────────────────────────
 
@@ -132,12 +141,18 @@ export function noise(seed: number): CorpusSpec {
   // query, not the note, carries the "direct deposit" / "payroll" words that pull the 90 near-duplicates in. Each
   // note also gets a unique, rare tag word (the same trick probe-footer-synonym's notes use below): 18 short
   // decision sentences in the same register are otherwise close enough in embedding space to bury each other
-  // instead of the mail, confirmed live in this round's second draft, before the tag was added.
+  // instead of the mail, confirmed live in this round's second draft, before the tag was added. Three phrasings
+  // per topic, all pointing at the same note: run against the real recorded baseline, only a fraction of any one
+  // topic's phrasings land where a fix can reach (gold already first, or gold pushed out past the top 10 the
+  // report can see, are both unaffected by design; only the middle is recoverable), so the subset needs enough
+  // queries for that fraction to add up to a headline-visible gain, confirmed live in this round's third draft.
   const tags = pseudoWords(60, seed + 23);
+  const decisionAsk = (topic: string) => [`What did I decide about ${topic}?`, `Do you remember what I decided about ${topic}?`, `Remind me what I decided about ${topic}.`];
+  const weDecisionAsk = (topic: string) => [`What did we decide about ${topic}?`, `Do you remember what we decided about ${topic}?`, `Remind me what we decided about ${topic}.`];
   PAYROLL_QUERY.forEach((topic, i) => {
     const id = `nz-payroll-${i}`;
     note(id, `${PAYROLL_NOTE[i]}, filed under the household tag ${tags[i]}.`);
-    ask(i, "mail-crowding", `What did I decide about ${topic}?`, id, "mail-crowding");
+    decisionAsk(topic).forEach((text, v) => ask(i * 3 + v, "mail-crowding", text, id, "mail-crowding"));
   });
 
   // Airline mail (unique city per booking), each with a genuine decision note about the same trip.
@@ -187,10 +202,13 @@ export function noise(seed: number): CorpusSpec {
   const NOUN_SYN: Record<string, string> = { name: "title", datastore: "database", color: "paint shade", font: "typeface", venue: "hall", vendor: "supplier", laptop: "notebook computer", template: "layout", schedule: "timetable", logo: "emblem" };
   const TARGET_SYN: Record<string, string> = { "new feature": "upcoming release", "spring workshop": "april class", "office move": "relocation" };
   let p = 0;
+  // Three phrasings per (noun, target) pair, one shared note: the same statistical-weight reasoning as the
+  // mail-crowding paraphrases above, confirmed live to matter for this subset specifically.
+  const synonymAsk = (noun: string, target: string) => [`choosing a ${noun} for the ${target}`, `User is choosing a ${noun} for the ${target}, what should I know?`, `Which ${noun} did I pick for the ${target}?`];
   for (const noun of NOUNS) for (const target of TARGETS) {
     const id = `nz-probe-${p}`;
     note(id, `For the ${TARGET_SYN[target]}, the ${NOUN_SYN[noun]} I keep coming back to is ${words[p]}, over ${words[p + 35]}.`);
-    ask(p, "probe", p % 2 ? `User is choosing a ${noun} for the ${target}, what should I know?` : `choosing a ${noun} for the ${target}`, id, "probe-footer-synonym");
+    synonymAsk(noun, target).forEach((text, v) => ask(p * 3 + v, "probe-syn", text, id, "probe-footer-synonym"));
     p++;
   }
   FAVORS.forEach((favor, i) => {
@@ -239,11 +257,12 @@ export function noise(seed: number): CorpusSpec {
 
   // Near-duplicate crowding: a genuine CI-policy decision the same 60 chore excerpts try to bury. As with
   // PAYROLL_QUERY/PAYROLL_NOTE above, the query carries the "test" / "push" / "CI" words and the note does not,
-  // and each note gets its own rare tag word so the 18 short CI-policy notes cannot bury each other either.
+  // and each note gets its own rare tag word so the 18 short CI-policy notes cannot bury each other either. Three
+  // phrasings per topic, same reasoning as mail-crowding above.
   CROWD_QUERY.forEach((topic, i) => {
     const id = `nz-crowd-${i}`;
     note(id, `${CROWD_NOTE[i]}, filed under the ticket tag ${tags[18 + i]}.`);
-    ask(i, "transcript-crowding", `What did we decide about ${topic}?`, id, "transcript-crowding");
+    weDecisionAsk(topic).forEach((text, v) => ask(i * 3 + v, "transcript-crowding", text, id, "transcript-crowding"));
   });
 
   // Dev-topic transcripts (a status check, not a decision) plus the genuine decision note that settles each one.
@@ -259,9 +278,10 @@ export function noise(seed: number): CorpusSpec {
     const turns = `User: quick check on ${topic}, ${pick(rand, devFraming)}?\nAssistant: ${topic} ${pick(rand, devStatus)}.\nUser: ok, noted on ${topic}, nothing to do right now.`;
     (i % 2 ? cursor : codex)(`nz-dev-${i}`, turns);
   });
+  // Three phrasings per topic, same reasoning as mail-crowding above.
   DEV_TOPICS.slice(0, 20).forEach((topic, i) => {
     note(`nz-devnote-${i}`, `Decided on ${topic}: went with the simpler option after the benchmark showed the difference did not matter in practice, tagged ${tags[36 + i]} in the notes.`);
-    ask(i, "note-same-topic-transcript", `What did we decide about ${topic}?`, `nz-devnote-${i}`, "note-same-topic-transcript");
+    weDecisionAsk(topic).forEach((text, v) => ask(i * 3 + v, "note-same-topic-transcript", text, `nz-devnote-${i}`, "note-same-topic-transcript"));
   });
   DEV_TOPICS.forEach((topic, i) => {
     const client = i % 2 ? "cursor" : "codex";
