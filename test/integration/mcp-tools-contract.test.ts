@@ -34,6 +34,7 @@ const EXPECTED_TOOLS = [
   "update",
   "set_status",
   "forget",
+  "undo",
   "share",
   "link",
   "unlink",
@@ -424,6 +425,35 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       expect(forget).not.toMatch(/cannot be undone|permanently/i);
       expect(forget).toMatch(/trash/i);
       expect(forget).toMatch(/removed for good after the retention period \(14 days/i);
+    });
+  });
+
+  describe("undo", () => {
+    it("matches the approved description word for word (T-0089.6.6)", async () => {
+      const undo = (await descriptions()).undo;
+      expect(undo).toBe(
+        "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone.",
+      );
+    });
+
+    it("has no parameter that can delete permanently", async () => {
+      const schema = await schemaFor("undo");
+      expect(schema).not.toHaveProperty("permanent");
+      expect(schema).not.toHaveProperty("confirm");
+      expect(Object.keys(schema).sort()).toEqual(["id", "to_version"]);
+    });
+
+    it("is honest that a hard delete is irreversible and history beyond the cap is gone", async () => {
+      const undo = (await descriptions()).undo;
+      // The top-level description only promises "the most recent change" or "from the trash" — it
+      // never claims universal reversibility, so a tier-3 hard delete (no trash row at all) and a
+      // pruned older version are already outside what it offers.
+      expect(undo).not.toMatch(/undo (any|every) (change|deletion)/i);
+      expect(undo).not.toMatch(/always (restore|recover)/i);
+      // to_version is the one parameter that could be read as reaching arbitrarily far back; its
+      // own description says plainly that pruned history is out of reach.
+      const schema = await schemaFor("undo");
+      expect(schema.to_version.description).toMatch(/age out|no longer (kept|available|reachable)/i);
     });
   });
 

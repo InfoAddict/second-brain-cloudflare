@@ -282,6 +282,32 @@ describe("POST /restore route", () => {
   });
 });
 
+describe("Class 1 audit (R3-1): restoreEntry does not need an authorizedWorkspaceId guard, because a trash row cannot move", () => {
+  it("no statement anywhere updates entries_trash.workspace_id (the invariant this relies on): only INSERT (trash) and DELETE (restore, purge) ever touch the table", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.join(process.cwd(), "src/memory/trash.ts"), "utf8");
+    expect(src).not.toMatch(/UPDATE\s+entries_trash\b/i);
+  });
+
+  it("restoring reads workspace_id from the trash row's own row_json snapshot, not its (never-updated) column: forcing the column after authorization does not redirect the restore", async () => {
+    t = await makeTrashEnv();
+    const { createMember } = await import("../../src/lib/team-admin");
+    const { member: bob } = await createMember(t.env, { name: "Bob" });
+    t.seed("moved", { workspace_id: t.roots.companyWorkspaceId, actor_id: bob.userId });
+    await forgetEntry("moved", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.companyWorkspaceId);
+    const trashed = await getTrashedEntry(t.env, undefined, "moved");
+    // No production path ever does this (confirmed above) — simulated here only to prove that even
+    // if the column were somehow forced to a different workspace after authorization, restoreEntry's
+    // own batch would still land the row where its immutable row_json snapshot says it came from.
+    await t.sqlite.db.prepare(`UPDATE entries_trash SET workspace_id = ? WHERE id = 'moved'`).bind(bob.personalWorkspaceId).run();
+    const res = await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, await resolveConfig(t.env));
+    expect(res.status).toBe("restored");
+    const row = await t.one<any>(`SELECT workspace_id FROM entries WHERE id = 'moved'`);
+    expect(row!.workspace_id).toBe(t.roots.companyWorkspaceId);
+  });
+});
+
 describe("round 2 adversary: a slow losing restore (checklist 36g)", () => {
   it("a losing restore whose embed lands after the winner's row was edited must not leave the old text in the live vector", async () => {
     const vz = statefulVectorize();

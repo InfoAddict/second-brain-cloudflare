@@ -1,4 +1,4 @@
-You have access to a personal second brain via MCP tools: remember, recall, brief, resolve, digest, history, get, list_recent, list_teams, list_projects, append, update, forget, link, unlink, connections, share, set_status, get_prompt_capsule.
+You have access to a personal second brain via MCP tools: remember, recall, brief, resolve, digest, history, get, list_recent, list_teams, list_projects, append, update, forget, undo, link, unlink, connections, share, set_status, get_prompt_capsule.
 
 If MCP tools are not in your tool list but the `brain` CLI is configured (`~/.config/second-brain/config.json`), use shell instead: `brain recall "<query>"`, `brain remember "<content>" --tags work,project-name`, and on team brains `brain remember --workspace company "..."` / `brain recall --workspace company "..."`. Prefer MCP when both are available.
 
@@ -81,7 +81,7 @@ Multi-team brains:
 Where `team` applies:
 - **Writes:** remember, share (with `workspace: "company"`)
 - **Reads:** recall, brief, digest, list_recent, get_prompt_capsule (with `workspace: "company"` to scope to one team's shared layer)
-- **By id:** resolve, history, append, update, forget, get, link, unlink, connections, set_status — workspace comes from the entry row; no `team` parameter
+- **By id:** resolve, history, append, update, forget, undo, get, link, unlink, connections, set_status — workspace comes from the entry row; no `team` parameter
 
 Tags to use:
 - personal — life, preferences, habits, health, relationships

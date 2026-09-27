@@ -29,12 +29,12 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("Delete forever RETURNING on wo
       const change = { actorId: roots.ownerUserId, channel: "rest" as const };
 
       await seed("live1", '["live1","live1-update-9"]');
-      expect(await deleteForever(env, "live1", change)).toEqual({ status: "deleted", from: "live", deletedVectors: 2 });
+      expect(await deleteForever(env, "live1", change, roots.ownerPersonalWorkspaceId)).toEqual({ status: "deleted", from: "live", deletedVectors: 2 });
       expect(deleteByIds).toHaveBeenLastCalledWith(["live1", "live1-update-9"]);
 
       await seed("tr1", "[]");
       await env.DB.batch(trashManyStatements(env, planTrash(await readTrashCandidates(env, ["tr1"])), { reason: "forget", change, now: Date.now() }));
-      expect(await deleteForever(env, "tr1", change)).toEqual({ status: "deleted", from: "trash", deletedVectors: 1 });
+      expect(await deleteForever(env, "tr1", change, roots.ownerPersonalWorkspaceId)).toEqual({ status: "deleted", from: "trash", deletedVectors: 1 });
       expect(deleteByIds).toHaveBeenLastCalledWith(["tr1"]);
       const ev = await env.DB.prepare(`SELECT actor_id FROM entry_events WHERE entry_id = 'tr1' AND event = 'purged'`).first<{ actor_id: string }>();
       expect(ev?.actor_id).toBe(roots.ownerUserId);

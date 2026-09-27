@@ -7,6 +7,8 @@ import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } fro
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
 import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
+import { getTrashedEntry } from "../memory/trash";
+import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { auditEvent, type ChangeContext } from "../lib/audit";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
@@ -14,10 +16,10 @@ import { createEdge, deleteEdge, edgeLabel, isValidEdgeType, kindMismatchMessage
 import { EDGE_TYPES } from "../graph/types";
 import { getConnections } from "../graph/traverse";
 import type { Identity } from "../lib/identity";
-import { assertCanEditContent, assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
+import { assertCanEditContent, assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { listTeamWorkspaces } from "../lib/team-admin";
 import { layerOf, scopeWhereForRead, scopeWrite, effectiveWriteTarget, readTeamParam, readScopeWorkspaces, primaryCompanyWorkspaceId, type WriteContext } from "../lib/scope";
-import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
+import { isManagedMirror, mirrorEditError, mirrorUndoError } from "../integrations/mirror";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
@@ -1008,6 +1010,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       inputSchema: {
         id: z.string().describe("Entry ID from recall or list_recent"),
       },
+      annotations: { destructiveHint: true },
     },
     async ({ id }) => {
       const row = await getReadableEntry(env, identity, id);
@@ -1029,6 +1032,66 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       return { content: [{ type: "text", text: result.trashed
         ? `Moved entry ${id} to the trash; it is removed for good after ${cfg.TRASH_RETENTION_DAYS} days.`
         : `Deleted entry ${id} and ${result.vectorCount} vector(s). It was too large for the trash, so it cannot be restored.` }] };
+    }
+  );
+
+  // ── undo ─────────────────────────────────────────────────────────────────
+  // No permanent parameter, on either surface: Delete forever is REST-only, human-facing (T-0089.4.7),
+  // and unreachable from here by design.
+  server.registerTool(
+    "undo",
+    {
+      description: "Reverse the most recent change to a memory, or restore a memory from the trash. Call when the user says a change was wrong or asks to put something back. Every undo can itself be undone.",
+      inputSchema: {
+        id: z.string().describe("Entry ID from recall, list_recent or history"),
+        to_version: z.number().int().positive().optional().describe("Roll all the way back to this version number instead of just undoing the latest change. Get version numbers from history. Only reaches versions still within the kept history — the oldest eventually age out, and a permanently deleted memory has none left to reach."),
+      },
+      // Reverting a redo lands right back on the change it just reversed (server.ts's own docs on
+      // the tool describe this), so calling it twice does not repeat the first call's effect.
+      annotations: { idempotentHint: false },
+    },
+    async ({ id, to_version }) => {
+      // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of
+      // a forget — a trashed row's. revertEntry reads the row again moments later on its own;
+      // pinning its CAS guard to what this read found is what keeps an unshare in that gap from
+      // landing. No permission check here: revertEntry's own canRevert applies rule (b) (a
+      // member's own newest change on a company row), which assertCanMutateEntry alone would
+      // wrongly refuse.
+      const liveRow = await getReadableEntry(env, identity, id, "id, workspace_id");
+      const trashedRow = liveRow ? null : await getTrashedEntry(env, identity, id);
+      const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
+
+      const cfg = await resolveConfig(env);
+      const result = await revertEntry(
+        env, identity, id, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, cfg, to_version, authorizedWorkspaceId ?? "",
+      );
+
+      switch (result.status) {
+        case "reverted":
+          return { content: [{ type: "text", text: revertedMessage(id, result) }] };
+        case "restored":
+          return { content: [{ type: "text", text: restoredMessage(id, result) }] };
+        case "no_change":
+          return { content: [{ type: "text", text: `Entry ${id} already matches that version; nothing changed.` }] };
+        case "nothing_to_undo":
+          return { content: [{ type: "text", text: `Entry ${id} has no recorded changes to undo.` }] };
+        case "stale":
+          return { content: [{ type: "text", text: `Entry ${id} changed after you looked at it; check history and try again.` }] };
+        case "forbidden":
+          return { content: [{ type: "text", text: FORBIDDEN_MSG }] };
+        case "mirrored":
+          return { content: [{ type: "text", text: mirrorUndoError(result.source) }] };
+        case "pruned":
+          return { content: [{ type: "text", text: prunedMessage(id, to_version!, result.oldestKept, cfg.VERSION_KEEP) }] };
+        // A hidden version reads exactly like one that never existed (D-SH): never reveals whether
+        // history predating a share exists.
+        case "unreadable":
+          return { content: [{ type: "text", text: unreadableMessage(id) }] };
+        case "not_found":
+          return { content: [{ type: "text", text: result.gone ? goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS) : `No entry found with ID: ${id}` }] };
+        case "reembed_failed":
+          return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged; try again.` }] };
+      }
     }
   );
 

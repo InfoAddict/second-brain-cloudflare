@@ -64,11 +64,11 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("trash statement builders on wo
       expect(await env.DB.prepare(`SELECT id FROM entries WHERE id = 'c'`).first()).not.toBeNull();
 
       // Delete forever, live and trashed.
-      const live = await deleteForever(env, "c", change);
+      const live = await deleteForever(env, "c", change, roots.ownerPersonalWorkspaceId);
       expect(live).toMatchObject({ status: "deleted", from: "live" });
       await seed("d");
       await env.DB.batch(trashManyStatements(env, planTrash(await readTrashCandidates(env, ["d"])), { reason: "forget", change, now: Date.now() }));
-      const trashResult = await deleteForever(env, "d", change);
+      const trashResult = await deleteForever(env, "d", change, roots.ownerPersonalWorkspaceId);
       expect(trashResult).toMatchObject({ status: "deleted", from: "trash" });
       expect(await env.DB.prepare(`SELECT id FROM entries_trash WHERE id = 'd'`).first()).toBeNull();
 

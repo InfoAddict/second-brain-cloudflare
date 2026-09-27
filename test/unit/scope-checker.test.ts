@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (186 queries, 102 exceptions, 13 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (195 queries, 105 exceptions, 15 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1411,7 +1411,13 @@ describe("the checker over the real source tree", () => {
     // merge paths, undo's revertEntry, the mirror sync) picks up the same clamp for the digest
     // guard's own change signal, but only ever reads its OWN row (e.updated_at/e.created_at), so
     // none of them add a new corpus query either.
-    ).toEqual({ queries: 190, exempt: 103, checked: 13, outerJoin: 1 });
+    // MOVED 190/103/13/1 -> real --inventory output (merge of 36fe9dad, Builder B's Task 10): this
+    // branch's own R3-2/clamp changes above and Builder B's T-0100 SQLITE_TOOBIG fallback (two new
+    // by-id/scoped queries in trash.ts, both scope-checked) landed on independently-tracked running
+    // totals with different starting points (190/103/13/1 here, 193/105/13/1 -> 195/105/15/1 on
+    // Builder B's side) — recomputed against the real scanner output after combining rather than
+    // hand-reconciling the two totals, same reasoning as the Builder C merge above.
+    ).toEqual({ queries: 195, exempt: 105, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

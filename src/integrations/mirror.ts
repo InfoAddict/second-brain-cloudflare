@@ -199,6 +199,18 @@ export function mirrorEditError(source: string): string {
   return `This memory is synced from ${name}. Edit it in ${name} (the change syncs automatically), or disconnect the ${name} integration to make it editable.`;
 }
 
+/** Undo's own refusal text (T-0089.6.6): a revert would only be overwritten by the next sync. */
+export function mirrorUndoError(source: string): string {
+  const name = getProvider(source)?.name ?? source;
+  return `This memory is synced from ${name}. Change it in ${name}; the change syncs back.`;
+}
+
+/** Restoring a mirror row from the trash works, but the integration still thinks it is gone. */
+export function mirrorRestoreWarning(id: string, source: string): string {
+  const name = getProvider(source)?.name ?? source;
+  return `Restored entry ${id}. ${name} still has it archived, so the next sync will remove it again. Restore the page in ${name} to keep it.`;
+}
+
 /**
  * The schedule this job owns, and the reason it has one.
  *
