@@ -656,7 +656,7 @@ export async function recallEntries(
   const rcRows: CandidateSignalRow[] = [];
   const candidateSignalProjection = hops > 0
     ? `id, content, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id`
-    : "id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id";
+    : "id, source, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id";
   // Scoped too: this is the leak-catcher for unscoped Vectorize hits — until
   // namespaces land (P3) the dense arm can surface a stranger's id, and the
   // scope clause here is what stops that id from hydrating into signals. The
@@ -678,12 +678,14 @@ export async function recallEntries(
   const contradictionWins = new Map(rcRows.map(r => [r.id, r.contradiction_wins ?? 0]));
   const contradictionLosses = new Map(rcRows.map(r => [r.id, r.contradiction_losses ?? 0]));
   const d1Tags = new Map(rcRows.map(r => [r.id, JSON.parse(r.tags ?? "[]") as string[]]));
+  const d1Sources = new Map(rcRows.filter(r => r.source !== undefined).map(r => [r.id, r.source as string]));
 
   // The traced variant is for explain only: off, recall runs the plain reranker it always ran.
-  const directTraced = explain ? rerankWithTimeDecayTraced(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg) : undefined;
-  let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg);
+  const directOptions = { d1Sources };
+  const directTraced = explain ? rerankWithTimeDecayTraced(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions) : undefined;
+  let directReranked = directTraced ? directTraced.map(t => t.match) : rerankWithTimeDecay(fusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, directOptions);
   // The root view is computed here, beside the direct one, so a single model batch can cover both.
-  const rootOptions = { useRecallFrequency: false };
+  const rootOptions = { useRecallFrequency: false, d1Sources };
   const rootTraced = explain && hops > 0 ? rerankWithTimeDecayTraced(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];
   let rootReranked = rootTraced.length ? rootTraced.map(t => t.match)
     : hops > 0 ? rerankWithTimeDecay(rootFusedMatches, recallCounts, importanceScores, queryTags, contradictionWins, contradictionLosses, d1Tags, cfg, rootOptions) : [];

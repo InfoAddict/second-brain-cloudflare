@@ -5,6 +5,7 @@ import { DEFAULTS, type Config } from "../config";
 import { allowanceFor, snippetOf, truncationNote, type Snippet } from "./snippet";
 import { computeCompoundStale } from "./compound-stale";
 import type { CompoundStaleSignal } from "./types";
+import { sourceClass } from "./source-trust";
 
 /**
  * The bracketed header every memory-returning MCP tool prints.
@@ -123,6 +124,7 @@ function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>
     else if (mult.importance < 1) parts.push("low importance");
     if (mult.tag_boost > 1) parts.push("tag match");
     if (mult.frequency > 1) parts.push("recalled before");
+    if (mult.source_weight < 1) parts.push(`${sourceClass(m.source, m.tags)} source ×${mult.source_weight}`);
   }
   if (why.rerank_move) parts.push(`reranked ${why.rerank_move}`);
   if (why.graph) {
