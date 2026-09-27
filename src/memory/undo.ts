@@ -284,10 +284,18 @@ export async function revertEntry(
   }
 
   if (changesOf(results[1]) === 0) {
-    if (newVectorIds) { try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+    // The existence read comes first (U12): if it throws, nothing below has run and the row still
+    // names whatever committed its own vectors, never something this lost attempt already deleted.
     // scope-exempt: by-id: the row was read above under the caller's own scope
     const stillThere = await env.DB.prepare(`SELECT 1 AS ok FROM entries WHERE id = ?`).bind(id).first();
-    if (!stillThere) return { status: "not_found" };
+    if (!stillThere) {
+      // The row is truly gone: the fresh vectors this undo wrote describe a row nothing owns now.
+      if (newVectorIds) { try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+      return { status: "not_found" };
+    }
+    // The row is still there, committed by someone else. Never delete under the deterministic ids
+    // this undo re-embedded onto (the class rule R2-2 proved broken elsewhere): re-embed from the row
+    // as it actually stands instead, which restoreRowVectors does under those same ids.
     if (needsReembed) await restoreRowVectors(env, id, oldVectorIds, newVectorIds ?? [], row.source, config, embedCtx);
     return { status: "stale" };
   }
