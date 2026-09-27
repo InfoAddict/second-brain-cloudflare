@@ -1420,7 +1420,10 @@ describe("the checker over the real source tree", () => {
     // Builder B's own 195/105/15/1: the two branches' independent prior changes to shared callers
     // (revertEntry, deleteForever) overlap by one query and one exemption once combined on the real
     // tip, not a new finding — the checker exits clean.
-    ).toEqual({ queries: 194, exempt: 104, checked: 15, outerJoin: 1 });
+    // MOVED 194/104/15/1 -> 195/105/15/1 (T-0089.1.1, R4-V4): restoreRowVectors's own-miss branch
+    // gained a second by-id read of the row (same reasoning as its first, scope-exempt) to repair a
+    // clobbered vector and catch a chunk added between two of its own callers' reads.
+    ).toEqual({ queries: 195, exempt: 105, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
