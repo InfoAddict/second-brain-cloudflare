@@ -19,9 +19,20 @@ export const NOT_HELD_SQL = `tags NOT LIKE '%"${QUARANTINE_TAG_PREFIX}%'`;
 
 export type HoldReason = "instruction" | "hidden" | "burst" | "capsule";
 const HOLD_REASONS: readonly HoldReason[] = ["instruction", "hidden", "burst", "capsule"];
+const EDITED_CANONICAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isTagString(t: unknown): t is string {
   return typeof t === "string";
+}
+
+/** True when a bare value (no prefix) is a recognized hold reason. */
+export function isHoldReasonValue(value: string): value is HoldReason {
+  return (HOLD_REASONS as readonly string[]).includes(value);
+}
+
+/** True when a bare value (no prefix) is a YYYY-MM-DD date, the canonical-edit label's shape. */
+export function isEditedCanonicalDateValue(value: string): boolean {
+  return EDITED_CANONICAL_DATE_RE.test(value);
 }
 
 /** True when any tag holds the row out of recall, whatever the reason. */

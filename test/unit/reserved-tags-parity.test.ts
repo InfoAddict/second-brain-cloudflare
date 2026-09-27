@@ -26,6 +26,7 @@ import { isReservedTag, isTopicTag, isTopicTagSql, RESERVED_TAG_PREFIXES as ELIG
 import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX } from "../../src/quarantine/tags";
 import {
   COUNTERPARTY_TAG_PREFIX,
+  LEDGER_TAG,
   OWED_TO_ME_TAG,
   STANDING_TAG,
   T7_TAG_NAMES,
@@ -102,11 +103,57 @@ describe("case-insensitive in both lists", () => {
   });
 });
 
-describe("the dashboard hides every T7 and trust tag as a system tag", () => {
-  it("isSystemTag is true for a sample value of each", () => {
+describe("the dashboard hides every T7 and trust tag as a system tag, when its value matches the system's own format", () => {
+  // Codex cross-vendor review, MINOR (T-0102): a bare "sample" suffix is not
+  // itself a value the system ever writes, so isSystemTag now correctly
+  // shows it as an ordinary tag rather than hiding it (isRecognizedReservedTagFormat,
+  // src/tags/system.ts). Realistic values are used here instead.
+  const REALISTIC_VALUES = [
+    `${QUARANTINE_TAG_PREFIX}instruction`,
+    `${EDITED_CANONICAL_TAG_PREFIX}2026-09-26`,
+    STANDING_TAG,
+    LEDGER_TAG,
+  ];
+
+  it("isSystemTag is true for a realistic value of each trust and ledger/standing tag", () => {
     const { isSystemTag } = loadUtils();
-    for (const prefix of ALL_NEW_PREFIXES) expect(isSystemTag(`${prefix}sample`), prefix).toBe(true);
+    for (const value of REALISTIC_VALUES) expect(isSystemTag(value), value).toBe(true);
     for (const name of ALL_NEW_NAMES) expect(isSystemTag(name), name).toBe(true);
+  });
+
+  it("isSystemTag is true for a realistic value of every remaining T7 prefix", () => {
+    const { isSystemTag } = loadUtils();
+    const realistic: Record<string, string> = {
+      "confidence:": "confidence:0.70",
+      "confidence-source:": "confidence-source:stated",
+      "outcome:": "outcome:right",
+      "review-rearms:": "review-rearms:1",
+      "counterparty:": "counterparty:priya",
+    };
+    for (const [prefix, value] of Object.entries(realistic)) {
+      expect(T7_TAG_PREFIXES as readonly string[], prefix).toContain(prefix);
+      expect(isSystemTag(value), value).toBe(true);
+    }
+  });
+
+  it("a bare prefix-shaped placeholder that is NOT a real system value is NOT hidden", () => {
+    const { isSystemTag } = loadUtils();
+    // counterparty: accepts any grammar-valid slug by design (Design 1.1: "the
+    // PROJECT_SLUG_RE grammar"), and "sample" is one, so it is correctly
+    // recognized -- excluded here, not a special case in the guard itself.
+    for (const prefix of ALL_NEW_PREFIXES) {
+      if (prefix === COUNTERPARTY_TAG_PREFIX) continue;
+      expect(isSystemTag(`${prefix}sample`), prefix).toBe(false);
+    }
+    expect(isSystemTag(`${COUNTERPARTY_TAG_PREFIX}has space`)).toBe(false);
+  });
+
+  it("a pre-existing user tag that merely looks like a reserved namespace stays a normal tag", () => {
+    // Rahil's own examples from the review: outcome:won, confidence:high.
+    const { isSystemTag, humanTags } = loadUtils();
+    expect(isSystemTag("outcome:won")).toBe(false);
+    expect(isSystemTag("confidence:high")).toBe(false);
+    expect(humanTags(["outcome:won", "confidence:high", "work"])).toEqual(["outcome:won", "confidence:high", "work"]);
   });
 });
 

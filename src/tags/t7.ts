@@ -40,6 +40,56 @@ export const T7_TAG_PREFIXES = [
 /** Every Track 7 bare marker name. */
 export const T7_TAG_NAMES = new Set<string>([OWED_TO_ME_TAG]);
 
+// Same slug grammar as PROJECT_SLUG_RE (src/tags/system.ts). Duplicated rather
+// than imported: system.ts imports from this file, so importing back would be
+// circular. public/utils.js already duplicates the same grammar for the same
+// reason (see its PROJECT_SLUG_RE comment).
+const T7_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+// Exact string set rather than a numeric range check: floating-point steps
+// (0.05, 0.10, ...) do not divide evenly in binary, so comparing parsed
+// numbers risks the same class of bug the design note on isTopicTagSql warns
+// about for LIKE wildcards -- an off-by-a-rounding-error match. Nineteen
+// fixed strings has no such risk.
+const CONFIDENCE_VALUES = new Set([
+  "0.05", "0.10", "0.15", "0.20", "0.25", "0.30", "0.35", "0.40", "0.45",
+  "0.50", "0.55", "0.60", "0.65", "0.70", "0.75", "0.80", "0.85", "0.90", "0.95",
+]);
+
+/** True when a bare value (no prefix) is standing:active's one legal value. */
+export function isStandingValue(value: string): boolean {
+  return value === "active";
+}
+
+/** True when a bare value (no prefix) is ledger:decision's one legal value. */
+export function isLedgerValue(value: string): boolean {
+  return value === "decision";
+}
+
+/** True when a bare value (no prefix) is a two-decimal confidence in [0.05, 0.95], step 0.05. */
+export function isConfidenceValue(value: string): boolean {
+  return CONFIDENCE_VALUES.has(value);
+}
+
+/** True when a bare value (no prefix) is a recognized confidence source. */
+export function isConfidenceSourceValue(value: string): boolean {
+  return value === "stated" || value === "inferred";
+}
+
+/** True when a bare value (no prefix) is a recognized decision outcome. */
+export function isOutcomeValue(value: string): boolean {
+  return value === "right" || value === "wrong" || value === "mixed" || value === "unknown";
+}
+
+/** True when a bare value (no prefix) is a recognized review-rearm count. */
+export function isReviewRearmsValue(value: string): boolean {
+  return value === "1" || value === "2";
+}
+
+/** True when a bare value (no prefix) is a valid counterparty slug. */
+export function isCounterpartyValue(value: string): boolean {
+  return T7_SLUG_RE.test(value);
+}
+
 /**
  * Drops any caller-supplied Track 7 tag from a tag list, so a raw `remember`
  * or `update` tag can never forge a namespace that only the typed parameters

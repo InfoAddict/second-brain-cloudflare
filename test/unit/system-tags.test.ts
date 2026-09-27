@@ -131,12 +131,12 @@ describe("Track 7 reserved tag namespaces", () => {
       .toEqual([STANDING_TAG, LEDGER_TAG, "new-topic"]);
   });
 
-  it("a caller-supplied counterparty: tag cannot be injected by replacement alone (it stays, since a replacement only adds tags -- capture-time stripping is a later task)", () => {
-    // This documents today's scope precisely: applyTagReplacement unions the
-    // caller's tags on top of the worker-owned ones it kept, so a raw
-    // counterparty: tag in the replacement list is not dropped here. Closing
-    // that gap for capture and remember is stripT7CallerTags's job (t7.ts),
-    // wired in a later task -- see reserved-tags-parity.test.ts.
-    expect(applyTagReplacement(["old"], [`${COUNTERPARTY_TAG_PREFIX}priya`])).toEqual([`${COUNTERPARTY_TAG_PREFIX}priya`]);
+  it("a caller-supplied counterparty: tag cannot be injected through a replacement", () => {
+    // Fixed after the Codex cross-vendor review (T-0102): applyTagReplacement
+    // now drops any tag in a namespace this contract reserved from the
+    // replacement list, via stripNewReservedTags (src/tags/system.ts). See
+    // test/unit/reserved-tags-write-guard.test.ts for the structural guard
+    // across every caller write path.
+    expect(applyTagReplacement(["old"], [`${COUNTERPARTY_TAG_PREFIX}priya`])).toEqual([]);
   });
 });
