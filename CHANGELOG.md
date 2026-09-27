@@ -17,7 +17,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Search**
 
-- Search records which memories it showed with one database call instead of one per result, so a 20-result search uses up to 19 fewer of the free plan's daily database calls.
+- Search records which memories it showed with one database call instead of one per result, so a 20-result search makes up to 19 fewer database calls.
 
 ## [3.7.0] — Search that puts the right answer first
 
