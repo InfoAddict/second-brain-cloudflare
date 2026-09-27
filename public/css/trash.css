@@ -171,6 +171,20 @@
   color: var(--danger);
 }
 
+/* ── Append / edit inline errors (size cap, T-0101.10) ────────────────────
+ * The 128 KB size cap's message shows in place rather than as a toast, so it
+ * survives as long as the sheet does and sits right next to the text it is
+ * talking about. */
+.inline-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.inline-error[hidden] {
+  display: none;
+}
+
 /* main.css's .team-select-wrap has no :disabled rule (its only other user,
  * team.js, never disables a select), so a member's read-only selects fell
  * back to the browser default, which barely reads as disabled in most

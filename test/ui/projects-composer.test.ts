@@ -205,6 +205,40 @@ describe("capturing into a project", () => {
     expect(receipt.innerHTML).not.toContain("project:website");
     expect(receipt.innerHTML).toContain("work");
   });
+
+  /**
+   * The 128 KB size cap (Rahil's decision, T-0101.10): POST /capture can 413
+   * with { ok:false, error:"too_large", limit_bytes, message }. The composer
+   * shows the copy deck's own inline line, and — its explicit promise — keeps
+   * the text in the box rather than clearing it like a normal capture does.
+   */
+  describe("the 128 KB size cap", () => {
+    it("shows the size-cap line inline and keeps the text in the box", async () => {
+      const h = boot({ "POST /capture": { status: 413, body: { ok: false, error: "too_large", limit_bytes: 131072, message: "Too long..." } } });
+      await capture(h, "x".repeat(200000));
+      expect(h.els.get("home-field").value).toBe("x".repeat(200000));
+      const receiptHtml = h.els.get("home-more").innerHTML as string;
+      expect(receiptHtml).toContain(
+        "Too long to save as one memory (about 20,000 words at most). Your text is still here, so you can split it.",
+      );
+    });
+
+    it("speaks Italian when the page does", async () => {
+      const h = boot({ "POST /capture": { status: 413, body: { ok: false, error: "too_large" } } });
+      h.run(`initI18n("it")`);
+      await capture(h, "x".repeat(200000));
+      expect(h.els.get("home-field").value).toBe("x".repeat(200000));
+      expect(h.els.get("home-more").innerHTML).toContain(
+        "Troppo lungo per un solo ricordo (al massimo circa 20.000 parole). Il testo è ancora qui, così puoi dividerlo.",
+      );
+    });
+
+    it("a normal capture still clears the field and stores the receipt", async () => {
+      const h = boot();
+      await capture(h, "Decided to ship on Friday");
+      expect(h.els.get("home-field").value).toBe("");
+    });
+  });
 });
 
 describe("project chips", () => {

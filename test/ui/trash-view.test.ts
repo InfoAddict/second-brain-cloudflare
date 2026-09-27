@@ -103,6 +103,8 @@ function load(pages: any[] = [], opts: { teamMode?: boolean; teamIsAdmin?: boole
 /** With the real memory-crud module, so Delete forever is the real caller, not a stub of it. */
 function loadWithCrud(pages: any[] = []) {
   const els = new Map<string, any>();
+  const toasts: { message: string; opts?: any }[] = [];
+  const requests: { url: string; init: any }[] = [];
   let pageIndex = 0;
   const ctx: any = {
     console,
@@ -116,12 +118,12 @@ function loadWithCrud(pages: any[] = []) {
     refreshAll: () => {},
     setTimeout: (fn: () => void) => fn(),
     clearTimeout: () => {},
-    showToast: () => {},
+    showToast: (message: string, o?: any) => toasts.push({ message, opts: o }),
     notifyMemoryResolved: () => {},
     fetch: async (url: string, init: any) => {
+      requests.push({ url, init });
       const page = pages[Math.min(pageIndex++, pages.length - 1)] ?? { ok: true, items: [], next_cursor: null, retention_days: 14 };
-      if (String(url).endsWith("/forget")) return { ok: true, json: async () => ({ ok: true }) };
-      return { ok: true, json: async () => page };
+      return { ok: page.ok !== false, status: page.status ?? 200, json: async () => page };
     },
     document: {
       getElementById: (id: string) => {
@@ -149,6 +151,8 @@ function loadWithCrud(pages: any[] = []) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
   ctx.__els = els;
+  ctx.__toasts = toasts;
+  ctx.__requests = requests;
   return ctx;
 }
 
@@ -174,6 +178,7 @@ function item(overrides: Partial<Record<string, any>> = {}) {
     layer: "personal",
     can_restore: true,
     can_delete_forever: true,
+    nonce: "n1",
     ...overrides,
   };
 }
@@ -310,7 +315,7 @@ describe("Restore posts /restore, removes the row and offers Open", () => {
 
     const restoreCall = ctx.__requests.find((r: any) => r.url.endsWith("/restore"));
     expect(restoreCall, "/restore was called").toBeTruthy();
-    expect(JSON.parse(restoreCall.init.body)).toEqual({ id: "m1" });
+    expect(JSON.parse(restoreCall.init.body)).toEqual({ id: "m1", nonce: "n1" });
 
     const html = el(ctx, "trash-list").innerHTML;
     expect(html).not.toContain("First flagged claim");
@@ -322,28 +327,44 @@ describe("Restore posts /restore, removes the row and offers Open", () => {
     expect(ctx.__opened).toHaveLength(1);
   });
 
-  it("maps a 404 to 'already gone'", async () => {
+  it("sends the row's nonce with /restore", async () => {
     const ctx = load([
-      { ok: true, items: [item({ id: "m1" })], next_cursor: null, retention_days: 14 },
-      { ok: false, status: 404, error: "not_found" },
+      { ok: true, items: [item({ id: "m1", nonce: "abc123" })], next_cursor: null, retention_days: 14 },
+      { ok: true },
     ]);
     await ctx.loadTrashPage();
     ctx.handleTrashRestore(trashItemsOf(ctx)[0]);
     await flush();
-    expect(ctx.__toasts[0].message).toBe("Already removed for good.");
-    // The row stays: nothing to restore, so nothing should vanish from the list.
-    expect(el(ctx, "trash-list").innerHTML).toContain("First flagged claim");
+    const restoreCall = ctx.__requests.find((r: any) => r.url.endsWith("/restore"));
+    expect(JSON.parse(restoreCall.init.body)).toEqual({ id: "m1", nonce: "abc123" });
   });
 
-  it("maps a 409 to the conflict message", async () => {
+  it("a 404 (stale nonce: the row is gone) refreshes the list and shows the conflict message", async () => {
     const ctx = load([
       { ok: true, items: [item({ id: "m1" })], next_cursor: null, retention_days: 14 },
-      { ok: false, status: 409, error: "conflict" },
+      { ok: false, status: 404, error: "not_found" },
+      { ok: true, items: [], next_cursor: null, retention_days: 14 },
     ]);
     await ctx.loadTrashPage();
     ctx.handleTrashRestore(trashItemsOf(ctx)[0]);
     await flush();
     expect(ctx.__toasts[0].message).toBe("This memory is already back, restored from another tab or by an AI tool.");
+    // The refresh landed: the list now reflects the server's current state.
+    expect(ctx.__requests.filter((r: any) => r.url.includes("/trash?")).length).toBe(2);
+    expect(el(ctx, "trash-list").innerHTML).toContain("The trash is empty.");
+  });
+
+  it("a 409 (stale nonce: someone else already acted) refreshes the list and shows the conflict message", async () => {
+    const ctx = load([
+      { ok: true, items: [item({ id: "m1" })], next_cursor: null, retention_days: 14 },
+      { ok: false, status: 409, error: "conflict" },
+      { ok: true, items: [], next_cursor: null, retention_days: 14 },
+    ]);
+    await ctx.loadTrashPage();
+    ctx.handleTrashRestore(trashItemsOf(ctx)[0]);
+    await flush();
+    expect(ctx.__toasts[0].message).toBe("This memory is already back, restored from another tab or by an AI tool.");
+    expect(ctx.__requests.filter((r: any) => r.url.includes("/trash?")).length).toBe(2);
   });
 
   it("maps a 502 to the re-index message", async () => {
@@ -387,17 +408,39 @@ describe("mirror restore confirms first", () => {
 });
 
 describe("Delete forever uses the existing confirm and removes the row", () => {
-  it("goes through openDeleteForeverConfirm and removes the row on success", async () => {
-    const ctx = loadWithCrud([{ ok: true, items: [item({ id: "m1" }), item({ id: "m2", preview: "Second" })], next_cursor: null, retention_days: 14 }]);
+  it("goes through openDeleteForeverConfirm, sends the row's nonce, and removes the row on success", async () => {
+    const ctx = loadWithCrud([
+      { ok: true, items: [item({ id: "m1", nonce: "abc123" }), item({ id: "m2", preview: "Second" })], next_cursor: null, retention_days: 14 },
+      { ok: true },
+    ]);
     await ctx.loadTrashPage();
 
-    ctx.handleTrashDeleteForever("m1");
+    ctx.handleTrashDeleteForever(trashItemsOf(ctx).find((i: any) => i.id === "m1"));
     expect(el(ctx, "confirm-title").textContent).toBe("Delete this memory for good?");
     await ctx.runConfirmAction();
+
+    const forgetCall = ctx.__requests.find((r: any) => r.url.endsWith("/forget"));
+    expect(JSON.parse(forgetCall.init.body)).toEqual({ id: "m1", permanent: true, confirm: "m1", nonce: "abc123" });
 
     const html = el(ctx, "trash-list").innerHTML;
     expect(html).not.toContain("First flagged claim");
     expect(html).toContain("Second");
+  });
+
+  it("a 404 or 409 (stale nonce) refreshes the list and shows the conflict message instead of a generic failure", async () => {
+    const ctx = loadWithCrud([
+      { ok: true, items: [item({ id: "m1" })], next_cursor: null, retention_days: 14 },
+      { ok: false, status: 409, error: "conflict" },
+      { ok: true, items: [], next_cursor: null, retention_days: 14 },
+    ]);
+    await ctx.loadTrashPage();
+
+    ctx.handleTrashDeleteForever(trashItemsOf(ctx)[0]);
+    await ctx.runConfirmAction();
+    await flush();
+
+    expect(ctx.__toasts[0].message).toBe("This memory is already back, restored from another tab or by an AI tool.");
+    expect(ctx.__requests.filter((r: any) => r.url.includes("/trash?")).length).toBe(2);
   });
 });
 

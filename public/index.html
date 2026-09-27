@@ -660,6 +660,7 @@
         <div class="append-input-wrap">
           <textarea id="append-textarea" placeholder="What's changed or new?" data-i18n="memories.appendPlaceholder" data-i18n-attr="placeholder" rows="3"></textarea>
         </div>
+        <p class="inline-error" id="append-error" hidden></p>
         <div class="append-actions">
           <button class="btn-append-cancel" onclick="closeAppend()" data-i18n="memories.cancel">Cancel</button>
           <button class="btn-append-save" id="append-save-btn" onclick="saveAppend()" data-i18n="memories.appendSave">Update</button>
@@ -677,6 +678,7 @@
           <textarea id="edit-textarea" placeholder="Edit your memory..." data-i18n="memories.editPlaceholder" data-i18n-attr="placeholder"></textarea>
         </div>
         <div class="edit-existing-tags" id="edit-existing-tags"></div>
+        <p class="inline-error" id="edit-error" hidden></p>
         <div class="edit-hint" data-i18n="memories.editHintHtml" data-i18n-html>Tap a tag to remove it. Use <span style="font-style: italic">#hashtags</span> in the text to add one.</div>
         <div class="append-actions">
           <button class="btn-append-cancel" onclick="closeEdit()" data-i18n="memories.cancel">Cancel</button>

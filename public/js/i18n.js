@@ -63,6 +63,7 @@ const I18N_EN = {
     receiptAlreadyKeptNote: 'Something very similar is already in your brain, so this was skipped.',
     receiptCouldNotSave: 'could not save',
     receiptCouldNotSaveNote: 'Nothing was lost — the text is still in the box. Try again.',
+    tooLong: 'Too long to save as one memory (about 20,000 words at most). Your text is still here, so you can split it.',
     receiptStored: 'stored to brain',
     receiptMerged: 'merged into an existing memory',
     receiptMergedNote: 'You had written about this before, so the two are now one memory.',
@@ -394,7 +395,6 @@ const I18N_EN = {
     open: 'Open',
     mirrorTitle: 'Restore this memory?',
     mirrorBody: "It's still removed in {provider}, so the next sync may remove it again. To keep it, restore it in {provider} too.",
-    alreadyGone: 'Already removed for good.',
     conflict: 'This memory is already back, restored from another tab or by an AI tool.',
     reindexFailed: 'Could not restore: search did not update. Nothing changed. Try again.',
     empty: 'The trash is empty.',
@@ -483,6 +483,10 @@ const I18N_EN = {
     restoreSummaryRestored: '{n} restored',
     restoreSummaryConnections: '{n} connections',
     restoreSummaryPresent: '{n} already present',
+    importTooLarge: {
+      one: '{n} memory was too long to import and was skipped.',
+      other: '{n} memories were too long to import and were skipped.',
+    },
     restoreFailNote:
       "{n} item(s) couldn't be restored — usually rows edited by hand; the rest are unaffected.",
     restoreNeedsIndex: "Restored memories can't be searched until they're indexed.",
@@ -1131,6 +1135,7 @@ const I18N_IT = {
     receiptAlreadyKeptNote: 'Qualcosa di molto simile è già nel tuo cervello, quindi è stato saltato.',
     receiptCouldNotSave: 'salvataggio non riuscito',
     receiptCouldNotSaveNote: 'Non è andato perso nulla — il testo è ancora nel riquadro. Riprova.',
+    tooLong: 'Troppo lungo per un solo ricordo (al massimo circa 20.000 parole). Il testo è ancora qui, così puoi dividerlo.',
     receiptStored: 'salvato nel cervello',
     receiptMerged: 'unito a un ricordo esistente',
     receiptMergedNote: 'Ne avevi già scritto: ora i due sono un solo ricordo.',
@@ -1464,7 +1469,6 @@ const I18N_IT = {
     open: 'Apri',
     mirrorTitle: 'Ripristinare questo ricordo?',
     mirrorBody: 'In {provider} risulta ancora rimosso, quindi la prossima sincronizzazione potrebbe rimuoverlo di nuovo. Per tenerlo, ripristinalo anche in {provider}.',
-    alreadyGone: 'Già eliminato definitivamente.',
     conflict: "Questo ricordo è già tornato: è stato ripristinato da un'altra scheda o da uno strumento di IA.",
     reindexFailed: 'Impossibile ripristinare: la ricerca non si è aggiornata. Non è cambiato nulla. Riprova.',
     empty: 'Il cestino è vuoto.',
@@ -1553,6 +1557,10 @@ const I18N_IT = {
     restoreSummaryRestored: '{n} ripristinati',
     restoreSummaryConnections: '{n} connessioni',
     restoreSummaryPresent: '{n} già presenti',
+    importTooLarge: {
+      one: '{n} ricordo era troppo lungo per essere importato ed è stato saltato.',
+      other: '{n} ricordi erano troppo lunghi per essere importati e sono stati saltati.',
+    },
     restoreFailNote:
       '{n} elemento/i non ripristinabili — di solito righe modificate a mano; il resto non è influenzato.',
     restoreNeedsIndex: 'I ricordi ripristinati non si possono cercare finché non sono indicizzati.',

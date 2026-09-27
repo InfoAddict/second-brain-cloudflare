@@ -243,6 +243,13 @@ async function submitHome() {
     const content = text.replace(/#[a-zA-Z][\w-]*/g, '').trim() || text
 
     const result = await apiCapture(content, tags, 'web-ui', homeLayer, selectedComposerProject())
+    // Rejected before anything is cleared: the too-large reply promises "your
+    // text is still here", so the field keeps it exactly like a network
+    // failure below does, and this is not a receipt (nothing was stored).
+    if (result && result.ok === false && result.error === 'too_large') {
+      receipts.innerHTML = `<div class="receipt"><div class="receipt-headline"><span class="receipt-dot"></span>${escHtml(t('home.tooLong'))}</div></div>`
+      return
+    }
     field.value = ''
     autoResize(field)
     if (result.duplicate) {
