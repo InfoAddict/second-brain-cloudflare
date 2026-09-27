@@ -747,7 +747,7 @@ export function buildMcpServer(
   server.registerTool(
     "set_status",
     {
-      description: "Set a memory's lifecycle status. 'canonical' = confirmed/authoritative (protected from auto-overwrite), 'draft' = tentative, 'deprecated' = no longer accurate (removed from recall, kept for audit). Get the entry ID from recall or list_recent first.",
+      description: "Set a memory's lifecycle status. 'canonical' = confirmed/authoritative (protected from auto-overwrite), 'draft' = tentative, 'deprecated' = wrong or not to be used (hidden from recall, kept in history). Get the entry ID from recall or list_recent first.",
       inputSchema: {
         id: z.string().describe("Entry ID — from recall or list_recent"),
         status: z.enum([...STATUS_VALUES] as [string, ...string[]]).describe("canonical | draft | deprecated"),
@@ -765,7 +765,12 @@ export function buildMcpServer(
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp", ...(client ? { client } : {}) } });
       }
-      return { content: [{ type: "text", text: status === "deprecated" ? `Entry ${id} deprecated — removed from recall, kept for audit.` : `Entry ${id} marked ${status}.` }] };
+      const reply = status === "deprecated"
+        ? `Marked entry ${id} as wrong: it is hidden from recall and kept in its history. Undo is available.`
+        : status === "canonical"
+        ? `Marked entry ${id} as trusted.`
+        : `Marked entry ${id} as unconfirmed.`;
+      return { content: [{ type: "text", text: reply }] };
     }
   );
 
