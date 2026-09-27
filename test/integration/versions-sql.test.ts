@@ -301,8 +301,11 @@ describe("reconstruction and versions:since", () => {
 
   it("getVersionsSince recovers MIN(created_at)", async () => {
     await seedRow("e1", "a");
-    await edit({ id: "e1", next: "b", now: 900 });
-    await edit({ id: "e1", next: "c", now: 800 });
+    // Increasing, not decreasing (R2-6): a version's created_at is now clamped to at least the
+    // previous version's, so this recovers the FIRST version's created_at, not an artificially
+    // earlier one a later write could no longer produce.
+    await edit({ id: "e1", next: "b", now: 800 });
+    await edit({ id: "e1", next: "c", now: 900 });
     expect(await getVersionsSince(env)).toBe(800);
     expect(await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY)).toBe("800");
     await env.OAUTH_KV.put(VERSIONS_SINCE_KV_KEY, "123");

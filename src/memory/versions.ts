@@ -64,7 +64,17 @@ const NEWEST_SEQ = `COALESCE((SELECT MAX(v.seq) FROM entry_versions v WHERE v.en
 
 const INSERT_COLUMNS = `INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, prior_length_utf16, tags, state, actor_id, channel, reason, meta, valid_from, created_at)`;
 
-/** SELECT list shared by the one-row and many-row snapshots. `delta` is a SQL boolean over e.content. */
+/**
+ * SELECT list shared by the one-row and many-row snapshots. `delta` is a SQL boolean over e.content.
+ *
+ * R2-6: a Worker's own clock read (s.now) is taken before the batch travels to D1, so a slower
+ * isolate's write can commit after a faster one's — created_at is clamped to at least the
+ * previous version's own created_at (or the row's updated_at/created_at with no version yet), the
+ * same floor valid_from above already uses, so seq order and created_at order cannot disagree.
+ * A `--` SQL comment does not belong inside the string this builds: node:sqlite's test double
+ * still runs it, but a bare `--` between two lines of one statement makes it report changes: 0
+ * for a write that actually landed, silently defeating every compare-and-set guard's caller.
+ */
 function selectList(
   p: Params, delta: string,
   s: { reason: VersionReason; change: ChangeContext; meta?: Record<string, unknown>; now: number; priorLengthUtf16?: number },
@@ -80,7 +90,8 @@ function selectList(
        ${p.add(s.change.actorId)}, ${p.add(s.change.channel)}, ${p.add(s.reason)}, ${p.add(JSON.stringify(s.meta ?? {}))},
        COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
                 COALESCE(e.updated_at, e.created_at)),
-       ${p.add(s.now)}
+       MAX(${p.add(s.now)}, COALESCE((SELECT v.created_at FROM entry_versions v WHERE v.entry_id = e.id AND v.seq = (SELECT MAX(x.seq) FROM entry_versions x WHERE x.entry_id = e.id)),
+                COALESCE(e.updated_at, e.created_at)))
   FROM entries e`;
 }
 
