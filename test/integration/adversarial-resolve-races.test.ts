@@ -105,4 +105,26 @@ describe("adversarial resolve interleavings", () => {
     expect(JSON.parse(String(row.tags))).toContain("auto-insight");
     expect(JSON.parse(String(row.tags))).not.toContain("status:deprecated");
   });
+
+  // T-0089.7.4's other half: a concurrent forget (which deletes the row from entries outright, the
+  // same as it moved to the trash) between the caller's scoped read and this batch used to still
+  // report the row resolved, because the old bulk UPDATE carried no guard at all. 01e8118e's
+  // buildCasGuard on tags and workspace_id closes it: a row entries no longer has cannot satisfy
+  // any guard, so its UPDATE misses and it is excluded from `resolved`.
+  it("does not report an insight resolved after a concurrent forget trashes the row", async () => {
+    const owner = (await resolveIdentityFromToken("test-token", env))!;
+    sqlite.seed({ id: "gone", content: "Suggested relationship", createdAt: 1, tags: ["auto-insight", "status:draft"] });
+    await env.DB.prepare("UPDATE entries SET workspace_id = ? WHERE id = ?")
+      .bind(owner.personalWorkspaceId, "gone").run();
+    const scoped = await getReadableEntry(env, owner, "gone", "id, workspace_id, actor_id, tags, vector_ids") as Record<string, any>;
+    expect(scoped).toBeTruthy();
+    // The row's own forget path moves it to entries_trash and deletes it from entries; what
+    // applyInsightResolution's guard sees is that entries no longer has it under any guard.
+    await env.DB.prepare("DELETE FROM entries WHERE id = ?").bind("gone").run();
+
+    const result = await applyInsightResolution(env, ctx, { actorId: owner.userId, channel: "mcp" }, [scoped], 1, "confirm");
+    expect(result.resolved).toEqual([]);
+    expect(result.skipped).toBe(1);
+    expect(sqlite.rows().find(r => r.id === "gone")).toBeUndefined();
+  });
 });

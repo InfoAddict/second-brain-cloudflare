@@ -284,3 +284,88 @@ describe("R2-7: revertEntry writes into the author's personal memory after an un
     expect(row.content).toBe("v2 text");
   });
 });
+
+describe("R3-2: an admin's unshare can take a member's already-private memory", () => {
+  it("REST /share personal by an admin does not move a row Bob already made private", async () => {
+    const worker = (await import("../../src/index")).default;
+    const { req } = await import("../helpers/make-request");
+    const adminTok = (await createMember(env, { name: "Ada", role: "admin" })).token;
+    const admin = (await resolveIdentityFromToken(adminTok, env))!;
+    const author = await member("Bob");
+    await seed("x2", { content: "Bob's note", workspaceId: companyWs, actorId: author.userId });
+    const raw = env.DB as any;
+    let fired = false;
+    const racing = { ...env, DB: { ...raw, prepare(sql: string) {
+      const st = raw.prepare(sql);
+      if (fired || !/^SELECT id, workspace_id, actor_id, vector_ids FROM entries WHERE id = \? AND/.test(sql)) return st;
+      return { bind: (...a: unknown[]) => ({ first: async () => {
+        const r = await st.bind(...a).first();
+        fired = true;
+        await sqlite.db.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'x2'`).bind(author.personalWorkspaceId).run();
+        return r;
+      } }) };
+    } } } as unknown as Env;
+    const res = await worker.fetch(req("POST", "/share", { body: { id: "x2", workspace: "personal" }, token: adminTok }), racing, ctx);
+    const row = await live("x2");
+    expect(row.workspace_id).not.toBe(admin.personalWorkspaceId);
+    expect(row.workspace_id).toBe(author.personalWorkspaceId);
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("R3-4: the owner does not inherit a member's private history of a system row they unshare", () => {
+  it("GET /entry by the owner does not show Bob's private-era events on Bob's digest", async () => {
+    const worker = (await import("../../src/index")).default;
+    const { req } = await import("../helpers/make-request");
+    const bob = await member("Bob");
+    await seed("dg1", { content: "Digest of Bob's health notes", tags: ["synthesized", "digest"], source: "system", actorId: "", workspaceId: bob.personalWorkspaceId });
+    const ev = (event: string, actor: string, at: number, payload: Record<string, unknown>) => env.DB.prepare(
+      `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, 'dg1', ?, ?, ?, ?)`,
+    ).bind(crypto.randomUUID(), actor, event, JSON.stringify(payload), at).run();
+    await ev("status_changed", bob.userId, 1000, { status: "draft", prior: { tags: ["private-health-tag"] }, channel: "rest" }); // Bob's private era
+    const shared = await moveEntry("dg1", "company", env, bob, { actorId: bob.userId, channel: "rest" });
+    expect(shared.status).toBe("shared");
+    const back = await moveEntry("dg1", "personal", env, owner, { actorId: owner.userId, channel: "rest" });
+    expect(back.status).toBe("unshared");
+    expect((await live("dg1")).workspace_id).toBe(owner.personalWorkspaceId);
+    const res = await worker.fetch(req("GET", "/entry?id=dg1"), env, ctx); // default token = the owner
+    const body = await res.json() as any;
+    expect((body.entry ?? body).timeline.map((e: any) => e.event)).not.toContain("status_changed");
+  });
+});
+
+describe("R3-3: restoreRowVectors does not orphan the chunks of the appends that beat the update", () => {
+  it("an update that loses three times to short appends leaves every indexed vector listed in vector_ids", async () => {
+    const { appendToEntry, updateEntryContent } = await import("../../src/capture/store");
+    const { DEFAULTS } = await import("../../src/config");
+    const store = new Map<string, any>();
+    const vec = makeVectorizeMock({
+      upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
+      insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v); return { mutationId: "m" } as any; }),
+      deleteByIds: vi.fn(async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" } as any; }),
+    });
+    const e = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), VECTORIZE: vec,
+      AI: { run: vi.fn(async () => ({ data: [new Array(384).fill(0.1)] })) } as any }) as Env;
+    const ws = owner.personalWorkspaceId;
+    const wctx = { workspaceId: ws, actorId: owner.userId };
+    const change = { actorId: owner.userId, channel: "rest" as const };
+    await seed("e3", { content: "base", vectorIds: ["e3"] });
+    store.set("e3", { id: "e3", values: [0.1], metadata: { content: "base", parentId: "e3" } });
+    let n = 0;
+    const raw = e.DB as any;
+    const racing = { ...e, DB: { ...raw, prepare(sql: string) {
+      const st = raw.prepare(sql);
+      if (!sql.startsWith("SELECT content, tags, source, vector_ids, workspace_id FROM entries")) return st;
+      return { bind: (...a: unknown[]) => ({ first: async () => {
+        const r = await st.bind(...a).first();
+        if (n++ < 3) { await new Promise(res => setTimeout(res, 2)); await appendToEntry(e, "e3", "", `addition ${n}`, [], "api", DEFAULTS, undefined, wctx, change, undefined, ws); }
+        return r;
+      } }) };
+    } } } as unknown as Env;
+    const r = await updateEntryContent(racing, "e3", "rewritten", DEFAULTS, undefined, undefined, wctx, change, ws);
+    expect(r.status).toBe("conflict");
+    const listed = new Set(JSON.parse((await live("e3")).vector_ids) as string[]);
+    const unlisted = [...store.keys()].filter(k => (k === "e3" || k.startsWith("e3-")) && !listed.has(k));
+    expect(unlisted).toEqual([]);
+  });
+});
