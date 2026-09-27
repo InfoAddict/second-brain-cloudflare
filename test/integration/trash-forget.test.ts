@@ -286,4 +286,39 @@ describe("adversary: the dashboard's forget confirm reads the real config shape"
       expect(src, file).not.toMatch(/can't be undone.*memory will be removed|cannot be undone.*memory will be removed/i);
     }
   });
+
+  it("the default confirm body's retention wording does not address only members who could change it", () => {
+    const { readFileSync } = require("node:fs");
+    const { resolve } = require("node:path");
+    const src = readFileSync(resolve(import.meta.dirname, "../../public/js/i18n.js"), "utf8");
+    // "unless you changed it" / "salvo modifiche" presume the reader can change retention, which a
+    // team member cannot (round 2 adversary): every locale's default wording must stay neutral.
+    expect(src).not.toMatch(/unless you changed it/i);
+    expect(src).not.toMatch(/salvo modifiche/i);
+  });
+});
+
+describe("round 2 adversary: dashboard copy for a memory too large for the trash", () => {
+  it("the dashboard tells the person when a forget was a hard delete (REST answers trash:false)", async () => {
+    t = await makeTrashEnv();
+    t.seed("huge", { content: "x".repeat(1_850_000) });
+    const res = await post("/forget", { id: "huge" });
+    const body = await res.json() as any;
+    expect(body).toMatchObject({ ok: true, trash: false });
+
+    // The confirm promised "It moves to the trash"; the success path must read `trash` to correct that.
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(import.meta.dirname, "../../public/js/memory-crud.js"), "utf8");
+    const confirmForget = src.slice(src.indexOf("async function confirmForget"), src.indexOf("\n}\n", src.indexOf("async function confirmForget")));
+    expect(confirmForget).toMatch(/\.trash\b/);
+    // No em dashes in whatever it shows for that case (wording nit alongside the fix).
+    const toastCall = confirmForget.match(/showToast\(t\(['"]([\w.]+)['"]\)\)/)?.[1];
+    expect(toastCall).toBeDefined();
+    const i18n = readFileSync(resolve(import.meta.dirname, "../../public/js/i18n.js"), "utf8");
+    const key = toastCall!.split(".").pop()!;
+    const strings = [...i18n.matchAll(new RegExp(`${key}: '([^']*)'`, "g"))].map((m) => m[1]);
+    expect(strings.length).toBeGreaterThanOrEqual(2); // en and it both have it
+    for (const s of strings) expect(s).not.toMatch(/—/);
+  });
 });
