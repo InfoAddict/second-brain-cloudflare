@@ -201,6 +201,11 @@ export async function compressTag(
     if (result.status === "blocked") {
       continue;
     }
+    // A protected draft is not a live digest: rolling sources up onto it would penalise and
+    // rewrite user memories for a summary recall never shows. The digest retries next cycle.
+    if (result.status === "contradiction_protected") {
+      continue;
+    }
 
     await markSourcesRolledUp(env, rows.map(r => r.id), result.id);
 

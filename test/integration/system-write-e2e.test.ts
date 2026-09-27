@@ -80,7 +80,7 @@ describe("ADV systemWrite", () => {
     expect(String(row.tags)).not.toContain("status:deprecated");
   });
 
-  it("C: protected contradiction still writes to the user row (contradiction_wins) and orphans a draft digest", async () => {
+  it("C: a protected contradiction leaves the user row alone and stores a draft digest without rolling sources up", async () => {
     sqlite.seed({ id: "user-row", content: "We decided the work plan is X", createdAt: now - 1 * DAY, tags: ["decisions"], source: "api" });
     target = "user-row"; score = 0.8;
     decision = () => JSON.stringify({ contradicts: true, conflicting_id: "user-row", reason: "changed" });
@@ -92,10 +92,11 @@ describe("ADV systemWrite", () => {
     expect(user.contradiction_wins).toBe(0);
     expect(user.contradiction_losses).toBe(0);
     expect(JSON.parse(String(user.tags))).toEqual(["decisions"]);
-    // The draft digest is a real written row, so its sources roll up onto it.
+    // The draft digest is stored, but it is not a live digest: sources are not rolled up onto it
+    // and nothing is reported as synthesized. The digest retries next cycle.
     expect(digests).toHaveLength(1);
-    expect(r.synthesizedId).toBe(digests[0].id);
-    expect(rows.filter(x => String(x.tags).includes('"rolled-up"'))).toHaveLength(12);
+    expect(r.synthesizedId).toBeNull();
+    expect(rows.filter(x => String(x.tags).includes('"rolled-up"'))).toHaveLength(0);
   });
 
   it("D: a user row that merely carries the system tags but has an actor is still protected from merge", async () => {

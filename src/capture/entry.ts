@@ -7,7 +7,7 @@ import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
 import { auditEvent } from "../lib/audit";
-import { deleteStaleVectors, reembedOrThrow, storeEntry } from "./store";
+import { deleteStaleVectors, embedContextForRow, reembedOrThrow, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
 import { getVolatility, withVolatility } from "../memory/volatility";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
@@ -131,14 +131,14 @@ async function restoreRowVectors(
   try {
     const current = await env.DB.prepare(
       // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-      `SELECT content, tags FROM entries WHERE id = ?`
+      `SELECT content, tags, workspace_id FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
     if (!current) {
       // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
       await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
       return;
     }
-    const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, writeCtx);
+    const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, embedContextForRow(current, writeCtx));
     await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
   } catch (e) {
     console.error("Restoring vectors after a lost system merge failed (non-fatal):", e);
@@ -193,7 +193,7 @@ export async function captureEntry(
 
     const targetRow = await env.DB.prepare(
       // scope-exempt: by-id: the merge target is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
-      `SELECT content, tags, source, vector_ids, importance_score, actor_id FROM entries WHERE id = ?`
+      `SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id FROM entries WHERE id = ?`
     ).bind(targetId).first() as Record<string, any> | null;
 
     if (targetRow) {
@@ -243,9 +243,9 @@ export async function captureEntry(
           const cas = opts.systemWrite !== undefined;
           const committed = cas
             ? await env.DB.prepare(
-              // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the tags and content read
-              `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?`)
-              .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent).run()
+              // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
+              `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id IS ? AND COALESCE(actor_id, '') = '' AND source = ?`)
+              .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent, targetRow.workspace_id ?? null, existingSource).run()
             : await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
               .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
           if (cas && (committed.meta.changes ?? committed.meta.rows_written ?? 0) === 0) {
@@ -280,11 +280,13 @@ export async function captureEntry(
 
   // 公開可否をINSERT前に確定し、同時に読むgatewayへ矛盾したprefixを見せない。
   let protectConflict = false;
+  let conflictSnapshot: Record<string, any> | null = null;
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictRow = await env.DB.prepare(
       // scope-exempt: by-id: the conflict id is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
-      `SELECT tags, source, actor_id FROM entries WHERE id = ?`
+      `SELECT content, tags, source, actor_id, workspace_id, vector_ids FROM entries WHERE id = ?`
     ).bind(contradiction.conflicting_id).first() as Record<string, any> | null;
+    conflictSnapshot = conflictRow;
     const conflictTags: string[] = conflictRow ? JSON.parse(conflictRow.tags ?? "[]") : [];
     const conflictStatus = conflictRow ? getStatus(conflictTags) : null;
     const conflictSource = conflictRow ? String(conflictRow.source ?? "") : "";
@@ -344,7 +346,7 @@ export async function captureEntry(
   if (contradiction.detected && contradiction.conflicting_id) {
     const conflictId = contradiction.conflicting_id;
 
-    if (protectConflict) {
+    const keepAsDraft = async (): Promise<CaptureResult> => {
       const draftTags = finalTags.filter(t => t !== "contradiction-resolved");
       // Contradictory definitions must not publish into a prompt prefix.
       const protectedTags = withStatus(draftTags, "draft");
@@ -369,6 +371,36 @@ export async function captureEntry(
         entryStatus: getStatus(protectedTags),
         reason: contradiction.reason,
       };
+    };
+
+    if (protectConflict) return keepAsDraft();
+
+    // A system job deprecates only a row that is STILL the system row it read: same workspace,
+    // actor, source, tags and content. A person's edit or a share/unshare since then wins.
+    let deprecatedBySystem = false;
+    if (opts.systemWrite !== undefined && conflictSnapshot) {
+      const snap = conflictSnapshot;
+      const res = await env.DB.prepare(
+        // scope-exempt: by-id: compare-and-set on the row read above under this write's workspace, workspace_id included
+        `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id IS ? AND COALESCE(actor_id, '') = '' AND source = ?`
+      ).bind(
+        JSON.stringify(withStatus(JSON.parse(snap.tags ?? "[]"), "deprecated")), conflictId,
+        snap.tags ?? "[]", snap.content, snap.workspace_id ?? null, snap.source,
+      ).run();
+      if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) return keepAsDraft();
+      deprecatedBySystem = true;
+      try {
+        const oldVectorIds: string[] = JSON.parse(snap.vector_ids ?? "[]");
+        if (oldVectorIds.length) await deleteVectorIds(env, oldVectorIds);
+      } catch (e) { console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e); }
+      if (opts.channel) {
+        auditEvent(env, ctx, {
+          entryId: conflictId,
+          actorId: writeCtx.actorId,
+          event: "status_changed",
+          payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel },
+        });
+      }
     }
 
     try {
@@ -378,7 +410,7 @@ export async function captureEntry(
       console.error("Contradiction count update failed (non-fatal):", e);
     }
     try {
-      if (await deprecateEntry(conflictId, env) && opts.channel) {
+      if (!deprecatedBySystem && await deprecateEntry(conflictId, env) && opts.channel) {
         auditEvent(env, ctx, {
           entryId: conflictId,
           actorId: writeCtx.actorId,

@@ -1,0 +1,91 @@
+import { describe, it, expect, vi } from "vitest";
+import { captureEntry } from "../../src/capture/entry";
+import { compressTag } from "../../src/compression/digest";
+import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
+import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
+import { makeSqliteD1 } from "../helpers/sqlite-d1";
+import type { Env } from "../../src/env";
+
+const ctx = { waitUntil: () => {} } as unknown as ExecutionContext;
+const stream = (text: string) => new ReadableStream({ start(c) {
+  c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(text)}}\n\n`));
+  c.enqueue(new TextEncoder().encode("data: [DONE]\n\n")); c.close();
+}});
+
+async function setup(score: number, decision: string) {
+  resetDatabaseInit();
+  const sqlite = makeSqliteD1();
+  const vectors = new Map<string, any>();
+  const env = makeTestEnv(undefined, {
+    DB: sqlite.db as any,
+    OAUTH_KV: makeMemoryKV(),
+    VECTORIZE: makeVectorizeMock({
+      query: vi.fn().mockResolvedValue({ matches: [{ id: "old", score, metadata: { parentId: "old" } }] }),
+      upsert: vi.fn(async (rows: any[]): Promise<any> => { for (const row of rows) vectors.set(row.id, row.metadata); return { mutationId: "m" }; }),
+    }),
+    AI: { run: vi.fn(async (model: string) => model.startsWith("@cf/baai/bge")
+      ? { data: [new Array(384).fill(0.1)] } : stream(decision)) } as any,
+  }) as Env;
+  await initializeDatabase(env);
+  sqlite.seed({ id: "old", content: "Old digest", tags: ["synthesized"], source: "system", createdAt: 1000 });
+  return { sqlite, env, vectors };
+}
+
+// Reproductions from the cross-vendor review, now pinned as regression tests.
+describe("system-write races", () => {
+  it("a protected contradiction must not roll user sources into a draft digest", async () => {
+    const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
+    sqlite.db.prepare(`UPDATE entries SET tags = '["work"]', source = 'api', actor_id = 'u1' WHERE id = 'old'`).run();
+    for (let i = 0; i < 12; i++) sqlite.seed({ id: `work-${i}`, content: `User work fact ${i}`, tags: ["work"], source: "api", createdAt: 1000 + i });
+    await compressTag("work", env, ctx);
+    const digests = (await env.DB.prepare(`SELECT id, tags FROM entries WHERE source = 'system'`).all()).results as any[];
+    const sources = (await env.DB.prepare(`SELECT id, tags, content FROM entries WHERE id LIKE 'work-%'`).all()).results as any[];
+    expect(digests).toHaveLength(1);
+    expect(JSON.parse(digests[0].tags)).toContain("status:draft");
+    console.log("draft rollup:", digests[0], sources.filter(row => JSON.parse(row.tags).includes("rolled-up")).length);
+    expect(sources.some(row => JSON.parse(row.tags).includes("rolled-up"))).toBe(false);
+    sqlite.close();
+  });
+
+  it("user edit between conflict guard and deprecate must protect the row", async () => {
+    const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
+    const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
+    db.prepare = (sql: string) => {
+      if (!raced && sql.startsWith("INSERT INTO entries (id, content")) {
+        raced = true;
+        sqlite.db.prepare(`UPDATE entries SET content = 'MY CORRECTION', tags = '["synthesized","user-edited"]' WHERE id = 'old'`).run();
+      }
+      return prepare(sql);
+    };
+    const result = await captureEntry("New conflicting digest", ["synthesized"], "system", env, ctx, undefined,
+      { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
+    const old = await env.DB.prepare("SELECT tags, content FROM entries WHERE id = 'old'").first() as any;
+    expect(raced).toBe(true);
+    console.log("contradiction race:", result.status, old);
+    expect(result.status).toBe("contradiction_protected");
+    expect(JSON.parse(old.tags)).not.toContain("status:deprecated");
+    sqlite.close();
+  });
+
+  it("workspace move between read and CAS must prevent cross-workspace system merge", async () => {
+    const { sqlite, env, vectors } = await setup(0.9, '{"action":"merge","target_id":"old","merged_content":"new system text"}');
+    const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
+    db.prepare = (sql: string) => {
+      if (!raced && sql.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags")) {
+        raced = true;
+        sqlite.db.prepare("UPDATE entries SET workspace_id = 'other-workspace' WHERE id = 'old'").run();
+      }
+      return prepare(sql);
+    };
+    const result = await captureEntry("New digest", ["synthesized"], "system", env, ctx, undefined,
+      { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
+    const old = await env.DB.prepare("SELECT workspace_id, content FROM entries WHERE id = 'old'").first() as any;
+    expect(raced).toBe(true);
+    expect(old.workspace_id).toBe("other-workspace");
+    console.log("workspace race:", result.status, old, vectors.get("old"));
+    expect(result.status).not.toBe("merged");
+    expect(old.content).toBe("Old digest");
+    expect(vectors.get("old")?.workspace_id).toBe("other-workspace");
+    sqlite.close();
+  });
+});
