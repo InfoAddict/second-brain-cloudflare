@@ -368,6 +368,7 @@ const I18N_EN = {
     exportMdTags: '**Tags:** {tags}',
     exportMdSource: '**Source:** {source}',
     exportMdRelationships: '## Relationships',
+    backupExcludesHistory: 'Backups include your memories, not their edit history or the trash.',
   },
   trash: {
     title: 'Trash',
@@ -1419,6 +1420,7 @@ const I18N_IT = {
     exportMdTags: '**Tag:** {tags}',
     exportMdSource: '**Fonte:** {source}',
     exportMdRelationships: '## Relazioni',
+    backupExcludesHistory: 'I backup includono i tuoi ricordi, non la loro cronologia delle modifiche né il cestino.',
   },
   trash: {
     title: 'Cestino',

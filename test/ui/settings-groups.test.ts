@@ -266,3 +266,34 @@ describe("the memories export, through the shared downloader", () => {
     expect(toasts[0]).toContain("503");
   });
 });
+
+/**
+ * D1.3 (T-0101.2.4): a backup is a copy of the memories only. Nothing in the
+ * dashboard said that in words, and a restore or an export reader had no way
+ * to know their edit history or their trash did not travel with it.
+ */
+describe("the Data group's backup note", () => {
+  it("sits under the backup buttons, before the Trash entry", () => {
+    const html = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
+    const dataGroup = html.match(/menu\.groupData[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
+    const restoreAt = dataGroup.indexOf('id="restore-btn"');
+    const noteAt = dataGroup.indexOf("menu.backupExcludesHistory");
+    const trashAt = dataGroup.indexOf('id="menu-trash-btn"');
+    expect(restoreAt, "restore-btn found in the Data group").toBeGreaterThanOrEqual(0);
+    expect(noteAt, "the backup note found in the Data group").toBeGreaterThan(restoreAt);
+    expect(trashAt, "the Trash entry found in the Data group").toBeGreaterThan(noteAt);
+  });
+
+  it("both locales carry the note, and they read differently", () => {
+    const ctx = { console };
+    (ctx as any).globalThis = ctx;
+    vm.createContext(ctx);
+    installI18n(ctx as any, "en");
+    const en = (ctx as any).t("menu.backupExcludesHistory");
+    (ctx as any).initI18n("it");
+    const it_ = (ctx as any).t("menu.backupExcludesHistory");
+    expect(en).toBe("Backups include your memories, not their edit history or the trash.");
+    expect(it_).not.toBe(en);
+    expect(it_).toContain("cronologia");
+  });
+});
