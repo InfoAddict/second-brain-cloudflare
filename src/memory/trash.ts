@@ -178,12 +178,14 @@ export function trashManyStatements(
   const insert = (ids: string[], withEdges: boolean) => {
     const p = new Params();
     const idList = p.add(JSON.stringify(ids));
+    // A plain INSERT (T-0089.1.1): ids are unique across entries and entries_trash, so an existing
+    // trash row under this id is a PRIMARY KEY error that fails the whole batch closed, never a replace.
     stmts.push(env.DB.prepare(
       // scope-exempt: by-id: callers authorize the entries before building the batch.
       // vector_ids is the live row's own value at deletion time (round 2 adversary): a short
       // append's chunk (id-update-<ts>, store.ts) is not a function of content, so it cannot be
       // rederived later — Delete forever needs the real ids stored, not just guessed at.
-      `INSERT OR REPLACE INTO entries_trash (${TRASH_COLUMNS})
+      `INSERT INTO entries_trash (${TRASH_COLUMNS})
        SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
               ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}, lower(hex(randomblob(16)))
          FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))`,

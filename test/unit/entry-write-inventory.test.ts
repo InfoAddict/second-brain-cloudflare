@@ -96,7 +96,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/store.ts', line: 642, kind: 'snapshot' },
   { file: 'src/capture/store.ts', line: 728, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
-  { file: 'src/entries/import.ts', line: 26, kind: 'exempt' },
+  // MOVED 26 -> 30 (T-0089.1.1 round 2): the id-uniqueness comment above import's insert, which now mints a fresh id in-statement.
+  { file: 'src/entries/import.ts', line: 30, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 96, kind: 'exempt' },
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
   { file: 'src/lib/team-admin.ts', line: 587, kind: 'hard-delete' },
@@ -107,12 +108,14 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 172, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 183, kind: 'snapshot' },
-  { file: 'src/memory/trash.ts', line: 218, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 605, kind: 'exempt' },
+  // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
+  { file: 'src/memory/trash.ts', line: 220, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 607, kind: 'exempt' },
   // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
   // it acts only on a trash row pinned by nonce.
-  { file: 'src/memory/undo.ts', line: 312, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 348, kind: 'exempt' },
+  // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.
+  { file: 'src/memory/undo.ts', line: 316, kind: 'snapshot' },
+  { file: 'src/memory/undo.ts', line: 352, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1194, kind: 'exempt' },
   // MOVED 1538 -> 1544 (T-0089.1.1, adv-final MAJOR 2): /vectorize-pending's remaining/
   // retryAfterMs rework added lines above this site; same site, shifted only.

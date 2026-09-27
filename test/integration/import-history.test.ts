@@ -15,7 +15,7 @@ describe("import and the trash", () => {
     t = await makeTrashEnv();
     t.seed("a", { content: "the newer text" }); t.version("a", 1); t.version("a", 2);
     await forgetEntry("a", t.env, { actorId: "", channel: "rest" }, { reason: "forget", config: await resolveConfig(t.env), purge: false }, t.roots.ownerPersonalWorkspaceId);
-    const summary = await importExportPayload(t.env, { entries: [entry("a", "old text")] }, {});
+    const summary = await importExportPayload(t.env, { entries: [entry("a", "old text")] }, { writeCtx: { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId } });
     expect(summary).toMatchObject({ imported: 0, skipped: 1, skipped_in_trash: 1 });
     expect(summary.results).toEqual([{ id: "a", status: "skipped", reason: "in_trash" }]);
     expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).toBeNull();

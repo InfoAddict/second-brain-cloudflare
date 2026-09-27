@@ -21,9 +21,16 @@ export const IMPORT_D1_BATCH_SIZE = 50;
 /** Edge endpoint lookups bind each id twice (source IN + target IN). */
 export const EDGE_ENDPOINT_QUERY_BATCH = Math.floor(D1_MAX_BOUND_PARAMS / 2);
 
+// Ids are unique across entries and entries_trash (T-0089.1.1): the pre-read skips ids it saw, and
+// an id that turns up in either table after that read gets a fresh one here, checked in this same
+// statement, so an import never lands on top of a live or trashed row. RETURNING says which id won.
 // versioning: exempt: creation — an imported row has no prior state to keep
+// scope-exempt: by-id existence probes across every workspace: an id is unique deployment-wide
 const ENTRY_INSERT_SQL_TEMPLATE =
-  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, recall_count, importance_score, contradiction_wins, contradiction_losses, workspace_id, actor_id)
+   SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM entries WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM entries_trash WHERE id = ?1) THEN ?1 ELSE lower(hex(randomblob(16))) END,
+          ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+   RETURNING id`;
 
 function parseInsertColumns(sql: string): readonly string[] {
   const match = sql.match(/INSERT INTO entries \(([^)]+)\)/i);
@@ -42,6 +49,8 @@ export interface ImportEntryResult {
   status: ImportEntryStatus;
   reason?: string;
   detail?: string;
+  /** Set when the export's id was taken by the time of the insert: the row was imported as `id`. */
+  original_id?: string;
 }
 
 export interface ImportEdgeResult {
@@ -123,7 +132,7 @@ export interface ImportSummary {
   ok: true;
   imported: number;
   skipped: number;
-  /** Of `skipped`, ids that sit in the trash: restore them instead of importing over them. */
+  /** Of `skipped`, ids in the importer's own trash: restore them instead of importing over them. */
   skipped_in_trash: number;
   failed: number;
   edges_imported: number;
@@ -252,9 +261,10 @@ export function parseImportLimit(raw: string | null): number {
 }
 
 /** Ids already present, split into live entries and trashed ones (a trashed id is restored, never overwritten). */
-async function loadExistingIds(env: Env, ids: string[], withTrash = true): Promise<{ live: Set<string>; trashed: Set<string> }> {
+async function loadExistingIds(env: Env, ids: string[], withTrash = true): Promise<{ live: Set<string>; trashed: Map<string, string> }> {
   const live = new Set<string>();
-  const trashed = new Set<string>();
+  /** id -> the trash row's workspace, so a skip only names the trash for the importer's own rows. */
+  const trashed = new Map<string, string>();
   for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMS) {
     const batch = ids.slice(i, i + D1_MAX_BOUND_PARAMS);
     const placeholders = batch.map(() => "?").join(", ");
@@ -266,19 +276,28 @@ async function loadExistingIds(env: Env, ids: string[], withTrash = true): Promi
     if (!withTrash) continue;
     const { results: inTrash } = await env.DB.prepare(
       // scope-exempt: by-id: primary-key existence check for dedupe; a trashed id is skipped, never read
-      `SELECT id FROM entries_trash WHERE id IN (${placeholders})`,
-    ).bind(...batch).all() as { results: { id: string }[] };
-    for (const row of inTrash) trashed.add(row.id);
+      `SELECT id, workspace_id FROM entries_trash WHERE id IN (${placeholders})`,
+    ).bind(...batch).all() as { results: { id: string; workspace_id: string }[] };
+    for (const row of inTrash) trashed.set(row.id, row.workspace_id);
   }
   return { live, trashed };
 }
 
-/** Versions left behind by an earlier life of an id are dropped in the same batch that inserts it. */
+/** Versions left behind by an earlier life of an id are dropped in the same batch that inserts it,
+ * unless the id is live or trashed now (then the insert takes a fresh id and this history is theirs). */
 function orphanVersionsDelete(env: Env, ids: string[]) {
   return env.DB.prepare(
     // scope-exempt: by-id: history of ids this batch inserts fresh; an imported row starts with none
-    `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?1))`,
+    `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?1))
+       AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.id = entry_versions.entry_id)
+       AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)`,
   ).bind(JSON.stringify(ids));
+}
+
+/** The id the insert actually wrote (RETURNING); a fresh one means the export's id was taken. */
+function importedResult(row: PendingInsert, res: { results?: unknown[] } | undefined): ImportEntryResult {
+  const id = (res?.results?.[0] as { id?: string } | undefined)?.id ?? row.id;
+  return id === row.id ? { id, status: "imported" } : { id, status: "imported", original_id: row.id };
 }
 
 async function loadExistingEdgeKeys(env: Env, endpoints: string[]): Promise<Set<string>> {
@@ -359,19 +378,19 @@ async function flushInsertBatch(
 
   const stmts = [orphanVersionsDelete(env, batch.map(row => row.id)), ...batch.map(row => bindInsert(env, row, writeCtx))];
   try {
-    await env.DB.batch(stmts);
-    for (const row of batch) {
+    const written = await env.DB.batch(stmts);
+    batch.forEach((row, i) => {
       existingIds.add(row.id);
       counters.imported++;
-      results.push({ id: row.id, status: "imported" });
-    }
+      results.push(importedResult(row, written[i + 1]));
+    });
   } catch {
     for (const row of batch) {
       try {
-        await env.DB.batch([orphanVersionsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
+        const written = await env.DB.batch([orphanVersionsDelete(env, [row.id]), bindInsert(env, row, writeCtx)]);
         existingIds.add(row.id);
         counters.imported++;
-        results.push({ id: row.id, status: "imported" });
+        results.push(importedResult(row, written[1]));
       } catch (e) {
         counters.failed++;
         results.push({
@@ -613,8 +632,12 @@ export async function importExportPayload(
     }
     if (trashedIds.has(p.row.id)) {
       skipped++;
-      skipped_in_trash++;
-      results.push({ id: p.row.id, status: "skipped", reason: "in_trash" });
+      // Only the importer's own trash is named (restore it instead); another workspace's trash row
+      // is a plain skip, the same as a live id elsewhere, so the reply never says where an id lives.
+      if (trashedIds.get(p.row.id) === writeCtx.workspaceId) {
+        skipped_in_trash++;
+        results.push({ id: p.row.id, status: "skipped", reason: "in_trash" });
+      }
       continue;
     }
     if (existingIds.has(p.row.id)) {

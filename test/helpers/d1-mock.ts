@@ -212,7 +212,7 @@ export class D1Mock {
           }
           return { meta: { changes: n } };
         }
-        if (s.startsWith("INSERT INTO entries")) {
+        if (s.startsWith("INSERT INTO entries (")) {
           const colMatch = s.match(/INSERT INTO entries \(([^)]+)\)/i);
           if (!colMatch) throw new Error("INSERT INTO entries missing column list");
           const cols = colMatch[1].split(",").map(c => c.trim());
@@ -534,14 +534,15 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         // The trash batch (src/memory/trash.ts trashManyStatements): every id list is one JSON parameter.
-        if (s.startsWith("INSERT OR REPLACE INTO entries_trash")) {
+        if (s.startsWith("INSERT INTO entries_trash")) {
           const [idsJson, now, by, channel, reason] = args;
           const withEdges = s.includes("json_group_array");
           const rows = db.entries.filter((e: any) => (JSON.parse(idsJson) as string[]).includes(e.id));
           for (const e of rows) {
             const { id, content, vector_ids, ...rest } = e;
             const edges = withEdges ? db.edges.filter((g: any) => g.source_id === id || g.target_id === id) : [];
-            db.trash = db.trash.filter((t: any) => t.id !== id);
+            // A plain INSERT, as in SQLite: an id already in the trash is a PRIMARY KEY error.
+            if (db.trash.some((t: any) => t.id === id)) throw new Error("UNIQUE constraint failed: entries_trash.id");
             db.trash.push({ id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", content, row_json: JSON.stringify(rest), edges_json: JSON.stringify(edges), vector_ids: vector_ids ?? "[]", deleted_at: now, deleted_by: by, channel, reason });
           }
           return { meta: { changes: rows.length } };

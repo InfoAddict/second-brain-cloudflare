@@ -136,11 +136,15 @@ export async function revertEntry(
    * scoping through getTrashedEntry.
    */
   authorizedWorkspaceId: string,
+  /** Optional: the trash row the caller saw. Given, undo only restores that exact row, never reverts a live one. */
+  trashNonce?: string,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
+  if (row && trashNonce !== undefined) return { status: "not_found" };
   if (!row) {
     // No live row: undo of a forget, if the trash row is readable (author or admin, same as forget itself).
-    const trashed = await getTrashedEntry(env, identity, id);
+    const found = await getTrashedEntry(env, identity, id);
+    const trashed = found && (trashNonce === undefined || found.nonce === trashNonce) ? found : null;
     if (!trashed) {
       const gone = await describeGone(env, identity, id);
       return gone ? { status: "not_found", gone } : { status: "not_found" };

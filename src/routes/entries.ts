@@ -230,13 +230,16 @@ export async function handleEntriesRoutes(
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string };
+    let body: { id?: string; nonce?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     const id = body.id.trim();
+    const nonce = optionalNonce(body);
+    if (nonce === null) return json({ ok: false, error: "nonce must be a non-empty string" }, 400);
 
     const trashed = await getTrashedEntry(env, auth, id);
-    if (!trashed) return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
+    // With a nonce, only that exact trash row: a stale view never restores a row that replaced it.
+    if (!trashed || (nonce !== undefined && trashed.nonce !== nonce)) return json({ ok: false, error: `No trashed entry found with ID: ${id}` }, 404);
     const denied = assertCanMutateEntry(auth, trashed);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
@@ -260,10 +263,12 @@ export async function handleEntriesRoutes(
     const auth = await requireIdentity(request, env);
     if (auth instanceof Response) return auth;
 
-    let body: { id?: string; to_version?: unknown };
+    let body: { id?: string; to_version?: unknown; nonce?: unknown };
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     const id = body.id.trim();
+    const nonce = optionalNonce(body);
+    if (nonce === null) return json({ ok: false, error: "nonce must be a non-empty string" }, 400);
 
     let toVersion: number | undefined;
     if (body.to_version !== undefined) {
@@ -284,7 +289,7 @@ export async function handleEntriesRoutes(
     const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
 
     const cfg = await resolveConfig(env);
-    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "");
+    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "", nonce);
 
     switch (result.status) {
       case "reverted":
@@ -516,4 +521,10 @@ export async function handleEntriesRoutes(
   }
 
   return null;
+}
+
+/** An optional trash-row nonce: undefined when absent, null when present but not a non-empty string. */
+function optionalNonce(body: { nonce?: unknown }): string | undefined | null {
+  if (!("nonce" in body) || body.nonce === undefined) return undefined;
+  return typeof body.nonce === "string" && body.nonce !== "" ? body.nonce : null;
 }
