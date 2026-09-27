@@ -172,25 +172,35 @@ export async function revertEntry(
   // versioning: snapshot
   const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}, vector_ids = ${p.add(nextVectorIds)}, when_at = ${p.add(nextWhenAt)}, when_kind = ${p.add(nextWhenKind)}, when_source = ${p.add(nextWhenSource)}, when_label = ${p.add(nextWhenLabel)} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
-  const results = await env.DB.batch([
-    snapshotStatement(env, {
-      entryId: id, reason: "revert", change,
-      content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
-      nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
-      // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
-      // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
-      // recreated_incoming_id rides along the same way, so a redo of this revert (undoing it) knows
-      // which row to remove again (U4).
-      meta: {
-        nonce, target_seq: target.seq, reverted_reason: target.reason,
-        ...(restoreWhen ? { when: true } : {}),
-        ...(recreatedIncomingId ? { recreated_incoming_id: recreatedIncomingId } : {}),
-      }, now,
-    }),
-    // versioning: snapshot
-    env.DB.prepare(updateSql).bind(...p.values()),
-    pruneStatement(env, id, config.VERSION_KEEP),
-  ]);
+  let results;
+  try {
+    results = await env.DB.batch([
+      snapshotStatement(env, {
+        entryId: id, reason: "revert", change,
+        content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
+        nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
+        // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
+        // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
+        // recreated_incoming_id rides along the same way, so a redo of this revert (undoing it) knows
+        // which row to remove again (U4).
+        meta: {
+          nonce, target_seq: target.seq, reverted_reason: target.reason,
+          ...(restoreWhen ? { when: true } : {}),
+          ...(recreatedIncomingId ? { recreated_incoming_id: recreatedIncomingId } : {}),
+        }, now,
+      }),
+      // versioning: snapshot
+      env.DB.prepare(updateSql).bind(...p.values()),
+      pruneStatement(env, id, config.VERSION_KEEP),
+    ]);
+  } catch (e) {
+    // The re-embed above already pointed the row's deterministic vector ids at the restored text; a
+    // thrown batch means the row itself never committed, so the index and the row would disagree
+    // until the next write touched it. Re-embed from the row as it actually stands (U6) — never
+    // delete under those ids, which are the row's live vectors (the rule ADV proved broken elsewhere).
+    if (needsReembed) await restoreRowVectors(env, id, oldVectorIds, newVectorIds ?? [], row.source, config, embedCtx);
+    throw e;
+  }
 
   if (changesOf(results[1]) === 0) {
     if (newVectorIds) { try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
