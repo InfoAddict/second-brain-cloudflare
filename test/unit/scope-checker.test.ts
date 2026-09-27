@@ -1271,9 +1271,18 @@ describe("the checker over the real source tree", () => {
     // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
     // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
     // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
-    // Deliberate: +1 query for Track 7 Task 3 (src/standing/cache.ts, buildStandingCache): the standing
+    // Deliberate: +1 query (148 -> 149) for Track 7: the decision ledger's
+    // calibration read (src/decisions/queries.ts calibrationQuery). It carries
+    // both the read scope and the actionable clause (personal workspace or
+    // authored by the caller, P7.7), so it needs no exemption.
+    // Deliberate: +1 scope-checked (12 -> 13), same query, after the QA review
+    // (18-t7-wow, finding 6): the scope clause is now assembled in JS
+    // (boundedScope collapses a many-team IN-list into one json_each binding
+    // to stay under D1's 100-bound-parameter limit), so the literal
+    // `${scope.clause}` interpolation the checker recognized is gone.
+    // Deliberate: +1 query (149 -> 150) for Track 7 Task 3 (src/standing/cache.ts, buildStandingCache): the standing
     // cache build's one D1 read of a workspace's standing:active rows, scoped by `workspace_id = ?1`.
-    ).toEqual({ queries: 149, exempt: 70, checked: 12, outerJoin: 1 });
+    ).toEqual({ queries: 150, exempt: 70, checked: 13, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
