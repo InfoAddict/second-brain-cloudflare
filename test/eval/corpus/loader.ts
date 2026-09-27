@@ -28,6 +28,7 @@ export interface LoadedCorpus {
   replay: ReplayAi;
   workspaceOf: Map<string, string>;
   entryCount: number;
+  standingIds: string[];
   close(): Promise<void>;
 }
 
@@ -101,6 +102,7 @@ export async function loadCorpus(o: {
       id: o.spec.id, dataFingerprint: o.spec.dataFingerprint, indexId: o.index?.id ?? "shipped", env, d1, vectorize, replay: o.replay,
       workspaceOf: new Map(entries.map(e => [e.id, e.workspaceId] as const)),
       entryCount: entries.length,
+      standingIds: entries.filter(e => e.tags.includes("standing")).map(e => e.id),
       close: () => d1.close(),
     };
   } catch (e) {

@@ -10,7 +10,8 @@ import { resetVectorizeFilterState, vectorizeFilterState } from "../../src/vecto
 import type { LoadedCorpus } from "./corpus/loader";
 import { EVAL_NOW, IDENTITIES } from "./corpus/types";
 import { recallAtK, scoreQuery } from "./metrics";
-import { QUERY_CATEGORIES, RUNNER_VERSION, type CostSample, type GoldenQuery, type PoolDiagnostic, type QueryResult, type VariantReport } from "./types";
+import { ALL_QUERY_CATEGORIES, RUNNER_VERSION, type CostSample, type GoldenQuery, type PoolDiagnostic, type QueryResult, type VariantReport } from "./types";
+import { measureStanding } from "./standing";
 import type { VariantSpec } from "./variants";
 
 /** Metrics need the top 10; recall@5 is read from its first five (Decision 9). */
@@ -120,7 +121,23 @@ export async function runVariant(o: {
     const rerankExpected = rerankFlag === true || (rerankFlag !== false && cfg.RERANK_MODE !== "off");
 
     let intercepted = 0;
-    const env = { ...corpus.env, DB: withoutRecallCountWrites(corpus.env.DB, () => { intercepted++; }) } as typeof corpus.env;
+    let activeQueryId: string | undefined;
+    const queryVectors = new Map<string, number[]>();
+    const captureAi = corpus.standingIds.length ? new Proxy(corpus.env.AI, {
+      get(target, prop, receiver) {
+        if (prop !== "run") return Reflect.get(target, prop, receiver);
+        return async (...args: unknown[]) => {
+          const result = await Reflect.apply(target.run, target, args);
+          const input = args[1] as { text?: unknown } | undefined;
+          if (activeQueryId && args[0] === o.embeddingModel && Array.isArray(input?.text)) {
+            const values = (result as { data?: number[][] })?.data?.[0];
+            if (values) queryVectors.set(activeQueryId, values);
+          }
+          return result;
+        };
+      },
+    }) : corpus.env.AI;
+    const env = { ...corpus.env, AI: captureAi, DB: withoutRecallCountWrites(corpus.env.DB, () => { intercepted++; }) } as typeof corpus.env;
     const recallOnce = async (q: GoldenQuery) => {
       const diagnostics: RecallDiagnostics = {};
       corpus.replay.drainCalls();
@@ -131,16 +148,21 @@ export async function runVariant(o: {
       // A swallowed side call (as the retired tag inference was) can outlive a failed recall. Scope its calls to this query and wait for them, or a late failure would be charged to the next one.
       let result: Awaited<ReturnType<typeof recallEntries>> | undefined;
       let recallError: unknown;
+      const restoreQueryClock = q.asOf === undefined ? undefined : freezeClock(q.asOf);
+      activeQueryId = q.id;
       try {
         result = await corpus.replay.scope(q.id, () => recallEntries(
-          { query: q.text, topK: o.topK ?? EVAL_TOP_K, hops: q.hops, synthesize: false },
+          { query: q.text, topK: o.topK ?? EVAL_TOP_K, hops: q.hops, synthesize: false, ...(q.asOf !== undefined && { before: q.asOf + 1 }) },
           env, ctx, cfg,
           { ...variant.internal, identity: IDENTITIES[q.viewer], workspaceFilter: q.layer, diagnostics },
         ));
       } catch (e) {
         recallError = e;
+      } finally {
+        restoreQueryClock?.();
       }
       await corpus.replay.settle(q.id);
+      activeQueryId = undefined;
       const standInFailures = corpus.replay.drainErrors(q.id);
       const standInMessage = standInFailures.length ? `query-tag stand-in failed: ${standInFailures.join("; ")}` : "";
       if (recallError) throw standInMessage ? new Error(`${recallError instanceof Error ? recallError.message : String(recallError)}; ${standInMessage}`) : recallError;
@@ -201,7 +223,8 @@ export async function runVariant(o: {
       o.onProgress?.(results.length, o.queries.length);
     }
     const producers = corpus.replay.producers(), neuronSource = corpus.replay.neuronSource();
-    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), llmTags: corpus.replay.llmTags, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: o.topK ?? EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results };
+    const standing = corpus.standingIds.length ? await measureStanding(corpus, o.queries, queryVectors) : undefined;
+    return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), llmTags: corpus.replay.llmTags, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: o.topK ?? EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results, ...(standing && { standing }) };
   } finally {
     restoreClock();
   }
@@ -242,7 +265,7 @@ function validateReport(raw: unknown, path: string): VariantReport {
     const q = (x ?? {}) as Record<string, unknown>;
     const at = (f: string) => `results[${i}].${f}`;
     if (!isStr(q.queryId)) fail(at("queryId"), "a string");
-    if (!(QUERY_CATEGORIES as readonly string[]).includes(q.category as string)) fail(at("category"), "a known category");
+    if (!(ALL_QUERY_CATEGORIES as readonly string[]).includes(q.category as string)) fail(at("category"), "a known category");
     if (!isStr(q.clusterKey)) fail(at("clusterKey"), "a string");
     if (!isStrArray(q.rankedIds)) fail(at("rankedIds"), "a string array");
     if (!isStrArray(q.leaked)) fail(at("leaked"), "a string array");

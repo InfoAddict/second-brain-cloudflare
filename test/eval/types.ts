@@ -1,7 +1,10 @@
 export const QUERY_CATEGORIES = [
   "identifier", "cjk", "rare-word", "common-word", "short-word", "paraphrase", "multi-hop", "long-context", "agent-framed",
 ] as const;
-export type QueryCategory = (typeof QUERY_CATEGORIES)[number];
+/** Categories of the opt-in synthetic corpora (T-0089.1.8); the core categories above stay what the core gate and audits iterate. */
+export const SYNTHETIC_QUERY_CATEGORIES = ["temporal", "knowledge-update", "noise", "injection", "standing"] as const;
+export const ALL_QUERY_CATEGORIES = [...QUERY_CATEGORIES, ...SYNTHETIC_QUERY_CATEGORIES] as const;
+export type QueryCategory = (typeof ALL_QUERY_CATEGORIES)[number];
 export type ViewerId = "avery" | "blake" | "outsider";
 
 export const METRIC_NAMES = ["recall5", "recall10", "mrr10", "ndcg10"] as const;
@@ -25,6 +28,8 @@ export interface GoldenQuery {
   tags?: string[];
   /** Audit only: the substring of the gold memory that answers the query (long-context queries). */
   answerSpan?: string;
+  /** Question time for temporal evaluation; the runner restores its fixed clock after this query. */
+  asOf?: number;
 }
 
 export interface CostSample {
@@ -130,6 +135,8 @@ export interface VariantReport {
   /** Set when the run covered only the first N queries; such a report is never gate-eligible. */
   limit?: number;
   results: QueryResult[];
+  /** Report-only cosine firing curve for the synthetic standing corpus. */
+  standing?: { threshold: number; precision: number; recall: number; truePositive: number; falsePositive: number; falseNegative: number }[];
 }
 
 /** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). 7: recall diagnostics count first() statements (run as all()), so workerd rows_read is no longer null for queries that ran one. 8: each result carries the candidate-pool diagnostic (pool). */

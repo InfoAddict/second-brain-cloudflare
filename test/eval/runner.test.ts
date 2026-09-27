@@ -68,6 +68,30 @@ async function corpus(dryOther?: (model: string, input: unknown) => unknown): Pr
 const run = (c: LoadedCorpus, name = "no-rerank", isolate: "warm" | "cold" = "warm") =>
   runVariant({ corpus: c, variant: getVariant(name), queries, isolate, embeddingModel: MODEL });
 
+it("uses a query's as-of clock and excludes later documents without changing the next query's clock", async () => {
+  const c = await corpus();
+  const at = EVAL_NOW - 3 * 86_400_000;
+  const dated: GoldenQuery[] = [
+    { ...queries[0], id: "dated", asOf: at },
+    { ...queries[0], id: "undated" },
+  ];
+  await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: dated, isolate: "cold", embeddingModel: MODEL });
+  expect(seen.find(call => call.params.query === "xylo alpha" && call.now === at)?.params.before).toBe(at + 1);
+  expect(seen.some(call => call.params.query === "xylo alpha" && call.now === EVAL_NOW && call.params.before === undefined)).toBe(true);
+});
+
+it("measures standing cosine from the embedding used by recall", async () => {
+  const q: GoldenQuery = { id: "standing-probe", category: "standing", text: "arranging a flight", gold: [{ id: "st-one", grade: 2 }], viewer: "avery" };
+  const c = await loadCorpus({
+    spec: { id: "standing-probe", intent: "tie", entries: [{ ...row("st-one", "When arranging a flight, check the calendar"), tags: ["standing"] }], edges: [], queries: [q] },
+    backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry" }), embeddingModel: MODEL,
+  });
+  open.push(c);
+  const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: [q], isolate: "cold", embeddingModel: MODEL });
+  expect(report.standing).toHaveLength(13);
+  expect(report.results[0].error).toBeUndefined();
+});
+
 describe("runVariant", () => {
   it("returns per-query results with real cost fields and no cross-workspace leaks", async () => {
     const report = await run(await corpus());
