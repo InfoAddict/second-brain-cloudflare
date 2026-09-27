@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { resolveConfig } from "../config";
 import { initializeDatabase } from "../db/init";
 import { COMPRESSION_MIN_AGE_MS, compressionEligibilitySql, isTopicTagSql } from "./eligibility";
-import { compressTag } from "./digest";
+import { compressTag, heldSetFrom, prepareHeldDigests } from "./digest";
 import { prepareActiveProjects, projectRowsOf, type ProjectRow } from "../projects/registry";
 import { PROJECT_TAG_PREFIX } from "../tags/system";
 
@@ -101,13 +101,20 @@ export async function runNightlyCompression(
   // the cron's shared budget. Members are decided by compressTag (the tag or any alias, and
   // the usual >= 10 eligible entries), so a thin project costs one rotation slot and two
   // statements, never a wrong digest.
+  //
+  // The same batch also carries the held-draft read: which (workspace, tag) pairs already have a live
+  // held digest, so the loop below skips them without a statement per tag. It rides in the batch, so
+  // it costs no extra subrequest. If the batch fails it is left undefined and compressTag asks per tag.
   const projectsBySlug = new Map<string, ProjectRow[]>();
   let results: Record<string, unknown>[];
+  let heldDigests: Set<string> | undefined;
   try {
-    const [candidates, projects] = await env.DB.batch<Record<string, unknown>>([
+    const [candidates, projects, held] = await env.DB.batch<Record<string, unknown>>([
       candidateQuery,
       prepareActiveProjects(env.DB, workspaceId ?? null),
+      prepareHeldDigests(env, workspaceId ?? null),
     ]);
+    heldDigests = heldSetFrom(held?.results);
     results = candidates.results ?? [];
     for (const row of projectRowsOf(projects.results)) {
       projectsBySlug.set(row.id, [...(projectsBySlug.get(row.id) ?? []), row]);
@@ -129,8 +136,8 @@ export async function runNightlyCompression(
       const rows = tag.startsWith(PROJECT_TAG_PREFIX) ? projectsBySlug.get(tag.slice(PROJECT_TAG_PREFIX.length)) : undefined;
       // Only the workspaces that hold the project are rolled up, each with its own row's aliases.
       const result = await compressTag(tag, env, ctx, rows
-        ? { workspaceIds: [...new Set(rows.map(r => r.workspace_id))], project: rows }
-        : undefined);
+        ? { workspaceIds: [...new Set(rows.map(r => r.workspace_id))], project: rows, heldDigests }
+        : { heldDigests });
       if (result.synthesizedId) digestsWritten++;
     } catch (e) {
       console.error(`Compression failed for tag "${tag}" (non-fatal):`, e);

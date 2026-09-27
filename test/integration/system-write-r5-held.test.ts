@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { compressTag } from "../../src/compression/digest";
+import { runNightlyCompression } from "../../src/compression/nightly";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
 import { makeSqliteD1 } from "../helpers/sqlite-d1";
@@ -13,7 +14,7 @@ const stream = (text: string) => new ReadableStream({ start(c) {
 }});
 
 describe("held drafts", () => {
-  async function world() {
+  async function world(withSecondTag = false) {
     let now = 400 * DAY;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     resetDatabaseInit();
@@ -39,9 +40,11 @@ describe("held drafts", () => {
     await initializeDatabase(env);
     sqlite.seed({ id: "user-row", content: "We ship the work plan in May", createdAt: now - 5 * DAY, tags: ["decisions"], source: "api" });
     for (let i = 0; i < 12; i++) sqlite.seed({ id: `w-${i}`, content: `Memory about work number ${i}`, createdAt: now - 200 * DAY + i, tags: ["work"] });
+    if (withSecondTag) for (let i = 0; i < 12; i++) sqlite.seed({ id: `h-${i}`, content: `Memory about home number ${i}`, createdAt: now - 200 * DAY + i, tags: ["home"] });
+    const nightly = async () => { const r = await runNightlyCompression(env, ctx); now += 2 * DAY; return r; };
     const cycle = async () => { await compressTag("work", env, ctx); now += 2 * DAY; };
     const held = () => (sqlite.rows() as any[]).filter(r => String(r.tags).includes('"conflict-held"'));
-    return { sqlite, cycle, held, calls: () => n };
+    return { sqlite, env, cycle, nightly, held, calls: () => n };
   }
 
   it("H1: five cycles of a digest that keeps contradicting a user row leave one held draft and one LLM call", async () => {
@@ -100,6 +103,34 @@ describe("held drafts", () => {
     await cycle(); await cycle();
     expect(held()).toHaveLength(1);
     expect(calls()).toBe(1);
+    sqlite.close();
+  });
+
+  it("the nightly run reads the held set ONCE for all its tags (in its candidate batch), and skips the held ones", async () => {
+    const { sqlite, env, nightly, held, calls } = await world(true);
+    const prepared: string[] = [];
+    const db = env.DB as any; const realPrepare = db.prepare.bind(db);
+    db.prepare = (sql: string) => { prepared.push(sql); return realPrepare(sql); };
+    // Every held-draft read is prepared through env.DB, batched or not; count them there.
+    const heldReads = () => prepared.filter(q => q.includes("idx_entries_conflict_held")).length;
+    await nightly();
+    expect(held()).toHaveLength(2); // work and home each held
+    expect(calls()).toBe(2);
+    expect(heldReads()).toBe(1);
+    await nightly();
+    expect(calls()).toBe(2); // both skipped, no new model calls
+    expect(held()).toHaveLength(2);
+    expect(heldReads()).toBe(2); // one per run, not one per tag
+    sqlite.close();
+  });
+
+  it("the nightly run digests again for a tag whose held draft the person edited, and only that tag", async () => {
+    const { sqlite, nightly, held, calls } = await world(true);
+    await nightly();
+    const workHeld = held().find(r => String(r.tags).includes('"work"'))!;
+    sqlite.db.prepare(`UPDATE entries SET tags = json_insert(tags, '$[#]', 'user-edited') WHERE id = ?`).bind(workHeld.id).run();
+    await nightly();
+    expect(calls()).toBe(3); // work digested again, home still held
     sqlite.close();
   });
 });

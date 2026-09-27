@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (141 queries, 69 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (142 queries, 70 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1262,7 +1262,11 @@ describe("the checker over the real source tree", () => {
     // scoped by `workspace_id = ?`. And +1 scope-exempt: the nightly corpus-wide 24h cooldown query is back
     // to its original text and its `scope-exempt: cron` reason. The folded version had put `workspace_id = ?`
     // inside an OR arm, which the checker used to count as scoped; it no longer does (inUnscopedOrArm).
-    ).toEqual({ queries: 141, exempt: 69, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (cron) for T-0089.4.4 (src/compression/digest.ts prepareHeldDigests):
+    // the nightly run's one held-digest read, riding in its existing candidate batch. It selects only
+    // (workspace, tags) of held drafts, narrowed by the run's workspace slice when it has one, and the per-tag
+    // `heldDigestSql` it replaces on the nightly path stays for manual digests.
+    ).toEqual({ queries: 142, exempt: 70, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
