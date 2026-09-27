@@ -184,6 +184,6 @@ describe("both locales", () => {
     ctx.initI18n("it");
     await ctx.renderWhatsNewLine({ version: "4.0.0", history_since: Date.now() - 5 * DAY });
     expect(line(ctx).innerHTML).toContain("Novità della 4.0");
-    expect(line(ctx).innerHTML).toContain("Vai al cestino");
+    expect(line(ctx).innerHTML).toContain("Apri il cestino");
   });
 });

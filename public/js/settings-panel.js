@@ -43,10 +43,11 @@ function closeSettingsSheet() {
 
 /**
  * Rebuild one select's options from the fixed choices, plus a "Custom
- * (value)" entry when the effective value sits outside them — added, never
+ * (value)" entry when the effective value sits outside them: added, never
  * silently rewritten to the nearest choice. `formatLabel` defaults to the
  * bare number (versions kept); the retention select passes one that
- * pluralizes "day".
+ * pluralizes "day", and Custom's own {value} goes through the same
+ * formatter so it reads "Custom (21 days)", not a bare "21".
  */
 function renderSettingsOptions(selectId, choices, value, formatLabel) {
   const sel = document.getElementById(selectId);
@@ -54,7 +55,7 @@ function renderSettingsOptions(selectId, choices, value, formatLabel) {
   const label = formatLabel || ((c) => String(c));
   const options = choices.map((c) => `<option value="${c}">${escHtml(label(c))}</option>`);
   if (typeof value === 'number' && !choices.includes(value)) {
-    options.push(`<option value="${value}">${escHtml(t('settingsPanel.custom', { value }))}</option>`);
+    options.push(`<option value="${value}">${escHtml(t('settingsPanel.custom', { value: label(value) }))}</option>`);
   }
   sel.innerHTML = options.join('');
   if (typeof value === 'number') sel.value = String(value);

@@ -98,7 +98,7 @@ async function renderWhatsNewLine(health) {
 
   const el = ensureWhatsNewLine();
   el.innerHTML = `
-    <span class="whats-new-text">${escHtml(t('whatsNew.line', { n: retentionDays }))}</span>
+    <span class="whats-new-text">${escHtml(tPlural('whatsNew.line', retentionDays))}</span>
     <button type="button" class="whats-new-see" onclick="openTrashSheet()">${escHtml(t('whatsNew.seeTrash'))}</button>
     <button type="button" class="whats-new-dismiss" onclick="dismissWhatsNew()" aria-label="${escAttr(t('whatsNew.dismissLabel'))}" title="${escAttr(t('whatsNew.dismiss'))}"><i class="ti ti-x"></i></button>`;
   el.hidden = false;

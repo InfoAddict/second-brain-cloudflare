@@ -33,7 +33,7 @@ function closeTrashSheet() {
 
 function renderTrashIntro() {
   const intro = document.getElementById('trash-intro');
-  if (intro) intro.textContent = t('trash.intro', { n: trashRetentionDays ?? 14 });
+  if (intro) intro.textContent = tPlural('trash.intro', trashRetentionDays ?? 14);
   const note = document.getElementById('trash-teammate-note');
   if (note) {
     // A note explaining the filtering only means something to a teammate who

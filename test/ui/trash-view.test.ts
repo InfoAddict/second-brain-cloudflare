@@ -253,11 +253,14 @@ describe("rows render who, date and days left for each reason and channel", () =
   });
 });
 
-describe("days 0 reads next cleanup", () => {
-  it("a row past retention but not yet purged says 'at the next cleanup'", async () => {
+describe("days 0 reads waiting for a daily cleanup", () => {
+  it("a row past retention but not yet purged says it is waiting for a cleanup, not 'the next' one", async () => {
+    // A single night's cleanup is capped, so a backlog can leave a day-0 row
+    // waiting past the very next run — "waiting" is the copy deck's honest
+    // fix for the earlier "at the next cleanup" claim.
     const ctx = load([{ ok: true, items: [item({ days_left: 0 })], next_cursor: null, retention_days: 14 }]);
     await ctx.loadTrashPage();
-    expect(el(ctx, "trash-list").innerHTML).toContain("next cleanup");
+    expect(el(ctx, "trash-list").innerHTML).toContain("Waiting to be removed for good at a daily cleanup");
   });
 });
 
@@ -306,7 +309,7 @@ describe("Restore posts /restore, removes the row and offers Open", () => {
     await ctx.loadTrashPage();
     ctx.handleTrashRestore(trashItemsOf(ctx)[0]);
     await flush();
-    expect(ctx.__toasts[0].message).toBe("A memory with this ID already exists.");
+    expect(ctx.__toasts[0].message).toBe("This memory is already back, restored from another tab or by an AI tool.");
   });
 
   it("maps a 502 to the re-index message", async () => {
@@ -317,7 +320,7 @@ describe("Restore posts /restore, removes the row and offers Open", () => {
     await ctx.loadTrashPage();
     ctx.handleTrashRestore(trashItemsOf(ctx)[0]);
     await flush();
-    expect(ctx.__toasts[0].message).toBe("Could not restore: re-indexing failed. Nothing changed. Try again.");
+    expect(ctx.__toasts[0].message).toBe("Could not restore: search did not update. Nothing changed. Try again.");
   });
 });
 

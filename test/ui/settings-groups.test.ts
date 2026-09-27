@@ -277,7 +277,7 @@ describe("the Data group's backup note", () => {
     const html = readFileSync(resolve(ROOT, "public/index.html"), "utf8");
     const dataGroup = html.match(/menu\.groupData[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
     const restoreAt = dataGroup.indexOf('id="restore-btn"');
-    const noteAt = dataGroup.indexOf("menu.backupExcludesHistory");
+    const noteAt = dataGroup.indexOf("menu.backupNote");
     const trashAt = dataGroup.indexOf('id="menu-trash-btn"');
     expect(restoreAt, "restore-btn found in the Data group").toBeGreaterThanOrEqual(0);
     expect(noteAt, "the backup note found in the Data group").toBeGreaterThan(restoreAt);
@@ -289,10 +289,10 @@ describe("the Data group's backup note", () => {
     (ctx as any).globalThis = ctx;
     vm.createContext(ctx);
     installI18n(ctx as any, "en");
-    const en = (ctx as any).t("menu.backupExcludesHistory");
+    const en = (ctx as any).t("menu.backupNote");
     (ctx as any).initI18n("it");
-    const it_ = (ctx as any).t("menu.backupExcludesHistory");
-    expect(en).toBe("Backups include your memories, not their edit history or the trash.");
+    const it_ = (ctx as any).t("menu.backupNote");
+    expect(en).toBe("Backups include your memories, but not their history or the trash.");
     expect(it_).not.toBe(en);
     expect(it_).toContain("cronologia");
   });

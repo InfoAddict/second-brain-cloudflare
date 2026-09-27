@@ -115,7 +115,7 @@ describe("Custom for an out-of-list value, not rewritten", () => {
 
     const html = el(ctx, "setting-trash-retention").innerHTML;
     expect(optionValues(html)).toEqual(["7", "14", "30", "90", "21"]);
-    expect(html).toContain("Custom (21)");
+    expect(html).toContain("Custom (21 days)");
     expect(el(ctx, "setting-trash-retention").value).toBe("21");
   });
 });
@@ -202,7 +202,7 @@ describe("both locales", () => {
     const ctx = load({ config: { TRASH_RETENTION_DAYS: 21, VERSION_KEEP: 20 }, defaults: {} });
     ctx.initI18n("it");
     await ctx.loadSettingsPanel();
-    expect(el(ctx, "setting-trash-retention").innerHTML).toContain("Personalizzato (21)");
+    expect(el(ctx, "setting-trash-retention").innerHTML).toContain("Personalizzato (21 giorni)");
 
     el(ctx, "setting-version-keep").value = "50";
     await ctx.onSettingChange("setting-version-keep", "VERSION_KEEP");
