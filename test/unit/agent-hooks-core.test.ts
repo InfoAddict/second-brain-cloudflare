@@ -227,7 +227,6 @@ describe("core.performRecall", () => {
   it("fails loudly (stderr + null) on a hard HTTP error, and writes no secrets", async () => {
     const errSpy: string[] = [];
     const write = process.stderr.write.bind(process.stderr);
-    // @ts-expect-error test spy
     process.stderr.write = (chunk: string) => { errSpy.push(String(chunk)); return true; };
     try {
       const out = await withStub(
@@ -341,7 +340,7 @@ describe("core.captureEnabled", () => {
 });
 
 describe("core.performCapture", () => {
-  const withStub = async (handler: (url: URL, init?: RequestInit) => { status: number; body: unknown } | null, run: () => Promise<unknown>) => {
+  const withStub = async <T,>(handler: (url: URL, init?: RequestInit) => { status: number; body: unknown } | null, run: () => Promise<T>): Promise<T> => {
     const realFetch = global.fetch;
     // @ts-expect-error test stub
     global.fetch = async (url: string, init?: RequestInit) => {
@@ -371,17 +370,31 @@ describe("core.performCapture", () => {
     expect(out).toEqual({ sent: false, reason: "no-credentials" });
   });
 
-  it("never captures the same session twice", async () => {
+  it("never captures the same session twice for the same content", async () => {
+    // The dedup marker is content-keyed (see claimCapture), not a plain flag,
+    // so this seeds it the real way: an actual prior capture of this exact
+    // content, not a hand-set marker value the new design would not recognise.
     const dir = tmp();
-    core.setMarker("codex-captured", "s1", dir);
-    let called = false;
-    const out = await withStub(() => { called = true; return { status: 200, body: { ok: true } }; }, () =>
-      core.performCapture({
-        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
-        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
-      }));
+    let captureCount = 0;
+    const out = await withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") { captureCount++; return { status: 200, body: { ok: true } }; }
+        return null;
+      },
+      async () => {
+        await core.performCapture({
+          env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+          userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+        });
+        return core.performCapture({
+          env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+          userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
+        });
+      },
+    );
     expect(out).toEqual({ sent: false, reason: "already-captured" });
-    expect(called).toBe(false);
+    expect(captureCount).toBe(1);
   });
 
   it("skips capture and notices once when the Worker is older than 3.0", async () => {
@@ -412,7 +425,6 @@ describe("core.performCapture", () => {
     const dir = tmp();
     const write = process.stdout.write.bind(process.stdout);
     let printed = "";
-    // @ts-expect-error test spy
     process.stdout.write = (chunk: string) => { printed += String(chunk); return true; };
     try {
       const out = await withStub(
@@ -422,8 +434,7 @@ describe("core.performCapture", () => {
           userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
         }),
       );
-      expect(out?.sent).toBe(false);
-      expect(out?.reason).toBe("dry-run");
+      expect(out).toMatchObject({ sent: false, reason: "dry-run" });
     } finally { process.stdout.write = write; }
     expect(JSON.parse(printed)).toMatchObject({ source: "codex-session" });
     expect(core.hasMarker("codex-captured", "s1", dir)).toBe(false);
@@ -443,7 +454,7 @@ describe("core.performCapture", () => {
         userTurns: goodTurns, meta, namespace: "codex", sessionId: "s1", cacheDir: dir,
       }),
     );
-    expect(out.sent).toBe(true);
+    expect(out).toMatchObject({ sent: true });
     expect(posted).toHaveLength(1);
     expect(JSON.parse(posted[0])).toMatchObject({ source: "codex-session" });
     expect(core.hasMarker("codex-captured", "s1", dir)).toBe(true);
@@ -466,6 +477,51 @@ describe("core.performCapture", () => {
     expect(out).toMatchObject({ sent: false, reason: "http-error" });
     expect(process.exitCode).toBe(1);
     process.exitCode = 0;
-    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(false);
+    // The claim is taken before the network call (see claimCapture), so it
+    // survives a failed POST too: a second concurrent or later attempt for
+    // this exact same content must not retry and double-post once the
+    // Worker starts accepting it. Never-double-post outranks guaranteed-
+    // eventual-capture for a background hook.
+    expect(core.hasMarker("codex-captured", "s1", dir)).toBe(true);
+  });
+
+  it("claims atomically before uploading, so two concurrent captures of the same content post once", async () => {
+    const dir = tmp();
+    let captures = 0;
+    const args = {
+      env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+      userTurns: goodTurns, meta, namespace: "codex", sessionId: "same-session", cacheDir: dir,
+    };
+    await withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") { captures++; return { status: 200, body: { ok: true } }; }
+        return null;
+      },
+      () => Promise.all([core.performCapture(args), core.performCapture(args)]),
+    );
+    expect(captures).toBe(1);
+  });
+
+  it("a later capture with new content (e.g. the final turn) still gets through for the same session", async () => {
+    const dir = tmp();
+    const posted: string[] = [];
+    const base = {
+      env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+      meta, namespace: "codex", sessionId: "same-session", cacheDir: dir,
+    };
+    await withStub(
+      (u, init) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") { posted.push(String(init?.body)); return { status: 200, body: { ok: true } }; }
+        return null;
+      },
+      async () => {
+        await core.performCapture({ ...base, userTurns: [goodTurns[0]] });
+        await core.performCapture({ ...base, userTurns: [goodTurns[0], "A final turn with real content, long enough to pass the gate on its own merits."] });
+      },
+    );
+    expect(posted).toHaveLength(2);
+    expect(posted[1]).toContain("A final turn");
   });
 });

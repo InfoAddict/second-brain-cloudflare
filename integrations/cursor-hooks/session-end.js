@@ -22,6 +22,7 @@
 const fs = require('node:fs');
 const {
   readStdinJson, performCapture, gitRemoteUrl, parseProjectLabel, projectSlug, resolveWorkspace, fail,
+  transcriptBelongsToSession,
 } = require('../agent-hooks-core/core');
 
 const NAMESPACE = 'cursor';
@@ -110,10 +111,16 @@ async function main() {
     : typeof p.transcriptPath === 'string' ? p.transcriptPath : '';
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return; // no transcript on this event: not a failure
 
-  const userTurns = readUserTurns(transcriptPath);
-  const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : process.cwd();
   const sessionId = typeof p.sessionId === 'string' ? p.sessionId
     : typeof p.session_id === 'string' ? p.session_id : '';
+  // A review demonstrated a capture worker (Codex's) handed a transcript_path
+  // from an unrelated project's session: the same class of check applies
+  // here, layout-agnostic for the same reason (see
+  // transcriptBelongsToSession's own comment in agent-hooks-core/core.js).
+  if (!transcriptBelongsToSession(transcriptPath, sessionId)) return;
+
+  const userTurns = readUserTurns(transcriptPath);
+  const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : process.cwd();
   const projectName = parseProjectLabel(gitRemoteUrl(cwd), cwd);
   const meta = {
     hostLabel: 'Cursor',

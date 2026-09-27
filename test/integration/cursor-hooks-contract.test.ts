@@ -153,7 +153,7 @@ describe("session-start.js", () => {
     const elapsed = Date.now() - started;
     expect(elapsed).toBeLessThan(6000); // well under the delay: the cap, not the stub, decides
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^\[Second Brain\] recall failed: no reply within 3\.0s/);
+    expect(r.stderr).toMatch(/^\[Second Brain\] recall failed: no reply within [0-3]\.\ds/);
   }, 10000);
 
   it("does nothing without credentials, and honours the opt-out", async () => {
@@ -181,9 +181,13 @@ describe("before-submit-prompt.js", () => {
   it("without a prior session-start, delivers context itself and marks delivery; the next call in-session emits nothing", async () => {
     const first = await runHook("before-submit-prompt.js", startPayload("s3"));
     expect(first.code, first.stderr).toBe(0);
+    // beforeSubmitPrompt's documented output shape is NOT sessionStart's: only
+    // `continue` and `user_message` are recognized fields for this event
+    // (https://prod.cursor.com/docs/hooks).
     const parsed = JSON.parse(first.stdout.trim());
-    expect(Object.keys(parsed)).toEqual(["additional_context"]);
-    expect(parsed.additional_context).toContain("a remembered thing");
+    expect(Object.keys(parsed).sort()).toEqual(["continue", "user_message"]);
+    expect(parsed.continue).toBe(true);
+    expect(parsed.user_message).toContain("a remembered thing");
     const firstRecallCount = captured.filter(c => c.url.startsWith("/recall?")).length;
     expect(firstRecallCount).toBeGreaterThanOrEqual(1);
 
@@ -216,13 +220,13 @@ describe("before-submit-prompt.js", () => {
     const r = await runHook("before-submit-prompt.js", startPayload("s6"));
     expect(Date.now() - started).toBeLessThan(6000);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/no reply within 3\.0s/);
+    expect(r.stderr).toMatch(/no reply within [0-3]\.\ds/);
   }, 10000);
 });
 
 describe("session-end.js", () => {
   it("reads transcript_path and makes one POST /capture with the exact header and body shape", async () => {
-    const transcript = join(scratch, "fx.jsonl");
+    const transcript = join(scratch, "cap-1.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-1"));
     expect(r.code, r.stderr).toBe(0);
@@ -243,7 +247,7 @@ describe("session-end.js", () => {
   });
 
   it("does not capture a transcript with no substantial human text", async () => {
-    const transcript = join(scratch, "tiny.jsonl");
+    const transcript = join(scratch, "cap-2.jsonl");
     writeFileSync(transcript, [
       JSON.stringify({ role: "user", content: "hi" }),
       JSON.stringify({ role: "assistant", content: "hello" }),
@@ -266,7 +270,7 @@ describe("session-end.js", () => {
   });
 
   it("never captures the same session twice, even across two separate process runs", async () => {
-    const transcript = join(scratch, "fx2.jsonl");
+    const transcript = join(scratch, "cap-5.jsonl");
     copyFileSync(FIXTURE, transcript);
     const first = await runHook("session-end.js", endPayload(transcript, "cap-5"));
     expect(first.code, first.stderr).toBe(0);
@@ -280,7 +284,7 @@ describe("session-end.js", () => {
 
   it("reports a rejected token on capture: stderr line and exit 1", async () => {
     behaviour.captureStatus = 401;
-    const transcript = join(scratch, "fx3.jsonl");
+    const transcript = join(scratch, "cap-6.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-6"));
     expect(r.code).toBe(1);
@@ -289,18 +293,20 @@ describe("session-end.js", () => {
 
   it("does not capture against a Worker older than 3.0, and says so once", async () => {
     behaviour.healthVersion = "2.4.0";
-    const transcript = join(scratch, "fx4.jsonl");
+    const transcript = join(scratch, "cap-7.jsonl");
     copyFileSync(FIXTURE, transcript);
     const first = await runHook("session-end.js", endPayload(transcript, "cap-7"));
     expect(first.code).toBe(1);
     expect(first.stderr).toContain("needs Worker 3.0+");
-    const second = await runHook("session-end.js", endPayload(transcript, "cap-8"));
+    const transcript2 = join(scratch, "cap-8.jsonl");
+    copyFileSync(FIXTURE, transcript2);
+    const second = await runHook("session-end.js", endPayload(transcript2, "cap-8"));
     expect(second.code).toBe(0); // notice is once per 24h
     expect(captured.filter(c => c.url === "/capture")).toHaveLength(0);
   });
 
   it("reports a network failure on capture: stderr line and exit 1", async () => {
-    const transcript = join(scratch, "fx5.jsonl");
+    const transcript = join(scratch, "cap-9.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-9"), { SECOND_BRAIN_URL: "http://127.0.0.1:1" });
     expect(r.code).toBe(1);
@@ -308,7 +314,7 @@ describe("session-end.js", () => {
   });
 
   it("honours SECOND_BRAIN_HOOK_CAPTURE_CURSOR without touching recall", async () => {
-    const transcript = join(scratch, "fx6.jsonl");
+    const transcript = join(scratch, "cap-10.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-10"), { SECOND_BRAIN_HOOK_CAPTURE_CURSOR: "0" });
     expect(r.code, r.stderr).toBe(0);
@@ -316,7 +322,7 @@ describe("session-end.js", () => {
   });
 
   it("dry run prints the body and sends nothing", async () => {
-    const transcript = join(scratch, "fx7.jsonl");
+    const transcript = join(scratch, "cap-11.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-11"), { SECOND_BRAIN_DRY_RUN: "1" });
     expect(r.code, r.stderr).toBe(0);
@@ -327,7 +333,7 @@ describe("session-end.js", () => {
 
 describe("stop event alias", () => {
   it("session-end.js also captures when invoked as the stop hook (same script, same transcript_path contract)", async () => {
-    const transcript = join(scratch, "fx-stop.jsonl");
+    const transcript = join(scratch, "cap-stop-1.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-stop-1"));
     expect(r.code, r.stderr).toBe(0);

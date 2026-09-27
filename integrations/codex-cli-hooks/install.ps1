@@ -131,7 +131,8 @@ if (MODE !== 'uninstall') {
     hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-start.js`)}` }],
   });
   config.hooks.SessionEnd.push({
-    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-end.js`)}`, timeout: 3000 }],
+    // Codex's hooks.json documents this field in SECONDS, not milliseconds.
+    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-end.js`)}`, timeout: 3 }],
   });
 }
 for (const ev of ['SessionStart', 'SessionEnd']) if (!config.hooks[ev].length) delete config.hooks[ev];

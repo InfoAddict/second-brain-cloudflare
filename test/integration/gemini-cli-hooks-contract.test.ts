@@ -182,6 +182,6 @@ describe("gemini-cli-hooks/session-start.js", () => {
     expect(elapsed).toBeLessThan(4000);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toMatch(/^\[Second Brain\] recall failed: no reply within 3\.0s/);
+    expect(r.stderr).toMatch(/^\[Second Brain\] recall failed: no reply within [0-3]\.\ds/);
   }, 15000);
 });

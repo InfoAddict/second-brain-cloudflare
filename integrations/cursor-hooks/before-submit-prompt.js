@@ -14,7 +14,24 @@
 // Same undocumented-stdin caveat as session-start.js: field names are read
 // defensively, and there is no confirmed skip-list for this event either.
 const { readStdinJson, performRecall, hasMarker, setMarker, fail } = require('../agent-hooks-core/core');
-const { normalizeStdin, emitAdditionalContext, NAMESPACE, DELIVERED_KEY, CAP_MS } = require('./session-start');
+const { normalizeStdin, NAMESPACE, DELIVERED_KEY, CAP_MS } = require('./session-start');
+
+/**
+ * beforeSubmitPrompt's own documented output shape, which is NOT the same
+ * contract sessionStart uses. A review caught an earlier version of this
+ * file reusing sessionStart's flat `additional_context` field here, which
+ * beforeSubmitPrompt's own docs do not support
+ * (https://prod.cursor.com/docs/hooks): only `continue` and `user_message`
+ * are recognized fields for this event. Named to match session-start.js's
+ * sibling function (both "emit the context we recalled"), not the field it
+ * writes, which is intentionally different from that function's. No-op, and
+ * no stdout at all, for empty text.
+ */
+function emitAdditionalContext(text) {
+  if (!text) return false;
+  process.stdout.write(`${JSON.stringify({ continue: true, user_message: text })}\n`);
+  return true;
+}
 
 /**
  * The testable main flow. Checks the shared marker first (no request at all

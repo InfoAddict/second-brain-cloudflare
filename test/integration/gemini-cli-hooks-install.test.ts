@@ -35,7 +35,10 @@ describe.skipIf(!hasBash)("integrations/gemini-cli-hooks/install.sh", () => {
     const s = read();
     expect(s.hooks.SessionStart).toHaveLength(1);
     expect(s.hooks.SessionStart[0].hooks[0].command).toMatch(/^node ".*\/gemini-cli-hooks\/session-start\.js"$/);
-    expect(s.hooks.SessionStart[0].hooks[0].timeout).toBeGreaterThanOrEqual(4000);
+    // Never declare more time to the host than the hook's own internal cap
+    // (a review caught an earlier version of this file asking for 4s here
+    // while promising 3s internally).
+    expect(s.hooks.SessionStart[0].hooks[0].timeout).toBeLessThanOrEqual(3000);
     // No SessionEnd half - this adapter is SessionStart injection only.
     expect(s.hooks.SessionEnd).toBeUndefined();
     expect(readFileSync(settings, "utf8")).not.toContain("tok");

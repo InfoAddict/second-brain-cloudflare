@@ -37,7 +37,9 @@ describe.skipIf(!hasBash)("integrations/codex-cli-hooks/install.sh", () => {
     expect(s.hooks.SessionStart[0].hooks[0].command).toMatch(/^node ".*\/codex-cli-hooks\/session-start\.js"$/);
     expect(s.hooks.SessionEnd).toHaveLength(1);
     expect(s.hooks.SessionEnd[0].hooks[0].command).toMatch(/^node ".*\/codex-cli-hooks\/session-end\.js"$/);
-    expect(s.hooks.SessionEnd[0].hooks[0].timeout).toBeGreaterThanOrEqual(3000);
+    // Codex's hooks.json documents this field in seconds, not milliseconds
+    // (a review caught an earlier version of this file asking for 3000s).
+    expect(s.hooks.SessionEnd[0].hooks[0].timeout).toBe(3);
     expect(readFileSync(hooksFile, "utf8")).not.toContain("tok");
     // Credentials live in the CLI's shared file, mode 600, trailing slash stripped.
     expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ workerUrl: "https://w.example", authToken: "tok" });

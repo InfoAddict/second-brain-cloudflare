@@ -108,8 +108,8 @@ const { loadCredentials, fetchWithTimeout, CONFIG_PATH } = require(process.env.C
   let installed = false;
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    installed = Array.isArray(parsed?.SessionStart) && parsed.SessionStart.some((e) =>
-      Array.isArray(e?.hooks) && e.hooks.some((h) => typeof h?.command === 'string' && h.command.replace(/\\/g, '/').includes('/vscode-copilot-hooks/session-start.js')));
+    const entries = Array.isArray(parsed?.hooks?.SessionStart) ? parsed.hooks.SessionStart : [];
+    installed = entries.some((h) => typeof h?.command === 'string' && h.command.replace(/\\/g, '/').includes('/vscode-copilot-hooks/session-start.js'));
   } catch { /* no hooks file yet, or unreadable */ }
   console.log(installed ? `SessionStart hook found in ${file}` : `SessionStart hook NOT found in ${file} -- run install.ps1 to install it`);
   process.exit(installed ? 0 : 1);
@@ -150,18 +150,23 @@ if (fs.existsSync(HOOKS_FILE)) {
   }
 }
 
-const isOurs = (entry) => Array.isArray(entry?.hooks) && entry.hooks.some((h) =>
-  typeof h?.command === 'string' && h.command.replace(/\\/g, '/').includes('/vscode-copilot-hooks/session-start.js'));
+// Documented shape (https://code.visualstudio.com/docs/agent-customization/hooks):
+// a top-level "hooks" object keyed by event name, each a flat array of
+// {type, command} entries. An earlier version of this file nested each entry
+// under its own {hooks:[...]} array with no top-level wrapper at all -- a
+// shape VS Code's Local harness does not load.
+config.hooks = config.hooks && typeof config.hooks === 'object' ? config.hooks : {};
+const isOurs = (entry) =>
+  typeof entry?.command === 'string' && entry.command.replace(/\\/g, '/').includes('/vscode-copilot-hooks/session-start.js');
 
-config.SessionStart = (Array.isArray(config.SessionStart) ? config.SessionStart : []).filter((e) => !isOurs(e));
+config.hooks.SessionStart = (Array.isArray(config.hooks.SessionStart) ? config.hooks.SessionStart : []).filter((e) => !isOurs(e));
 
 if (MODE !== 'uninstall') {
   const q = (p) => `"${p.replace(/"/g, '\\"')}"`;
-  config.SessionStart.push({
-    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-start.js`)}` }],
-  });
+  config.hooks.SessionStart.push({ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-start.js`)}` });
 }
-if (!config.SessionStart.length) delete config.SessionStart;
+if (!config.hooks.SessionStart.length) delete config.hooks.SessionStart;
+if (!Object.keys(config.hooks).length) delete config.hooks;
 
 if (fs.existsSync(HOOKS_FILE)) fs.copyFileSync(HOOKS_FILE, `${HOOKS_FILE}.bak-${Date.now()}`);
 const tmp = `${HOOKS_FILE}.tmp-${process.pid}`;

@@ -88,11 +88,11 @@ function runHook(script: string, payload: object) {
   });
 }
 
-const payload = { session_id: "s1", cwd: project, hook_event_name: "SessionStart", source: "startup" };
+const payload = () => ({ session_id: "s1", cwd: project, hook_event_name: "SessionStart", source: "startup" });
 
 describe("Claude Code session-start.js vs. its frozen pre-shared-core self", () => {
   it("produces byte-for-byte identical stdout on the plain path", async () => {
-    const [current, golden] = await Promise.all([runHook(CURRENT, payload), runHook(GOLDEN, payload)]);
+    const [current, golden] = await Promise.all([runHook(CURRENT, payload()), runHook(GOLDEN, payload())]);
     expect(current.code).toBe(0);
     expect(golden.code).toBe(0);
     expect(current.stdout).toBe(golden.stdout);
@@ -101,7 +101,7 @@ describe("Claude Code session-start.js vs. its frozen pre-shared-core self", () 
 
   it("still recalls when the Worker takes 10s to answer - well past a 3s cap, well inside the original 15s budget", async () => {
     behaviour.recallDelayMs = 10000;
-    const [current, golden] = await Promise.all([runHook(CURRENT, payload), runHook(GOLDEN, payload)]);
+    const [current, golden] = await Promise.all([runHook(CURRENT, payload()), runHook(GOLDEN, payload())]);
     expect(current.code, current.stderr).toBe(0);
     expect(golden.code, golden.stderr).toBe(0);
     // A 3s-capped version would have failed here (recall timeout) and printed
@@ -112,7 +112,7 @@ describe("Claude Code session-start.js vs. its frozen pre-shared-core self", () 
 
   it("keeps the brief's ~3s grace after recall answers, matching the original exactly", async () => {
     behaviour.briefDelayMs = 8000;
-    const [current, golden] = await Promise.all([runHook(CURRENT, payload), runHook(GOLDEN, payload)]);
+    const [current, golden] = await Promise.all([runHook(CURRENT, payload()), runHook(GOLDEN, payload())]);
     expect(current.code).toBe(0);
     expect(golden.code).toBe(0);
     expect(current.stdout).toBe(golden.stdout);

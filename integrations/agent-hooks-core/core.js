@@ -70,22 +70,48 @@ function resolveWorkspace(env = process.env) {
   return (env.SECOND_BRAIN_WORKSPACE || '').trim() === 'company' ? 'company' : 'personal';
 }
 
+// A review caught two bugs in an earlier version of this function: (1) a
+// 64 KiB soft cap parsed whatever had arrived SO FAR the instant it was
+// crossed, rather than waiting for the complete message, silently dropping
+// any field that landed after the cut; and (2) on both the timeout and the
+// size-cap paths, the stdin listeners were left attached and the stream left
+// flowing, which keeps a plain Node process alive indefinitely even after
+// this function has "finished" — an open pipe with no listeners removed is
+// still a reason for the event loop to keep spinning. STDIN_CEILING_BYTES
+// below is a sanity ceiling that ABANDONS the read (resolves null) rather
+// than parsing a truncated payload; ordinary hook payloads are nowhere near
+// it.
+const STDIN_CEILING_BYTES = 10 * 1024 * 1024;
+
 /**
  * Read whatever JSON a host writes to stdin and closes. A TTY (someone running
  * the script by hand) or a pipe that never closes (execFile in a test) must
- * not hang the hook, so the read races a short timer.
+ * not hang the hook, so the read races a short timer — and once this settles,
+ * by whichever path, the stream is fully detached and paused so nothing here
+ * can keep the process alive past its own deadline.
  */
 function readStdinJson(timeoutMs = 1500) {
   if (process.stdin.isTTY) return Promise.resolve(null);
   return new Promise((resolve) => {
     let raw = '';
     let done = false;
-    const finish = (value) => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
+    const cleanup = () => {
+      process.stdin.removeListener('data', onData);
+      process.stdin.removeListener('end', onEnd);
+      process.stdin.removeListener('error', onError);
+      try { process.stdin.pause(); } catch { /* already closed */ }
+      if (typeof process.stdin.unref === 'function') { try { process.stdin.unref(); } catch { /* not unref-able */ } }
+    };
+    const finish = (value) => { if (!done) { done = true; clearTimeout(timer); cleanup(); resolve(value); } };
     const timer = setTimeout(() => finish(parse(raw)), timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    const onData = (c) => { raw += c; if (raw.length > STDIN_CEILING_BYTES) finish(null); };
+    const onEnd = () => finish(parse(raw));
+    const onError = () => finish(null);
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => { raw += c; if (raw.length > 65536) finish(parse(raw)); });
-    process.stdin.on('end', () => finish(parse(raw)));
-    process.stdin.on('error', () => finish(null));
+    process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
+    process.stdin.on('error', onError);
   });
   function parse(s) { try { return s.trim() ? JSON.parse(s) : null; } catch { return null; } }
 }
@@ -120,10 +146,14 @@ function parseProjectName(remoteUrl, cwd, home = HOME) {
   return projectSlug(parseProjectLabel(remoteUrl, cwd, home));
 }
 
-function gitRemoteUrl(cwd) {
+/** `timeoutMs` defaults to 2s but is threaded down from performRecall's own
+ * deadline when one is active, so a slow `git` call cannot itself blow past
+ * a hook's overall budget (see performRecall's "one shared deadline" note). */
+function gitRemoteUrl(cwd, timeoutMs = 2000) {
+  if (timeoutMs <= 0) return null;
   try {
     return execFileSync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
-      stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'], timeout: timeoutMs, encoding: 'utf8',
     }).trim() || null;
   } catch { return null; }
 }
@@ -144,10 +174,25 @@ function hintFor(status) {
   return '';
 }
 
-/** `dir` is only ever passed by tests, so nothing writes to the real cache during a run. */
+/**
+ * `dir` is only ever passed by tests, so nothing writes to the real cache
+ * during a run. Recalled and captured text can be private, so the directory
+ * is owner-only (0700): a review caught an earlier version of this relying
+ * on mkdirSync's default mode, which a permissive umask can leave group- or
+ * world-readable. chmodSync is a second, explicit pass rather than trusting
+ * the mode option alone, since a pre-existing directory from before this fix
+ * (or from a different umask) would otherwise keep its old, looser mode.
+ */
 function cachePath(name, dir = CACHE_DIR) {
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(dir, 0o700); } catch { /* best effort */ }
   return path.join(dir, name);
+}
+
+/** Writes `text` to `file` and enforces owner-only (0600) permissions on it, same reasoning as cachePath's 0700. */
+function writeCacheFile(file, text) {
+  fs.writeFileSync(file, text, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
 }
 
 /** Worker major version from GET /health, cached per origin for 24 h. null when unknown. */
@@ -163,7 +208,7 @@ async function workerMajorVersion({ baseUrl, token }, now = Date.now(), dir) {
     const body = await res.json();
     const major = parseInt(String(body?.version ?? '').split('.')[0], 10);
     if (!Number.isInteger(major)) return null;
-    fs.writeFileSync(file, JSON.stringify({ major, version: body.version, checkedAt: now }));
+    writeCacheFile(file, JSON.stringify({ major, version: body.version, checkedAt: now }));
     return major;
   } catch { return null; }
 }
@@ -174,7 +219,7 @@ function noticeOncePerDay(key, message, now = Date.now(), dir) {
   try {
     if (now - fs.statSync(file).mtimeMs < HEALTH_TTL_MS) return false;
   } catch { /* first time */ }
-  fs.writeFileSync(file, String(now));
+  writeCacheFile(file, String(now));
   fail(message);
   return true;
 }
@@ -185,15 +230,29 @@ function noticeOncePerDay(key, message, now = Date.now(), dir) {
  * one adapter's cache from colliding with another's, in the unlikely event two
  * hosts mint the same session id. `dir` is only ever passed by tests.
  */
+/**
+ * `claude` is deliberately exempt from the `-<namespace>-` segment every
+ * other adapter's cache file gets: this is the ORIGINAL cache path from
+ * before this shared core existed, and Claude Code's session-start.js is
+ * held to a byte-for-byte regression contract against its own pre-refactor
+ * self (see fixtures/pre-shared-core.session-start.js and
+ * test/integration/claude-code-hooks-regression.test.ts). A review's own
+ * repro pinned this exact equality, catching a version of this file that
+ * had quietly changed Claude's cache path to `session-claude-<id>.txt` —
+ * which would have gone cold for every session mid-flight across the change,
+ * since nothing would have looked at the old file again. Every other
+ * namespace keeps the segment; only `claude` is grandfathered.
+ */
 function sessionCacheFile(namespace, sessionId, dir) {
   const safe = String(sessionId ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '').slice(0, 96);
-  return safe ? cachePath(`session-${namespace}-${safe}.txt`, dir) : null;
+  if (!safe) return null;
+  return namespace === 'claude' ? cachePath(`session-${safe}.txt`, dir) : cachePath(`session-${namespace}-${safe}.txt`, dir);
 }
 
 function writeSessionCache(namespace, sessionId, text, dir) {
   const file = text ? sessionCacheFile(namespace, sessionId, dir) : null;
   if (!file) return false;
-  try { fs.writeFileSync(file, text); return true; } catch { return false; }
+  try { writeCacheFile(file, text); return true; } catch { return false; }
 }
 
 /** The block cached for this session, or null when it is missing or older than 24 h. */
@@ -261,6 +320,12 @@ async function fetchBrief(creds, project, workspace, signal) {
  * recall: a failure or timeout there is just no brief. This is the exact
  * shape Claude Code's original session-start.js used, generalized so every
  * adapter can supply its own pair of numbers instead of inheriting Claude's.
+ *
+ * `graceMs` may be a plain number (Claude's fixed-budget model, unchanged) OR
+ * a zero-argument function returning the CURRENT remaining time (performRecall's
+ * shared-deadline mode) — settle() calls it right when it is invoked, not once
+ * up front, so a slow recall loop cannot hand the brief a fresh grace window
+ * it was never promised.
  */
 function startBrief(creds, project, workspace, outerCapMs, graceMs) {
   const controller = new AbortController();
@@ -269,8 +334,9 @@ function startBrief(creds, project, workspace, outerCapMs, graceMs) {
   const promise = fetchBrief(creds, project, workspace, controller.signal);
   return {
     async settle() {
+      const grace = typeof graceMs === 'function' ? graceMs() : graceMs;
       let timer;
-      const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), graceMs); });
+      const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(0, grace)); });
       const brief = await Promise.race([promise, late]);
       clearTimeout(timer);
       clearTimeout(cap);
@@ -386,19 +452,35 @@ async function performRecall({
     if (cached) return cached;
   }
 
-  const project = parseProjectName(gitRemoteUrl(cwd), cwd);
+  // Shared-deadline mode (capMs given): a review caught the previous version
+  // handing every recall attempt AND the brief its own fresh recallTimeoutMs,
+  // so a project-arm miss followed by a fallback attempt could each spend the
+  // full cap — a 3s promise could cost 6s or more. One absolute deadline,
+  // computed once here, bounds `git`, every recall attempt, and the brief
+  // together; each consults it fresh rather than restarting a full budget.
+  // Claude Code's own explicit two-phase model (recallTimeoutMs/briefGraceMs,
+  // no capMs) is unaffected and keeps its exact original per-call semantics.
+  const deadline = capMs !== undefined ? Date.now() + capMs : null;
+  const remaining = () => Math.max(0, deadline - Date.now());
+
+  const project = parseProjectName(gitRemoteUrl(cwd, deadline !== null ? remaining() : undefined), cwd);
   const workspace = resolveWorkspace(env);
   const plan = buildRecallPlan(project, workspace);
-  const brief = startBrief(creds, project, workspace, recallTimeoutMs, briefGraceMs);
+  const brief = startBrief(
+    creds, project, workspace,
+    deadline !== null ? remaining() : recallTimeoutMs,
+    deadline !== null ? remaining : briefGraceMs,
+  );
 
   for (const step of plan) {
     let res;
+    const stepTimeoutMs = deadline !== null ? remaining() : recallTimeoutMs;
     try {
       res = await fetchWithTimeout(buildRecallUrl(creds.baseUrl, step), {
         headers: { Authorization: `Bearer ${creds.token}` },
-      }, recallTimeoutMs);
+      }, stepTimeoutMs);
     } catch (e) {
-      fail(`recall failed: ${e?.name === 'TimeoutError' ? `no reply within ${(recallTimeoutMs / 1000).toFixed(1)}s` : e?.message ?? 'network error'}`);
+      fail(`recall failed: ${e?.name === 'TimeoutError' ? `no reply within ${(stepTimeoutMs / 1000).toFixed(1)}s` : e?.message ?? 'network error'}`);
       return null;
     }
     if (!res.ok) {
@@ -473,12 +555,71 @@ function redactSecrets(text, token) {
 function hasMarker(key, sessionId, dir) { return readSessionCache(key, sessionId, Date.now(), dir) !== null; }
 function setMarker(key, sessionId, dir) { return writeSessionCache(key, sessionId, '1', dir); }
 
+/** A short, order-sensitive digest of what is about to be captured — enough to tell "the same content again" from "new information", never used as a secret. */
+function contentDigest(userTurns) {
+  return crypto.createHash('sha1').update(JSON.stringify(userTurns ?? [])).digest('hex');
+}
+
+/**
+ * Atomically claims `sessionId` for capture under `contentHash`, keyed by
+ * `namespace`. Returns true when the caller should proceed: either the first
+ * claim ever for this session, or new content that differs from whatever was
+ * last claimed (a later end-of-session event that finally saw the final
+ * turn a partial one missed must still get through). Returns false only for
+ * an exact repeat of what is already claimed — two simultaneous end events
+ * uploading the identical turns.
+ *
+ * A review caught the previous design writing its "already captured" marker
+ * only AFTER a successful upload, which left a window between two
+ * concurrent callers both reading "not yet captured" and both uploading.
+ * The fix is an atomic claim (`wx`: fails with EEXIST if another caller's
+ * write already landed) taken immediately before the network call, not a
+ * read-then-later-write pair a race can fit between.
+ */
+function claimCapture(namespace, sessionId, contentHash, dir) {
+  const file = sessionCacheFile(`${namespace}-captured`, sessionId, dir);
+  if (!file) return true; // nothing to key the claim on: never block a sessionless caller
+  try {
+    fs.writeFileSync(file, contentHash, { flag: 'wx', mode: 0o600 });
+    try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+    return true;
+  } catch (e) {
+    if (e && e.code !== 'EEXIST') return true; // an unrelated fs error must not silently drop a real capture
+  }
+  let existing = '';
+  try { existing = fs.readFileSync(file, 'utf8'); } catch { /* treat as no prior claim */ }
+  if (existing === contentHash) return false;
+  try { writeCacheFile(file, contentHash); } catch { /* best effort */ }
+  return true;
+}
+
 function recordLastCaptureTime(namespace, dir, now = Date.now()) {
   try { fs.writeFileSync(cachePath(`last-capture-${namespace}`, dir), String(now)); } catch { /* best effort */ }
 }
 /** ms timestamp of the last successful capture for this adapter, or null. Used by `--check`. */
 function lastCaptureTime(namespace, dir) {
   try { return parseInt(fs.readFileSync(cachePath(`last-capture-${namespace}`, dir), 'utf8'), 10) || null; } catch { return null; }
+}
+
+/**
+ * Whether `transcriptPath` plausibly belongs to `sessionId` at all, checked
+ * the one way available without assuming a specific vendor directory layout
+ * (none of Codex's, Cursor's, or any future client's real session storage
+ * path is pinned down in the docs these adapters were built from): the
+ * host's own hook payload carries both `session_id` and `transcript_path`
+ * together, so a transcript for session A should never be handed to us
+ * labelled as session B's end event. A review demonstrated exactly that: a
+ * capture worker given `cwd` for one project and a `transcript_path` under a
+ * completely unrelated one, with nothing to say they belonged together
+ * except the caller's own claim. Requiring the session id to appear in the
+ * transcript file's own name is a cheap, layout-agnostic check that a
+ * mismatched or spoofed path fails and a real one (named after its own
+ * session, which every vendor's examples so far do) passes.
+ */
+function transcriptBelongsToSession(transcriptPath, sessionId) {
+  if (!sessionId) return false; // nothing to check the claim against: refuse rather than trust blindly
+  const name = path.basename(String(transcriptPath ?? ''));
+  return name.includes(sessionId);
 }
 
 /** Global off switch plus an optional per-client one, e.g. SECOND_BRAIN_HOOK_CAPTURE_CODEX. */
@@ -541,7 +682,6 @@ async function performCapture({
   if (!captureEnabled(env, perClientEnvVar)) return { sent: false, reason: 'disabled' };
   const creds = loadCredentials(env, configPath);
   if (!creds) return { sent: false, reason: 'no-credentials' };
-  if (sessionId && hasMarker(`${namespace}-captured`, sessionId, cacheDir)) return { sent: false, reason: 'already-captured' };
 
   const major = await workerMajorVersion(creds, Date.now(), cacheDir);
   if (major !== null && major < 3) {
@@ -554,6 +694,13 @@ async function performCapture({
   if (env.SECOND_BRAIN_DRY_RUN === '1') {
     process.stdout.write(JSON.stringify(body, null, 2) + '\n');
     return { sent: false, reason: 'dry-run', body };
+  }
+
+  // Claimed right here, immediately before the network call — see
+  // claimCapture's own comment for why this replaced an early read-only
+  // marker check.
+  if (sessionId && !claimCapture(namespace, sessionId, contentDigest(userTurns), cacheDir)) {
+    return { sent: false, reason: 'already-captured' };
   }
 
   let res;
@@ -573,7 +720,6 @@ async function performCapture({
     fail(`session capture failed: HTTP ${res.status}${detail ? ` ${detail}` : ''}${hintFor(res.status)}`);
     return { sent: false, reason: 'http-error' };
   }
-  if (sessionId) setMarker(`${namespace}-captured`, sessionId, cacheDir);
   recordLastCaptureTime(namespace, cacheDir);
   return { sent: true, body };
 }
@@ -590,5 +736,6 @@ module.exports = {
   performRecall,
   redactSecrets, buildSessionCaptureBody, shouldCaptureSession, performCapture,
   recordLastCaptureTime, lastCaptureTime, captureEnabled,
+  contentDigest, claimCapture, transcriptBelongsToSession,
   CAPTURE_MAX_CONTENT_CHARS, CAPTURE_WANT_USER_TURNS, CAPTURE_TIMEOUT_MS,
 };

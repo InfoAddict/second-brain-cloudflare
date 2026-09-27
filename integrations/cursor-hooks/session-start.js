@@ -30,14 +30,25 @@ const CAP_MS = 3000;
 /**
  * Cursor's sessionStart stdin payload, normalized. Field names were not
  * pinned letter-perfect in the fetched docs, so this reads sessionId first
- * (Cursor's own examples favor camelCase), then session_id; cwd as-is,
- * defaulting to process.cwd() when absent. UNVERIFIED; see README.md.
+ * (Cursor's own examples favor camelCase), then session_id.
+ *
+ * `cwd` prefers the documented `workspace_roots` input
+ * (https://prod.cursor.com/docs/hooks): a review caught this hook falling
+ * back to `process.cwd()` even when workspace_roots was present, which is
+ * wrong for a project because Cursor's own hooks run from the user's
+ * ~/.cursor directory, not the project - process.cwd() there is never the
+ * project. workspace_roots[0] is the project the session is actually in;
+ * `cwd` itself and process.cwd() are fallbacks for whenever it is absent.
+ * UNVERIFIED; see README.md.
  */
 function normalizeStdin(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const sessionId = typeof p.sessionId === 'string' ? p.sessionId
     : typeof p.session_id === 'string' ? p.session_id : '';
-  const cwd = typeof p.cwd === 'string' && p.cwd ? p.cwd : process.cwd();
+  const roots = Array.isArray(p.workspace_roots) ? p.workspace_roots
+    : Array.isArray(p.workspaceRoots) ? p.workspaceRoots : [];
+  const root = typeof roots[0] === 'string' && roots[0] ? roots[0] : '';
+  const cwd = root || (typeof p.cwd === 'string' && p.cwd ? p.cwd : process.cwd());
   return { sessionId, cwd };
 }
 

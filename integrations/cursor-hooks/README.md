@@ -243,6 +243,15 @@ transcript file.
 
 ## Smoke test
 
+A review caught two real bugs since this list was first written: `before-
+submit-prompt.js` was emitting sessionStart's `additional_context` field,
+which beforeSubmitPrompt's own docs do not recognize (it takes `continue` and
+`user_message` instead, fixed now); and `session-start.js` was falling back to
+`process.cwd()` even when the payload's `workspace_roots` named the actual
+project, which is wrong because Cursor's hooks run from `~/.cursor`, never
+from the project - `process.cwd()` there is never the project. Both are fixed;
+steps 3 and 3a below specifically re-check them.
+
 1. `bash install.sh https://your-worker.workers.dev your-token`
 2. `bash install.sh --check`: confirms the Worker is reachable, prints
    recall/capture status and the last capture time, and runs a live
@@ -251,6 +260,10 @@ transcript file.
    a fresh session, and confirm the model's first reply reflects recalled
    context (or, if it does not, that the very next prompt does, via the
    `beforeSubmitPrompt` fallback).
+3a. Confirm the recall was actually scoped to THIS project, not to wherever
+   `~/.cursor` happens to be: check your Worker's logs for the `project=`
+   query parameter on the `/recall` call, or temporarily point
+   `SECOND_BRAIN_URL` at a stub and inspect the captured request directly.
 4. Have a short back-and-forth (at least one substantial message), end the
    session, and confirm a new memory tagged with this project's name appears
    in your brain within a minute or two.

@@ -33,9 +33,14 @@ describe.skipIf(!hasBash)("integrations/vscode-copilot-hooks/install.sh", () => 
     const r = run(["https://w.example/", "tok"]);
     expect(r.status, r.stderr).toBe(0);
     const s = read();
-    expect(s.SessionStart).toHaveLength(1);
-    expect(s.SessionStart[0].hooks[0].type).toBe("command");
-    expect(s.SessionStart[0].hooks[0].command).toMatch(/^node ".*\/vscode-copilot-hooks\/session-start\.js"$/);
+    // Documented shape (https://code.visualstudio.com/docs/agent-customization/hooks):
+    // a top-level "hooks" object keyed by event name, each a flat array of
+    // {type, command} entries - a review caught an earlier version of this
+    // installer nesting each entry under its own {hooks:[...]} array with no
+    // top-level wrapper at all, a shape VS Code's Local harness does not load.
+    expect(s.hooks.SessionStart).toHaveLength(1);
+    expect(s.hooks.SessionStart[0].type).toBe("command");
+    expect(s.hooks.SessionStart[0].command).toMatch(/^node ".*\/vscode-copilot-hooks\/session-start\.js"$/);
     expect(readFileSync(hooksFile, "utf8")).not.toContain("tok");
     // Credentials live in the shared config file, mode 600, trailing slash stripped.
     expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ workerUrl: "https://w.example", authToken: "tok" });
@@ -46,26 +51,28 @@ describe.skipIf(!hasBash)("integrations/vscode-copilot-hooks/install.sh", () => 
     expect(run(["https://w.example", "tok"]).status).toBe(0);
     expect(run(["https://w.example", "tok"]).status).toBe(0);
     const s = read();
-    expect(s.SessionStart).toHaveLength(1);
+    expect(s.hooks.SessionStart).toHaveLength(1);
   });
 
   it("preserves an unrelated entry already in the hooks file", () => {
     mkdirSync(join(home, ".copilot", "hooks"), { recursive: true });
     writeFileSync(hooksFile, JSON.stringify({
-      SessionStart: [{ hooks: [{ type: "command", command: "echo someone-elses-hook" }] }],
-      PreToolUse: [{ hooks: [{ type: "command", command: "echo untouched" }] }],
+      hooks: {
+        SessionStart: [{ type: "command", command: "echo someone-elses-hook" }],
+        PreToolUse: [{ type: "command", command: "echo untouched" }],
+      },
     }));
     expect(run(["https://w.example", "tok"]).status).toBe(0);
     const s = read();
-    expect(s.SessionStart).toHaveLength(2);
-    expect(s.SessionStart.filter((e: any) => e.hooks[0].command.includes("someone-elses-hook"))).toHaveLength(1);
-    expect(s.SessionStart.filter((e: any) => e.hooks[0].command.includes("session-start.js"))).toHaveLength(1);
-    expect(s.PreToolUse).toEqual([{ hooks: [{ type: "command", command: "echo untouched" }] }]);
+    expect(s.hooks.SessionStart).toHaveLength(2);
+    expect(s.hooks.SessionStart.filter((e: any) => e.command.includes("someone-elses-hook"))).toHaveLength(1);
+    expect(s.hooks.SessionStart.filter((e: any) => e.command.includes("session-start.js"))).toHaveLength(1);
+    expect(s.hooks.PreToolUse).toEqual([{ type: "command", command: "echo untouched" }]);
   });
 
   it("refuses a malformed hooks file and leaves it untouched", () => {
     mkdirSync(join(home, ".copilot", "hooks"), { recursive: true });
-    const broken = '{ "SessionStart": [ }\n';
+    const broken = '{ "hooks": { "SessionStart": [ } }\n';
     writeFileSync(hooksFile, broken);
     const r = run(["https://w.example", "tok"]);
     expect(r.status).toBe(1);
@@ -75,7 +82,7 @@ describe.skipIf(!hasBash)("integrations/vscode-copilot-hooks/install.sh", () => 
 
   it("backs up the hooks file before writing to it", () => {
     mkdirSync(join(home, ".copilot", "hooks"), { recursive: true });
-    writeFileSync(hooksFile, JSON.stringify({ SessionStart: [{ hooks: [{ type: "command", command: "echo keep-me" }] }] }));
+    writeFileSync(hooksFile, JSON.stringify({ hooks: { SessionStart: [{ type: "command", command: "echo keep-me" }] } }));
     expect(run(["https://w.example", "tok"]).status).toBe(0);
     const { readdirSync } = require("node:fs") as typeof import("node:fs");
     const backups = readdirSync(join(home, ".copilot", "hooks")).filter((f) => f.startsWith("second-brain.json.bak-"));
@@ -87,7 +94,7 @@ describe.skipIf(!hasBash)("integrations/vscode-copilot-hooks/install.sh", () => 
     writeFileSync(config, JSON.stringify({ workerUrl: "https://w.example", authToken: "tok" }));
     const r = run([]);
     expect(r.status, r.stderr).toBe(0);
-    expect(read().SessionStart).toHaveLength(1);
+    expect(read().hooks.SessionStart).toHaveLength(1);
   });
 
   it("exits 2 instead of prompting when there is no TTY and no credentials", () => {
@@ -103,12 +110,12 @@ describe.skipIf(!hasBash)("integrations/vscode-copilot-hooks/install.sh", () => 
 
   it("--uninstall removes only our entry", () => {
     mkdirSync(join(home, ".copilot", "hooks"), { recursive: true });
-    writeFileSync(hooksFile, JSON.stringify({ SessionStart: [{ hooks: [{ type: "command", command: "echo keep-me" }] }] }));
+    writeFileSync(hooksFile, JSON.stringify({ hooks: { SessionStart: [{ type: "command", command: "echo keep-me" }] } }));
     expect(run(["https://w.example", "tok"]).status).toBe(0);
     expect(run(["--uninstall"]).status).toBe(0);
     const s = read();
-    expect(s.SessionStart).toHaveLength(1);
-    expect(s.SessionStart[0].hooks[0].command).toBe("echo keep-me");
+    expect(s.hooks.SessionStart).toHaveLength(1);
+    expect(s.hooks.SessionStart[0].command).toBe("echo keep-me");
   });
 
   it("--uninstall leaves credentials in place", () => {

@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import worker from "../../src/index";
@@ -150,7 +150,17 @@ function replay(c: Captured): Promise<Response> {
 }
 
 const startPayload = (source = "startup") => ({ session_id: "s1", cwd: project, hook_event_name: "SessionStart", source });
-const workerPayload = (sessionId = "cx1") => ({ sessionId, cwd: project, transcriptPath: FIXTURE, reason: "close" });
+// The transcript's own filename must carry its session id (see
+// transcriptBelongsToSession in agent-hooks-core/core.js): a real Codex
+// rollout file is named after its own session, and the worker refuses a
+// transcript_path that is not. Each test gets its own copy so the id can
+// vary per test without the tests stepping on each other's file.
+function transcriptFor(sessionId: string) {
+  const file = join(scratch, `rollout-${sessionId}.jsonl`);
+  copyFileSync(FIXTURE, file);
+  return file;
+}
+const workerPayload = (sessionId = "cx1") => ({ sessionId, cwd: project, transcriptPath: transcriptFor(sessionId), reason: "close" });
 
 describe("session-start.js", () => {
   it("makes a recall request GET /recall accepts, and prints the exact hookSpecificOutput.additionalContext shape", async () => {
@@ -296,7 +306,7 @@ describe("capture-worker.js", () => {
 
   it("does not capture a transcript with no substantial human text", async () => {
     const { writeFileSync } = await import("node:fs");
-    const empty = join(scratch, "empty.jsonl");
+    const empty = join(scratch, "rollout-cx-empty.jsonl");
     writeFileSync(empty, [
       JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] } }),
     ].join("\n") + "\n");

@@ -120,10 +120,11 @@ if (MODE !== 'uninstall') {
   config.hooks.SessionEnd.push({
     // session-end.js itself only reads stdin and spawns a detached worker, so
     // it needs almost none of this - but Codex's own documented default for
-    // this event is 1s, so ask explicitly for its documented max (3s) as
-    // headroom. UNVERIFIED: whether this field is named "timeout", and
-    // whether its unit is milliseconds (as below) or seconds.
-    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-end.js`)}`, timeout: 3000 }],
+    // this event is 1s, so ask explicitly for its documented max as headroom.
+    // Codex's hooks.json documents this field in SECONDS, not milliseconds
+    // (a review caught an earlier version of this file asking for 3000s).
+    // UNVERIFIED: whether this field is actually named "timeout".
+    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-end.js`)}`, timeout: 3 }],
   });
 }
 for (const ev of ['SessionStart', 'SessionEnd']) if (!config.hooks[ev].length) delete config.hooks[ev];

@@ -76,7 +76,7 @@ at startup, so a running session keeps the old wiring.
       { "hooks": [{ "type": "command", "command": "node \"/path/to/codex-cli-hooks/session-start.js\"" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "node \"/path/to/codex-cli-hooks/session-end.js\"", "timeout": 3000 }] }
+      { "hooks": [{ "type": "command", "command": "node \"/path/to/codex-cli-hooks/session-end.js\"", "timeout": 3 }] }
     ]
   }
 }
@@ -103,13 +103,16 @@ command = ["node", "/path/to/codex-cli-hooks/session-start.js"]
 
 [[hooks.session_end]]
 command = ["node", "/path/to/codex-cli-hooks/session-end.js"]
-timeout_ms = 3000
+timeout_s = 3
 ```
 
 Table and key names above (`hooks.session_start` vs `hooks.SessionStart`,
-`command` as an array vs a string, `timeout_ms` vs `timeout`) are a best
+`command` as an array vs a string, `timeout_s` vs `timeout`) are a best
 guess, not a verified schema - check your installed Codex CLI's own
-documentation before relying on this snippet.
+documentation before relying on this snippet. The unit, though, is not a
+guess: Codex's hooks.json reference documents this field in seconds, not
+milliseconds (a review caught an earlier version of this file asking for a
+3,000-second timeout).
 
 ## Where credentials live
 
@@ -213,8 +216,10 @@ behaviour:
 - The `hooks.json` schema this installer writes: whether `hooks.SessionStart`
   /`hooks.SessionEnd` is the right shape, whether a `matcher` concept exists
   (this adapter does not write one - filtering happens in the JS itself via
-  `SKIP_SOURCES`), and whether `timeout` is the right field name and
-  milliseconds the right unit.
+  `SKIP_SOURCES`), and whether `timeout` is the right field name. The unit is
+  not a guess (seconds, confirmed against the hooks.json reference - a review
+  caught an earlier version of this installer writing 3000, three thousand
+  seconds, instead of 3).
 - **Whether a detached, unref'd child process survives past its parent hook
   process exiting**, under whatever process-group and signal handling Codex
   CLI actually uses for its hooks. If Codex kills the whole process group on

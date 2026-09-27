@@ -176,6 +176,14 @@ the conversation.
 Nothing above this line has been run against a real session - see
 "Unverified" below. To actually prove it:
 
+**If you smoke-tested this adapter before and it did nothing:** a review
+caught the installer writing a hooks.json shape (each entry nested under its
+own `{hooks:[...]}` array, no top-level `hooks` wrapper) that VS Code's Local
+harness does not load at all - the hook was silently inert. That is fixed
+now (a top-level `hooks` object keyed by event name, each a flat array of
+`{type, command}` entries); re-run `install.sh` to rewrite the file in the
+corrected shape before retrying the steps below.
+
 1. Run `bash install.sh https://your-worker.workers.dev your-token` (or reuse
    an existing `~/.config/second-brain/config.json`), then
    `bash install.sh --check` and confirm it prints `SessionStart hook found`.

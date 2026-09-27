@@ -117,10 +117,11 @@ if (MODE !== 'uninstall') {
     hooks: [{
       type: 'command',
       command: `node ${q(`${HOOKS_DIR}/session-start.js`)}`,
-      // Belt and suspenders: the hook's own performRecall call is capped at
-      // 3000ms internally, so this is a generous margin, not the real limit -
-      // the vendor docs do not specify a default timeout for this event.
-      timeout: 4000,
+      // Matches the hook's own internal cap exactly (CAP_MS in session-start.js).
+      // A review caught an earlier version of this file asking Gemini for 4s
+      // here while promising 3s internally - never declare more time to the
+      // host than the hook is actually allowed to take.
+      timeout: 3000,
     }],
   });
 }

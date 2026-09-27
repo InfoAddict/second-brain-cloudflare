@@ -14,6 +14,7 @@
 const fs = require('node:fs');
 const {
   performCapture, parseProjectLabel, projectSlug, gitRemoteUrl, resolveWorkspace, fail,
+  transcriptBelongsToSession,
 } = require('../agent-hooks-core/core');
 
 const NAMESPACE = 'codex';
@@ -113,6 +114,10 @@ function readTranscript(transcriptPath) {
  */
 async function run(payload, overrides = {}) {
   const { transcriptPath, cwd, sessionId } = payload || {};
+  // A review demonstrated a capture worker handed a transcript_path from an
+  // unrelated project's session: refuse rather than trust the path just
+  // because it was readable. See transcriptBelongsToSession's own comment.
+  if (!transcriptBelongsToSession(transcriptPath, sessionId)) return { sent: false, reason: 'untrusted-transcript-path' };
   const turns = parseTranscript(readTranscript(transcriptPath));
   const userTurns = extractUserTurns(turns);
 

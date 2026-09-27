@@ -51,11 +51,32 @@ describe("session-start.normalizeStdin", () => {
   });
 });
 
+describe("before-submit-prompt.emitAdditionalContext (its own output shape, not session-start's)", () => {
+  const captureStdout = (fn: () => void) => {
+    const write = process.stdout.write.bind(process.stdout);
+    let printed = "";
+    process.stdout.write = (chunk: string) => { printed += String(chunk); return true; };
+    try { fn(); } finally { process.stdout.write = write; }
+    return printed;
+  };
+
+  it("writes {continue, user_message}, not sessionStart's flat additional_context", () => {
+    // beforeSubmitPrompt's documented output schema is different from
+    // sessionStart's (https://prod.cursor.com/docs/hooks); a review caught an
+    // earlier version of this file reusing sessionStart's field here, which
+    // beforeSubmitPrompt does not support.
+    const printed = captureStdout(() => { beforeSubmit.emitAdditionalContext("hello world"); });
+    const parsed = JSON.parse(printed.trim());
+    expect(Object.keys(parsed).sort()).toEqual(["continue", "user_message"]);
+    expect(parsed.continue).toBe(true);
+    expect(parsed.user_message).toBe("hello world");
+  });
+});
+
 describe("session-start.emitAdditionalContext (output-shape builder)", () => {
   const captureStdout = (fn: () => void) => {
     const write = process.stdout.write.bind(process.stdout);
     let printed = "";
-    // @ts-expect-error test spy
     process.stdout.write = (chunk: string) => { printed += String(chunk); return true; };
     try { fn(); } finally { process.stdout.write = write; }
     return printed;
@@ -79,7 +100,6 @@ describe("session-start.emitAdditionalContext (output-shape builder)", () => {
   it("writes nothing, and returns false, for empty text", () => {
     let called = false;
     const write = process.stdout.write.bind(process.stdout);
-    // @ts-expect-error test spy
     process.stdout.write = () => { called = true; return true; };
     let result: boolean;
     try { result = start.emitAdditionalContext(""); } finally { process.stdout.write = write; }
@@ -219,7 +239,6 @@ describe("dedup marker logic (cursor-delivered) in isolation", () => {
     core.setMarker("cursor-delivered", "s4", dir);
     let calls = 0;
     const realFetch = global.fetch;
-    // @ts-expect-error test stub
     global.fetch = async () => { calls++; return new Response("{}", { status: 404 }); };
     try {
       const out = await beforeSubmit.runBeforeSubmitPrompt({ sessionId: "s4", cwd: dir }, { env, cacheDir: dir });
