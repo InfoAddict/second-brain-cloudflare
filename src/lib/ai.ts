@@ -78,20 +78,33 @@ export async function readStreamText(stream: ReadableStream): Promise<string> {
   return text;
 }
 
-export async function embed(
-  text: string,
+/**
+ * One env.AI.run call embedding every text in `texts`, in order. Standing memory (Track 7) uses this to embed the
+ * raw query alongside recall's distilled one in the same call, so firing costs no extra aiCalls.
+ */
+export async function embedMany(
+  texts: readonly string[],
   env: Env,
   config: Readonly<Config> = DEFAULTS,
-): Promise<number[]> {
+): Promise<number[][]> {
   // bge-m3 rejects input past its token limit unless told to truncate; the
   // bge-en models have no such switch and reject unknown fields. Applied as a
   // defensive default (controller ruling) — live measurement against
   // Workers AI wasn't possible in the environment that authored this; see
   // the #326 spec, §10.6.
   const input = config.EMBEDDING_MODEL === "@cf/baai/bge-m3"
-    ? { text: [text], truncate_inputs: true }
-    : { text: [text] };
+    ? { text: texts, truncate_inputs: true }
+    : { text: texts };
   // Workers AI requires `as any` here — the SDK types don't cover all models
   const result = (await env.AI.run(config.EMBEDDING_MODEL as any, input as any)) as any;
-  return result.data[0] as number[];
+  return result.data as number[][];
+}
+
+export async function embed(
+  text: string,
+  env: Env,
+  config: Readonly<Config> = DEFAULTS,
+): Promise<number[]> {
+  const [vector] = await embedMany([text], env, config);
+  return vector;
 }

@@ -1271,7 +1271,9 @@ describe("the checker over the real source tree", () => {
     // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
     // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
     // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
-    ).toEqual({ queries: 148, exempt: 70, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query for Track 7 Task 3 (src/standing/cache.ts, buildStandingCache): the standing
+    // cache build's one D1 read of a workspace's standing:active rows, scoped by `workspace_id = ?1`.
+    ).toEqual({ queries: 149, exempt: 70, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
