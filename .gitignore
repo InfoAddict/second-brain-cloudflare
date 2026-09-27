@@ -34,6 +34,10 @@ deploy-personal.sh
 # `wrangler dev`). Local tooling, like wrangler.*.jsonc above.
 devharness/
 
+# UX-I local UX QA harness: seeded brains' D1/KV/vector state and esbuild
+# bundles under scripts/ux-harness. Local tooling, regenerated on demand.
+.ux-harness/
+
 # ── Anything that could hold somebody's memories ──────────────────────────────
 # `wrangler d1 export` writes every entry, in plaintext, to wherever --output
 # points; docs/local-testing.md sends it to /tmp, but the repo root is one

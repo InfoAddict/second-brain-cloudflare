@@ -325,6 +325,32 @@ See [GitHub Releases](releases) for release notes and previous versions.
 - [Obsidian Plugin](https://github.com/rahilp/second-brain-cloudflare/wiki/Obsidian-Plugin): Installation, configuration, and sync modes
 - [Local Development](https://github.com/rahilp/second-brain-cloudflare/wiki/Local-Development): Run the Worker locally and share it for testing
 
+## Local UX QA harness
+
+Runs the real Worker and dashboard offline, for a UI change or a full walkthrough of the app, with no Cloudflare account of any kind, ever. `wrangler dev` cannot do this on its own: a real Workers AI binding needs a Cloudflare login even in local dev. This harness never asks for one.
+
+```bash
+npm run dev:local                 # boots the Worker + dashboard at http://localhost:8788
+npm run ux:seed -- solo           # seeds a 3.7.0-shaped brain and boots the real 4.0 upgrade against it
+npm run ux:seed -- team           # the same, plus a teammate, for the shared-history rows
+UX_BRAIN=3.7-solo npm run dev:local   # run against a seeded brain instead of an empty one
+npm run ux:shot -- --name=home --caption="Dashboard home"   # one screenshot, on demand (see below)
+npm run ux:walkthroughs           # the scripted dashboard journeys (map section 6.2), with screenshots
+npm run ux:chat                   # scripted MCP calls per AI_Instructions file (map section 6.4)
+```
+
+What it uses instead of a Cloudflare account: real local D1 and KV (via wrangler's `getPlatformProxy`), real deterministic local embeddings (the same BGE weights Workers AI serves, run in-process through `@huggingface/transformers`, the eval harness's own local-model runtime), a real cosine-similarity Vectorize double, and fixed canned replies for the handful of LLM-style calls (classify, merge decisions, digest synthesis) a real local model cannot practically stand in for. Everything else, the dashboard, the REST routes, the MCP tools, is the genuine Worker code.
+
+`npm run ux:shot` takes one screenshot of a named screen or state on demand (any lane can use it for a before/after pair), for example:
+
+```bash
+npm run ux:shot -- --name=trash-view --caption="New Trash view" --path=/#trash --viewport=mobile --locale=it
+```
+
+Screenshots never land in this repository: they are written to `docs/superpowers/screenshots/v4/harness/<run-id>/` outside `public/`, which the project's `docs/*` gitignore rule already excludes, alongside an `index.md` captioning each one.
+
+A journey in `npm run ux:walkthroughs` that reaches a feature not yet built on the current branch (the dashboard timeline, trash view, or settings panel, for example) reports PENDING with the exact missing UX item, not a failure; the same script turns green the moment that feature ships. None of this runs as part of `npm test` or CI's default job: it needs a local Chrome or Chromium (already present on GitHub's `ubuntu-latest` runners and most Linux desktops) and takes real wall-clock time to boot a browser and a local D1, so it stays behind its own npm scripts.
+
 ## Technology and privacy
 
 Second Brain uses Cloudflare Workers, D1 SQLite, Vectorize, Workers AI, KV, the Model Context Protocol, and TypeScript. It runs within Cloudflare's free tier at personal scale.
