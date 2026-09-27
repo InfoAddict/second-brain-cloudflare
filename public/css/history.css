@@ -60,9 +60,18 @@
   box-shadow: var(--shadow-card);
 }
 
+/* Plain opacity alone read as "still selected, just weaker" for the checked
+   option, since its accent color and card background survived the dim; a
+   disabled control needs to look inactive, not just faint. Flattening the
+   checked option's color to neutral (its background and shadow stay, so the
+   selection itself is still legible) makes that reading unambiguous. */
 .status-option:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.status-option:disabled[aria-checked='true'] {
+  color: var(--text-secondary);
 }
 
 .status-option:focus-visible {
