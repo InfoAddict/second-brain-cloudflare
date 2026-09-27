@@ -54,11 +54,18 @@ function historyProvider(entry) {
  * loaded it (or a solo brain, which never does) leaves names untouched.
  */
 function historyActorDisplay(name) {
-  if (typeof memoryAuthors !== 'undefined' && memoryAuthors && memoryAuthors.you && name) {
+  if (!name) return ''
+  // A solo brain has exactly one human, the owner, and the dashboard is
+  // always the owner: every human-authored row is the viewer's own, with
+  // nobody else it could be. TEAM_MODE is declared once in api.js, which
+  // loads before this file, so the bare reference matches the rest of the
+  // dashboard (home.js, board.js) rather than guarding it here too.
+  if (!TEAM_MODE) return t('history.actorYou')
+  if (typeof memoryAuthors !== 'undefined' && memoryAuthors && memoryAuthors.you) {
     const me = (memoryAuthors.members || []).find((m) => m.userId === memoryAuthors.you)
     if (me && me.name === name) return t('history.actorYou')
   }
-  return name || ''
+  return name
 }
 
 function historyWhoLabel(item, entry) {
@@ -101,8 +108,12 @@ function renderHistoryChangeRow(item, index, items, entry) {
   )
 }
 
+// UI review: matches the change rows' "{reason} · {date} · by {actor}"
+// order, rather than actor-first with no "by" (history.byPlain, since the
+// copy deck has no template for an event row's actor).
 function renderHistoryEventRow(item) {
-  const meta = [item.actor_name || '', typeof timelineEventLabel === 'function' ? timelineEventLabel(item.event) : item.event || '', historyDate(item.at)]
+  const who = item.actor_name ? t('history.byPlain', { actor: historyActorDisplay(item.actor_name) }) : ''
+  const meta = [typeof timelineEventLabel === 'function' ? timelineEventLabel(item.event) : item.event || '', historyDate(item.at), who]
     .filter(Boolean)
     .join(' · ')
   return `<li class="history-item" data-event="${escAttr(item.event || '')}"><div class="history-meta">${escHtml(meta)}</div></li>`

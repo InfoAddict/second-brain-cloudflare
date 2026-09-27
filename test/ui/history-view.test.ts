@@ -106,6 +106,9 @@ function load(fetchImpl?: (url: string, init?: any) => Promise<any>) {
     },
     WORKER_URL: "https://example.test",
     AUTH_TOKEN: "t",
+    // api.js's own default, which loads before history-view.js on the real
+    // page; tests that want team mode set this explicitly to true.
+    TEAM_MODE: false,
   };
   ctx.document = {
     getElementById: (id: string) => {
@@ -211,12 +214,18 @@ describe("renderHistory — change and event rows", () => {
     const html = tl.innerHTML as string;
     const editedAt = html.indexOf("Edited");
     const addedAt = html.indexOf("Text added");
-    const sharedAt = html.indexOf("Ana");
+    const sharedAt = html.indexOf("Shared with the team");
     expect(editedAt).toBeGreaterThanOrEqual(0);
     expect(addedAt).toBeGreaterThan(editedAt); // newest first
     expect(sharedAt).toBeGreaterThan(addedAt);
-    expect(html).toContain("Rahil");
-    expect(html).toContain("Claude");
+    expect(html).toContain("by you via Claude"); // solo mode: the viewer's own change
+    // Event rows read "{event} · {date} · by {actor}", same order as change
+    // rows. Solo mode also renders this row's actor as "you" (a solo brain
+    // has nobody else to be), which is the fixture's own unrealistic corner
+    // — "shared with the team" cannot happen without a team — not a case
+    // this test is about; the dedicated describe blocks below cover team
+    // mode's real-name path.
+    expect(html).toContain("Shared with the team · Aug 29, 2026, 6:40 AM · by you");
     expect(html).toContain("Uses Postgres 15");
   });
 
@@ -265,25 +274,51 @@ describe("renderHistory — change and event rows", () => {
     expect(tl.innerHTML).toContain("&lt;img");
   });
 
-  it('renders the viewer\'s own change as "you" in team mode, via memoryAuthors', () => {
-    const ctx = load();
-    ctx.memoryAuthors = { you: "u1", members: [{ userId: "u1", name: "Rahil" }] };
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
-    expect(tl.innerHTML).toContain("by you via Claude");
-    expect(tl.innerHTML).not.toContain("by Rahil via Claude");
+  // DECIDED: a solo brain has exactly one human, the owner, and the
+  // dashboard is always the owner — so with TEAM_MODE off, every
+  // human-authored row is unconditionally the viewer's own. No memoryAuthors
+  // lookup needed, and none is available in solo mode anyway.
+  describe("solo mode (TEAM_MODE false, the load() default)", () => {
+    it('renders any human-authored row as "you", AI-assisted or not', () => {
+      const ctx = load();
+      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER] } });
+      expect(tl.innerHTML).toContain("by you via Claude"); // CHANGE_NEWEST: channel mcp, client Claude
+      expect(tl.innerHTML).toContain("by you"); // CHANGE_OLDER: channel rest, byDashboard
+      expect(tl.innerHTML).not.toContain("by Rahil");
+    });
+
+    it("leaves an integration row's own phrasing untouched", () => {
+      const ctx = load();
+      const { tl } = renderAndWire(ctx, { id: "e1", source: "notion", history: { items: [CHANGE_SYNCED] } });
+      expect(tl.innerHTML).toContain("synced from Notion");
+      expect(tl.innerHTML).not.toContain("by you");
+    });
   });
 
-  it("keeps the real name when memoryAuthors is absent (solo brain)", () => {
-    const ctx = load();
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
-    expect(tl.innerHTML).toContain("by Rahil via Claude");
-  });
+  describe("team mode (TEAM_MODE true)", () => {
+    it('renders the viewer\'s own change as "you", via memoryAuthors', () => {
+      const ctx = load();
+      ctx.TEAM_MODE = true;
+      ctx.memoryAuthors = { you: "u1", members: [{ userId: "u1", name: "Rahil" }] };
+      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+      expect(tl.innerHTML).toContain("by you via Claude");
+      expect(tl.innerHTML).not.toContain("by Rahil via Claude");
+    });
 
-  it("keeps the real name for a change that is not the viewer's own", () => {
-    const ctx = load();
-    ctx.memoryAuthors = { you: "u2", members: [{ userId: "u1", name: "Rahil" }, { userId: "u2", name: "Ana" }] };
-    const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
-    expect(tl.innerHTML).toContain("by Rahil via Claude");
+    it("keeps the real name for a change that is not the viewer's own", () => {
+      const ctx = load();
+      ctx.TEAM_MODE = true;
+      ctx.memoryAuthors = { you: "u2", members: [{ userId: "u1", name: "Rahil" }, { userId: "u2", name: "Ana" }] };
+      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+      expect(tl.innerHTML).toContain("by Rahil via Claude");
+    });
+
+    it("keeps the real name when memoryAuthors has not resolved yet", () => {
+      const ctx = load();
+      ctx.TEAM_MODE = true;
+      const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
+      expect(tl.innerHTML).toContain("by Rahil via Claude");
+    });
   });
 
   it("names a synced provider with its brand name, not the lowercase badge label", () => {

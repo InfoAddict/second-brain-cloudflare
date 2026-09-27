@@ -336,6 +336,12 @@ const I18N_EN = {
     byClient: 'by {actor} via {client}',
     byAgent: 'by {actor} via an AI tool',
     byDashboard: 'by {actor}',
+    // New key: the copy deck has no template for an event row's actor
+    // (shared, unshared, restored...). Text matches byDashboard's own
+    // "by {actor}" exactly; kept separate since byDashboard's name still
+    // implies a specific channel even though its text no longer does. Noted
+    // for the copywriter to fold in or rename in a later copy pass.
+    byPlain: 'by {actor}',
     actorYou: 'you',
     byDigest: 'by the nightly summary',
     byInsight: "by Second Brain's insights",
@@ -1469,6 +1475,7 @@ const I18N_IT = {
     byClient: 'da {actor} tramite {client}',
     byAgent: 'da {actor} tramite uno strumento di IA',
     byDashboard: 'da {actor}',
+    byPlain: 'da {actor}',
     actorYou: 'te',
     byDigest: 'dal riepilogo notturno',
     byInsight: 'dagli insight di Second Brain',
