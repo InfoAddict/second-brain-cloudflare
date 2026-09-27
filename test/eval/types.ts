@@ -35,6 +35,10 @@ export interface GoldenQuery {
    * or a vague "back in April"). Read by the supersession oracle and audits only; never passed to recall.
    */
   expectedAsOf?: number;
+  /** Passed to recall as `asOf` (the agent-supplied path, T-0089.2.6): the runner's as-of gate, unlike `asOf`. */
+  asOfParam?: number;
+  /** Ids that must not rank above the first gold id. scoreQuery cuts the ranking at the first one seen. */
+  forbidden?: string[];
 }
 
 export interface CostSample {
