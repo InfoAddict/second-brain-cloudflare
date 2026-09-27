@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import type { ChangeContext } from "../lib/audit";
 import { writeAuditEvents } from "../lib/audit";
-import { getReadableEntry } from "../lib/entry-access";
+import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus } from "./status";
 import { withUserEditMarker } from "../tags/system";
@@ -53,9 +53,18 @@ export async function revertEntry(
     // No live row: undo of a forget, if the trash row is readable (author or admin, same as forget itself).
     const trashed = await getTrashedEntry(env, identity, id);
     if (!trashed) return { status: "not_found" };
+    // Same author lock POST /restore enforces (routes/entries.ts): visibility into the trash is not
+    // itself permission to bring a company memory back.
+    const denied = assertCanMutateEntry(identity, trashed);
+    if (denied) return { status: "forbidden" };
     const restored = await restoreEntry(env, trashed, change, config);
     switch (restored.status) {
-      case "restored": return { status: "restored" };
+      case "restored":
+        await writeAuditEvents(env, [{
+          entryId: id, actorId: change.actorId, event: "restored",
+          payload: { channel: change.channel, edgesRestored: restored.edgesRestored, trashedReason: restored.trashedReason },
+        }]);
+        return { status: "restored" };
       case "reembed_failed": return { status: "reembed_failed" };
       // A racing restore or purge already claimed the trash row between the read above and the batch.
       case "not_found": case "conflict": return { status: "not_found" };
