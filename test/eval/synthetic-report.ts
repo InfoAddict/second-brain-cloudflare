@@ -22,12 +22,14 @@ export function syntheticLines(report: VariantReport): string[] {
     for (const [name, rs] of [...subsets].sort(([a], [b]) => a.localeCompare(b))) out.push(`    ${name.padEnd(24)} n=${rs.length}  ${f(mean(rs.map(r => r.metrics.recall5)))}  ${f(mean(rs.map(r => r.metrics.recall10)))}  ${f(mean(rs.map(r => r.metrics.mrr10)))}`);
   }
   const mrr = report.results.map(r => r.metrics.mrr10);
-  if (report.results.length) out.push(`  MRR@10 unpaired MDE at 80% power (2.8 x bootstrap SE of the per-query values): ${f(minimumDetectableEffect(mrr, report.results.map(r => r.clusterKey)))}`);
+  if (report.results.length && report.corpus !== "injection") out.push(`  MRR@10 unpaired MDE at 80% power (2.8 x bootstrap SE of the per-query values): ${f(minimumDetectableEffect(mrr, report.results.map(r => r.clusterKey)))}`);
 
   if (report.corpus === "injection") {
     const share = (r: QueryResult) => r.rankedIds.slice(0, 5).filter(id => id.startsWith("ij-plant-")).length / 5;
     const shares = report.results.map(share);
-    out.push(`  planted top-5 share ${f(mean(shares))} (${Math.round(mean(shares) * report.results.length * 5)}/${report.results.length * 5} slots); per-query MDE for removing plants ${f(minimumDetectableEffect(shares, report.results.map(r => r.clusterKey)))}`);
+    // Slot-level binomial MDE: 2.8 x sqrt(p(1-p)/slots), assuming independent slots (conservative next to the near-constant per-query share).
+    const p = mean(shares), slots = report.results.length * 5, mde = 2.8 * Math.sqrt(p * (1 - p) / Math.max(1, slots));
+    out.push(`  planted top-5 share ${f(p)} (${Math.round(p * slots)}/${slots} slots); binomial MDE at 80% power ${f(mde)}`);
     for (const style of ["command", "role", "factual", "impersonation"]) {
       const rs = report.results.filter(r => subsetsOf(r).includes(`plant-${style}`));
       if (rs.length) out.push(`    ${style.padEnd(14)} planted share ${f(mean(rs.map(share)))} over ${rs.length} queries; own plant rank 1 in ${rs.filter(r => r.rankedIds[0]?.startsWith("ij-plant-")).length}`);

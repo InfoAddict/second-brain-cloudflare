@@ -25,7 +25,8 @@ export function pseudoWords(count: number, seed: number): string[] {
   return [...out];
 }
 
-export const utc = (month: number, day: number, year = 2026) => Date.UTC(year, month - 1, day);
+/** Noon UTC, so a document's calendar date is the same in every timezone from UTC-11 to UTC+11 (the date parser reads local days). */
+export const utc = (month: number, day: number, year = 2026) => Date.UTC(year, month - 1, day, 12);
 export const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 export function entry(id: string, content: string, o: Partial<CorpusEntry> & { ageDays?: number } = {}): CorpusEntry {

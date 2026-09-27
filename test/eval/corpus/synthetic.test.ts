@@ -29,6 +29,9 @@ describe("synthetic corpora, common", () => {
 
 describe("temporal", () => {
   const c = built.temporal;
+  it("dates documents at noon UTC, so the local-time date parser answers the same in every timezone", () => {
+    for (const e of c.entries) expect(e.createdAt % 86_400_000).toBe(12 * 3_600_000);
+  });
   it("names every timeline's subject distinctly, with no numbered siblings", () => {
     const subjects = c.queries.filter(q => q.tags?.includes("subset:current")).map(q => q.text.replace(/^Where is the /, "").replace(/ now\?$/, ""));
     expect(subjects).toHaveLength(Object.values(TEMPORAL_TYPES).reduce((a, b) => a + b, 0));
