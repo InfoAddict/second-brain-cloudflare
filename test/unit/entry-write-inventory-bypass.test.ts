@@ -3,6 +3,9 @@
  * test/unit/adv-entry-write-inventory-bypass.test.ts). test/unit/entry-write-inventory.test.ts
  * finds writers with writerSpans() + isEntriesWriteSql(); every case below is a real, working
  * D1 write that this pair missed entirely, so it needed no marker and no version.
+ *
+ * Round 2 (fc89df2f) added the last two: a statement split by string concatenation or
+ * assembled with .join(), neither of which any per-literal scan sees as a complete statement.
  */
 import { describe, it, expect } from "vitest";
 import { writerSpans } from "../../scripts/check-scope.mjs";
@@ -33,5 +36,11 @@ describe("ADV-5: the write-path inventory guard can be bypassed", () => {
   });
   it("a second statement in one exec() string", () => {
     expect(writersIn("await env.DB.exec(`UPDATE workspaces SET name = 'a'; UPDATE entries SET content = 'b'`);")).toHaveLength(1);
+  });
+  it("R2: a statement split across a string concatenation", () => {
+    expect(writersIn(`await env.DB.prepare("UPDATE " + "entries SET content = ? WHERE id = ?").bind(c, id).run();`)).toHaveLength(1);
+  });
+  it("R2: a statement assembled with join()", () => {
+    expect(writersIn(`await env.DB.prepare(["DELETE FROM", "entries", "WHERE id = ?"].join(" ")).bind(id).run();`)).toHaveLength(1);
   });
 });
