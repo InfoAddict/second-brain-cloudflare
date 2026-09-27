@@ -19,13 +19,17 @@ export interface TimelineEvent {
 export async function readEntryTimeline(
   env: Env, id: string, identity: Identity, entryActorId = "", limit?: number, inlineLabels = false, entryWorkspaceId?: string,
 ): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string> }> {
+  // ev.rowid breaks a created_at tie by true insertion order (D1/SQLite serializes writes, so rowid
+  // assignment IS the real happens-before order), not by whatever order a tied created_at otherwise
+  // sorts in. Without it, a private event recorded in the same millisecond as the share event that
+  // moved this row could sort as "newer" than the share and leak past the D-SH cut below.
   const query = inlineLabels
     ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at, u.name AS user_name
        FROM entry_events ev LEFT JOIN users u ON u.id = ev.actor_id AND (u.removed_at IS NULL OR u.removed_at = 0)
-       WHERE ev.entry_id = ? ORDER BY ev.created_at DESC LIMIT ?`
+       WHERE ev.entry_id = ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`
     : limit === undefined
-    ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at ASC`
-    : `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at DESC LIMIT ?`;
+    ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at ASC, ev.rowid ASC`
+    : `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at FROM entry_events ev WHERE ev.entry_id = ? ORDER BY ev.created_at DESC, ev.rowid DESC LIMIT ?`;
   const statement = env.DB.prepare(query);
   const { results } = await (limit === undefined && !inlineLabels ? statement.bind(id) : statement.bind(id, limit ?? 10))
     .all<{ actor_id: string; event: string; payload: string; created_at: number; user_name?: string | null }>();
