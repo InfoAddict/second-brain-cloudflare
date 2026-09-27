@@ -23,6 +23,7 @@ import { resolveIdentityFromToken } from "./lib/identity";
 import { apiHandler } from "./mcp/handler";
 import { augmentOAuthRegistrationRequest } from "./oauth/register";
 import { defaultHandler } from "./routes";
+import { classifyD1DailyLimitError, dailyLimitMcpResponse, dailyLimitRestResponse } from "./lib/daily-limit";
 
 export type { Env } from "./env";
 
@@ -54,11 +55,22 @@ export default {
     // once instead of 500ing (see src/db/fts-write-guard.ts).
     const env = withFtsWriteGuard(rawEnv);
     const url = new URL(req.url);
-    if (url.pathname === "/oauth/register" && req.method === "POST") {
-      const augmented = await augmentOAuthRegistrationRequest(req);
-      return oauthProvider.fetch(augmented, env as any, ctx);
+    try {
+      if (url.pathname === "/oauth/register" && req.method === "POST") {
+        const augmented = await augmentOAuthRegistrationRequest(req);
+        return await oauthProvider.fetch(augmented, env as any, ctx);
+      }
+      return await oauthProvider.fetch(req, env as any, ctx);
+    } catch (e) {
+      // R3 (budget audit, MAJOR): once the account's daily D1 cap is spent, D1 hard-fails every
+      // query — including identity resolution, which every authenticated route runs first — and
+      // an uncaught throw here would otherwise reach the caller as Cloudflare's opaque error 1101
+      // with no wording about the limit. Caught once, here, for every route including /mcp: the
+      // MCP surface's own pre-dispatch identity check is itself a D1 read and fails the same way.
+      const kind = classifyD1DailyLimitError(e);
+      if (!kind) throw e;
+      return url.pathname === "/mcp" ? dailyLimitMcpResponse(kind) : dailyLimitRestResponse(kind);
     }
-    return oauthProvider.fetch(req, env as any, ctx);
   },
   scheduled: async (event: ScheduledEvent, rawEnv: Env, ctx: ExecutionContext) => {
     const env = withFtsWriteGuard(rawEnv);
