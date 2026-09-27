@@ -27,9 +27,9 @@ afterEach(() => sqlite.close());
 describe("shared brief domain", () => {
   it("dashboard brief counts what the agent brief lists, from one set of predicates", async () => {
     const soon = Date.now() + 3600000;
-    sqlite.seed({ id: "t1", content: "Pay rent", createdAt: Date.now(), tags: ["task"] });
+    sqlite.seed({ id: "t1", content: "Pay rent", createdAt: 2000, tags: ["task"] });
     await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_source = 'explicit' WHERE id = 't1'`).bind(soon).run();
-    sqlite.seed({ id: "t2", content: "Book flights", createdAt: Date.now() - 1, tags: ["task"] });
+    sqlite.seed({ id: "t2", content: "Book flights", createdAt: 1000, tags: ["task"] });
 
     const dash = await computeBrief(env, auth, true);
     const agent = await readAgentBrief(env, auth, { parts: ["due", "loops"] });

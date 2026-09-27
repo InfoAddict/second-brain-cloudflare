@@ -283,7 +283,7 @@ describe("M3 brief queries use their partial indexes", () => {
   it("each agent-brief read plans onto its own index, with and without a project filter", async () => {
     // Seed enough rows for the planner to prefer the partial indexes over a scan.
     for (let i = 0; i < 200; i++) sqlite.seed({ id: `n${i}`, content: `note ${i}`, createdAt: i, tags: ["work"] });
-    for (const project of [undefined, [{ id: "work", workspace_id: owner.personalWorkspaceId, name: "Work", description: "", status: "active", aliases: ["hosting"], created_at: 1, updated_at: null }]]) {
+    for (const project of [undefined, [{ id: "work", workspace_id: owner.personalWorkspaceId, name: "Work", description: "", status: "active" as const, aliases: ["hosting"], created_at: 1, updated_at: null }]]) {
       sqlite.issued.length = 0;
       await readAgentBrief(env, owner, { parts: ["due", "loops", "stale", "insights"], projectRows: project });
       const reads = sqlite.issued.filter(q => /^SELECT id, content/.test(q));
