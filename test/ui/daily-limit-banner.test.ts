@@ -280,3 +280,14 @@ describe("CSS: #app makes room for the fixed banner instead of it overlapping th
     expect(desktopBlock?.[0]).toMatch(/height:\s*calc\(100vh - var\(--daily-limit-height,\s*0px\)\)/);
   });
 });
+
+describe("CSS: a member's ask-owner text is plain, not styled as a link they can't click", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+
+  it(".daily-limit-ask does not share the danger-red link color with .daily-limit-upgrade", () => {
+    const askRule = css.match(/\.daily-limit-ask\s*{([^}]*)}/);
+    expect(askRule?.[1]).not.toMatch(/color:\s*var\(--danger\)/);
+    const upgradeRule = css.match(/\.daily-limit-upgrade\s*{([^}]*)}/);
+    expect(upgradeRule?.[1]).toMatch(/color:\s*var\(--danger\)/);
+  });
+});

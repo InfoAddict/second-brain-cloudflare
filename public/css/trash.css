@@ -312,10 +312,18 @@
   display: none;
 }
 
-.daily-limit-upgrade,
-.daily-limit-ask {
+/* A member can't act on this, so it reads as plain banner text, not a link
+ * they can't actually click. Only the owner/admin variant, an actual <a>,
+ * gets the danger-red link treatment. */
+.daily-limit-upgrade {
   color: var(--danger);
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.daily-limit-ask {
+  color: inherit;
+  font-weight: inherit;
   white-space: nowrap;
 }
 
