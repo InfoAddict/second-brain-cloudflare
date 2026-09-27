@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { templateSpans } from "../../scripts/check-scope.mjs";
+import { writerSpans } from "../../scripts/check-scope.mjs";
 import { isEntriesWriteSql } from "../../src/db/fts-write-guard";
 
 const ROOT = resolveRoot();
@@ -40,7 +40,7 @@ function scanInventory(): Site[] {
     const file = relative(ROOT, path);
     const text = readFileSync(path, "utf8");
     const lines = text.split("\n");
-    const spans = templateSpans(text) as { start: number; end: number }[];
+    const spans = writerSpans(text) as { start: number; end: number }[];
     for (const span of spans) {
       const sql = text.slice(span.start + 1, span.end);
       if (!isEntriesWriteSql(sql)) continue;
