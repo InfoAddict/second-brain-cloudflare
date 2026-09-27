@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
-import { getReadableEntry, assertCanEditContent } from "../lib/entry-access";
+import { getReadableEntry, assertCanEditContent, type EntryAccessRow } from "../lib/entry-access";
 import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
 import { withTaskDone, withoutTask } from "./loops";
 import { hasStaleAsOf, withoutStaleAsOf } from "./stale";
@@ -31,7 +31,7 @@ export async function resolveEntryAction(
     if (until <= Date.now()) return { ok: false, error: "until must be in the future", status: 400 };
   }
   if (action === "still_true") {
-    const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags");
+    const row = await getReadableEntry(env, identity, id, `id, workspace_id, actor_id, tags, COALESCE(updated_at, created_at) AS prior_updated_at, staleness_checked_at`) as (EntryAccessRow & Record<string, any> | null);
     if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
     const denied = assertCanEditContent(identity, row);
     if (denied) return { ok: false, error: denied.message, status: 403 };
@@ -40,31 +40,39 @@ export async function resolveEntryAction(
     const now = Date.now();
     await env.DB.prepare(`UPDATE entries SET tags = ?, updated_at = ?, staleness_checked_at = ? WHERE id = ?`)
       .bind(JSON.stringify(withoutStaleAsOf(tags)), now, now, id).run();
-    auditEvents(env, ctx, [{ entryId: id, actorId: identity.userId, event: "updated", payload: { stale_confirmed: true, ...channelPayload(channel) } }]);
+    auditEvents(env, ctx, [{ entryId: id, actorId: identity.userId, event: "updated", payload: {
+      stale_confirmed: true,
+      prior: { tags, updated_at: row.prior_updated_at, staleness_checked_at: row.staleness_checked_at ?? null },
+      ...channelPayload(channel),
+    } }]);
     return { ok: true, id, action };
   }
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, content");
+    const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, content, when_at, when_kind, when_label, when_source") as (EntryAccessRow & Record<string, any> | null);
     if (!row) return { ok: false, error: `No entry found with ID: ${id}`, status: 404 };
     const denied = assertCanEditContent(identity, row);
     if (denied) return { ok: false, error: denied.message, status: 403 };
     const tags = parseTags(row.tags as string);
+    const priorWhen = { when_at: row.when_at ?? null, when_kind: row.when_kind ?? null, when_label: row.when_label ?? null, when_source: row.when_source ?? null };
+    // The date columns join the CAS so the recorded prior is the value actually replaced.
+    const whenUnchanged = `AND when_at IS ? AND when_kind IS ? AND when_label IS ? AND when_source IS ?`;
+    const whenBindings = [priorWhen.when_at, priorWhen.when_kind, priorWhen.when_label, priorWhen.when_source];
     let statement: D1PreparedStatement;
     let payload: Record<string, unknown>;
     if (action === "done" || action === "not_a_task") {
       const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
       statement = env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`)
         .bind(JSON.stringify(nextTags), id, row.tags, row.content);
-      payload = { loop_action: action === "done" ? "done" : "not-task" };
+      payload = { loop_action: action === "done" ? "done" : "not-task", prior: { tags } };
     } else if (action === "snooze") {
-      statement = env.DB.prepare(`UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ?`)
-        .bind(until, id, row.tags, row.content);
-      payload = { due_action: "snooze", until };
+      statement = env.DB.prepare(`UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ? ${whenUnchanged}`)
+        .bind(until, id, row.tags, row.content, ...whenBindings);
+      payload = { due_action: "snooze", until, prior: priorWhen };
     } else {
-      statement = env.DB.prepare(`UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ?`)
-        .bind(id, row.tags, row.content);
-      payload = { due_action: "clear" };
+      statement = env.DB.prepare(`UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ? ${whenUnchanged}`)
+        .bind(id, row.tags, row.content, ...whenBindings);
+      payload = { due_action: "clear", prior: priorWhen };
     }
     const result = await statement.run();
     if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
@@ -100,7 +108,7 @@ export async function applyInsightResolution(
       vectorsToDrop.push(...(JSON.parse(row.vector_ids ?? "[]") as string[]));
     }
     resolved.push(row.id as string);
-    auditRows.push({ entryId: row.id as string, actorId, event: action === "confirm" ? "insight_confirmed" : "insight_dismissed", ...(channel ? { payload: { channel } } : {}) });
+    auditRows.push({ entryId: row.id as string, actorId, event: action === "confirm" ? "insight_confirmed" : "insight_dismissed", payload: { prior: { tags }, ...channelPayload(channel) } });
   }
   if (statements.length) await env.DB.batch(statements);
   auditEvents(env, ctx, auditRows);

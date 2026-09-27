@@ -1142,8 +1142,8 @@ export async function handleAdminRoutes(
   }
 
   // POST /stale/keep, confirm a flagged memory is still true without editing it.
-  // Agents may settle this on the user's word through MCP resolve. The change
-  // is reversible in 4.0. Clears stale:as-of and bumps updated_at so the
+  // Agents may settle this on the user's word through MCP resolve. The audit
+  // event records the prior values. Clears stale:as-of and bumps updated_at so the
   // nightly pass does not immediately re-flag the same claim.
   if (url.pathname === "/stale/keep" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
@@ -1365,7 +1365,7 @@ export async function handleAdminRoutes(
 
   // POST /patterns/resolve, confirm or dismiss a proposed insight.
   // Agents may settle one insight on the user's word through MCP resolve;
-  // 4.0 makes each change reversible. Confirm promotes it into a real recallable
+  // the audit event records each prior value. Confirm promotes it into a real recallable
   // memory; dismiss deprecates it (audit row kept, vectors removed).
   //
   // Takes `id` for one or `ids` for many. Ruling on a backlog one at a time is

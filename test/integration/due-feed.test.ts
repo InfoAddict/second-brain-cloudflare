@@ -226,7 +226,7 @@ describe("POST /due/snooze", () => {
     const events = (await sq.db.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = 'e1'`).all()).results as any[];
     expect(events).toHaveLength(1);
     expect(events[0].event).toBe("status_changed");
-    expect(JSON.parse(events[0].payload)).toEqual({ due_action: "snooze", until: Date.parse(until), channel: "rest" });
+    expect(JSON.parse(events[0].payload)).toMatchObject({ due_action: "snooze", until: Date.parse(until), prior: { when_at: expect.any(Number) }, channel: "rest" });
   });
 });
 
@@ -267,7 +267,7 @@ describe("POST /due/clear", () => {
 
     const events = (await sq.db.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = 'e1'`).all()).results as any[];
     expect(events).toHaveLength(1);
-    expect(JSON.parse(events[0].payload)).toEqual({ due_action: "clear", channel: "rest" });
+    expect(JSON.parse(events[0].payload)).toMatchObject({ due_action: "clear", prior: { when_at: expect.any(Number) }, channel: "rest" });
   });
 
   it("drops the entry from GET /due once cleared", async () => {

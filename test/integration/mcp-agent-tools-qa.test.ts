@@ -60,6 +60,7 @@ const events = async (id: string) => (await env.DB.prepare(`SELECT event, payloa
 
 describe("resolve: REST and MCP produce the same state and audit on real SQLite", () => {
   const until = new Date(Date.now() + 5 * 86400000).toISOString();
+  const seededDue = Date.now() + 86400000; // one value for both rows, so the recorded prior matches
   const cases: { name: string; tags: string[]; vec?: string[]; mcpArgs: Record<string, unknown>; restCall: (id: string) => [string, string, unknown] }[] = [
     { name: "done", tags: ["task"], mcpArgs: { action: "done" }, restCall: id => ["POST", "/loops/resolve", { id, action: "done" }] },
     { name: "not_a_task", tags: ["task"], mcpArgs: { action: "not_a_task" }, restCall: id => ["POST", "/loops/resolve", { id, action: "not-task" }] },
@@ -74,7 +75,7 @@ describe("resolve: REST and MCP produce the same state and audit on real SQLite"
       for (const id of ["rest-row", "mcp-row"]) {
         sqlite.seed({ id, content: "Identical content", createdAt: 1000, tags: c.tags, vectorIds: c.vec ?? [] });
         if (c.name === "clear_date" || c.name === "snooze") {
-          await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_label = 'x', when_source = 'explicit' WHERE id = ?`).bind(Date.now() + 86400000, id).run();
+          await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_label = 'x', when_source = 'explicit' WHERE id = ?`).bind(seededDue, id).run();
         }
       }
       const [m, p, b] = c.restCall("rest-row");
