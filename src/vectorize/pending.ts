@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { Config } from "../config";
 import { CHUNK_MAX_CHARS, CHUNK_OVERLAP_CHARS, MIRRORED_SOURCES } from "../constants";
 import { graceMs } from "../lib/ai";
-import { storeEntry, upsertEntryVectors, restoreRowVectors } from "../capture/store";
+import { storeEntry, upsertEntryVectors, settleLostVectorCommit } from "../capture/store";
 import { changedRows } from "../memory/trash";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 
@@ -27,10 +27,12 @@ export interface PendingRow {
   id: string; content: string; tags: string; source: string; created_at: number; workspace_id: string; actor_id: string;
 }
 
-/** Index one deferred row under its own workspace and author (never the caller's). */
-export async function indexPendingRow(env: Env, row: PendingRow, cfg: Readonly<Config>): Promise<void> {
-  await storeEntry(env, row.id, row.content, JSON.parse(row.tags), row.source, row.created_at, cfg,
+/** Index one deferred row under its own workspace and author (never the caller's). False when the
+ * row's content or workspace changed during the embed: the upload is settled and the row stays pending. */
+export async function indexPendingRow(env: Env, row: PendingRow, cfg: Readonly<Config>): Promise<boolean> {
+  const stored = await storeEntry(env, row.id, row.content, JSON.parse(row.tags), row.source, row.created_at, cfg,
     { workspaceId: row.workspace_id, actorId: row.actor_id });
+  return stored.committed !== false;
 }
 
 /** An upper bound on the chunks chunkText makes from `len` characters, worst case (a sentence break
@@ -84,19 +86,22 @@ export async function runNightlyVectorizePending(
     }
   }
   if (!upserted.length) return { processed: 0, failed };
+  // CAS on the content AND the workspace the vectors were stamped for (round 5): a share or move
+  // during the embed misses, and the upload is settled below instead of committed.
   const written = await env.DB.batch(upserted.map(({ row, vectorIds }) => env.DB.prepare(
     // versioning: exempt: vector bookkeeping
-    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ?`,
-  ).bind(JSON.stringify(vectorIds), row.id, row.content)));
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ?`,
+  ).bind(JSON.stringify(vectorIds), row.id, row.content, row.workspace_id)));
   let processed = 0;
   for (let i = 0; i < upserted.length; i++) {
     if (changedRows(written[i]) > 0) { processed++; continue; }
-    // Lost the content CAS to a concurrent edit: re-embed the row as it stands now (storeEntry's rule).
+    // Lost the CAS (content edited, or the row shared or moved): delete the stale upload and leave
+    // the row pending for next night, or repair it if another writer has committed meanwhile.
     const { row, vectorIds } = upserted[i];
     try {
-      await restoreRowVectors(env, row.id, [], vectorIds, row.source, config, { workspaceId: row.workspace_id, actorId: row.actor_id });
+      await settleLostVectorCommit(env, row.id, vectorIds, row.source, config, { workspaceId: row.workspace_id, actorId: row.actor_id });
     } catch (e) {
-      console.error("Nightly re-embed repair failed for entry", row.id, e);
+      console.error("Nightly re-embed settle failed for entry", row.id, e);
     }
   }
   return { processed, failed };

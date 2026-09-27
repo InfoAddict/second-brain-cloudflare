@@ -1471,8 +1471,8 @@ export async function handleAdminRoutes(
       try {
         // cfg carries the configured embedding model; indexPendingRow stamps the ROW's own
         // workspace and author, never the admin's.
-        await indexPendingRow(env, row, cfg);
-        processed++;
+        // False: the row changed content or workspace mid-embed; it stays pending for the next call.
+        if (await indexPendingRow(env, row, cfg)) processed++; else failed++;
       } catch (e) {
         console.error("Re-embed failed for entry", row.id, e);
         failed++;

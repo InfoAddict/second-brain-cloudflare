@@ -295,7 +295,7 @@ export async function runBatch(
       // Cron path, no request identity: the context comes from the row being
       // repaired, not the caller, so a re-embed can never relocate an entry
       // between workspaces.
-      await storeEntry(
+      const stored = await storeEntry(
         env,
         row.id as string,
         content,
@@ -305,6 +305,9 @@ export async function runBatch(
         config,
         { workspaceId: row.workspace_id as string, actorId: row.actor_id as string },
       );
+      // Lost the compare-and-set (content edited, or the row shared or moved during the embed): the
+      // upload is settled, and the cursor stays in front of this row so the next batch retries it.
+      if (stored.committed === false) { failed++; break; }
       processed++;
       // Only advance past entries that actually succeeded. A failed entry stays
       // in front of the cursor so a later run retries it.

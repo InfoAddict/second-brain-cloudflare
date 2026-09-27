@@ -88,14 +88,16 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/lifecycle.ts', line: 127, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 195, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 56, kind: 'exempt' },
+  // MOVED 56 -> 60 and every later store.ts site (T-0089.1.1 round 5): storeEntry's CAS pins the
+  // workspace, StoredEntry gains `committed`, and settleLostVectorCommit is new; same sites.
+  { file: 'src/capture/store.ts', line: 60, kind: 'exempt' },
   // MOVED +3 below line 56 (T-0089.1.1 round 3): upsertEntryVectors takes an opt-in batchEmbeds option.
-  { file: 'src/capture/store.ts', line: 218, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 248, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 269, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 477, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 645, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 731, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 243, kind: 'exempt' },
+  { file: 'src/capture/store.ts', line: 274, kind: 'exempt' },
+  { file: 'src/capture/store.ts', line: 295, kind: 'exempt' },
+  { file: 'src/capture/store.ts', line: 503, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 671, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 757, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
   // MOVED 26 -> 30 (T-0089.1.1 round 2): the id-uniqueness comment above import's insert, which now mints a fresh id in-statement.
   { file: 'src/entries/import.ts', line: 30, kind: 'exempt' },
@@ -127,7 +129,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
   // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
-  { file: 'src/vectorize/pending.ts', line: 89, kind: 'exempt' },
+  // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
+  { file: 'src/vectorize/pending.ts', line: 93, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 

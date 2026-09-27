@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (199 queries, 105 exceptions, 17 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (200 queries, 106 exceptions, 17 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1444,7 +1444,9 @@ describe("the checker over the real source tree", () => {
     // scoped by the actor's readable workspaces bound as one JSON array.
     // Deliberate: +1 query and +1 scope-exempt (198/104 -> 199/105) for T-0089.1.1 round 3: the
     // nightly vectorize-pending pass reads lengths to plan, then the chosen rows' content by id.
-    ).toEqual({ queries: 199, exempt: 105, checked: 17, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (199/105 -> 200/106) for T-0089.1.1 round 5:
+    // settleLostVectorCommit reads the row's vector_ids by id to settle a lost vector commit.
+    ).toEqual({ queries: 200, exempt: 106, checked: 17, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

@@ -26,11 +26,24 @@ it("a deferred embed cannot commit old-workspace vectors after a share", async (
     return result;
   };
 
+  const deleted: string[] = [];
+  const originalDelete = t.env.VECTORIZE.deleteByIds.bind(t.env.VECTORIZE);
+  (t.env.VECTORIZE as any).deleteByIds = async (ids: string[]) => { deleted.push(...ids); return originalDelete(ids); };
+
   await runNightlyVectorizePending(t.env, DEFAULTS);
   const row = (await t.one<{ workspace_id: string; vector_ids: string }>(
     "SELECT workspace_id, vector_ids FROM entries WHERE id = 'deferred-move'"))!;
   expect(moved).toBe(true);
   expect(row.workspace_id).toBe(t.roots.companyWorkspaceId);
-  expect(JSON.parse(row.vector_ids)).toEqual(stamped.map(v => v.id));
-  expect(stamped.every(v => v.workspace_id === row.workspace_id)).toBe(true);
+  // Director's rule (round 5): the stale upload is deleted and the row stays pending for next night,
+  // rather than committing vectors stamped for the old workspace.
+  expect(JSON.parse(row.vector_ids)).toEqual([]);
+  expect(deleted).toEqual(expect.arrayContaining(stamped.map(v => v.id)));
+
+  // The next night indexes it under the workspace it now lives in.
+  stamped.length = 0;
+  await runNightlyVectorizePending(t.env, DEFAULTS);
+  const after = (await t.one<{ vector_ids: string }>("SELECT vector_ids FROM entries WHERE id = 'deferred-move'"))!;
+  expect(JSON.parse(after.vector_ids)).toEqual(stamped.map(v => v.id));
+  expect(stamped.every(v => v.workspace_id === t.roots.companyWorkspaceId)).toBe(true);
 });

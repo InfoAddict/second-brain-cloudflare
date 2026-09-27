@@ -30,6 +30,9 @@ export function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: Wr
 export interface StoredEntry {
   vectorIds: string[];
   values: number[] | null;
+  /** storeEntry only: false when the vector_ids write lost its compare-and-set (content or
+   * workspace changed during the embed), so these vectors are not the row's. */
+  committed?: boolean;
 }
 
 export async function storeEntry(
@@ -48,22 +51,43 @@ export async function storeEntry(
   // deliberately does NOT touch workspace_id: an update edits a row in place and
   // must never move it between workspaces — that is share/unshare's job alone.
   // Restamping here would let any context-less caller silently reset a row to ''.
-  // Compare-and-set on content (R4-2): a concurrent edit that commits while this
-  // call's embed was in flight must not have its vectors overwritten by ids
-  // describing text the row no longer holds.
+  // Compare-and-set on the content AND the workspace these vectors were stamped for (R4-2,
+  // T-0089.1.1 round 5): a concurrent edit, or a share or move, that commits while this call's
+  // embed was in flight must not have its row point at vectors describing other text or carrying
+  // another workspace's metadata.
   // versioning: exempt: vector bookkeeping
   const result = await env.DB.prepare(
-    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ?`
-  ).bind(JSON.stringify(stored.vectorIds), id, content).run();
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ?`
+  ).bind(JSON.stringify(stored.vectorIds), id, content, writeCtx.workspaceId).run();
 
   if (changesOf(result) === 0) {
-    // Lost the race: this call's own upsert already ran under storeEntry's deterministic ids,
-    // which the winner's own vectors may share, so it can have clobbered them with stale text.
-    // restoreRowVectors re-embeds the row as it now stands and repairs exactly that.
-    await restoreRowVectors(env, id, [], stored.vectorIds, source, config, writeCtx);
+    await settleLostVectorCommit(env, id, stored.vectorIds, source, config, writeCtx);
+    return { ...stored, committed: false };
   }
 
-  return stored;
+  return { ...stored, committed: true };
+}
+
+/**
+ * A vector_ids write lost its compare-and-set. If the row lists none of the ids just uploaded (it is
+ * still pending, or gone), the upload is nobody's: delete it and leave the row for the next pass.
+ * If it lists some (another writer committed under the same deterministic ids, which this upload may
+ * have overwritten), restoreRowVectors re-embeds the row as it stands, in its current workspace.
+ */
+export async function settleLostVectorCommit(
+  env: Env, id: string, uploadedIds: string[], source: string, cfg: Readonly<Config>, writeCtx: WriteContext,
+): Promise<void> {
+  const row = await env.DB.prepare(
+    // scope-exempt: by-id: settling this call's own upload for the row it just tried to write
+    `SELECT vector_ids FROM entries WHERE id = ?`
+  ).bind(id).first() as { vector_ids?: string } | null;
+  let listed: string[] = [];
+  try { listed = JSON.parse(row?.vector_ids ?? "[]"); } catch { listed = []; }
+  if (!uploadedIds.some(v => listed.includes(v))) {
+    try { await deleteVectorIds(env, uploadedIds); } catch (e) { console.error("Deleting a stale vector upload failed (non-fatal):", e); }
+    return;
+  }
+  await restoreRowVectors(env, id, [], uploadedIds, source, cfg, writeCtx);
 }
 
 /**
@@ -215,8 +239,9 @@ export async function restoreRowVectors(
     // here with no tags guard could still commit fresh vectors for a row a concurrent write just
     // deprecated (content unchanged, only the tag), undoing the very index removal that write made.
     // versioning: exempt: vector bookkeeping (L5) — reembedOrThrow no longer writes this itself.
-    const written = await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND tags = ?`)
-      .bind(JSON.stringify(restored.vectorIds), id, current.content, current.tags).run();
+    // And on the workspace the re-embed stamped (round 5): a move in the gap must miss, not commit.
+    const written = await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND tags = ? AND workspace_id = ?`)
+      .bind(JSON.stringify(restored.vectorIds), id, current.content, current.tags, current.workspace_id ?? "").run();
     if (changesOf(written) > 0) {
       // R3-3: the row's OWN current vector_ids (read moments ago, above) — not just the caller's
       // own orphans — is ALSO safe to retire now, because our write just replaced it: a short
@@ -236,17 +261,18 @@ export async function restoreRowVectors(
       const nowLive = await env.DB.prepare(
         // scope-exempt: by-id: same reasoning as the read above — a faithful repair of the row's
         // OWN vectors to match its OWN current content is harmless regardless of workspace.
-        `SELECT content, tags, vector_ids FROM entries WHERE id = ?`
+        `SELECT content, tags, vector_ids, workspace_id FROM entries WHERE id = ?`
       ).bind(id).first() as Record<string, any> | null;
       const liveIds = new Set(nowLive ? JSON.parse(nowLive.vector_ids ?? "[]") as string[] : []);
       await deleteVectorIds(env, callerOwnOrphans.filter(v => !liveIds.has(v)));
       const clobbered = restored.vectorIds.some(v => liveIds.has(v));
-      if (nowLive && clobbered && nowLive.content !== current.content) {
+      // Content changed, or the row moved (round 5): either way these vectors are not the row's now.
+      if (nowLive && clobbered && (nowLive.content !== current.content || (nowLive.workspace_id ?? "") !== (current.workspace_id ?? ""))) {
         try {
           const repaired = await reembedOrThrow(env, id, nowLive.content as string, JSON.parse(nowLive.tags ?? "[]"), source, cfg, embedContextForRow(nowLive, writeCtx));
           // versioning: exempt: vector bookkeeping (L5), same as the write above
-          const landed = await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND tags = ?`)
-            .bind(JSON.stringify(repaired.vectorIds), id, nowLive.content, nowLive.tags).run();
+          const landed = await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND tags = ? AND workspace_id = ?`)
+            .bind(JSON.stringify(repaired.vectorIds), id, nowLive.content, nowLive.tags, nowLive.workspace_id ?? "").run();
           if (changesOf(landed) === 0) await deleteVectorIds(env, repaired.vectorIds);
         } catch (e3) {
           console.error("Repairing a clobbered vector after a lost write failed (non-fatal):", e3);
