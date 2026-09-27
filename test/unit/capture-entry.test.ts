@@ -317,7 +317,7 @@ describe("captureEntry()", () => {
       AI: makeContradictionAI(decision),
     });
     const { ctx } = makeCtx();
-    const result = await captureEntry("I switched to Cursor", [], "system", env, ctx, undefined, undefined, undefined, { systemWrite: true, channel: "system:digest" });
+    const result = await captureEntry("I switched to Cursor", [], "system", env, ctx, undefined, undefined, undefined, { systemWrite: "digest", channel: "system:digest" });
     expect(result.status).toBe("flagged");
     expect(db.entries).toHaveLength(2);
     expect(db.entries.find(e => e.id === "existing")).toEqual(userRow);

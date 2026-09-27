@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
 import { captureEntry } from "../capture/entry";
-import { DIGEST_MAX_TOKENS, LLM_MODEL } from "../constants";
+import { DIGEST_MAX_TOKENS, LLM_MODEL, SYSTEM_SOURCE } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { MAX_PROJECT_PATTERNS, expandProjectFilter, projectFilterSql } from "../projects/filter";
@@ -191,8 +191,8 @@ export async function compressTag(
     const content = `[Synthesized from ${rows.length} entries ${provenance}]\n\n${digestText}`;
     // The digest inherits the partition's workspace and keeps actor "" — system-
     // authored, like every pre-team pipeline row.
-    const result = await captureEntry(content, ["synthesized", tag], "system", env, ctx, cfg,
-      { workspaceId, actorId: "" }, undefined, { systemWrite: true, channel: "system:digest" });
+    const result = await captureEntry(content, ["synthesized", tag], SYSTEM_SOURCE, env, ctx, cfg,
+      { workspaceId, actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
 
     // Only a blocked capture wrote nothing. Every other status (flagged, contradiction,
     // contradiction_protected, merged, replaced) left a row that holds these sources'

@@ -73,7 +73,7 @@ describe("system jobs declare themselves to captureEntry", () => {
     await compressTag("work", env, ctx);
     expect(seen).toHaveLength(1);
     expect(seen[0].source).toBe("system");
-    expect(seen[0].opts).toEqual({ systemWrite: true, channel: "system:digest" });
+    expect(seen[0].opts).toEqual({ systemWrite: "digest", channel: "system:digest" });
   });
 
   it("the weekly insight passes systemWrite with a system:insight channel", async () => {
@@ -85,6 +85,6 @@ describe("system jobs declare themselves to captureEntry", () => {
     ).bind(120 * DAY, NOW).run();
     await runWeeklyInsights(env, ctx);
     expect(seen).toHaveLength(1);
-    expect(seen[0].opts).toEqual({ systemWrite: true, channel: "system:insight" });
+    expect(seen[0].opts).toEqual({ systemWrite: "insight", channel: "system:insight" });
   });
 });

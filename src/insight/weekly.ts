@@ -19,7 +19,7 @@ import { edgeInsertStatement, kindsAllowEdge } from "../graph/edges";
 import { getKind } from "../memory/kind";
 import type { TypedRelationship } from "./reason";
 import { isEligiblePair, parseTags } from "./candidates";
-import { D1_MAX_BOUND_PARAMS } from "../constants";
+import { D1_MAX_BOUND_PARAMS, SYSTEM_SOURCE } from "../constants";
 
 /**
  * Weight for an edge the reasoning model proposed.
@@ -376,6 +376,7 @@ export async function runWeeklyInsights(
     // keeps the whole batch's statements prepared together — which is what
     // lets it join the status updates as a single subrequest.
     const drawnFromPairs: { insightId: string; targetId: string; workspaceId: string }[] = [];
+    const replacedInsightIds: string[] = [];
     // Typed edges the reasoning produced. Collected rather than written in the
     // loop for the same reason drawnFromPairs is: one batch, one subrequest.
     const typedEdges: { sourceId: string; targetId: string; type: TypedRelationship["type"]; workspaceId: string }[] = [];
@@ -511,8 +512,8 @@ export async function runWeeklyInsights(
       const content = `${result.text}\n\n[Insight: ${result.shape} — drawn from 2 memories]`;
       // actorId stays "": the insight is system-authored regardless of whose
       // workspace it inherits.
-      const captured = await captureEntry(content, ["auto-insight"], "system", env, ctx, cfg,
-        { workspaceId: insightWorkspace, actorId: "" }, undefined, { systemWrite: true, channel: "system:insight" });
+      const captured = await captureEntry(content, ["auto-insight"], SYSTEM_SOURCE, env, ctx, cfg,
+        { workspaceId: insightWorkspace, actorId: "" }, undefined, { systemWrite: "insight", channel: "system:insight" });
 
       // Mark it used either way, or the pass re-proposes and re-pays for this pair forever.
       used.push(candidate.id);
@@ -522,6 +523,9 @@ export async function runWeeklyInsights(
       // carries the insight's own workspace so scoped graph walks can see it.
       if (captured.status !== "blocked") {
         written++;
+        // A replaced insight was redrawn from THIS pair, so the pair it was drawn from
+        // before no longer describes it. A merge keeps its edges and adds these.
+        if (captured.status === "replaced") replacedInsightIds.push(captured.id);
         for (const targetId of [candidate.a_id, candidate.b_id]) {
           drawnFromPairs.push({ insightId: captured.id, targetId, workspaceId: insightWorkspace });
         }
@@ -547,6 +551,9 @@ export async function runWeeklyInsights(
         `UPDATE insight_candidates SET status = 'rejected' WHERE id = ?`).bind(id)),
       ...used.map(id => env.DB.prepare(
         `UPDATE insight_candidates SET status = 'used' WHERE id = ?`).bind(id)),
+      ...[...new Set(replacedInsightIds)].map(id => env.DB.prepare(
+        // scope-exempt: cron: by-id, an insight the system job just replaced in the workspace it was drawing from
+        `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from'`).bind(id)),
       ...drawnFromPairs
         .map(({ insightId, targetId, workspaceId }) => edgeInsertStatement(
           insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId }, env,

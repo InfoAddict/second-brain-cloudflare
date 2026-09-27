@@ -14,9 +14,9 @@ import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { projectFilterSql } from "../projects/filter";
 import type { ProjectRow } from "../projects/registry";
 import { rememberTags } from "../tags/vocabulary";
-import { isCapsuleTag } from "../tags/system";
+import { isCapsuleTag, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import { TRANSCRIPT_SOURCES } from "../constants";
+import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES } from "../constants";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
 
@@ -88,12 +88,13 @@ export function normalizeCaptureInput(rawContent: string, tags: string[]): { con
 
 export interface CaptureOptions {
   /**
-   * A system job (digest, weekly insight) is writing. It only ever merges into,
-   * replaces or deprecates a row another system job wrote (`isSystemRow`): a
-   * user's or agent's memory is left untouched and the newcomer is stored as its
+   * A system job is writing, and which: the nightly "digest" or the weekly "insight".
+   * It only ever merges into, replaces or deprecates a row of ITS OWN kind that a
+   * system job wrote (`isSystemRow`). A user's or agent's memory, an edited digest,
+   * and the other job's output are left untouched, and the newcomer is stored as its
    * own row, still flagged as a duplicate.
    */
-  systemWrite?: boolean;
+  systemWrite?: SystemJob;
   /**
    * Audit channel for events the domain layer writes itself: "mcp", "rest" or
    * "system:<job>". Absent means the caller has no identity to attribute, and
@@ -102,14 +103,19 @@ export interface CaptureOptions {
   channel?: string;
 }
 
-const SYSTEM_ROW_TAGS = ["synthesized", "auto-insight"];
+export type SystemJob = keyof typeof SYSTEM_JOB_TAGS;
 
 /**
- * A row a system job wrote: no actor AND a system tag. Not the `source` string,
- * which any client can set to "system" through POST /capture or MCP remember.
+ * A row THIS system job wrote and nobody has touched since: empty actor, the source
+ * the jobs write, the job's own tag, and no `user-edited` marker. Not the source
+ * string alone, which any client can set through POST /capture or MCP remember; not
+ * either system tag, which would let a digest overwrite an unreviewed insight.
  */
-export function isSystemRow(row: { tags: string[]; actor_id?: unknown }): boolean {
-  return (row.actor_id ?? "") === "" && row.tags.some(t => SYSTEM_ROW_TAGS.includes(t));
+export function isSystemRow(row: { tags: string[]; actor_id?: unknown; source?: unknown }, job: SystemJob): boolean {
+  return (row.actor_id ?? "") === ""
+    && row.source === SYSTEM_SOURCE
+    && row.tags.includes(SYSTEM_JOB_TAGS[job])
+    && !row.tags.includes(USER_EDITED_TAG);
 }
 
 export async function captureEntry(
@@ -168,7 +174,7 @@ export async function captureEntry(
         || targetStatus === "canonical"
         || (TRANSCRIPT_SOURCES.has(source) && existingSource !== source)
         // A system job merges only into what a system job wrote.
-        || (opts.systemWrite === true && !isSystemRow({ tags: existingTags, actor_id: targetRow.actor_id }));
+        || (opts.systemWrite !== undefined && !isSystemRow({ tags: existingTags, actor_id: targetRow.actor_id, source: existingSource }, opts.systemWrite));
 
       if (!protectedTarget) {
         let newVectorIds: string[] | null = null;
@@ -188,7 +194,10 @@ export async function captureEntry(
           // its verdict describes the combined body more recently than the target's does.
           const incomingVerdict = getVolatility(t);
           const stripped = tagsAfterWrite(existingTags);
-          const refreshedTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+          const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+          // A person's capture merging into a digest or insight makes it theirs (a system
+          // job merging into its own row does not).
+          const refreshedTags = opts.systemWrite ? verdictTags : withUserEditMarker(verdictTags);
           const now = Date.now();
           await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
             .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
@@ -235,7 +244,7 @@ export async function captureEntry(
       conflictStatus === "canonical"
       || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source)
       // A system job never rewrites a row it did not write, deprecation included.
-      || (opts.systemWrite === true && !isSystemRow({ tags: conflictTags, actor_id: conflictRow?.actor_id }));
+      || (opts.systemWrite !== undefined && !isSystemRow({ tags: conflictTags, actor_id: conflictRow?.actor_id, source: conflictSource }, opts.systemWrite));
 
   }
 
@@ -291,7 +300,7 @@ export async function captureEntry(
         .bind(JSON.stringify(protectedTags), id).run();
       // A system job's guess must not move the user's row: a win here would make it
       // permanently ineligible for digests (compression/eligibility.ts).
-      if (!opts.systemWrite) {
+      if (opts.systemWrite === undefined) {
         try {
           await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(conflictId).run();
           await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(id).run();
