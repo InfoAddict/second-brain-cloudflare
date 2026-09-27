@@ -34,35 +34,38 @@ describe("synthetic corpora stay out of the core eval", () => {
     }
   });
 
-  it("gives every synthetic query a synthetic category, and an asOf only on the dated past questions", () => {
+  it("gives every synthetic query a synthetic category, and an asOf only on the pre-filtered past questions", () => {
     for (const id of SYNTHETIC_CORPORA) {
       const corpus = buildSyntheticCorpus(id);
       expect(corpus.queries.length).toBeGreaterThan(0);
       for (const q of corpus.queries) {
         expect((SYNTHETIC_QUERY_CATEGORIES as readonly string[]).includes(q.category)).toBe(true);
-        expect(q.gold.length > 0 || q.tags?.includes("standing:no")).toBe(true);
-        expect(q.asOf !== undefined).toBe(id === "temporal" && q.category === "temporal");
+        expect(q.gold.length > 0 || q.tags?.some(t => ["standing:overlap", "standing:intent", "standing:unrelated"].includes(t))).toBe(true);
+        expect(q.asOf !== undefined).toBe(id === "temporal" && !!q.tags?.includes("subset:prefiltered"));
       }
     }
   });
 
-  it("gives temporal past questions distinct old and new gold, both present as documents", () => {
+  it("points every temporal gold id at a document that exists", () => {
     const corpus = buildSyntheticCorpus("temporal");
     const ids = new Set(corpus.entries.map(e => e.id));
-    const gold = corpus.queries.map(q => q.gold[0].id);
-    for (const g of gold) expect(ids.has(g)).toBe(true);
-    expect(new Set(gold).size).toBe(240);
+    for (const q of corpus.queries) for (const g of q.gold) expect(ids.has(g.id)).toBe(true);
   });
 });
 
 describe("standing measurement report", () => {
-  it("prints precision and recall for every threshold, 0.30 through 0.90", () => {
-    const standing = Array.from({ length: 13 }, (_, i) => ({ threshold: Number((0.3 + i * 0.05).toFixed(2)), precision: 0.25, recall: 0.5, truePositive: 1, falsePositive: 3, falseNegative: 1 }));
+  it("prints both query embeddings' firing curves, the dev-chosen threshold and the held-out intervals", () => {
+    const point = (threshold: number) => ({ threshold, precision: 0.25, recall: 0.5, truePositive: 1, falsePositive: 3, falseNegative: 1, intentFired: 2, intentQueries: 9 });
+    const input = { curve: Array.from({ length: 13 }, (_, i) => point(Number((0.3 + i * 0.05).toFixed(2)))), chosen: { threshold: 0.7, meetsPrecisionTarget: false, dev: point(0.7), test: { ...point(0.7), precisionCi: [0.1, 0.5] as [number, number], recallCi: [0.2, 0.8] as [number, number] } } };
+    const standing = { groups: { yes: 5, overlap: 4, intent: 3, unrelated: 20 }, memories: 30, inputs: { distilled: input, raw: input } };
     const report: VariantReport = { schema: 1, variant: "no-rerank", corpus: "standing", embeddingModel: "hash-smoke", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, results: [result("st-yes-0-0", "standing")], standing };
-    const lines = formatReport(report).split("\n").filter(l => l.includes("threshold "));
-    expect(lines).toHaveLength(13);
-    expect(lines[0]).toMatch(/threshold 0\.30 {2}precision 0\.250 {2}recall 0\.500/);
-    expect(lines[12]).toMatch(/threshold 0\.90 /);
+    const text = formatReport(report);
+    expect(text.split("\n").filter(l => /^ {4}threshold /.test(l))).toHaveLength(26);
+    expect(text).toMatch(/threshold 0\.30 {2}precision 0\.250 {2}recall 0\.500/);
+    expect(text).toContain("firing curve, distilled query embedding");
+    expect(text).toContain("firing curve, raw query embedding");
+    expect(text).toMatch(/chosen on dev: threshold 0\.70 \(misses precision 0\.9\)/);
+    expect(text).toContain("same-subject-other-intent fired 2/9");
   });
 
   it("omits the standing block for a report that has none, so core output is unchanged", () => {

@@ -223,7 +223,15 @@ export async function runVariant(o: {
       o.onProgress?.(results.length, o.queries.length);
     }
     const producers = corpus.replay.producers(), neuronSource = corpus.replay.neuronSource();
-    const standing = corpus.standingIds.length ? await measureStanding(corpus, o.queries, queryVectors) : undefined;
+    // The distilled vectors are what recall embedded; the raw ones embed each query's text as written (Track 7 decides which input it uses).
+    const rawVectors = new Map<string, number[]>();
+    if (corpus.standingIds.length) {
+      for (const q of o.queries) {
+        const out = await corpus.env.AI.run(o.embeddingModel as never, { text: [q.text] } as never) as { data?: number[][] };
+        if (out.data?.[0]) rawVectors.set(q.id, out.data[0]);
+      }
+    }
+    const standing = corpus.standingIds.length ? await measureStanding(corpus, o.queries, { distilled: queryVectors, raw: rawVectors }) : undefined;
     return { schema: 1, variant: variant.name, corpus: corpus.id, embeddingModel: o.embeddingModel, ...(Object.keys(producers).length && { producers }), ...(neuronSource && { neuronSource }), llmTags: corpus.replay.llmTags, d1Backend: corpus.d1.kind, isolate: o.isolate, topK: o.topK ?? EVAL_TOP_K, runnerVersion: RUNNER_VERSION, ...(corpus.dataFingerprint && { dataFingerprint: corpus.dataFingerprint }), results, ...(standing && { standing }) };
   } finally {
     restoreClock();

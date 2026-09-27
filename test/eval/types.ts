@@ -30,6 +30,11 @@ export interface GoldenQuery {
   answerSpan?: string;
   /** Question time for temporal evaluation; the runner restores its fixed clock after this query. */
   asOf?: number;
+  /**
+   * The date a question is about when the text carries it and the runner must NOT pre-filter (a date phrase in the query,
+   * or a vague "back in April"). Read by the supersession oracle and audits only; never passed to recall.
+   */
+  expectedAsOf?: number;
 }
 
 export interface CostSample {
@@ -113,6 +118,22 @@ export const producersKey = (m: Record<string, EmbeddingProducer> | undefined): 
  */
 export type NeuronSource = "projected" | "provider";
 
+export interface StandingFiringPoint {
+  threshold: number; precision: number; recall: number; truePositive: number; falsePositive: number; falseNegative: number;
+  /** Queries (same subject, different intent) where a memory fired; reported apart, never part of precision. */
+  intentFired: number; intentQueries: number;
+}
+export interface StandingInputReport {
+  curve: StandingFiringPoint[];
+  /** Threshold chosen on the dev split only; dev and held-out test numbers at it, with 95% Wilson intervals on test. */
+  chosen: { threshold: number; meetsPrecisionTarget: boolean; dev: StandingFiringPoint; test: StandingFiringPoint & { precisionCi: [number, number]; recallCi: [number, number] } };
+}
+export interface StandingReport {
+  groups: Record<"yes" | "overlap" | "intent" | "unrelated", number>;
+  memories: number;
+  inputs: { distilled: StandingInputReport; raw: StandingInputReport };
+}
+
 export interface VariantReport {
   schema: 1;
   variant: string;
@@ -135,8 +156,8 @@ export interface VariantReport {
   /** Set when the run covered only the first N queries; such a report is never gate-eligible. */
   limit?: number;
   results: QueryResult[];
-  /** Report-only cosine firing curve for the synthetic standing corpus. */
-  standing?: { threshold: number; precision: number; recall: number; truePositive: number; falsePositive: number; falseNegative: number }[];
+  /** Report-only cosine firing measurement for the synthetic standing corpus. */
+  standing?: StandingReport;
 }
 
 /** Bump when what a report means changes (measurement, guards, degradation flags, schema). 2: limit and dataFingerprint. 3: embeddingProducer. 4: producers map (every model) and neuronSource. 6: neuronSource from actual calls and per-row provenance, plus the llmTags arm (query-tag LLM calls answered by a priced embedding stand-in by default). 7: recall diagnostics count first() statements (run as all()), so workerd rows_read is no longer null for queries that ran one. 8: each result carries the candidate-pool diagnostic (pool). */

@@ -17,6 +17,7 @@ import { producerFromCache, stampCache } from "./stamp";
 import { COMMITTED_LAYER_VARIANTS, dryReranker, exportCache, prepare } from "./prepare";
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
+import { syntheticLines } from "./synthetic-report";
 import { ALL_QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
 import { excludeNeedles } from "./corpus/exclude";
 import { VARIANTS, getVariant, type VariantSpec } from "./variants";
@@ -154,8 +155,6 @@ export function formatReport(report: VariantReport): string {
   // AI calls beyond the embeddings: the LLM arm answered something (a reranking variant also counts, which only prints the caveat)
   const llmCalled = report.results.some(r => r.cost.aiCalls > r.cost.embeddingCalls);
   const gapKeys = Object.keys(knownGaps.byGap);
-  const planted = report.corpus === "injection" ? report.results.reduce((n, r) => n + r.rankedIds.slice(0, 5).filter(id => id.startsWith("ij-plant-")).length, 0) : 0;
-  const noiseTop3 = report.corpus === "noise" ? report.results.filter(r => r.rankedIds.slice(0, 3).includes(`nz-note-${r.queryId.slice(5)}`)).length : 0;
   return [
     `variant ${report.variant} | corpus ${report.corpus} | model ${report.embeddingModel} | d1 ${report.d1Backend} | ${report.isolate}${report.limit ? ` | LIMITED to ${report.limit} queries` : ""}`,
     ...(report.embeddingModel === HASH_MODEL ? ["  WARNING: hash embeddings are a harness smoke test; dense results are meaningless and not comparable."] : []),
@@ -185,9 +184,7 @@ export function formatReport(report: VariantReport): string {
     `    AI calls       mean ${allQueries.aiCalls.mean.toFixed(2)}   neurons mean ${allQueries.neurons.mean.toFixed(1)}${allQueries.estimatedNeuronQueries ? ` (estimated for ${allQueries.estimatedNeuronQueries} quer${allQueries.estimatedNeuronQueries === 1 ? "y" : "ies"})` : ""}`,
     `    wall ms        p50 ${allQueries.wallMs.p50.toFixed(0)}  p95 ${allQueries.wallMs.p95.toFixed(0)}  (reported, never gated)`,
     `  leaks ${allQueries.leaks}   errors ${allQueries.errors}   degraded ${allQueries.degraded}`,
-    ...(report.corpus === "injection" ? [`  planted top-5 share ${f(planted / (report.results.length * 5))} (${planted}/${report.results.length * 5} slots)`] : []),
-    ...(report.corpus === "noise" ? [`  genuine note in top 3 ${noiseTop3}/${report.results.length}`] : []),
-    ...(report.standing ? ["  standing cosine firing (at most 2 per query):", ...report.standing.map(s => `    threshold ${s.threshold.toFixed(2)}  precision ${f(s.precision)}  recall ${f(s.recall)}  TP ${s.truePositive}  FP ${s.falsePositive}  FN ${s.falseNegative}`)] : []),
+    ...syntheticLines(report),
   ].join("\n");
 }
 

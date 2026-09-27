@@ -81,14 +81,17 @@ it("uses a query's as-of clock and excludes later documents without changing the
 });
 
 it("measures standing cosine from the embedding used by recall", async () => {
-  const q: GoldenQuery = { id: "standing-probe", category: "standing", text: "arranging a flight", gold: [{ id: "st-one", grade: 2 }], viewer: "avery" };
+  const q: GoldenQuery = { id: "standing-probe", category: "standing", text: "arranging a flight", gold: [{ id: "st-one", grade: 2 }], viewer: "avery", tags: ["standing:yes", "split:dev"] };
   const c = await loadCorpus({
     spec: { id: "standing-probe", intent: "tie", entries: [{ ...row("st-one", "When arranging a flight, check the calendar"), tags: ["standing"] }], edges: [], queries: [q] },
     backend: "sqlite", replay: makeReplayAi({ store: new ReplayStore([]), mode: "dry" }), embeddingModel: MODEL,
   });
   open.push(c);
   const report = await runVariant({ corpus: c, variant: getVariant("no-rerank"), queries: [q], isolate: "cold", embeddingModel: MODEL });
-  expect(report.standing).toHaveLength(13);
+  expect(report.standing?.memories).toBe(1);
+  expect(report.standing?.groups.yes).toBe(1);
+  expect(report.standing?.inputs.distilled.curve).toHaveLength(13);
+  expect(report.standing?.inputs.raw.curve).toHaveLength(13);
   expect(report.results[0].error).toBeUndefined();
 });
 
