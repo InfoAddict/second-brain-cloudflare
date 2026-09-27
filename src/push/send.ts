@@ -10,6 +10,12 @@ import { DUE_SQL } from "../when/input";
 import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
 import { fromBase64Url } from "./base64url";
+import { OWED_TO_ME_TAG, COUNTERPARTY_TAG_PREFIX, counterpartyName } from "../commitments/direction";
+
+// Literal for now, not imported from a shared reserved-tag list: Track 7's
+// Lane A (src/tags/t7.ts) owns that list and lands separately. Reconcile once
+// it merges.
+const LEDGER_DECISION_TAG = "ledger:decision";
 
 /** A feed, not a blast: at most this many due items get a notification per run. */
 const MAX_NOTIFICATIONS_PER_RUN = 3;
@@ -43,6 +49,21 @@ interface DueCandidate {
   id: string;
   when_at: number;
   label: string;
+  tags: string[];
+}
+
+type PushKind = "inbound" | "decision" | "other";
+
+function pushKindOf(tags: string[]): PushKind {
+  if (tags.includes(LEDGER_DECISION_TAG)) return "decision";
+  if (tags.includes(OWED_TO_ME_TAG)) return "inbound";
+  return "other";
+}
+
+/** The display name from the row's counterparty:<slug> tag, or null when there is none. */
+function counterpartyOf(tags: string[]): string | null {
+  const tag = tags.find((t) => t.startsWith(COUNTERPARTY_TAG_PREFIX));
+  return tag ? counterpartyName(tag.slice(COUNTERPARTY_TAG_PREFIX.length)) : null;
 }
 
 type SendResult = "ok" | "gone" | "failed";
@@ -51,6 +72,15 @@ interface SendOutcome {
   result: SendResult;
   /** The push service's HTTP response status, or null when the request itself threw (network error). */
   httpStatus: number | null;
+}
+
+function parseTags(raw: unknown): string[] {
+  try {
+    const parsed = JSON.parse(typeof raw === "string" ? raw : "[]");
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function pushedKvKey(workspaceId: string): string {
@@ -110,13 +140,29 @@ function toReportedOutcomes(outcomes: { hash: string; result: SendResult; httpSt
  * (Workers run in UTC anyway, and even if they did not, "the machine
  * happened to run on" is not "the zone this brain is configured for").
  */
-function notificationPayload(candidate: DueCandidate, contentFree: boolean, timezone: string): Record<string, unknown> {
-  if (contentFree) return { title: "1 thing due - tap to view" };
+function formattedZonedDate(atMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(candidate.when_at);
+  }).formatToParts(atMs);
   const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
-  const dueDate = `${get("year")}-${get("month")}-${get("day")}`;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function notificationPayload(candidate: DueCandidate, contentFree: boolean, timezone: string): Record<string, unknown> {
+  if (contentFree) return { title: "1 thing due - tap to view" };
+  const dueDate = formattedZonedDate(candidate.when_at, timezone);
+  const kind = pushKindOf(candidate.tags);
+
+  if (kind === "decision") {
+    return { title: candidate.label, body: "Time to check how it went - from your second brain", entry_id: candidate.id };
+  }
+  if (kind === "inbound") {
+    const counterparty = counterpartyOf(candidate.tags);
+    const body = counterparty
+      ? `Owed to you by ${counterparty}, was due ${dueDate} - from your second brain`
+      : `Owed to you, was due ${dueDate} - from your second brain`;
+    return { title: candidate.label, body, entry_id: candidate.id };
+  }
   return { title: candidate.label, body: `due ${dueDate} - from your second brain`, entry_id: candidate.id };
 }
 
@@ -204,7 +250,7 @@ export async function pushDueItems(env: Env, workspaceId: string, resolved?: Rea
   const now = Date.now();
   const config = resolved ?? await resolveConfig(env);
   const dueRows = ((await env.DB.prepare(
-    `SELECT id, content, when_at, when_label FROM entries
+    `SELECT id, content, when_at, when_label, tags FROM entries
      WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
      ORDER BY when_at ASC LIMIT ?`,
   ).bind(now, workspaceId, MAX_NOTIFICATIONS_PER_RUN * 5).all()).results ?? []) as Record<string, any>[];
@@ -217,6 +263,7 @@ export async function pushDueItems(env: Env, workspaceId: string, resolved?: Rea
       id: r.id as string,
       when_at: r.when_at as number,
       label: (r.when_label as string | null) || (r.content as string).slice(0, 80),
+      tags: parseTags(r.tags),
     }));
 
   if (!candidates.length) return { sent: 0, candidates: 0, subscriptions: 0, results: [] };
