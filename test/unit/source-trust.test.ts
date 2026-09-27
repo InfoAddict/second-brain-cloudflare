@@ -4,7 +4,9 @@ import {
   templateSignature, collapseNearDuplicates,
   SOURCE_LIFT_WORDS, TRANSACTIONAL_LIFT_WORDS, ENUMERATE_RE, sourceWordLift, tagLift, collapseLift,
   type CollapseCandidate,
+  liftFor, applyOccupancyCap, type OccupancyCandidate,
 } from "../../src/recall/source-trust";
+import { mulberry32 } from "../eval/stats";
 import { MIRRORED_SOURCES, TRANSCRIPT_SOURCES } from "../../src/constants";
 import { DEFAULTS } from "../../src/config";
 import { rerankWithTimeDecay, rerankWithTimeDecayTraced } from "../../src/recall/math";
@@ -277,5 +279,102 @@ describe("lift conditions (T-0089.3.1, 4.3, 4.4)", () => {
 
   it("SOURCE_LIFT_WORDS and TRANSACTIONAL_LIFT_WORDS are disjoint word lists", () => {
     expect(SOURCE_LIFT_WORDS.some(w => TRANSACTIONAL_LIFT_WORDS.includes(w))).toBe(false);
+  });
+
+  it("liftFor is true for a source word or a mirror tag filter, but a project filter is not a parameter it can consult (P3)", () => {
+    expect(liftFor("show me my email", undefined)).toBe(true);
+    expect(liftFor("random query", "calendar")).toBe(true);
+    expect(liftFor("random query", undefined)).toBe(false);
+    // Enumerating intent alone does not lift the cap (only the collapse).
+    expect(liftFor("show all my notes", undefined)).toBe(false);
+  });
+});
+
+const mk = (over: Partial<OccupancyCandidate> = {}): OccupancyCandidate => ({ source: "api", tags: [], ...over });
+const mirrorRow = () => mk({ source: "email-gmail" });
+const transcriptRow = () => mk({ source: "claude-code" });
+const directRow = () => mk({ source: "api" });
+
+describe("applyOccupancyCap (T-0089.3.1, 4.3)", () => {
+  it("at share 1.0 (off), the list passes through unchanged", () => {
+    const list = [mirrorRow(), mirrorRow(), directRow(), mirrorRow()];
+    expect(applyOccupancyCap(list, 1.0)).toEqual(list);
+  });
+
+  it("at share 0.4, the top 5 hold at most 2 mail rows (the spec's worked example), not 3 from floating-point drift", () => {
+    // 0.4 * 5 === 2.0000000000000004 in IEEE 754: a naive Math.ceil gives 3.
+    // Interleaved with enough direct rows in reserve that position 5 is not
+    // the exhausted case (a later direct row is still available to promote).
+    const list = [mirrorRow(), directRow(), mirrorRow(), directRow(), mirrorRow(), directRow(), mirrorRow(), directRow()];
+    const out = applyOccupancyCap(list, 0.4);
+    expect(out.slice(0, 5).filter(m => m.source !== "api")).toHaveLength(2);
+  });
+
+  it.each(Array.from({ length: 30 }, (_, seed) => seed))(
+    "at share 0.4, every prefix p has at most ceil(0.4p) capped rows while a direct row remains (seed %i)",
+    (seed) => {
+      const rand = mulberry32(seed + 1);
+      const n = 20;
+      const list = Array.from({ length: n }, () => (rand() < 0.7 ? mirrorRow() : directRow()));
+      const out = applyOccupancyCap(list, 0.4);
+      expect(out).toHaveLength(n);
+      let cappedSoFar = 0;
+      for (let p = 1; p <= n; p++) {
+        if (out[p - 1].source !== "api") cappedSoFar++;
+        const remainingHasDirect = out.slice(p).some(m => m.source === "api");
+        if (remainingHasDirect) expect(cappedSoFar).toBeLessThanOrEqual(Math.ceil(0.4 * p));
+      }
+    },
+  );
+
+  it("deferred rows re-enter at the first allowed position, in their own order", () => {
+    // share 0.5: quota at p=1,2,3,4 is 1,1,2,2. Two mirrors up front exceed
+    // quota 1 at p=2, so the second mirror defers behind the first direct row.
+    const m1 = mirrorRow(), m2 = mirrorRow(), d1 = directRow(), d2 = directRow();
+    const out = applyOccupancyCap([m1, m2, d1, d2], 0.5);
+    expect(out).toEqual([m1, d1, m2, d2]);
+  });
+
+  it("never shortens: an all-mirror list fills topK", () => {
+    const list = Array.from({ length: 5 }, mirrorRow);
+    expect(applyOccupancyCap(list, 0.4)).toHaveLength(5);
+  });
+
+  it("transcripts count toward the share exactly like mirror rows", () => {
+    const list = [transcriptRow(), transcriptRow(), directRow()];
+    const out = applyOccupancyCap(list, 0.4);
+    // quota at p=1 is 1: the first transcript is taken, the second defers behind the direct row.
+    expect(out.map(m => m.source)).toEqual(["claude-code", "api", "claude-code"]);
+  });
+
+  it("order within each group (capped, direct) is preserved", () => {
+    const a = mirrorRow(), b = mirrorRow(), c = directRow(), d = directRow();
+    const out = applyOccupancyCap([a, c, b, d], 1.0);
+    expect(out).toEqual([a, c, b, d]);
+  });
+
+  it("the pinned index keeps its position and still counts toward the share", () => {
+    // share 0.4: without a pin, only 1 of the first 2 mirrors would be kept at p=1..2.
+    // Pinning index 1 (the second mirror) forces it to stay at output position 1.
+    const m1 = mirrorRow(), m2 = mirrorRow(), d1 = directRow();
+    const out = applyOccupancyCap([m1, m2, d1], 0.4, 1);
+    expect(out[1]).toBe(m2);
+    // The first mirror, not pinned, defers past the direct row since the pin already spent the quota.
+    expect(out).toEqual([m1, m2, d1]);
+  });
+
+  it("result(topK=5) is a prefix of result(topK=10) when the lookahead is not exhausted", () => {
+    // Alternating capped/direct rows: plenty of direct rows within both slice
+    // lengths, so neither call runs out of a non-capped row to promote.
+    const list = Array.from({ length: 30 }, (_, i) => (i % 2 === 0 ? mirrorRow() : directRow()));
+    const capped = applyOccupancyCap(list, 0.4);
+    expect(capped.slice(0, 10)).toEqual(applyOccupancyCap(list.slice(0, 20), 0.4).slice(0, 10));
+  });
+
+  it("the exhausted case (fewer non-capped rows than the lookahead needs) is documented and stable: the shorter input still returns everything it has", () => {
+    // Every row is capped: there is no non-capped row to promote, so both calls degrade to input order.
+    const list = Array.from({ length: 8 }, mirrorRow);
+    expect(applyOccupancyCap(list, 0.4)).toEqual(list);
+    expect(applyOccupancyCap(list.slice(0, 4), 0.4)).toEqual(list.slice(0, 4));
   });
 });

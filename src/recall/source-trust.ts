@@ -85,6 +85,97 @@ export function collapseLift(query: string, tagFilter: string | undefined): bool
   return sourceWordLift(query) || tagLift(tagFilter) || ENUMERATE_RE.test(query);
 }
 
+/** The occupancy cap's lift (4.3): a source word or a mirror tag filter. A `project` filter never lifts (P3), so it is not a parameter here. */
+export function liftFor(query: string, tagFilter: string | undefined, includeTransactional = false): boolean {
+  return sourceWordLift(query, includeTransactional) || tagLift(tagFilter);
+}
+
+// ── Occupancy cap (4.3) ──
+
+export interface OccupancyCandidate {
+  source: string | undefined;
+  tags: readonly string[];
+}
+
+/**
+ * A prefix rule (P2): at output position p (1-based), the mirror-plus-
+ * transcript count stays at most `ceil(share * p)` while a non-capped
+ * candidate remains anywhere in the list. A capped row that would exceed the
+ * quota is deferred and re-enters at the first position the rule allows,
+ * preserving order among deferred rows and among everything else. It never
+ * shortens the list: once no non-capped candidate remains, deferred rows
+ * fill in order regardless of quota.
+ *
+ * `pinnedIndex`, when given, is an index into `list` that is placed the
+ * moment the walk reaches it, never deferred — the graph-linked-evidence
+ * slot keeps its position — but still counts toward the share if it is
+ * itself capped.
+ */
+export function applyOccupancyCap<T extends OccupancyCandidate>(
+  list: readonly T[], share: number, pinnedIndex: number | null = null,
+): T[] {
+  const isCapped = (m: T) => {
+    const cls = sourceClass(m.source, m.tags);
+    return cls === "mirror" || cls === "transcript";
+  };
+  const n = list.length;
+  const hasNonCappedFrom = (from: number) => {
+    for (let j = from; j < n; j++) if (!isCapped(list[j])) return true;
+    return false;
+  };
+  const output: T[] = [];
+  const deferred: T[] = [];
+  let cappedCount = 0;
+  let i = 0;
+  while (output.length < n) {
+    const p = output.length + 1;
+    // Epsilon-corrected: 0.4 * 5 is 2.0000000000000004 in IEEE 754, and a
+    // naive ceil would read that as 3, one row over what the spec's worked
+    // example (and every share the grid names) actually calls for.
+    const quota = Math.ceil(share * p - 1e-9);
+    if (i === pinnedIndex) {
+      const pinned = list[i];
+      if (isCapped(pinned)) cappedCount++;
+      output.push(pinned);
+      i++;
+      continue;
+    }
+    if (deferred.length && cappedCount < quota) {
+      output.push(deferred.shift()!);
+      cappedCount++;
+      continue;
+    }
+    if (i < n) {
+      const candidate = list[i];
+      if (!isCapped(candidate)) {
+        output.push(candidate);
+        i++;
+        continue;
+      }
+      if (cappedCount < quota) {
+        output.push(candidate);
+        i++;
+        cappedCount++;
+        continue;
+      }
+      if (hasNonCappedFrom(i + 1)) {
+        deferred.push(candidate);
+        i++;
+        continue;
+      }
+      // No non-capped row remains anywhere: stop deferring and drain, never shortening the list.
+      output.push(...deferred, ...list.slice(i));
+      break;
+    }
+    if (deferred.length) {
+      output.push(...deferred);
+      break;
+    }
+    break;
+  }
+  return output;
+}
+
 // ── Near-duplicate collapse (4.4) ──
 
 /**

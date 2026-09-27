@@ -42,7 +42,7 @@ import { queryRelevantWindow } from "./snippet";
 import { FTS_LIVENESS_SQL, ftsEligibleToken, ftsReady, ftsShortToken, isFtsLiveRows, planFtsMatch } from "./fts";
 import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./keyword-rows";
 import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
-import { CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates } from "./source-trust";
+import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -444,6 +444,12 @@ export async function recallEntries(
   // or tag names its own source (a source word, a mirror-written tag, or an
   // enumerating query): a deliberate "show all my emails" must not be thinned (4.4).
   const collapseActive = cfg.NOTICE_COLLAPSE === "on" && !collapseLift(query, tag);
+  // Off at share 1.0, and off for this one call when the query or tag names
+  // its own source. A `project` filter never lifts it (P3, Q-C): every
+  // session-start hook passes project on every recall, so a lift there would
+  // switch the defence off exactly where it runs most.
+  const capActive = cfg.MIRROR_MAX_SHARE < 1.0 && !liftFor(query, tag);
+  const lookaheadActive = collapseActive || capActive;
   const hops = Math.max(0, Math.min(cfg.GRAPH_MAX_HOPS, params.hops ?? cfg.DEFAULT_HOPS));
   const now = Date.now();
   let semanticUnavailable = false;
@@ -794,7 +800,7 @@ export async function recallEntries(
   // MMR is greedy, so its first n picks do not depend on how many are asked for. Rounding the depth up to whole
   // blocks (each ordered by score below) keeps every block a topK cuts the same block a larger topK sees, and a
   // default topK 5 call diversifies and hydrates exactly the five it always did.
-  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK + (collapseActive ? CAP_LOOKAHEAD : 0));
+  const directCandidates = mmrRerank(dedupedAll, cfg.MMR_LAMBDA, Math.ceil(topK / RECALL_BLOCK) * RECALL_BLOCK + (lookaheadActive ? CAP_LOOKAHEAD : 0));
   // A topK larger than the diversified list draws the rest from a deeper dense list, after everything above. The
   // fetch happens only then, but what it adds is the same whatever topK is, and it only ever follows the list, so the
   // head of a smaller topK is a prefix of it.
@@ -1178,7 +1184,13 @@ export async function recallEntries(
     const similar = similarById.get(m.id);
     if (similar) m.similar = similar;
   }
-  const matches = uncollapsed.slice(0, topK);
+  // The occupancy cap runs last, on the assembled list, immediately before
+  // the final cut (4.3). The graph-linked-evidence slot keeps its position
+  // even when collapse moved it, so its pin is resolved against this
+  // (post-collapse) list, not the original one.
+  const pinnedAt = evidenceSlotId ? uncollapsed.findIndex(m => m.id === evidenceSlotId) : -1;
+  const uncapped = capActive ? applyOccupancyCap(uncollapsed, cfg.MIRROR_MAX_SHARE, pinnedAt >= 0 ? pinnedAt : null) : uncollapsed;
+  const matches = uncapped.slice(0, topK);
   if (explain) {
     // Only what the stages above already computed: nothing is queried or scored here.
     const multipliers = new Map<string, { multipliers: RankMultipliers; ageKnown: boolean }>();
