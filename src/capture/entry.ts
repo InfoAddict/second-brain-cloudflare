@@ -118,6 +118,28 @@ export function isSystemRow(row: { tags: string[]; actor_id?: unknown; source?: 
     && !row.tags.includes(USER_EDITED_TAG);
 }
 
+/**
+ * A system merge re-embedded a row and then lost it to a concurrent edit: the vectors under
+ * that id now describe the system's text. Re-embed the row as it stands now and retire any
+ * extra chunks the merge wrote. Best effort: the edit itself is safe in D1 either way.
+ */
+async function restoreRowVectors(
+  env: Env, id: string, oldVectorIds: string[], mergedVectorIds: string[], source: string,
+  cfg: Readonly<Config>, writeCtx: WriteContext,
+): Promise<void> {
+  try {
+    const current = await env.DB.prepare(
+      // scope-exempt: by-id: the merge target this call just read under the write's own workspace
+      `SELECT content, tags FROM entries WHERE id = ?`
+    ).bind(id).first() as Record<string, any> | null;
+    if (!current) return;
+    const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, writeCtx);
+    await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
+  } catch (e) {
+    console.error("Restoring vectors after a lost system merge failed (non-fatal):", e);
+  }
+}
+
 export async function captureEntry(
   rawContent: string,
   tags: string[],
@@ -155,11 +177,12 @@ export async function captureEntry(
 
     const targetRow = await env.DB.prepare(
       // scope-exempt: by-id: the merge target is one of the ids checkDuplicateAndContradiction hydrated under `AND workspace_id = ?` against this same writeCtx.workspaceId, and it only returns ids it hydrated — so this row is already known to be in the workspace being written to
-      `SELECT tags, source, vector_ids, importance_score, actor_id FROM entries WHERE id = ?`
+      `SELECT content, tags, source, vector_ids, importance_score, actor_id FROM entries WHERE id = ?`
     ).bind(targetId).first() as Record<string, any> | null;
 
     if (targetRow) {
       const existingTags: string[] = JSON.parse(targetRow.tags ?? "[]");
+      const existingContent = targetRow.content as string;
       const existingSource = targetRow.source as string;
       const oldVectorIds: string[] = JSON.parse(targetRow.vector_ids ?? "[]");
 
@@ -199,28 +222,41 @@ export async function captureEntry(
           // job merging into its own row does not).
           const refreshedTags = opts.systemWrite ? verdictTags : withUserEditMarker(verdictTags);
           const now = Date.now();
-          await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-            .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
-          try {
-            await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-          } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
+          // A system merge commits only if the row is still what was read: a person's edit can land
+          // during the re-embed above, and their text and `user-edited` marker must not be overwritten.
+          const cas = opts.systemWrite !== undefined;
+          const committed = cas
+            ? await env.DB.prepare(
+              // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the tags and content read
+              `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?`)
+              .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent).run()
+            : await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+              .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
+          if (cas && (committed.meta.changes ?? committed.meta.rows_written ?? 0) === 0) {
+            console.error("System merge lost the row to a concurrent edit — keeping both");
+            await restoreRowVectors(env, targetId, oldVectorIds, newVectorIds, existingSource, cfg, writeCtx);
+          } else {
+            try {
+              await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+            } catch (e) { console.error("Old vector cleanup failed (non-fatal):", e); }
 
-          // The survivor's content just changed, so its graph position should
-          // too. `neighbors` is the answer duplicate detection already got from
-          // Vectorize for this same text, reused rather than asked again — the
-          // merge therefore adds no query and no embed of its own.
-          // inferEdgesOnWrite drops the written id from its own candidates, so
-          // the target needs no filtering. dup.matchId does: the model picks the
-          // merge target and is free to choose the SECOND-best match, leaving
-          // the closest near-duplicate in `neighbors` — and linking the survivor
-          // to that is the junk edge suppression exists to prevent, arriving by
-          // a different door.
-          classifyThenInfer(targetId, newContent, env, ctx, cfg, kind =>
-            inferEdgesOnWrite(targetId, neighbors, env, { suppressId: dup.matchId, newKind: kind }));
+            // The survivor's content just changed, so its graph position should
+            // too. `neighbors` is the answer duplicate detection already got from
+            // Vectorize for this same text, reused rather than asked again — the
+            // merge therefore adds no query and no embed of its own.
+            // inferEdgesOnWrite drops the written id from its own candidates, so
+            // the target needs no filtering. dup.matchId does: the model picks the
+            // merge target and is free to choose the SECOND-best match, leaving
+            // the closest near-duplicate in `neighbors` — and linking the survivor
+            // to that is the junk edge suppression exists to prevent, arriving by
+            // a different door.
+            classifyThenInfer(targetId, newContent, env, ctx, cfg, kind =>
+              inferEdgesOnWrite(targetId, neighbors, env, { suppressId: dup.matchId, newKind: kind }));
 
-          return mergeAction.action === "merge"
-            ? { status: "merged", id: targetId }
-            : { status: "replaced", id: targetId };
+            return mergeAction.action === "merge"
+              ? { status: "merged", id: targetId }
+              : { status: "replaced", id: targetId };
+          }
         }
       }
     }

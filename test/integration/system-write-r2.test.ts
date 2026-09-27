@@ -108,6 +108,50 @@ describe("ADV systemWrite", () => {
     expect(edges.map(e => e.target_id)).toEqual(["a-0", "b-0"]);
   });
 
+  it("M: replacing an insight also deletes a drawn_from link the USER made by hand", async () => {
+    sqlite.seed({ id: "ins-old", content: "Old insight text", createdAt: now - 3 * DAY, tags: ["auto-insight"], source: "system" });
+    sqlite.seed({ id: "mine", content: "my evidence", createdAt: now - 9 * DAY, tags: [] });
+    await env.DB.prepare(`INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at) VALUES ('e-user', 'ins-old', 'mine', 'drawn_from', 1, 'explicit', '{}', 1, 1)`).run();
+    seedPair();
+    target = "ins-old"; score = 0.9;
+    decision = () => JSON.stringify({ action: "replace", target_id: "ins-old" });
+    insightAI();
+    await runWeeklyInsights(env, ctx);
+    const edges = (await env.DB.prepare(`SELECT target_id FROM edges WHERE source_id = 'ins-old'`).all()).results as any[];
+    expect(edges.some(e => e.target_id === "mine")).toBe(true); // fails: only a-0, b-0 remain
+  });
+
+  it("N: a user edit landing between the merge's read and its UPDATE survives; the system text lands as its own row", async () => {
+    sqlite.seed({ id: "old-digest", content: "Older digest", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "system" });
+    target = "old-digest"; score = 0.9;
+    decision = () => JSON.stringify({ action: "merge", target_id: "old-digest", merged_content: "combined digest text" });
+    const upserts: { id: string; metadata: any }[] = [];
+    (env.VECTORIZE as any).upsert = async (v: any[]) => { upserts.push(...v); return { mutationId: "m" }; };
+    // The person's edit commits after the merge read the row and before its UPDATE runs.
+    const db = env.DB as any;
+    const realPrepare = db.prepare.bind(db);
+    let raced = false;
+    db.prepare = (sql: string) => {
+      if (!raced && sql.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?")) {
+        raced = true;
+        sqlite.db.prepare(`UPDATE entries SET content = 'MY EDIT', tags = '["synthesized","work","user-edited"]' WHERE id = 'old-digest'`).run();
+      }
+      return realPrepare(sql);
+    };
+    await compressTag("work", env, ctx);
+    expect(raced).toBe(true);
+    const rows = sqlite.rows();
+    const mine = rows.find(x => x.id === "old-digest")!;
+    expect(mine.content).toBe("MY EDIT");
+    expect(JSON.parse(String(mine.tags))).toContain("user-edited");
+    const others = rows.filter(x => String(x.tags).includes('"synthesized"') && x.id !== "old-digest");
+    expect(others).toHaveLength(1);
+    expect(String(others[0].content)).not.toContain("MY EDIT");
+    // The vectors under the user's row describe the user's text again, not the system's.
+    const last = upserts.filter(v => v.id === "old-digest").pop()!;
+    expect(last.metadata.content).toBe("MY EDIT");
+  });
+
   it("I: a legacy row (empty actor, ordinary source) a user tagged synthesized is not a system row", async () => {
     sqlite.seed({ id: "legacy", content: "My own note that I tagged synthesized", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "api" });
     target = "legacy"; score = 0.9;
@@ -144,13 +188,13 @@ describe("ADV systemWrite", () => {
     expect(isTopicTag("user-edited")).toBe(false);
   });
 
-  it("G: an owner-edited digest is still a system row and the next digest overwrites the edit", async () => {
+  it("G: an owner-edited digest is no longer a system row, so the next digest leaves the edit alone", async () => {
     const { updateEntryContent } = await import("../../src/capture/store");
     sqlite.seed({ id: "old-digest", content: "Older digest", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "system" });
     await updateEntryContent(env, "old-digest", "MY OWN CORRECTION: the launch is in March, not May", undefined, undefined, undefined, { workspaceId: "", actorId: "owner" });
     target = "old-digest"; score = 0.9;
     decision = () => JSON.stringify({ action: "merge", target_id: "old-digest", merged_content: "combined digest text" });
     await compressTag("work", env, ctx);
-    expect(String(sqlite.rows().find(x => x.id === "old-digest")!.content)).toContain("MY OWN CORRECTION"); // gets "combined digest text"
+    expect(String(sqlite.rows().find(x => x.id === "old-digest")!.content)).toContain("MY OWN CORRECTION"); // the digest text does not replace it
   });
 });

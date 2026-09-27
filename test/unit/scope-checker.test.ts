@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (139 queries, 70 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (140 queries, 71 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1228,7 +1228,9 @@ describe("the checker over the real source tree", () => {
     // per-term match levels. Same rows, same scope.
     // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4: the weekly insight pass drops the old
     // drawn_from edges of an insight it replaces, by that insight's own id.
-    ).toEqual({ queries: 139, exempt: 70, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4's compare-and-set on a system merge
+    // (src/capture/entry.ts): the merge target read a moment earlier under the write's own workspace.
+    ).toEqual({ queries: 140, exempt: 71, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

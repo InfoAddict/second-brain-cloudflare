@@ -553,7 +553,7 @@ export async function runWeeklyInsights(
         `UPDATE insight_candidates SET status = 'used' WHERE id = ?`).bind(id)),
       ...[...new Set(replacedInsightIds)].map(id => env.DB.prepare(
         // scope-exempt: cron: by-id, an insight the system job just replaced in the workspace it was drawing from
-        `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from'`).bind(id)),
+        `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from' AND provenance = 'system'`).bind(id)),
       ...drawnFromPairs
         .map(({ insightId, targetId, workspaceId }) => edgeInsertStatement(
           insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId }, env,
