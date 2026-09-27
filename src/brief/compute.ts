@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import type { ProjectRow } from "../projects/registry";
 import { projectFilterSql } from "../projects/filter";
-import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
+import { scopeWhereForRead, readScopeWorkspaces, type ScopeClause } from "../lib/scope";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
 import { PENDING_INSIGHT_SQL } from "../memory/patterns";
@@ -69,8 +69,21 @@ const RESURFACE_RECENT_WINDOW_DAYS = 30;
  */
 const RESURFACE_EXCLUDE_BOUND_CAP = 20;
 
+/**
+ * Same predicate as scopeWhereForRead, but a single team keeps its own placeholder (=?, one bound
+ * value — no reason to widen that) while the general many-workspace case binds the whole list as one
+ * JSON parameter instead of one placeholder per workspace. Every brief query below combines this with
+ * a project filter (up to MAX_PROJECT_PATTERNS LIKE patterns), and the combined width otherwise
+ * crosses D1's 100-bound-parameter ceiling for a member in enough teams — the resurface pick already
+ * has its own budget guard for the same reason; the other four brief queries did not.
+ */
+function briefWorkspaceScope(auth: Identity, layer?: "personal" | "company", teamId?: string): ScopeClause {
+  if (teamId) return scopeWhereForRead(auth, { layer, teamId });
+  return { clause: `workspace_id IN (SELECT value FROM json_each(?))`, bindings: [JSON.stringify(readScopeWorkspaces(auth, { layer }))] };
+}
+
 function briefScope(auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): ScopeClause {
-  const baseScope = scopeWhereForRead(auth, { layer, teamId });
+  const baseScope = briefWorkspaceScope(auth, layer, teamId);
   const project = projectRows ? projectFilterSql(projectRows) : null;
   return project
     ? { clause: `${baseScope.clause} AND ${project.clause}`, bindings: [...baseScope.bindings, ...project.bindings] }
