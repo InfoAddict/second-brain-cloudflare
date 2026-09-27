@@ -570,6 +570,14 @@ describe("dashboard i18n", () => {
       by: "renderViewStatus() in public/js/memory-crud.js, keyed by STATUS_HELP_KEYS[status]",
     },
     {
+      keys: ["undo.done", "undo.dateRemoved"],
+      by: "resolveDue()'s undo toast in public/js/due.js, keyed by whether the resolve went to /loops/resolve or /due/clear",
+    },
+    {
+      keys: ["undo.done", "undo.notTask"],
+      by: "resolveLoop()'s undo toast in public/js/loops.js, keyed by the 'done'/'not-task' action",
+    },
+    {
       prefix: "common.source",
       by: "public/utils.js t(key), through the SOURCE_LABELS map keyed by the capture's `source` value",
     },
@@ -788,6 +796,8 @@ describe("dashboard i18n", () => {
       "public/js/history-view.js t(`history.${key}`)",
       "public/js/history-view.js t(`history.${key}`)",
       "public/js/memory-crud.js t(STATUS_HELP_KEYS[status] || '')",
+      "public/js/due.js t(wentToLoops ? 'undo.done' : 'undo.dateRemoved')",
+      "public/js/loops.js t(action === 'done' ? 'undo.done' : 'undo.notTask')",
     ].sort();
 
     function dynamicIdentity(file: string, fn: string, snippet: string): string {

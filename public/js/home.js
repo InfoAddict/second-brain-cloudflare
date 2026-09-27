@@ -250,6 +250,26 @@ async function submitHome() {
     } else {
       receipts.innerHTML = ''
       receipts.appendChild(captureReceipt(result, tags))
+      // A fresh capture has no earlier version, so "Undo" here means forget
+      // rather than the usual POST /undo, and the toast that follows says so.
+      if (result.id && typeof showToast === 'function') {
+        showToast(t('undo.saved'), {
+          action: t('history.undo'),
+          onAction: async () => {
+            try {
+              await fetch(`${WORKER_URL}/forget`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+                body: JSON.stringify({ id: result.id }),
+              })
+              showToast(t('undo.trashed'))
+              refreshAll()
+            } catch (e) {
+              showToast(e.message || t('team.actionFailed'))
+            }
+          },
+        })
+      }
     }
     // Outside the try: a refresh hiccup must never rewrite a successful
     // capture's receipt as "could not save" — that lie cost a user trust once.
