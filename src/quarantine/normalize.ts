@@ -115,7 +115,7 @@ const RGI_SUBDIVISION_FLAG_RE =
 // every pattern runs on the decoded text. Covered: HTML entities (decimal,
 // hex, the named ones that stand for spaces and punctuation, and the
 // letter-form ones like &iscr; and &iacute;), percent-encoding including
-// UTF-8, JS \u, \u{} and \x escapes, and quoted-printable bytes and soft
+// UTF-8 and the legacy %uXXXX, JS \u, \u{} and \x escapes, CSS \hex escapes, and quoted-printable bytes and soft
 // line breaks. Layers are unwrapped up to DECODE_MAX_PASSES; a fourth layer is
 // left as is. Every decoding shortens the text, so the byte budget holds.
 
@@ -129,6 +129,10 @@ const PERCENT_RUN_RE = /(?:%[0-9a-fA-F]{2})+/g;
 const QP_SOFT_BREAK_RE = /=\r?\n/g;
 const QP_RUN_RE = /(?:=[0-9a-fA-F]{2})+/g;
 const JS_ESCAPE_RE = /\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))/g;
+// Legacy JavaScript escape() output, %uXXXX, which browsers still decode via unescape().
+const PERCENT_U_RE = /%[uU]([0-9a-fA-F]{4})/g;
+// CSS: a backslash, 1 to 6 hex digits, and one optional whitespace terminator.
+const CSS_ESCAPE_RE = /\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?/g;
 
 // A Map, so a name like "constructor" can never resolve to an Object prototype member.
 const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map(Object.entries({
@@ -169,10 +173,15 @@ function decodeOnce(s: string): string {
       .replace(NAMED_ENTITY_RE, (m, name: string) =>
         NAMED_ENTITIES.get(name) ?? NAMED_ENTITIES.get(name.toLowerCase()) ?? LETTER_ENTITY_RE.exec(name)?.[1] ?? m);
   }
-  if (s.includes("%")) s = s.replace(PERCENT_RUN_RE, run => decodeByteRun(run, "%"));
+  if (s.includes("%")) {
+    s = s
+      .replace(PERCENT_U_RE, (m, u4: string) => codePointOrNull(parseInt(u4, 16)) ?? m)
+      .replace(PERCENT_RUN_RE, run => decodeByteRun(run, "%"));
+  }
   if (s.includes("\\")) {
     s = s.replace(JS_ESCAPE_RE, (m, braced: string | undefined, u4: string | undefined, x2: string | undefined) =>
-      codePointOrNull(parseInt(braced ?? u4 ?? x2 ?? "", 16)) ?? m);
+      codePointOrNull(parseInt(braced ?? u4 ?? x2 ?? "", 16)) ?? m)
+      .replace(CSS_ESCAPE_RE, (m, hex: string) => codePointOrNull(parseInt(hex, 16)) ?? m);
   }
   if (s.includes("=")) s = s.replace(QP_RUN_RE, run => decodeByteRun(run, "="));
   return s;
