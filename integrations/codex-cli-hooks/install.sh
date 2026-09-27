@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Installs, upgrades, checks or removes the Second Brain hooks in Codex CLI's
+# user hooks file (~/.codex/hooks.json).
+#
+#   bash install.sh https://your-worker.workers.dev your-token   install or upgrade
+#   bash install.sh                                              reuse ~/.config/second-brain/config.json, or prompt
+#   bash install.sh --check                                      prove the hooks reach the Worker
+#   bash install.sh --uninstall                                  remove only our entries
+#
+# Credentials go to ~/.config/second-brain/config.json (the same file the CLI,
+# the desktop app and every other adapter already use), never into hooks.json
+# or the hook command line. Re-running always reconciles: our entries are
+# replaced, everything else in the file is preserved byte-for-byte as JSON, and
+# a malformed file is refused rather than overwritten.
+#
+# This writes the USER-level hooks file. Codex CLI also supports a
+# PROJECT-level ~/.codex/hooks.json (per checkout) and an inline hooks table in
+# config.toml - see README.md for both as hand-editable snippets; this script
+# does not write either of those, so it never has to carry a TOML writer.
+#
+# The exact SessionStart/SessionEnd hooks.json schema below (field names,
+# whether a "matcher" concept exists, the timeout field's unit) is UNVERIFIED
+# against a real Codex CLI install - see README.md's "Unverified" section.
+
+set -euo pipefail
+
+HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOKS_FILE="${CODEX_HOOKS_FILE:-$HOME/.codex/hooks.json}"
+CONFIG_DIR="$HOME/.config/second-brain"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+
+MODE="install"
+case "${1:-}" in
+  --check) MODE="check"; shift ;;
+  --uninstall) MODE="uninstall"; shift ;;
+  -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+esac
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Error: Node.js is required to run the hook scripts." >&2
+  exit 1
+fi
+
+if [[ "$MODE" == "check" ]]; then
+  exec node "$HOOKS_DIR/check.js"
+fi
+
+if [[ "$MODE" == "install" ]]; then
+  WORKER_URL="${1:-}"
+  TOKEN="${2:-}"
+  if [[ -z "$WORKER_URL" && -z "$TOKEN" && -f "$CONFIG_FILE" ]]; then
+    echo "Using credentials from $CONFIG_FILE"
+  else
+    if [[ -z "$WORKER_URL" || -z "$TOKEN" ]]; then
+      if [[ ! -t 0 ]]; then
+        echo "Usage: bash install.sh <worker-url> <auth-token>   (no TTY to prompt on)" >&2
+        exit 2
+      fi
+      [[ -z "$WORKER_URL" ]] && read -rp "Enter your Second Brain worker URL (e.g. https://your-worker.workers.dev): " WORKER_URL
+      [[ -z "$TOKEN" ]] && { read -rsp "Enter your AUTH_TOKEN: " TOKEN; echo; }
+    fi
+    while [[ "$WORKER_URL" == */ ]]; do WORKER_URL="${WORKER_URL%/}"; done
+    if [[ ! "$WORKER_URL" =~ ^https?:// ]]; then
+      echo "Error: worker URL must start with http:// or https://" >&2
+      exit 1
+    fi
+    mkdir -p "$CONFIG_DIR"
+    WORKER_URL="$WORKER_URL" TOKEN="$TOKEN" CONFIG_FILE="$CONFIG_FILE" node - <<'NODEEOF'
+const fs = require('fs');
+const { WORKER_URL, TOKEN, CONFIG_FILE } = process.env;
+let existing = {};
+try { existing = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) || {}; } catch {}
+const next = { ...existing, workerUrl: WORKER_URL, authToken: TOKEN };
+const tmp = `${CONFIG_FILE}.tmp-${process.pid}`;
+fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+fs.renameSync(tmp, CONFIG_FILE);
+NODEEOF
+    chmod 600 "$CONFIG_FILE"
+    echo "Wrote $CONFIG_FILE (mode 600)"
+  fi
+fi
+
+mkdir -p "$(dirname "$HOOKS_FILE")"
+
+HOOKS_FILE="$HOOKS_FILE" HOOKS_DIR="$HOOKS_DIR" MODE="$MODE" node - <<'NODEEOF'
+const fs = require('fs');
+const { HOOKS_FILE, HOOKS_DIR, MODE } = process.env;
+
+let config = {};
+if (fs.existsSync(HOOKS_FILE)) {
+  const raw = fs.readFileSync(HOOKS_FILE, 'utf8');
+  if (raw.trim()) {
+    try { config = JSON.parse(raw); } catch (e) {
+      console.error(`Refusing to touch ${HOOKS_FILE}: it is not valid JSON (${e.message}).`);
+      console.error('Codex CLI hooks.json must be plain JSON - no comments or trailing commas. Fix the file and re-run.');
+      process.exit(1);
+    }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      console.error(`Refusing to touch ${HOOKS_FILE}: expected a JSON object at the top level.`);
+      process.exit(1);
+    }
+  }
+}
+
+// Ours = any entry whose command runs a script from this folder, regardless of
+// the checkout path. Windows paths normalised.
+const isOurs = (entry) => Array.isArray(entry?.hooks) && entry.hooks.some((h) =>
+  typeof h?.command === 'string' && h.command.replace(/\\/g, '/').includes('/codex-cli-hooks/'));
+
+config.hooks = config.hooks && typeof config.hooks === 'object' ? config.hooks : {};
+for (const ev of ['SessionStart', 'SessionEnd']) {
+  config.hooks[ev] = (Array.isArray(config.hooks[ev]) ? config.hooks[ev] : []).filter((e) => !isOurs(e));
+}
+
+if (MODE !== 'uninstall') {
+  const q = (p) => `"${p.replace(/"/g, '\\"')}"`;
+  config.hooks.SessionStart.push({
+    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-start.js`)}` }],
+  });
+  config.hooks.SessionEnd.push({
+    // session-end.js itself only reads stdin and spawns a detached worker, so
+    // it needs almost none of this - but Codex's own documented default for
+    // this event is 1s, so ask explicitly for its documented max as headroom.
+    // Codex's hooks.json documents this field in SECONDS, not milliseconds
+    // (a review caught an earlier version of this file asking for 3000s).
+    // UNVERIFIED: whether this field is actually named "timeout".
+    hooks: [{ type: 'command', command: `node ${q(`${HOOKS_DIR}/session-end.js`)}`, timeout: 3 }],
+  });
+}
+for (const ev of ['SessionStart', 'SessionEnd']) if (!config.hooks[ev].length) delete config.hooks[ev];
+if (!Object.keys(config.hooks).length) delete config.hooks;
+
+if (fs.existsSync(HOOKS_FILE)) fs.copyFileSync(HOOKS_FILE, `${HOOKS_FILE}.bak-${Date.now()}`);
+const tmp = `${HOOKS_FILE}.tmp-${process.pid}`;
+fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n');
+fs.renameSync(tmp, HOOKS_FILE);
+console.log(`${MODE === 'uninstall' ? 'Removed Second Brain hooks from' : 'Updated'} ${HOOKS_FILE}`);
+NODEEOF
+
+if [[ "$MODE" == "uninstall" ]]; then
+  echo "Done. Credentials in $CONFIG_FILE were left in place."
+  exit 0
+fi
+
+echo
+echo "Done. Second Brain hooks installed for Codex CLI."
+echo "  SessionStart (startup, resume, clear, compact): recalls context for the current project"
+echo "  SessionEnd (close, archive, delete, idle):       saves the conversation (needs Worker 3.0+)"
+echo
+echo "Sessions already open keep the old hook config - restart them."
+echo "Verify with: bash $HOOKS_DIR/install.sh --check"

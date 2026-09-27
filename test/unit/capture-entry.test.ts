@@ -677,6 +677,17 @@ describe("captureEntry()", () => {
     expect(JSON.parse(added!.tags)).toContain("duplicate-candidate");
   });
 
+  it("a codex-session transcript never replaces a memory of another source (same rule as claude-code)", async () => {
+    db.entries = [existingNote("claude")];
+    env = makeTestEnv(db, { VECTORIZE: nearMatch(), AI: makeContradictionAI('{"action":"replace","target_id":"existing"}') });
+    const { ctx } = makeCtx();
+    const result = await captureEntry("User: we decided on Vectorize.\n\nAssistant: noted.", ["proj"], "codex-session", env, ctx);
+    expect(result.status).toBe("flagged");
+    if (result.status !== "flagged") return;
+    expect(db.entries).toHaveLength(2);
+    expect(db.entries.find(e => e.id === "existing")!.content).toBe("We decided to use Vectorize for semantic search.");
+  });
+
   it("a transcript may replace its own earlier capture (same source)", async () => {
     db.entries = [existingNote("claude-code")];
     env = makeTestEnv(db, { VECTORIZE: nearMatch(), AI: makeContradictionAI('{"action":"replace","target_id":"existing"}') });

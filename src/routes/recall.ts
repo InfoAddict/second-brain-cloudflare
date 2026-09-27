@@ -142,11 +142,18 @@ export async function handleRecallRoutes(
     // Off by default: `why` adds a structured trace to every result.
     const explain = ["1", "true", "yes"].includes((url.searchParams.get("explain") ?? "").toLowerCase());
 
+    // Opt-out only: recallEntries already defaults synthesize to true (src/recall/search.ts), so
+    // omitting this or passing anything else keeps every existing caller byte-identical. Hooks
+    // that want recall without an LLM synthesis call (e.g. Cursor's per-prompt recall, R1 in
+    // 20-free-tier-ledger.md) pass synthesize=false or synthesize=0.
+    const synthesizeParam = url.searchParams.get("synthesize");
+    const synthesize = synthesizeParam === "false" || synthesizeParam === "0" ? false : undefined;
+
     const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
     if (project instanceof Response) return project;
 
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain, synthesize }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
 
     if (!matches.length) {
       return json({

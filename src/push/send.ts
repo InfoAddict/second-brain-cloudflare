@@ -7,6 +7,7 @@
 import type { Env } from "../env";
 import { resolveConfig, type Config } from "../config";
 import { DUE_SQL } from "../when/input";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
 import { fromBase64Url } from "./base64url";
@@ -205,7 +206,7 @@ export async function pushDueItems(env: Env, workspaceId: string, resolved?: Rea
   const config = resolved ?? await resolveConfig(env);
   const dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label FROM entries
-     WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
+     WHERE ${DUE_SQL} AND ${NOT_HELD_SQL} AND when_at <= ? AND workspace_id = ?
      ORDER BY when_at ASC LIMIT ?`,
   ).bind(now, workspaceId, MAX_NOTIFICATIONS_PER_RUN * 5).all()).results ?? []) as Record<string, any>[];
 

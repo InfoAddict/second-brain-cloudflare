@@ -36,6 +36,7 @@ import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
+import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -477,6 +478,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // Same grammar checks, same messages, as POST /capture. Bad input fails before any write.
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
+      // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note.
+      if (isOverContentLimit(content)) return { content: [{ type: "text", text: tooLargeMcpMessage() }] };
       let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
       if (when !== undefined) {
         const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
@@ -606,6 +609,13 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(source) }] };
       }
 
+      // Rahil's decision (18-copy-deck.md 6.8): checks the RESULTING total, not the addition
+      // alone, and reads "Not added" rather than "Not saved" — the new text is what could not
+      // be added, the existing memory is untouched.
+      if (contentByteLength(existingContent) + contentByteLength(a) > MAX_CONTENT_BYTES) {
+        return { content: [{ type: "text", text: tooLargeMcpMessage("append") }] };
+      }
+
       let indexed: boolean;
       try {
         indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx);
@@ -658,6 +668,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
+      // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note.
+      if (isOverContentLimit(newContent)) return { content: [{ type: "text", text: tooLargeMcpMessage() }] };
 
       // Refuse before anything is written — same guard, same read, as POST /update.
       const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, source");
