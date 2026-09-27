@@ -154,10 +154,6 @@ export async function revertEntry(
     }
   }
   const nextVectorIds = targetStatus === "deprecated" ? "[]" : newVectorIds ? JSON.stringify(newVectorIds) : row.vector_ids;
-  const nextWhenAt = restoreWhen ? nextWhen!.when_at ?? null : row.when_at;
-  const nextWhenKind = restoreWhen ? nextWhen!.when_kind ?? null : row.when_kind;
-  const nextWhenSource = restoreWhen ? nextWhen!.when_source ?? null : row.when_source;
-  const nextWhenLabel = restoreWhen ? nextWhen!.when_label ?? null : row.when_label;
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
@@ -167,10 +163,14 @@ export async function revertEntry(
   const pinnedWorkspaceId = authorizedWorkspaceId ?? row.workspace_id;
   const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: pinnedWorkspaceId });
   const p = new Params();
-  // One literal, every column always in the SET list: a column not being restored just rebinds its
-  // own current value, which keeps this one statement shape instead of several assembled fragments.
+  // The when_* columns are set only when this revert is actually restoring the date. Rebinding them
+  // from this call's own stale JS read, as every other column here does, would silently erase a date
+  // some other write (the unversioned when pass, when/pass.ts) set in the meantime (U7).
+  const whenSet = restoreWhen
+    ? `, when_at = ${p.add(nextWhen!.when_at ?? null)}, when_kind = ${p.add(nextWhen!.when_kind ?? null)}, when_source = ${p.add(nextWhen!.when_source ?? null)}, when_label = ${p.add(nextWhen!.when_label ?? null)}`
+    : "";
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}, vector_ids = ${p.add(nextVectorIds)}, when_at = ${p.add(nextWhenAt)}, when_kind = ${p.add(nextWhenKind)}, when_source = ${p.add(nextWhenSource)}, when_label = ${p.add(nextWhenLabel)} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}, vector_ids = ${p.add(nextVectorIds)}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   let results;
   try {
