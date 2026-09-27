@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULTS } from "../../src/config";
-import { scoreWrite, type QuarantineChannel, type ScoreInput } from "../../src/quarantine/score";
+import { QUARANTINE_WARMUP_SAMPLE, scoreWrite, type QuarantineChannel, type ScoreInput } from "../../src/quarantine/score";
 import {
   budgetSlice, normalizeForScoring,
   QUARANTINE_SCORE_CHARS, QUARANTINE_SCORE_HEAD_CHARS, QUARANTINE_SCORE_TAIL_CHARS,
@@ -297,6 +297,28 @@ describe("the scorer reads at most 32 KB: the first 24 KB and the last 8 KB", ()
     expect(n.scan.length).toBeLessThanOrEqual(QUARANTINE_SCORE_CHARS + 4);
     expect(n.partial).toBe(true);
     expect(score("ﷺ".repeat(4000), "mcp").partial).toBe(true);
+  });
+});
+
+describe("patterns and tables are compiled at module load, not on the first write", () => {
+  it("the warm-up sample reaches every pattern the scorer can run", () => {
+    // V8 compiles a regex to native code on first use when the subject is
+    // at least 1,000 characters; a shorter sample would leave that to the write.
+    expect(QUARANTINE_WARMUP_SAMPLE.length).toBeGreaterThanOrEqual(1000);
+    const r = scoreWrite({
+      content: QUARANTINE_WARMUP_SAMPLE, tags: ["capsule:core"], source: "claude", channel: "mcp", kind: "create",
+      mcpWritesInWindow: 0, capsuleTagsChanged: true,
+    }, CFG);
+    const ids = new Set(r.signals.map(s => s.id));
+    for (const id of ["I1", "I2", "I3", "I4", "I5", "I6", "H1", "H2", "H3", "H4", "H5", "C1"]) expect(ids.has(id as never), id).toBe(true);
+    expect(r.signals.some(s => s.damped)).toBe(true);
+  });
+
+  it("the sample exercises the Unicode fold: confusables, compatibility forms, diacritics and emoji sequences", () => {
+    expect(QUARANTINE_WARMUP_SAMPLE).toMatch(/[аое]/);
+    expect(QUARANTINE_WARMUP_SAMPLE).toMatch(/[ﬁＡ-ｚ]/);
+    expect(QUARANTINE_WARMUP_SAMPLE).toMatch(/[À-ÿ]/);
+    expect(QUARANTINE_WARMUP_SAMPLE).toMatch(/\p{Extended_Pictographic}‍\p{Extended_Pictographic}/u);
   });
 });
 
