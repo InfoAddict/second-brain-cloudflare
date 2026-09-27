@@ -16,12 +16,13 @@ export function makeVectorizeMock(overrides: Partial<VectorizeIndex> = {}): Vect
 
 export function makeAIMock(): Ai {
   return {
-    run: vi.fn().mockImplementation(async (model: string) => {
+    run: vi.fn().mockImplementation(async (model: string, input?: { text?: string | string[] }) => {
       // Every bge-* model here is an embedding call (bge-small is the
       // shipped default; bge-base/large/m3 are config-selectable) — anything
       // else is assumed to be an LLM chat completion, below.
+      // One vector per input text, as the real binding returns for a batch.
       if (model.startsWith("@cf/baai/bge"))
-        return { data: [new Array(384).fill(0.1)] };
+        return { data: (Array.isArray(input?.text) ? input.text : [input?.text]).map(() => new Array(384).fill(0.1)) };
       return new ReadableStream({
         start(c) {
           c.enqueue(new TextEncoder().encode('data: {"response":"3"}\n\n'));

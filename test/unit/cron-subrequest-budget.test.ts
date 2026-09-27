@@ -106,7 +106,8 @@ const HELD_DIGEST_D1_WORST_CASE = 1;
 // T-0089.1.1 close-out: the nightly vectorize-pending pass (src/vectorize/pending.ts) costs its candidate
 // read on every night, plus ONE write batch on a night with deferred rows (config resolves only then).
 // A row that loses its content CAS to a concurrent edit pays restoreRowVectors' repair on top, rarely.
-const VECTORIZE_PENDING_D1_WORST_CASE = 2;
+// Round 3: plus the content read of the rows it chose (it plans from lengths first): 3.
+const VECTORIZE_PENDING_D1_WORST_CASE = 3;
 // The platform ceiling this suite's one external caller — the integration
 // sync's feed fetch — actually has to respect (see "the integration schedule"
 // tests below).

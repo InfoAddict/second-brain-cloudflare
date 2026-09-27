@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
 import { CHUNK_MAX_CHARS, MIRRORED_SOURCES, VECTORIZE_UPSERT_BATCH, WRITE_CAS_ATTEMPTS } from "../constants";
-import { embed } from "../lib/ai";
+import { embed, embedMany } from "../lib/ai";
 import { inferEdgesOnWrite } from "../graph/edges";
 import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
@@ -79,7 +79,9 @@ export async function upsertEntryVectors(
   source: string,
   now: number,
   config: Readonly<Config> = DEFAULTS,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  writeCtx: WriteContext = OWNER_WRITE_CONTEXT,
+  /** Embed chunks embedBatchSize() per AI call (the nightly backfill), rather than one call each. */
+  opts: { batchEmbeds?: boolean } = {},
 ): Promise<StoredEntry> {
   // A mirrored record is indexed by its first chunk only. `chunkText` splits at
   // CHUNK_MAX_CHARS and every chunk below gets its own vector, so a long one from
@@ -96,6 +98,7 @@ export async function upsertEntryVectors(
   const allChunks = chunkText(content);
   const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
 
+  const batched = opts.batchEmbeds ? await embedMany(chunks, env, config) : null;
   const vectors = await Promise.all(
     chunks.map(async (chunk, i) => {
       const metadata: Record<string, any> = {
@@ -118,7 +121,7 @@ export async function upsertEntryVectors(
 
       return {
         id: chunks.length === 1 ? id : `${id}-chunk-${i}`,
-        values: await embed(chunk, env, config),
+        values: batched ? batched[i] : await embed(chunk, env, config),
         metadata,
       };
     })

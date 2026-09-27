@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import worker from "../../src/index";
 import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
-import { makeAIMock } from "../helpers/make-env";
 import {
-  runNightlyVectorizePending, VECTORIZE_PENDING_NIGHTLY_ROWS, VECTORIZE_PENDING_NIGHTLY_EMBEDS,
+  runNightlyVectorizePending, VECTORIZE_PENDING_NIGHTLY_ROWS,
 } from "../../src/vectorize/pending";
 import { DEFAULTS } from "../../src/config";
 
@@ -44,24 +43,7 @@ describe("nightly vectorize-pending pass", () => {
     expect(second.every(Boolean)).toBe(true);
   }, 30000);
 
-  it("stays inside its embed budget: a row too large for one night is skipped, not allowed to block the rows behind it", async () => {
-    const ai = makeAIMock();
-    t = await makeTrashEnv({ AI: ai });
-    // Far more chunks than one night's embed budget allows.
-    t.seed("huge", { content: "A sentence of filler text. ".repeat(VECTORIZE_PENDING_NIGHTLY_EMBEDS * 120), created_at: OLD - 10 });
-    t.seed("small1", { content: "small one", created_at: OLD });
-    t.seed("small2", { content: "small two", created_at: OLD + 1 });
-    const run = vi.mocked(ai.run);
-    run.mockClear();
-
-    const result = await runNightlyVectorizePending(t.env, DEFAULTS);
-    const embeds = run.mock.calls.filter(([model]) => String(model).startsWith("@cf/baai/bge")).length;
-    expect(embeds).toBeLessThanOrEqual(VECTORIZE_PENDING_NIGHTLY_EMBEDS);
-    expect(await indexed("huge")).toBe(false);
-    expect(await indexed("small1")).toBe(true);
-    expect(await indexed("small2")).toBe(true);
-    expect(result).toEqual({ processed: 2, failed: 0 });
-  });
+  // Large rows: test/integration/vectorize-pending-large.test.ts (a row is never skipped for its size).
 
   it("a failing row is counted and does not stop the rest", async () => {
     t = await makeTrashEnv();

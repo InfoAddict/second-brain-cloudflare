@@ -89,12 +89,13 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/lifecycle.ts', line: 195, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 56, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 215, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 245, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 266, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 474, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 642, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 728, kind: 'snapshot' },
+  // MOVED +3 below line 56 (T-0089.1.1 round 3): upsertEntryVectors takes an opt-in batchEmbeds option.
+  { file: 'src/capture/store.ts', line: 218, kind: 'exempt' },
+  { file: 'src/capture/store.ts', line: 248, kind: 'exempt' },
+  { file: 'src/capture/store.ts', line: 269, kind: 'exempt' },
+  { file: 'src/capture/store.ts', line: 477, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 645, kind: 'snapshot' },
+  { file: 'src/capture/store.ts', line: 731, kind: 'snapshot' },
   { file: 'src/compression/digest.ts', line: 102, kind: 'snapshot' },
   // MOVED 26 -> 30 (T-0089.1.1 round 2): the id-uniqueness comment above import's insert, which now mints a fresh id in-statement.
   { file: 'src/entries/import.ts', line: 30, kind: 'exempt' },
@@ -125,7 +126,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
-  { file: 'src/vectorize/pending.ts', line: 78, kind: 'exempt' },
+  // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
+  { file: 'src/vectorize/pending.ts', line: 89, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 
