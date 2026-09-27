@@ -152,6 +152,47 @@ describe("ADV systemWrite", () => {
     expect(last.metadata.content).toBe("MY EDIT");
   });
 
+  function statefulVectors() {
+    const store = new Map<string, any>();
+    const vz = env.VECTORIZE as any;
+    vz.upsert = async (v: any[]) => { for (const x of v) store.set(x.id, x.metadata); return { mutationId: "m" }; };
+    vz.deleteByIds = async (ids: string[]) => { for (const i of ids) store.delete(i); return { mutationId: "m" }; };
+    return store;
+  }
+  function raceOnMergeUpdate(action: () => void) {
+    const db = env.DB as any; const real = db.prepare.bind(db); let raced = false;
+    db.prepare = (sql: string) => {
+      if (!raced && sql.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?")) { raced = true; action(); }
+      return real(sql);
+    };
+  }
+  const LONG = "combined digest text ".repeat(200); // multi-chunk merge
+
+  it("P2: lost merge + restore embed failure leaves the user row indexed by the system text", async () => {
+    sqlite.seed({ id: "d", content: "Older digest", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "system", vectorIds: ["d"] });
+    const store = statefulVectors(); store.set("d", { content: "Older digest", parentId: "d" });
+    target = "d"; score = 0.9;
+    decision = () => JSON.stringify({ action: "merge", target_id: "d", merged_content: LONG });
+    const ai = env.AI as any; const base = ai.run.getMockImplementation(); let failEmbeds = false;
+    ai.run.mockImplementation(async (m: string, o: any) => { if (failEmbeds && m.startsWith("@cf/baai/bge")) throw new Error("embed 503"); return base(m, o); });
+    raceOnMergeUpdate(() => { sqlite.db.prepare(`UPDATE entries SET content = 'MY EDIT', tags = '["synthesized","work","user-edited"]' WHERE id = 'd'`).run(); failEmbeds = true; });
+    await compressTag("work", env, ctx);
+    // content = "MY EDIT", vector_ids = ["d-chunk-0","d-chunk-1","d-chunk-2"], all three vectors hold "combined digest text"
+    expect([...store.values()].filter(m => m.parentId === "d").every(m => !String(m.content).includes("combined digest"))).toBe(true);
+    // The repair job (/vectorize-pending) re-indexes a row whose vector_ids is empty.
+    expect(sqlite.rows().find(x => x.id === "d")!.vector_ids).toBe("[]");
+  });
+
+  it("P3: row forgotten during the merge re-embed leaves the merge's vectors orphaned", async () => {
+    sqlite.seed({ id: "d", content: "Older digest", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "system", vectorIds: ["d"] });
+    const store = statefulVectors(); store.set("d", { content: "Older digest", parentId: "d" });
+    target = "d"; score = 0.9;
+    decision = () => JSON.stringify({ action: "merge", target_id: "d", merged_content: LONG });
+    raceOnMergeUpdate(() => { sqlite.db.prepare(`DELETE FROM entries WHERE id = 'd'`).run(); store.delete("d"); });
+    await compressTag("work", env, ctx);
+    expect([...store.entries()].filter(([, m]) => m.parentId === "d").map(([k]) => k)).toEqual([]); // gets d-chunk-0..2
+  });
+
   it("I: a legacy row (empty actor, ordinary source) a user tagged synthesized is not a system row", async () => {
     sqlite.seed({ id: "legacy", content: "My own note that I tagged synthesized", createdAt: now - 3 * DAY, tags: ["synthesized", "work"], source: "api" });
     target = "legacy"; score = 0.9;

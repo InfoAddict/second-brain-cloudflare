@@ -17,6 +17,7 @@ import { rememberTags } from "../tags/vocabulary";
 import { isCapsuleTag, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES } from "../constants";
+import { deleteVectorIds } from "../vectorize/batch";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
 
@@ -132,11 +133,26 @@ async function restoreRowVectors(
       // scope-exempt: by-id: the merge target this call just read under the write's own workspace
       `SELECT content, tags FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
-    if (!current) return;
+    if (!current) {
+      // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
+      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
+      return;
+    }
     const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, writeCtx);
     await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
   } catch (e) {
     console.error("Restoring vectors after a lost system merge failed (non-fatal):", e);
+    // The row's vector_ids now names vectors holding the system's text. Emptying them makes
+    // /vectorize-pending re-index the row from its own content, and the vectors go best-effort.
+    try {
+      await env.DB.prepare(
+        // scope-exempt: by-id: the merge target this call just read under the write's own workspace
+        `UPDATE entries SET vector_ids = '[]' WHERE id = ?`
+      ).bind(id).run();
+      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
+    } catch (e2) {
+      console.error("Emptying vector_ids after a lost system merge failed (non-fatal):", e2);
+    }
   }
 }
 

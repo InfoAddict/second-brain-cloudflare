@@ -1228,8 +1228,10 @@ describe("the checker over the real source tree", () => {
     // per-term match levels. Same rows, same scope.
     // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4: the weekly insight pass drops the old
     // drawn_from edges of an insight it replaces, by that insight's own id.
-    // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4's compare-and-set on a system merge
-    // (src/capture/entry.ts): the merge target read a moment earlier under the write's own workspace.
+    // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4 (src/capture/entry.ts
+    // restoreRowVectors): the SELECT content, tags of a merge target that lost a compare-and-set,
+    // read by the id already read under the write's own workspace. The checker counts SELECTs, so the
+    // CAS UPDATE and the vector_ids UPDATE beside it add nothing.
     ).toEqual({ queries: 140, exempt: 71, checked: 12, outerJoin: 1 });
   });
 
