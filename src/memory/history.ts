@@ -46,12 +46,15 @@ export async function readEntryTimeline(
   // into a workspace they can read (D-SH, A3). A legacy row (actor_id "") has no author on file,
   // but its own owner still needs the full timeline of a memory sitting in their own personal
   // workspace — pre-4.0 move events recorded no fromWorkspaceId, so the D-SH walk below would
-  // otherwise cut them off from their own history (ADV-11). This is narrowly the owner of THIS
-  // row's own personal workspace, not any admin: entryWorkspaceId must match identity's own, or
-  // (the pre-workspace-migration case) be "" and identity be the tenant owner.
+  // otherwise cut them off from their own history (ADV-11). This is narrowly the TENANT OWNER,
+  // never any other admin: R2-4 found that matching "the row sits in identity's own personal
+  // workspace" alone let an admin who unshared someone else's legacy row into their OWN personal
+  // workspace inherit its private-era history too, since that check never asked whose tenant this
+  // is. identity must BE the owner, and the row must sit in the owner's own personal workspace
+  // (or, pre-workspace-migration, the legacy "" marker).
   const isLegacyOwnRow = entryActorId === "" && entryWorkspaceId !== undefined
-    && (entryWorkspaceId === identity.personalWorkspaceId
-      || (entryWorkspaceId === "" && identity.userId === (await ensureTenantBootstrap(env)).ownerUserId));
+    && identity.userId === (await ensureTenantBootstrap(env)).ownerUserId
+    && (entryWorkspaceId === identity.personalWorkspaceId || entryWorkspaceId === "");
   const isAuthor = (entryActorId !== "" && identity.userId === entryActorId) || isLegacyOwnRow;
   let rows = parsedChrono;
   if (!isAuthor) {
