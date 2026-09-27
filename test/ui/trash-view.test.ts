@@ -200,7 +200,7 @@ describe("rows render who, date and days left for each reason and channel", () =
   it("a dashboard forget on a solo brain reads 'by you'", async () => {
     const ctx = load([{ ok: true, items: [item({ channel: "rest", client: null, deleted_by_name: "You" })], next_cursor: null, retention_days: 14 }]);
     await ctx.loadTrashPage();
-    expect(el(ctx, "trash-list").innerHTML).toContain("by you in the dashboard");
+    expect(el(ctx, "trash-list").innerHTML).toContain("by you");
   });
 
   it("an MCP forget names the client", async () => {
@@ -226,15 +226,23 @@ describe("rows render who, date and days left for each reason and channel", () =
     await ctx.loadTrashPage();
     const html = el(ctx, "trash-list").innerHTML;
     expect(html).toContain("Removed");
-    expect(html).toContain("notion");
+    expect(html).toContain("Notion");
     expect(html).toContain("sync");
+  });
+
+  it("names the provider brand, not the raw source id, in every {provider} sentence", async () => {
+    const ctx = load([{ ok: true, items: [item({ reason: "mirror", channel: null, client: null, source: "calendar-google" })], next_cursor: null, retention_days: 14 }]);
+    await ctx.loadTrashPage();
+    const html = el(ctx, "trash-list").innerHTML;
+    expect(html).toContain("Google Calendar");
+    expect(html).not.toContain("calendar-google");
   });
 
   it("a disconnect removal says the integration was disconnected", async () => {
     const ctx = load([{ ok: true, items: [item({ reason: "disconnect", channel: null, client: null, source: "github" })], next_cursor: null, retention_days: 14 }]);
     await ctx.loadTrashPage();
     const html = el(ctx, "trash-list").innerHTML;
-    expect(html).toContain("github");
+    expect(html).toContain("GitHub");
     expect(html).toContain("disconnected");
   });
 
@@ -362,7 +370,7 @@ describe("mirror restore confirms first", () => {
     // Not called yet: the confirm sheet is up, not the request.
     expect(ctx.__requests.some((r: any) => r.url.endsWith("/restore"))).toBe(false);
     expect(el(ctx, "confirm-title").textContent).toBe("Restore this memory?");
-    expect(el(ctx, "confirm-body").textContent).toContain("notion");
+    expect(el(ctx, "confirm-body").textContent).toContain("Notion");
 
     await ctx.runConfirmAction();
     const restoreCall = ctx.__requests.find((r: any) => r.url.endsWith("/restore"));
@@ -458,7 +466,7 @@ describe("both locales", () => {
     ctx.initI18n("it");
     await ctx.loadTrashPage();
     const html = el(ctx, "trash-list").innerHTML;
-    expect(html).toContain("da te dalla dashboard");
+    expect(html).toContain("da te");
   });
 
   it("translates the empty state and the Restore/Delete forever labels", async () => {

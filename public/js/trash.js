@@ -54,8 +54,8 @@ function renderTrashIntro() {
  */
 function trashWhoLine(item) {
   const date = formatDateUI(item.deleted_at, { year: 'numeric', month: 'short', day: 'numeric' });
-  if (item.reason === 'mirror') return t('trash.removedBySync', { date, provider: item.source || '' });
-  if (item.reason === 'disconnect') return t('trash.removedByDisconnect', { date, provider: item.source || '' });
+  if (item.reason === 'mirror') return t('trash.removedBySync', { date, provider: providerName(item.source) || '' });
+  if (item.reason === 'disconnect') return t('trash.removedByDisconnect', { date, provider: providerName(item.source) || '' });
   if (item.channel === 'mcp') {
     return item.client ? t('trash.deletedByClient', { date, client: item.client }) : t('trash.deletedByAgent', { date });
   }
@@ -182,7 +182,7 @@ function handleTrashRestore(item) {
   if (item.reason === 'mirror') {
     openDangerConfirm({
       title: t('trash.mirrorTitle'),
-      body: t('trash.mirrorBody', { provider: item.source || '' }),
+      body: t('trash.mirrorBody', { provider: providerName(item.source) || '' }),
       confirmLabel: t('trash.restore'),
       tone: 'primary',
       onConfirm: async (_checked, done) => {

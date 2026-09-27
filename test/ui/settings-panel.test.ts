@@ -50,6 +50,7 @@ function load(configResponse: any, opts: { admin?: boolean } = {}) {
     fetch: async (url: string, init: any) => {
       const body = init?.body ? JSON.parse(init.body) : undefined;
       patches.push({ url, method: init?.method, body });
+      if (ctx.__patchThrows) throw new TypeError("Failed to fetch");
       const forced = (ctx.__patchResponse as ((body: any) => any) | undefined)?.(body);
       if (forced) return forced;
       return { ok: true, status: 200, json: async () => ({ ok: true }) };
@@ -260,12 +261,14 @@ describe("Reset to default", () => {
     expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(false);
     expect(ctx.__toasts).toHaveLength(0);
     expect(el(ctx, "setting-trash-retention-error").hidden).toBe(false);
-    expect(el(ctx, "setting-trash-retention-error").textContent).toBe("Could not save: server error");
+    expect(el(ctx, "setting-trash-retention-error").textContent).toBe(
+      "Not saved. Your Second Brain couldn't save it. Try again in a moment.",
+    );
   });
 });
 
 describe("a failed save reports inline, next to the control", () => {
-  it("shows 'Could not save' with the reason next to the select that failed, not as a toast", async () => {
+  it("maps a 5xx or an unreadable reply to the same plain reason, never the server's own text", async () => {
     const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
     await ctx.loadSettingsPanel();
     ctx.__patchResponse = () => ({ ok: false, status: 500, json: async () => ({ ok: false, error: "search did not update" }) });
@@ -275,9 +278,54 @@ describe("a failed save reports inline, next to the control", () => {
 
     expect(ctx.__toasts).toHaveLength(0);
     expect(el(ctx, "setting-trash-retention-error").hidden).toBe(false);
-    expect(el(ctx, "setting-trash-retention-error").textContent).toBe("Could not save: search did not update");
+    expect(el(ctx, "setting-trash-retention-error").textContent).toBe(
+      "Not saved. Your Second Brain couldn't save it. Try again in a moment.",
+    );
+    expect(el(ctx, "setting-trash-retention-error").textContent).not.toContain("search did not update");
     // The other control's error slot is untouched.
     expect(el(ctx, "setting-version-keep-error").hidden).toBe(true);
+  });
+
+  it("maps a 400 range rejection to 'didn't accept that value', never the server's own text", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    ctx.__patchResponse = () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ ok: false, error: "TRASH_RETENTION_DAYS must be between 1 and 365 (got 400)" }),
+    });
+
+    el(ctx, "setting-trash-retention").value = "30";
+    await ctx.onSettingChange("setting-trash-retention", "TRASH_RETENTION_DAYS");
+
+    expect(el(ctx, "setting-trash-retention-error").textContent).toBe(
+      "Not saved. Your Second Brain didn't accept that value.",
+    );
+  });
+
+  it("maps a network failure (fetch throws) to a plain offline reason", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    ctx.__patchThrows = true;
+
+    el(ctx, "setting-trash-retention").value = "30";
+    await ctx.onSettingChange("setting-trash-retention", "TRASH_RETENTION_DAYS");
+
+    expect(el(ctx, "setting-trash-retention-error").textContent).toBe(
+      "Not saved. Couldn't reach your Second Brain. Check your connection and try again.",
+    );
+  });
+
+  it("a 403 keeps the admin-only note instead of an inline error", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    ctx.__patchResponse = () => ({ ok: false, status: 403, json: async () => ({ ok: false, error: "forbidden" }) });
+
+    el(ctx, "setting-trash-retention").value = "30";
+    await ctx.onSettingChange("setting-trash-retention", "TRASH_RETENTION_DAYS");
+
+    expect(el(ctx, "setting-trash-retention-error").hidden).toBe(true);
+    expect(el(ctx, "settings-admin-note").hidden).toBe(false);
   });
 
   it("clears once the same control saves successfully", async () => {

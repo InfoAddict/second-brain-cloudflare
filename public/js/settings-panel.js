@@ -129,20 +129,49 @@ async function loadSettingsPanel() {
   applySettingsRole(teamIsAdmin !== false);
 }
 
+/**
+ * Never the server's own text standing alone (T-0101.10, copy deck section
+ * 6.4): a network failure, a 5xx or an unreadable reply, and a rejected
+ * value each get one plain, translated reason. 403 is not handled here -
+ * its caller keeps the admin-only note instead of this error slot.
+ */
+function configErrorReason(res, data) {
+  if (!data || res.status >= 500) return t('settingsPanel.errorServer');
+  return t('settingsPanel.errorRejected');
+}
+
+async function requestConfig(url, init) {
+  let res;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    const err = new Error(t('settingsPanel.failed', { message: t('settingsPanel.errorOffline') }));
+    err.status = null;
+    throw err;
+  }
+  if (res.status === 403) {
+    const err = new Error(t('settingsPanel.adminOnly'));
+    err.status = 403;
+    throw err;
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {}
+  if (!res.ok || !data || !data.ok) {
+    const err = new Error(t('settingsPanel.failed', { message: configErrorReason(res, data) }));
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
 async function patchSetting(key, value) {
-  const res = await fetch(`${WORKER_URL}/config`, {
+  await requestConfig(`${WORKER_URL}/config`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
     body: JSON.stringify({ [key]: value }),
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.ok) {
-    // Always the copy deck's "Could not save: {message}" lead, never the
-    // server's own reason standing alone.
-    const err = new Error(t('settingsPanel.failed', { message: data.error || String(res.status) }));
-    err.status = res.status;
-    throw err;
-  }
 }
 
 async function onSettingChange(selectId, key) {
@@ -179,31 +208,30 @@ async function onSettingChange(selectId, key) {
       // than assume this was a stale admin flag.
       applySettingsRole(false);
     } else {
-      showSettingError(key, e.message || t('settingsPanel.failed', { message: '' }));
+      showSettingError(key, e.message);
     }
   }
 }
 
 /**
  * Reset one key to the Worker's shipped default (DELETE /config/:key),
- * independent of the other setting — the same per-key reset the route
+ * independent of the other setting: the same per-key reset the route
  * already offers admins elsewhere.
  */
 async function resetSetting(key) {
   const selectId = SETTINGS_SELECT_ID[key];
   try {
-    const res = await fetch(`${WORKER_URL}/config/${key}`, {
+    await requestConfig(`${WORKER_URL}/config/${key}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) throw new Error(t('settingsPanel.failed', { message: data.error || String(res.status) }));
     settingsCurrent[key] = SETTINGS_DEFAULT[key];
     renderSettingsOptions(selectId, SETTINGS_CHOICES[key], SETTINGS_DEFAULT[key], SETTINGS_LABEL[key]);
     updateResetVisibility(key, SETTINGS_DEFAULT[key]);
     clearSettingError(key);
     showToast(t('settingsPanel.wasReset'));
   } catch (e) {
-    showSettingError(key, e.message || t('settingsPanel.failed', { message: '' }));
+    if (e.status === 403) applySettingsRole(false);
+    else showSettingError(key, e.message);
   }
 }
