@@ -7,7 +7,7 @@ import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
 import { auditEvent } from "../lib/audit";
-import { deleteStaleVectors, embedContextForRow, reembedOrThrow, storeEntry } from "./store";
+import { deleteStaleVectors, embedContextForRow, reembedOrThrow, restoreRowVectors, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
 import { getVolatility, withVolatility } from "../memory/volatility";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
@@ -121,43 +121,6 @@ export function isSystemRow(row: { tags: string[]; actor_id?: unknown; source?: 
     && !row.tags.includes(CONFLICT_HELD_TAG)
     && getStatus(row.tags) !== "draft"
     && getStatus(row.tags) !== "deprecated";
-}
-
-/**
- * A system merge re-embedded a row and then lost it to a concurrent edit: the vectors under
- * that id now describe the system's text. Re-embed the row as it stands now and retire any
- * extra chunks the merge wrote. Best effort: the edit itself is safe in D1 either way.
- */
-async function restoreRowVectors(
-  env: Env, id: string, oldVectorIds: string[], mergedVectorIds: string[], source: string,
-  cfg: Readonly<Config>, writeCtx: WriteContext,
-): Promise<void> {
-  try {
-    const current = await env.DB.prepare(
-      // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-      `SELECT content, tags, workspace_id FROM entries WHERE id = ?`
-    ).bind(id).first() as Record<string, any> | null;
-    if (!current) {
-      // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
-      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
-      return;
-    }
-    const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, embedContextForRow(current, writeCtx));
-    await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
-  } catch (e) {
-    console.error("Restoring vectors after a lost system merge failed (non-fatal):", e);
-    // The row's vector_ids now names vectors holding the system's text. Emptying them makes
-    // /vectorize-pending re-index the row from its own content, and the vectors go best-effort.
-    try {
-      await env.DB.prepare(
-        // scope-exempt: by-id: the merge target this call just read under the write's own workspace
-        `UPDATE entries SET vector_ids = '[]' WHERE id = ?`
-      ).bind(id).run();
-      await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
-    } catch (e2) {
-      console.error("Emptying vector_ids after a lost system merge failed (non-fatal):", e2);
-    }
-  }
 }
 
 export async function captureEntry(

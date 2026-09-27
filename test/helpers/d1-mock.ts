@@ -221,6 +221,34 @@ export class D1Mock {
           if (row) { row.content = content; row.vector_ids = vector_ids; row.tags = tags; row.updated_at = updated_at; }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // Short append: content is concatenated in SQL and the write compares-and-sets on the tags it read.
+        if (s.startsWith("UPDATE entries SET content = content || ?, vector_ids = CASE WHEN ? = 1")) {
+          const hasWhen = s.includes("when_at = ?");
+          const [suffix, indexed, chunk, tags, updated_at, ...rest] = args;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readTags] = rest;
+          const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags);
+          if (row) {
+            row.content = row.content + suffix;
+            if (indexed === 1) row.vector_ids = JSON.stringify([...JSON.parse(row.vector_ids ?? "[]"), chunk]);
+            row.tags = tags; row.updated_at = updated_at;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // Long append: compare-and-set on content and tags.
+        if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ?") && s.includes("WHERE id = ? AND content = ? AND tags = ?")) {
+          const hasWhen = s.includes("when_at = ?");
+          const [content, tags, updated_at, ...rest] = args;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readContent, readTags] = rest;
+          const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags);
+          if (row) {
+            row.content = content; row.tags = tags; row.updated_at = updated_at;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
         // An append that also sets the time anchor (Task 3 folds the separate `when` UPDATE into the batch).
         if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ?, when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id")) {
           const [content, vector_ids, tags, updated_at, when_at, when_kind, id] = args;
@@ -506,6 +534,11 @@ export class D1Mock {
         if (s.includes("COALESCE(updated_at, created_at) AS last_updated") && s.includes("FROM entries WHERE id = ?")) {
           const row = db.entries.find((e: any) => e.id === args[0]);
           return row ? { ...row, last_updated: row.updated_at ?? row.created_at } : null;
+        }
+        // appendToEntry's own read of the row it edits.
+        if (s.includes("SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id")) {
+          const row = db.entries.find((e: any) => e.id === args[0]);
+          return row ? { content: row.content, tags: row.tags ?? "[]", source: row.source, vector_ids: row.vector_ids ?? "[]", workspace_id: row.workspace_id ?? "" } : null;
         }
         if (s.includes("SELECT vector_ids FROM entries WHERE id")) {
           const row = db.entries.find((e: any) => e.id === args[0]);

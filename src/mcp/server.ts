@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { RECALL_MAX_TOP_K, SEMANTIC_UNAVAILABLE_DETAIL, VECTORIZE_FIX_HINT } from "../constants";
 import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
-import { appendToEntry, updateEntryContent } from "../capture/store";
+import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { auditEvent, type ChangeContext } from "../lib/audit";
@@ -605,6 +605,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       try {
         indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, mcpChange, whenInput);
       } catch (e) {
+        if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
+        if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
         console.error("Append failed:", e);
         return {
           content: [{ type: "text", text: `Append failed: ${(e as Error).message}` }],

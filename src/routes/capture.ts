@@ -8,7 +8,7 @@ import { requireIdentity, type Identity } from "../lib/identity";
 import { assertCanEditContent, getReadableEntry } from "../lib/entry-access";
 import { scopeWrite, effectiveWriteTarget, readTeamParam, type WriteContext } from "../lib/scope";
 import { captureEntry } from "../capture/entry";
-import { appendToEntry, updateEntryContent } from "../capture/store";
+import { appendToEntry, EntryGoneError, updateEntryContent, WriteConflictError } from "../capture/store";
 import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
@@ -194,6 +194,8 @@ export async function handleCaptureRoutes(
       if (writeCtx instanceof Response) return writeCtx;
       indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" });
     } catch (e) {
+      if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
+      if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
 
