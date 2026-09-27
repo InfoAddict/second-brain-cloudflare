@@ -3,6 +3,7 @@ import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { readResurfaceState, withDismissed, writeResurfaceState } from "../runtime/resurface-state";
 import { computeBrief } from "../brief/compute";
+import { readProjectParam } from "./project-param";
 
 export async function handleBriefRoutes(request: Request, url: URL, env: Env): Promise<Response | null> {
   if (url.pathname === "/resurface/dismiss" && request.method === "POST") {
@@ -19,5 +20,7 @@ export async function handleBriefRoutes(request: Request, url: URL, env: Env): P
   if (url.pathname !== "/brief" || request.method !== "GET") return null;
   const auth = await requireIdentity(request, env);
   if (auth instanceof Response) return auth;
-  return json(await computeBrief(env, auth, url.searchParams.get("preview") === "1"));
+  const projectRows = await readProjectParam(env, auth, url);
+  if (projectRows instanceof Response) return projectRows;
+  return json(await computeBrief(env, auth, url.searchParams.get("preview") === "1", projectRows));
 }

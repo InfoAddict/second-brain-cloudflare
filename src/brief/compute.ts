@@ -1,5 +1,7 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
+import type { ProjectRow } from "../projects/registry";
+import { projectFilterSql } from "../projects/filter";
 import { scopeWhere, type ScopeClause } from "../lib/scope";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
@@ -66,8 +68,12 @@ const RESURFACE_RECENT_WINDOW_DAYS = 30;
  */
 const RESURFACE_EXCLUDE_BOUND_CAP = 20;
 
-export async function computeBrief(env: Env, auth: Identity, preview = false) {
-  const scope = scopeWhere(auth);
+export async function computeBrief(env: Env, auth: Identity, preview = false, projectRows?: ProjectRow[]) {
+  const baseScope = scopeWhere(auth);
+  const project = projectRows ? projectFilterSql(projectRows) : null;
+  const scope: ScopeClause = project
+    ? { clause: `${baseScope.clause} AND ${project.clause}`, bindings: [...baseScope.bindings, ...project.bindings] }
+    : baseScope;
   const now = Date.now();
   const since = now - RECENT_WINDOW_MS;
   const resurfaceBefore = now - RESURFACE_MIN_AGE_MS;
