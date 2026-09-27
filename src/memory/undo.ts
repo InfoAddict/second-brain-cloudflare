@@ -137,7 +137,9 @@ export async function revertEntry(
       entryId: id, reason: "revert", change,
       content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
       nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq,
-      meta: { nonce, target_seq: target.seq, reverted_reason: target.reason }, now,
+      // Recorded whenever this revert restores the date, so a later undo of THIS version (a redo)
+      // knows to restore when_* too, the same way an append-with-when or a due version does (U2).
+      meta: { nonce, target_seq: target.seq, reverted_reason: target.reason, ...(restoreWhen ? { when: true } : {}) }, now,
     }),
     // versioning: snapshot
     env.DB.prepare(updateSql).bind(...p.values()),
