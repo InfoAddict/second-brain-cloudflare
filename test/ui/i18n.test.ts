@@ -563,6 +563,10 @@ describe("dashboard i18n", () => {
       by: "activityEventLabel() in public/js/activity.js, keyed by the audit event name",
     },
     {
+      prefix: "history.reason",
+      by: "historyReasonLabel() in public/js/history-view.js, keyed by HISTORY_REASON_KEYS[item.reason]",
+    },
+    {
       prefix: "common.source",
       by: "public/utils.js t(key), through the SOURCE_LABELS map keyed by the capture's `source` value",
     },
@@ -775,6 +779,11 @@ describe("dashboard i18n", () => {
       "public/js/memory-crud.js t(keys[event])",
       "public/js/patterns.js t(`patterns.shapes.${shape}`)",
       "public/utils.js t(key)",
+      // historyReasonLabel()'s two returns: the plain reason label, and the
+      // reasonStatus one with a {status} interpolation. Same template
+      // literal, so the scanner sees one identity twice.
+      "public/js/history-view.js t(`history.${key}`)",
+      "public/js/history-view.js t(`history.${key}`)",
     ].sort();
 
     function dynamicIdentity(file: string, fn: string, snippet: string): string {

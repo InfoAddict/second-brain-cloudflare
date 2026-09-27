@@ -1,0 +1,136 @@
+/* SH-1: the history timeline, and SH-3's status control (same lane, same
+   sheet). Rows read on a hairline, like .related-item — a list, not cards. */
+
+/* A quiet aside, not a claim: a session capture reads differently from
+   something the user typed, but it should not compete with the memory text
+   right below it. */
+.view-auto-save-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  margin: -6px 0 12px;
+}
+
+.history-label {
+  margin-bottom: 8px;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.history-item {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.history-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.history-meta {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.history-before {
+  margin-top: 8px;
+  background: var(--surface-muted);
+  border-radius: var(--r-input);
+  padding: 8px 10px;
+}
+
+.history-before-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin-bottom: 3px;
+}
+
+.history-before-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-link-btn {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.history-link-btn:hover {
+  text-decoration: underline;
+}
+
+.history-link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  text-decoration: none;
+}
+
+.history-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.history-action {
+  border: 1px solid var(--accent-ink);
+  color: var(--accent-ink);
+  background: transparent;
+  border-radius: var(--r-button);
+  padding: 8px 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 36px;
+  transition: background-color var(--dur-feedback) var(--ease-standard);
+}
+
+.history-action:hover {
+  background: var(--accent-soft);
+}
+
+.history-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.history-footer {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding-top: 8px;
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.history-footer + .history-footer {
+  border-top: none;
+  margin-top: 2px;
+  padding-top: 0;
+}
+
+@media (max-width: 480px) {
+  .history-action {
+    min-height: 44px;
+    padding: 10px 14px;
+    flex: 1 1 auto;
+  }
+}

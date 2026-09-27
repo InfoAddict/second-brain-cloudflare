@@ -13,6 +13,7 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="stylesheet" href="css/main.css" />
     <link rel="stylesheet" href="css/graph.css" />
+    <link rel="stylesheet" href="css/history.css" />
     <link rel="stylesheet" href="css/board.css" />
     <link rel="stylesheet" href="css/projects.css" />
   </head>
@@ -695,6 +696,7 @@
              against the bottom edge of the card. -->
         <div class="view-scroll">
           <div class="view-meta" id="view-meta"></div>
+          <div class="view-auto-save-note" id="view-auto-save-note" style="display: none"></div>
           <div class="view-content" id="view-content-text"></div>
           <div class="view-tags" id="view-tags-container"></div>
           <div class="view-brain" id="view-brain" style="display: none"></div>
@@ -913,6 +915,8 @@
     <script src="js/recall.js"></script>
     <script src="js/recent.js"></script>
     <script src="js/remember.js"></script>
+    <script src="js/undo.js"></script>
+    <script src="js/history-view.js"></script>
     <script src="js/memory-crud.js"></script>
     <script src="js/settings.js"></script>
     <script src="js/patterns.js"></script>

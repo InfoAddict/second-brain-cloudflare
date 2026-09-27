@@ -11,7 +11,7 @@ The one-shot migration script that performed this split was removed after use; d
 | Pure | `utils.js`, `credits.js` | — (DOM optional via injection) |
 | Infra | `js/i18n.js`, `js/state.js`, `js/api.js` | pure |
 | UI kit | `js/theme.js`, `js/ui-chat.js`, `js/toast.js`, `js/coach.js`, `js/confirm-sheet.js` | pure, state |
-| Feature | `js/recall.js`, `js/recent.js`, `js/remember.js`, `js/memory-crud.js`, `js/settings.js`, `js/patterns.js`, `js/stale.js`, `js/loops.js`, `js/pending-due.js`, `js/due.js`, `js/install-guide.js`, `js/notifications.js`, `js/integrations.js`, `js/team.js`, `js/activity.js`, `js/projects.js`, `js/graph-canvas.js`, `js/brief.js`, `js/board.js`, `js/chart.js`, `js/home.js` | infra, UI kit, pure |
+| Feature | `js/recall.js`, `js/recent.js`, `js/remember.js`, `js/undo.js`, `js/history-view.js`, `js/memory-crud.js`, `js/settings.js`, `js/patterns.js`, `js/stale.js`, `js/loops.js`, `js/pending-due.js`, `js/due.js`, `js/install-guide.js`, `js/notifications.js`, `js/integrations.js`, `js/team.js`, `js/activity.js`, `js/projects.js`, `js/graph-canvas.js`, `js/brief.js`, `js/board.js`, `js/chart.js`, `js/home.js` | infra, UI kit, pure |
 | Shell | `js/nav.js`, `js/refresh.js`, `js/auth.js`, `js/download-app.js`, `js/app.js` | feature, infra |
 | Entry | `index.html` | link/script tags only |
 
@@ -28,7 +28,7 @@ warned about the ordering hazard it creates.
 ```
 i18n.js → utils.js → credits.js → state.js → toast.js → coach.js
 → confirm-sheet.js → api.js → theme.js → ui-chat.js
-→ recall.js → recent.js → remember.js → memory-crud.js
+→ recall.js → recent.js → remember.js → undo.js → history-view.js → memory-crud.js
 → settings.js → patterns.js → stale.js → loops.js → pending-due.js → due.js → install-guide.js → notifications.js → integrations.js → team.js → activity.js → projects.js
 → graph-canvas.js → brief.js → board.js → chart.js → home.js
 → nav.js → refresh.js → auth.js → download-app.js → app.js
@@ -58,6 +58,9 @@ against the page rather than maintained by hand.
 | Recall tab | `js/recall.js` |
 | Recent tab | `js/recent.js` |
 | Remember tab | `js/remember.js` |
+| Shared `/undo` fetch, result-toast mapping, write-site Undo toasts | `js/undo.js` |
+| History timeline CSS | `css/history.css` |
+| Memory sheet history list (`renderHistory`): Undo, Restore this version, Show all | `js/history-view.js` |
 | Append/edit/forget/view/related | `js/memory-crud.js` |
 | Menu stats, digest, vectorize, classify, export | `js/settings.js` |
 | Due sheet (`GET /due`, snooze/clear/resolve actions, 4-channel deep link) | `js/due.js` |
@@ -217,9 +220,10 @@ and nothing in the sheet can make it so: an action can be suspended at an
 `await` while another action runs, so there is no "currently running action"
 for a module-level variable to hold.
 
-In tree the sheet has ten callers — memory forget, Delete forever and link
-removal (`memory-crud.js`), integration disconnect and the move of an
-integration's already-synced memories into its current layer
+In tree the sheet has eleven callers — memory forget, Delete forever and link
+removal (`memory-crud.js`), Restore this version on a history row
+(`history-view.js`, `tone: 'primary'`), integration disconnect and the move of
+an integration's already-synced memories into its current layer
 (`integrations.js`), token rotation, suspension and removal (`team.js`), the
 memories list's bulk layer move (`recent.js`), and project deletion
 (`projects.js`) — and every one of them closes with its `done()`. The

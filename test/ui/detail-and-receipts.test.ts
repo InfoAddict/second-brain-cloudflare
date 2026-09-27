@@ -169,6 +169,39 @@ describe("memory detail — what the brain knows", () => {
   });
 });
 
+// Director addition: a quiet note on the sheet (not the card) for a memory an
+// AI coding session saved on its own, so a session capture reads differently
+// from something the user typed themselves.
+describe("the auto-save note (sheet only)", () => {
+  it("names the tool for each session-capture source", () => {
+    const ctx = load();
+    ctx.renderViewAutoSaveNote({ source: "claude-code" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Saved automatically at the end of a Claude Code session.");
+    expect(ctx.__els.get("view-auto-save-note").style.display).toBe("");
+
+    ctx.renderViewAutoSaveNote({ source: "codex-session" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Saved automatically at the end of a Codex session.");
+
+    ctx.renderViewAutoSaveNote({ source: "cursor-session" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Saved automatically at the end of a Cursor session.");
+  });
+
+  it("stays hidden for every other source", () => {
+    const ctx = load();
+    ctx.renderViewAutoSaveNote({ source: "web-ui" });
+    expect(ctx.__els.get("view-auto-save-note").style.display).toBe("none");
+    ctx.renderViewAutoSaveNote({ source: undefined });
+    expect(ctx.__els.get("view-auto-save-note").style.display).toBe("none");
+  });
+
+  it("both locales", () => {
+    const ctx = load();
+    ctx.initI18n("it");
+    ctx.renderViewAutoSaveNote({ source: "cursor-session" });
+    expect(ctx.__els.get("view-auto-save-note").textContent).toBe("Salvato automaticamente alla fine di una sessione Cursor.");
+  });
+});
+
 describe("citation chips", () => {
   function render(text: string) {
     const ctx: any = {

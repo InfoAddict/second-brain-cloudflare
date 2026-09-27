@@ -336,6 +336,31 @@ function renderViewMeta(entry) {
   el.innerHTML = parts.join('')
 }
 
+/** claude-code, codex-session, cursor-session: an AI coding session's own capture, not the user typing. */
+const AUTO_SAVE_SESSION_SOURCES = {
+  'claude-code': 'Claude Code',
+  'codex-session': 'Codex',
+  'cursor-session': 'Cursor',
+}
+
+/**
+ * A quiet note, sheet only (never the list card): a memory an AI coding
+ * session saved on its own reads differently from one the user wrote, and the
+ * tool name is not translated — only the sentence around it is.
+ */
+function renderViewAutoSaveNote(entry) {
+  const el = document.getElementById('view-auto-save-note')
+  if (!el) return
+  const tool = AUTO_SAVE_SESSION_SOURCES[String(entry.source || '').toLowerCase()]
+  if (!tool) {
+    el.style.display = 'none'
+    el.textContent = ''
+    return
+  }
+  el.textContent = t('history.autoSaved', { tool })
+  el.style.display = ''
+}
+
 function renderViewBrain(entry) {
   const el = document.getElementById('view-brain')
   // Rendered from the tags when /entry has not been consulted (recall cards
@@ -405,6 +430,7 @@ async function hydrateView(id) {
     if (!data.ok || !data.entry) return
     if (viewOpenId !== id) return // the sheet moved on while this was in flight
     renderViewMeta(data.entry)
+    renderViewAutoSaveNote(data.entry)
     renderViewBrain(data.entry)
     renderViewTimeline(data.entry)
     // openView rendered from whatever the caller happened to hold; /entry is
@@ -438,6 +464,13 @@ function timelineEventLabel(event) {
 }
 
 function renderViewTimeline(entry) {
+  // SH-1: a Worker that sends `history` (contract 4.1) gets the rich list
+  // with Undo and Restore this version. A Worker that predates it falls back
+  // to the plain event list below, unchanged.
+  if (entry.history) {
+    renderHistory(entry)
+    return
+  }
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.timeline || []
@@ -537,6 +570,7 @@ function openView(entry, cardElement) {
   viewOpenId = entry.id || null
   document.getElementById('view-content-text').textContent = normalizeForDisplay(entry.content)
   renderViewMeta(entry)
+  renderViewAutoSaveNote(entry)
   renderViewBrain(entry)
   if (entry.id) hydrateView(entry.id)
   const tagsContainer = document.getElementById('view-tags-container')
