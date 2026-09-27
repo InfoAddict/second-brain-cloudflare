@@ -800,7 +800,13 @@ export async function recallEntries(
   if (hops > 0) {
     const candidateContent = new Map(rcRows.map(r => [r.id, r.content ?? ""]));
     const rootSeen = new Set<string>();
-    rootCandidates = rootReranked.flatMap(match => {
+    // Scoped like everything else here (inScope): a root the caller cannot read must
+    // never anchor a traversal, or its id rides out on a readable neighbour's viaFrom
+    // (why.graph.from, the MCP "linked from" line, REST related_to). This is a no-op
+    // whenever the workspace filter held, since rootReranked already held only the
+    // caller's own rows; it only bites when Vectorize rejected the filter and the
+    // unfiltered retry handed back another member's private vector.
+    rootCandidates = rootReranked.filter(inScope).flatMap(match => {
       const parentId = ((match.metadata as any)?.parentId ?? match.id) as string;
       if (rootSeen.has(parentId)) return [];
       rootSeen.add(parentId);

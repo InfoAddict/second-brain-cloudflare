@@ -113,3 +113,19 @@ describe("renderRecallText why line", () => {
     expect(out).toBe(`1. [Sep 20, 2026 · claude [work]] (100% match)\nID: e1\nBody text`);
   });
 });
+
+describe("rerankWithTimeDecay untraced path", () => {
+  it("scores and orders matches exactly like the traced path, with no trace fields riding along", () => {
+    const now = Date.UTC(2026, 8, 25, 12, 0, 0);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const matches = [
+      { id: "a", score: 0.8, metadata: { parentId: "a", created_at: now, tags: [] } },
+      { id: "b", score: 0.6, metadata: { parentId: "b", created_at: now - 400 * 86_400_000, tags: ["rolled-up"] } },
+    ];
+    const out = rerankWithTimeDecay(matches);
+    expect(out).toEqual(rerankWithTimeDecayTraced(matches).map(t => t.match));
+    expect((out[0] as any).multipliers).toBeUndefined();
+    expect((out[0] as any).ageKnown).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+});
