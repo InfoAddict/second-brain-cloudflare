@@ -16,6 +16,7 @@ import { cleanTemp } from "../helpers/tmp";
 import { makeTestEnv, makeMemoryKV } from "../helpers/make-env";
 import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { listTrash } from "../../src/memory/trash-list";
+import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
 import type { Identity } from "../../src/lib/identity";
 
@@ -83,7 +84,7 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("listTrash rows_read on workerd
       };
 
       const limit = 20;
-      const { items } = await listTrash(meteredEnv, identity, { limit, config: { TRASH_RETENTION_DAYS: 14 } });
+      const { items } = await listTrash(meteredEnv, identity, { limit, config: DEFAULTS });
       expect(items.length).toBeGreaterThan(0);
 
       expect(log.length).toBeLessThanOrEqual(3);

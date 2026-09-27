@@ -12,10 +12,11 @@ import { createMember } from "../../src/lib/team-admin";
 import { assertCanMutateEntry } from "../../src/lib/entry-access";
 import { readableWorkspaces } from "../../src/lib/scope";
 import { listTrash, decodeTrashCursor, encodeTrashCursor } from "../../src/memory/trash-list";
+import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
 import type { Identity } from "../../src/lib/identity";
 
-const CONFIG = { TRASH_RETENTION_DAYS: 14 };
+const CONFIG = { ...DEFAULTS, TRASH_RETENTION_DAYS: 14 };
 
 let sqlite: SqliteD1;
 let env: Env;

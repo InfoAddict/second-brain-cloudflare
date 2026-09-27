@@ -30,7 +30,7 @@ export interface ListTrashOptions {
   limit: number;
   cursor?: string;
   layer?: "personal" | "company";
-  config: Pick<Config, "TRASH_RETENTION_DAYS">;
+  config: Readonly<Config>;
 }
 
 const DAY_MS = 86_400_000;

@@ -1411,7 +1411,11 @@ describe("the checker over the real source tree", () => {
     // merge paths, undo's revertEntry, the mirror sync) picks up the same clamp for the digest
     // guard's own change signal, but only ever reads its OWN row (e.updated_at/e.created_at), so
     // none of them add a new corpus query either.
-    ).toEqual({ queries: 190, exempt: 103, checked: 13, outerJoin: 1 });
+    // Deliberate: +1 query (190 -> 191) for T-0101.2.1 (BE-1): listTrash's own entries_trash SELECT,
+    // scoped by workspace_id IN (...) same as every other properly-scoped read — no new exemption,
+    // since its second statement (the deleting client/channel lookup) reads entry_events, not one
+    // of the four tables this checker tracks.
+    ).toEqual({ queries: 191, exempt: 103, checked: 13, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

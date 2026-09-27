@@ -106,7 +106,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/undo.ts', line: 233, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 258, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },
-  { file: 'src/routes/admin.ts', line: 1538, kind: 'exempt' },
+  { file: 'src/routes/admin.ts', line: 1542, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 96, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
@@ -121,7 +121,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
 const HYGIENE_EXEMPT = new Set([
   "src/staleness/pass.ts:86", "src/staleness/pass.ts:96",
   "src/when/pass.ts:367",
-  "src/capture/classify.ts:78", "src/routes/admin.ts:1538", // /classify-pending and applyClassification (hygiene)
+  "src/capture/classify.ts:78", "src/routes/admin.ts:1542", // /classify-pending and applyClassification (hygiene)
   // captureEntry retags its OWN new row before returning, while it has no version chain yet
   // (design row 18): the caller sees the final tags in the same response, nothing to undo.
   "src/capture/entry.ts:406", "src/capture/entry.ts:497",
