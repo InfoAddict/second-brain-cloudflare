@@ -1,3 +1,4 @@
+import { DEFAULTS } from "../../src/config";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { deprecateEntry } from "../../src/capture/lifecycle";
 import { makeTestEnv, makeTestDb, makeVectorizeMock } from "../helpers/make-env";
@@ -28,7 +29,7 @@ describe("deprecateEntry()", () => {
       vector_ids: JSON.stringify(["v1", "v2"]),
     });
 
-    const result = await deprecateEntry("entry-1", env);
+    const result = await deprecateEntry("entry-1", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
 
     expect(result).toBe(true);
 
@@ -49,7 +50,7 @@ describe("deprecateEntry()", () => {
   });
 
   it("returns false for a missing id", async () => {
-    const result = await deprecateEntry("missing-id", env);
+    const result = await deprecateEntry("missing-id", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
     expect(result).toBe(false);
     expect(deleteByIdsMock).not.toHaveBeenCalled();
   });

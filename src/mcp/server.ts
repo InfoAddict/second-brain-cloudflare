@@ -713,7 +713,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
-      const ok = await applyStatus(id, status as MemoryStatus, env);
+      const ok = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env));
       if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp" } });

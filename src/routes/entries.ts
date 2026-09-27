@@ -11,6 +11,7 @@ import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
+import { resolveConfig } from "../config";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { projectRowsOf } from "../projects/registry";
@@ -330,7 +331,7 @@ export async function handleEntriesRoutes(
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const ok = await applyStatus(id, status, env);
+    const ok = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env));
 
     if (!ok) {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);

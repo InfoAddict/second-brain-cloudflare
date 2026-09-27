@@ -1,3 +1,4 @@
+import { DEFAULTS } from "../../src/config";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyStatus } from "../../src/capture/lifecycle";
 import worker from "../../src/index";
@@ -31,7 +32,7 @@ describe("applyStatus()", () => {
   });
 
   it("canonical: returns true, sets status:canonical tag, vectors untouched", async () => {
-    const result = await applyStatus("entry-1", "canonical", env);
+    const result = await applyStatus("entry-1", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
     expect(result).toBe(true);
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
@@ -43,10 +44,10 @@ describe("applyStatus()", () => {
 
   it("draft: replaces status:canonical with status:draft (only one status tag)", async () => {
     // First set to canonical
-    await applyStatus("entry-1", "canonical", env);
+    await applyStatus("entry-1", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
 
     // Now set to draft
-    const result = await applyStatus("entry-1", "draft", env);
+    const result = await applyStatus("entry-1", "draft", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
     expect(result).toBe(true);
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
@@ -59,7 +60,7 @@ describe("applyStatus()", () => {
   });
 
   it("deprecated: deletes vectors, clears vector_ids, sets status:deprecated", async () => {
-    const result = await applyStatus("entry-1", "deprecated", env);
+    const result = await applyStatus("entry-1", "deprecated", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
     expect(result).toBe(true);
 
     const row = db.entries.find((e: any) => e.id === "entry-1");
@@ -70,7 +71,7 @@ describe("applyStatus()", () => {
   });
 
   it("returns false for a missing id", async () => {
-    const result = await applyStatus("missing-id", "canonical", env);
+    const result = await applyStatus("missing-id", "canonical", env, { actorId: "u1", channel: "rest" }, DEFAULTS);
     expect(result).toBe(false);
   });
 });

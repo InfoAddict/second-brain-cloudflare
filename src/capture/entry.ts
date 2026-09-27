@@ -6,7 +6,7 @@ import { extractHashtags } from "../text/hashtags";
 import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
-import { auditEvent } from "../lib/audit";
+import { auditEvent, type AuditChannel, type ChangeContext } from "../lib/audit";
 import { deleteStaleVectors, embedContextForRow, reembedOrThrow, restoreRowVectors, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
 import { getVolatility, withVolatility } from "../memory/volatility";
@@ -16,7 +16,8 @@ import type { ProjectRow } from "../projects/registry";
 import { rememberTags } from "../tags/vocabulary";
 import { CONFLICT_HELD_TAG, isCapsuleTag, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES } from "../constants";
+import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
+import { changesOf, pruneStatement, snapshotStatement } from "../memory/versions";
 import { deleteVectorIds } from "../vectorize/batch";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
@@ -101,7 +102,9 @@ export interface CaptureOptions {
    * "system:<job>". Absent means the caller has no identity to attribute, and
    * no such event is written.
    */
-  channel?: string;
+  channel?: AuditChannel;
+  /** Test seam: the byte budget a merge's version row may use before it drops the incoming text. */
+  versionRowBudgetBytes?: number;
 }
 
 export type SystemJob = keyof typeof SYSTEM_JOB_TAGS;
@@ -141,6 +144,8 @@ export async function captureEntry(
   // every embed below. Recall and capture must agree on EMBEDDING_MODEL or the
   // vectors they produce are not comparable.
   const cfg = config ?? await resolveConfig(env);
+  // Who and which surface made the change, recorded on every version this capture writes.
+  const change: ChangeContext = { actorId: writeCtx.actorId, channel: opts.channel ?? "unspecified" };
   const { content: c, tags: t } = normalizeCaptureInput(rawContent, tags);
 
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(c, env, cfg, writeCtx.workspaceId, ctx);
@@ -161,7 +166,7 @@ export async function captureEntry(
     const targetRow = await env.DB.prepare(
       // Pinned to the WRITER's workspace, not read back from the row: a share or move after the
       // scoped candidate read must make this a lost race (null row), never a merge in the new workspace.
-      `SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id FROM entries WHERE id = ? AND workspace_id = ?`
+      `SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id, length(CAST(content AS BLOB)) AS content_bytes, length(CAST(tags AS BLOB)) AS tags_bytes FROM entries WHERE id = ? AND workspace_id = ?`
     ).bind(targetId, writeCtx.workspaceId).first() as Record<string, any> | null;
 
     if (targetRow) {
@@ -209,14 +214,32 @@ export async function captureEntry(
           // A system merge commits only if the row is still what was read: a person's edit can land
           // during the re-embed above, and their text and `user-edited` marker must not be overwritten.
           const cas = opts.systemWrite !== undefined;
-          const committed = cas
-            ? await env.DB.prepare(
-              // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
-              `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
-              .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource).run()
-            : await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-              .bind(newContent, JSON.stringify(refreshedTags), now, targetId).run();
-          if (cas && (committed.meta.changes ?? committed.meta.rows_written ?? 0) === 0) {
+          const casValues = [targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource] as const;
+          // The version keeps the target's prior text and the incoming capture, so a merge can be undone
+          // and the incoming memory re-created. The incoming text is dropped when the row would not fit.
+          const incoming = { incoming: c, incomingTags: t, incomingSource: source };
+          const versionMeta = (targetRow.content_bytes as number) + (targetRow.tags_bytes as number)
+            + new TextEncoder().encode(JSON.stringify(incoming)).length + 1024 <= (opts.versionRowBudgetBytes ?? VERSION_ROW_BUDGET_BYTES)
+            ? incoming
+            : { incomingTruncated: true, incomingBytes: new TextEncoder().encode(c).length };
+          const results = await env.DB.batch([
+            snapshotStatement(env, {
+              entryId: targetId, reason: mergeAction.action === "merge" ? "merge" : "replace", change, content: { kind: "next", content: newContent },
+              nextTags: refreshedTags, meta: versionMeta, now,
+              // A system merge's snapshot shares its compare-and-set, so a lost merge writes no version.
+              guard: cas ? p => `e.tags = ${p.add(casValues[0])} AND e.content = ${p.add(casValues[1])} AND e.workspace_id = ${p.add(casValues[2])} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(casValues[3])}` : undefined,
+            }),
+            cas
+              ? env.DB.prepare(
+                // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
+                `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
+                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, ...casValues)
+              : env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+                .bind(newContent, JSON.stringify(refreshedTags), now, targetId),
+            pruneStatement(env, targetId, cfg.VERSION_KEEP),
+          ]);
+          const committed = results[1];
+          if (cas && changesOf(committed) === 0) {
             console.error("System merge lost the row to a concurrent edit — keeping both");
             await restoreRowVectors(env, targetId, oldVectorIds, newVectorIds, existingSource, cfg, writeCtx);
           } else {
@@ -358,14 +381,21 @@ export async function captureEntry(
     let deprecatedBySystem = false;
     if (opts.systemWrite !== undefined && conflictSnapshot) {
       const snap = conflictSnapshot;
-      const res = await env.DB.prepare(
-        // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
-        `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`
-      ).bind(
-        JSON.stringify(withStatus(JSON.parse(snap.tags ?? "[]"), "deprecated")), conflictId,
-        snap.tags ?? "[]", snap.content, writeCtx.workspaceId, snap.source,
-      ).run();
-      if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) return keepAsDraft();
+      const snapTags: string = snap.tags ?? "[]";
+      const deprecatedTags = withStatus(JSON.parse(snapTags), "deprecated");
+      const results = await env.DB.batch([
+        snapshotStatement(env, {
+          entryId: conflictId, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags,
+          meta: { cause: "contradiction", newEntryId: id }, now,
+          guard: p => `e.tags = ${p.add(snapTags)} AND e.content = ${p.add(snap.content)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`,
+        }),
+        env.DB.prepare(
+          // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
+          `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`
+        ).bind(JSON.stringify(deprecatedTags), conflictId, snapTags, snap.content, writeCtx.workspaceId, snap.source),
+        pruneStatement(env, conflictId, cfg.VERSION_KEEP),
+      ]);
+      if (changesOf(results[1]) === 0) return keepAsDraft();
       deprecatedBySystem = true;
       try {
         const oldVectorIds: string[] = JSON.parse(snap.vector_ids ?? "[]");
@@ -386,7 +416,7 @@ export async function captureEntry(
     let deprecated = deprecatedBySystem;
     if (!deprecatedBySystem) {
       try {
-        deprecated = await deprecateEntry(conflictId, env, writeCtx.workspaceId);
+        deprecated = await deprecateEntry(conflictId, env, change, cfg, { workspaceId: writeCtx.workspaceId, meta: { cause: "contradiction", newEntryId: id } });
         if (deprecated && opts.channel) {
           auditEvent(env, ctx, {
             entryId: conflictId,
