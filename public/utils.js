@@ -195,18 +195,20 @@ const SOURCE_BADGE_I18N = {
 const SOURCE_BADGES = [
   // Terminals and code tools. `cli` is the Second Brain CLI; an earlier version
   // of this table matched it to GitHub, which was simply wrong.
-  [/claude-code/, 'ti-terminal-2', 'claude code'],
   [/^cli$|command-line|terminal/, 'ti-terminal-2', 'cli'],
   [/git-hook|github|^git$/, 'ti-brand-github', 'github'],
-  // Codex CLI and Cursor: the automatic session-end capture hook and a
-  // deliberate MCP write are different sources on purpose (see
-  // TRANSCRIPT_SOURCES in src/constants.ts) and get distinct labels here too.
-  // These rows must stay ahead of the generic chatgpt/openai/codex row below,
-  // which would otherwise catch every one of them and badge them all
-  // "chatgpt" — that row is for ChatGPT/OpenAI conversation sources, not
-  // Codex CLI or Cursor.
-  [/codex-session/, 'ti-terminal-2', 'codex session'],
-  [/cursor-session/, 'ti-code', 'cursor session'],
+  // Every automatic session-end capture hook (Claude Code, Codex CLI, Cursor)
+  // shares one icon so "this was captured for you, not written by hand" reads
+  // at a glance, regardless of which client did it. A deliberate MCP write
+  // from the same client (plain "codex" / "cursor") is a different source on
+  // purpose (see TRANSCRIPT_SOURCES in src/constants.ts) and keeps its own
+  // brand icon below — the two must never collide, which is why each pair
+  // gets its own row rather than one shared pattern. These rows must stay
+  // ahead of the generic chatgpt/openai/codex row further down, which would
+  // otherwise catch every one of them and badge them all "chatgpt".
+  [/claude-code/, 'ti-history', 'claude code session'],
+  [/codex-session/, 'ti-history', 'codex session'],
+  [/cursor-session/, 'ti-history', 'cursor session'],
   [/^codex$|codex-cli/, 'ti-brand-openai', 'codex'],
   [/^cursor$/, 'ti-code', 'cursor'],
   // Mail, branded by provider where we know it.
