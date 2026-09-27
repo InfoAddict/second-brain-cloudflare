@@ -73,8 +73,14 @@ export interface IntegrationRecord {
   lastSyncedAt: number | null;
   lastSyncError: string | null;
   itemMap: Record<string, ItemMapEntry>;
-  /** Set while a disconnect purge is paging through the item map; syncs skip the record. Carries the running totals. */
-  disconnecting?: { purged: number; skipped: number };
+  /**
+   * Set while a disconnect purge is paging through the item map; syncs skip the record. Carries
+   * the running totals, plus the cursor this page was computed from (`fromCursor`, undefined for
+   * the first page) and the cursor it handed back (`nextCursor`, undefined once done): a repeated
+   * call whose own cursor matches `fromCursor` is the same page again (its response was lost) and
+   * must return this same state rather than reprocessing and double-counting it.
+   */
+  disconnecting?: { purged: number; skipped: number; fromCursor?: string; nextCursor?: string };
   createdAt: number;
   updatedAt: number;
 }

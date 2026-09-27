@@ -65,7 +65,9 @@ describe("disconnect purge through the trash", () => {
     const first = await disconnect();
     expect(first.status).toBe(202);
     const rec = (await loadIntegration(t.env, "notion"))!;
-    expect(rec.disconnecting).toEqual({ purged: 200, skipped: 0 });
+    // MOVED (round 2 adversary): disconnecting now also remembers nextCursor (and fromCursor, once
+    // a page arrives with one), so a repeated call can return the same answer instead of reprocessing.
+    expect(rec.disconnecting).toEqual({ purged: 200, skipped: 0, nextCursor: "k00199" });
     expect(await count(`SELECT COUNT(*) n FROM admin_events WHERE event = 'integration_disconnected'`)).toBe(0);
   });
 
@@ -168,5 +170,18 @@ describe("adversary (MINOR): a restart without a cursor must not misreport kept 
     expect(await count(`SELECT COUNT(*) n FROM entries WHERE source = 'notion'`)).toBe(0);
     // Every memory went to the trash, so none was kept.
     expect(last).toMatchObject({ purged: 300, kept: 0 });
+  });
+});
+
+describe("adversary round 2: a repeated page (lost response) must not double-count purged", () => {
+  it("a page repeated with the same cursor is not counted purged twice", async () => {
+    await connected(600);
+    const first = await (await disconnect()).json() as any;
+    await disconnect({ purge: true, cursor: first.next_cursor }); // response lost
+    const repeat = await (await disconnect({ purge: true, cursor: first.next_cursor })).json() as any;
+    const last = await (await disconnect({ purge: true, cursor: repeat.next_cursor })).json() as any;
+    expect(last.done).toBe(true);
+    expect(await t.one<any>(`SELECT COUNT(*) n FROM entries_trash WHERE reason = 'disconnect'`)).toMatchObject({ n: 600 });
+    expect(last).toMatchObject({ purged: 600, kept: 0 });
   });
 });
