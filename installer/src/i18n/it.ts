@@ -39,8 +39,10 @@ export const it: Messages = {
     lede: "Come il tuo Second Brain ricorda e recupera. Le modifiche valgono dalla prossima ricerca.",
     sectionRecall: "Recupero",
     sectionRemember: "Ricorda",
+    sectionHistory: "Cronologia e cestino",
     sectionAi: "AI",
     sectionMatching: "Corrispondenze",
+    historyReadOnly: "Solo il proprietario del Second Brain o un amministratore può cambiare per quanto tempo il cestino conserva i ricordi o quante versioni vengono conservate.",
     custom: "Personalizzato",
     customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",
     reset: "Ripristina il valore predefinito",
@@ -144,6 +146,25 @@ export const it: Messages = {
           name: "Aggressivo",
           notice: "Comprime prima. Cervello più snello, ma i dettagli dei ricordi vecchi vengono riassunti via.",
         },
+      },
+    },
+    trash: {
+      label: "Per quanto tempo i ricordi dimenticati restano nel cestino",
+      desc: "Un ricordo dimenticato resta nel cestino prima di essere eliminato definitivamente, così puoi ancora recuperarlo se volevi tenerlo.",
+      levels: {
+        short: { name: "1 settimana", notice: "Eliminato definitivamente dopo 7 giorni." },
+        standard: { name: "2 settimane", notice: "Il valore predefinito. Eliminato definitivamente dopo 14 giorni." },
+        long: { name: "1 mese", notice: "Eliminato definitivamente dopo 30 giorni." },
+        extended: { name: "3 mesi", notice: "Eliminato definitivamente dopo 90 giorni." },
+      },
+    },
+    versions: {
+      label: "Quante modifiche vengono conservate per ogni ricordo",
+      desc: "Second Brain conserva le versioni precedenti di un ricordo, così una modifica può essere annullata. Le versioni più vecchie vengono eliminate man mano che arrivano le nuove.",
+      levels: {
+        brief: { name: "10", notice: "Vengono conservate le ultime 10 modifiche a un ricordo." },
+        standard: { name: "20", notice: "Il valore predefinito. Vengono conservate le ultime 20 modifiche a un ricordo." },
+        extended: { name: "50", notice: "Vengono conservate le ultime 50 modifiche a un ricordo." },
       },
     },
     model: {
@@ -795,6 +816,13 @@ export const it: Messages = {
     doneTitle: "Second Brain aggiornato",
     doneLede:
       "Tutto è all'ultima versione. Memorie, password e strumenti collegati non sono cambiati.",
+    whatsNew: {
+      title: "Novità della versione 4.0",
+      undo: "Ogni modifica a un ricordo viene ora conservata, quindi qualsiasi cambiamento si può annullare, da te o chiedendolo alla tua IA.",
+      trash: "I ricordi dimenticati restano nel cestino per 14 giorni prima di essere eliminati definitivamente.",
+      notRecorded: "Le modifiche fatte prima di questo aggiornamento non sono state registrate, quindi l'annullamento parte da oggi.",
+    },
+    doneMajorLine: "I ricordi dimenticati restano ora nel cestino per {days} giorni, e qualsiasi cambiamento può essere annullato.",
   },
   email: {
     subject: "Dettagli del tuo Second Brain",

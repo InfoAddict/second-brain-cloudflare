@@ -39,10 +39,14 @@ export const en: Messages = {
     lede: "How your Second Brain remembers and recalls. Changes apply to your next search.",
     sectionRecall: "Recall",
     sectionRemember: "Remember",
+    sectionHistory: "History and trash",
     sectionAi: "AI",
     sectionMatching: "Matching",
     custom: "Custom",
     customNote: "These values were set outside the app and don't match a preset. Picking a level below will replace them.",
+    // Shown above the History and trash controls for anyone who can see but
+    // not change them (4.0, UX-D.2).
+    historyReadOnly: "Only the brain's owner or an admin can change how long the trash keeps memories or how many versions are kept.",
     reset: "Reset to default",
     save: "Save changes",
     cancel: "Cancel",
@@ -138,6 +142,25 @@ export const en: Messages = {
           name: "Aggressive",
           notice: "Compresses sooner. Leaner brain, and detail in old memories is summarized away.",
         },
+      },
+    },
+    trash: {
+      label: "How long forgotten memories wait in the trash",
+      desc: "A forgotten memory sits in the trash before it's removed for good, so you can still bring it back if you meant to keep it.",
+      levels: {
+        short: { name: "1 week", notice: "Removed for good after 7 days." },
+        standard: { name: "2 weeks", notice: "The default. Removed for good after 14 days." },
+        long: { name: "1 month", notice: "Removed for good after 30 days." },
+        extended: { name: "3 months", notice: "Removed for good after 90 days." },
+      },
+    },
+    versions: {
+      label: "How many changes are kept per memory",
+      desc: "Second Brain keeps a memory's past versions so an edit can be undone. Older versions fall off as new ones arrive.",
+      levels: {
+        brief: { name: "10", notice: "The last 10 changes to a memory are kept." },
+        standard: { name: "20", notice: "The default. The last 20 changes to a memory are kept." },
+        extended: { name: "50", notice: "The last 50 changes to a memory are kept." },
       },
     },
     model: {
@@ -825,6 +848,18 @@ export const en: Messages = {
     doneTitle: "Your Second Brain is up to date",
     doneLede:
       "Everything's on the latest version. Your memories, password, and connected tools are unchanged.",
+    // Shown only to the owner, only when the update crosses a major version
+    // (UX-D.1). Each line must stay true of what that version actually ships.
+    whatsNew: {
+      title: "What's new in 4.0",
+      undo: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI.",
+      trash: "Forgotten memories wait in the trash for 14 days before they are removed for good.",
+      notRecorded: "Edits made before this update were not recorded, so undo starts from today.",
+    },
+    // The Done screen's own line, separate from the block above. Reads the
+    // freshly-updated brain's actual retention setting when it can; {days}
+    // falls back to the shipped default of 14 if that read fails.
+    doneMajorLine: "Forgotten memories now wait in the trash for {days} days, and any change can be undone.",
   },
   email: {
     subject: "Your Second Brain details",

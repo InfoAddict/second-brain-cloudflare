@@ -46,10 +46,13 @@ export type Messages = {
     lede: string;
     sectionRecall: string;
     sectionRemember: string;
+    sectionHistory: string;
     sectionAi: string;
     sectionMatching: string;
     custom: string;
     customNote: string;
+    /** Shown above History and trash for anyone who can see but not change it. */
+    historyReadOnly: string;
     reset: string;
     save: string;
     cancel: string;
@@ -64,6 +67,8 @@ export type Messages = {
     detail: { label: string; desc: string; levels: { compact: LevelCopy; standard: LevelCopy; full: LevelCopy } };
     duplicates: { label: string; desc: string; note: string; levels: { permissive: LevelCopy; standard: LevelCopy; strict: LevelCopy } };
     compression: { label: string; desc: string; note: string; levels: { conservative: LevelCopy; standard: LevelCopy; aggressive: LevelCopy } };
+    trash: { label: string; desc: string; levels: { short: LevelCopy; standard: LevelCopy; long: LevelCopy; extended: LevelCopy } };
+    versions: { label: string; desc: string; levels: { brief: LevelCopy; standard: LevelCopy; extended: LevelCopy } };
     model: { label: string; desc: string; sizeNote: string; neuronsNote: string };
     /**
      * The model used only when Second Brain reasons over a pair of memories to
@@ -561,6 +566,10 @@ export type Messages = {
     stepFinish: string;
     doneTitle: string;
     doneLede: string;
+    /** Owner-only, major-version-only "What's new" block (4.0, UX-D.1). */
+    whatsNew: { title: string; undo: string; trash: string; notRecorded: string };
+    /** The Done screen's own line. {days} is the freshly-read retention value. */
+    doneMajorLine: string;
   };
   email: {
     subject: string;

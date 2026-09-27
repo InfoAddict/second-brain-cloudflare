@@ -27,6 +27,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 - Agents can inspect who changed a memory, through which channel, and its supersedes links.
 - The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
 
+**Desktop app**
+
+- The Worker update screen now shows what changed for a major version. For 4.0: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI. Forgotten memories wait in the trash for 14 days before they are removed for good. Edits made before this update were not recorded, so undo starts from today." Shown to the brain's owner only, and the Done screen adds a line reading the brain's actual trash retention once the update has finished.
+- Advanced Settings has a new "History and trash" section: how long forgotten memories wait in the trash (7, 14, 30 or 90 days) and how many changes are kept per memory (10, 20 or 50). Owners and admins can change these; members see them read-only, with a line saying who can change them.
+- The app's self-update dialog now says plainly that 4.0's features depend on the brain being updated, not the app alone. English: "New in 4.0 once your Second Brain is updated: edits can be undone, forgotten memories wait in the trash before they're removed for good, and every change is kept in its history. This app update alone doesn't bring those. Ask whoever owns your Second Brain whether it's been updated yet." Italian: "Novità della versione 4.0, una volta aggiornato il tuo Second Brain: le modifiche si possono annullare, i ricordi dimenticati restano nel cestino prima di essere eliminati per sempre, e ogni cambiamento viene conservato nella cronologia. Questo aggiornamento dell'app da solo non porta queste novità. Chiedi al proprietario del tuo Second Brain se lo ha già aggiornato."
+
 ## [3.7.0] — Search that puts the right answer first
 
 **Search**

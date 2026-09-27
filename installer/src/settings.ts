@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { h } from "./shared";
 import { LOCALE_CHANGE_EVENT, getLocale, initI18n, t } from "./i18n";
+import { roleFromDetailsProbe, type ConnectionRole } from "./connection-role";
 import "./style.css";
 
 type ControlView = {
@@ -48,15 +49,19 @@ type Staged = { kind: "level"; id: string } | { kind: "reset" };
  * "matching" is last because it is the only pane that can start something
  * destructive.
  */
-type SectionId = "recall" | "remember" | "ai" | "matching";
+type SectionId = "recall" | "remember" | "history" | "ai" | "matching";
 
 const SECTIONS: {
   id: SectionId;
-  labelKey: "sectionRecall" | "sectionRemember" | "sectionAi" | "sectionMatching";
+  labelKey: "sectionRecall" | "sectionRemember" | "sectionHistory" | "sectionAi" | "sectionMatching";
   controls: string[];
 }[] = [
   { id: "recall", labelKey: "sectionRecall", controls: ["recency", "variety", "connections", "detail"] },
   { id: "remember", labelKey: "sectionRemember", controls: ["duplicates", "compression"] },
+  // Trash retention and versions kept (4.0, UX-D.2). A search-log toggle
+  // (RECALL_LOG) joins this section once T-0089.5.5 lands the config key on
+  // the Worker; there is nothing to render yet, so it is not stubbed here.
+  { id: "history", labelKey: "sectionHistory", controls: ["trash", "versions"] },
   { id: "ai", labelKey: "sectionAi", controls: [] },
   { id: "matching", labelKey: "sectionMatching", controls: [] },
 ];
@@ -74,6 +79,9 @@ let stagedModel: string | null = null;
 let stagedInsightModel: string | null = null;
 let busy = false;
 let message: { text: string; kind: "ok" | "error" } | null = null;
+/** Determined once at boot (4.0, UX-D.2). PATCH /config is admin-only on the
+ * Worker, so a member can see History and trash but not edit it. */
+let connectionRole: ConnectionRole = "owner";
 
 /** Tauri hands string errors through as strings and everything else as objects. */
 function errorText(e: unknown): string {
@@ -973,7 +981,13 @@ function migrationCard(): HTMLElement {
   return card;
 }
 
-function controlCard(c: ControlView): HTMLElement {
+/**
+ * `readOnly` is separate from `locked()`: locked is a temporary, whole-window
+ * state (a save or rebuild in flight), while read-only is per-control and
+ * durable for the session - a member can see History and trash the entire
+ * time this window is open, never just while something else is busy.
+ */
+function controlCard(c: ControlView, readOnly = false): HTMLElement {
   // Typed so the dotted keys below still satisfy t()'s Path type rather
   // than widening to a bare string.
   const base: `settingsPanel.${string}` = `settingsPanel.${c.id}`;
@@ -999,7 +1013,7 @@ function controlCard(c: ControlView): HTMLElement {
   for (const levelId of c.levels) {
     const input = h("input", { type: "radio", name: `sb-${c.id}`, value: levelId });
     (input as HTMLInputElement).checked = shown === levelId;
-    (input as HTMLInputElement).disabled = locked();
+    (input as HTMLInputElement).disabled = locked() || readOnly;
     input.addEventListener("change", () => stage(c.id, { kind: "level", id: levelId }, c));
     const label = h("label", { class: "settings-level" }, [
       input,
@@ -1028,7 +1042,7 @@ function controlCard(c: ControlView): HTMLElement {
     t("settingsPanel.reset"),
   ]);
   // Reset is itself staged, so it can be cancelled like any other edit.
-  (reset as HTMLButtonElement).disabled = locked() || shown === c.defaultLevel;
+  (reset as HTMLButtonElement).disabled = locked() || readOnly || shown === c.defaultLevel;
   reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
   card.append(reset);
 
@@ -1181,12 +1195,19 @@ function render(): void {
     ]),
   );
 
+  // Members can see History and trash but PATCH /config is admin-only on the
+  // Worker, so their controls render read-only with a line saying why.
+  const historyReadOnly = section.id === "history" && connectionRole === "member";
+  if (historyReadOnly) {
+    pane.append(h("p", { class: "settings-notice" }, [t("settingsPanel.historyReadOnly")]));
+  }
+
   const byId = new Map(saved.controls.map(c => [c.id, c]));
   for (const id of section.controls) {
     const c = byId.get(id);
     // Skip silently rather than throwing: a Worker running an older version
     // may not expose every control yet.
-    if (c) pane.append(controlCard(c));
+    if (c) pane.append(controlCard(c, historyReadOnly));
   }
   if (active === "ai") pane.append(modelCard(saved), insightModelCard(saved));
   if (active === "matching") pane.append(migrationCard());
@@ -1214,6 +1235,16 @@ async function boot(): Promise<void> {
   app.replaceChildren(h("p", { class: "settings-lede" }, [t("settingsPanel.saving")]));
   try {
     saved = await invoke<SettingsView>("get_brain_settings");
+    try {
+      const details = await invoke<{ teamMode: boolean }>("get_connection_details");
+      const probe = details.teamMode ? await invoke<unknown>("connection_role").catch(() => null) : null;
+      connectionRole = roleFromDetailsProbe(details.teamMode, probe);
+    } catch {
+      // Role could not be determined. Read-only is the safer wrong guess:
+      // hiding an edit control from someone allowed to use it is a smaller
+      // mistake than letting a member stage a change the Worker will 403.
+      connectionRole = "member";
+    }
     render();
   } catch (e) {
     app.replaceChildren(
