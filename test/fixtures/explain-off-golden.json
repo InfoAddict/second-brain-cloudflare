@@ -1,0 +1,152 @@
+{
+ "rest": {
+  "ok": true,
+  "query_used": "atlas ledger",
+  "compound_stale": null,
+  "results": [
+   {
+    "id": "e1",
+    "content": "Atlas ledger decision for gatewright",
+    "truncated": false,
+    "full_length": 36,
+    "score": 100,
+    "tags": [
+     "status:canonical",
+     "work"
+    ],
+    "source": "api",
+    "created_at": 1790164800000,
+    "updated_at": 1790164800000,
+    "stale_as_of": false,
+    "updated": false,
+    "hop": 0,
+    "workspace": "personal",
+    "actor_name": null,
+    "via_provenance": null,
+    "via_type": null,
+    "linked_at": null,
+    "related_to": null
+   },
+   {
+    "id": "e3",
+    "content": "Atlas planning notes",
+    "truncated": false,
+    "full_length": 20,
+    "score": 52.9,
+    "tags": [],
+    "source": "api",
+    "created_at": 1789473600000,
+    "updated_at": 1789473600000,
+    "stale_as_of": false,
+    "updated": false,
+    "hop": 0,
+    "workspace": "personal",
+    "actor_name": null,
+    "via_provenance": null,
+    "via_type": null,
+    "linked_at": null,
+    "related_to": null
+   },
+   {
+    "id": "e2",
+    "content": "A second memory about ledgers",
+    "truncated": false,
+    "full_length": 29,
+    "score": 24.2,
+    "tags": [
+     "idea"
+    ],
+    "source": "api",
+    "created_at": 1781697600000,
+    "updated_at": 1781697600000,
+    "stale_as_of": false,
+    "updated": false,
+    "hop": 0,
+    "workspace": "personal",
+    "actor_name": null,
+    "via_provenance": null,
+    "via_type": null,
+    "linked_at": null,
+    "related_to": null
+   }
+  ],
+  "insight": "3",
+  "semantic_unavailable": false
+ },
+ "restHops": {
+  "ok": true,
+  "query_used": "atlas ledger",
+  "compound_stale": null,
+  "results": [
+   {
+    "id": "e1",
+    "content": "Atlas ledger decision for gatewright",
+    "truncated": false,
+    "full_length": 36,
+    "score": 100,
+    "tags": [
+     "status:canonical",
+     "work"
+    ],
+    "source": "api",
+    "created_at": 1790164800000,
+    "updated_at": 1790164800000,
+    "stale_as_of": false,
+    "updated": false,
+    "hop": 0,
+    "workspace": "personal",
+    "actor_name": null,
+    "via_provenance": null,
+    "via_type": null,
+    "linked_at": null,
+    "related_to": null
+   },
+   {
+    "id": "e3",
+    "content": "Atlas planning notes",
+    "truncated": false,
+    "full_length": 20,
+    "score": 52.9,
+    "tags": [],
+    "source": "api",
+    "created_at": 1789473600000,
+    "updated_at": 1789473600000,
+    "stale_as_of": false,
+    "updated": false,
+    "hop": 0,
+    "workspace": "personal",
+    "actor_name": null,
+    "via_provenance": null,
+    "via_type": null,
+    "linked_at": null,
+    "related_to": null
+   },
+   {
+    "id": "e2",
+    "content": "A second memory about ledgers",
+    "truncated": false,
+    "full_length": 29,
+    "score": 24.2,
+    "tags": [
+     "idea"
+    ],
+    "source": "api",
+    "created_at": 1781697600000,
+    "updated_at": 1781697600000,
+    "stale_as_of": false,
+    "updated": false,
+    "hop": 0,
+    "workspace": "personal",
+    "actor_name": null,
+    "via_provenance": null,
+    "via_type": null,
+    "linked_at": null,
+    "related_to": null
+   }
+  ],
+  "insight": "3",
+  "semantic_unavailable": false
+ },
+ "mcp": "1. [Sep 23, 2026 · api [status:canonical, work]] (100% match)\nID: e1\nAtlas ledger decision for gatewright\n\n2. [Sep 15, 2026 · api] (53% match)\nID: e3\nAtlas planning notes\n\n3. [Jun 17, 2026 · api [idea]] (24% match)\nID: e2\nA second memory about ledgers",
+ "mcpHops": "1. [Sep 23, 2026 · api [status:canonical, work]] (100% match)\nID: e1\nAtlas ledger decision for gatewright\n\n2. [Sep 15, 2026 · api] (53% match)\nID: e3\nAtlas planning notes\n\n3. [Jun 17, 2026 · api [idea]] (24% match)\nID: e2\nA second memory about ledgers"
+}

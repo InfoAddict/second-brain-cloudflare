@@ -1,4 +1,4 @@
-import { MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, projectSlugError, projectTagError, withProjectTag, PROJECT_SLUG_RE } from "../tags/system";
+import { MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, projectSlugError, projectTagError, withProjectTag, PROJECT_SLUG_RE, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveConfig } from "../config";
 import { z } from "zod";
@@ -85,7 +85,7 @@ const FOUR_AXES =
   "Memories live on four axes: workspace = who can see it (personal or shared), project = what it's about, "
   + "tags = free-form facets, source = where it came from.";
 
-const RECALL_DESCRIPTION =
+export const RECALL_DESCRIPTION =
   "Recall: semantically search your second brain for relevant notes and context. "
   + "Call recall automatically at the start of every conversation and every 3-4 messages.\n\n"
   + "EVALUATE, DON'T ASSUME. Ask for enough candidates to compare — topK 5 (the default) unless the task "
@@ -107,6 +107,7 @@ const RECALL_DESCRIPTION =
   + "GRAPH. Raise hops to 1-2 when the question is about why something happened, how a decision evolved, "
   + "chronology, causes, outcomes, related decisions, or what came before or after something. Leave it at 0 "
   + "when direct matches already answer the question.\n\n"
+  + "EXPLAIN. Pass explain: true when the user asks why a memory came back, or when results look wrong.\n\n"
   + "TRUNCATION. Long memories come back shortened to keep the response small: any result ending in a "
   + "[truncated …] marker is PARTIAL, so call get(id) before relying on its details or quoting it. Results "
   + "without that marker are complete.\n\n"
@@ -552,6 +553,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // case-sensitive one let "Volatility:durable" through to become a second verdict,
       // and the injected one won.
       const baseTags = tags ?? [];
+      // Computed on the caller's raw tags, before withVolatility/withProjectTag add
+      // their own (never-reserved) ones — captureEntry strips these again on its own
+      // path (normalizeCaptureInput), this is purely for telling the caller honestly.
+      const { ignored: ignoredReservedTags } = stripNewReservedTags(baseTags);
+      const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
       const withVerdictOnly = volatility ? withVolatility(baseTags, volatility as Volatility) : baseTags;
       const withVerdict = projectSlug ? withProjectTag(withVerdictOnly, projectSlug) : withVerdictOnly;
       const orgDefault = (await resolveConfig(env)).TEAM_DEFAULT_WORKSPACE;
@@ -584,24 +590,24 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: `Duplicate detected (${(result.score * 100).toFixed(0)}% match) — not stored. Existing entry ID: ${result.matchId}` }] };
       }
       if (result.status === "contradiction") {
-        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.` }] };
+        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
       }
       if (result.status === "contradiction_protected") {
         const disposition = result.entryStatus
           ? `Stored as ${result.entryStatus}`
           : "Stored without a status pending classification";
-        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.` }] };
+        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
       }
       if (result.status === "replaced") {
-        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).` }] };
+        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).${noteSuffix}` }] };
       }
       if (result.status === "merged") {
-        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).` }] };
+        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).${noteSuffix}` }] };
       }
       if (result.status === "flagged") {
-        return { content: [{ type: "text", text: `Stored with ID: ${result.id} — note: similar entry exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}). Tagged as duplicate-candidate.` }] };
+        return { content: [{ type: "text", text: `Stored with ID: ${result.id} — note: similar entry exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}). Tagged as duplicate-candidate.${noteSuffix}` }] };
       }
-      return { content: [{ type: "text", text: `Stored. ID: ${result.id}` }] };
+      return { content: [{ type: "text", text: `Stored. ID: ${result.id}${noteSuffix}` }] };
     }
   );
 
@@ -718,6 +724,12 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
+      // Computed on the caller's raw tags — updateEntryContent strips these again on its
+      // own path (applyTagReplacement), this is purely for telling the caller honestly.
+      // Absent (undefined) means "leave the tags alone", so nothing was ignored.
+      const { ignored: ignoredReservedTags } = stripNewReservedTags(tags ?? []);
+      const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
+
       const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, mcpChange, row.workspace_id as string);
 
       // Only reachable if the entry was deleted between the guard read and the write.
@@ -750,13 +762,13 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return {
           content: [{
             type: "text",
-            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
+            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.${noteSuffix}`,
           }],
         };
       }
 
       return {
-        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).` }],
+        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).${noteSuffix}` }],
       };
     }
   );
@@ -914,15 +926,16 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         workspace: z.enum(["personal", "company"]).optional().describe("Restrict the search to one layer: personal or the shared company layer. Omit to search both — the default, and right for most questions"),
         team: z.string().optional().describe("When workspace is company, restrict to one team — id from list_teams"),
         project: projectParam.describe("Search inside one project: its slug from list_projects. Matches the project's own memories and anything its aliases claim. An unknown slug is an error, not an empty result"),
+        explain: z.boolean().optional().describe("Add one line per result saying why it came back (meaning rank, matched keywords, boosts, rerank, link). Off by default because it costs output tokens"),
       },
     },
-    async ({ query, topK, tag, after, before, kind, hops, workspace, team, project }) => {
+    async ({ query, topK, tag, after, before, kind, hops, workspace, team, project, explain }) => {
       const teamRead = identity ? readTeamParam(team, identity, workspace) : {};
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
       const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
       if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
       const cfg = await resolveConfig(env);
-      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId });
+      const { matches, insight, semanticUnavailable, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind: kind as MemoryKind | undefined, hops, synthesize: false, project: projectRows, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: teamRead.teamId });
 
       const notice = semanticUnavailable
         ? `Note: semantic search was unavailable or incomplete for this query, so these results may be keyword matches only. ${SEMANTIC_UNAVAILABLE_DETAIL}\n\n`
