@@ -442,7 +442,10 @@ async function selectViewStatus(status, entry) {
     const data = await res.json()
     if (!res.ok || !data.ok) throw new Error(data.error || '')
     let message = t('undo.marked', { status: viewStatusLabel(status).toLowerCase() })
-    if (data.indexed === false) message += ' ' + t('status.keywordOnly')
+    // undo.marked is a plain "toast after an action" (no period, per the copy
+    // guide), but appending a full sentence after it makes this one a "toast
+    // with a consequence", which does take one.
+    if (data.indexed === false) message += '. ' + t('status.keywordOnly')
     undoToast(message, entry.id, {
       onUndone: () => {
         if (typeof hydrateView === 'function') hydrateView(entry.id)
