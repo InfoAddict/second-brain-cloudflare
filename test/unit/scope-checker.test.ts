@@ -1288,10 +1288,10 @@ describe("the checker over the real source tree", () => {
     // separate by-id statements (each needs its own dense Params, so each carries its own comment).
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts): revertEntry's post-miss
     // liveness check is by-id, the row having been read above under the caller's own scope.
-    // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts, round 2, U10):
-    // findLiveIncomingRecreation's liveness check is by-id, the row being one this same mechanism
-    // created earlier under the caller's own authorized write.
-    ).toEqual({ queries: 163, exempt: 82, checked: 12, outerJoin: 1 });
+    // Round 3 (T-0089.1.3, U10/U13 simplification): the round-2 findLiveIncomingRecreation liveness
+    // read is gone (a merge's incoming is now re-created at most once by checking meta already in
+    // hand, no DB read), back down by 1 query and 1 scope-exempt to the round-1 total.
+    ).toEqual({ queries: 162, exempt: 81, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
