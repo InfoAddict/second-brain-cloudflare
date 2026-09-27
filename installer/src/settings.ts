@@ -1045,15 +1045,16 @@ function controlCard(c: ControlView, readOnly = false): HTMLElement {
     card.append(h("div", { class: "settings-forward-note" }, [`ⓘ ${t(`${base}.note`)}`]));
   }
 
-  // Hidden rather than disabled for a read-only member: nothing on this card
-  // is theirs to change, so an inert Reset button is a control with no
-  // purpose rather than a clearly unavailable one.
-  if (!readOnly) {
+  // Hidden, not disabled, in both cases it has nothing to do: a read-only
+  // member has nothing on this card to change, and a value already at its
+  // default has nothing to reset. An inert button under "The default. ..."
+  // is a control with no purpose, not a clearly unavailable one.
+  if (!readOnly && shown !== c.defaultLevel) {
     const reset = h("button", { class: "btn-secondary settings-reset", type: "button" }, [
       t("settingsPanel.reset"),
     ]);
     // Reset is itself staged, so it can be cancelled like any other edit.
-    (reset as HTMLButtonElement).disabled = locked() || shown === c.defaultLevel;
+    (reset as HTMLButtonElement).disabled = locked();
     reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
     card.append(reset);
   }
@@ -1230,7 +1231,12 @@ function render(): void {
   if (active === "ai") pane.append(modelCard(saved), insightModelCard(saved));
   if (active === "matching") pane.append(migrationCard());
 
-  app.append(h("div", { class: "panel" }, [rail, pane]), actionBar());
+  // A member has nothing to save on a fully read-only section. The bar stays
+  // if something IS staged (on another section they can edit), since it
+  // would otherwise hide a real pending change - "nothing to save" only
+  // holds when that is actually true.
+  const nothingToSaveHere = historyReadOnly && !isDirty();
+  app.append(h("div", { class: "panel" }, [rail, pane]), ...(nothingToSaveHere ? [] : [actionBar()]));
   // Re-render replaces the whole tree; without this, staging an edit near the
   // bottom would jump the view back to the top.
   window.scrollTo({ top: scroll });

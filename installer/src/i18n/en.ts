@@ -49,7 +49,7 @@ export const en: Messages = {
     historyReadOnly: "Only the brain's owner or an admin can change how long the trash keeps memories or how many versions are kept.",
     // The shared lede above is wrong here (it promises "next search"). Trash
     // length and versions kept run on different schedules, so this says both.
-    historyLede: "How long forgotten memories wait in the trash, and how many past versions of each memory are kept. A trash length change takes effect tonight; a versions-kept change takes effect the next time you edit that memory.",
+    historyLede: "A new trash length applies at the next cleanup, usually overnight. A new versions-kept number applies to each memory the next time it changes; lowering it removes older versions then, and raising it does not bring back ones already removed.",
     reset: "Reset to default",
     save: "Save changes",
     cancel: "Cancel",
@@ -855,14 +855,14 @@ export const en: Messages = {
     // (UX-D.1). Each line must stay true of what that version actually ships.
     whatsNew: {
       title: "What's new in 4.0",
-      undo: "Every edit to a memory is now kept, so any change can be undone, by you or by asking your AI.",
+      undo: "Every change to a memory is now kept, so you can undo it, yourself or by asking your AI.",
       trash: "Forgotten memories wait in the trash for 14 days before they are removed for good.",
       notRecorded: "Edits made before this update were not recorded, so undo starts from today.",
     },
     // The Done screen's own line, separate from the block above. Reads the
     // freshly-updated brain's actual retention setting when it can; {days}
     // falls back to the shipped default of 14 if that read fails.
-    doneMajorLine: "Forgotten memories now wait in the trash for {days} days, and any change can be undone.",
+    doneMajorLine: "Forgotten memories now wait in the trash for {days} days, and changes can be undone from now on.",
   },
   email: {
     subject: "Your Second Brain details",

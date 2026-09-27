@@ -40,10 +40,10 @@ export const it: Messages = {
     sectionRecall: "Recupero",
     sectionRemember: "Ricorda",
     sectionHistory: "Cronologia e cestino",
-    sectionAi: "AI",
+    sectionAi: "IA",
     sectionMatching: "Corrispondenze",
     historyReadOnly: "Solo il proprietario del Second Brain o un amministratore può cambiare per quanto tempo il cestino conserva i ricordi o quante versioni vengono conservate.",
-    historyLede: "Per quanto tempo i ricordi dimenticati restano nel cestino, e quante versioni passate di ogni ricordo vengono conservate. Una modifica alla durata del cestino ha effetto questa notte; una modifica al numero di versioni conservate ha effetto alla prossima modifica di quel ricordo.",
+    historyLede: "La nuova durata del cestino vale dalla prossima pulizia, di solito durante la notte. Il nuovo numero di versioni vale per ogni ricordo alla sua prossima modifica: abbassarlo rimuove allora le versioni più vecchie, alzarlo non recupera quelle già rimosse.",
     custom: "Personalizzato",
     customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",
     reset: "Ripristina il valore predefinito",
@@ -801,10 +801,10 @@ export const it: Messages = {
     title: "Aggiorna il Second Brain",
     ledeWithVersion:
       "È disponibile una nuova versione ({version}). " +
-      "Memorie, password e strumenti collegati restano. Nulla viene resettato.",
+      "I tuoi ricordi, la password e gli strumenti collegati restano. Nulla viene resettato.",
     ledeGeneric:
       "È disponibile una nuova versione del Second Brain. " +
-      "Memorie, password e strumenti collegati restano. Nulla viene resettato.",
+      "I tuoi ricordi, la password e gli strumenti collegati restano. Nulla viene resettato.",
     notice: "Accederai a Cloudflare una volta per autorizzare l'aggiornamento. Circa un minuto.",
     signInUpdate: "Accedi e aggiorna",
     waitingLede:
@@ -819,11 +819,11 @@ export const it: Messages = {
       "Tutto è all'ultima versione. Memorie, password e strumenti collegati non sono cambiati.",
     whatsNew: {
       title: "Novità della versione 4.0",
-      undo: "Ogni modifica a un ricordo viene ora conservata, quindi qualsiasi cambiamento si può annullare, da te o chiedendolo alla tua IA.",
+      undo: "Ogni modifica a un ricordo viene ora conservata, così puoi annullarla, da te o chiedendolo alla tua IA.",
       trash: "I ricordi dimenticati restano nel cestino per 14 giorni prima di essere eliminati definitivamente.",
       notRecorded: "Le modifiche fatte prima di questo aggiornamento non sono state registrate, quindi l'annullamento parte da oggi.",
     },
-    doneMajorLine: "I ricordi dimenticati restano ora nel cestino per {days} giorni, e qualsiasi cambiamento può essere annullato.",
+    doneMajorLine: "I ricordi dimenticati restano ora nel cestino per {days} giorni, e le modifiche si possono annullare da ora in poi.",
   },
   email: {
     subject: "Dettagli del tuo Second Brain",
