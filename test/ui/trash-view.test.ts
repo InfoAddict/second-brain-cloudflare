@@ -470,3 +470,33 @@ describe("both locales", () => {
     expect(html).toContain("Elimina per sempre");
   });
 });
+
+/**
+ * Restore and Delete forever must stay a normal button height at every
+ * width, including a Restore-only row. There is no browser in this test
+ * runner to lay flex out and measure it, so this reads the rule as text
+ * (the same technique test/unit/history-trash-settings-parity.test.ts uses
+ * for a Rust file) - a stacked layout, or a container that stretches its
+ * children, is how a lone button balloons to fill the tallest sibling.
+ */
+describe("the action row keeps a normal button height at every width", () => {
+  const css = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+
+  it("no stacking rule remains for .trash-item-actions", () => {
+    expect(css).not.toMatch(/\.trash-item-actions\s*{[^}]*flex-direction:\s*column/s);
+    expect(css).not.toContain("flex-direction: column");
+  });
+
+  it(".trash-btn has a fixed height under 48px, not just a minimum", () => {
+    const rule = css.match(/\.trash-btn\s*{([^}]*)}/s)?.[1] ?? "";
+    expect(rule).not.toContain("min-height");
+    const height = Number(rule.match(/(?:^|\s)height:\s*(\d+)px/)?.[1]);
+    expect(height).toBeGreaterThan(0);
+    expect(height).toBeLessThan(48);
+  });
+
+  it(".trash-item-actions does not stretch its children to the tallest one", () => {
+    const rule = css.match(/\.trash-item-actions\s*{([^}]*)}/s)?.[1] ?? "";
+    expect(rule).toMatch(/align-items:\s*flex-start/);
+  });
+});

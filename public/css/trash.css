@@ -106,19 +106,8 @@
 .trash-item-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px;
-}
-
-/* At 390px the two buttons technically fit side by side, but narrow enough
- * to crowd the 44px tap target the house rules ask for. Stack instead. */
-@media (max-width: 480px) {
-  .trash-item-actions {
-    flex-direction: column;
-  }
-
-  .trash-btn {
-    flex: 1 1 auto;
-  }
 }
 
 .trash-btn {
@@ -127,8 +116,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 40px;
-  padding: 9px 14px;
+  height: 40px;
+  padding: 0 14px;
   border-radius: var(--r-button);
   font-family: var(--font-sans);
   font-size: 13px;
