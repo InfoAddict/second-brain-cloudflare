@@ -171,6 +171,6 @@ describe("ADV-U20 (MINOR): keptIncoming says a row is kept after it has been del
     expect(row(x)).toBeUndefined();
     // Task 15 will turn this into user-facing text; it must not claim a memory exists that does not.
     const claim = ((redo as any).keptIncoming ?? []).find((k: any) => k.id === x);
-    expect(claim?.reason).not.toBe("kept as its own memory"); // actual: "kept as its own memory" (test/integration/adv-undo-r3.test.ts U16 pins it)
+    expect(claim?.reason).toBe("re-created earlier");
   });
 });

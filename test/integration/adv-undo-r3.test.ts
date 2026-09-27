@@ -204,7 +204,7 @@ describe("ADV-U16 (MINOR, superseded by the round-3 simplification): a user-remo
     // Nothing resurrects x, and the result still names it rather than falling silent about a fact
     // the user can no longer find under that id.
     expect(row(x)).toBeUndefined();
-    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
   });
 });
 

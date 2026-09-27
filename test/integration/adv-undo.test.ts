@@ -179,7 +179,7 @@ describe("ADV-U4 (MINOR): merge undo is not symmetric", () => {
     // Redo restores the merged text but leaves the re-created row exactly alone: the fact now
     // legitimately lives in both places, and the result says so instead of silently removing one.
     expect(row(recreated).content).toBe("Incoming fact");
-    expect((redo as any).keptIncoming).toEqual([{ id: recreated, reason: "kept as its own memory" }]);
+    expect((redo as any).keptIncoming).toEqual([{ id: recreated, reason: "re-created earlier" }]);
   });
 
   it("to_version past a merge keeps the incoming fact somewhere live", async () => {

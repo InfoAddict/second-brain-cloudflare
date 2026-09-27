@@ -113,7 +113,7 @@ describe("ADV-U8 (MAJOR, superseded by the round-3 simplification): redo never t
     expect(row(x)).toBeDefined();
     expect(row(x).workspace_id).toBe(bob.personalWorkspaceId);
     expect(await trashed(x)).toBeNull();
-    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
   });
 
   it("redo keeps (and reports) a re-created memory someone else has since edited", async () => {
@@ -131,7 +131,7 @@ describe("ADV-U8 (MAJOR, superseded by the round-3 simplification): redo never t
     const redo = await revertEntry(e, alice, "old", change(alice), DEFAULTS);
     expect(redo.status).toBe("reverted");
     expect(row(x)?.content).toContain("follow-up");
-    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
   });
 });
 
@@ -147,7 +147,7 @@ describe("ADV-U9 (MINOR, superseded by the round-3 simplification): a merge's in
     const redo = await revertEntry(e, owner, "old", change(), DEFAULTS); // redo: merged text restored, x kept
     expect(redo.status).toBe("reverted");
     expect(row(x)).toBeDefined();
-    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
+    expect((redo as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
 
     const undo2 = await revertEntry(e, owner, "old", change(), DEFAULTS); // undo again
     expect(undo2.status).toBe("reverted");
@@ -155,7 +155,7 @@ describe("ADV-U9 (MINOR, superseded by the round-3 simplification): a merge's in
     // Exactly one live copy of the fact throughout: no re-creation happens twice.
     expect(sqlite.rows().filter((r: any) => r.content === "Incoming fact")).toHaveLength(1);
     expect((undo2 as any).recreatedIncomingId).toBeUndefined();
-    expect((undo2 as any).keptIncoming).toEqual([{ id: x, reason: "kept as its own memory" }]);
+    expect((undo2 as any).keptIncoming).toEqual([{ id: x, reason: "re-created earlier" }]);
   });
 });
 

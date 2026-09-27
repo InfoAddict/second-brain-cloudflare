@@ -167,8 +167,11 @@ export async function revertEntry(
   // reporting it every time so whoever is looking can see the fact now lives in two places and
   // remove one on purpose. The record travels forward on every hop so this keeps working no matter
   // how many undo/redo cycles run.
+  // "re-created earlier" rather than a claim like "kept as its own memory" (U20): this report costs
+  // no DB read, so it cannot say whether the row is still there, still that content, or gone for
+  // good — Task 15 surfaces this text to users, and it must never assert a memory exists that does not.
   const inheritedIncoming = target.reason === "revert" ? asRecordedIncoming(targetMeta.recreated_incoming) : [];
-  for (const entry of inheritedIncoming) keptIncoming.push({ id: entry.id, reason: "kept as its own memory" });
+  for (const entry of inheritedIncoming) keptIncoming.push({ id: entry.id, reason: "re-created earlier" });
 
   const recreatedForMeta: RecordedIncoming[] = [
     ...inheritedIncoming,
