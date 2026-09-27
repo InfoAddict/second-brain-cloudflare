@@ -253,6 +253,32 @@ describe("rows render who, date and days left for each reason and channel", () =
   });
 });
 
+describe("honors can_restore and can_delete_forever per row (contract 4.3)", () => {
+  it("hides Delete forever on a row the reader may not permanently delete", async () => {
+    const ctx = load([{ ok: true, items: [item({ can_restore: true, can_delete_forever: false })], next_cursor: null, retention_days: 14 }]);
+    await ctx.loadTrashPage();
+    const html = el(ctx, "trash-list").innerHTML;
+    expect(html).toContain('data-action="restore"');
+    expect(html).not.toContain('data-action="delete-forever"');
+  });
+
+  it("hides Restore on a row the reader may not restore", async () => {
+    const ctx = load([{ ok: true, items: [item({ can_restore: false, can_delete_forever: true })], next_cursor: null, retention_days: 14 }]);
+    await ctx.loadTrashPage();
+    const html = el(ctx, "trash-list").innerHTML;
+    expect(html).not.toContain('data-action="restore"');
+    expect(html).toContain('data-action="delete-forever"');
+  });
+
+  it("shows neither action when both are false", async () => {
+    const ctx = load([{ ok: true, items: [item({ can_restore: false, can_delete_forever: false })], next_cursor: null, retention_days: 14 }]);
+    await ctx.loadTrashPage();
+    const html = el(ctx, "trash-list").innerHTML;
+    expect(html).not.toContain('data-action="restore"');
+    expect(html).not.toContain('data-action="delete-forever"');
+  });
+});
+
 describe("days 0 reads waiting for a daily cleanup", () => {
   it("a row past retention but not yet purged says it is waiting for a cleanup, not 'the next' one", async () => {
     // A single night's cleanup is capped, so a backlog can leave a day-0 row
