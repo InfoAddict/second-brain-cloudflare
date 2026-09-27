@@ -1142,8 +1142,8 @@ export async function handleAdminRoutes(
   }
 
   // POST /stale/keep, confirm a flagged memory is still true without editing it.
-  // Dashboard-only, no MCP twin: like insight review, this is a human curation
-  // act on the out-of-date queue. Clears stale:as-of and bumps updated_at so the
+  // Agents may settle this on the user's word through MCP resolve. The change
+  // is reversible in 4.0. Clears stale:as-of and bumps updated_at so the
   // nightly pass does not immediately re-flag the same claim.
   if (url.pathname === "/stale/keep" && request.method === "POST") {
     const auth = await requireIdentity(request, env);
@@ -1364,8 +1364,8 @@ export async function handleAdminRoutes(
   }
 
   // POST /patterns/resolve, confirm or dismiss a proposed insight.
-  // Dashboard-only, no MCP twin: insight review is a human curation act, not
-  // an agent capability. Confirm promotes an insight into a real recallable
+  // Agents may settle one insight on the user's word through MCP resolve;
+  // 4.0 makes each change reversible. Confirm promotes it into a real recallable
   // memory; dismiss deprecates it (audit row kept, vectors removed).
   //
   // Takes `id` for one or `ids` for many. Ruling on a backlog one at a time is

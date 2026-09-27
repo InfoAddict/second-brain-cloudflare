@@ -8,12 +8,14 @@ import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
 import { resolveIdentityFromToken, type Identity } from "../../src/lib/identity";
 import { createProject } from "../../src/projects/registry";
+import { createMember } from "../../src/lib/team-admin";
 import type { Env } from "../../src/env";
 
 let sqlite: SqliteD1;
 let env: Env;
 let identity: Identity;
-const ctx = { waitUntil: (_: Promise<unknown>) => {} } as ExecutionContext;
+let pending: Promise<unknown>[] = [];
+const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as ExecutionContext;
 
 async function call(name: string, args: Record<string, unknown> = {}, user: Identity | null = identity) {
   const server = buildMcpServer(env, ctx, user ?? undefined);
@@ -31,6 +33,7 @@ async function call(name: string, args: Record<string, unknown> = {}, user: Iden
 
 beforeEach(async () => {
   resetDatabaseInit();
+  pending = [];
   sqlite = makeSqliteD1();
   env = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV() });
   await initializeDatabase(env);
@@ -38,7 +41,7 @@ beforeEach(async () => {
   identity = (await resolveIdentityFromToken("test-token", env))!;
   sqlite.issued.length = 0;
 });
-afterEach(() => sqlite?.close());
+afterEach(async () => { await Promise.all(pending); sqlite?.close(); });
 
 describe("MCP brief", () => {
   it("returns a quiet empty state and rejects unauthenticated reads", async () => {
@@ -68,5 +71,67 @@ describe("MCP brief", () => {
     expect(text).toContain("insight-1");
     expect(text).not.toContain("Other task");
     expect(sqlite.issued).toHaveLength(5);
+  });
+});
+
+describe("MCP resolve", () => {
+  it("marks one task done with a channel audit in at most four statements", async () => {
+    sqlite.seed({ id: "todo", content: "Send invoice", createdAt: 1, tags: ["task"] });
+    sqlite.issued.length = 0;
+    expect(await call("resolve", { id: "todo", action: "done" })).toMatch(/todo.*done/i);
+    await Promise.all(pending);
+    expect(sqlite.rows().find(r => r.id === "todo")?.tags).toContain("task:done");
+    const event = await env.DB.prepare(`SELECT payload FROM entry_events WHERE entry_id = 'todo'`).first<{ payload: string }>();
+    expect(JSON.parse(event!.payload)).toMatchObject({ loop_action: "done", channel: "mcp" });
+    expect(sqlite.issued.length - 1).toBe(3);
+  });
+
+  it("requires until for snooze and a specific actionable id", async () => {
+    expect(await call("resolve", { id: "todo", action: "snooze" })).toContain("until is required");
+    expect(await call("resolve", { id: "missing", action: "done" })).toContain("No entry found");
+  });
+
+  it("confirms insights and keeps stale memories on the user's word", async () => {
+    sqlite.seed({ id: "insight", content: "Pattern", createdAt: 1, tags: ["auto-insight"] });
+    sqlite.seed({ id: "stale", content: "Still true", createdAt: 1, tags: ["stale:as-of"] });
+    sqlite.issued.length = 0;
+    expect(await call("resolve", { id: "insight", action: "confirm_insight" })).toMatch(/insight.*confirm/i);
+    await Promise.all(pending);
+    expect(sqlite.issued).toHaveLength(3);
+    sqlite.issued.length = 0;
+    expect(await call("resolve", { id: "stale", action: "still_true" })).toMatch(/stale.*still_true/i);
+    await Promise.all(pending);
+    expect(sqlite.issued).toHaveLength(3);
+    const tags = Object.fromEntries(sqlite.rows().map(r => [r.id, JSON.parse(String(r.tags)) as string[]]));
+    expect(tags.insight).toContain("status:canonical");
+    expect(tags.insight).not.toContain("auto-insight");
+    expect(tags.stale).not.toContain("stale:as-of");
+  });
+
+  it("handles not_a_task, snooze, clear_date, and dismiss_insight", async () => {
+    const future = new Date(Date.now() + 3 * 86400000).toISOString();
+    sqlite.seed({ id: "task", content: "Maybe task", createdAt: 1, tags: ["task"] });
+    sqlite.seed({ id: "dated", content: "Pay later", createdAt: 1, tags: ["task"] });
+    sqlite.seed({ id: "insight", content: "Bad pattern", createdAt: 1, tags: ["auto-insight"] });
+    expect(await call("resolve", { id: "task", action: "not_a_task" })).toContain("not_a_task");
+    expect(await call("resolve", { id: "dated", action: "snooze", until: future })).toContain("snooze");
+    expect((sqlite.rows().find(r => r.id === "dated")?.when_at as number)).toBeGreaterThan(Date.now());
+    expect(await call("resolve", { id: "dated", action: "clear_date" })).toContain("clear_date");
+    expect(await call("resolve", { id: "insight", action: "dismiss_insight" })).toContain("dismiss_insight");
+    const rows = Object.fromEntries(sqlite.rows().map(r => [r.id, r]));
+    expect(JSON.parse(String(rows.task.tags))).not.toContain("task");
+    expect(rows.dated.when_at).toBeNull();
+    expect(rows.dated.when_source).toBe("cleared");
+    expect(JSON.parse(String(rows.insight.tags))).toContain("status:deprecated");
+  });
+
+  it("does not resolve another member's personal entry", async () => {
+    const other = await createMember(env, { name: "Other" });
+    sqlite.seed({ id: "private", content: "Private task", createdAt: 1, tags: ["task"] });
+    await env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'private'`).bind(other.member.personalWorkspaceId).run();
+    const member = await createMember(env, { name: "Reader" });
+    const reader = (await resolveIdentityFromToken(member.token, env))!;
+    expect(await call("resolve", { id: "private", action: "done" }, reader)).toContain("No entry found");
+    expect(JSON.parse(String(sqlite.rows().find(r => r.id === "private")?.tags))).not.toContain("task:done");
   });
 });

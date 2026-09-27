@@ -31,6 +31,7 @@ import { autoCreateProject } from "../projects/autocreate";
 import { listProjects, type ProjectRow } from "../projects/registry";
 import { resolveProjectRead } from "../projects/resolve";
 import { computeAgentBrief } from "../brief/compute";
+import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -352,6 +353,36 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
       if (typeof projectRows === "string") return { content: [{ type: "text", text: projectRows }] };
       return { content: [{ type: "text", text: await computeAgentBrief(env, identity, projectRows, workspace, teamRead.teamId) }] };
+    },
+  );
+
+  server.registerTool(
+    "resolve",
+    {
+      description: "Act only on a clear user signal about one specific item: done, not a task, wait, clear date, confirm or dismiss an insight, or still true. Never close several items on your own initiative. Every resolve can be undone.",
+      inputSchema: {
+        id: z.string().describe("Exact memory id"),
+        action: z.enum(["done", "not_a_task", "snooze", "clear_date", "confirm_insight", "dismiss_insight", "still_true"]).describe("How to resolve this one item"),
+        until: z.string().optional().describe("Future date for snooze"),
+      },
+    },
+    async ({ id: rawId, action, until }) => {
+      if (!identity) return { content: [{ type: "text", text: "Resolve requires an authenticated identity." }] };
+      const id = rawId.trim();
+      if (!id) return { content: [{ type: "text", text: "id is required" }] };
+      if (action === "confirm_insight" || action === "dismiss_insight") {
+        const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, vector_ids") as (Record<string, any> | null);
+        if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        if (!(JSON.parse(row.tags ?? "[]") as string[]).includes("auto-insight")) {
+          return { content: [{ type: "text", text: "Entry is not a derived insight" }] };
+        }
+        const result = await applyInsightResolution(env, ctx, identity.userId, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss", "mcp");
+        const text = result.resolved.length ? `Resolved ${id}: ${action}` : `Already resolved: ${id}`;
+        return { content: [{ type: "text", text }] };
+      }
+      const result = await resolveEntryAction(env, ctx, identity, id, action, until, "mcp");
+      if (!result.ok) return { content: [{ type: "text", text: result.error }] };
+      return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
     },
   );
 
