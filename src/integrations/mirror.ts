@@ -159,7 +159,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       return "busy";
     },
     async deleteEntry(id) {
-      const r = await forgetEntry(id, env, { actorId: writeCtx.actorId, channel: "system:mirror" }, { reason: "mirror", config: await config(), purge: false });
+      const r = await forgetEntry(id, env, { actorId: writeCtx.actorId, channel: "system:mirror" }, { reason: "mirror", config: await config(), purge: false }, writeCtx.workspaceId);
       if (r.status !== "deleted") return;
       auditBuffer.push({
         entryId: id,

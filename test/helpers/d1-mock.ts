@@ -241,10 +241,13 @@ export class D1Mock {
         }
         // Short append (T-0089.9/ADV-1/ADV-2, buildCasGuard/Params, dense-numbered): content is
         // concatenated in SQL, guarded on tags AND workspace_id (the row this call is authorized for).
+        // updated_at is clamped (R2-6, MAX(now, last version's created_at)); the clamp's own
+        // entry_id reference reuses the id placeholder, so it shows up a second time in
+        // placeholderArgs' per-occurrence output, right after updated_at, ahead of the real id.
         if (s.startsWith("UPDATE entries AS e SET content = content || ")) {
           const args2 = placeholderArgs(s, args);
           const hasWhen = /when_at = \?\d+/.test(s);
-          const [suffix, indexed, chunk, tags, updated_at, ...rest] = args2;
+          const [suffix, indexed, chunk, tags, updated_at, _clampId, ...rest] = args2;
           const when = hasWhen ? rest.splice(0, 2) : [];
           const [id, readTags, workspace_id] = rest;
           const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags && (e.workspace_id ?? "") === workspace_id);
@@ -256,13 +259,38 @@ export class D1Mock {
           }
           return { meta: { changes: row ? 1 : 0 } };
         }
-        // updateEntryContent's compare-and-set commit, and the append long branch (identical shape):
+        // A person's or a system's merge/replace commit (entry.ts), vector_ids folded into the same
+        // guarded UPDATE (ADV-4 residual): SET content, tags, updated_at, vector_ids, guarded on
+        // TAGS first then content (systemCasColumns/personCasColumns build tags before content —
+        // the update/append branch below guards content first, which is how the two are told apart
+        // here). The system form adds the actor/source identity check (an empty actor, its own source).
+        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = \?\d+, vector_ids = \?\d+ WHERE e\.id = \?\d+ AND e\.tags/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const hasActorSourceTail = s.includes("COALESCE(e.actor_id, '') = ''");
+          const [content, tags, updated_at, vector_ids, id, readTags, readContent, workspace_id, source] = args2;
+          const row = db.entries.find((e: any) =>
+            e.id === id && (e.tags ?? "[]") === readTags && e.content === readContent && (e.workspace_id ?? "") === workspace_id
+            && (!hasActorSourceTail || ((e.actor_id ?? "") === "" && e.source === source)));
+          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; row.vector_ids = vector_ids; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // updateEntryContent's compare-and-set commit, and the append long branch (identical shape,
+        // except the append branch's updated_at is clamped, R2-6: MAX(now, last version's
+        // created_at). The clamp's own entry_id reference reuses the id placeholder, so it shows up
+        // a second time in placeholderArgs' per-occurrence output, right after updated_at, ahead of
+        // vector_ids. updateEntryContent has no clamp and takes the plain-placeholder branch below.
+        // The clamp form's own subquery text sits between "MAX(" and "vector_ids", so the two forms
+        // are matched separately rather than as one regex requiring vector_ids right after updated_at.
         // SET content, tags, updated_at, vector_ids atomically (ADV-4), guarded on content, tags AND
         // workspace_id (ADV-2, buildCasGuard).
-        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = \?\d+, vector_ids = \?\d+/.test(s)) {
+        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = (\?\d+, vector_ids = \?\d+|MAX\()/.test(s)) {
           const args2 = placeholderArgs(s, args);
           const hasWhen = /when_at = \?\d+/.test(s);
-          const [content, tags, updated_at, vector_ids, ...rest] = args2;
+          const isClamped = /updated_at = MAX\(/.test(s);
+          const [content, tags, ...afterTags] = args2;
+          const [updated_at, vector_ids, ...rest] = isClamped
+            ? [afterTags[0], afterTags[2], ...afterTags.slice(3)]
+            : afterTags;
           const when = hasWhen ? rest.splice(0, 2) : [];
           const [id, readContent, readTags, workspace_id] = rest;
           const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags && (e.workspace_id ?? "") === workspace_id);
@@ -272,16 +300,24 @@ export class D1Mock {
           }
           return { meta: { changes: row ? 1 : 0 } };
         }
-        // A person's or a system's merge/replace commit (entry.ts): SET content, tags, updated_at; the
-        // system form adds the actor/source identity check (an empty actor and its own source).
-        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = \?\d+ WHERE e\.id/.test(s)) {
+        // applyStatus's non-deprecated branch (lifecycle.ts, R2-3): SET tags alone, guarded on
+        // workspace_id — the row moved out of the caller's authorized workspace misses.
+        if (/^UPDATE entries AS e SET tags = \?\d+ WHERE e\.id = \?\d+ AND e\.workspace_id = \?\d+$/.test(s)) {
           const args2 = placeholderArgs(s, args);
-          const hasActorSourceTail = s.includes("COALESCE(e.actor_id, '') = ''");
-          const [content, tags, updated_at, id, readTags, readContent, workspace_id, source] = args2;
-          const row = db.entries.find((e: any) =>
-            e.id === id && (e.tags ?? "[]") === readTags && e.content === readContent && (e.workspace_id ?? "") === workspace_id
-            && (!hasActorSourceTail || ((e.actor_id ?? "") === "" && e.source === source)));
-          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; }
+          const [tags, id, workspace_id] = args2;
+          const row = db.entries.find((e: any) => e.id === id && (e.workspace_id ?? "") === workspace_id);
+          if (row) row.tags = tags;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // deprecateEntry (lifecycle.ts, R2-3): SET tags and empty vector_ids, guarded on workspace_id
+        // alone — the caller already read tags to compute the deprecated set, so there is nothing
+        // else to re-check. Checked first (a strict end anchor) so entry.ts's wider contradiction
+        // shape below, which guards tags/content too, is not shadowed by this simpler prefix.
+        if (/^UPDATE entries AS e SET tags = \?\d+, vector_ids = '\[\]' WHERE e\.id = \?\d+ AND e\.workspace_id = \?\d+$/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const [tags, id, workspace_id] = args2;
+          const row = db.entries.find((e: any) => e.id === id && (e.workspace_id ?? "") === workspace_id);
+          if (row) { row.tags = tags; row.vector_ids = "[]"; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         // A system job's contradiction deprecation (entry.ts): SET tags and empty vector_ids, guarded

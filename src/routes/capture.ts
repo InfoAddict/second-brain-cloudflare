@@ -192,7 +192,7 @@ export async function handleCaptureRoutes(
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" });
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
@@ -258,11 +258,17 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" });
+    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" }, row.workspace_id as string);
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    }
+
+    // R2-5: the row is still there, just moved out of this caller's reach mid-edit — a conflict to
+    // retry, not a memory that vanished.
+    if (result.status === "moved") {
+      return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
     }
 
     if (result.status === "reembed_failed") {

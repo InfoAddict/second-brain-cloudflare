@@ -133,8 +133,16 @@ export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: str
   if (stale.length) await deleteVectorIds(env, stale);
 }
 
+/**
+ * Embeds and upserts to Vectorize only (upsertEntryVectors, not storeEntry): every caller of
+ * reembedOrThrow/reembedOrDegrade commits vector_ids itself, inside its own compare-and-set batch
+ * (update, append, merge, undo). storeEntry's own unconditional `vector_ids = ?` write, if it ran
+ * here too, would race ahead of that guarded batch and could overwrite a concurrent short append's
+ * json_insert with a vector_ids list that never saw it (ADV-4, residual). restoreRowVectors is the
+ * one caller that has no batch of its own to fold this into, so it writes vector_ids explicitly.
+ */
 export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS, writeCtx: WriteContext = OWNER_WRITE_CONTEXT): Promise<StoredEntry> {
-  const stored = await storeEntry(env, id, content, tags, source, Date.now(), config, writeCtx);
+  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
   if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
   return stored;
 }
@@ -180,6 +188,8 @@ export async function restoreRowVectors(
       return;
     }
     const restored = await reembedOrThrow(env, id, current.content as string, JSON.parse(current.tags ?? "[]"), source, cfg, embedContextForRow(current, writeCtx));
+    // versioning: exempt: vector bookkeeping (L5) — reembedOrThrow no longer writes this itself
+    await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify(restored.vectorIds), id).run();
     await deleteStaleVectors(env, [...new Set([...oldVectorIds, ...mergedVectorIds])], restored.vectorIds);
   } catch (e) {
     console.error("Restoring vectors after a lost write failed (non-fatal):", e);
@@ -206,6 +216,9 @@ export async function restoreRowVectors(
  */
 export type UpdateEntryResult =
   | { status: "not_found" }
+  /** R2-5: the row still exists, but it moved out of the caller's authorized workspace since the
+   * caller's own scoped read (an unshare mid-edit) — a conflict to retry, not a memory that vanished. */
+  | { status: "moved" }
   | { status: "reembed_failed" }
   /** The row kept changing under the write: nothing was committed and the vectors were restored to the row as it stands. */
   | { status: "conflict" }
@@ -243,7 +256,16 @@ export async function updateEntryContent(
   replaceTags: string[] | undefined,
   writeCtx: WriteContext,
   change: ChangeContext,
+  /** The workspace the CALLER's own scoped read authorized (getReadableEntry + assertCanEditContent),
+   * required so an unshare in the awaited gap between that read and this call's own first read (R2-3)
+   * cannot land as "authorized" here — this call's guard pins to it, not to whatever it reads later. */
+  authorizedWorkspaceId: string,
 ): Promise<UpdateEntryResult> {
+  // A route's own scoped read can carry workspace_id as null/undefined for a row from before the
+  // workspace column existed; this call's OWN read of the same row (below) always normalizes it to
+  // "" (COALESCE-equivalent), so the pin must match that or a legitimate legacy row's every write
+  // reports "moved" forever. Normalize once here rather than trust every call site to.
+  const pinnedWorkspaceId = authorizedWorkspaceId ?? "";
   // Same treatment captureEntry gives every stored memory, which is the point — but note it
   // flattens all whitespace, so a replacement does not preserve line breaks or code fences.
   // `appendToEntry` deliberately does not flatten; prefer append when the shape matters.
@@ -258,14 +280,15 @@ export async function updateEntryContent(
   let embeddedFrom: string | null = null;
   let reembedded: StoredEntry | null = null;
   let last: { row: Record<string, any>; vectorIds: string[]; embedCtx: WriteContext } | null = null;
-  // ADV-2: `writeCtx.workspaceId` is the CALLER's default capture target (see embedContextForRow's own
-  // comment) — a member editing a row in a DIFFERENT, but readable and authorized, company workspace
-  // legitimately has a `writeCtx` that disagrees with the row's own workspace, and pinning the guard to
-  // it would refuse every ordinary edit outside the caller's default team. What the guard must pin to
-  // instead is the workspace THIS CALL found the row in on its own first read — the same workspace the
-  // route's own getReadableEntry + assertCanEditContent already authorized moments earlier. A LATER
-  // attempt landing somewhere else is the actual unauthorized-move case (an unshare mid-embed).
-  let authorizedWorkspaceId: string | null = null;
+  // R2-2: a lost or failed attempt's own embed shares a DETERMINISTIC vector id with the row's real
+  // live vectors (the id, or id-chunk-i) — deleting it outright can delete a WINNING concurrent
+  // write's vector, not just this attempt's own. Re-embed the row as it now stands instead, which
+  // self-heals regardless of who actually won; never delete an attempt's vectors directly.
+  const recoverFromLostAttempt = async () => {
+    if (!reembedded?.vectorIds.length) return;
+    if (last) await restoreRowVectors(env, id, last.vectorIds, reembedded.vectorIds, last.row.source as string, config, last.embedCtx);
+    else { try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); } }
+  };
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
     // vector_ids has to be read before any mutation: storeEntry overwrites it, and the
@@ -277,21 +300,17 @@ export async function updateEntryContent(
 
     if (!row) {
       // Forgotten meanwhile: its own vectors went with it, and any this write made are orphans.
-      if (reembedded?.vectorIds.length) {
-        try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
-      }
+      await recoverFromLostAttempt();
       return { status: "not_found" };
     }
 
-    if (authorizedWorkspaceId === null) {
-      authorizedWorkspaceId = row.workspace_id ?? "";
-    } else if (row.workspace_id !== authorizedWorkspaceId) {
-      // The row moved since this call's own first read: write nothing. Retrying would re-authorize
-      // against wherever it landed, which is exactly the cross-tenant write this guard refuses.
-      if (reembedded?.vectorIds.length) {
-        try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
-      }
-      return { status: "not_found" };
+    if (row.workspace_id !== pinnedWorkspaceId) {
+      // The row moved since the caller's own authorization (R2-3: that may be the route's read, not
+      // this call's): write nothing. Retrying would re-authorize against wherever it landed, which is
+      // exactly the cross-tenant write this guard refuses. Distinct from not_found (R2-5): the row is
+      // still there, just not here for this caller any more — a conflict, not a 404.
+      await recoverFromLostAttempt();
+      return { status: "moved" };
     }
 
     const readContent: string = row.content;
@@ -329,11 +348,10 @@ export async function updateEntryContent(
     // writer may have upserted over these ids); a tags-only change keeps the vectors already made.
     if (attempt === 1 || embeddedFrom !== readContent) {
       // A previous attempt's embed is being abandoned for this fresh one (content moved again since
-      // it ran): retire its ids now (ADV-4), or they sit in vector_ids for the next commit — whichever
-      // branch it takes — to build on top of, the exact orphan the short-append json_insert case hit.
-      if (reembedded?.vectorIds.length) {
-        try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Superseded embed cleanup failed (non-fatal):", e); }
-      }
+      // it ran): recover it now (R2-2), or its deterministic ids sit in vector_ids for the next
+      // commit — whichever branch it takes — to build on top of, the exact orphan the short-append
+      // json_insert case hit.
+      await recoverFromLostAttempt();
       try {
         reembedded = await reembedOrDegrade(env, id, finalContent, mergedTags, source, config, embedCtx);
       } catch (e) {
@@ -356,27 +374,36 @@ export async function updateEntryContent(
     // to storeEntry's own unconditional write, which a losing attempt would otherwise leave behind
     // for the next attempt's statement to build on top of.
     const now = Date.now();
-    const casColumns = { content: readContent, tags: readTags, workspace_id: authorizedWorkspaceId };
+    const casColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId };
     const p = new Params();
     const contentIdx = p.add(finalContent);
     const tagsIdx = p.add(JSON.stringify(committedTags));
     const nowIdx = p.add(now);
     const vectorIdsIdx = p.add(newVectorIds ? JSON.stringify(newVectorIds) : row.vector_ids);
     const idIdx = p.add(id);
-    const committed = await env.DB.batch([
-      snapshotStatement(env, {
-        entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
-        // ADV-10: readContent is this write's own base, right here in JS — its UTF-16 length is the
-        // exact boundary a later reconstruction needs, at zero cost. Stored only when this row
-        // actually lands as a delta (buildSnapshot nulls it out on a full copy, same as prior_length).
-        priorLengthUtf16: readContent.length,
-        guard: p2 => buildCasGuard(p2, casColumns),
-      }),
-      // versioning: snapshot
-      env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
-        .bind(...p.values()),
-      pruneStatement(env, id, config.VERSION_KEEP),
-    ]);
+    let committed: Awaited<ReturnType<typeof env.DB.batch>>;
+    try {
+      committed = await env.DB.batch([
+        snapshotStatement(env, {
+          entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
+          // ADV-10: readContent is this write's own base, right here in JS — its UTF-16 length is the
+          // exact boundary a later reconstruction needs, at zero cost. Stored only when this row
+          // actually lands as a delta (buildSnapshot nulls it out on a full copy, same as prior_length).
+          priorLengthUtf16: readContent.length,
+          guard: p2 => buildCasGuard(p2, casColumns),
+        }),
+        // versioning: snapshot
+        env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
+          .bind(...p.values()),
+        pruneStatement(env, id, config.VERSION_KEEP),
+      ]);
+    } catch (e) {
+      // The batch never landed, but the embed above already committed vector_ids-shaped ids
+      // describing text that was never saved (U6): re-embed the row as it now stands before
+      // the caller sees the error, so a thrown batch cannot leave the index ahead of D1.
+      await recoverFromLostAttempt();
+      throw e;
+    }
     if (changesOf(committed[1]) === 0) continue;
 
     // Rewritten content can carry hashtags the brain has never seen, so this is one of the
@@ -448,8 +475,15 @@ export async function appendToEntry(
   writeCtx: WriteContext,
   change: ChangeContext,
   /** An explicit time anchor set in the same batch as the text, so one undo restores both. */
-  when?: { at: number; kind: string },
+  when: { at: number; kind: string } | undefined,
+  /** The workspace the CALLER's own scoped read authorized, same reasoning as updateEntryContent's
+   * identical parameter (R2-3): this call's guard pins to it, not to whatever it reads later. */
+  authorizedWorkspaceId: string,
 ): Promise<boolean> {
+  // See updateEntryContent's identical normalization: this call's own read of the row (below)
+  // always coalesces workspace_id to "", so the pin must match that or a legacy row with no
+  // workspace_id column value yet ever appends again.
+  const pinnedWorkspaceId = authorizedWorkspaceId ?? "";
   const nextWhen: WhenChange | undefined = when ? { when_at: when.at, when_kind: when.kind, when_source: "explicit" } : undefined;
   const whenSql = when ? `, when_at = ?, when_kind = ?, when_source = 'explicit'` : "";
   const whenBind = when ? [when.at, when.kind] : [];
@@ -467,10 +501,13 @@ export async function appendToEntry(
     }
   };
 
-  // ADV-2: pinned to what THIS call's own first read saw, not to writeCtx.workspaceId (the caller's
-  // default capture target, unrelated to which workspace an EXISTING row happens to live in — see
-  // embedContextForRow's own comment and updateEntryContent's identical reasoning above).
-  let authorizedWorkspaceId: string | null = null;
+  // R2-2: same reasoning as updateEntryContent's recoverFromLostAttempt — a lost attempt's own embed
+  // shares a deterministic vector id with the row's real live vectors, so deleting it outright can
+  // delete a winning concurrent write's vector. Re-embed the row as it now stands instead.
+  const recoverFromLostAttempt = async (existingVectorIds: string[], source: string, embedCtx: WriteContext, newVectorIds: string[] | null) => {
+    if (!newVectorIds?.length) return;
+    await restoreRowVectors(env, id, existingVectorIds, newVectorIds, source, config, embedCtx);
+  };
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
     const row = await env.DB.prepare(
@@ -478,11 +515,10 @@ export async function appendToEntry(
       `SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
     if (!row) { await retireChunk(); throw new EntryGoneError(id); }
-    if (authorizedWorkspaceId === null) {
-      authorizedWorkspaceId = row.workspace_id ?? "";
-    } else if (row.workspace_id !== authorizedWorkspaceId) {
-      // The row moved since this call's own first read: nothing here to append to — retrying would
-      // append into a workspace this request was never cleared to write into.
+    if (row.workspace_id !== pinnedWorkspaceId) {
+      // The row moved since the caller's own authorization (R2-3: that may be the route's read, not
+      // this call's) — nothing here to append to: retrying would append into a workspace this
+      // request was never cleared to write into.
       await retireChunk();
       throw new EntryGoneError(id);
     }
@@ -505,7 +541,7 @@ export async function appendToEntry(
       // ADV-12: taken AFTER the embed, not before — a slow embed that lets a concurrent append commit
       // first must not stamp this later write with an earlier time than the one it lands on top of.
       const now = Date.now();
-      const longCasColumns = { content: readContent, tags: readTags, workspace_id: authorizedWorkspaceId };
+      const longCasColumns = { content: readContent, tags: readTags, workspace_id: pinnedWorkspaceId };
       const p = new Params();
       const contentIdx = p.add(newContent);
       const tagsIdx = p.add(JSON.stringify(refreshedTags));
@@ -513,25 +549,34 @@ export async function appendToEntry(
       const vectorIdsIdx = p.add(newVectorIds ? JSON.stringify(newVectorIds) : row.vector_ids);
       const whenIdx = when ? [p.add(when.at), p.add(when.kind)] : [];
       const idIdx = p.add(id);
-      const committed = await env.DB.batch([
-        snapshotStatement(env, {
-          entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now,
-          // ADV-10: see updateEntryContent's identical reasoning above.
-          priorLengthUtf16: readContent.length,
-          guard: p2 => buildCasGuard(p2, longCasColumns),
-        }),
-        // versioning: snapshot — vector_ids set here, atomically with content, under the same guard (ADV-4).
-        env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
-          .bind(...p.values()),
-        pruneStatement(env, id, config.VERSION_KEEP),
-      ]);
+      let committed: Awaited<ReturnType<typeof env.DB.batch>>;
+      try {
+        committed = await env.DB.batch([
+          snapshotStatement(env, {
+            entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now,
+            // ADV-10: see updateEntryContent's identical reasoning above.
+            priorLengthUtf16: readContent.length,
+            guard: p2 => buildCasGuard(p2, longCasColumns),
+          }),
+          // R2-6: updated_at clamped to at least the version this same batch's snapshot just landed
+          // (already clamped itself), the same reasoning as buildSnapshot's own created_at floor —
+          // this UPDATE runs after that INSERT in the same batch, so it sees the fresh row.
+          // versioning: snapshot — vector_ids set here, atomically with content, under the same guard (ADV-4).
+          env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE((SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = ${idIdx}), 0)), vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
+            .bind(...p.values()),
+          pruneStatement(env, id, config.VERSION_KEEP),
+        ]);
+      } catch (e) {
+        // U6: the batch never landed, but the embed above already committed vector_ids-shaped ids
+        // describing text that was never saved.
+        await recoverFromLostAttempt(existingVectorIds, source, embedCtx, newVectorIds);
+        throw e;
+      }
       if (changesOf(committed[1]) === 0) {
-        // This attempt's own embed never committed: retire it now (ADV-4), not just on final
+        // This attempt's own embed never committed (R2-2): recover it now, not just on final
         // exhaustion — otherwise it sits in vector_ids for whichever branch the next attempt takes
         // to build on top of (the short branch's json_insert reads vector_ids fresh at commit time).
-        if (newVectorIds) {
-          try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Losing attempt's vector cleanup failed (non-fatal):", e); }
-        }
+        await recoverFromLostAttempt(existingVectorIds, source, embedCtx, newVectorIds);
         if (attempt < WRITE_CAS_ATTEMPTS) continue;
         // Out of attempts: re-embed the row as it now stands, so the last upsert describes committed text.
         await retireChunk();
@@ -581,7 +626,7 @@ export async function appendToEntry(
 
     // ADV-12: taken AFTER the chunk embed, not before — see the long branch's identical reasoning above.
     const now = Date.now();
-    const shortCasColumns = { tags: readTags, workspace_id: authorizedWorkspaceId };
+    const shortCasColumns = { tags: readTags, workspace_id: pinnedWorkspaceId };
     const shortP = new Params();
     const suffixIdx = shortP.add(suffix);
     const indexedIdx = shortP.add(indexed ? 1 : 0);
@@ -590,19 +635,27 @@ export async function appendToEntry(
     const shortNowIdx = shortP.add(now);
     const shortWhenIdx = when ? [shortP.add(when.at), shortP.add(when.kind)] : [];
     const shortIdIdx = shortP.add(id);
-    const committed = await env.DB.batch([
-      snapshotStatement(env, {
-        entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta, now,
-        // ADV-10: see updateEntryContent's identical reasoning above.
-        priorLengthUtf16: readContent.length,
-        guard: p => buildCasGuard(p, shortCasColumns),
-      }),
-      // versioning: snapshot
-      env.DB.prepare(
-        `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = ${shortNowIdx}${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
-      ).bind(...shortP.values()),
-      pruneStatement(env, id, config.VERSION_KEEP),
-    ]);
+    let committed: Awaited<ReturnType<typeof env.DB.batch>>;
+    try {
+      committed = await env.DB.batch([
+        snapshotStatement(env, {
+          entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta, now,
+          // R2-1: NOT stamped here, unlike the long branch and updateEntryContent above — this
+          // branch's guard (shortCasColumns) does not include content, so a concurrent short append
+          // can land between this read and this commit, making readContent.length describe a state
+          // shorter than what this version actually retires. buildChain falls back to its scan.
+          guard: p => buildCasGuard(p, shortCasColumns),
+        }),
+        // versioning: snapshot — R2-6: updated_at clamped, same reasoning as the long branch above.
+        env.DB.prepare(
+          `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = MAX(${shortNowIdx}, COALESCE((SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = ${shortIdIdx}), 0))${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
+        ).bind(...shortP.values()),
+        pruneStatement(env, id, config.VERSION_KEEP),
+      ]);
+    } catch (e) {
+      await retireChunk();
+      throw e;
+    }
     if (changesOf(committed[1]) === 0) {
       if (attempt < WRITE_CAS_ATTEMPTS) continue;
       await retireChunk();

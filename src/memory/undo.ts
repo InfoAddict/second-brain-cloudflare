@@ -12,7 +12,7 @@ import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { Config } from "../config";
 import { getTrashedEntry, restoreEntry } from "./trash";
 import {
-  canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
+  buildCasGuard, canRevert, changesOf, loadHistory, ownSnapshotLandedSql, pruneStatement, snapshotStatement, Params,
   type VersionRow, type WhenChange,
 } from "./versions";
 
@@ -47,6 +47,9 @@ const whenEqual = (a: WhenChange, b: WhenChange) =>
  */
 export async function revertEntry(
   env: Env, identity: Identity | undefined, id: string, change: ChangeContext, config: Readonly<Config>, toVersion?: number,
+  /** Pins the CAS guard to the workspace the caller's own scoped read authorized (Task 15's route),
+   * rather than the read this function makes moments later. Falls back to that read when absent. */
+  authorizedWorkspaceId?: string,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
   if (!row) {
@@ -117,17 +120,22 @@ export async function revertEntry(
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
+  // R2-7: pinned at authorization (the caller's own scoped read, or this function's read moments
+  // ago), never at the write — a share/unshare writes no version, so without this a concurrent move
+  // leaves MAX(seq) unchanged and an admin's undo can commit into the row after it left their reach.
+  const pinnedWorkspaceId = authorizedWorkspaceId ?? row.workspace_id;
+  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: pinnedWorkspaceId });
   const p = new Params();
   // One literal, every column always in the SET list: a column not being restored just rebinds its
   // own current value, which keeps this one statement shape instead of several assembled fragments.
   // versioning: snapshot
-  const updateSql = `UPDATE entries SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}, vector_ids = ${p.add(nextVectorIds)}, when_at = ${p.add(nextWhenAt)}, when_kind = ${p.add(nextWhenKind)}, when_source = ${p.add(nextWhenSource)}, when_label = ${p.add(nextWhenLabel)} WHERE id = ${p.add(id)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}, vector_ids = ${p.add(nextVectorIds)}, when_at = ${p.add(nextWhenAt)}, when_kind = ${p.add(nextWhenKind)}, when_source = ${p.add(nextWhenSource)}, when_label = ${p.add(nextWhenLabel)} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   const results = await env.DB.batch([
     snapshotStatement(env, {
       entryId: id, reason: "revert", change,
       content: contentChanged ? { kind: "next", content: restoredContent } : { kind: "unchanged" },
-      nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq,
+      nextTags: restoredTags, nextWhen, skipNoOp: false, expectNewestSeq: newest.seq, guard: workspaceGuard,
       meta: { nonce, target_seq: target.seq, reverted_reason: target.reason }, now,
     }),
     // versioning: snapshot
@@ -173,7 +181,13 @@ export async function revertEntry(
           `INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, workspace_id, actor_id) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)`
         ).bind(newId, incoming, JSON.stringify(incomingTags), incomingSource, insertedAt, insertedAt, row.workspace_id, target.actor_id).run();
         try {
-          await reembedOrDegrade(env, newId, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: target.actor_id });
+          const restored = await reembedOrDegrade(env, newId, incoming, incomingTags, incomingSource, config, { workspaceId: row.workspace_id, actorId: target.actor_id });
+          // ADV-4 residual: reembedOrDegrade no longer writes vector_ids itself (store.ts); this
+          // freshly-created row has no other guarded batch to fold the write into.
+          if (restored?.vectorIds.length) {
+            // versioning: exempt: vector bookkeeping (L5)
+            await env.DB.prepare(`UPDATE entries SET vector_ids = ? WHERE id = ?`).bind(JSON.stringify(restored.vectorIds), newId).run();
+          }
         } catch (e) {
           console.error("Undo-merge re-embed failed (non-fatal):", e);
         }

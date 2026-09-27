@@ -206,7 +206,7 @@ export async function handleEntriesRoutes(
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
     const cfg = await resolveConfig(env);
-    const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg });
+    const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg }, row.workspace_id as string);
 
     if (result.status === "not_found") {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
@@ -376,7 +376,7 @@ export async function handleEntriesRoutes(
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const ok = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env));
+    const ok = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
 
     if (!ok) {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);

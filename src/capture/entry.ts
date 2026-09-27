@@ -234,10 +234,13 @@ export async function captureEntry(
                 const contentIdx = p.add(newContent);
                 const tagsIdx = p.add(JSON.stringify(refreshedTags));
                 const nowIdx = p.add(now);
+                // ADV-4 residual: vector_ids lands in this same guarded UPDATE now, not from
+                // reembedOrThrow's own (removed) unconditional write racing ahead of this batch.
+                const vectorIdsIdx = p.add(JSON.stringify(newVectorIds));
                 const idIdx = p.add(targetId);
                 // versioning: snapshot
                 // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
-                return env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, systemCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`)
+                return env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, systemCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`)
                   .bind(...p.values());
               })(),
               pruneStatement(env, targetId, cfg.VERSION_KEEP),
@@ -267,10 +270,12 @@ export async function captureEntry(
                 const contentIdx = p.add(newContent);
                 const tagsIdx = p.add(JSON.stringify(refreshedTags));
                 const nowIdx = p.add(now);
+                // ADV-4 residual: see commitSystem's identical reasoning above.
+                const vectorIdsIdx = p.add(JSON.stringify(newVectorIds));
                 const idIdx = p.add(targetId);
                 // versioning: snapshot
                 // scope-exempt: by-id: the merge target this write read, compare-and-set on the tags, content and workspace it embedded from
-                return env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, personCasColumns)}`)
+                return env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, personCasColumns)}`)
                   .bind(...p.values());
               })(),
               pruneStatement(env, targetId, cfg.VERSION_KEEP),
@@ -466,7 +471,7 @@ export async function captureEntry(
     let deprecated = deprecatedBySystem;
     if (!deprecatedBySystem) {
       try {
-        deprecated = await deprecateEntry(conflictId, env, change, cfg, { workspaceId: writeCtx.workspaceId, meta: { cause: "contradiction", newEntryId: id } });
+        deprecated = await deprecateEntry(conflictId, env, change, cfg, writeCtx.workspaceId, { meta: { cause: "contradiction", newEntryId: id } });
         if (deprecated && opts.channel) {
           auditEvent(env, ctx, {
             entryId: conflictId,

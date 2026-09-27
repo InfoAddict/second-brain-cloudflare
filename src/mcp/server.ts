@@ -603,7 +603,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
 
       let indexed: boolean;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, mcpChange, whenInput);
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, mcpChange, whenInput, row.workspace_id as string);
       } catch (e) {
         if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
         if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
@@ -663,11 +663,16 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, mcpChange);
+      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, mcpChange, row.workspace_id as string);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      }
+
+      // R2-5: the row is still there, just moved out of this caller's reach mid-edit.
+      if (result.status === "moved") {
+        return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was written. Please try again.` }] };
       }
 
       // Fails closed (#212): nothing was written, so the reply must not claim otherwise.
@@ -717,7 +722,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
-      const ok = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env));
+      const ok = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env), row.workspace_id as string);
       if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (identity) {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp" } });
@@ -1010,7 +1015,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
       const cfg = await resolveConfig(env);
-      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, { reason: "forget", config: cfg });
+      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, { reason: "forget", config: cfg }, row.workspace_id as string);
       if (result.status === "not_found") {
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
