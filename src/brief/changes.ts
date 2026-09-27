@@ -1,0 +1,292 @@
+// S1 (T-0089.4.3, 16-t3-t4-trust-spec.md Lane S): the "what AI tools changed"
+// query and grouping (5.8). New file only -- wiring into GET /brief, the MCP
+// brief tool and the dashboard's changes line is S2/S3/S4, after Track 1 and
+// Lane W (quarantine holds) merge. Nothing here is called from any route yet,
+// and nothing here writes.
+//
+// One D1 statement, proven against real SQLite (test/integration/brief-changes.test.ts):
+// entry_events joined by id against entries or entries_trash, scoped to the
+// reader's readable workspaces as ONE JSON-bound parameter rather than one
+// placeholder per workspace -- the same reason src/brief/compute.ts's
+// briefWorkspaceScope does that: a member of many teams must not blow D1's
+// 100-bound-parameter ceiling.
+import type { Env } from "../env";
+import type { Identity } from "../lib/identity";
+import { readScopeWorkspaces } from "../lib/scope";
+
+/** Matches src/brief/compute.ts's RECENT_WINDOW_MS window. */
+export const BRIEF_CHANGES_WINDOW_HOURS = 48;
+
+const READ_LIMIT = 200;
+const OUTPUT_LIMIT = 20;
+const GROUP_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Group-collapse thresholds (5.8). The status family's mirrors Track 4's
+ * QUARANTINE_STATUS_BURST default (src/config.ts, a different lane's
+ * contract, not yet merged into this branch) -- reconcile the two once it
+ * lands rather than importing a key that does not exist here yet.
+ */
+const GROUP_THRESHOLD_STATUS = 10;
+const GROUP_THRESHOLD_OTHER = 5;
+
+export type ChangeFamily =
+  | "held" | "released" | "canonical_edit" | "capsule_changed" | "status" | "trash" | "revert";
+
+export interface ChangeItem {
+  kind: "item";
+  id: string;
+  event: string;
+  family: ChangeFamily;
+  at: number;
+  client: string | null;
+  preview: string | null;
+  reasons?: string[];
+  source?: string | null;
+  status?: string;
+  capsuleChanged?: boolean;
+  canUndo?: boolean;
+  canRelease?: boolean;
+}
+
+export interface ChangeGroup {
+  kind: "group";
+  family: ChangeFamily;
+  count: number;
+  /** Oldest change in the group. */
+  at: number;
+  /** Newest change in the group. */
+  until: number;
+  client: string | null;
+  /** Opaque key: base64url(JSON.stringify({f,a,c,s,e})). The server re-derives
+   *  membership from it (5.9) -- a client cannot smuggle ids into it. */
+  group: string;
+  canUndoAll?: boolean;
+  canReleaseAll?: boolean;
+}
+
+export type ChangeRow = ChangeItem | ChangeGroup;
+
+export interface ChangesResult {
+  windowHours: number;
+  /** Memories affected, before grouping. */
+  count: number;
+  /** Held rows among them. */
+  held: number;
+  truncated: boolean;
+  items: ChangeRow[];
+}
+
+interface RawRow {
+  id: string;
+  entry_id: string;
+  event: string;
+  payload: string;
+  created_at: number;
+  actor_id: string;
+  author_id: string | null;
+  source: string | null;
+  preview: string | null;
+}
+
+/**
+ * A client name that itself reads as an instruction to an AI tool is shown as
+ * null (the brief renders that as "an AI tool") rather than put into agent
+ * context verbatim -- a pure display-time check, no cost (5.8, Q5).
+ *
+ * Deliberately narrow: BE-5 accepts any DCR client_name, so this only needs
+ * to catch a name shaped like an override or role-address attempt, not
+ * reimplement the whole scorer (src/quarantine/score.ts, Track 4's own lane,
+ * not built yet). Replace this with a real scoreWrite call once it lands --
+ * see the module comment.
+ */
+function clientNameIsSafe(name: string): boolean {
+  const t = name.toLowerCase();
+  return !(
+    /\b(ignore|disregard|forget|override)\s+(all\s+|any\s+)?(the\s+)?(previous|prior|above|earlier|preceding)\s+(instructions|prompts|rules|directions|messages)\b/.test(t)
+    || /\bsystem\s+(prompt|notice|message)\b/.test(t)
+    || /\byou are now\b/.test(t)
+    || /\bas an ai (assistant|model)\b/.test(t)
+  );
+}
+
+function safeClient(rawClient: unknown): string | null {
+  if (typeof rawClient !== "string") return null;
+  const name = rawClient.trim();
+  if (!name) return null;
+  return clientNameIsSafe(name) ? name : null;
+}
+
+function parsePayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+interface Classified {
+  id: string;
+  event: string;
+  family: ChangeFamily;
+  actorId: string;
+  client: string | null;
+  createdAt: number;
+  preview: string | null;
+  reasons?: string[];
+  source?: string | null;
+  status?: string;
+  capsuleChanged?: boolean;
+}
+
+const STATUS_VALUES = new Set(["canonical", "draft", "deprecated"]);
+
+/** One row's classification, or null when it does not qualify for the line at all (5.8's "not listed"). */
+function classify(row: RawRow): Classified | null {
+  const payload = parsePayload(row.payload);
+  const client = safeClient(payload.client);
+  const base = {
+    id: row.entry_id, event: row.event, actorId: row.actor_id, client,
+    createdAt: row.created_at, preview: row.preview,
+  };
+
+  switch (row.event) {
+    case "held": {
+      const reasons = Array.isArray(payload.reasons)
+        ? payload.reasons.filter((r): r is string => typeof r === "string")
+        : [];
+      return { ...base, family: "held", reasons, source: row.source };
+    }
+    case "released":
+      return { ...base, family: "released" };
+    case "reverted":
+      return { ...base, family: "revert" };
+    case "updated":
+    case "appended": {
+      const wasCanonical = payload.was_canonical === true;
+      const capsuleChanged = payload.capsule_changed === true;
+      if (!wasCanonical && !capsuleChanged) return null; // an ordinary edit to a non-canonical memory: not listed
+      return { ...base, family: wasCanonical ? "canonical_edit" : "capsule_changed", capsuleChanged };
+    }
+    case "status_changed": {
+      const status = typeof payload.status === "string" ? payload.status : "";
+      if (!STATUS_VALUES.has(status)) return null;
+      return { ...base, family: "status", status };
+    }
+    case "deleted":
+      if (payload.trash !== true) return null; // a permanent delete, not a trash move
+      return { ...base, family: "trash" };
+    default:
+      return null;
+  }
+}
+
+function toBase64Url(json: string): string {
+  return btoa(json).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function groupKey(family: ChangeFamily, actorId: string, client: string | null, startMs: number, endMs: number): string {
+  return toBase64Url(JSON.stringify({ f: family, a: actorId, c: client, s: startMs, e: endMs }));
+}
+
+function thresholdFor(family: ChangeFamily): number {
+  return family === "status" ? GROUP_THRESHOLD_STATUS : GROUP_THRESHOLD_OTHER;
+}
+
+/**
+ * Groups consecutive same actor/client/family rows within GROUP_WINDOW_MS of
+ * each other. `rows` must be newest-first, the order the query returns.
+ * A run below its family's threshold stays as individual items.
+ */
+function group(rows: Classified[]): ChangeRow[] {
+  const out: ChangeRow[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    let j = i + 1;
+    while (
+      j < rows.length
+      && rows[j].family === rows[i].family
+      && rows[j].actorId === rows[i].actorId
+      && rows[j].client === rows[i].client
+      && rows[j - 1].createdAt - rows[j].createdAt <= GROUP_WINDOW_MS
+    ) j++;
+    const run = rows.slice(i, j);
+    const family = run[0].family;
+    if (run.length >= thresholdFor(family)) {
+      const at = run[run.length - 1].createdAt;
+      const until = run[0].createdAt;
+      out.push({
+        kind: "group",
+        family,
+        count: run.length,
+        at,
+        until,
+        client: run[0].client,
+        group: groupKey(family, run[0].actorId, run[0].client, at, until),
+        ...(family === "held" ? { canReleaseAll: true } : { canUndoAll: true }),
+      });
+    } else {
+      for (const r of run) {
+        out.push({
+          kind: "item",
+          id: r.id,
+          event: r.event,
+          family: r.family,
+          at: r.createdAt,
+          client: r.client,
+          preview: r.preview,
+          ...(r.reasons ? { reasons: r.reasons } : {}),
+          ...(r.source !== undefined ? { source: r.source } : {}),
+          ...(r.status ? { status: r.status } : {}),
+          ...(r.capsuleChanged ? { capsuleChanged: true } : {}),
+          ...(r.family === "held" ? { canRelease: true } : { canUndo: true }),
+        });
+      }
+    }
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * The "what AI tools changed" query and grouping (5.8). Exactly one D1
+ * statement; pure JS grouping after. Read-only.
+ */
+export async function getChanges(
+  env: Env,
+  identity: Identity,
+  windowHours: number = BRIEF_CHANGES_WINDOW_HOURS,
+): Promise<ChangesResult> {
+  const since = Date.now() - windowHours * 60 * 60 * 1000;
+  const workspaces = readScopeWorkspaces(identity);
+
+  const { results } = await env.DB.prepare(
+    // scope-checked: the reader's scope clause is applied to COALESCE(en.workspace_id, t.workspace_id); entry_events has no workspace column
+    `SELECT e.id, e.entry_id, e.event, e.payload, e.created_at, e.actor_id,
+            COALESCE(en.actor_id, t.actor_id) AS author_id,
+            COALESCE(en.source, json_extract(t.row_json, '$.source')) AS source,
+            substr(COALESCE(en.content, t.content), 1, 160) AS preview
+     FROM entry_events e INDEXED BY idx_entry_events_created
+     LEFT JOIN entries en ON en.id = e.entry_id
+     LEFT JOIN entries_trash t ON en.id IS NULL AND t.id = e.entry_id
+     WHERE e.created_at > ?1
+       AND e.event IN ('held','released','updated','appended','status_changed','deleted','reverted')
+       AND (e.event = 'held' OR json_extract(e.payload, '$.channel') = 'mcp')
+       AND COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?2))
+       AND (e.actor_id = ?3 OR COALESCE(en.actor_id, t.actor_id) = ?3 OR e.event = 'held')
+     ORDER BY e.created_at DESC
+     LIMIT 200`,
+  ).bind(since, JSON.stringify(workspaces), identity.userId).all<RawRow>();
+
+  const classified = results.map(classify).filter((c): c is Classified => c !== null);
+  const held = classified.filter(c => c.family === "held").length;
+
+  return {
+    windowHours,
+    count: classified.length,
+    held,
+    truncated: results.length === READ_LIMIT,
+    items: group(classified).slice(0, OUTPUT_LIMIT),
+  };
+}

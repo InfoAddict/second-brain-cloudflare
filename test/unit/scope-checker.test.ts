@@ -1444,7 +1444,11 @@ describe("the checker over the real source tree", () => {
     // scoped by the actor's readable workspaces bound as one JSON array.
     // Deliberate: +1 query and +1 scope-exempt (198/104 -> 199/105) for T-0089.1.1 round 3: the
     // nightly vectorize-pending pass reads lengths to plan, then the chosen rows' content by id.
-    ).toEqual({ queries: 199, exempt: 105, checked: 17, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-checked (199/105/17 -> 200/105/18) for T-0089.4.3 Lane S,
+    // Task S1: src/brief/changes.ts's one-statement changes query, scoped by
+    // COALESCE(en.workspace_id, t.workspace_id) IN (SELECT value FROM json_each(?)) -- the
+    // lexer cannot see the leading AND inside that JS-assembled fragment.
+    ).toEqual({ queries: 200, exempt: 105, checked: 18, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
