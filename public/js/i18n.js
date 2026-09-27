@@ -435,6 +435,12 @@ const I18N_EN = {
     dismiss: 'Got it',
     dismissLabel: 'Hide this note',
   },
+  limits: {
+    bannerWrite: "Cloudflare's free daily database limit is used up. New memories and changes can't be saved until {time}.",
+    bannerRead: "Cloudflare's free daily database limit is used up. Your Second Brain can't load or save until {time}.",
+    upgrade: 'Move to Workers Paid',
+    askOwner: 'Ask the owner about moving to Workers Paid.',
+  },
   upkeep: {
     working: 'Working…',
     done: 'Done',
@@ -1498,6 +1504,12 @@ const I18N_IT = {
     seeTrash: 'Apri il cestino',
     dismiss: 'Ho capito',
     dismissLabel: 'Nascondi questa nota',
+  },
+  limits: {
+    bannerWrite: 'Il limite giornaliero gratuito del database di Cloudflare è esaurito. Nuovi ricordi e modifiche non si possono salvare fino alle {time}.',
+    bannerRead: 'Il limite giornaliero gratuito del database di Cloudflare è esaurito. Il tuo Second Brain non può caricare né salvare fino alle {time}.',
+    upgrade: 'Passa a Workers Paid',
+    askOwner: 'Chiedi al proprietario di passare a Workers Paid.',
   },
   upkeep: {
     working: 'In corso…',

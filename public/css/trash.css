@@ -281,3 +281,44 @@
 .whats-new-dismiss:hover {
   color: var(--text-primary);
 }
+
+/* ── Free-plan daily database limit banner ────────────────────────────── */
+
+/* Fixed and persistent across every screen (there is no per-screen slot
+ * for it, and the point is that it stays visible no matter which tab is
+ * open). --danger, not --accent-soft: this reads as a real, current
+ * blocker, not the softer "here's what's new" tone of the line above. */
+.daily-limit-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 14px;
+  padding: 10px 16px;
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--danger);
+  font-size: 13.5px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.daily-limit-banner[hidden] {
+  display: none;
+}
+
+.daily-limit-upgrade,
+.daily-limit-ask {
+  color: var(--danger);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.daily-limit-upgrade:hover {
+  text-decoration: underline;
+}

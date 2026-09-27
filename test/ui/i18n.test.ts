@@ -575,6 +575,13 @@ describe("dashboard i18n", () => {
       by: "public/js/home.js renderCaptureHint(), which picks the key into `key` and calls t(key)",
     },
     {
+      // NOT a prefix: showDailyLimitBanner() in public/js/daily-limit-banner.js
+      // picks exactly one of these two literals (branching on whether the 429's
+      // `limit` names a write or a read) and calls t(key).
+      keys: ["limits.bannerWrite", "limits.bannerRead"],
+      by: "showDailyLimitBanner() in public/js/daily-limit-banner.js, via t(key)",
+    },
+    {
       // NOT a prefix: installGuideStepKeys(platform) in
       // public/js/install-guide.js returns one of these four literals
       // (branching on platform), read by installGuideStepsHtml via t(key).
@@ -756,6 +763,7 @@ describe("dashboard i18n", () => {
       // form for this indirection is what keeps this list readable.
       "public/js/activity.js t(keys[event])",
       "public/js/board.js t(`patterns.shapes.${shape}`)",
+      "public/js/daily-limit-banner.js t(key)",
       "public/js/brief.js t(`patterns.shapes.${shape}`)",
       // Both of these resolve through captureDefaultKey() in public/utils.js, which
       // returns one of exactly four literals — home.auto{Shared,Personal}{Yours,Org}.
