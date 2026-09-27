@@ -79,10 +79,17 @@ async function reembedForRevert(
  * delegates to a trash restore when the row is gone. Design "Undo" (T-0089.1.3).
  */
 export async function revertEntry(
-  env: Env, identity: Identity | undefined, id: string, change: ChangeContext, config: Readonly<Config>, toVersion?: number,
-  /** Pins the CAS guard to the workspace the caller's own scoped read authorized (Task 15's route),
-   * rather than the read this function makes moments later. Falls back to that read when absent. */
-  authorizedWorkspaceId?: string,
+  env: Env, identity: Identity | undefined, id: string, change: ChangeContext, config: Readonly<Config>, toVersion: number | undefined,
+  /**
+   * Pins the CAS guard to the workspace the caller's own scoped read authorized (Class 1,
+   * T-0089.6.6's route and MCP tool), rather than the read this function makes moments later — an
+   * unshare landing in that gap must miss the guard, not silently authorize against wherever the
+   * row ended up. Required, not defaulted to this function's own read: a caller with no scoped
+   * read of its own has no business calling this at all. When there is no live row (the trash
+   * path), this value is never consumed — any string is fine, since restoreEntry has its own
+   * scoping through getTrashedEntry.
+   */
+  authorizedWorkspaceId: string,
 ): Promise<UndoResult> {
   const row = await getReadableEntry(env, identity, id, ENTRY_COLUMNS) as EntryRow | null;
   if (!row) {
@@ -214,11 +221,10 @@ export async function revertEntry(
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
-  // Pinned at authorization (the caller's own scoped read, or this function's read moments ago),
-  // never at the write: a share/unshare writes no version, so without this a concurrent move leaves
-  // MAX(seq) unchanged and an admin's undo can commit into the row after it left their reach (U3, R2-7).
-  const pinnedWorkspaceId = authorizedWorkspaceId ?? row.workspace_id;
-  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: pinnedWorkspaceId });
+  // Pinned at authorization (the caller's own scoped read), never at the write: a share/unshare
+  // writes no version, so without this a concurrent move leaves MAX(seq) unchanged and an admin's
+  // undo can commit into the row after it left their reach (U3, R2-7, Class 1).
+  const workspaceGuard = (guardP: Params) => buildCasGuard(guardP, { workspace_id: authorizedWorkspaceId });
   const p = new Params();
   // The when_* columns are set only when this revert is actually restoring the date. Rebinding them
   // from this call's own stale JS read, as every other column here does, would silently erase a date

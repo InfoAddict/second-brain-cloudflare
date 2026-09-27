@@ -124,7 +124,7 @@ describe("ADV-U13 (MAJOR): undoing a large merge writes a version row D1 cannot 
     const mergeRow = (await versions("big")).at(-1)!;
     expect(JSON.parse(mergeRow.meta).incoming).toHaveLength(1_000_000);
 
-    const r = await revertEntry(e, owner, "big", change(), DEFAULTS);
+    const r = await revertEntry(e, owner, "big", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     const revertRow = await env.DB.prepare(
       `SELECT COALESCE(length(CAST(content AS BLOB)), 0) + length(CAST(meta AS BLOB)) + length(CAST(tags AS BLOB)) + length(CAST(state AS BLOB)) AS bytes
@@ -142,7 +142,7 @@ describe("ADV-U14 (MINOR): statements grow with every merge a rollback crosses",
     for (let i = 0; i < 16; i++) expect((await capture(e, `fact ${i}`)).status).toBe("merged");
     const first = (await versions("hub"))[0].seq;
     const { env: counted, executed } = counting(e);
-    const r = await revertEntry(counted, owner, "hub", change(), DEFAULTS, first);
+    const r = await revertEntry(counted, owner, "hub", change(), DEFAULTS, first, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect(live("fact 15")).toHaveLength(1);
     expect(executed.length).toBeLessThanOrEqual(50); // actual: 52 = 4 + 3 per merge (INSERT, vector_ids UPDATE, audit batch); 19 merges = 61
@@ -154,7 +154,7 @@ describe("ADV-U14 (MINOR): statements grow with every merge a rollback crosses",
     for (let i = 0; i < 19; i++) expect((await capture(e, `fact ${i}`)).status).toBe("merged");
     const first = (await versions("hub19"))[0].seq;
     const { env: counted, executed } = counting(e);
-    const r = await revertEntry(counted, owner, "hub19", change(), DEFAULTS, first);
+    const r = await revertEntry(counted, owner, "hub19", change(), DEFAULTS, first, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     for (let i = 0; i < 19; i++) expect(live(`fact ${i}`)).toHaveLength(1);
     // read + history read + one batch (snapshot, UPDATE, 19 inserts, prune) + one batch of 19 created
@@ -170,12 +170,12 @@ describe("ADV-U15 (MINOR): U8's 'unchanged' check ignores tags, status and dates
     const e = mergingEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
-    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS)) as any).recreatedIncomingId as string;
+    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
     await applyStatus(x, "canonical", e, change(), DEFAULTS, owner.personalWorkspaceId);
     await resolveEntryAction(e, ctx, owner, x, "snooze", new Date(Date.now() + 86_400_000).toISOString(), change());
     expect(JSON.parse(row(x).tags)).toContain("status:canonical");
 
-    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS);
+    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(redo.status).toBe("reverted");
     // The row has two versions of its own now; it is not "what this mechanism left behind".
     const kept = ((redo as any).keptIncoming ?? []) as { id: string }[];
@@ -193,12 +193,12 @@ describe("ADV-U16 (MINOR, superseded by the round-3 simplification): a user-remo
     const e = mergingEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
-    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS)) as any).recreatedIncomingId as string;
+    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
     // The user removes the re-created row for good, deliberately — not through redo, which never
     // touches it at all any more.
     await deleteForever(e, x, change());
 
-    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS);
+    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(redo.status).toBe("reverted");
     expect(row("old").content).toBe("Old text Incoming fact");
     // Nothing resurrects x, and the result still names it rather than falling silent about a fact
@@ -213,7 +213,7 @@ describe("ADV-U17 (MINOR): the re-created row's audit event has no channel", () 
     const e = mergingEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
-    const x = ((await revertEntry(e, owner, "old", change(owner, "mcp"), DEFAULTS)) as any).recreatedIncomingId as string;
+    const x = ((await revertEntry(e, owner, "old", change(owner, "mcp"), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
     const ev = await env.DB.prepare(`SELECT payload FROM entry_events WHERE entry_id = ? AND event = 'created'`).bind(x).first() as any;
     expect(JSON.parse(ev.payload).channel).toBe("mcp"); // actual: undefined
   });
