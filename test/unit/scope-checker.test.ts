@@ -1401,7 +1401,17 @@ describe("the checker over the real source tree", () => {
     // of the difference is queries the wider alternation now counts for the first time that were
     // already properly scoped or already covered by an existing annotation, not new findings —
     // the checker exits clean.
-    ).toEqual({ queries: 191, exempt: 104, checked: 13, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (T-0089.7.4, R3-2, src/capture/share.ts): moveEntry's
+    // post-miss liveness check is by-id, the row having been read above under the caller's own scope.
+    // Deliberate: -2 queries and -2 scope-exempt (192/105 -> 190/103) for T-0089.1.1 (digest mark
+    // guard hardening): the entry_versions correlated subquery R2-6's updated_at clamp used in
+    // both append branches (store.ts) is gone, replaced by a bare COALESCE(e.updated_at,
+    // e.created_at) + 1 row reference with no table read of its own — the two scope-exempt
+    // annotations it needed are gone with it. Every other content writer (updateEntryContent, the
+    // merge paths, undo's revertEntry, the mirror sync) picks up the same clamp for the digest
+    // guard's own change signal, but only ever reads its OWN row (e.updated_at/e.created_at), so
+    // none of them add a new corpus query either.
+    ).toEqual({ queries: 190, exempt: 103, checked: 13, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
