@@ -465,6 +465,16 @@ export interface RemovalProgress {
   remaining?: number;
   /** Rows written by this call, for the nightly budget. */
   rowsWritten?: number;
+  /**
+   * True only for the specific done:false case where every history chunk is already clear and
+   * the one thing left is a final batch too big for what `rowsLeft` has left this call (the
+   * nightly resume, never the dashboard's unbounded call). Distinct from an ordinary done:false
+   * (still working through history, making progress every night on its own): a removal whose
+   * final batch alone exceeds the whole nightly budget stalls HERE forever on a brain where the
+   * trash purge writes something every night, since `allowOversize` never sees a night to fire on
+   * its own (T-0089.7.5) — the caller uses this flag to force one.
+   */
+  blockedByBudget?: boolean;
 }
 
 /**
@@ -472,7 +482,8 @@ export interface RemovalProgress {
  * chunks (so no chain is ever left with a gap or an orphan); only when none remains does the
  * one final batch delete the rows themselves, the trash rows, the membership and the workspace.
  * `rowsLeft` (the nightly resume) shrinks each chunk and defers a final batch that would not fit,
- * unless `allowOversize` (a night when the purge wrote nothing).
+ * unless `allowOversize` (a night when the purge wrote nothing, or one the caller is forcing —
+ * see `RemovalProgress.blockedByBudget`).
  */
 export async function cleanupMemberData(
   env: Env,
@@ -557,7 +568,7 @@ export async function cleanupMemberData(
   // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
   const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0);
   if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
-    return { done: false, removedEntries: 0, vectorIds: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten };
+    return { done: false, removedEntries: 0, vectorIds: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten, blockedByBudget: true };
   }
 
   await env.DB.batch([

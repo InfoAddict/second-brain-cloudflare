@@ -36,12 +36,11 @@ describe("ADV-5 (MINOR): the write-path inventory guard can be bypassed", () => 
   it("a second statement in one exec() string", () => {
     expect(writersIn("await env.DB.exec(`UPDATE workspaces SET name = 'a'; UPDATE entries SET content = 'b'`);")).toHaveLength(1);
   });
-  // Owned by Builder B (residual ADV-5, concatenation/join bypass) — still red on this branch.
-  // Left to B to fix in trash.ts's own inventory-guard work; not touched here.
-  it.skip("R2: a statement split across a string concatenation", () => {
+  // Builder B's residual ADV-5 fix (3a2b8df7, writerSpans): concatenation and join() now fail loud.
+  it("R2: a statement split across a string concatenation", () => {
     expect(writersIn(`await env.DB.prepare("UPDATE " + "entries SET content = ? WHERE id = ?").bind(c, id).run();`)).toHaveLength(1);
   });
-  it.skip("R2: a statement assembled with join()", () => {
+  it("R2: a statement assembled with join()", () => {
     expect(writersIn(`await env.DB.prepare(["DELETE FROM", "entries", "WHERE id = ?"].join(" ")).bind(id).run();`)).toHaveLength(1);
   });
 });

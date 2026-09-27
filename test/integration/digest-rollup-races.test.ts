@@ -96,3 +96,25 @@ describe("ADV-9: a rollup does not mark text the digest never saw", () => {
     expect(await versions(env, "s0")).toEqual([]); // no rollup version for text the digest never saw
   });
 });
+
+describe("round 2: the rollup mark bumps updated_at like every other content writer", () => {
+  it("a marked source's updated_at moves off NULL, so its rowVersion (COALESCE(updated_at, created_at)) tracks the write", async () => {
+    const { env, roots } = await makeDigestEnv();
+    const digestEnv = makeTestEnv(undefined, { DB: sqlite.db as unknown as Env["DB"], OAUTH_KV: makeMemoryKV(), AI: mockAi() }) as Env;
+    for (let i = 0; i < 12; i++) {
+      await seed(`s${i}`, { content: `Work memory number ${i} with enough detail to be eligible`, tags: ["work"], createdAt: 1000 + i }, roots.ownerPersonalWorkspaceId, roots.ownerUserId);
+    }
+    const before = await live(env, "s0");
+    expect(before.updated_at).toBeNull(); // never edited: the exact state the guard's rowVersion falls back to created_at for
+
+    await compressTag("work", digestEnv, ctx);
+
+    const after = await live(env, "s0");
+    expect(JSON.parse(after.tags)).toContain("rolled-up");
+    // The mark itself is a content write (appends the digest note): it must bump updated_at like
+    // every other content writer, or a later reader's rowVersion (this guard's own compare-and-set,
+    // and any future one built the same way) keeps reading the pre-mark value forever.
+    expect(after.updated_at).not.toBeNull();
+    expect(after.updated_at).toBeGreaterThan(before.created_at);
+  });
+});

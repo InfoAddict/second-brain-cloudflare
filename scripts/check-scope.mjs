@@ -492,6 +492,111 @@ export function templateSpans(text) {
 }
 
 /**
+ * Whether position `i` is the start of a `.prepare(`/`.exec(` call's argument (skipping
+ * whitespace back to `(`, then further back to the method name). Array-join and concatenation
+ * detection (below) are scoped to exactly this: `[...].join(...)` and `"a" + "b"` are ordinary,
+ * common JS elsewhere in this codebase (building a page's plain-text body, an error message —
+ * neither has anything to do with SQL), and flagging every one of them unconditionally would
+ * make false positives the norm rather than the guard's whole point (ADV-5 round 2).
+ */
+function isCallArgumentStart(text, i) {
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (text[j] !== "(") return false;
+  j--;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  let k = j;
+  while (k >= 0 && /[A-Za-z0-9_$]/.test(text[k])) k--;
+  const name = text.slice(k + 1, j + 1);
+  return name === "prepare" || name === "exec";
+}
+
+/**
+ * Skips one quoted string or backtick template starting at `i` (any character), returning the
+ * index just past it — or `i` itself if `text[i]` opens neither. Used by `matchArrayJoin` to walk
+ * an array literal's own elements without a second copy of writerSpans' whole state machine; a
+ * template here does not need interpolation tracked, only that its closing backtick is found.
+ */
+function skipOneLiteral(text, i) {
+  const c = text[i];
+  if (c === '"' || c === "'") {
+    let j = i + 1;
+    while (j < text.length && text[j] !== c && text[j] !== "\n") j += text[j] === "\\" ? 2 : 1;
+    return text[j] === c ? j + 1 : j;
+  }
+  if (c === "`") {
+    let j = i + 1;
+    while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
+    return text[j] === "`" ? j + 1 : j;
+  }
+  return i;
+}
+
+/**
+ * `[...].join(sep)` at `i` (`text[i] === "["`), called only at the top level — never inside a
+ * template's own `${...}`, where the identical shape (`${ids.map(() => "?").join(", ")}`) builds
+ * an ordinary placeholder list inside an otherwise-normal statement, not a dynamic one (ADV-5
+ * round 2). Returns the index just past the matching `.join(...)` call if this is one, else -1.
+ * Walks the array with its own tiny bracket-depth count, skipping nested strings/templates
+ * atomically so a `]` or `)` inside one is never mistaken for the real closing bracket/paren.
+ */
+function matchArrayJoin(text, i) {
+  let depth = 1;
+  let j = i + 1;
+  while (j < text.length && depth > 0) {
+    const c = text[j];
+    if (c === "\\") { j += 2; continue; }
+    if (c === '"' || c === "'" || c === "`") { j = skipOneLiteral(text, j); continue; }
+    if (c === "[") depth++;
+    else if (c === "]") depth--;
+    j++;
+  }
+  if (depth !== 0) return -1; // unterminated array: not valid JS either way
+  const afterBracket = /^\s*\.join\s*\(/.exec(text.slice(j));
+  if (!afterBracket) return -1;
+  let pdepth = 1;
+  let k = j + afterBracket[0].length;
+  while (k < text.length && pdepth > 0) {
+    const c = text[k];
+    if (c === "\\") { k += 2; continue; }
+    if (c === '"' || c === "'" || c === "`") { k = skipOneLiteral(text, k); continue; }
+    if (c === "(") pdepth++;
+    else if (c === ")") pdepth--;
+    k++;
+  }
+  return pdepth === 0 ? k : -1;
+}
+
+/**
+ * `"a" + "b" + ...`: writerSpans' main scan already finds each operand's own literal span; this
+ * merges any spans joined ONLY by whitespace and `+` into one covering the whole chain, quotes and
+ * all, so the classifier sees the complete statement rather than each fragment alone (ADV-5 round
+ * 2: `"UPDATE " + "entries SET content = ? WHERE id = ?"` split across two spans, neither of which
+ * alone names a write to `entries`).
+ */
+function mergeConcatenatedSpans(text, spans) {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const out = [];
+  let i = 0;
+  while (i < sorted.length) {
+    let cur = sorted[i];
+    const group = [cur];
+    let j = i + 1;
+    while (j < sorted.length && /^\s*\+\s*$/.test(text.slice(cur.end + 1, sorted[j].start))) {
+      cur = { start: cur.start, end: sorted[j].end };
+      group.push(sorted[j]);
+      j++;
+    }
+    // Only a chain that starts as a .prepare()/.exec() argument collapses into one span — see
+    // isCallArgumentStart. Anything else keeps its original per-literal spans, unmerged.
+    if (group.length > 1 && isCallArgumentStart(text, group[0].start)) out.push(cur);
+    else out.push(...group);
+    i = j;
+  }
+  return out;
+}
+
+/**
  * Every string literal that could hold a raw SQL statement: a backtick template at ANY nesting
  * depth (unlike templateSpans, which reports only the outermost one — the write-path inventory
  * guard, test/unit/entry-write-inventory.test.ts, needs to see a writer template nested inside
@@ -500,14 +605,18 @@ export function templateSpans(text) {
  * unit instead of a second independently-scored query — ADV-5 vs. scanSource's A1 fix, at odds on
  * the very same shape, resolved here by giving the guard its own, more aggressive scan), plus
  * single- and double-quoted strings (D1 runs a query however it is quoted; house style always
- * uses a backtick, but the guard cannot assume a writer always will).
+ * uses a backtick, but the guard cannot assume a writer always will). Also collapses two round 2
+ * bypasses that slip past a per-literal scan entirely — `"a" + "b"` and `[...].join(sep)` built
+ * directly as a .prepare()/.exec() argument — into one span apiece, so the classifier
+ * (isEntriesWriteSql) sees one candidate statement rather than fragments that never individually
+ * name a table.
  *
  * Only the guard (and its own test) should call this. scanSource's structural SQL analysis
  * — table refs, scope predicates, join structure — assumes templateSpans' one-span-per-statement
  * shape and must keep using that.
  */
 export function writerSpans(text) {
-  const spans = [];
+  let spans = [];
   const stack = [];
   const top = () => stack[stack.length - 1];
   let i = 0;
@@ -547,6 +656,16 @@ export function writerSpans(text) {
       }
       continue;
     }
+    // Only at the top level (stack.length === 0): a `.join()` inside a template's `${...}` (an
+    // "expr" or nested "brace" frame, so top().kind !== "tpl" and the check above let it fall
+    // through to here) builds an ordinary placeholder list inside an otherwise-normal statement
+    // (`${ids.map(() => "?").join(", ")}`), not a dynamic one, and must not be flagged. And only
+    // when the array is itself the .prepare()/.exec() argument (isCallArgumentStart) — the same
+    // shape building a plain string anywhere else (e.g. a page's plain-text body) is not this.
+    if (c === "[" && stack.length === 0 && isCallArgumentStart(text, i)) {
+      const end = matchArrayJoin(text, i);
+      if (end !== -1) { spans.push({ start: i - 1, end }); i = end; continue; }
+    }
     if (c === '"' || c === "'") {
       // Unlike templateSpans, this records the span — an unterminated string (hits end-of-line or
       // end-of-file before its closing quote) isn't valid JS either way and gets none.
@@ -565,6 +684,7 @@ export function writerSpans(text) {
     }
     i++;
   }
+  spans = mergeConcatenatedSpans(text, spans);
   spans.balanced = stack.length === 0;
   return spans;
 }

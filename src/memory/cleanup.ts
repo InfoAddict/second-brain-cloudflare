@@ -17,6 +17,20 @@ export interface NightlyCleanupResult {
 }
 
 /**
+ * The one pending removal `allowOversize` deferred (its own last-mile final batch alone did not
+ * fit what the purge left of the night's budget) — keyed by userId, so a stale flag from an
+ * already-finished removal cannot force oversize for an unrelated one that has not even tried the
+ * ordinary path yet. KV, not D1: it costs nothing against the nightly's own execution pin.
+ *
+ * On an active brain the purge writes something every night, so `allowOversize: purgeRows === 0`
+ * alone never fires again once a removal's final batch is bigger than what is left — the removal
+ * waits forever, not just some nights (T-0089.7.5). This is its guaranteed slot: the night after a
+ * removal is turned away at the size gate, it forces allowOversize regardless of what the purge
+ * did, so the wait is at most one night, not indefinite.
+ */
+const REMOVAL_DEFERRED_KV_KEY = "cleanup:removal-deferred";
+
+/**
  * Nightly cleanup with one rows-written budget shared in order: the trash purge (at most
  * TRASH_PURGE_NIGHTLY_MAX_BATCHES batches, TRASH_PURGE_NIGHTLY_ROWS of the budget), then the
  * resume of one pending member removal with what is left. An ordinary night costs two D1
@@ -54,11 +68,21 @@ export async function runNightlyCleanup(env: Env): Promise<NightlyCleanupResult>
       const pending = await findPendingRemoval(env);
       if (!pending) break;
       removalResumed = true;
+      let forceOversize = false;
+      try { forceOversize = (await env.OAUTH_KV.get(REMOVAL_DEFERRED_KV_KEY)) === pending.userId; } catch (e) {
+        console.error("Removal-deferred flag read failed (non-fatal):", e);
+      }
       const res = await cleanupMemberData(env, pending.userId, pending.personalWid, {
         rowsLeft: NIGHTLY_CLEANUP_ROWS - purgeRows,
-        allowOversize: purgeRows === 0,
+        allowOversize: purgeRows === 0 || forceOversize,
       });
       removalRows += res.rowsWritten ?? 0;
+      try {
+        if (res.blockedByBudget) await env.OAUTH_KV.put(REMOVAL_DEFERRED_KV_KEY, pending.userId);
+        else await env.OAUTH_KV.delete(REMOVAL_DEFERRED_KV_KEY);
+      } catch (e) {
+        console.error("Removal-deferred flag write failed (non-fatal):", e);
+      }
       if (!res.done) break;
       if (res.vectorIds.length) {
         try { await deleteVectorIds(env, res.vectorIds); } catch (e) { console.error("Vectorize deleteByIds failed during member removal resume (non-fatal):", e); }

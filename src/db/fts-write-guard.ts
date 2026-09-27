@@ -235,14 +235,36 @@ const STATIC_VERB_DYNAMIC_TABLE = new RegExp(
  */
 const DYNAMIC_VERB_ENTRIES = new RegExp(`^\\$\\{[^}]*\\}\\s*(?:main\\.)?${ENTRIES_NAME}(?=\\s|\\(|;|$)`, "iu");
 
+/**
+ * A write verb followed by string concatenation where the table name belongs (round 2, ADV-5):
+ * `"UPDATE " + "entries SET ..."` reconstructs to this shape once check-scope.mjs's writerSpans
+ * merges the operands into one span — a closing quote, `+`, and an opening quote sitting right
+ * after the verb is not valid SQL syntax on its own, so it can only be a concatenation boundary.
+ * Same fail-loud principle as STATIC_VERB_DYNAMIC_TABLE: the guard cannot read past it, so it
+ * cannot prove the table is not `entries`.
+ */
+const CONCATENATED_TABLE = new RegExp(
+  `^(?:INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|REPLACE\\s+INTO|UPDATE(?:\\s+OR\\s+\\w+)?|DELETE\\s+FROM)\\b[\\s\\S]*?["'\`]\\s*\\+\\s*["'\`]`,
+  "iu",
+);
+
+/**
+ * `[...].join(sep)` built directly as a .prepare()/.exec() argument (round 2, ADV-5): writerSpans
+ * only ever produces this shape there (isCallArgumentStart), never for the same construct used to
+ * build an ordinary string elsewhere, so unlike the checks above this needs no verb or table name
+ * to already be readable — the shape itself is the fail-loud signal, unconditionally.
+ */
+const ARRAY_JOIN_CALL = /^\s*\[[\s\S]*\]\s*\.\s*join\s*\(/iu;
+
 function isSingleStatementEntriesWrite(sql: string): boolean {
+  if (ARRAY_JOIN_CALL.test(sql)) return true;
   let stripped = stripLeadingCommentsAndWs(sql);
   if (/^WITH\b/i.test(stripped)) {
     stripped = stripLeadingCommentsAndWs(skipLeadingWith(stripped));
   }
   const m = ENTRIES_WRITE_STATEMENT.exec(stripped);
   if (m && isRealStatementTail(stripped.slice(m.index + m[0].length))) return true;
-  return STATIC_VERB_DYNAMIC_TABLE.test(stripped) || DYNAMIC_VERB_ENTRIES.test(stripped);
+  return STATIC_VERB_DYNAMIC_TABLE.test(stripped) || DYNAMIC_VERB_ENTRIES.test(stripped) || CONCATENATED_TABLE.test(stripped);
 }
 
 export function isEntriesWriteSql(sql: string): boolean {

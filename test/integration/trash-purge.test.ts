@@ -246,6 +246,24 @@ describe("a night with a bulk purge and a pending removal", () => {
     expect(await t.one(`SELECT id FROM entries WHERE id = 'm1'`)).toBeNull();
     void m;
   });
+
+  it("T-0089.7.5: on an active brain (the purge writes something every night), the removal still finishes within two nights instead of starving", async () => {
+    t = await makeTrashEnv();
+    await pendingRemovalWith(1600); // 10 x 1,600 = 16,000 > 15,000: bigger than the whole nightly budget
+    // Fresh expired trash every night, mimicking continuous churn: the purge is never quiet, so
+    // `allowOversize: purgeRows === 0` alone would never fire again.
+    for (let night = 0; night < 6; night++) {
+      await seedTrashRows(t, 5, { prefix: `n${night}-`, deletedAt: 1 });
+      const r = await runNightlyCleanup(t.env);
+      expect(r.purged).toBeGreaterThan(0); // confirms the brain stayed "active" this night
+      if (night === 0) {
+        expect(await t.one(`SELECT id FROM entries WHERE id = 'm1'`)).not.toBeNull(); // first night: still waiting
+      }
+    }
+    // Given its guaranteed slot the night after being turned away, it is done well within six
+    // nights of a purge that never once went quiet.
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'm1'`)).toBeNull();
+  });
 });
 
 describe("adversary (MINOR): the nightly purge must not run at half the spec's pace", () => {

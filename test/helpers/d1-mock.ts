@@ -480,15 +480,26 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content ||")) {
-          const [addition, id] = args;
-          const row = db.entries.find((e: any) => e.id === id);
-          if (row) {
+          // digest.ts's markSourcesRolledUp (many-row, guarded on workspace_id + each source's own
+          // (rowVersion = COALESCE(updated_at, created_at), byte length of content) — a JSON tuple
+          // list, not a literal id per statement.
+          const [addition, now, workspaceId, tuplesJson] = args;
+          const tuples = JSON.parse(tuplesJson) as [string, number, number][];
+          let changes = 0;
+          for (const [id, rowVersion, contentBytes] of tuples) {
+            const row = db.entries.find((e: any) => e.id === id);
+            if (!row) continue;
+            if ((row.workspace_id ?? "") !== workspaceId) continue;
+            if ((row.updated_at ?? row.created_at) !== rowVersion) continue;
+            if (Buffer.byteLength(row.content ?? "") !== contentBytes) continue;
             const tags: string[] = JSON.parse(row.tags ?? "[]");
             if (!tags.includes("rolled-up")) tags.push("rolled-up");
             row.tags = JSON.stringify(tags);
             row.content = row.content + addition;
+            row.updated_at = now;
+            changes++;
           }
-          return { meta: { changes: row ? 1 : 0 } };
+          return { meta: { changes } };
         }
         if (s.startsWith("UPDATE entries SET tags = json_insert(tags, '$[#]'")) {
           const [tag, id] = args;
@@ -1128,7 +1139,7 @@ export class D1Mock {
           const results = rows.map((e: any) => ({ id: e.id, content: e.content, tags: e.tags, source: e.source, created_at: e.created_at }));
           return { results };
         }
-        if (s.includes("SELECT id, content FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
+        if (s.includes("SELECT id, content, COALESCE(updated_at, created_at) AS row_version FROM entries") && s.includes("WHERE tags LIKE") && s.includes("ORDER BY created_at DESC")) {
           // compressTag raw entries query — tag match, system-tag exclusion, and the
           // recall/age/contradiction eligibility predicate (cutoff is the 2nd bind param).
           const tagPattern = args[0] as string;
@@ -1152,7 +1163,7 @@ export class D1Mock {
             })
             .sort((a: any, b: any) => b.created_at - a.created_at)
             .slice(0, 50)
-            .map((e: any) => ({ id: e.id, content: e.content }));
+            .map((e: any) => ({ id: e.id, content: e.content, row_version: e.updated_at ?? e.created_at }));
           return { results };
         }
         if (s.includes("SELECT id, content FROM entries WHERE id IN")) {
