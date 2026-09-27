@@ -190,7 +190,7 @@ export async function handleEntriesRoutes(
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "deleted", payload: { deletedVectors: result.vectorCount } });
+    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "deleted", payload: { deletedVectors: result.vectorCount, channel: "rest" } });
     return json({ ok: true, id, deletedVectors: result.vectorCount });
   }
 
@@ -314,7 +314,7 @@ export async function handleEntriesRoutes(
       entryId: id,
       actorId: auth.userId,
       event: result.status,
-      payload: { workspaceId: result.workspaceId },
+      payload: { workspaceId: result.workspaceId, channel: "rest" },
     });
     // After the audit event, before the response: the D1 move and the audit
     // row are both already committed, so a Vectorize outage here can only
@@ -348,7 +348,7 @@ export async function handleEntriesRoutes(
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status } });
+    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
     return json({ ok: true, id, status });
   }
 

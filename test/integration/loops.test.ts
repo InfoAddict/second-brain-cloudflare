@@ -244,7 +244,7 @@ describe("POST /loops/resolve", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].entry_id).toBe("open-1");
       expect(rows[0].event).toBe("status_changed");
-      expect(JSON.parse(rows[0].payload)).toEqual({ loop_action: "done" });
+      expect(JSON.parse(rows[0].payload)).toEqual({ loop_action: "done", channel: "rest" });
     });
   });
 });

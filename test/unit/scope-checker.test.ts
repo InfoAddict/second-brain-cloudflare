@@ -668,6 +668,28 @@ describe("scanSource, documented limitations, pinned so the header cannot drift"
     expect(r.violations).toEqual([]);
   });
 
+  it("a literal workspace_id predicate that sits only inside an OR arm does not count as scoping", () => {
+    // `created_at > ? OR (held AND workspace_id = ?)` returns every recent row of every workspace: the
+    // predicate restricts one arm, not the row set. It used to pass because the predicate was "present".
+    const r = scanSource("const q = `SELECT id FROM entries WHERE tags LIKE ? AND (created_at > ? OR (tags LIKE ? AND workspace_id = ?)) LIMIT 1`;");
+    expect(r.violations.length).toBe(1);
+  });
+
+  it("`WHERE x OR workspace_id = ?` is not scoped, the same shape written flat", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE created_at > ? OR workspace_id = ?`;");
+    expect(r.violations.length).toBe(1);
+  });
+
+  it("an OR whose every arm is scoped still counts: `(workspace_id = ? OR workspace_id IN (?, ?))`", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE (workspace_id = ? OR workspace_id IN (?, ?)) AND tags LIKE ?`;");
+    expect(r.violations).toEqual([]);
+  });
+
+  it("a predicate alongside an OR elsewhere still counts: `workspace_id = ? AND (a = ? OR b = ?)`", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE workspace_id = ? AND (created_at > ? OR tags LIKE ?)`;");
+    expect(r.violations).toEqual([]);
+  });
+
   it("limitation 2 + item 4: a conditional hoisted one line up is not caught", () => {
     // Asserted as CURRENT BEHAVIOUR. The rejection in item 4 is a test on the
     // text between ${ and }, so moving the ternary into a const defeats it,
@@ -1162,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (138 queries, 69 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (142 queries, 70 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1226,7 +1248,25 @@ describe("the checker over the real source tree", () => {
     // src/recall/keyword-rows.ts): the FTS statement that was one prepare over both tiers is now two candidate
     // SELECTs (the AND tier and the bm25 tier), each carrying the caller's clause into a CTE that D1 turns into
     // per-term match levels. Same rows, same scope.
-    ).toEqual({ queries: 138, exempt: 69, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4: the weekly insight pass drops the old
+    // drawn_from edges of an insight it replaces, by that insight's own id.
+    // Deliberate: net +1 query and no new exemption for T-0089.4.4 (src/capture/entry.ts): the merge-target
+    // and contradiction-conflict snapshot reads are now pinned to the writer's workspace in the predicate
+    // (`AND workspace_id = ?`, writeCtx.workspaceId) instead of trusting the scoped candidate read, so their two
+    // by-id exemptions are gone; restoreRowVectors adds one by-id SELECT after a lost compare-and-set.
+    // The CAS and deprecation UPDATEs are not counted by the checker.
+    // Deliberate: -1 scope-exempt for T-0089.4.4: deprecateEntry (src/capture/lifecycle.ts) takes an optional
+    // workspace and pins its read and write to it when captureEntry passes the writer's workspace; that SELECT
+    // now carries the clause in a JS fragment, and the checker no longer needs an exemption for the read it replaced.
+    // Deliberate: +1 query for T-0089.4.4 (src/compression/digest.ts): the held-draft existence check,
+    // scoped by `workspace_id = ?`. And +1 scope-exempt: the nightly corpus-wide 24h cooldown query is back
+    // to its original text and its `scope-exempt: cron` reason. The folded version had put `workspace_id = ?`
+    // inside an OR arm, which the checker used to count as scoped; it no longer does (inUnscopedOrArm).
+    // Deliberate: +1 query and +1 scope-exempt (cron) for T-0089.4.4 (src/compression/digest.ts prepareHeldDigests):
+    // the nightly run's one held-digest read, riding in its existing candidate batch. It selects only
+    // (workspace, tags) of held drafts, narrowed by the run's workspace slice when it has one, and the per-tag
+    // `heldDigestSql` it replaces on the nightly path stays for manual digests.
+    ).toEqual({ queries: 142, exempt: 70, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

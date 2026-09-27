@@ -77,7 +77,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     "BATCH",
     "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
     "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
-    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (?)",
   ],
 }
 `;
@@ -161,7 +161,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     "BATCH",
     "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?)",
     "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
-    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (?)",
   ],
 }
 `;
@@ -228,7 +228,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
       "aiCalls": 1,
       "d1RowsRead": null,
       "d1RowsWritten": 0,
-      "d1Statements": 7,
+      "d1Statements": 6,
       "embeddingCalls": 1,
       "kvReads": 3,
       "kvWrites": 1,
@@ -249,8 +249,7 @@ exports[`internal.variant.arms > matches the unmodified SQL, top-k IDs, and stab
     "BATCH",
     "SELECT id, recall_count, importance_score, contradiction_wins, contradiction_losses, tags, workspace_id, actor_id FROM entries WHERE id IN (?, ?)",
     "SELECT id, content, tags, source, created_at, updated_at, workspace_id, actor_id FROM entries WHERE id IN (?, ?) AND tags NOT LIKE '%"auto-pattern"%' AND tags NOT LIKE '%"auto-insight"%' AND tags NOT LIKE '%"status:deprecated"%'",
-    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
-    "UPDATE entries SET recall_count = recall_count + 1 WHERE id = ?",
+    "UPDATE entries SET recall_count = recall_count + 1 WHERE id IN (?, ?)",
   ],
 }
 `;

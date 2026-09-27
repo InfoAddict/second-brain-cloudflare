@@ -321,7 +321,8 @@ describe("compressTag()", () => {
   function countingDb(db: D1Mock, failBatch = false, failRowIds: string[] = []) {
     const calls = { batches: 0, batchedStatements: 0, individualRuns: 0 };
     const wrap = (stmt: any, boundId?: string): any => ({
-      bind: (...args: any[]) => wrap(stmt.bind(...args), args[args.length - 1]),
+      // the row id is a bound arg, no longer the last one (the statement also binds the workspace)
+      bind: (...args: any[]) => wrap(stmt.bind(...args), args.find(a => failRowIds.includes(a))),
       run: async () => {
         calls.individualRuns++;
         if (boundId && failRowIds.includes(boundId)) throw new Error(`row ${boundId} rejected`);

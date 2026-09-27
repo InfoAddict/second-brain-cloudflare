@@ -66,6 +66,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "admin_events", "idx_admin_events_created", "maintenance_cursor", "idx_entries_workspace_created", "idx_entries_capsule",
   // Projects registry; idx_entries_project is post-column like the capsule index.
   "projects", "idx_projects_workspace", "idx_entries_project",
+  // Held draft digests (T-0089.4.4); post-column like the capsule and project indexes.
+  "idx_entries_conflict_held",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   "entries_fts",
@@ -259,7 +261,8 @@ describe("initializeDatabase updated_at migration", () => {
       // MOVED 56 -> 61 (T-0065) by entry_counts, its three triggers, and the
       // GROUP BY seed — five statements, all through prepare(), in their own
       // dedicated batch mirroring entries_fts's ownership rule.
-      expect(migrated).toBe(61); // 27 base objects + 18 ALTERs + 10 post-column objects + the email-index CREATE
+      // MOVED 61 -> 62 (T-0089.4.4) by idx_entries_conflict_held, the partial index behind the digest's held-draft check.
+      expect(migrated).toBe(62); // 27 base objects + 18 ALTERs + 11 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -592,7 +595,8 @@ describe("initializeDatabase against real SQLite", () => {
     // bills by, so the net cost here is +1 (the batch), not +4.
     // MOVED 54 -> 55 (T-0065) by entry_counts, its three triggers, and its
     // GROUP BY seed, created together in ONE batch — same +1, not +5.
-    expect(cold).toBe(55); // one probe, then the 54 statements a new brain needs
+    // MOVED 55 -> 56 (T-0089.4.4) by idx_entries_conflict_held.
+    expect(cold).toBe(56); // one probe, then the 55 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });

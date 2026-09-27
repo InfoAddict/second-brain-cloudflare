@@ -299,6 +299,33 @@ describe("captureEntry()", () => {
     expect(db.entries[0].content).toBe("I switched to Cursor");
   });
 
+  it.each([
+    ["replace", '{"action":"replace","target_id":"existing"}'],
+    ["merge", '{"action":"merge","target_id":"existing","merged_content":"Combined system and user text"}'],
+  ])("systemWrite: a %s decision never touches the existing row — the newcomer is stored flagged", async (_action, decision) => {
+    const userRow = {
+      id: "existing", content: "I use VSCode", tags: '["work"]', source: "api",
+      created_at: Date.now(), vector_ids: '["existing"]', recall_count: 0, importance_score: 3,
+    };
+    db.entries.push({ ...userRow });
+    env = makeTestEnv(db, {
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({
+          matches: [{ id: "existing", score: 0.88, metadata: { parentId: "existing" } }],
+        }),
+      }),
+      AI: makeContradictionAI(decision),
+    });
+    const { ctx } = makeCtx();
+    const result = await captureEntry("I switched to Cursor", [], "system", env, ctx, undefined, undefined, undefined, { systemWrite: "digest", channel: "system:digest" });
+    expect(result.status).toBe("flagged");
+    expect(db.entries).toHaveLength(2);
+    expect(db.entries.find(e => e.id === "existing")).toEqual(userRow);
+    const fresh = db.entries.find(e => e.id !== "existing")!;
+    expect(fresh.content).toBe("I switched to Cursor");
+    expect(JSON.parse(fresh.tags)).toContain("duplicate-candidate");
+  });
+
   it("replace: deletes old vectors after re-embedding", async () => {
     db.entries.push({
       id: "existing", content: "I use VSCode", tags: "[]", source: "api",

@@ -390,7 +390,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           actorId: identity.userId,
         };
       }
-      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput);
+      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, identity ? { channel: "mcp" } : {});
       // Silent, after the write: a lost registry row never fails the memory.
       if (identity && projectSlug && result.status !== "blocked") {
         await autoCreateProject(env, ctx, { workspaceId: targetCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -400,7 +400,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           entryId: result.id,
           actorId: identity.userId,
           event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
-          payload: { captureStatus: result.status },
+          payload: { captureStatus: result.status, channel: "mcp" },
         });
       }
       if (result.status === "blocked") {
@@ -499,7 +499,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
 
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended" });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp" } });
       }
 
       return {
@@ -564,7 +564,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
 
       if (identity && result.status === "updated") {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated" });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp" } });
       }
 
       if (!result.vectorIds) {
@@ -601,7 +601,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const ok = await applyStatus(id, status as MemoryStatus, env);
       if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status } });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp" } });
       }
       return { content: [{ type: "text", text: status === "deprecated" ? `Entry ${id} deprecated — removed from recall, kept for audit.` : `Entry ${id} marked ${status}.` }] };
     }
@@ -627,7 +627,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (result.status === "forbidden") return { content: [{ type: "text", text: `Only the entry's author or an admin can un-share ${id}.` }] };
       if (result.status === "no_change") return { content: [{ type: "text", text: `Entry ${id} is already in the ${workspace ?? "company"} workspace.` }] };
-      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: result.status, payload: { workspaceId: result.workspaceId } });
+      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: result.status, payload: { workspaceId: result.workspaceId, channel: "mcp" } });
       // After the audit event, before the response — see moveEntry's own
       // comment: the D1 move is already committed, so a Vectorize outage
       // here costs only this cosmetic ranking follow-up.
@@ -896,7 +896,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "deleted", payload: { deletedVectors: result.vectorCount } });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "deleted", payload: { deletedVectors: result.vectorCount, channel: "mcp" } });
       }
       return { content: [{ type: "text", text: `Deleted entry ${id} and ${result.vectorCount} vector(s)` }] };
     }

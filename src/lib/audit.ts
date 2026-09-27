@@ -101,3 +101,22 @@ export function auditEvents(
   fireAndForget(ctx, "entry_events batch insert failed (non-fatal):", () =>
     env.DB.batch(events.map((e) => auditEventStatement(env, e))));
 }
+
+/** Most audit rows in one batch, so a large delete stays inside the ~50 statements a request allows. */
+export const AUDIT_BATCH_MAX = 50;
+
+/**
+ * Awaited, chunked form for callers that must have the rows written before they
+ * go on (a purge or sync with no ExecutionContext to defer to): one env.DB.batch
+ * per AUDIT_BATCH_MAX rows. A failed chunk is logged and does not stop the next,
+ * or fail the operation the rows describe.
+ */
+export async function writeAuditEvents(env: Env, events: AuditEventInput[]): Promise<void> {
+  for (let i = 0; i < events.length; i += AUDIT_BATCH_MAX) {
+    try {
+      await env.DB.batch(events.slice(i, i + AUDIT_BATCH_MAX).map(e => auditEventStatement(env, e)));
+    } catch (e) {
+      console.error("entry_events batch insert failed (non-fatal):", e);
+    }
+  }
+}

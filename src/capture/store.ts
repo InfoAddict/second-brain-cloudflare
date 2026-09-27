@@ -7,7 +7,7 @@ import { neighborsFromVectorQuery } from "../graph/traverse";
 import { chunkText } from "../text/chunk";
 import { deleteVectorIds } from "../vectorize/batch";
 import { rememberTags } from "../tags/vocabulary";
-import { applyTagReplacement } from "../tags/system";
+import { applyTagReplacement, withUserEditMarker } from "../tags/system";
 import { extractHashtags } from "../text/hashtags";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { tagsAfterWrite, tagsAfterAppend } from "../memory/stale";
@@ -216,6 +216,8 @@ export async function updateEntryContent(
     // volatility/staleness verdicts, and the reason `append` must NOT strip it — an append
     // keeps the digested original inside the entry, so the digest still covers it.
     .filter(t => t !== "rolled-up");
+  // A person's edit takes a digest or insight out of the system's hands, in this same UPDATE.
+  const committedTags = withUserEditMarker(mergedTags);
 
   // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors untouched and
   // surface an error, instead of committing new content and then deleting every vector —
@@ -237,7 +239,7 @@ export async function updateEntryContent(
   // and actor_id is left untouched: the original author of a row being edited is not
   // this call's to decide.
   await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-    .bind(finalContent, JSON.stringify(mergedTags), Date.now(), id).run();
+    .bind(finalContent, JSON.stringify(committedTags), Date.now(), id).run();
 
   // Rewritten content can carry hashtags the brain has never seen, so this is one of the
   // two places an unknown tag enters the corpus (#288). It sits here rather than in the
@@ -303,7 +305,7 @@ export async function appendToEntry(
   // replacement this keeps any existing volatility verdict (see tagsAfterAppend); a
   // caller-supplied one still overrides it.
   const appendedTags = tagsAfterAppend(tags);
-  const refreshedTags = volatility ? withVolatility(appendedTags, volatility) : appendedTags;
+  const refreshedTags = withUserEditMarker(volatility ? withVolatility(appendedTags, volatility) : appendedTags);
 
   if (newContent.length > CHUNK_MAX_CHARS) {
     const newVectorIds = (await reembedOrDegrade(env, id, newContent, tags, source, config, embedCtx))?.vectorIds ?? null;

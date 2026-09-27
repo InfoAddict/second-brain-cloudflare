@@ -17,7 +17,9 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
   // scope-exempt: by-id delete: routes gate with getReadableEntry before calling
-  await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(id).run();
+  const deletion = await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(id).run();
+  // A racing deleter removed it between the read and here: it owns the cleanup and the audit.
+  if (deletion?.meta?.changes === 0) return { status: "not_found" };
 
   try {
     // scope-exempt: by-id cascade: edge endpoints of the row just deleted
@@ -54,18 +56,26 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
  */
 export const INDEXABLE_SQL = `tags NOT LIKE '%"status:deprecated"%'`;
 
-export async function deprecateEntry(id: string, env: Env): Promise<boolean> {
+/**
+ * `workspaceId`, when given, pins both the read and the write to that workspace: a row that has
+ * moved since the caller's scoped read is left alone and false is returned. Routes gate with
+ * getReadableEntry and omit it.
+ */
+export async function deprecateEntry(id: string, env: Env, workspaceId?: string): Promise<boolean> {
+  const pinned = workspaceId === undefined ? "" : " AND workspace_id = ?";
+  const pin = workspaceId === undefined ? [] : [workspaceId];
   const row = await env.DB.prepare(
-    // scope-exempt: by-id: routes gate with getReadableEntry before calling
-    `SELECT tags, vector_ids FROM entries WHERE id = ?`
-  ).bind(id).first() as Record<string, any> | null;
+    // scope-exempt: by-id: routes gate with getReadableEntry before calling; captureEntry passes the writer's workspace
+    `SELECT tags, vector_ids FROM entries WHERE id = ?${pinned}`
+  ).bind(id, ...pin).first() as Record<string, any> | null;
   if (!row) return false;
 
   const tags: string[] = JSON.parse(row.tags ?? "[]");
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
-  await env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?`)
-    .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", id).run();
+  const res = await env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?${pinned}`)
+    .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", id, ...pin).run();
+  if (workspaceId !== undefined && (res.meta?.changes ?? res.meta?.rows_written ?? 1) === 0) return false;
 
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);

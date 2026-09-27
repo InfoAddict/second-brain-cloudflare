@@ -335,6 +335,9 @@ const POST_COLUMN_OBJECTS: Record<string, string> = {
   // Membership scans (GET /projects?counts=1) stay off ordinary memories. Post-column
   // because workspace_id arrives by ALTER on older brains.
   idx_entries_project: `CREATE INDEX IF NOT EXISTS idx_entries_project ON entries(workspace_id, id) WHERE instr(lower(tags), '"project:') > 0`,
+  // Held draft digests (a digest stored because it contradicted a memory a system job may not rewrite):
+  // the nightly check for one reads only these rows. Post-column because workspace_id arrives by ALTER.
+  idx_entries_conflict_held: `CREATE INDEX IF NOT EXISTS idx_entries_conflict_held ON entries(workspace_id, id) WHERE instr(lower(tags), '"conflict-held"') > 0`,
   prompt_capsule_entry_insert: `CREATE TRIGGER IF NOT EXISTS prompt_capsule_entry_insert
     AFTER INSERT ON entries
     WHEN instr(lower(NEW.tags), '"capsule:') > 0 OR instr(lower(NEW.tags), '"capsule-slot:') > 0

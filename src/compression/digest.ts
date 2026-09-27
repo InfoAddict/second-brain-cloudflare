@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { DEFAULTS, resolveConfig, type Config } from "../config";
 import { captureEntry } from "../capture/entry";
-import { DIGEST_MAX_TOKENS, LLM_MODEL } from "../constants";
+import { DIGEST_MAX_TOKENS, LLM_MODEL, SYSTEM_SOURCE } from "../constants";
 import { readStreamText } from "../lib/ai";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { MAX_PROJECT_PATTERNS, expandProjectFilter, projectFilterSql } from "../projects/filter";
@@ -51,12 +51,12 @@ State of ${stateOf}:`;
 }
 
 /** Mark digest sources and retry individually if the batch fails. */
-async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): Promise<void> {
+async function markSourcesRolledUp(env: Env, ids: string[], digestId: string, workspaceId: string): Promise<void> {
   if (!ids.length) return;
   const note = `\n\n[Digest: ${digestId}]`;
   const mark = (id: string) => env.DB.prepare(
-    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ?`
-  ).bind(note, id);
+    `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ?`
+  ).bind(note, id, workspaceId);
 
   try {
     await env.DB.batch(ids.map(mark));
@@ -72,7 +72,96 @@ async function markSourcesRolledUp(env: Env, ids: string[], digestId: string): P
   }
 }
 
+/**
+ * A digest held as a draft (it contradicted a memory a system job may not rewrite) that is still
+ * LIVE in one workspace for one tag. Bound: workspace id, then the tag's LIKE pattern.
+ *
+ * The `instr(lower(tags), '"conflict-held"') > 0` predicate is what makes the partial index
+ * idx_entries_conflict_held usable, so the check reads only held rows, never the workspace
+ * (test/unit/compress-held-plan.test.ts). This per-tag form serves a manual digest; the nightly run
+ * reads every workspace's held set once (heldDigestSet) and passes it in. It runs only on the path
+ * that would otherwise pay for a model call, after the cooldown and the source count.
+ *
+ * It releases when the person acts on the draft: edits it (`user-edited`), confirms it (status
+ * canonical), deprecates it, or forgets it (the row is gone).
+ */
+export const heldDigestSql = (indexed: boolean): string => `
+  SELECT id FROM entries${indexed ? " INDEXED BY idx_entries_conflict_held" : ""}
+  WHERE instr(lower(tags), '"conflict-held"') > 0
+    AND workspace_id = ?
+    AND tags LIKE ? ${TAG_LIKE_ESCAPE}
+    AND tags NOT LIKE '%"user-edited"%'
+    AND tags NOT LIKE '%"status:canonical"%'
+    AND tags NOT LIKE '%"status:deprecated"%'
+  LIMIT 1`;
+
+/**
+ * Is a held draft for this tag still waiting on the person? Forced onto the partial index, which
+ * SQLite will not otherwise pick over the workspace index; a brain that has not built it yet
+ * (`no such index`) retries once without the hint, as GET /projects does.
+ */
+async function hasHeldDigest(env: Env, workspaceId: string, tag: string): Promise<boolean> {
+  try {
+    return Boolean(await env.DB.prepare(heldDigestSql(true)).bind(workspaceId, tagLikePattern(tag)).first());
+  } catch (e) {
+    if (!/no such index: idx_entries_conflict_held/i.test(String((e as Error)?.message ?? e))) throw e;
+    return Boolean(await env.DB.prepare(heldDigestSql(false)).bind(workspaceId, tagLikePattern(tag)).first());
+  }
+}
+
+/** The key `heldDigestSet` holds a (workspace, tag) pair under. */
+export const heldKey = (workspaceId: string, tag: string): string => `${workspaceId}\u0000${tag}`;
+
+/** Most held digests one read returns. A read that comes back full may be incomplete, so callers treat it as unknown. */
+export const HELD_DIGESTS_READ_LIMIT = 500;
+
+/**
+ * The read behind `heldDigestSet`: the held digests that are still live, as (workspace, tags) rows.
+ * `workspaceId` narrows it to that workspace's slice; null reads every workspace (the corpus-wide
+ * cron scan). Bounded by HELD_DIGESTS_READ_LIMIT: a held digest is at most one per tag and workspace, but holds never expire on their own.
+ * Exported so the nightly run can ride it in the batch it already sends for its candidates.
+ */
+export function prepareHeldDigests(env: Env, workspaceId: string | null, indexed = true): D1PreparedStatement {
+  // scope-exempt: cron: held-draft existence read for the nightly rollup; the workspace slice, when the run has one, is in the predicate, and only (workspace, tag) names are used, never content
+  const sql = `
+    SELECT workspace_id, tags FROM entries${indexed ? " INDEXED BY idx_entries_conflict_held" : ""}
+    WHERE instr(lower(tags), '"conflict-held"') > 0
+      AND tags LIKE '%"synthesized"%'
+      AND tags NOT LIKE '%"user-edited"%'
+      AND tags NOT LIKE '%"status:canonical"%'
+      AND tags NOT LIKE '%"status:deprecated"%'${workspaceId === null ? "" : "\n      AND workspace_id = ?"}
+    LIMIT ${HELD_DIGESTS_READ_LIMIT}`;
+  return env.DB.prepare(sql).bind(...(workspaceId === null ? [] : [workspaceId]));
+}
+
+/** The set of `heldKey(workspace, tag)` for every tag on the rows prepareHeldDigests returned. */
+export function heldSetFrom(rows: readonly Record<string, unknown>[] | undefined): Set<string> {
+  const held = new Set<string>();
+  for (const row of rows ?? []) {
+    let tags: unknown;
+    try { tags = JSON.parse(String(row.tags ?? "[]")); } catch { continue; }
+    if (!Array.isArray(tags)) continue;
+    for (const t of tags) if (typeof t === "string") held.add(heldKey(String(row.workspace_id ?? ""), t));
+  }
+  return held;
+}
+
+/** Same read on its own, with the index hint and the `no such index` retry of hasHeldDigest. */
+export async function heldDigestSet(env: Env, workspaceId: string | null): Promise<Set<string>> {
+  try {
+    return heldSetFrom((await prepareHeldDigests(env, workspaceId, true).all<Record<string, unknown>>()).results);
+  } catch (e) {
+    if (!/no such index: idx_entries_conflict_held/i.test(String((e as Error)?.message ?? e))) throw e;
+    return heldSetFrom((await prepareHeldDigests(env, workspaceId, false).all<Record<string, unknown>>()).results);
+  }
+}
+
 export interface CompressTagOptions {
+  /**
+   * The (workspace, tag) pairs with a live held digest, already read once for the whole run
+   * (heldDigestSet). Absent, compressTag asks per tag, as a manual digest does.
+   */
+  heldDigests?: ReadonlySet<string>;
   /** When set, roll up only these workspaces and scope the 24h cooldown per workspace. */
   workspaceIds?: string[];
   /**
@@ -160,6 +249,7 @@ export async function compressTag(
       continue;
     }
 
+
     const member = workspaceRows
       ? projectFilterSql(workspaceRows)
       : { clause: `tags LIKE ? ${TAG_LIKE_ESCAPE}`, bindings: [tagLikePattern(tag)] };
@@ -182,6 +272,12 @@ export async function compressTag(
       continue;
     }
 
+    // A held draft for this tag is not retried every cycle: the same sources would be re-summarised,
+    // and the model paid for, only to be held again. See heldDigestSql for when it releases.
+    if (opts?.heldDigests ? opts.heldDigests.has(heldKey(workspaceId, tag)) : await hasHeldDigest(env, workspaceId, tag)) {
+      continue;
+    }
+
     const rows = rawEntries.map(r => ({ id: r.id as string, content: r.content as string }));
     const label = workspaceRows?.[0].name;
     const digestText = await synthesizeDigest(tag, rows, env, cfg, label);
@@ -191,14 +287,23 @@ export async function compressTag(
     const content = `[Synthesized from ${rows.length} entries ${provenance}]\n\n${digestText}`;
     // The digest inherits the partition's workspace and keeps actor "" — system-
     // authored, like every pre-team pipeline row.
-    const result = await captureEntry(content, ["synthesized", tag], "system", env, ctx, cfg,
-      { workspaceId, actorId: "" });
+    const result = await captureEntry(content, ["synthesized", tag], SYSTEM_SOURCE, env, ctx, cfg,
+      { workspaceId, actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
 
-    if (result.status !== "stored") {
+    // Only a blocked capture wrote nothing. Every other status (flagged, contradiction,
+    // contradiction_protected, merged, replaced) left a row that holds these sources'
+    // digest, so they roll up onto it; skipping them would re-digest the same sources
+    // into a fresh near-duplicate every cooldown.
+    if (result.status === "blocked") {
+      continue;
+    }
+    // A protected draft is not a live digest: rolling sources up onto it would penalise and
+    // rewrite user memories for a summary recall never shows. The digest retries next cycle.
+    if (result.status === "contradiction_protected") {
       continue;
     }
 
-    await markSourcesRolledUp(env, rows.map(r => r.id), result.id);
+    await markSourcesRolledUp(env, rows.map(r => r.id), result.id, workspaceId);
 
     // First successful digest defines the returned text/id; counts accumulate across
     // workspaces so a caller still learns how much was compressed tonight.

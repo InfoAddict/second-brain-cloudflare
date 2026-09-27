@@ -45,7 +45,7 @@ const SCHEMA_PROBE_RESULTS = [
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
     "idx_workspaces_kind", "idx_users_token_hash", "idx_users_email", "idx_memberships_workspace",
     "idx_entry_events_entry", "idx_entry_events_created", "idx_admin_events_created",
-    "idx_projects_workspace", "idx_entries_project", "idx_push_subscriptions_workspace"]
+    "idx_projects_workspace", "idx_entries_project", "idx_entries_conflict_held", "idx_push_subscriptions_workspace"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",
@@ -346,10 +346,10 @@ export class D1Mock {
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET recall_count")) {
-          const [id] = args;
-          const row = db.entries.find((e: any) => e.id === id);
-          if (row) row.recall_count = (row.recall_count ?? 0) + 1;
-          return { meta: { changes: row ? 1 : 0 } };
+          // `WHERE id = ?` or `WHERE id IN (?, ...)`: every bound arg is an id.
+          const rows = db.entries.filter((e: any) => args.includes(e.id));
+          for (const row of rows) row.recall_count = (row.recall_count ?? 0) + 1;
+          return { meta: { changes: rows.length } };
         }
         if (s.startsWith("UPDATE entries SET importance_score")) {
           const [score, id] = args;
@@ -542,8 +542,9 @@ export class D1Mock {
         }
         if (s.includes("WHERE tags LIKE") && s.includes("created_at >")) {
           // Cooldown check: find entries matching arg LIKE patterns + any hardcoded tags in SQL
-          const likePatterns: string[] = args.slice(0, -1).map((a: any) => String(a));
-          const cutoff = args[args.length - 1] as number;
+          // Binds are the LIKE pattern(s), the cutoff, and (since the held-digest clause) the workspace id.
+          const likePatterns: string[] = args.filter((a: any) => typeof a === "string" && a.startsWith("%")).map((a: any) => String(a));
+          const cutoff = args.find((a: any) => typeof a === "number") as number;
           // Extract hardcoded tags from SQL (e.g. '%"synthesized"%')
           const hardcoded = [...s.matchAll(/'%"(\w+)"%'/g)].map(m => m[1]);
           const match = db.entries.find((e: any) => {

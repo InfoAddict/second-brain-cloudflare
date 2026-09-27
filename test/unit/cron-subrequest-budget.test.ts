@@ -97,6 +97,12 @@ const NIGHTLY_D1_STATEMENT_BUDGET = 61;
 // near the platform's real 1,000-subrequest ceiling, so the honest worst-case
 // budget for a sweep night is this, not a reason to shrink anything.
 const SWEEP_NIGHT_D1_STATEMENT_BUDGET = NIGHTLY_D1_STATEMENT_BUDGET + 1;
+// T-0089.4.4: the compression run reads which (workspace, tag) pairs still have a held draft digest waiting
+// on the person (a partial-index read) and skips those tags. The read rides in the batch the run already
+// sends for its candidates and the project registry, so it costs no extra subrequest: measured +0 on every
+// night below. The term is kept as the honest worst case if the read ever has to stand alone (+1 per run,
+// never per tag; the per-tag check it replaced cost up to +COMPRESSION_MAX_TAGS_PER_RUN).
+const HELD_DIGEST_D1_WORST_CASE = 1;
 // The platform ceiling this suite's one external caller — the integration
 // sync's feed fetch — actually has to respect (see "the integration schedule"
 // tests below).
@@ -287,7 +293,7 @@ describe("nightly cron D1 subrequest cost", () => {
 
     expect(db.entries.filter(e => JSON.parse(e.tags).includes("synthesized")).length).toBeGreaterThan(0);
     expect(db.entries.filter(e => e.staleness_checked_at != null)).toHaveLength(25);
-    expect(statements.length).toBeLessThanOrEqual(SWEEP_NIGHT_D1_STATEMENT_BUDGET);
+    expect(statements.length).toBeLessThanOrEqual(SWEEP_NIGHT_D1_STATEMENT_BUDGET + HELD_DIGEST_D1_WORST_CASE);
   });
 
   // The exact-pin tests below fix the clock rather than trusting the real

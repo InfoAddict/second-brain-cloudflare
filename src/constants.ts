@@ -277,3 +277,6 @@ export const CJK_STOPWORDS = new Set([
   "什么", "怎么", "为什么", "没有", "可以", "一个", "我们", "你们", "他们", "这个", "那个", "这些", "那些",
   "因为", "所以", "但是", "如果", "已经", "还是", "或者", "以及", "关于",
 ]);
+
+/** The `source` the digest and weekly-insight jobs write; with an empty actor it is how their rows are told from a client's. */
+export const SYSTEM_SOURCE = "system";

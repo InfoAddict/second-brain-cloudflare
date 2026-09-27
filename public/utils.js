@@ -461,6 +461,8 @@ const SYSTEM_TAG_NAMES = new Set([
   'rolled-up',
   'duplicate-candidate',
   'contradiction-resolved',
+  'user-edited',
+  'conflict-held',
 ])
 
 /**

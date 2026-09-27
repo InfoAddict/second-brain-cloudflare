@@ -299,9 +299,11 @@ describe("nightly per-project digests", () => {
     await run(WS);
 
     const first = sqlite.batches[0];
-    expect(first).toHaveLength(2);
+    // The third statement is the held-draft digest read (T-0089.4.4): it rides in this batch too.
+    expect(first).toHaveLength(3);
     expect(first[0]).toMatch(/json_each\(entries\.tags\)/);
     expect(first[1]).toMatch(/FROM projects WHERE workspace_id IN \(\?\) AND status = 'active'/);
+    expect(first[2]).toMatch(/idx_entries_conflict_held/);
     // Nothing else read the registry: one candidate read, whatever the number of projects.
     expect(sqlite.issued.filter(s => /FROM projects/.test(s))).toEqual([]);
   });

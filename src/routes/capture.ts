@@ -97,7 +97,7 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when);
+    const result = await captureEntry(body.content, captureTags, body.source ?? "api", env, ctx, undefined, writeCtx, when, { channel: "rest" });
 
     if (projectSlug && result.status !== "blocked") {
       await autoCreateProject(env, ctx, { workspaceId: writeCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -111,7 +111,7 @@ export async function handleCaptureRoutes(
         entryId: result.id,
         actorId: identity.userId,
         event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
-        payload: { captureStatus: result.status },
+        payload: { captureStatus: result.status, channel: "rest" },
       });
     }
 
@@ -197,7 +197,7 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended" });
+    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
 
     return json({
       ok: true,
@@ -263,11 +263,12 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated" });
-
     if (result.status === "reembed_failed") {
       return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
     }
+
+    // Only a write that happened is audited.
+    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
 
     if (!result.vectorIds) {
       return json({

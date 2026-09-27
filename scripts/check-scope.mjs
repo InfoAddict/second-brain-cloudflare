@@ -122,10 +122,11 @@
  *     passes whatever it renders; it shows the thought was applied, not that the
  *     clause is right. Correctness is the isolation suite's job
  *     (test/integration/team-isolation.test.ts).
- *  3. Boolean structure is not parsed. `WHERE ${scope.clause} OR 1=1` passes:
+ *  3. Boolean structure is not parsed for the INTERPOLATED clause. `WHERE ${scope.clause} OR 1=1` passes:
  *     the clause is present and unconditional, and this script cannot tell that
  *     an OR at the same level defeats it. Pinned by a test so this line and the
- *     behaviour cannot drift apart.
+ *     behaviour cannot drift apart. A LITERAL `workspace_id = ?` is different: one that sits only in an
+ *     OR arm whose siblings are not all scoped is ignored (inUnscopedOrArm).
  *  4. Alias attribution is textual. `${aScope.clause}` carries no visible alias,
  *     so it joins a shared pool — two aliases and two unattributed clauses pass
  *     even if both clauses were built for the same alias. Only an explicitly
@@ -843,6 +844,62 @@ function joinStructure(masked, interps) {
 }
 
 /**
+ * Does the literal predicate at `index` sit in an OR arm whose sibling arms are not all scoped?
+ *
+ * `created_at > ? OR (held AND workspace_id = ?)` and `WHERE x OR workspace_id = ?` read as
+ * "scoped" to a checker that only asks whether a narrowing predicate is present, and return every
+ * row of every workspace the other arm admits. A predicate counts only when it holds at every
+ * level around it: at each enclosing level (the statement, then each parenthesised group) that is
+ * split by a top-level OR, every OTHER arm must itself carry a `workspace_id =/IN` predicate, as in
+ * `(workspace_id = ? OR workspace_id IN (?, ?))`. Applies to the literal predicate only; the
+ * interpolated `${scope.clause}` path keeps limitation 3.
+ */
+function inUnscopedOrArm(clean, index) {
+  const ARM_SCOPED = /\bworkspace_id\b\s*(?:=|IN\b)/i;
+  // Enclosing groups, outermost first: each is [start, end) of the text inside its parentheses.
+  const opens = [];
+  for (let i = 0; i < index; i++) {
+    if (clean[i] === "(") opens.push(i);
+    else if (clean[i] === ")") opens.pop();
+  }
+  const levels = [[0, clean.length]];
+  for (const open of opens) {
+    let depth = 0;
+    let end = clean.length;
+    for (let i = open; i < clean.length; i++) {
+      if (clean[i] === "(") depth++;
+      else if (clean[i] === ")" && --depth === 0) { end = i; break; }
+    }
+    levels.push([open + 1, end]);
+  }
+  for (const [start, end] of levels) {
+    // Split this level at its own top-level ORs.
+    const arms = [];
+    let depth = 0;
+    let armStart = start;
+    const text = clean.slice(start, end);
+    const orRe = /\bOR\b/gi;
+    let m;
+    while ((m = orRe.exec(text)) !== null) {
+      depth = 0;
+      for (let i = 0; i < m.index; i++) {
+        if (text[i] === "(") depth++;
+        else if (text[i] === ")") depth--;
+      }
+      if (depth !== 0) continue;
+      arms.push([armStart, start + m.index]);
+      armStart = start + m.index + m[0].length;
+    }
+    if (!arms.length) continue;
+    arms.push([armStart, end]);
+    const own = arms.findIndex(([a, b]) => index >= a && index < b);
+    if (own < 0) continue;
+    if (arms.some(([a, b], k) => k !== own && !ARM_SCOPED.test(clean.slice(a, b)))) return true;
+  }
+  return false;
+}
+
+/**
  * The scope predicates in a statement, each attributed to an alias where the
  * source says which one — plus any corpus table hidden inside an interpolation,
  * which is reported rather than parsed.
@@ -898,6 +955,8 @@ function scopePredicates(sql) {
     // The masked text blanks interpolations, so a `${...}` right-hand side shows
     // as whitespace here; read the RHS from the original to tell it from nothing.
     if (!BOUND_RHS.test(sql.slice(m.index + m[0].length))) continue;
+    // A predicate that restricts only one arm of an OR restricts nothing.
+    if (inUnscopedOrArm(clean, m.index)) continue;
     predicates.push({
       alias: m[1] ? m[1].toLowerCase() : null,
       outerOn: inOuterOn(m.index),

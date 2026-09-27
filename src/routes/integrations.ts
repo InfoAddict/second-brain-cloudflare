@@ -11,6 +11,7 @@ import {
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
 import { json } from "../lib/http";
+import { AUDIT_BATCH_MAX, writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
@@ -177,10 +178,13 @@ export async function handleIntegrationsRoutes(
       // which meant one connection mirrored into different workspaces depending
       // on who pressed "Sync now" — so a page synced by hand and the same page
       // synced overnight landed in two different people's private space.
-      const result = await provider.sync(
-        env,
-        makeMirrorStore(env, await mirrorWriteContext(env, record)),
-      );
+      const store = makeMirrorStore(env, await mirrorWriteContext(env, record), undefined, provider.id);
+      let result: Awaited<ReturnType<typeof provider.sync>>;
+      try {
+        result = await provider.sync(env, store);
+      } finally {
+        await store.flushAudit();
+      }
       return json(result, result.ok ? 200 : 502);
     }
 
@@ -399,6 +403,14 @@ export async function handleIntegrationsRoutes(
 
     let purged = 0;
     let skipped = 0;
+    let purgeAudit: AuditEventInput[] = [];
+    // Written per chunk of deletions, awaited, and before the connection is removed, so a
+    // throw or a dead invocation loses at most the chunk in flight, never the whole trail.
+    const flushPurgeAudit = async () => {
+      const events = purgeAudit;
+      purgeAudit = [];
+      await writeAuditEvents(env, events);
+    };
     if (body.purge) {
       for (const mapped of Object.values(record.itemMap)) {
         try {
@@ -412,11 +424,24 @@ export async function handleIntegrationsRoutes(
           const row = await getReadableEntry(env, auth, mapped.entryId);
           if (!row || assertCanMutateEntry(auth, row)) { skipped++; continue; }
           const r = await forgetEntry(mapped.entryId, env);
-          if (r.status === "deleted") purged++;
+          if (r.status === "deleted") {
+            purged++;
+            purgeAudit.push({
+              entryId: mapped.entryId,
+              actorId: auth.userId,
+              event: "deleted",
+              payload: { reason: "disconnect", provider: provider.id, deletedVectors: r.vectorCount, channel: "rest" },
+            });
+          } else {
+            // Gone already (a racing sync or delete): not ours to count or audit, but the totals must add up.
+            skipped++;
+          }
         } catch (e) {
           console.error("Mirror purge failed (non-fatal):", e);
         }
+        if (purgeAudit.length >= AUDIT_BATCH_MAX) await flushPurgeAudit();
       }
+      await flushPurgeAudit();
     }
     await deleteIntegration(env, provider.id);
     // A separate name rather than integration_connected with a boolean, for the

@@ -244,6 +244,11 @@ CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id, stat
 CREATE INDEX IF NOT EXISTS idx_entries_project ON entries(workspace_id, id)
 WHERE instr(lower(tags), '"project:') > 0;
 
+-- Held-draft index: the nightly digest's "is one still waiting on the person?" check reads only these
+-- rows. Must stay in step with src/db/init.ts.
+CREATE INDEX IF NOT EXISTS idx_entries_conflict_held ON entries(workspace_id, id)
+WHERE instr(lower(tags), '"conflict-held"') > 0;
+
 -- Web Push subscriptions. One row per subscribed browser/device, scoped to
 -- the workspace it was created against. Must stay in step with src/db/init.ts.
 CREATE TABLE IF NOT EXISTS push_subscriptions (
