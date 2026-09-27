@@ -17,7 +17,9 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
 
   // scope-exempt: by-id delete: routes gate with getReadableEntry before calling
-  await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(id).run();
+  const deletion = await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(id).run();
+  // A racing deleter removed it between the read and here: it owns the cleanup and the audit.
+  if (deletion?.meta?.changes === 0) return { status: "not_found" };
 
   try {
     // scope-exempt: by-id cascade: edge endpoints of the row just deleted
