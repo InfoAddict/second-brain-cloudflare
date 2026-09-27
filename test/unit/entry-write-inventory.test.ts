@@ -81,7 +81,7 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/entry.ts', line: 508, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 127, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 195, kind: 'snapshot' },
-  { file: 'src/capture/share.ts', line: 75, kind: 'exempt' },
+  { file: 'src/capture/share.ts', line: 78, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 53, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 205, kind: 'exempt' },
   { file: 'src/capture/store.ts', line: 235, kind: 'exempt' },

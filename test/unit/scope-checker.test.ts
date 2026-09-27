@@ -1423,7 +1423,12 @@ describe("the checker over the real source tree", () => {
     // MOVED 194/104/15/1 -> 195/105/15/1 (T-0089.1.1, R4-V4): restoreRowVectors's own-miss branch
     // gained a second by-id read of the row (same reasoning as its first, scope-exempt) to repair a
     // clobbered vector and catch a chunk added between two of its own callers' reads.
-    ).toEqual({ queries: 195, exempt: 105, checked: 15, outerJoin: 1 });
+    // MOVED 195/105/15/1 -> 195/105/15/1, then 195/104/15/1 (T-0089.1.1, R4-C1): moveEntry's move-
+    // event INSERT changed its guard from `workspace_id <> target` to `workspace_id = row.workspace_id`
+    // (R4-C1's own fix) — the scanner's heuristic now reads that equality as a self-evident scope
+    // clause and no longer flags the query as needing the `scope-exempt` comment it previously
+    // carried; the query itself, and its actual scoping, are unchanged.
+    ).toEqual({ queries: 195, exempt: 104, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
