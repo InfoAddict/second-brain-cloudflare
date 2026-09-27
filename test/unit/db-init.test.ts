@@ -8,7 +8,7 @@ import {
 import { hashToken, resolveIdentityFromToken } from "../../src/lib/identity";
 import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
-import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY } from "../../src/constants";
+import { FTS_BACKFILL_CURSOR_KV_KEY, FTS_READY_KV_KEY, VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 
 const MIGRATION: [column: string, alter: string][] = [
   ["recall_count", `ALTER TABLE entries ADD COLUMN recall_count INTEGER DEFAULT 0`],
@@ -72,6 +72,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
+  // Content history and soft delete (T-0089.1.1, T-0089.1.2).
+  "entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted",
   "entries_fts",
   "entry_counts",
   ...PROMPT_CAPSULE_TRIGGERS,
@@ -265,7 +267,8 @@ describe("initializeDatabase updated_at migration", () => {
       // dedicated batch mirroring entries_fts's ownership rule.
       // MOVED 61 -> 62 (T-0089.4.4) by idx_entries_conflict_held, the partial index behind the digest's held-draft check.
       // MOVED 62 -> 66 (T-0089.6.1) by the four partial indexes behind the agent brief.
-      expect(migrated).toBe(66); // 27 base objects + 18 ALTERs + 15 post-column objects + the email-index CREATE
+      // MOVED 66 -> 70 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
+      expect(migrated).toBe(70); // 31 base objects + 18 ALTERs + 15 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -309,7 +312,7 @@ describe("initializeDatabase updated_at migration", () => {
 
       await Promise.all(Array.from({ length: 4 }, () => initializeDatabase(env)));
 
-      expect(execd.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries"))).toHaveLength(1);
+      expect(execd.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries ("))).toHaveLength(1);
     });
 
     it("resetDatabaseInit clears the memo so a later call redoes the work", async () => {
@@ -365,7 +368,7 @@ describe("initializeDatabase updated_at migration", () => {
       state.failing = false;
       await initializeDatabase(env); // no resetDatabaseInit — the memo must have cleared itself
 
-      expect(state.execd.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries"))).toHaveLength(1);
+      expect(state.execd.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries ("))).toHaveLength(1);
     });
 
     it("rejects when a later statement fails, rather than latching a partial schema", async () => {
@@ -600,7 +603,8 @@ describe("initializeDatabase against real SQLite", () => {
     // GROUP BY seed, created together in ONE batch — same +1, not +5.
     // MOVED 55 -> 56 (T-0089.4.4) by idx_entries_conflict_held.
     // MOVED 56 -> 60 (T-0089.6.1) by the four partial indexes behind the agent brief.
-    expect(cold).toBe(60); // one probe, then the 59 statements a new brain needs
+    // MOVED 60 -> 64 (T-0089.1.1, T-0089.1.2) by entry_versions, entries_trash and their two indexes.
+    expect(cold).toBe(64); // one probe, then the 63 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -684,6 +688,15 @@ describe("initializeDatabase against real SQLite", () => {
     expect(results).toEqual([{ id: "ee-old", created_at: 42 }]);
   });
 
+  it("the entries-table filters do not match entries_trash", async () => {
+    // entries_trash starts with the same prefix as entries; the "(" is what tells them apart.
+    d1 = makeSqliteD1({ schema: false });
+    await initializeDatabase(envFor(d1));
+    const creates = d1.issued.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries"));
+    expect(creates.some(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries_trash"))).toBe(true);
+    expect(creates.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries ("))).toHaveLength(1);
+  });
+
   it("adds the edges table to a brain that predates it", async () => {
     // The other real intermediate state (issue #16 added edges to brains that already had
     // entries). Tables, indexes, and triggers are probed independently of columns, so this is not
@@ -695,7 +708,7 @@ describe("initializeDatabase against real SQLite", () => {
     await initializeDatabase(envFor(d1));
 
     expect(await objectNames(d1)).toContain("edges");
-    expect(d1.issued.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries"))).toEqual([]);
+    expect(d1.issued.filter(s => s.startsWith("CREATE TABLE IF NOT EXISTS entries ("))).toEqual([]);
     expect(sameColumns(d1.columns())).toBe(true);
   });
 
@@ -1116,7 +1129,8 @@ describe("initializeDatabase against real SQLite", () => {
       await initializeDatabase(envWithKv(d1, kv));
 
       expect(await ftsObjectNames(d1)).toEqual(["entries_fts", "entries_fts_delete", "entries_fts_insert", "entries_fts_update"]);
-      expect(calls).toEqual([`put:${FTS_READY_KV_KEY}`]);
+      // versions:since (T-0089.1.1) is written the pass entry_versions is created, fresh brains included.
+      expect(calls).toEqual([`put:${VERSIONS_SINCE_KV_KEY}`, `put:${FTS_READY_KV_KEY}`]);
     });
 
     // Probe failure (combined review of Tasks 4-6): `existing === null` must

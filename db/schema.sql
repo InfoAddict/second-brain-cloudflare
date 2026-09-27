@@ -274,6 +274,45 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_workspace ON push_subscriptions(workspace_id);
 
+-- Content history (4.0, T-0089.1.1). One row per retired state of an entry,
+-- written in the same batch as the change. Must stay in step with src/db/init.ts.
+CREATE TABLE IF NOT EXISTS entry_versions (
+  id           INTEGER PRIMARY KEY,           -- rowid alias: no extra index row per insert
+  entry_id     TEXT NOT NULL,
+  workspace_id TEXT NOT NULL DEFAULT '',      -- the entry's workspace at change time; decides who may read it
+  seq          INTEGER NOT NULL,              -- 1, 2, 3 per entry, newest highest, no gaps above the oldest kept
+  content      TEXT,                          -- full prior text, or NULL when prior_length is set
+  prior_length INTEGER,                       -- prior text = first N characters of the next newer state
+  tags         TEXT NOT NULL,                 -- prior tags (JSON), always full
+  state        TEXT NOT NULL DEFAULT '{}',    -- prior non-text state (JSON): when_at, when_kind, when_source, when_label
+  actor_id     TEXT NOT NULL DEFAULT '',      -- who made the change that retired this state
+  channel      TEXT NOT NULL DEFAULT '',      -- rest | mcp | system:<job>
+  reason       TEXT NOT NULL,                 -- update | append | merge | replace | rollup | status | due | mirror | revert
+  meta         TEXT NOT NULL DEFAULT '{}',
+  valid_from   INTEGER,                       -- when the prior state became current
+  created_at   INTEGER NOT NULL,              -- when the prior state was retired
+  CHECK ((content IS NULL) <> (prior_length IS NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entry_versions_entry ON entry_versions(entry_id, seq);
+
+-- Soft delete (4.0, T-0089.1.2). A forgotten entry waits here for
+-- TRASH_RETENTION_DAYS. Must stay in step with src/db/init.ts.
+CREATE TABLE IF NOT EXISTS entries_trash (
+  id           TEXT PRIMARY KEY,              -- the original entry id
+  workspace_id TEXT NOT NULL DEFAULT '',      -- scopes restore and permanent delete
+  actor_id     TEXT NOT NULL DEFAULT '',      -- the entry's author, for the permission check
+  content      TEXT NOT NULL,                 -- kept out of row_json so escaping cannot pass the 2 MB row limit
+  row_json     TEXT NOT NULL,                 -- every entries column except content and vector_ids
+  edges_json   TEXT NOT NULL DEFAULT '[]',    -- edges at either endpoint at deletion time
+  deleted_at   INTEGER NOT NULL,
+  deleted_by   TEXT NOT NULL DEFAULT '',
+  channel      TEXT NOT NULL DEFAULT '',
+  reason       TEXT NOT NULL DEFAULT 'forget' -- forget | mirror | disconnect
+);
+
+CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at);
+
 -- Lexical recall index (FTS5, trigram). Plain table, not external-content: entries
 -- has a TEXT PK, so triggers mirror entries.rowid into entries_fts.rowid and sync
 -- by rowid — an O(1) delete instead of a content-table scan. Must stay in step

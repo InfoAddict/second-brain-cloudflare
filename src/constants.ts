@@ -280,3 +280,35 @@ export const CJK_STOPWORDS = new Set([
 
 /** The `source` the digest and weekly-insight jobs write; with an empty actor it is how their rows are told from a client's. */
 export const SYSTEM_SOURCE = "system";
+
+// ── Content versions and trash (4.0, Track 1) ──
+/** KV key holding when entry_versions came into being; history before it does not exist. Read through getVersionsSince. */
+export const VERSIONS_SINCE_KV_KEY = "versions:since";
+/** Versions kept for a mirrored (integration-synced) row that no user has edited. */
+export const MIRROR_VERSION_KEEP = 3;
+/** Ceiling on trash rows purged after one forget; the version-count read may choose fewer. */
+export const TRASH_PURGE_ON_FORGET = 10;
+/** Ceiling on trash rows in one nightly purge batch. */
+export const TRASH_PURGE_NIGHTLY = 400;
+export const TRASH_PURGE_NIGHTLY_MAX_BATCHES = 5;
+/** Rows-written target for one purge batch. */
+export const TRASH_PURGE_BATCH_ROWS = 5000;
+/** One rows-written budget per night, shared by the trash purge and the member-removal resume. */
+export const NIGHTLY_CLEANUP_ROWS = 15000;
+/** The purge's share of NIGHTLY_CLEANUP_ROWS; the resume gets the rest. */
+export const TRASH_PURGE_NIGHTLY_ROWS = 10000;
+/** Bottom-up version deletes per chunk for one oversized trash row. */
+export const VERSION_DELETE_CHUNK = 2000;
+/** Compare-and-set retries for content writers. */
+export const WRITE_CAS_ATTEMPTS = 3;
+/** Disconnect purge: ids per call, and ids per batch. */
+export const DISCONNECT_PURGE_PAGE = 200;
+export const DISCONNECT_PURGE_CHUNK = 50;
+/** D1's hard row limit, and the budgets that leave 200 KB for growth between a size read and its batch. */
+export const D1_ROW_MAX_BYTES = 2_000_000;
+export const VERSION_ROW_BUDGET_BYTES = 1_800_000;
+export const TRASH_ROW_BUDGET_BYTES = 1_800_000;
+/** Member removal: history rows deleted per chunk, chunks per call, removals resumed per night. */
+export const MEMBER_HISTORY_CHUNK = 1000;
+export const MEMBER_HISTORY_MAX_CHUNKS = 10;
+export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;

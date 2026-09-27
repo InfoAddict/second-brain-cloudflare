@@ -39,14 +39,15 @@ const TRIGGER_DDL = new Map([...readFileSync(resolve(import.meta.dirname, "../..
 const SCHEMA_PROBE_RESULTS = [
   ...["entries", "edges", "insight_candidates", "workspaces", "users", "memberships",
     "entry_events", "admin_events", "maintenance_cursor", "prompt_capsule_revisions", "projects",
-    "push_subscriptions", "entries_fts", "entry_counts"]
+    "push_subscriptions", "entry_versions", "entries_trash", "entries_fts", "entry_counts"]
     .map(name => ({ kind: "table", name })),
   ...["idx_entries_created_at", "idx_entries_source", "idx_entries_workspace_created", "idx_entries_capsule",
     "idx_edges_source", "idx_edges_target", "idx_edges_weight", "idx_insight_candidates_queue",
     "idx_workspaces_kind", "idx_users_token_hash", "idx_users_email", "idx_memberships_workspace",
     "idx_entry_events_entry", "idx_entry_events_created", "idx_admin_events_created",
     "idx_projects_workspace", "idx_entries_project", "idx_entries_conflict_held", "idx_push_subscriptions_workspace",
-    "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale"]
+    "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
+    "idx_entry_versions_entry", "idx_entries_trash_deleted"]
     .map(name => ({ kind: "index", name })),
   ...["prompt_capsule_entry_insert", "prompt_capsule_entry_update",
     "prompt_capsule_entry_delete", "prompt_capsule_workspace_delete",

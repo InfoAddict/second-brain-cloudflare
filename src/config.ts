@@ -140,6 +140,12 @@ export const DEFAULTS = {
   // placeholder string, is what this key protects — see the comment on the
   // .local placeholder this replaced in src/push/vapid.ts.
   PUSH_CONTACT: "",
+
+  // ── Content versions and trash (src/memory/versions.ts, src/memory/trash.ts) ──
+  // Prior states kept per memory, newest first. The oldest fall off as new ones arrive.
+  VERSION_KEEP: 20,
+  // Days a forgotten memory waits in the trash before it is purged for good.
+  TRASH_RETENTION_DAYS: 14,
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -208,6 +214,8 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_MODE: { kind: "string" },
   TIMEZONE: { kind: "string" },
   PUSH_CONTACT: { kind: "string" },
+  VERSION_KEEP: { kind: "number", min: 5, max: 500, integer: true },
+  TRASH_RETENTION_DAYS: { kind: "number", min: 1, max: 365, integer: true },
 };
 
 /**
