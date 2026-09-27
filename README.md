@@ -89,6 +89,7 @@ Search now finds the hard things: exact names, ticket numbers, versions, and phr
 | `get_prompt_capsule` | Read a deterministic core or project context projection for a gateway-controlled prompt prefix |
 | `get` | Read one memory by ID |
 | `forget` | Permanently delete a memory |
+| `undo` | Reverse the most recent change to a memory, or restore one from the trash |
 | `set_status` | Mark a memory `canonical`, `draft`, or `deprecated` |
 | `link` | Add an explicit relationship between two memories |
 | `unlink` | Remove a relationship between two memories |

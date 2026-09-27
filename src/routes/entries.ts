@@ -3,12 +3,13 @@ import { importExportPayload, parseImportBody, parseImportLimit, parseImportOffs
 import { initializeDatabase } from "../db/init";
 import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
-import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
+import { assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
 import { readEntryTimeline } from "../memory/history";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
+import { revertEntry } from "../memory/undo";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
@@ -245,6 +246,66 @@ export async function handleEntriesRoutes(
       payload: { channel: "rest", edgesRestored: result.edgesRestored, trashedReason: result.trashedReason },
     });
     return json({ ok: true, id, edgesRestored: result.edgesRestored, vectorCount: result.vectorCount });
+  }
+
+  // POST /undo — reverse the most recent change to a memory (or a specific earlier version, with
+  // to_version), or restore it from the trash when nothing live remains. Mirrors the MCP `undo`
+  // tool; both call revertEntry, so REST and MCP undo leave identical rows and versions.
+  if (url.pathname === "/undo" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; to_version?: unknown };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    const id = body.id.trim();
+
+    let toVersion: number | undefined;
+    if (body.to_version !== undefined) {
+      if (typeof body.to_version !== "number" || !Number.isInteger(body.to_version) || body.to_version < 1) {
+        return json({ ok: false, error: "to_version must be a positive integer" }, 400);
+      }
+      toVersion = body.to_version;
+    }
+
+    // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of a
+    // forget — a trashed row's. revertEntry reads the row again moments later on its own; pinning
+    // its CAS guard to what this read found is what keeps an unshare in that gap from landing (the
+    // same reason forgetEntry, updateEntryContent and appendToEntry all take this same parameter).
+    // No permission check here: revertEntry's own canRevert applies rule (b) (a member's own newest
+    // change on a company row), which assertCanMutateEntry alone would wrongly refuse.
+    const liveRow = await getReadableEntry(env, auth, id, "id, workspace_id");
+    const trashedRow = liveRow ? null : await getTrashedEntry(env, auth, id);
+    const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
+
+    const cfg = await resolveConfig(env);
+    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "");
+
+    switch (result.status) {
+      case "reverted":
+        return json({
+          ok: true, id, status: "reverted", targetSeq: result.targetSeq,
+          ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
+          ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
+          ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
+        });
+      case "restored":
+        return json({ ok: true, id, status: "restored" });
+      case "no_change":
+        return json({ ok: true, id, status: "no_change", changed: false });
+      // A hidden version reads exactly like one that never existed (D-SH): same status, same body.
+      case "not_found":
+      case "unreadable":
+        return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      case "forbidden":
+        return json({ ok: false, error: FORBIDDEN_MSG }, 403);
+      case "stale":
+        return json({ ok: false, error: "Entry changed after you looked at it; check history and try again." }, 409);
+      case "nothing_to_undo":
+        return json({ ok: false, error: `Entry ${id} has no recorded changes to undo.` }, 409);
+      case "reembed_failed":
+        return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
+    }
   }
 
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open
