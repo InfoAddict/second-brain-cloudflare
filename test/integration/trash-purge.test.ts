@@ -125,6 +125,35 @@ describe("purge", () => {
     expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(5);
     expect((await t.all<any>(`SELECT reason FROM entries_trash WHERE id IN ('m','d') ORDER BY id`)).map((r) => r.reason)).toEqual(["disconnect", "mirror"]);
   });
+
+  it("adversary (MINOR): must not delete a trash row that was restored and re-forgotten between the candidate read and the batch", async () => {
+    const { getTrashedEntry, restoreEntry } = await import("../../src/memory/trash");
+    t = await makeTrashEnv();
+    t.seed("a"); t.version("a", 1); t.version("a", 2);
+    await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false });
+    // Age the trash row past 14 days.
+    await t.sqlite.db.prepare(`UPDATE entries_trash SET deleted_at = 1 WHERE id = 'a'`).run();
+    const c = await cfg();
+
+    const realBatch = t.env.DB.batch.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).batch = async (stmts: any[]) => {
+      const first = String(stmts[0]?.sourceSql?.() ?? "");
+      if (!injected && first.includes("'purged'") && first.includes("system:purge")) {
+        injected = true;
+        // Between the purge's candidate read and its batch: the user restores, then forgets again.
+        const trashed = await getTrashedEntry(t.env, undefined, "a");
+        expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, c)).status).toBe("restored");
+        expect((await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false })).status).toBe("deleted");
+      }
+      return realBatch(stmts);
+    };
+    await purgeTrash(t.env, c, { ceiling: 10, rowTarget: 1000 });
+
+    // The trash row now in place was written a moment ago: it must survive, with its history.
+    expect(await t.one(`SELECT deleted_at FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
+    expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
+  });
 });
 
 describe("nightly cleanup", () => {

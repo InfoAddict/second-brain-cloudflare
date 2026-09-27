@@ -294,30 +294,37 @@ export async function purgeTrash(
   }
 
   // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder.
+  // Every statement also re-checks deleted_at < cutoff (not just id IN (...)): a restore plus a
+  // re-forget can land between the candidate read above and this batch, giving the same id a
+  // fresh, unexpired trash row that must not be swept up just because it matched the id list.
   const idsJson = JSON.stringify(chosen);
   const auditP = new Params();
   const auditIds = auditP.add(idsJson);
   const auditNow = auditP.add(now);
+  const auditCutoff = auditP.add(cutoff);
   const versionsP = new Params();
   const versionsIds = versionsP.add(idsJson);
+  const versionsCutoff = versionsP.add(cutoff);
   const trashP = new Params();
   const trashIds = trashP.add(idsJson);
+  const trashCutoff = trashP.add(cutoff);
   const results3 = await env.DB.batch([
     env.DB.prepare(
       // scope-exempt: retention purge: the audit row of each expired trash row, in the batch that removes it
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
        SELECT lower(hex(randomblob(16))), t.id, '', 'purged',
               json_object('channel', 'system:purge', 'reason', t.reason, 'deleted_at', t.deleted_at), ${auditNow}
-         FROM entries_trash t WHERE t.id IN (SELECT value FROM json_each(${auditIds}))`,
+         FROM entries_trash t WHERE t.id IN (SELECT value FROM json_each(${auditIds})) AND t.deleted_at < ${auditCutoff}`,
     ).bind(...auditP.values()),
     env.DB.prepare(
-      // scope-exempt: retention purge: versions of expired trash rows, never of a live entry
+      // scope-exempt: retention purge: versions of expired trash rows, never of a live entry, and only while that trash row is still expired
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${versionsIds}))
-         AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = entry_versions.entry_id)`,
+         AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = entry_versions.entry_id)
+         AND EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id AND t.deleted_at < ${versionsCutoff})`,
     ).bind(...versionsP.values()),
     env.DB.prepare(
       // scope-exempt: retention purge: expired trash rows
-      `DELETE FROM entries_trash WHERE id IN (SELECT value FROM json_each(${trashIds}))`,
+      `DELETE FROM entries_trash WHERE id IN (SELECT value FROM json_each(${trashIds})) AND deleted_at < ${trashCutoff}`,
     ).bind(...trashP.values()),
   ]);
   const purged = changedRows(results3[2]);
