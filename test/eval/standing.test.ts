@@ -75,6 +75,22 @@ describe("threshold choice and intervals", () => {
     expect(report.chosen.test.precisionCiClustered).toHaveLength(2);
     expect(report.chosen.intentCountedAsFalsePositive.test).toBeDefined();
   });
+
+  it("counts precision's clusters only over queries that actually fired, not every query in the split", () => {
+    // A regression for a real bug: counting clusters over the whole test population (instead of just the
+    // ones that fired) let "clusters" exceed n whenever most queries don't fire, which made the clustered
+    // interval narrower than the per-query one instead of wider.
+    const test = [
+      probe("yes", "test", ["a"], [["a", 0.95]], "mem-a"), // fires, TP
+      // 200 unrelated queries, each its own cluster, none of which clears the threshold.
+      ...Array.from({ length: 200 }, (_, i) => probe("unrelated", "test", [], [[`x${i}`, 0.1]], `unrel-${i}`)),
+    ];
+    const report = summarizeInput([...dev, ...test], [0.3, 0.5, 0.65, 0.8], 0.9);
+    expect(report.chosen.test).toMatchObject({ truePositive: 1, falsePositive: 0 });
+    // n = TP + FP = 1: the clustered interval must not be narrower than the per-query one.
+    expect(report.chosen.test.precisionCiClustered[0]).toBeLessThanOrEqual(report.chosen.test.precisionCi[0]);
+    expect(report.chosen.test.precisionCiClustered[1]).toBeGreaterThanOrEqual(report.chosen.test.precisionCi[1]);
+  });
 });
 
 describe("THRESHOLD_GRID_FINE", () => {

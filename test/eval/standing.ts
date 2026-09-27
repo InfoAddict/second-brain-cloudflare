@@ -110,7 +110,12 @@ export function summarizeInput(
   const chosen = chooseFn(dev, grid, target);
   const held = scoreFiring(test, chosen.threshold);
   const clustersOf = (ps: readonly StandingProbe[]) => new Set(ps.map(p => p.clusterKey)).size;
-  const precisionClusters = clustersOf(test.filter(p => p.group !== "intent"));
+  // Precision's clusters are counted over the queries that actually fired (its TP+FP population): counting
+  // every test query regardless of firing, as an earlier version of this function did, can make "clusters"
+  // exceed the trial count n and the interval narrower than the per-query one instead of wider. Recall's
+  // denominator (TP+FN) is every "yes" query whether it fired or not, so its cluster count uses that full set.
+  const fired = (p: StandingProbe) => p.scores.filter(x => x.value >= chosen.threshold).slice(0, MAX_FIRES).length > 0;
+  const precisionClusters = clustersOf(test.filter(p => p.group !== "intent" && fired(p)));
   const recallClusters = clustersOf(test.filter(p => p.group === "yes"));
   return {
     curve: grid.map(t => scoreFiring(probes, t)),

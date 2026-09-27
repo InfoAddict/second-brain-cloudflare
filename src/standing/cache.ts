@@ -103,7 +103,7 @@ export async function buildStandingCache(
 }
 
 // One isolate-level memo of the last KV read per key, and a throttle on how often a stale read may
-// schedule a rebuild — both windowed at STANDING_ISOLATE_MEMO_MS (Design 2.5, 2.4 "Revalidation").
+// schedule a rebuild, both windowed at STANDING_ISOLATE_MEMO_MS (Design 2.5, 2.4 "Revalidation").
 const isolateMemo = new Map<string, { cache: StandingCacheV1 | null; readAt: number }>();
 const lastScheduledBuild = new Map<string, number>();
 
