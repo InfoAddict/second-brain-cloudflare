@@ -362,6 +362,7 @@ function timelineEventLabel(event) {
     status_changed: 'memories.evStatusChanged',
     shared: 'memories.evShared',
     unshared: 'memories.evUnshared',
+    reverted: 'memories.evReverted',
   }
   return keys[event] ? t(keys[event]) : event || ''
 }
