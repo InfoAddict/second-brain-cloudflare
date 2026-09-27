@@ -491,12 +491,14 @@ export async function appendToEntry(
     // Unlike a replacement this keeps any existing volatility verdict (see tagsAfterAppend); a caller-supplied one overrides it.
     const appendedTags = tagsAfterAppend(rowTags);
     const refreshedTags = withUserEditMarker(volatility ? withVolatility(appendedTags, volatility) : appendedTags);
-    const now = Date.now();
 
     if (readContent.length + suffix.length > CHUNK_MAX_CHARS) {
       // The whole text is re-embedded, so this commit must be of the text that was embedded.
       const newContent = readContent + suffix;
       const newVectorIds = (await reembedOrDegrade(env, id, newContent, rowTags, source, config, embedCtx))?.vectorIds ?? null;
+      // ADV-12: taken AFTER the embed, not before — a slow embed that lets a concurrent append commit
+      // first must not stamp this later write with an earlier time than the one it lands on top of.
+      const now = Date.now();
       const longCasColumns = { content: readContent, tags: readTags, workspace_id: authorizedWorkspaceId };
       const p = new Params();
       const contentIdx = p.add(newContent);
@@ -569,6 +571,8 @@ export async function appendToEntry(
     }
     const { id: chunkId, indexed, values } = chunk;
 
+    // ADV-12: taken AFTER the chunk embed, not before — see the long branch's identical reasoning above.
+    const now = Date.now();
     const shortCasColumns = { tags: readTags, workspace_id: authorizedWorkspaceId };
     const shortP = new Params();
     const suffixIdx = shortP.add(suffix);

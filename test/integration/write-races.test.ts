@@ -237,6 +237,32 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect([...store.values()].filter(v => v.metadata?.parentId === "g1")).toEqual([]);
   });
 
+  it("ADV-12: a slow append's version and updated_at never land earlier than the commit it followed", async () => {
+    await seed("o1", "base");
+    const wctx = { workspaceId: wsId, actorId: ownerId };
+    const appendChange = { actorId: ownerId, channel: "rest" as const };
+    const plain = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), VECTORIZE: statefulVectorize(), AI: makeAIMock() });
+    let raced = false;
+    // Another client's append commits fully while this one is still embedding its own chunk.
+    const slowVectorize = makeVectorizeMock({
+      insert: vi.fn(async (vs: any[]) => {
+        if (!raced) { raced = true; await new Promise(r => setTimeout(r, 5)); await appendToEntry(plain, "o1", "", "fast one", [], "api", DEFAULTS, undefined, wctx, appendChange); }
+        for (const v of vs) store.set(v.id, v);
+        return { mutationId: "m" } as any;
+      }),
+    });
+    const slow = makeTestEnv(undefined, { DB: d1.db as unknown as D1Database, OAUTH_KV: makeMemoryKV(), VECTORIZE: slowVectorize, AI: makeAIMock() });
+    await appendToEntry(slow, "o1", "", "slow one", [], "api", DEFAULTS, undefined, wctx, appendChange);
+    const vs = await versions("o1");
+    expect(vs.map((v: any) => v.seq)).toEqual([1, 2]);
+    const row = await live("o1");
+    expect(row.content).toContain("fast one");
+    expect(row.content).toContain("slow one");
+    expect(vs[1].created_at).toBeGreaterThanOrEqual(vs[0].created_at);
+    expect(vs[1].valid_from).toBeLessThanOrEqual(vs[1].created_at);
+    expect(row.updated_at).toBeGreaterThanOrEqual(vs[0].created_at);
+  });
+
   it("a lost attempt writes no version", async () => {
     await seed("e1", "base", []);
     let n = 0;
