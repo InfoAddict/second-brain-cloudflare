@@ -1,25 +1,38 @@
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TRANSCRIPT_SOURCES } from "../../src/constants";
 import { buildSyntheticCorpus } from "./corpus/synthetic";
 import type { CorpusEntry } from "./corpus/types";
 import { evaluateGate } from "./gate";
-import { blanketDemote, collapseAndCap, dropNonDirect, pureRecency } from "./noise-oracle";
+import { blanketDemote, dropNonDirect, productionRerank, pureRecency } from "./noise-oracle";
 import { scoreQuery } from "./metrics";
 import { readReport } from "./runner";
-import type { QueryResult, VariantReport } from "./types";
+import type { GoldenQuery, QueryResult, VariantReport } from "./types";
 
 // IMPORTANT: unlike temporal-gate.test.ts (which proves gate MECHANICS ONLY with invented, hand-picked per-query
 // rankings, by its own header's admission), every ranking judged here comes from `corpus/noise-baseline.recorded.json`,
-// a REAL run of the shipped recall pipeline (local embeddings, local D1, no Cloudflare account; recorded 2026-09-27,
-// commit at time of writing) against the corpus this file also builds. Each candidate below is a deterministic
-// function of that recorded ranking and the corpus's own declared source/content (`noise-oracle.ts`), never a
-// hand-picked winner. This is the T-0089.3.5 rebuild's answer to the round-4 finding on `temporal-during`
-// (SYNTHETIC-CORPORA.md): a wrong change must be shown to fail this gate and a right one to pass it, both on real,
-// recorded rankings.
+// a REAL run of the shipped recall pipeline (local embeddings, local D1, no Cloudflare account) against the corpus
+// this file also builds. The "correct" candidate is production's own `collapseNearDuplicates` and `applyOccupancyCap`
+// (`src/recall/source-trust.ts`, v4/t3-r 60b84f78), imported and run unmodified against each entry's own declared
+// source/content/tags/createdAt: never a hand-picked winner, and never the query's gold (see the structural test
+// below). This is the T-0089.3.5 rebuild's second answer to "prove it on the recorded baseline, not invented
+// rankings": round 2 used invented per-query oracle logic that read the gold answer to decide what to protect from
+// collapse and demotion (a real Codex review finding, reported and fixed here, not just the round-4 lesson on
+// `temporal-during` this file's comment previously cited alone).
 //
 // Reproduce: `npm run eval:recall -- prepare --variant baseline --corpus noise` then
 // `npm run eval:recall -- --variant baseline --corpus noise --json test/eval/corpus/noise-baseline.recorded.json`
 // (byte-identical apart from `wallMs`, confirmed by running it twice; see SYNTHETIC-CORPORA.md).
+
+// `codex-session` and `cursor-session` (the T-0089.3.5 director addition) are not yet in
+// `src/constants.ts`'s `TRANSCRIPT_SOURCES` (only `claude-code` is, as of v4/t3-r 60b84f78): the
+// hooks lane that adds them has not landed. `sourceClass` reads `TRANSCRIPT_SOURCES` live by
+// design (its own comment: "a new label added to either set is classified with no change here"),
+// so this test registers the two labels for its own duration only, restoring the set afterward.
+// Vitest isolates modules per test file by default, so this cannot affect `source-trust.test.ts`
+// or any other file's own import of the same module.
+beforeAll(() => { (TRANSCRIPT_SOURCES as Set<string>).add("codex-session").add("cursor-session"); });
+afterAll(() => { (TRANSCRIPT_SOURCES as Set<string>).delete("codex-session"); (TRANSCRIPT_SOURCES as Set<string>).delete("cursor-session"); });
 
 const corpus = buildSyntheticCorpus("noise");
 const recorded = readReport(resolve(import.meta.dirname, "corpus/noise-baseline.recorded.json"));
@@ -66,39 +79,80 @@ describe("power floor", () => {
   });
 });
 
-describe("the combined Track 3 change (near-duplicate collapse + occupancy cap, source-word lift) passes", () => {
-  const candidate = rebuild("collapse-and-cap", r => collapseAndCap(r.rankedIds, byQueryId.get(r.queryId)!, byId));
-  const result = evaluateGate(testBaseline, candidate, { ...FEW, targetCategories: ["noise"] });
+describe("structural: the correct candidate never reads the query's gold", () => {
+  /** Throws the instant anything reads `.gold`, so the proof is a runtime fact, not a type-level claim. */
+  function noGoldQuery(q: GoldenQuery): GoldenQuery {
+    return new Proxy(q, {
+      get(target, prop, receiver) {
+        if (prop === "gold") throw new Error(`gold accessed on query ${target.id} while reranking: a candidate must never see the answer key`);
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }
 
-  it("does not regress the category, and shows a proven overall or targeted gain", () => {
-    expect(result.rules.find(r => r.rule === "regression")!.status).toBe("pass");
-    const improvement = result.rules.find(r => r.rule === "improvement")!;
-    expect(improvement.status).toBe("pass");
-    expect(improvement.detail).toMatch(/(overall|noise) (recall10|mrr10) \+/);
-  });
-
-  it("recovers real headroom on the crowded subsets this corpus was rebuilt to catch", () => {
-    for (const subset of ["transcript-crowding", "probe-footer-synonym", "note-same-topic-transcript"]) {
-      const row = scopeDelta(result, `noise [subset:${subset}]`);
-      expect(row, `expected a report row for subset ${subset}`).toBeDefined();
-      expect(row!.ci.mean, `${subset} MRR@10 delta`).toBeGreaterThan(0);
+  it("reranks every test-half query through a gold-throwing proxy without ever touching gold", () => {
+    for (const r of testResults) {
+      const q = noGoldQuery(byQueryId.get(r.queryId)!);
+      expect(() => productionRerank(r.rankedIds, q.text, byId)).not.toThrow();
     }
   });
 
-  it("mail-crowding: no regression, but no recovery on this recorded baseline's test half either", () => {
-    // Traced by hand (see SYNTHETIC-CORPORA.md): on this corpus, mail-crowding's gold is either already ranked
-    // first (nothing to fix) or pushed past what a top-10 rerank can see (nothing post-hoc reordering of a
-    // recorded top-10 can recover, since the pool below rank 10 was never captured in the report). Unlike
-    // transcript-crowding, no query in the test half landed in a recoverable middle. Documented as a finding, not
-    // chased further with more corpus content.
-    const row = scopeDelta(result, "noise [subset:mail-crowding]")!;
-    expect(row.ci.mean).toBeGreaterThanOrEqual(0);
+  it("CollapseCandidate and OccupancyCandidate (src/recall/source-trust.ts) have no gold-shaped field: gold cannot reach them even by accident", () => {
+    const candidate = { id: "x", content: "c", source: "api", tags: [], createdAt: 0 };
+    expect(Object.keys(candidate)).not.toContain("gold");
+  });
+});
+
+describe("the production Track 3 change (lane R's collapse + occupancy cap, v4/t3-r 60b84f78) on the recorded baseline", () => {
+  // Computed in a nested beforeAll, not at describe-body top level: describe callbacks run during
+  // vitest's collection phase, BEFORE the file's top-level beforeAll has registered codex-session
+  // and cursor-session as transcript sources, so a top-level `const result = ...` here would
+  // silently classify them as "direct" and understate the cap's effect. Confirmed live: computing
+  // it at top level and inside an `it` gave different regression verdicts on the identical inputs.
+  let result: ReturnType<typeof evaluateGate>;
+  beforeAll(() => {
+    const candidate = rebuild("production-rerank", r => productionRerank(r.rankedIds, byQueryId.get(r.queryId)!.text, byId));
+    result = evaluateGate(testBaseline, candidate, { ...FEW, targetCategories: ["noise"] });
+  });
+
+  it("prints the regression and improvement verdicts and every subset delta (see SYNTHETIC-CORPORA.md for the numbers this asserts against)", () => {
+    expect(result.rules.find(r => r.rule === "regression")).toBeDefined();
+    expect(result.rules.find(r => r.rule === "improvement")).toBeDefined();
+  });
+
+  it("does not regress the category", () => {
+    expect(result.rules.find(r => r.rule === "regression")!.status).toBe("pass");
   });
 
   it("does not touch the queries that genuinely want the mail or the transcript", () => {
     for (const subset of ["email-control", "transcript-control", "recurring", "transcript-recurring"]) {
       const row = scopeDelta(result, `noise [subset:${subset}]`)!;
       expect(row.ci.mean, `${subset} MRR@10 delta`).toBeGreaterThanOrEqual(-0.01);
+    }
+  });
+
+  // Honest finding (director's instruction: report this with numbers, do not hide it): collapse in
+  // production is mirror-only (never transcript, src/recall/source-trust.ts's collapseNearDuplicates),
+  // and sourceWeight itself cannot be replayed from a recorded top-10 (it multiplies a raw fused
+  // score before ranking; the report carries no scores). So the correct candidate here is collapse
+  // plus the occupancy cap alone, and it shows a real, proven, but SUB-MARGIN gain: the overall MRR@10
+  // delta's bootstrap CI excludes zero (there is a genuine effect) but its mean is below the gate's
+  // 0.02 improvement margin, so the improvement rule reads FAIL, not PASS, and honestly so.
+  it("shows a real but sub-margin overall gain: proven non-zero, not large enough to pass the improvement rule", () => {
+    const overall = scopeDelta(result, "noise")!;
+    expect(overall.ci.lo, "overall MRR@10 delta lower bound (should exclude zero: a real effect)").toBeGreaterThan(0);
+    expect(overall.ci.mean, "overall MRR@10 delta mean (below the 0.02 margin)").toBeLessThan(0.02);
+    expect(result.rules.find(r => r.rule === "improvement")!.status).toBe("fail");
+  });
+
+  it("concentrates its gain in probe-footer-synonym and transcript-crowding; mail-crowding and note-same-topic-transcript show none", () => {
+    const synonym = scopeDelta(result, "noise [subset:probe-footer-synonym]")!;
+    const transcriptCrowding = scopeDelta(result, "noise [subset:transcript-crowding]")!;
+    expect(synonym.ci.lo).toBeGreaterThan(0);
+    expect(transcriptCrowding.ci.lo).toBeGreaterThanOrEqual(0);
+    for (const subset of ["mail-crowding", "note-same-topic-transcript"]) {
+      const row = scopeDelta(result, `noise [subset:${subset}]`)!;
+      expect(row.ci.mean, `${subset} MRR@10 delta`).toBe(0);
     }
   });
 });
