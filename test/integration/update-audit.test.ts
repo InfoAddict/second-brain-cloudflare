@@ -61,7 +61,20 @@ describe("POST /update audit trail", () => {
     const id = await seed();
     const res = await worker.fetch(req("POST", "/update", { body: { id, content: "Replaced body for audit" } }), env, ctx);
     expect(res.status).toBe(200);
-    expect(await updatedEvents(id)).toHaveLength(1);
+    const rows = await updatedEvents(id);
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].payload).channel).toBe("rest");
+  });
+
+  it("records channel rest on capture, append and forget too", async () => {
+    const id = await seed();
+    await worker.fetch(req("POST", "/append", { body: { id, addition: "more detail" } }), env, ctx);
+    await worker.fetch(req("POST", "/forget", { body: { id } }), env, ctx);
+    await new Promise(r => setTimeout(r, 10));
+    const { results } = await env.DB.prepare(`SELECT event, payload FROM entry_events`).all();
+    const rows = results as { event: string; payload: string }[];
+    expect(rows.map(r => r.event).sort()).toEqual(["appended", "created", "deleted"]);
+    for (const r of rows) expect(JSON.parse(r.payload).channel).toBe("rest");
   });
 
   it("writes no updated event when the re-embed fails", async () => {

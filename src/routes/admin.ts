@@ -1168,7 +1168,7 @@ export async function handleAdminRoutes(
       `UPDATE entries SET tags = ?, updated_at = ?, staleness_checked_at = ? WHERE id = ?`,
     ).bind(JSON.stringify(withoutStaleAsOf(tags)), now, now, id).run();
 
-    auditEvents(env, ctx, [{ entryId: id, actorId: auth.userId, event: "updated", payload: { stale_confirmed: true } }]);
+    auditEvents(env, ctx, [{ entryId: id, actorId: auth.userId, event: "updated", payload: { stale_confirmed: true, channel: "rest" } }]);
 
     return json({ ok: true, id });
   }
@@ -1254,7 +1254,7 @@ export async function handleAdminRoutes(
       // meta.changes is D1's field; the SQLite test double reports rows_written
       // instead (see test/helpers/sqlite-d1.ts), same fallback as team-admin.ts.
       if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { loop_action: action } });
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { loop_action: action, channel: "rest" } });
         return json({ ok: true, id, action });
       }
       // Lost the race — someone else wrote this row between the read and the
@@ -1356,7 +1356,7 @@ export async function handleAdminRoutes(
       ).bind(until, id, row.tags, row.content).run();
 
       if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "snooze", until } });
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "snooze", until, channel: "rest" } });
         return json({ ok: true, id, when_at: until });
       }
       // Lost the race — loop back and re-read rather than retrying stale tags/content.
@@ -1393,7 +1393,7 @@ export async function handleAdminRoutes(
       ).bind(id, row.tags, row.content).run();
 
       if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "clear" } });
+        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "clear", channel: "rest" } });
         return json({ ok: true, id });
       }
       // Lost the race — loop back and re-read rather than retrying stale tags/content.
@@ -1554,6 +1554,7 @@ export async function handleAdminRoutes(
         entryId: row.id as string,
         actorId: auth.userId,
         event: action === "confirm" ? "insight_confirmed" : "insight_dismissed",
+        payload: { channel: "rest" },
       });
     }
 
