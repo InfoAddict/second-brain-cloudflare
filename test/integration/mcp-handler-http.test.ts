@@ -64,4 +64,48 @@ describe("MCP HTTP handler (/mcp)", () => {
     );
     expect(res).toBe(downstream);
   });
+
+  describe("R3 (budget audit): a tool call that hit the D1 daily cap", () => {
+    const READ_CAP = "D1_ERROR: Your account has exceeded D1's free tier daily row read limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
+    const WRITE_CAP = "D1_ERROR: Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
+
+    function toolErrorResponse(text: string) {
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0", id: 3, result: { isError: true, content: [{ type: "text", text }] },
+      }), { headers: { "content-type": "application/json" } });
+    }
+
+    it("rewrites the SDK's raw D1 read-cap message to the MCP read sentence", async () => {
+      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse(READ_CAP))) as never);
+      const res = await handler.fetch(
+        mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "recall", arguments: {} } }),
+        env, ctx,
+      );
+      expect(res.status).toBe(200);
+      const payload = await res.json() as any;
+      expect(payload.result.isError).toBe(true);
+      expect(payload.result.content[0].text.startsWith("Could not load memories.")).toBe(true);
+      expect(payload.result.content[0].text).not.toContain("D1_ERROR");
+    });
+
+    it("rewrites the SDK's raw D1 write-cap message to the MCP write sentence", async () => {
+      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse(WRITE_CAP))) as never);
+      const res = await handler.fetch(
+        mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "remember", arguments: {} } }),
+        env, ctx,
+      );
+      const payload = await res.json() as any;
+      expect(payload.result.content[0].text.startsWith("Not saved.")).toBe(true);
+    });
+
+    it("leaves an unrelated tool error untouched", async () => {
+      vi.mocked(createMcpHandler).mockReturnValue((() => Promise.resolve(toolErrorResponse("No entry found with ID: e1"))) as never);
+      const res = await handler.fetch(
+        mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get", arguments: { id: "e1" } } }),
+        env, ctx,
+      );
+      const payload = await res.json() as any;
+      expect(payload.result.content[0].text).toBe("No entry found with ID: e1");
+    });
+  });
 });

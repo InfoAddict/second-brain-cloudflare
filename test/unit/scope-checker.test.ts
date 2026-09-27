@@ -1280,7 +1280,9 @@ describe("the checker over the real source tree", () => {
     // (boundedScope collapses a many-team IN-list into one json_each binding
     // to stay under D1's 100-bound-parameter limit), so the literal
     // `${scope.clause}` interpolation the checker recognized is gone.
-    ).toEqual({ queries: 149, exempt: 70, checked: 13, outerJoin: 1 });
+    // Deliberate: +1 query (149 -> 150) for Track 7 Task 3 (src/standing/cache.ts, buildStandingCache): the standing
+    // cache build's one D1 read of a workspace's standing:active rows, scoped by `workspace_id = ?1`.
+    ).toEqual({ queries: 150, exempt: 70, checked: 13, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

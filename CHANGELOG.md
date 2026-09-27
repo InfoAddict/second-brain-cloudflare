@@ -4,6 +4,12 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Session hooks**
+
+- Session start no longer spends Workers AI allowance: hooks inject your ranked memories directly.
+- Session capture keeps only what you typed and the assistant's replies: instruction files, environment details and tool context are left out, and likely secrets are masked.
+- Cursor recall comes from session start; use the MCP recall tool for guaranteed recall.
+
 **Activity history**
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
@@ -13,6 +19,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Saving**
 
+- Nine tag prefixes are now reserved for the brain's own use: `quarantine:`, `edited-canonical:`, `standing:`, `ledger:`, `confidence:`, `confidence-source:`, `outcome:`, `review-rearms:`, `counterparty:`, plus the bare `owed-to-me` marker. A tag in one of these that a person or an AI tool tries to set directly on `remember` or `update` is not saved, and the reply says so. A tag you already had that merely looks like one of these (an `outcome:won` or `confidence:high` from before this change) keeps showing normally; nothing stored is rewritten. The features that use these prefixes land in a later release.
 - The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched (a digest merges only into an earlier digest, and an insight only into an earlier insight, and never into one you have edited). If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated. A digest that contradicts one of your memories is saved as a held draft instead, and that topic is not digested again while the draft stays as it is. Edit it, confirm it, delete it or mark it deprecated and the next nightly run digests the topic normally.
 
 **Search**

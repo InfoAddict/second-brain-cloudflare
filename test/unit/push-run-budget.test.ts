@@ -14,6 +14,7 @@ import { makeMemoryKV, makeTestEnv } from "../helpers/make-env";
 import { req } from "../helpers/make-request";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { setDbReady } from "../../src/runtime/state";
+import { QUARANTINE_TAG_PREFIX } from "../../src/quarantine/tags";
 import type { Config } from "../../src/config";
 import type { Env } from "../../src/env";
 
@@ -45,6 +46,12 @@ function seedDue(s: SqliteD1, id: string, workspaceId = "", whenAt = Date.now() 
   s.seed({ id, content: id, createdAt: 1, tags: ["task"] });
   s.db.prepare("UPDATE entries SET workspace_id = ?, when_at = ?, when_kind = 'due', when_source = 'explicit' WHERE id = ?")
     .bind(workspaceId, whenAt, id).run();
+}
+
+/** Marks a due row held (quarantine:<reason>), as Q3's contradiction/quarantine path does. */
+function holdEntry(s: SqliteD1, id: string, reason = "needs-review") {
+  s.db.prepare(`UPDATE entries SET tags = json_insert(tags, '$[#]', ?) WHERE id = ?`)
+    .bind(`${QUARANTINE_TAG_PREFIX}${reason}`, id).run();
 }
 
 function seedSub(s: SqliteD1, id: string, workspaceId = "", failCount = 0) {
@@ -353,6 +360,39 @@ describe("KV writes: only on change, and fail safe when they fail", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(result.skipped).toBe("kv_write_failed");
     expect(log).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("held (quarantined) rows are never pushed (Q3)", () => {
+  it("never sends a held due item, but does send an ordinary one alongside it", async () => {
+    sq = await migrated();
+    seedDue(sq, "held-item", "", Date.now() - 120_000);
+    holdEntry(sq, "held-item");
+    seedDue(sq, "ok-item", "", Date.now() - 60_000);
+    seedSub(sq, "sub");
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    await pushDueItems(env, "", cfg);
+    await pushDueItems(env, "", cfg);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const stored = JSON.parse((await env.OAUTH_KV.get("pushed:")) as string);
+    expect(stored).toHaveProperty("ok-item");
+    expect(stored).not.toHaveProperty("held-item");
+  });
+
+  it("never sends a held item even via the all-workspaces cron path", async () => {
+    sq = await migrated();
+    seedDue(sq, "held-item", "");
+    holdEntry(sq, "held-item");
+    seedSub(sq, "sub");
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    await pushDueItemsAllWorkspaces(env, cfg);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -7,6 +7,7 @@
 import type { Env } from "../env";
 import { resolveConfig, type Config } from "../config";
 import { DUE_SQL } from "../when/input";
+import { NOT_HELD_SQL } from "../quarantine/tags";
 import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
 import { fromBase64Url } from "./base64url";
@@ -471,7 +472,7 @@ async function prepareWorkspacePush(env: Env, workspaceId: string, now: number, 
   const delivered = Object.fromEntries(Object.entries(push.delivery).map(([id, record]) => [id, record.w]));
   push.dueRows = ((await env.DB.prepare(
     `SELECT id, content, when_at, when_label, tags FROM entries
-     WHERE ${DUE_SQL} AND when_at <= ? AND workspace_id = ?
+     WHERE ${DUE_SQL} AND ${NOT_HELD_SQL} AND when_at <= ? AND workspace_id = ?
      ORDER BY EXISTS (SELECT 1 FROM json_each(?) d WHERE d.key = entries.id AND d.value = entries.when_at), when_at ASC
      LIMIT ?`,
   ).bind(now, workspaceId, JSON.stringify(delivered), DUE_WINDOW).all()).results ?? []) as Record<string, any>[];

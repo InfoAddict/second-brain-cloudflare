@@ -1,4 +1,4 @@
-import { MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, projectSlugError, projectTagError, withProjectTag, PROJECT_SLUG_RE } from "../tags/system";
+import { MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, projectSlugError, projectTagError, withProjectTag, PROJECT_SLUG_RE, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveConfig } from "../config";
 import { z } from "zod";
@@ -35,6 +35,7 @@ import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
+import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -476,6 +477,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // Same grammar checks, same messages, as POST /capture. Bad input fails before any write.
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
+      // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note.
+      if (isOverContentLimit(content)) return { content: [{ type: "text", text: tooLargeMcpMessage() }] };
       let whenInput: { at: number; kind: "due" | "event" | "wake"; source: "explicit" } | undefined;
       if (when !== undefined) {
         const parsed = parseExplicitWhen(when, when_kind, undefined, (await resolveConfig(env)).TIMEZONE);
@@ -496,6 +499,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       // case-sensitive one let "Volatility:durable" through to become a second verdict,
       // and the injected one won.
       const baseTags = tags ?? [];
+      // Computed on the caller's raw tags, before withVolatility/withProjectTag add
+      // their own (never-reserved) ones — captureEntry strips these again on its own
+      // path (normalizeCaptureInput), this is purely for telling the caller honestly.
+      const { ignored: ignoredReservedTags } = stripNewReservedTags(baseTags);
+      const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
       const withVerdictOnly = volatility ? withVolatility(baseTags, volatility as Volatility) : baseTags;
       const withVerdict = projectSlug ? withProjectTag(withVerdictOnly, projectSlug) : withVerdictOnly;
       const orgDefault = (await resolveConfig(env)).TEAM_DEFAULT_WORKSPACE;
@@ -528,24 +536,24 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: `Duplicate detected (${(result.score * 100).toFixed(0)}% match) — not stored. Existing entry ID: ${result.matchId}` }] };
       }
       if (result.status === "contradiction") {
-        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.` }] };
+        return { content: [{ type: "text", text: `Stored. ID: ${result.id} — resolved contradiction with entry ${result.resolvedConflict}${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
       }
       if (result.status === "contradiction_protected") {
         const disposition = result.entryStatus
           ? `Stored as ${result.entryStatus}`
           : "Stored without a status pending classification";
-        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.` }] };
+        return { content: [{ type: "text", text: `${disposition} (ID: ${result.id}) — conflicts with a canonical memory (${result.canonicalId}), which was kept${result.reason ? `: ${result.reason}` : ""}.${noteSuffix}` }] };
       }
       if (result.status === "replaced") {
-        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).` }] };
+        return { content: [{ type: "text", text: `Memory updated — new content replaced outdated entry (ID: ${result.id}).${noteSuffix}` }] };
       }
       if (result.status === "merged") {
-        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).` }] };
+        return { content: [{ type: "text", text: `Memories merged — combined into existing entry (ID: ${result.id}).${noteSuffix}` }] };
       }
       if (result.status === "flagged") {
-        return { content: [{ type: "text", text: `Stored with ID: ${result.id} — note: similar entry exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}). Tagged as duplicate-candidate.` }] };
+        return { content: [{ type: "text", text: `Stored with ID: ${result.id} — note: similar entry exists (${(result.score * 100).toFixed(0)}% match, ID: ${result.matchId}). Tagged as duplicate-candidate.${noteSuffix}` }] };
       }
-      return { content: [{ type: "text", text: `Stored. ID: ${result.id}` }] };
+      return { content: [{ type: "text", text: `Stored. ID: ${result.id}${noteSuffix}` }] };
     }
   );
 
@@ -600,6 +608,13 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(source) }] };
       }
 
+      // Rahil's decision (18-copy-deck.md 6.8): checks the RESULTING total, not the addition
+      // alone, and reads "Not added" rather than "Not saved" — the new text is what could not
+      // be added, the existing memory is untouched.
+      if (contentByteLength(existingContent) + contentByteLength(a) > MAX_CONTENT_BYTES) {
+        return { content: [{ type: "text", text: tooLargeMcpMessage("append") }] };
+      }
+
       let indexed: boolean;
       try {
         indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx);
@@ -652,6 +667,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
+      // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note.
+      if (isOverContentLimit(newContent)) return { content: [{ type: "text", text: tooLargeMcpMessage() }] };
 
       // Refuse before anything is written — same guard, same read, as POST /update.
       const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, source");
@@ -668,6 +685,12 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       if (await isManagedMirror(row.source as string, env)) {
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
+
+      // Computed on the caller's raw tags — updateEntryContent strips these again on its
+      // own path (applyTagReplacement), this is purely for telling the caller honestly.
+      // Absent (undefined) means "leave the tags alone", so nothing was ignored.
+      const { ignored: ignoredReservedTags } = stripNewReservedTags(tags ?? []);
+      const noteSuffix = ignoredReservedTags.length ? ` ${reservedTagsNote(ignoredReservedTags)}` : "";
 
       const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx);
 
@@ -692,13 +715,13 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return {
           content: [{
             type: "text",
-            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
+            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.${noteSuffix}`,
           }],
         };
       }
 
       return {
-        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).` }],
+        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).${noteSuffix}` }],
       };
     }
   );

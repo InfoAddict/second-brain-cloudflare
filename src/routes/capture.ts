@@ -1,4 +1,4 @@
-import { validInputTags, projectSlugError, projectTagError, withProjectTag, MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS } from "../tags/system";
+import { validInputTags, projectSlugError, projectTagError, withProjectTag, MAX_INPUT_TAGS, MAX_INPUT_TAG_CHARS, reservedTagsNote, stripNewReservedTags } from "../tags/system";
 import { autoCreateProject } from "../projects/autocreate";
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
@@ -13,6 +13,7 @@ import { isManagedMirror, mirrorEditError } from "../integrations/mirror";
 import { auditEvent } from "../lib/audit";
 import { VOLATILITY_VALUES, withVolatility, type Volatility } from "../memory/volatility";
 import { parseExplicitWhen } from "../when/input";
+import { contentByteLength, isOverContentLimit, tooLargeRestBody, MAX_CONTENT_BYTES } from "../lib/content-size";
 
 /** Validate route-only volatility input; MCP gets equivalent Zod validation. */
 /** Where this caller's writes land and who gets stamped on them. */
@@ -40,6 +41,17 @@ function readVolatility(raw: unknown): { value?: Volatility; error?: string } {
   return { value: raw as Volatility };
 }
 
+/**
+ * Additive: older clients ignore both extra fields. Merged rather than
+ * overwritten, since several branches already carry their own `message`.
+ */
+function withReservedNote(body: Record<string, unknown>, ignored: readonly string[]): Record<string, unknown> {
+  if (!ignored.length) return body;
+  const note = reservedTagsNote(ignored);
+  const existingMessage = typeof body.message === "string" ? body.message : undefined;
+  return { ...body, ignored_tags: [...ignored], message: existingMessage ? `${existingMessage} ${note}` : note };
+}
+
 export async function handleCaptureRoutes(
   request: Request,
   url: URL,
@@ -59,6 +71,9 @@ export async function handleCaptureRoutes(
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
     if (typeof body.content === "string" && body.content.includes("\0")) return json({ ok: false, error: "NUL is not allowed" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
+    // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note, so a very large paste cannot
+    // spend the Worker's 10 ms CPU budget on one write. Checked before anything is written.
+    if (isOverContentLimit(body.content)) return json(tooLargeRestBody(), 413);
     if (body.workspace !== undefined && body.workspace !== "personal" && body.workspace !== "company") {
       return json({ ok: false, error: 'workspace must be "personal" or "company"' }, 400);
     }
@@ -94,6 +109,10 @@ export async function handleCaptureRoutes(
     // volatility: tags the Worker adds may take a capture past it; refusing a capture
     // over a convenience tag would lose the memory.
 
+    // Computed on the caller's raw tags — captureEntry strips these again on its own
+    // path (normalizeCaptureInput), this is purely for telling the caller honestly.
+    const { ignored: ignoredReservedTags } = stripNewReservedTags(body.tags ?? []);
+
     const writeCtx = await writeContextFor(env, identity, body.workspace, body.team);
     if (writeCtx instanceof Response) return writeCtx;
 
@@ -125,36 +144,36 @@ export async function handleCaptureRoutes(
       });
     }
     if (result.status === "contradiction") {
-      return json({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason });
+      return json(withReservedNote({ ok: true, id: result.id, resolved_conflict: result.resolvedConflict, reason: result.reason }, ignoredReservedTags));
     }
     if (result.status === "contradiction_protected") {
-      return json({
+      return json(withReservedNote({
         ok: true,
         id: result.id,
         status: result.entryStatus,
         kept_canonical: result.canonicalId,
         reason: result.reason,
-      });
+      }, ignoredReservedTags));
     }
     if (result.status === "replaced") {
-      return json({ ok: true, id: result.id, action: "replaced", message: "New memory replaced an outdated existing entry" });
+      return json(withReservedNote({ ok: true, id: result.id, action: "replaced", message: "New memory replaced an outdated existing entry" }, ignoredReservedTags));
     }
     if (result.status === "merged") {
-      return json({ ok: true, id: result.id, action: "merged", message: "Memories merged into a single combined entry" });
+      return json(withReservedNote({ ok: true, id: result.id, action: "merged", message: "Memories merged into a single combined entry" }, ignoredReservedTags));
     }
     if (result.status === "flagged") {
-      return json({
+      return json(withReservedNote({
         ok: true,
         id: result.id,
         warning: "similar",
         matchId: result.matchId,
         score: parseFloat((result.score * 100).toFixed(1)),
         message: "Stored but similar entry exists — tagged as duplicate-candidate",
-      });
+      }, ignoredReservedTags));
     }
     // Additive: older clients ignore the extra field, and the dashboard uses it
     // to show what was filed under what.
-    return json({ ok: true, id: result.id, tags: result.tags ?? [] });
+    return json(withReservedNote({ ok: true, id: result.id, tags: result.tags ?? [] }, ignoredReservedTags));
   }
 
   // POST /append
@@ -186,6 +205,13 @@ export async function handleCaptureRoutes(
 
     if (await isManagedMirror(source, env)) {
       return json({ ok: false, error: mirrorEditError(source) }, 409);
+    }
+
+    // Rahil's decision (18-copy-deck.md 6.8): checks the RESULTING total, not the addition
+    // alone — an append that would push an already-large memory over 128 KB is refused before
+    // anything is written, same as a fresh capture or a full replacement.
+    if (contentByteLength(existingContent) + contentByteLength(addition) > MAX_CONTENT_BYTES) {
+      return json(tooLargeRestBody(), 413);
     }
 
     let indexed: boolean;
@@ -223,6 +249,8 @@ export async function handleCaptureRoutes(
     if (badProjectTag) return json({ ok: false, error: badProjectTag }, 400);
     if (typeof body.content === "string" && body.content.includes("\0")) return json({ ok: false, error: "NUL is not allowed" }, 400);
     if (!body.content?.trim()) return json({ ok: false, error: "content is required" }, 400);
+    // Rahil's decision (18-copy-deck.md 6.8): 128 KB per note, checked before anything is written.
+    if (isOverContentLimit(body.content)) return json(tooLargeRestBody(), 413);
 
     const updateVol = readVolatility(body.volatility);
     if (updateVol.error) return json({ ok: false, error: updateVol.error }, 400);
@@ -256,6 +284,11 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity);
     if (writeCtx instanceof Response) return writeCtx;
 
+    // Computed on the caller's raw tags — updateEntryContent strips these again on its
+    // own path (applyTagReplacement), this is purely for telling the caller honestly.
+    // Absent (undefined) means "leave the tags alone", so nothing was ignored.
+    const { ignored: ignoredReservedTags } = stripNewReservedTags(replaceTags ?? []);
+
     const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx);
 
     // Only reachable if the entry was deleted between the guard read and the write.
@@ -271,16 +304,16 @@ export async function handleCaptureRoutes(
     auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
 
     if (!result.vectorIds) {
-      return json({
+      return json(withReservedNote({
         ok: true,
         id,
         vectors: 0,
         semantic_unavailable: true,
         message: `Updated, but not re-indexed for semantic search (Vectorize unavailable) — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.`,
-      });
+      }, ignoredReservedTags));
     }
 
-    return json({ ok: true, id, vectors: result.vectorIds.length });
+    return json(withReservedNote({ ok: true, id, vectors: result.vectorIds.length }, ignoredReservedTags));
   }
 
   return null;
