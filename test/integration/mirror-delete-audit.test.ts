@@ -78,6 +78,9 @@ describe("mirror delete audit", () => {
     seedMirrored(1);
     const store = makeMirrorStore(env, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, undefined, "notion");
     await store.deleteEntry("page-0");
+    // Buffered, not one INSERT per delete inside the sync.
+    expect(await trail()).toHaveLength(0);
+    await store.flushAudit();
     const rows = await trail();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ entry_id: "page-0", actor_id: roots.ownerUserId, event: "deleted" });
@@ -87,7 +90,18 @@ describe("mirror delete audit", () => {
   it("writes nothing when the row was already gone", async () => {
     const store = makeMirrorStore(env, undefined, undefined, "notion");
     await store.deleteEntry("missing");
+    await store.flushAudit();
     expect(await trail()).toHaveLength(0);
+  });
+
+  it("a sync that deletes 120 items writes its trail in batches of at most 50, never one INSERT per delete", async () => {
+    seedMirrored(120);
+    const store = makeMirrorStore(env, { workspaceId: roots.ownerPersonalWorkspaceId, actorId: roots.ownerUserId }, undefined, "notion");
+    batches.length = 0;
+    for (let i = 0; i < 120; i++) await store.deleteEntry(`page-${i}`);
+    await store.flushAudit();
+    expect(await trail()).toHaveLength(120);
+    expect(batches.filter(n => n >= 20)).toEqual([50, 50, 20]);
   });
 });
 
@@ -151,6 +165,26 @@ describe("disconnect purge audit", () => {
     await disconnect();
     await trail();
     expect(batches.filter(n => n === 12)).toHaveLength(1);
+  });
+
+  it("a 200-row purge writes its trail in batches of at most 50, one per chunk of deletions", async () => {
+    await connectWithItems(200);
+    batches.length = 0;
+    const body = await (await disconnect()).json() as any;
+    expect(body.purged).toBe(200);
+    expect(await trail()).toHaveLength(200);
+    expect(batches.filter(n => n >= 50)).toEqual([50, 50, 50, 50]);
+  });
+
+  it("every deleted row has its event even when the purge dies before the connection is removed", async () => {
+    await connectWithItems(60);
+    const kv = env.OAUTH_KV as any;
+    kv.delete = async () => { throw new Error("KV down"); };
+    const res = await disconnect().catch(() => null);
+    expect(res === null || res.status >= 500).toBe(true);
+    const deleted = ((await env.DB.prepare(`SELECT COUNT(*) AS n FROM entries WHERE source = 'notion'`).first()) as { n: number }).n;
+    expect(deleted).toBe(0);
+    expect(await trail()).toHaveLength(60);
   });
 
   it("writes no trail for rows a purge skipped or that keep memories", async () => {

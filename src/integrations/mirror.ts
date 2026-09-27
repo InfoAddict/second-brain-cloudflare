@@ -11,7 +11,7 @@ import type { IntegrationProvider, MirrorStore } from "./framework";
 import { narrowMirrorLayer } from "./framework";
 import { initializeDatabase } from "../db/init";
 import { forgetEntry } from "../capture/lifecycle";
-import { auditEventStatement } from "../lib/audit";
+import { AUDIT_BATCH_MAX, writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteStaleVectors, embedContextForRow, storeEntry } from "../capture/store";
 import { classifyEntry } from "../capture/classify";
 import { withKind } from "../memory/kind";
@@ -22,7 +22,7 @@ import { OWNER_WRITE_CONTEXT, scopeWrite, type WriteContext } from "../lib/scope
 import { resolveIdentityByUserId } from "../lib/identity";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 
-export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_CONTEXT, resolved?: Readonly<Config>, providerId?: string): MirrorStore {
+export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_CONTEXT, resolved?: Readonly<Config>, providerId?: string): MirrorStore & { flushAudit(): Promise<void> } {
   // The write context is a property of the store rather than of each method because
   // the MirrorStore interface (integrations/framework.ts) is shared with providers
   // that must not learn about tenancy. A sync batch is one actor's work, so one
@@ -41,7 +41,18 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
   let pending: Promise<Readonly<Config>> | null = resolved ? Promise.resolve(resolved) : null;
   const config = () => (pending ??= resolveConfig(env));
 
+  // Deletion events wait here and go out in batches, not one INSERT per delete: a
+  // calendar retention prune is unbounded and a sync has a D1 budget. The caller
+  // flushes once the sync ends; a full buffer flushes itself.
+  let auditBuffer: AuditEventInput[] = [];
+  const flushAudit = async () => {
+    const events = auditBuffer;
+    auditBuffer = [];
+    await writeAuditEvents(env, events);
+  };
+
   return {
+    flushAudit,
     async createEntry(content, tags, source) {
       const id = crypto.randomUUID();
       const now = Date.now();
@@ -119,18 +130,13 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
     async deleteEntry(id) {
       const r = await forgetEntry(id, env);
       if (r.status !== "deleted") return;
-      // Awaited: a sync has no ExecutionContext to defer to. A lost row must not
-      // fail the delete, which has already happened.
-      try {
-        await auditEventStatement(env, {
-          entryId: id,
-          actorId: writeCtx.actorId,
-          event: "deleted",
-          payload: { reason: "mirror", provider: providerId ?? null, deletedVectors: r.vectorCount, channel: "system:mirror" },
-        }).run();
-      } catch (e) {
-        console.error("entry_events insert failed (non-fatal):", e);
-      }
+      auditBuffer.push({
+        entryId: id,
+        actorId: writeCtx.actorId,
+        event: "deleted",
+        payload: { reason: "mirror", provider: providerId ?? null, deletedVectors: r.vectorCount, channel: "system:mirror" },
+      });
+      if (auditBuffer.length >= AUDIT_BATCH_MAX) await flushAudit();
     },
   };
 }
@@ -223,6 +229,7 @@ export async function runScheduledIntegrationSync(env: Env, resolved?: Readonly<
       if (!result.ok || result.remaining === 0) break;
     }
   } finally {
+    await store.flushAudit();
     await advanceRotationCursor(env, due.id);
   }
 }

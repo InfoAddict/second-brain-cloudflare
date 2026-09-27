@@ -11,7 +11,7 @@ import {
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
 import { json } from "../lib/http";
-import { auditEvents, type AuditEventInput } from "../lib/audit";
+import { AUDIT_BATCH_MAX, writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
@@ -178,10 +178,13 @@ export async function handleIntegrationsRoutes(
       // which meant one connection mirrored into different workspaces depending
       // on who pressed "Sync now" — so a page synced by hand and the same page
       // synced overnight landed in two different people's private space.
-      const result = await provider.sync(
-        env,
-        makeMirrorStore(env, await mirrorWriteContext(env, record), undefined, provider.id),
-      );
+      const store = makeMirrorStore(env, await mirrorWriteContext(env, record), undefined, provider.id);
+      let result: Awaited<ReturnType<typeof provider.sync>>;
+      try {
+        result = await provider.sync(env, store);
+      } finally {
+        await store.flushAudit();
+      }
       return json(result, result.ok ? 200 : 502);
     }
 
@@ -400,7 +403,14 @@ export async function handleIntegrationsRoutes(
 
     let purged = 0;
     let skipped = 0;
-    const purgeAudit: AuditEventInput[] = [];
+    let purgeAudit: AuditEventInput[] = [];
+    // Written per chunk of deletions, awaited, and before the connection is removed, so a
+    // throw or a dead invocation loses at most the chunk in flight, never the whole trail.
+    const flushPurgeAudit = async () => {
+      const events = purgeAudit;
+      purgeAudit = [];
+      await writeAuditEvents(env, events);
+    };
     if (body.purge) {
       for (const mapped of Object.values(record.itemMap)) {
         try {
@@ -426,12 +436,11 @@ export async function handleIntegrationsRoutes(
         } catch (e) {
           console.error("Mirror purge failed (non-fatal):", e);
         }
+        if (purgeAudit.length >= AUDIT_BATCH_MAX) await flushPurgeAudit();
       }
+      await flushPurgeAudit();
     }
     await deleteIntegration(env, provider.id);
-    // One batch however many rows the purge removed, so the trail costs one
-    // subrequest rather than one per row.
-    auditEvents(env, ctx, purgeAudit);
     // A separate name rather than integration_connected with a boolean, for the
     // reason member_suspended/member_unsuspended already gives: an auditor
     // scanning for "when did this stop mirroring" should not have to read a
