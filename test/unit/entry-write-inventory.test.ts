@@ -94,12 +94,12 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/integrations/mirror.ts', line: 148, kind: 'snapshot' },
   { file: 'src/lib/team-admin.ts', line: 587, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
-  { file: 'src/memory/actions.ts', line: 60, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 103, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 115, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 127, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 168, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 179, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 64, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 107, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 119, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 131, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 172, kind: 'snapshot' },
+  { file: 'src/memory/actions.ts', line: 183, kind: 'snapshot' },
   // MOVED (T-0100): readTrashCandidates's SQLITE_TOOBIG fallback added ~75 lines above these
   // three sites (two new read-only helpers); same sites, shifted line numbers only.
   { file: 'src/memory/trash.ts', line: 215, kind: 'trash' },
