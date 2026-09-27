@@ -17,8 +17,9 @@ export const AS_OF_APRIL = utc(4, 15);
 export const AS_OF_JULY = utc(7, 10);
 export const AS_OF_LATE_JULY = utc(7, 20);
 
-/** Tag that removes the month-day-name controls from the temporal category's regression and improvement rows (see
- * below); pinned in a corpus test alongside SYNTHETIC-CORPORA.md so the two cannot drift apart. */
+/** The known-gap tag the month-day-name controls carried before T-0089.2.5 fixed the parser (no longer applied to
+ * any query in this corpus); kept as a pinned fixture value for the gate-mechanics tests in temporal-gate.test.ts
+ * and synthetic-acceptance.test.ts, so they and SYNTHETIC-CORPORA.md's history cannot drift apart. */
 export const MONTH_DAY_CONTROL_GAP_TAG = "gap:temporal-month-day-controls";
 /** T-0089.2.5's acceptance floor for that row, an absolute bar gate.ts's delta-based target-gaps rule cannot express
  * on its own (see SYNTHETIC-CORPORA.md); pinned here so the corpus test and the doc cannot drift apart. */
@@ -92,19 +93,17 @@ export function temporal(seed: number): CorpusSpec {
     }
   });
 
-  // Controls: a month and day inside a name. A date parser that reads them as a question date filters the wrong documents.
-  // Today's shipped parser already misreads these (baseline 0/0), so a delta-from-baseline rule can never see a candidate
-  // break them further: both score 0. Tagged "gap:temporal-month-day-controls" so the gate's known-gap population excludes
-  // them from the temporal category's regression and improvement rows entirely (a gap query at baseline 0 cannot regress
-  // and would only dilute the rule; see gate.ts), instead of silently netting against a real as-of gain. They stay visible
-  // as their own row in "known gaps" and in the subset diagnostics: read them there, not through --target temporal.
+  // Controls: a month and day inside a name. A date parser that reads them as a question date filters the wrong
+  // documents. T-0089.2.5 fixed the shipped parser to recognize a month-day match followed by a proper noun as a
+  // name, not a date, so these now score correctly (recall@10/MRR@10 1.000) and join the ordinary "temporal"
+  // category's regression rule via subset:control-not-asof like any other subset (no gap tag needed).
   for (let c = 0; c < 30; c++) {
     const [m, d] = MONTH_DAY_NAMES[c % MONTH_DAY_NAMES.length];
     const name = `${m} ${d} ${brands[total + (c % 40)]} Cafe`;
     const at = utc(1 + ((c * 5) % 12) , 20 + (c % 8));
     const ident = `tm-control-${c}`;
     entries.push(entry(ident, `The ${name} on ${PLACES[(c * 7) % PLACES.length]} opens at nine and closes at five.`, { createdAt: at, validFrom: at }));
-    queries.push(query(`tm-q-control-${c}`, "temporal", `What time does the ${name} open?`, [ident], { clusterKey: `tm-control-${c}`, tags: ["subset:control-not-asof", "timeline:control", MONTH_DAY_CONTROL_GAP_TAG] }));
+    queries.push(query(`tm-q-control-${c}`, "temporal", `What time does the ${name} open?`, [ident], { clusterKey: `tm-control-${c}`, tags: ["subset:control-not-asof", "timeline:control"] }));
   }
 
   // Distractors that share the category nouns but belong to no timeline.

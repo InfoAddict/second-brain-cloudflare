@@ -66,18 +66,18 @@ describe("temporal", () => {
     }
     expect(byTag(c.queries, "subset:phrase-dated").every(q => /as of \w+ \d+, 2026/.test(q.text))).toBe(true);
   });
-  it("has month-day controls that a date parser must not read as a question date, tagged out of the temporal target", () => {
+  it("has month-day controls that a date parser must not read as a question date, no longer tagged out of the temporal target", () => {
     const controls = byTag(c.queries, "subset:control-not-asof");
     expect(controls.length).toBeGreaterThanOrEqual(30);
     for (const q of controls) {
       expect(q.text).toMatch(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}\b/);
       expect(q.asOf).toBeUndefined();
       expect(q.expectedAsOf).toBeUndefined();
-      // Baseline already misreads these (0/0), so a delta-from-baseline gate can never see them get worse; excluded from
-      // the headline via the known-gap mechanism instead of being averaged into the temporal category. Pinned against
-      // T-0089.2.5's acceptance floor and against SYNTHETIC-CORPORA.md in synthetic-acceptance.test.ts, so neither can
-      // drift silently.
-      expect(q.tags).toContain(MONTH_DAY_CONTROL_GAP_TAG);
+      // T-0089.2.5 fixed the parser to recognize these as names, not dates, so the controls now score correctly and
+      // no longer need the known-gap exclusion: they join the ordinary temporal category's regression rule like any
+      // other subset. MONTH_DAY_CONTROL_GAP_TAG/_ACCEPTANCE_MRR remain pinned for the gate-mechanics fixtures in
+      // temporal-gate.test.ts and synthetic-acceptance.test.ts, and for SYNTHETIC-CORPORA.md's history of the fix.
+      expect(q.tags).not.toContain(MONTH_DAY_CONTROL_GAP_TAG);
       expect(MONTH_DAY_CONTROL_GAP_TAG).toBe("gap:temporal-month-day-controls");
       expect(MONTH_DAY_CONTROL_ACCEPTANCE_MRR).toBe(0.95);
     }

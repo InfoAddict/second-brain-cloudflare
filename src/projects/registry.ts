@@ -2,6 +2,7 @@
 // here; it lives on entries as the reserved `project:<slug>` tag (see src/tags/system.ts).
 // Every read takes the caller's readable workspace ids, every write one exact workspace.
 import { CAPSULE_SLOT_TAG_PREFIX, CAPSULE_TAG_PREFIX, PROJECT_SLUG_RE, PROJECT_TAG_PREFIX } from "../tags/system";
+import { T7_TAG_PREFIXES } from "../tags/t7";
 
 export { PROJECT_SLUG_RE };
 
@@ -35,7 +36,7 @@ export class SlugTakenError extends Error {}
 export class ProjectNotFoundError extends Error {}
 
 /** Aliases claim plain topic tags, so the Worker-owned and project namespaces are off limits. */
-const RESERVED_ALIAS_PREFIXES = ["kind:", "status:", "volatility:", "stale:", CAPSULE_TAG_PREFIX, CAPSULE_SLOT_TAG_PREFIX, PROJECT_TAG_PREFIX];
+const RESERVED_ALIAS_PREFIXES = ["kind:", "status:", "volatility:", "stale:", CAPSULE_TAG_PREFIX, CAPSULE_SLOT_TAG_PREFIX, PROJECT_TAG_PREFIX, ...T7_TAG_PREFIXES];
 
 const COLUMNS = "id, workspace_id, name, description, aliases, status, created_at, updated_at";
 const SLUG_ERROR = "must match [a-z0-9][a-z0-9_-]{0,63}";
