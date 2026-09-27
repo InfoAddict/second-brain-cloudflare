@@ -3,6 +3,42 @@
  * .digest-note, .team-open-row, .team-select-wrap) that already ships in
  * main.css; this file only adds what those do not already cover. */
 
+/* ── New sheet containers ──────────────────────────────────────────────
+ * main.css's "BOTTOM SHEETS" rule (display/position/backdrop, its .open
+ * state, and the desktop centered-modal override) enumerates sheet ids
+ * explicitly rather than matching a shared class, and main.css is not this
+ * lane's file to edit. #trash-sheet and #settings-sheet replicate that same
+ * rule here, values kept identical to main.css's so a new sheet behaves like
+ * every other one. */
+#trash-sheet,
+#settings-sheet {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(20, 18, 13, 0.42);
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.28s var(--ease);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+#trash-sheet.open,
+#settings-sheet.open {
+  display: flex;
+  opacity: 1;
+}
+
+@media (min-width: 768px) {
+  #trash-sheet,
+  #settings-sheet {
+    align-items: center;
+    justify-content: center;
+  }
+}
+
 /* ── Memories foot entry point ─────────────────────────────────────────── */
 
 .mem-trash-link {
