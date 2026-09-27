@@ -1266,6 +1266,10 @@ describe("the checker over the real source tree", () => {
     // the nightly run's one held-digest read, riding in its existing candidate batch. It selects only
     // (workspace, tags) of held drafts, narrowed by the run's workspace slice when it has one, and the per-tag
     // `heldDigestSql` it replaces on the nightly path stays for manual digests.
+    // Deliberate: +6 queries, all scope-checked by the scanner, for the T-0089.6 MCP
+    // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
+    // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
+    // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
     ).toEqual({ queries: 142, exempt: 70, checked: 12, outerJoin: 1 });
   });
 
