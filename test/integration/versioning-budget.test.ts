@@ -180,7 +180,7 @@ describe("forget: baseline, POST /forget", () => {
     t = await makeTrashEnv();
     t.seed("e1");
     t.sqlite.issued.length = 0;
-    const r = await deleteForever(t.env, "e1", change());
+    const r = await deleteForever(t.env, "e1", change(), t.roots.ownerPersonalWorkspaceId);
     expect(r).toMatchObject({ status: "deleted", from: "live" });
     // Spec said "guard + vectors read + 1 batch + audit"; the current code folds the guard, the
     // vectors read AND the audit insert into ONE batch via RETURNING clauses (trash.ts:591-614).
@@ -195,7 +195,7 @@ describe("revertEntry: D's content undo", () => {
     t.seed("e1", { content: "v1" });
     await updateEntryContent(t.env, "e1", "v2", DEFAULTS, undefined, undefined, writeCtx(), change(), t.roots.ownerPersonalWorkspaceId);
     t.sqlite.issued.length = 0;
-    const r = await revertEntry(t.env, identity(), "e1", change(), DEFAULTS);
+    const r = await revertEntry(t.env, identity(), "e1", change(), DEFAULTS, undefined, t.roots.ownerPersonalWorkspaceId);
     expect(r.status).toBe("reverted");
     // getReadableEntry (1) + loadHistory (1) + the revert's own batch (1) + writeAuditEvents (1).
     expect(t.sqlite.issued).toHaveLength(4);

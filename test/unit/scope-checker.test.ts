@@ -1416,8 +1416,11 @@ describe("the checker over the real source tree", () => {
     // by-id/scoped queries in trash.ts, both scope-checked) landed on independently-tracked running
     // totals with different starting points (190/103/13/1 here, 193/105/13/1 -> 195/105/15/1 on
     // Builder B's side) — recomputed against the real scanner output after combining rather than
-    // hand-reconciling the two totals, same reasoning as the Builder C merge above.
-    ).toEqual({ queries: 195, exempt: 105, checked: 15, outerJoin: 1 });
+    // hand-reconciling the two totals, same reasoning as the Builder C merge above. Not exactly
+    // Builder B's own 195/105/15/1: the two branches' independent prior changes to shared callers
+    // (revertEntry, deleteForever) overlap by one query and one exemption once combined on the real
+    // tip, not a new finding — the checker exits clean.
+    ).toEqual({ queries: 194, exempt: 104, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
