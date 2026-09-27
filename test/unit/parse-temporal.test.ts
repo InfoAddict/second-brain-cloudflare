@@ -161,36 +161,60 @@ describe("parseTimePhrase", () => {
     });
   });
 
-  // Cross-vendor review (T-0105.3) found the proper-noun check too coarse: it dropped a real date
-  // preceding a timezone qualifier, and missed a lowercase-styled business name that the earlier
-  // capitalized-word check didn't catch. The fix keys off what precedes the match (an article
-  // means a name; a date preposition means a date, regardless of what follows) rather than only
-  // what follows it.
-  describe("review round: article-preceded names vs preposition-anchored dates", () => {
+  // Cross-vendor review (T-0105.3, then T-0105.4) found two rounds of edge cases in the
+  // proper-noun/as-of check. Simplified to the safe failure mode: a wrong filter hides the right
+  // memory, a missing filter only broadens results. A preposition never rescues a date by
+  // itself: "by/until/before/after/since/from" have range meaning this parser doesn't implement,
+  // so a date they introduce produces no filter at all, never a same-day window. A bare or
+  // "on"-led date is genuine only when nothing follows it, or what follows is a timezone/time
+  // expression; any other following text (a name, a description, capitalized or not) means it
+  // isn't standing alone as a date.
+  describe("review round: safe-failure-mode prepositions and timezones", () => {
     it("keeps a month-day business name with lowercase styling", () => {
       const query = "What time does the May 5 cafe open?";
       expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
     });
 
-    it("keeps a real date followed by a timezone qualifier", () => {
+    it("keeps a real date followed by a multi-word timezone qualifier", () => {
       const result = parseTimePhrase("What happened on May 5 New York time?", NOW);
       expect(result.after).toBe(new Date(2026, 4, 5).getTime());
       expect(result.before).toBe(new Date(2026, 4, 6).getTime());
     });
 
-    it("keeps a real date introduced by 'since', with no trailing qualifier at all", () => {
+    it("never turns 'since <date>' into a same-day window, even with no trailing text", () => {
       const query = "open since Jun 3";
-      expect(parseTimePhrase(query, NOW)).toEqual({
-        after: new Date(2026, 5, 3).getTime(),
-        before: new Date(2026, 5, 4).getTime(),
-        cleanQuery: "open",
-      });
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
     });
 
-    it("keeps a real date introduced by 'until', followed by a capitalized word", () => {
-      const result = parseTimePhrase("closed until Aug 9 Pacific time", NOW);
-      expect(result.after).toBe(new Date(2026, 7, 9).getTime());
-      expect(result.before).toBe(new Date(2026, 7, 10).getTime());
+    it("never turns 'until <date>' into a same-day window, even with a timezone qualifier", () => {
+      const query = "closed until Aug 9 Pacific time";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("never turns 'by <date>' into a same-day window (the reported deadline case)", () => {
+      const query = "Was the work done by March 3 Paris time?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("keeps a venue name with no leading article or preposition at all", () => {
+      const query = "May 5 Cafe on Main opening hours";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("keeps a venue name even when a preceding 'on' means 'about', not a date anchor", () => {
+      const query = "Notes on May 5 Cafe on Main";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("recognizes an ordinal date", () => {
+      const result = parseTimePhrase("What happened on May 5th?", NOW);
+      expect(result.after).toBe(new Date(2026, 4, 5).getTime());
+      expect(result.before).toBe(new Date(2026, 4, 6).getTime());
+    });
+
+    it("leaves a month without a day alone", () => {
+      const query = "open since May";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
     });
 
     it("keeps a lowercase business name introduced by an indefinite article", () => {
