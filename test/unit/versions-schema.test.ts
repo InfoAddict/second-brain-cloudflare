@@ -9,6 +9,8 @@ const envFor = (sqlite: SqliteD1, kv: KVNamespace = makeMemoryKV()) =>
   makeTestEnv(undefined, { DB: sqlite.db as unknown as D1Database, OAUTH_KV: kv });
 const objectNames = async () =>
   ((await d1.db.prepare(`SELECT name FROM sqlite_master`).all()).results as { name: string }[]).map(r => r.name);
+const columnNames = async (table: string) =>
+  ((await d1.db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all()).results as { name: string }[]).map(r => r.name);
 const insertVersion = (over: Record<string, unknown> = {}) => {
   const v = { entry_id: "e1", seq: 1, content: "old", prior_length: null, tags: "[]", reason: "update", created_at: 10, ...over };
   return d1.db.prepare(
@@ -28,6 +30,9 @@ describe("entry_versions and entries_trash schema", () => {
     await initializeDatabase(envFor(d1));
     const names = await objectNames();
     for (const n of ["entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted"]) expect(names).toContain(n);
+    // ADV-10: a brain with no entry_versions at all (a 3.7.0-shaped database included) gets
+    // prior_length_utf16 in the CREATE, not by a later ALTER.
+    expect(await columnNames("entry_versions")).toContain("prior_length_utf16");
   });
 
   it("creates them on a brain that predates them (init adds only what is missing)", async () => {
@@ -36,6 +41,32 @@ describe("entry_versions and entries_trash schema", () => {
     await initializeDatabase(envFor(d1));
     const names = await objectNames();
     for (const n of ["entry_versions", "idx_entry_versions_entry", "entries_trash", "idx_entries_trash_deleted"]) expect(names).toContain(n);
+  });
+
+  it("ADV-10: an entry_versions table from before prior_length_utf16 existed gains it by ALTER, and a second cold start issues only the probe", async () => {
+    // A dev brain that ran init on a commit before prior_length_utf16 shipped: entry_versions
+    // exists, but narrower than db/schema.sql declares today (frozen shape, matching
+    // test/unit/schema-upgrade-completeness.test.ts's LEGACY_SHAPES.entry_versions).
+    await d1.db.exec(`DROP TABLE entry_versions`);
+    await d1.db.exec(
+      `CREATE TABLE entry_versions (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL, content TEXT, prior_length INTEGER, tags TEXT NOT NULL, state TEXT NOT NULL DEFAULT '{}', actor_id TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', valid_from INTEGER, created_at INTEGER NOT NULL, CHECK ((content IS NULL) <> (prior_length IS NULL)))`,
+    );
+    await d1.db.exec(`CREATE UNIQUE INDEX idx_entry_versions_entry ON entry_versions(entry_id, seq)`);
+    expect(await columnNames("entry_versions")).not.toContain("prior_length_utf16");
+
+    await initializeDatabase(envFor(d1));
+    expect(await columnNames("entry_versions")).toContain("prior_length_utf16");
+    // The ALTER actually took, not just reported: a write binding the new column succeeds.
+    await d1.db.prepare(
+      `INSERT INTO entry_versions (entry_id, seq, content, prior_length, prior_length_utf16, tags, reason, created_at) VALUES ('e1', 1, NULL, 3, 3, '[]', 'update', 10)`,
+    ).run();
+
+    // Second cold start: the column is already there, so nothing beyond the probe is issued.
+    resetDatabaseInit();
+    d1.issued.length = 0;
+    await initializeDatabase(envFor(d1));
+    expect(d1.issued).toHaveLength(1);
+    expect(d1.issued[0]).toMatch(/^SELECT type AS kind, name, sql AS definition FROM sqlite_master\b/);
   });
 
   it("entry_versions rejects a duplicate (entry_id, seq)", async () => {
