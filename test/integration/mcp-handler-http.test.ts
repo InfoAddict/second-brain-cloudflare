@@ -1,15 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createMcpHandler } from "agents/mcp";
+import * as serverModule from "../../src/mcp/server";
 import { createApiHandler } from "../../src/mcp/handler";
 import { makeTestEnv } from "../helpers/make-env";
 import type { Env } from "../../src/env";
 
+vi.mock("../../src/mcp/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/mcp/server")>();
+  return { ...actual, buildMcpServer: vi.fn(actual.buildMcpServer) };
+});
+
 const ctx = { waitUntil: (_: Promise<unknown>) => {} } as ExecutionContext;
 
-function mcpPost(body: unknown) {
+function mcpPost(body: unknown, headers: Record<string, string> = {}) {
   return new Request("http://localhost/mcp", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+    headers: { "Content-Type": "application/json", Authorization: "Bearer test-token", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -63,5 +69,35 @@ describe("MCP HTTP handler (/mcp)", () => {
       ctx,
     );
     expect(res).toBe(downstream);
+  });
+
+  it("BE-5: reads ctx.props and passes {clientName, via} plus the bearer into buildMcpServer", async () => {
+    const ctxWithProps = {
+      waitUntil: (_: Promise<unknown>) => {},
+      props: { userId: "owner", clientId: "client-1", clientName: "Cursor" },
+    } as unknown as ExecutionContext;
+
+    await handler.fetch(mcpPost({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} }), env, ctxWithProps);
+
+    expect(serverModule.buildMcpServer).toHaveBeenCalledWith(
+      env, ctxWithProps, expect.anything(),
+      expect.objectContaining({ clientName: "Cursor" }),
+      "test-token",
+    );
+  });
+
+  it("BE-5: a static-token caller's props carry via: token through to buildMcpServer", async () => {
+    const ctxWithProps = {
+      waitUntil: (_: Promise<unknown>) => {},
+      props: { userId: "owner", via: "token" },
+    } as unknown as ExecutionContext;
+
+    await handler.fetch(mcpPost({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} }), env, ctxWithProps);
+
+    expect(serverModule.buildMcpServer).toHaveBeenCalledWith(
+      env, ctxWithProps, expect.anything(),
+      expect.objectContaining({ via: "token" }),
+      "test-token",
+    );
   });
 });
