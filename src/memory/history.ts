@@ -18,7 +18,7 @@ export interface TimelineEvent {
  * Reads one indexed statement; the shared-history cut (D-SH, A3) happens in JavaScript below. */
 export async function readEntryTimeline(
   env: Env, id: string, identity: Identity, entryActorId = "", limit?: number, inlineLabels = false, entryWorkspaceId?: string,
-): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string> }> {
+): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string>; cut: boolean }> {
   // ev.rowid breaks a created_at tie by true insertion order (D1/SQLite serializes writes, so rowid
   // assignment IS the real happens-before order), not by whatever order a tied created_at otherwise
   // sorts in. Without it, a private event recorded in the same millisecond as the share event that
@@ -59,15 +59,18 @@ export async function readEntryTimeline(
   // a fromWorkspaceId, even the pre-tenancy "" marker, which goes through the ordinary cut.
   const isAuthor = entryActorId !== "" && identity.userId === entryActorId;
   let rows = parsedChrono;
+  let cut = false;
   if (!isAuthor) {
     const newestFirst = [...parsedChrono].reverse();
     const needsOwner = entryActorId === "" || newestFirst.some(e => e.payload.fromWorkspaceId === "");
     const ownerUserId = needsOwner ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
     const isOwnerOfLegacyRow = entryActorId === "" && ownerUserId !== undefined && identity.userId === ownerUserId;
-    rows = visibleTimeline(newestFirst, {
+    const visible = visibleTimeline(newestFirst, {
       canRead: ws => workspaceReadable(identity, ws, ownerUserId), isAuthor: false,
       treatAbsentFromAsReadable: isOwnerOfLegacyRow,
-    }).reverse();
+    });
+    rows = [...visible.items].reverse();
+    cut = visible.cut;
   }
 
   const labelMap = inlineLabels
@@ -79,13 +82,19 @@ export async function readEntryTimeline(
     actor_name: resolveActorLabel(e.actor_id, labelMap, { viewerId: identity.userId }),
     payload: e.payload,
   }));
-  return { timeline, labelMap };
+  return { timeline, labelMap, cut };
 }
 
 /**
- * Scoped basic history: events (shared-history rule, D-SH/A3) and supersedes links.
- * A supersedes link is shown only when its other endpoint is readable too, the way
- * `connections` omits an unreadable neighbour.
+ * Scoped basic history: events (shared-history rule, D-SH/A3) and supersedes links. A supersedes
+ * link is shown only when its other endpoint is readable too, the way `connections` omits an
+ * unreadable neighbour.
+ *
+ * BE-11 (T-0101.3.1) will rewire this onto `buildEntryHistory` (history-view.ts, contract 4.1) so
+ * the MCP `history` tool lists versions too — deferred until that tool's own file
+ * (mcp/server.ts:434-455) is wireable (Builder B's tip, spec 5.3's file-region order), because
+ * swapping the read here without also swapping the tool's rendering would either break the tool
+ * or double every statement this function's own budget test pins.
  */
 export async function readEntryHistory(env: Env, identity: Identity, id: string, limit = 10) {
   const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id");
