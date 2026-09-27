@@ -19,6 +19,7 @@ import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { DISCONNECT_PURGE_PAGE, VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
 import { trashMirroredEntries } from "../memory/trash";
+import { scopeWhere } from "../lib/scope";
 
 // Batch size for POST /integrations/:provider/move. No external fetch on this
 // path (unlike a sync batch), so the item-count ceiling is sized for D1 cost
@@ -411,6 +412,12 @@ export async function handleIntegrationsRoutes(
         return json({ ok: false, error: "cursor must be a string" }, 400);
       }
       const cursor = body.cursor;
+      // A restart without a cursor (the dashboard reloaded mid-purge and called back in from
+      // scratch) resets the running total to zero, not to `record`'s own disconnecting field —
+      // that field is this same record, loaded before the reset below runs, so it still carries
+      // the PREVIOUS run's totals. Using it here double-counted already-purged pages as skipped
+      // on every restart (ADV-trash-9).
+      const tally = cursor === undefined ? { purged: 0, skipped: 0 } : (record.disconnecting ?? { purged: 0, skipped: 0 });
       if (cursor === undefined) {
         // Syncs skip a record marked disconnecting, so none re-creates memories mid-purge.
         await updateIntegration(env, provider.id, (r) => { r.disconnecting = { purged: 0, skipped: 0 }; });
@@ -418,9 +425,19 @@ export async function handleIntegrationsRoutes(
       const keys = Object.keys(record.itemMap).sort();
       const remainingKeys = cursor === undefined ? keys : keys.filter((k) => k > cursor);
       const page = remainingKeys.slice(0, DISCONNECT_PURGE_PAGE);
-      const result = await trashMirroredEntries(env, auth, page.map((k) => record.itemMap[k].entryId), { provider: provider.id });
-      const tally = record.disconnecting ?? { purged: 0, skipped: 0 };
-      purged = tally.purged + result.purged;
+      const pageIds = page.map((k) => record.itemMap[k].entryId);
+      // A restart without a cursor re-walks pages this same purge already finished (its own trash
+      // rows, not a foreign delete): trashMirroredEntries only sees "not live" and would count them
+      // as skipped, understating purged and overstating kept on every restart (ADV-trash-9). Ids
+      // this purge already trashed are counted purged directly; only the rest are processed again.
+      const scope = scopeWhere(auth);
+      const { results: already } = await env.DB.prepare(
+        `SELECT id FROM entries_trash WHERE reason = 'disconnect' AND id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
+      ).bind(JSON.stringify(pageIds), ...scope.bindings).all<{ id: string }>();
+      const alreadyTrashed = new Set((already ?? []).map((r) => r.id));
+      const toProcess = pageIds.filter((id) => !alreadyTrashed.has(id));
+      const result = await trashMirroredEntries(env, auth, toProcess, { provider: provider.id });
+      purged = tally.purged + alreadyTrashed.size + result.purged;
       skipped = tally.skipped + result.skipped;
       if (remainingKeys.length > page.length) {
         await updateIntegration(env, provider.id, (r) => { r.disconnecting = { purged, skipped }; });

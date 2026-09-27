@@ -1,11 +1,13 @@
 /**
  * QA measurement: D1 calls issued by one POST /integrations/notion/disconnect that purges 200
  * mirrored rows. A batch is one call (the sqlite double records it as "BATCH").
- * MOVED 807 -> 18 (T-0089.4.9): measured 2026-09-26 at 3e978d0, the per-row loop made 807 D1 calls (4 per purged
+ * MOVED 807 -> 18 -> 19 (T-0089.4.9): measured 2026-09-26 at 3e978d0, the per-row loop made 807 D1 calls (4 per purged
  * row: read, read vectors, DELETE entry, DELETE edges) plus 4 audit batches. The purge now goes through the trash in
  * chunks of 50: per chunk one scoped read, one trash batch, one landed-ids read (D1's `changes` on a DELETE FROM
  * entries folds in every FTS/entry_counts trigger row it fired, so what actually landed is read back rather than
- * counted) and one audit batch (16), plus identity resolution (2). One call, at most 50.
+ * counted) and one audit batch (16), plus identity resolution (2) and one already-trashed pre-filter read per PAGE
+ * (18 -> 19, ADV-trash-9: a restart without a cursor must count its own already-purged ids as purged, not skipped).
+ * One call, at most 50.
  */
 import { describe, it, expect, vi } from "vitest";
 import worker from "../../src/index";
@@ -51,7 +53,7 @@ describe("disconnect purge D1 calls", () => {
     const auditInserts = ((await env.DB.prepare(`SELECT COUNT(*) n FROM entry_events WHERE event='deleted'`).first()) as any).n;
 
     expect(auditInserts).toBe(200);
-    expect(d1Calls).toBe(18);
+    expect(d1Calls).toBe(19);
     expect(d1Calls).toBeLessThanOrEqual(50);
     // The audit is still four batches of 50, one per chunk.
     expect(sizes.filter(n => n === 50)).toHaveLength(4);

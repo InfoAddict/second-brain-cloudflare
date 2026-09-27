@@ -155,3 +155,18 @@ describe("disconnect purge through the trash", () => {
     expect(await count(`SELECT COUNT(*) n FROM entries WHERE source = 'notion'`)).toBe(3);
   });
 });
+
+describe("adversary (MINOR): a restart without a cursor must not misreport kept (ADV-trash-9)", () => {
+  it("a repeated page does not report trashed memories as kept", async () => {
+    await connected(300);
+    const first = await (await disconnect()).json() as any;
+    expect(first.done).toBe(false);
+    // The dashboard reloads mid-purge and starts over without a cursor.
+    const again = await (await disconnect()).json() as any;
+    const last = await (await disconnect({ purge: true, cursor: again.next_cursor })).json() as any;
+    expect(last.done).toBe(true);
+    expect(await count(`SELECT COUNT(*) n FROM entries WHERE source = 'notion'`)).toBe(0);
+    // Every memory went to the trash, so none was kept.
+    expect(last).toMatchObject({ purged: 300, kept: 0 });
+  });
+});
