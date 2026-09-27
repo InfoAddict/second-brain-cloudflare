@@ -28,6 +28,7 @@ import { MAX_INSIGHTS_PER_RUN, RECENT_INSIGHT_WINDOW, rawInsightText } from "../
 import { runInsightAccrual, isEligiblePair, parseTags } from "../insight/candidates";
 import { adminAuditEvent } from "../lib/admin-audit";
 import { auditEvent, auditEvents, type AuditEventInput } from "../lib/audit";
+import { resolveEntryAction, applyInsightResolution } from "../memory/actions";
 import { createMember, listMembers, listRoster, listTeamWorkspaces, lookupAuditNames, removeMember, renameTeamWorkspace, rotateMemberToken, setMemberDefaultShare, setMemberProfile, setMemberSuspended, isTeamBrain, TeamAdminError } from "../lib/team-admin";
 import { readNightSummary, type NightSummary } from "../runtime/night-summary";
 import { readWhenCursor, fetchWhenCandidates, judgeCommitment } from "../when/pass";
@@ -1152,25 +1153,9 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const id = body.id.trim();
-    const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags");
-    if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-    const denied = assertCanEditContent(auth, row);
-    if (denied) return json({ ok: false, error: denied.message }, 403);
-
-    const tags: string[] = JSON.parse(row.tags ?? "[]");
-    if (!hasStaleAsOf(tags)) {
-      return json({ ok: false, error: "Entry is not flagged as out of date" }, 400);
-    }
-
-    const now = Date.now();
-    await env.DB.prepare(
-      `UPDATE entries SET tags = ?, updated_at = ?, staleness_checked_at = ? WHERE id = ?`,
-    ).bind(JSON.stringify(withoutStaleAsOf(tags)), now, now, id).run();
-
-    auditEvents(env, ctx, [{ entryId: id, actorId: auth.userId, event: "updated", payload: { stale_confirmed: true, channel: "rest" } }]);
-
-    return json({ ok: true, id });
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "still_true");
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id });
   }
 
   // GET /loops, the open-commitments review queue. Mirrors GET /stale: the
@@ -1235,33 +1220,9 @@ export async function handleAdminRoutes(
       return json({ ok: false, error: `action must be "done" or "not-task"` }, 400);
     }
 
-    const id = body.id.trim();
-    const action = body.action;
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanEditContent(auth, row);
-      if (denied) return json({ ok: false, error: denied.message }, 403);
-
-      const tags: string[] = parseTags(row.tags as string);
-      const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
-
-      const result = await env.DB.prepare(
-        `UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`,
-      ).bind(JSON.stringify(nextTags), id, row.tags, row.content).run();
-
-      // meta.changes is D1's field; the SQLite test double reports rows_written
-      // instead (see test/helpers/sqlite-d1.ts), same fallback as team-admin.ts.
-      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { loop_action: action, channel: "rest" } });
-        return json({ ok: true, id, action });
-      }
-      // Lost the race — someone else wrote this row between the read and the
-      // write above. Loop back and re-read rather than retrying the stale tags.
-    }
-
-    return json({ ok: false, error: "Could not resolve — try again" }, 409);
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), body.action === "done" ? "done" : "not_a_task");
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id, action: body.action });
   }
 
   // GET /due, the time-anchored feed: overdue commitments (when_at already
@@ -1338,31 +1299,9 @@ export async function handleAdminRoutes(
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
     if (!body.until?.trim()) return json({ ok: false, error: "until is required" }, 400);
 
-    const parsed = parseExplicitWhen(body.until, undefined, undefined, (await resolveConfig(env)).TIMEZONE);
-    if (parsed.error) return json({ ok: false, error: parsed.error }, 400);
-    const until = parsed.value!.at;
-    if (until <= Date.now()) return json({ ok: false, error: "until must be in the future" }, 400);
-
-    const id = body.id.trim();
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanEditContent(auth, row);
-      if (denied) return json({ ok: false, error: denied.message }, 403);
-
-      const result = await env.DB.prepare(
-        `UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ?`,
-      ).bind(until, id, row.tags, row.content).run();
-
-      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "snooze", until, channel: "rest" } });
-        return json({ ok: true, id, when_at: until });
-      }
-      // Lost the race — loop back and re-read rather than retrying stale tags/content.
-    }
-
-    return json({ ok: false, error: "Could not snooze — try again" }, 409);
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "snooze", body.until);
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id, when_at: result.when_at });
   }
 
   // POST /due/clear, drop the time anchor entirely: not a commitment, or
@@ -1380,26 +1319,9 @@ export async function handleAdminRoutes(
     try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
     if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
 
-    const id = body.id.trim();
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const row = await getReadableEntry(env, auth, id, "id, workspace_id, actor_id, tags, content");
-      if (!row) return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
-      const denied = assertCanEditContent(auth, row);
-      if (denied) return json({ ok: false, error: denied.message }, 403);
-
-      const result = await env.DB.prepare(
-        `UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ?`,
-      ).bind(id, row.tags, row.content).run();
-
-      if ((result.meta.changes ?? result.meta.rows_written ?? 0) > 0) {
-        auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { due_action: "clear", channel: "rest" } });
-        return json({ ok: true, id });
-      }
-      // Lost the race — loop back and re-read rather than retrying stale tags/content.
-    }
-
-    return json({ ok: false, error: "Could not clear — try again" }, 409);
+    const result = await resolveEntryAction(env, ctx, auth, body.id.trim(), "clear_date");
+    if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+    return json({ ok: true, id: result.id });
   }
 
   // GET /extract/dry-run, a preview of the nightly when-extraction pass
@@ -1508,84 +1430,13 @@ export async function handleAdminRoutes(
       }
     }
 
-    const statements: D1PreparedStatement[] = [];
-    const vectorsToDrop: string[] = [];
-    const resolved: string[] = [];
-    // The record of who ruled on what. There is deliberately NO author lock on
-    // this route, an insight has actor_id "" and no author, so it is a shared
-    // suggestion and any member acting on one is the feature working. That is
-    // precisely why the record matters: without it, a member dismissing a
-    // company-layer insight for everyone leaves no trace, and GET /team/activity
-    // is blind to the one action on this surface that is invisible by design.
-    //
-    // Two names rather than one plus a payload flag, for the reason
-    // member_suspended and member_unsuspended are two names.
-    const auditRows: AuditEventInput[] = [];
-
-    for (const row of found) {
-      const tags: string[] = JSON.parse(row.tags ?? "[]");
-      // Anything that is not an unresolved pattern is skipped rather than
-      // rejected: a bulk request built from a list the user was looking at can
-      // legitimately race a nightly pass or a second tab.
-      if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
-
-      if (action === "confirm") {
-        // Losing the auto-insight tag is what exits the recall exclusion, it is
-        // enforced at D1 hydration, not vector metadata, so this tag update alone
-        // makes the entry recallable. No re-embed: content is unchanged and vectors
-        // already exist (the stale auto-insight flag in vector metadata is harmless).
-        const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
-        statements.push(
-          env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(promoted), row.id),
-        );
-      } else {
-        // Inlined rather than calling deprecateEntry per id: that reads the row
-        // again and issues its own UPDATE and its own Vectorize delete, so a
-        // hundred dismissals would be three hundred subrequests. Same effect,
-        // status:deprecated, vectors emptied, vectors deleted, in a fixed three.
-        statements.push(
-          env.DB.prepare(`UPDATE entries SET tags = ?, vector_ids = ? WHERE id = ?`)
-            .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", row.id),
-        );
-        vectorsToDrop.push(...(JSON.parse(row.vector_ids ?? "[]") as string[]));
-      }
-      resolved.push(row.id as string);
-      auditRows.push({
-        entryId: row.id as string,
-        actorId: auth.userId,
-        event: action === "confirm" ? "insight_confirmed" : "insight_dismissed",
-        payload: { channel: "rest" },
-      });
-    }
-
-    // One subrequest however many statements it holds, which is the whole reason
-    // the loop above builds them instead of running them.
-    if (statements.length) await env.DB.batch(statements);
-    // After the state change and off the critical path: one batch however many
-    // ids the request carried, so the route's cost stays flat in the id count,
-    // and fire-and-forget so a lost row can never cost a resolution. Only rows
-    // actually ruled on are recorded, a skipped or out-of-scope id was not
-    // resolved, and a false entry in an INSERT-only trail cannot be corrected.
-    auditEvents(env, ctx, auditRows);
-
-    if (vectorsToDrop.length) {
-      try {
-        await deleteVectorIds(env, vectorsToDrop);
-      } catch (e) {
-        // D1 already says deprecated and recall filters on that, so the entries
-        // are out of recall either way; the index just keeps some dead vectors.
-        console.error("Vectorize deleteByIds failed during bulk dismiss (non-fatal):", e);
-      }
-    }
-
+    const result = await applyInsightResolution(env, ctx, auth.userId, found, ids.length, action);
     return json({
       ok: true,
       action,
-      resolved: resolved.length,
-      // Named, so a client that showed the user N rows can tell which survived a
-      // race rather than assuming all of them were ruled on.
-      ids: resolved,
-      skipped: ids.length - resolved.length,
+      resolved: result.resolved.length,
+      ids: result.resolved,
+      skipped: result.skipped,
       ...(body.ids === undefined ? { id: ids[0] } : {}),
     });
   }
