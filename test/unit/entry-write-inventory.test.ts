@@ -100,9 +100,11 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 127, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 168, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 179, kind: 'snapshot' },
-  { file: 'src/memory/trash.ts', line: 140, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 498, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 636, kind: 'hard-delete' },
+  // MOVED (T-0100): readTrashCandidates's SQLITE_TOOBIG fallback added ~75 lines above these
+  // three sites (two new read-only helpers); same sites, shifted line numbers only.
+  { file: 'src/memory/trash.ts', line: 215, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 581, kind: 'exempt' },
+  { file: 'src/memory/trash.ts', line: 719, kind: 'hard-delete' },
   { file: 'src/memory/undo.ts', line: 310, kind: 'snapshot' },
   { file: 'src/memory/undo.ts', line: 335, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },

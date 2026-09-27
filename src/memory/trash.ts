@@ -74,11 +74,86 @@ export function trashSizeSelect(alias = "e"): string {
 export async function readTrashCandidates(env: Env, ids: string[]): Promise<TrashCandidate[]> {
   if (!ids.length) return [];
   const p = new Params();
-  const { results } = await env.DB.prepare(
-    // scope-exempt: by-id: routes gate with getReadableEntry before calling
-    `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(${p.add(JSON.stringify(ids))}))`,
-  ).bind(...p.values()).all<TrashCandidate>();
-  return results ?? [];
+  try {
+    const { results } = await env.DB.prepare(
+      // scope-exempt: by-id: routes gate with getReadableEntry before calling
+      `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(${p.add(JSON.stringify(ids))}))`,
+    ).bind(...p.values()).all<TrashCandidate>();
+    return results ?? [];
+  } catch (e) {
+    if (!isTooBig(e)) throw e;
+    return readTrashCandidatesIsolating(env, ids);
+  }
+}
+
+/** D1's shape for SQLite's own per-value size ceiling, hit by edgesJsonSql's aggregate on a row with too many edges. */
+function isTooBig(e: unknown): boolean {
+  return /too big/i.test(String((e as { message?: string })?.message ?? e));
+}
+
+/**
+ * Larger than any TRASH_ROW_BUDGET_BYTES this codebase will ever pass chooseTrashTier, so a row
+ * carrying it in content_bytes fails both the tier 1 and the tier 2 check and always lands in
+ * tier 3, whatever budget the caller uses. content_bytes specifically (not a fourth field) so
+ * this reuses chooseTrashTier's own arithmetic instead of adding a rule that duplicates it.
+ */
+const SIZE_UNMEASURABLE = Number.POSITIVE_INFINITY;
+
+/**
+ * One id in a batch has more edges than edgesJsonSql's json_group_array aggregate can even be
+ * measured at all: past roughly 10,000+ edges it exceeds real D1's per-value size ceiling and
+ * the batched read above throws SQLITE_TOOBIG before chooseTrashTier ever runs. Retried one id
+ * at a time so the OTHER ids in the same batch (the common case: everything else has a normal
+ * edge count) are not punished for the one that does not: only the id(s) that themselves also
+ * throw fall back to readTrashCandidateForcedTier3. `scope`, when given, is applied to both the
+ * per-id retry and the fallback so a row outside the caller's scope is still silently excluded,
+ * exactly as the batched read that just failed would have excluded it.
+ */
+async function readTrashCandidatesIsolating(
+  env: Env, ids: string[], scope?: { clause: string; bindings: unknown[] },
+): Promise<TrashCandidate[]> {
+  const out: TrashCandidate[] = [];
+  for (const id of ids) {
+    const where = scope ? `e.id = ? AND ${scope.clause}` : `e.id = ?`;
+    const bindings = [id, ...(scope?.bindings ?? [])];
+    try {
+      // scope-checked: by-id (readTrashCandidates, unscoped, same as its own batched read above)
+      // or scoped (trashMirroredEntries): the caller's clause IS applied into `where` above when
+      // given; the lexer cannot see into this JS-assembled fragment.
+      const row = await env.DB.prepare(`SELECT ${trashSizeSelect("e")} FROM entries e WHERE ${where}`)
+        .bind(...bindings).first<TrashCandidate>();
+      if (row) out.push(row);
+    } catch (e) {
+      if (!isTooBig(e)) throw e;
+      const forced = await readTrashCandidateForcedTier3(env, id, scope);
+      if (forced) out.push(forced);
+    }
+  }
+  return out;
+}
+
+/**
+ * The safe fallback once an id's own edge aggregate has proven too big to measure: this id is
+ * always tier 3 (hard delete, no trash-row snapshot), never re-attempting the aggregate and
+ * never guessing whether tier 2 (trash without edges) might otherwise have fit. Only the
+ * identity columns forget/the disconnect purge actually need (workspace_id for the authorization
+ * check, vector_ids for the Vectorize cleanup) are read; the size columns are the sentinel that
+ * drives chooseTrashTier to tier 3 unconditionally, not real measurements.
+ */
+async function readTrashCandidateForcedTier3(
+  env: Env, id: string, scope?: { clause: string; bindings: unknown[] },
+): Promise<TrashCandidate | null> {
+  const where = scope ? `e.id = ? AND ${scope.clause}` : `e.id = ?`;
+  const bindings = [id, ...(scope?.bindings ?? [])];
+  const row = await env.DB.prepare(
+    // scope-checked: by-id (unscoped) or scoped to mirror the batch read this id's caller already
+    // applied: the caller's clause IS applied into `where` above when given; the lexer cannot
+    // see into this JS-assembled fragment. No content, row_json or edges_json read here at all;
+    // this id is going to tier 3 regardless.
+    `SELECT e.id, e.workspace_id, e.actor_id, e.vector_ids FROM entries e WHERE ${where}`,
+  ).bind(...bindings).first<Pick<TrashCandidate, "id" | "workspace_id" | "actor_id" | "vector_ids">>();
+  if (!row) return null;
+  return { ...row, content_bytes: SIZE_UNMEASURABLE, row_json_bytes: 0, edges_json_bytes: 0, vector_ids_bytes: 0 };
 }
 
 const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason";
@@ -166,12 +241,20 @@ export async function trashMirroredEntries(
   for (let i = 0; i < entryIds.length; i += DISCONNECT_PURGE_CHUNK) {
     const chunk = [...new Set(entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK))];
     const scope = scopeWhere(auth, undefined, "e.workspace_id");
-    const { results } = await env.DB.prepare(
-      // Bare placeholders throughout: the scope clause brings its own.
-      `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
-    ).bind(JSON.stringify(chunk), ...scope.bindings).all<TrashCandidate>();
+    let results: TrashCandidate[];
+    try {
+      const res = await env.DB.prepare(
+        // Bare placeholders throughout: the scope clause brings its own.
+        `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
+      ).bind(JSON.stringify(chunk), ...scope.bindings).all<TrashCandidate>();
+      results = res.results ?? [];
+    } catch (e) {
+      if (!isTooBig(e)) throw e;
+      // One id in this chunk has too many edges to measure at all; isolate it (see readTrashCandidates).
+      results = await readTrashCandidatesIsolating(env, chunk, scope);
+    }
     // Same guard /forget applies: a purge removes only what this caller could delete one at a time.
-    const allowed = (results ?? []).filter((r) => !assertCanMutateEntry(auth, r));
+    const allowed = results.filter((r) => !assertCanMutateEntry(auth, r));
     skipped += entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK).length - allowed.length;
     if (!allowed.length) continue;
 

@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (193 queries, 105 exceptions, 13 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (195 queries, 105 exceptions, 15 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1401,7 +1401,11 @@ describe("the checker over the real source tree", () => {
     // of the difference is queries the wider alternation now counts for the first time that were
     // already properly scoped or already covered by an existing annotation, not new findings —
     // the checker exits clean.
-    ).toEqual({ queries: 193, exempt: 105, checked: 13, outerJoin: 1 });
+    // MOVED 193/105/13/1 -> 195/105/15/1 (T-0100): readTrashCandidates's SQLITE_TOOBIG fallback
+    // adds two new by-id/scoped queries in trash.ts (the per-id retry and the forced-tier-3 read),
+    // both scope-checked since the optional scope clause is assembled in JS. Not new findings:
+    // no unscoped corpus-wide read was added.
+    ).toEqual({ queries: 195, exempt: 105, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
