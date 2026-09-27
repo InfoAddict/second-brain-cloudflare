@@ -188,7 +188,7 @@ function notifyMemoryResolved(id) {
  * agents (there is no MCP tool or parameter for it) — the confirm echo, not a hidden token, is
  * what keeps this from being one accidental tap away from Forget.
  */
-function openDeleteForeverConfirm(id, cardElement) {
+function openDeleteForeverConfirm(id, cardElement, { onDone } = {}) {
   openDangerConfirm({
     title: t('memories.deleteForeverTitle'),
     body: t('memories.deleteForeverConfirm'),
@@ -216,6 +216,7 @@ function openDeleteForeverConfirm(id, cardElement) {
         allEntries = allEntries.filter((e) => e.id !== id)
         notifyMemoryResolved(id)
         refreshAll({ list: false })
+        if (typeof onDone === 'function') onDone(id)
       } catch (e) {
         showToast(t('memories.deleteForeverFailed', { message: e.message }))
         done()

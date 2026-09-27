@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="css/graph.css" />
     <link rel="stylesheet" href="css/board.css" />
     <link rel="stylesheet" href="css/projects.css" />
+    <link rel="stylesheet" href="css/trash.css" />
   </head>
 
   <body>
@@ -317,6 +318,9 @@
                 <button class="graph-btn" onclick="loadGraph()" title="Re-lay out" data-i18n="graph.relayout" data-i18n-attr="title"><i class="ti ti-refresh"></i></button>
               </div>
             </div>
+            <!-- Trash at the Memories foot (Q1: not a tab). The menu's Data
+                 group carries the other entry point; both call openTrashSheet(). -->
+            <button type="button" class="mem-trash-link" id="mem-trash-link" onclick="openTrashSheet()"><i class="ti ti-trash"></i> <span data-i18n="trash.link">Trash</span></button>
           </div>
 
           <!-- Projects: a named home for related memories. Membership is a
@@ -741,6 +745,7 @@
           <button class="menu-item" onclick="exportMemories('json')"><i class="ti ti-download"></i> <span data-i18n="menu.backupJson">Back up as JSON</span></button>
           <button class="menu-item" onclick="exportMemories('markdown')"><i class="ti ti-markdown"></i> <span data-i18n="menu.exportMarkdown">Export as Markdown</span></button>
           <button class="menu-item" id="restore-btn" onclick="restoreFromBackup()"><i class="ti ti-upload"></i> <span data-i18n="menu.restore">Restore from backup</span></button>
+          <button class="menu-item" id="menu-trash-btn" onclick="openTrashSheet()"><i class="ti ti-trash"></i> <span data-i18n="trash.link">Trash</span></button>
         </div>
 
         <div class="menu-group">
@@ -793,6 +798,22 @@
           <div class="about-credits" id="about-credits" aria-label="About Second Brain" data-i18n="menu.aboutAria" data-i18n-attr="aria-label"></div>
           <button class="menu-item danger" onclick="logout()"><i class="ti ti-logout"></i> <span data-i18n="menu.disconnect">Disconnect</span></button>
         </div>
+      </div>
+    </div>
+
+    <!-- Trash (T-0101.2.2): forgotten memories, Restore and Delete forever.
+         Delete forever lives here ONLY (Q11) — openDeleteForeverConfirm is
+         memory-crud.js's, called with onDone so a row leaves this list too. -->
+    <div id="trash-sheet">
+      <div class="menu-inner patterns-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="trash.title">Trash</h2>
+          <button class="btn-close-icon" onclick="closeTrashSheet()" aria-label="Close" data-i18n="memories.close" data-i18n-attr="aria-label"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note" id="trash-intro"></p>
+        <p class="digest-note" id="trash-teammate-note" hidden></p>
+        <div id="trash-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
+        <button class="digest-more" id="trash-more" hidden onclick="loadMoreTrash(this)"></button>
       </div>
     </div>
 
@@ -916,6 +937,7 @@
     <script src="js/remember.js"></script>
     <script src="js/memory-crud.js"></script>
     <script src="js/settings.js"></script>
+    <script src="js/trash.js"></script>
     <script src="js/patterns.js"></script>
     <script src="js/stale.js"></script>
     <script src="js/loops.js"></script>
