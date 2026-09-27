@@ -6,6 +6,10 @@ import { allowanceFor, snippetOf, truncationNote, type Snippet } from "./snippet
 import { computeCompoundStale } from "./compound-stale";
 import type { CompoundStaleSignal } from "./types";
 import { sourceClass } from "./source-trust";
+import { editedCanonicalAt } from "../quarantine/tags";
+
+/** How long the canonical-edit label shows after the dated tag (5.7). Expiry is by date at render time; there is no job. */
+export const EDITED_CANONICAL_LABEL_DAYS = 7;
 
 /**
  * The bracketed header every memory-returning MCP tool prints.
@@ -38,8 +42,16 @@ export function memoryHeader(m: {
   const layer = m.workspace === "company"
     ? ` · shared${m.actorName ? ` · ${m.actorName}` : ""}`
     : "";
+  // The AI-edit label (5.7): a canonical row edited through MCP within the
+  // last EDITED_CANONICAL_LABEL_DAYS. Recall names no tool (Q-I) — the
+  // dashboard, brief and history read the newest version's client instead.
+  const editedAt = getStatus(m.tags) === "canonical" ? editedCanonicalAt(m.tags) : null;
+  const editedAgeDays = editedAt ? (Date.now() - Date.parse(`${editedAt}T12:00:00Z`)) / 86_400_000 : Infinity;
+  const editedLabel = editedAt && editedAgeDays <= EDITED_CANONICAL_LABEL_DAYS
+    ? ` · edited via an AI tool on ${new Date(`${editedAt}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : "";
   const tagList = m.tags.length ? ` [${m.tags.join(", ")}]` : "";
-  return `${date}${src}${layer}${tagList}`;
+  return `${date}${src}${layer}${editedLabel}${tagList}`;
 }
 
 export function renderRecallText(

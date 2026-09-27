@@ -26,7 +26,8 @@
     "via_type": null,
     "linked_at": null,
     "related_to": null,
-    "similar": []
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e3",
@@ -47,7 +48,8 @@
     "via_type": null,
     "linked_at": null,
     "related_to": null,
-    "similar": []
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e2",
@@ -70,7 +72,8 @@
     "via_type": null,
     "linked_at": null,
     "related_to": null,
-    "similar": []
+    "similar": [],
+    "edited_canonical_at": null
    }
   ],
   "insight": "3",
@@ -103,7 +106,8 @@
     "via_type": null,
     "linked_at": null,
     "related_to": null,
-    "similar": []
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e3",
@@ -124,7 +128,8 @@
     "via_type": null,
     "linked_at": null,
     "related_to": null,
-    "similar": []
+    "similar": [],
+    "edited_canonical_at": null
    },
    {
     "id": "e2",
@@ -147,7 +152,8 @@
     "via_type": null,
     "linked_at": null,
     "related_to": null,
-    "similar": []
+    "similar": [],
+    "edited_canonical_at": null
    }
   ],
   "insight": "3",
