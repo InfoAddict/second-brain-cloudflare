@@ -3,6 +3,7 @@ import type { Identity } from "../lib/identity";
 import { isCompanyWorkspace, scopeWhere, scopeWrite } from "../lib/scope";
 import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
 import type { ChangeContext } from "../lib/audit";
+import { changesOf } from "../memory/versions";
 
 /** Move entries between personal and company workspaces; sharing is not a copy. */
 
@@ -13,6 +14,10 @@ export type ShareResult =
   | { status: "unshared"; workspaceId: string; vectorIds: string[]; fromWorkspaceId: string }
   | { status: "no_change"; workspaceId: string; vectorIds: string[] }
   | { status: "not_found" }
+  /** R3-2/T-0089.7.4: the row is still there, but it moved (or was forgotten and re-captured)
+   * since this call's own read — the caller's authorization no longer describes it. A conflict
+   * to retry, not the false success the unpinned UPDATE used to report. */
+  | { status: "conflict" }
   | { status: "forbidden" };
 
 export async function moveEntry(
@@ -49,6 +54,15 @@ export async function moveEntry(
   // move could have already overtaken. A move to the current workspace (raced there first)
   // writes no event. This is a deliberate exception to the fire-and-forget audit contract: the
   // event is load-bearing for shared-history visibility, so it commits or fails with the move.
+  //
+  // R3-2/T-0089.7.4: the entries and edges UPDATEs are now pinned to the workspace this call's own
+  // read found (row.workspace_id) — an unpinned UPDATE used to move whatever workspace the row
+  // happened to be in BY THE TIME THE BATCH RAN, not the one this caller was authorized against.
+  // An admin's unshare of a company row could therefore take a member's memory that the member
+  // had already made private again in the gap between the read and the batch, and a concurrent
+  // forget of the row (or its re-capture under the same id) was reported as a successful move.
+  // The event insert's own guard (e.workspace_id <> target) sees the SAME pre-batch state as the
+  // pinned UPDATE below it, so it fires exactly when the UPDATE's CAS matches.
   const event = target === "company" ? "shared" : "unshared";
   const results = await env.DB.batch([
     // scope-exempt: by-id: the row was read above under the caller's own scope
@@ -58,19 +72,24 @@ export async function moveEntry(
          FROM entries e WHERE e.id = ? AND e.workspace_id <> ?`
     ).bind(crypto.randomUUID(), change.actorId, event, targetWorkspaceId, change.channel, Date.now(), id, targetWorkspaceId),
     // versioning: exempt: a move changes location, not content, tags or when_*
-    env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ?`).bind(targetWorkspaceId, id),
-    // Edges carry denormalized workspace metadata and must move with the entry.
-    env.DB.prepare(`UPDATE edges SET workspace_id = ? WHERE source_id = ? OR target_id = ?`)
-      .bind(targetWorkspaceId, id, id),
+    env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = ? AND workspace_id = ?`)
+      .bind(targetWorkspaceId, id, row.workspace_id),
+    // Edges carry denormalized workspace metadata and must move with the entry, and only that
+    // entry's own edges as of this same read — pinned the same way as the row itself.
+    env.DB.prepare(`UPDATE edges SET workspace_id = ? WHERE (source_id = ? OR target_id = ?) AND workspace_id = ?`)
+      .bind(targetWorkspaceId, id, id, row.workspace_id),
   ]);
-  const eventWritten = (results[0].meta.changes ?? results[0].meta.rows_written ?? 0) > 0;
 
-  return {
-    status: event,
-    workspaceId: targetWorkspaceId,
-    vectorIds,
-    fromWorkspaceId: eventWritten ? row.workspace_id : targetWorkspaceId,
-  };
+  if (changesOf(results[1]) === 0) {
+    // The row moved, or was forgotten and possibly re-captured under the same id, since this
+    // call's own read: nothing above committed. Distinguish gone from moved (R2-5's same
+    // reasoning) rather than reporting either as the success the unpinned UPDATE used to.
+    // scope-exempt: by-id: liveness check for a row this call already read under its own scope
+    const stillThere = await env.DB.prepare(`SELECT 1 AS ok FROM entries WHERE id = ?`).bind(id).first();
+    return stillThere ? { status: "conflict" } : { status: "not_found" };
+  }
+
+  return { status: event, workspaceId: targetWorkspaceId, vectorIds, fromWorkspaceId: row.workspace_id };
 }
 
 /**

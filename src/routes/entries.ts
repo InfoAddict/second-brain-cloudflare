@@ -346,6 +346,9 @@ export async function handleEntriesRoutes(
     if (result.status === "forbidden") {
       return json({ ok: false, error: "Only the entry's author or an admin can un-share it" }, 403);
     }
+    if (result.status === "conflict") {
+      return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
+    }
     if (result.status === "no_change") {
       return json({ ok: true, id, status: "no_change" });
     }

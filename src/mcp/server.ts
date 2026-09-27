@@ -750,6 +750,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const result = await moveEntry(id, target, env, identity, mcpChange, teamRead.teamId);
       if (result.status === "not_found") return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (result.status === "forbidden") return { content: [{ type: "text", text: `Only the entry's author or an admin can un-share ${id}.` }] };
+      if (result.status === "conflict") return { content: [{ type: "text", text: `Entry ${id} changed while saving, try again.` }] };
       if (result.status === "no_change") return { content: [{ type: "text", text: `Entry ${id} is already in the ${workspace ?? "company"} workspace.` }] };
       // The shared/unshared event is written inside moveEntry's own batch (M5): no separate audit here.
       // Before the response — see moveEntry's own comment: the D1 move is already committed, so a

@@ -177,6 +177,13 @@ const CASES: Case[] = [
       return { succeeded: false };
     },
   },
+  {
+    name: "REST /share personal (R3-2)",
+    run: async (racingEnv, id, adminToken) => {
+      const res = await worker.fetch(req("POST", "/share", { body: { id, workspace: "personal" }, token: adminToken }), racingEnv, ctx);
+      return { succeeded: res.status === 200 };
+    },
+  },
 ];
 
 describe("CLASS 1 structural, forward-looking: revertEntry's optional authorizedWorkspaceId (Builder D, undo.ts)", () => {

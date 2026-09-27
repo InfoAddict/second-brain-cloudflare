@@ -324,6 +324,13 @@ export async function handleIntegrationsRoutes(
             case "forbidden":
               refused++;
               break;
+            case "conflict":
+              // The row moved (or was forgotten and re-captured) between this call's read and its
+              // batch — the same class of transient race the disconnect-purge tests already cover
+              // elsewhere in this route. Counted as missing for this pass; the next sync's own
+              // fresh read retries it.
+              missing++;
+              break;
           }
         } catch (e) {
           // Same per-item catch precedent as the purge loop below: one row's
