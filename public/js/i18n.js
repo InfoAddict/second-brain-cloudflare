@@ -397,6 +397,25 @@ const I18N_EN = {
     more: 'Show more',
     loadFailed: 'Could not load the trash: {message}',
   },
+  settingsPanel: {
+    menuGroup: 'Settings',
+    menuItem: 'History and trash',
+    title: 'History and trash',
+    retentionLabel: 'Keep forgotten memories for',
+    retentionHelp:
+      'After this, a forgotten memory is removed for good. Memories already in the trash longer than this are removed at the next cleanup.',
+    days: {
+      one: '{n} day',
+      other: '{n} days',
+    },
+    keepLabel: 'Changes kept per memory',
+    keepHelp:
+      'Older changes beyond this number are removed as new ones arrive. Raising it does not bring back changes already removed.',
+    custom: 'Custom ({value})',
+    adminOnly: 'Only an admin can change these.',
+    saved: 'Saved',
+    failed: 'Could not save: {message}',
+  },
   upkeep: {
     working: 'Working…',
     done: 'Done',
@@ -1422,6 +1441,25 @@ const I18N_IT = {
     empty: 'Il cestino è vuoto.',
     more: 'Mostra altri',
     loadFailed: 'Impossibile caricare il cestino: {message}',
+  },
+  settingsPanel: {
+    menuGroup: 'Impostazioni',
+    menuItem: 'Cronologia e cestino',
+    title: 'Cronologia e cestino',
+    retentionLabel: 'Conserva i ricordi dimenticati per',
+    retentionHelp:
+      'Dopo questo periodo un ricordo dimenticato viene eliminato definitivamente. Quelli già nel cestino da più tempo vengono eliminati alla prossima pulizia.',
+    days: {
+      one: '{n} giorno',
+      other: '{n} giorni',
+    },
+    keepLabel: 'Modifiche conservate per ricordo',
+    keepHelp:
+      'Le modifiche più vecchie oltre questo numero vengono rimosse man mano che ne arrivano di nuove. Aumentarlo non recupera quelle già rimosse.',
+    custom: 'Personalizzato ({value})',
+    adminOnly: 'Solo un amministratore può modificarle.',
+    saved: 'Salvato',
+    failed: 'Impossibile salvare: {message}',
   },
   upkeep: {
     working: 'In corso…',

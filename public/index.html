@@ -748,6 +748,13 @@
           <button class="menu-item" id="menu-trash-btn" onclick="openTrashSheet()"><i class="ti ti-trash"></i> <span data-i18n="trash.link">Trash</span></button>
         </div>
 
+        <!-- Settings (T-0101.8.3): trash retention and versions kept, shared
+             with the desktop Advanced Settings window (contract 4.6). -->
+        <div class="menu-group">
+          <div class="menu-group-label" data-i18n="settingsPanel.menuGroup">Settings</div>
+          <button class="menu-item" id="menu-settings-btn" onclick="openSettingsSheet()"><i class="ti ti-adjustments"></i> <span data-i18n="settingsPanel.menuItem">History and trash</span></button>
+        </div>
+
         <div class="menu-group">
           <div class="menu-group-label" data-i18n="menu.groupConnections">Connections</div>
           <button class="menu-item" onclick="openIntegrations()"><i class="ti ti-plug"></i> <span data-i18n="menu.integrations">Integrations</span></button>
@@ -814,6 +821,34 @@
         <p class="digest-note" id="trash-teammate-note" hidden></p>
         <div id="trash-list"><p class="digest-note" data-i18n="integrations.loading">Loading…</p></div>
         <button class="digest-more" id="trash-more" hidden onclick="loadMoreTrash(this)"></button>
+      </div>
+    </div>
+
+    <!-- Settings panel (T-0101.8.3): trash retention and versions kept.
+         Members see it read-only; admin status reuses team.js's existing
+         GET /team/members probe (teamIsAdmin). -->
+    <div id="settings-sheet">
+      <div class="menu-inner">
+        <div class="view-header">
+          <h2 style="margin-bottom: 0" data-i18n="settingsPanel.title">History and trash</h2>
+          <button class="btn-close-icon" onclick="closeSettingsSheet()" aria-label="Close" data-i18n="memories.close" data-i18n-attr="aria-label"><i class="ti ti-x"></i></button>
+        </div>
+        <p class="digest-note" id="settings-admin-note" data-i18n="settingsPanel.adminOnly" hidden>Only an admin can change these.</p>
+        <div class="team-open-row">
+          <i class="ti ti-trash"></i>
+          <span data-i18n="settingsPanel.retentionLabel">Keep forgotten memories for</span>
+          <span class="team-select-wrap"><select class="team-select" id="setting-trash-retention" onchange="onSettingChange('setting-trash-retention', 'TRASH_RETENTION_DAYS')"></select><i class="ti ti-chevron-down"></i></span>
+        </div>
+        <p class="digest-note settings-row-note" data-i18n="settingsPanel.retentionHelp">After this, a forgotten memory is removed for good. Memories already in the trash longer than this are removed at the next cleanup.</p>
+        <div class="team-open-row">
+          <i class="ti ti-history"></i>
+          <span data-i18n="settingsPanel.keepLabel">Changes kept per memory</span>
+          <span class="team-select-wrap"><select class="team-select" id="setting-version-keep" onchange="onSettingChange('setting-version-keep', 'VERSION_KEEP')"></select><i class="ti ti-chevron-down"></i></span>
+        </div>
+        <p class="digest-note settings-row-note" data-i18n="settingsPanel.keepHelp">Older changes beyond this number are removed as new ones arrive. Raising it does not bring back changes already removed.</p>
+        <!-- No visible stub: this shows only once GET /config's `defaults`
+             carries RECALL_LOG (T-0089.5.5). Its content is that release's. -->
+        <div id="setting-recall-log-row" style="display: none"></div>
       </div>
     </div>
 
@@ -938,6 +973,7 @@
     <script src="js/memory-crud.js"></script>
     <script src="js/settings.js"></script>
     <script src="js/trash.js"></script>
+    <script src="js/settings-panel.js"></script>
     <script src="js/patterns.js"></script>
     <script src="js/stale.js"></script>
     <script src="js/loops.js"></script>
