@@ -224,26 +224,19 @@ describe("renderHistory — change and event rows", () => {
     expect(html).not.toContain("history-list");
   });
 
-  // UI review fix: renderHistory used to hide #view-timeline whenever
-  // entry.history.items was empty, before it looked at can_edit, which
-  // silently dropped the lock note for a shared memory with rich history that
-  // nobody has edited yet — the fallback timeline already guards this case.
-  it("shows the lock note alone when history is empty and the memory is locked", () => {
-    const ctx = load();
-    const { tl } = renderAndWire(ctx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [] } });
-    expect(tl.style.display).toBe("");
-    expect(tl.innerHTML).toContain("Shared by Bob. Only they can edit or forget it.");
-    expect(tl.innerHTML).not.toContain("history-list");
-  });
-
-  it("shows the lock note after a real history list too, on a locked memory", () => {
+  // UI review: the lock note explaining a disabled sheet moved to the status
+  // control (renderViewStatus) so it appears once, not once in History and
+  // once in Status. History has nothing special to say about being locked.
+  it("never renders a lock note itself, even when the memory is locked", () => {
     const ctx = load();
     const { tl } = renderAndWire(ctx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [CHANGE_NEWEST] } });
-    expect(tl.innerHTML).toContain("history-list");
-    expect(tl.innerHTML).toContain("Shared by Bob. Only they can edit or forget it.");
+    expect(tl.innerHTML).not.toContain("Shared by Bob");
   });
 
-  it("hides history entirely when empty and not locked", () => {
+  it("hides history entirely when empty, locked or not", () => {
+    const lockedCtx = load();
+    const { tl: lockedTl } = renderAndWire(lockedCtx, { id: "e1", can_edit: false, actor_name: "Bob", history: { items: [] } });
+    expect(lockedTl.style.display).toBe("none");
     const ctx = load();
     const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [] } });
     expect(tl.style.display).toBe("none");

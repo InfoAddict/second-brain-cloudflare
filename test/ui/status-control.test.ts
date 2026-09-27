@@ -187,6 +187,24 @@ describe("the status control", () => {
     expect(btn(ctx, "deprecated").disabled).toBe(true);
   });
 
+  // UI review: the lock note explaining the disabled control now lives here,
+  // next to the control, rather than at the end of History.
+  it("shows the lock note under the control when locked, naming nobody when unresolved", () => {
+    const ctx = load();
+    ctx.renderViewStatus({ id: "e1", tags: ["status:canonical"], can_edit: false, actor_name: "Ana" });
+    expect(ctx.__els.get("view-status-lock-note").textContent).toBe("Shared by Ana. Only they can edit or forget it.");
+    expect(ctx.__els.get("view-status-lock-note").style.display).toBe("");
+
+    ctx.renderViewStatus({ id: "e1", tags: ["status:canonical"] });
+    expect(ctx.__els.get("view-status-lock-note").style.display).toBe("none");
+
+    // can_edit: false alone is not the signal: an entry can report that
+    // before it has resolved actor_name too, and a note attributed to
+    // nobody is worse than no note.
+    ctx.renderViewStatus({ id: "e1", tags: ["status:canonical"], can_edit: false });
+    expect(ctx.__els.get("view-status-lock-note").style.display).toBe("none");
+  });
+
   it("deprecated shows Wrong, never Superseded", () => {
     const ctx = load();
     expect(ctx.viewStatusLabel("deprecated")).toBe("Wrong");

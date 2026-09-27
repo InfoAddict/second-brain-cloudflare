@@ -4694,6 +4694,21 @@
         transform: translateX(-50%) translateY(0);
       }
 
+      /* UI review: on a narrow screen with a bottom sheet open, the toast
+         moves to the top of the viewport instead of fighting the sheet's own
+         fixed action row for the bottom edge. The safe-area offset keeps it
+         clear of a notch/status bar; env() with a fallback degrades to a
+         plain 12px on a browser that does not support it. */
+      .app-toast--top {
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        bottom: auto;
+        transform: translateX(-50%) translateY(-12px);
+      }
+
+      .app-toast--top.visible {
+        transform: translateX(-50%) translateY(0);
+      }
+
       .app-toast-msg {
         font-size: 13px;
         color: var(--text-on-elevated);

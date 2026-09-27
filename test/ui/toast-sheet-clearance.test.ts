@@ -1,9 +1,8 @@
 /**
- * UI review fix: SH-1's history row actions and SH-3's status control both
- * can show a toast while #view-sheet stays open. At a narrow, bottom-anchored
- * viewport the toast's default position collided with the sheet's fixed
- * action row; showToast now measures both and lifts the toast clear only
- * when they would actually overlap.
+ * UI review: on a narrow viewport with #view-sheet open, a toast moves to
+ * the top of the screen (app-toast--top) rather than fighting the sheet's
+ * fixed action row for the bottom edge. Desktop, and any state where no
+ * sheet is open, keeps the default bottom position.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -12,37 +11,37 @@ import { describe, it, expect } from "vitest";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
-function makeRectEl(rect: { top: number; bottom: number; height: number }) {
-  return {
-    getBoundingClientRect: () => rect,
-    querySelector: () => null,
-  };
-}
-
-function makeToastEl(height: number) {
+function makeToastEl() {
+  const classes = new Set<string>();
   return {
     id: "",
     style: {} as Record<string, string>,
     className: "",
     innerHTML: "",
+    attrs: {} as Record<string, string>,
     classList: {
-      add() {},
-      remove() {},
-      contains: () => false,
+      add: (c: string) => void classes.add(c),
+      remove: (c: string) => void classes.delete(c),
+      contains: (c: string) => classes.has(c),
     },
-    setAttribute() {},
+    setAttribute(name: string, value: string) {
+      this.attrs[name] = value;
+    },
+    getAttribute(name: string) {
+      return this.attrs[name] ?? null;
+    },
     querySelector: () => null,
-    getBoundingClientRect: () => ({ height }),
+    __classes: classes,
   };
 }
 
-function load(sheet?: any) {
+function load(sheet: any, innerWidth: number) {
   const els = new Map<string, any>();
   if (sheet) els.set("view-sheet", sheet);
-  const toast = makeToastEl(50);
+  const toast = makeToastEl();
   const ctx: any = {
     console,
-    window: {},
+    window: { innerWidth },
     setTimeout: () => 0,
     clearTimeout: () => {},
   };
@@ -55,7 +54,6 @@ function load(sheet?: any) {
       },
     },
   };
-  ctx.window.innerHeight = 844;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(readFileSync(resolve(ROOT, "public/utils.js"), "utf8"), ctx);
@@ -64,43 +62,49 @@ function load(sheet?: any) {
   return ctx;
 }
 
-describe("toast clearance of an open sheet's action row", () => {
-  it("leaves the default position when no sheet is open", () => {
-    const ctx = load();
+function openSheet() {
+  return { classList: { contains: (c: string) => c === "open" } };
+}
+
+describe("toast position relative to an open sheet", () => {
+  it("moves to the top on a narrow screen with the sheet open", () => {
+    const ctx = load(openSheet(), 390);
     ctx.showToast("Undone");
-    expect(ctx.__toast.style.bottom).toBe("");
+    expect(ctx.__toast.__classes.has("app-toast--top")).toBe(true);
   });
 
-  it("leaves the default position when the sheet's actions sit well above where the toast would land", () => {
-    const sheet = {
-      classList: { contains: (c: string) => c === "open" },
-      querySelector: () => makeRectEl({ top: 400, bottom: 450, height: 50 }),
-    };
-    const ctx = load(sheet);
+  it("stays at the default bottom position on a wide screen even with the sheet open", () => {
+    const ctx = load(openSheet(), 1280);
     ctx.showToast("Undone");
-    // toastTopAtDefault = 844 - 24 - 50 = 770, which is below actionsRect.bottom (450): no overlap.
-    expect(ctx.__toast.style.bottom).toBe("");
+    expect(ctx.__toast.__classes.has("app-toast--top")).toBe(false);
   });
 
-  it("lifts the toast clear of the sheet's action row when they would overlap", () => {
-    const sheet = {
-      classList: { contains: (c: string) => c === "open" },
-      querySelector: () => makeRectEl({ top: 800, bottom: 844, height: 44 }),
-    };
-    const ctx = load(sheet);
+  it("stays at the default bottom position on a narrow screen with no sheet open", () => {
+    const ctx = load(null, 390);
     ctx.showToast("Undone");
-    // toastTopAtDefault = 844 - 24 - 50 = 770, which IS below actionsRect.bottom (844): overlap.
-    // bottom = innerHeight - actionsRect.top + 12 = 844 - 800 + 12 = 56.
-    expect(ctx.__toast.style.bottom).toBe("56px");
+    expect(ctx.__toast.__classes.has("app-toast--top")).toBe(false);
   });
 
-  it("does nothing when the sheet element carries no 'open' class", () => {
-    const sheet = {
-      classList: { contains: () => false },
-      querySelector: () => makeRectEl({ top: 800, bottom: 844, height: 44 }),
-    };
-    const ctx = load(sheet);
+  it("stays at the default bottom position when the sheet element has no 'open' class", () => {
+    const closedSheet = { classList: { contains: () => false } };
+    const ctx = load(closedSheet, 390);
     ctx.showToast("Undone");
-    expect(ctx.__toast.style.bottom).toBe("");
+    expect(ctx.__toast.__classes.has("app-toast--top")).toBe(false);
+  });
+
+  it("drops the top class again once the sheet is no longer open", () => {
+    const sheet = openSheet();
+    const ctx = load(sheet, 390);
+    ctx.showToast("Undone");
+    expect(ctx.__toast.__classes.has("app-toast--top")).toBe(true);
+    sheet.classList.contains = () => false;
+    ctx.showToast("Undone again");
+    expect(ctx.__toast.__classes.has("app-toast--top")).toBe(false);
+  });
+
+  it("keeps role=status regardless of position", () => {
+    const ctx = load(openSheet(), 390);
+    ctx.showToast("Undone");
+    expect(ctx.__toast.getAttribute("role")).toBe("status");
   });
 });

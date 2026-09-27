@@ -502,6 +502,27 @@ function wireViewStatusButton(btn, entry) {
   }
 }
 
+/**
+ * UI review: the lock note explaining why Append, Edit, Forget and Status
+ * are disabled lives here, next to the control it explains, and only here —
+ * it used to also render at the end of History, which read as two different
+ * explanations for the same thing. `locked` is strictly `=== false` plus a
+ * resolved actor_name: an entry that has not answered can_edit yet, or has
+ * answered it without a name, must not print a note attributed to nobody.
+ */
+function renderViewStatusLockNote(entry) {
+  const el = document.getElementById('view-status-lock-note')
+  if (!el) return
+  const locked = entry.can_edit === false && !!entry.actor_name
+  if (!locked) {
+    el.style.display = 'none'
+    el.textContent = ''
+    return
+  }
+  el.style.display = ''
+  el.textContent = t('memories.authorLocked', { name: entry.actor_name })
+}
+
 function renderViewStatus(entry) {
   const group = document.getElementById('view-status')
   const caption = document.getElementById('view-status-caption')
@@ -515,6 +536,7 @@ function renderViewStatus(entry) {
     wireViewStatusButton(btn, entry)
   })
   caption.textContent = t(STATUS_HELP_KEYS[status] || '')
+  renderViewStatusLockNote(entry)
 }
 
 /**
@@ -578,11 +600,7 @@ function renderViewTimeline(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.timeline || []
-  // A shared memory nobody has edited or appended yet still has a reason two
-  // buttons are greyed out, and that reason lives in this section, so an
-  // empty timeline hides History only when there is also no lock note to show.
-  const locked = entry.can_edit === false && !!entry.actor_name
-  if (!items.length && !locked) {
+  if (!items.length) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
@@ -596,11 +614,6 @@ function renderViewTimeline(entry) {
       ? formatDateUI(item.created_at, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
       : ''
     lines.push(`<div class="view-timeline-item">${escHtml(item.actor_name || '')} · ${escHtml(timelineEventLabel(item.event))}${when ? ` · ${escHtml(when)}` : ''}</div>`)
-  }
-  // Two greyed-out buttons with no explanation read as a broken screen, so the
-  // reason sits at the end of the history that establishes it.
-  if (locked) {
-    lines.push(`<div class="view-timeline-note">${escHtml(t('memories.authorLocked', { name: entry.actor_name }))}</div>`)
   }
   el.style.display = ''
   el.innerHTML = `<div class="view-timeline-label">${escHtml(t('memories.timelineLabel'))}</div>${lines.join('')}`

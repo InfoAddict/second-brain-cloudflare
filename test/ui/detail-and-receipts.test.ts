@@ -484,25 +484,20 @@ describe("the history of a shared memory", () => {
     expect(el.innerHTML).toBe("");
   });
 
-  // Regression: renderViewTimeline hid the whole History section whenever
-  // entry.timeline was empty, before it ever looked at can_edit, so a shared
-  // memory nobody had edited or appended yet (an empty timeline is the common
-  // case) showed two greyed-out buttons with no explanation anywhere on the
-  // screen for why they were disabled.
-  it("still shows History for the lock note alone, on a shared memory with no timeline events yet", () => {
+  // History used to keep itself visible on an empty timeline just to carry
+  // the lock note explaining two greyed-out buttons. A UI review moved that
+  // note next to the status control instead (renderViewStatus), so it reads
+  // once, not once here and once in Status; History now hides on an empty
+  // timeline unconditionally, locked or not.
+  it("hides History on an empty timeline even when the memory is locked", () => {
     const ctx = load();
     ctx.renderViewTimeline({ workspace: "company", actor_name: "Bob", can_edit: false, timeline: [] });
     const el = ctx.__els.get("view-timeline");
-    expect(el.style.display).toBe("");
-    expect(el.innerHTML).toContain("Author: Bob");
-    expect(el.innerHTML).toContain("Shared by Bob. Only they can edit or forget it.");
+    expect(el.style.display).toBe("none");
+    expect(el.innerHTML).not.toContain("Shared by Bob");
   });
 
   it("still hides History on an empty timeline when the memory is not locked", () => {
-    // can_edit: false alone is not the signal: an entry can report that
-    // before it has resolved actor_name too (memory-crud.js sets can_edit
-    // only once /entry has actually answered), and a lock note attributed to
-    // nobody is worse than no note.
     const ctx = load();
     ctx.renderViewTimeline({ workspace: "company", can_edit: false, timeline: [] });
     const el = ctx.__els.get("view-timeline");
@@ -560,12 +555,16 @@ describe("who may change a shared memory", () => {
     }
   });
 
-  it("says why, rather than leaving two buttons mysteriously grey", () => {
+  // The lock note explaining why the buttons are grey moved to the status
+  // control (renderViewStatus, see test/ui/status-control.test.ts); History
+  // shows the events themselves and nothing about why editing is locked.
+  it("shows events on a locked shared memory without repeating the lock note", () => {
     const ctx = load();
     ctx.renderViewTimeline(shared({ can_edit: false, timeline: [{ event: "created", actor_name: "Bob", created_at: 1 }] }));
     const html = ctx.__els.get("view-timeline").innerHTML as string;
-    expect(html).toContain("Shared by Bob");
-    expect(html).toContain("view-timeline-note");
+    expect(html).toContain("Captured");
+    expect(html).not.toContain("Shared by Bob");
+    expect(html).not.toContain("view-timeline-note");
   });
 
   it("says nothing of the sort when the memory is yours to change", () => {

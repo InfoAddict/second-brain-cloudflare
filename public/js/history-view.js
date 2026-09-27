@@ -82,15 +82,20 @@ function renderHistoryChangeRow(item, index, items, entry) {
   } else if (item.can_restore) {
     actions.push(`<button type="button" class="history-action" data-action="restore-version">${escHtml(t('history.restoreVersion'))}</button>`)
   }
+  // Actions before the quote: Undo is the one control on this sheet a UI
+  // review found clipped under the footer at 390px, because the taller quote
+  // block used to sit between it and the meta line. The primary action now
+  // needs only one line of scroll to reach, and the reference text (secondary
+  // to the button that acts on it) follows.
   return (
     `<li class="history-item" data-seq="${escHtml(String(item.seq))}">` +
     `<div class="history-meta">${escHtml(meta)}</div>` +
+    (actions.length ? `<div class="history-item-actions">${actions.join('')}</div>` : '') +
     `<div class="history-before">` +
     `<div class="history-before-label">${escHtml(t('history.before'))}</div>` +
     `<p class="history-before-text" data-preview="${escAttr(item.before_preview || '')}">${escHtml(item.before_preview || '')}</p>` +
     `<button type="button" class="history-link-btn" data-action="show-before">${escHtml(t('history.showAll'))}</button>` +
     `</div>` +
-    (actions.length ? `<div class="history-item-actions">${actions.join('')}</div>` : '') +
     `</li>`
   )
 }
@@ -195,28 +200,29 @@ function wireHistoryRow(li, item, entry) {
   }
 }
 
-/** Replaces #view-timeline's contents with the rich history list (SH-1). */
+/**
+ * Replaces #view-timeline's contents with the rich history list (SH-1).
+ *
+ * The lock note explaining a disabled sheet lives next to the status
+ * control (renderViewStatus), not here: it is one fact about the whole
+ * sheet, not something History alone should carry, and duplicating it in
+ * two sections read as two different explanations for the same thing.
+ */
 function renderHistory(entry) {
   const el = document.getElementById('view-timeline')
   if (!el) return
   const items = entry.history?.items || []
   const footer = entry.history?.footer
-  // Same exception the fallback timeline makes: a shared memory nobody has
-  // edited yet has an empty history, but the lock note explaining why Append,
-  // Edit, Forget and Status are disabled still has to show somewhere.
-  const locked = entry.can_edit === false && !!entry.actor_name
-  if (!items.length && !locked) {
+  if (!items.length) {
     el.style.display = 'none'
     el.innerHTML = ''
     return
   }
   const rowsHtml = items.map((item, index) => (item.kind === 'change' ? renderHistoryChangeRow(item, index, items, entry) : renderHistoryEventRow(item))).join('')
-  const lockNote = locked ? `<div class="view-timeline-note">${escHtml(t('memories.authorLocked', { name: entry.actor_name }))}</div>` : ''
   el.style.display = ''
   el.innerHTML =
     `<div class="view-timeline-label history-label">${escHtml(t('memories.timelineLabel'))}</div>` +
-    (items.length ? `<ol class="history-list">${rowsHtml}</ol>${renderHistoryFooters(footer)}` : '') +
-    lockNote
+    `<ol class="history-list">${rowsHtml}</ol>${renderHistoryFooters(footer)}`
   // Joined by data-seq, not position: the same convention loadRelated uses
   // (row.dataset.id), so wiring does not depend on the DOM giving back rows
   // in array order.

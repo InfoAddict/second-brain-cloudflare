@@ -86,6 +86,15 @@
   margin-top: 8px;
 }
 
+/* The reason Append, Edit, Forget and Status are disabled, next to the
+   control it explains rather than at the end of History. */
+.status-lock-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+
 .history-label {
   margin-bottom: 8px;
 }
