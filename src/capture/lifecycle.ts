@@ -1,8 +1,10 @@
 import type { Env } from "../env";
-import { withStatus, type MemoryStatus } from "../memory/status";
+import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
 import { deleteVectorIds } from "../vectorize/batch";
+import { reembedOrDegrade } from "./store";
 import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
+import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
 import { TRASH_PURGE_ON_FORGET, FORGET_PURGE_ROWS } from "../constants";
 import { planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashManyStatements, type TrashReason } from "../memory/trash";
@@ -141,21 +143,37 @@ export async function applyStatus(id: string, status: MemoryStatus, env: Env, ch
   // R2-3: pinned to the caller's authorized workspace, same reasoning as deprecateEntry above
   // (including its null/undefined normalization for a legacy row's column value).
   const pinnedWorkspaceId = workspaceId ?? "";
-  const row = await env.DB.prepare(`SELECT tags FROM entries WHERE id = ? AND workspace_id = ?`).bind(id, pinnedWorkspaceId).first() as Record<string, any> | null;
+  const row = await env.DB.prepare(`SELECT content, tags, source, vector_ids FROM entries WHERE id = ? AND workspace_id = ?`).bind(id, pinnedWorkspaceId).first() as Record<string, any> | null;
   if (!row) return false;
-  const nextTags = withStatus(JSON.parse(row.tags ?? "[]") as string[], status);
+  const currentTags: string[] = JSON.parse(row.tags ?? "[]");
+  const nextTags = withStatus(currentTags, status);
   const casColumns = { workspace_id: pinnedWorkspaceId };
+
+  // BE-9 (T-0101.8.2): deprecateEntry empties vector_ids on the way INTO "deprecated" (recall
+  // must not find it), so leaving deprecated for any other status re-embeds before the status
+  // commits, or the row would sit un-deprecated with a stale empty index. reembedOrDegrade is the
+  // same fail-closed contract every other content writer uses: a transient failure throws (nothing
+  // below runs, nothing is written); Vectorize being unreachable returns null and this degrades to
+  // keyword-only, same as restoreEntry's own P8 fallback.
+  let newVectorIdsJson: string | undefined;
+  if (getStatus(currentTags) === "deprecated") {
+    const writeCtx: WriteContext = { workspaceId: pinnedWorkspaceId, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
+    const stored = await reembedOrDegrade(env, id, row.content as string, nextTags, row.source as string, config, writeCtx);
+    newVectorIdsJson = JSON.stringify(stored?.vectorIds ?? []);
+  }
+
   // A status set to what the row already has (tags may merely reorder) writes no version.
   const p = new Params();
   const tagsIdx = p.add(JSON.stringify(nextTags));
   const idIdx = p.add(id);
+  const vectorIdsSet = newVectorIdsJson !== undefined ? `, vector_ids = ${p.add(newVectorIdsJson)}` : "";
   const results = await env.DB.batch([
     snapshotStatement(env, {
       entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now: Date.now(),
       guard: p2 => buildCasGuard(p2, casColumns),
     }),
     // versioning: snapshot
-    env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()),
+    env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}${vectorIdsSet} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()),
     pruneStatement(env, id, config.VERSION_KEEP),
   ]);
   return changesOf(results[1]) > 0;
