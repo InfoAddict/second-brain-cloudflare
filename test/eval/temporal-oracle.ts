@@ -10,7 +10,9 @@ export function validAt(e: CorpusEntry, t: number): boolean {
   return from <= t && t < until;
 }
 
-const questionTime = (q: GoldenQuery) => q.asOf ?? q.expectedAsOf ?? EVAL_NOW;
+/** The instant a query is about: the pre-filtered date, then the phrase-implied one, then now. Exported for the
+ * gate-proof transforms (T-0089.2.6), which need the same instant the oracle uses. */
+export const questionTime = (q: GoldenQuery) => q.asOf ?? q.expectedAsOf ?? EVAL_NOW;
 
 export type OracleKind = "supersession" | "recency";
 
