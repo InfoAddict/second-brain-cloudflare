@@ -73,6 +73,8 @@ export interface IntegrationRecord {
   lastSyncedAt: number | null;
   lastSyncError: string | null;
   itemMap: Record<string, ItemMapEntry>;
+  /** Set while a disconnect purge is paging through the item map; syncs skip the record. Carries the running totals. */
+  disconnecting?: { purged: number; skipped: number };
   createdAt: number;
   updatedAt: number;
 }

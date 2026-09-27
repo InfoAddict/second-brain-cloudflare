@@ -11,17 +11,14 @@ import {
 import type { IntegrationRecord } from "../integrations";
 import type { Env } from "../env";
 import { json } from "../lib/http";
-import { AUDIT_BATCH_MAX, writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
-import { forgetEntry } from "../capture/lifecycle";
-import { resolveConfig } from "../config";
-import { getReadableEntry, assertCanMutateEntry } from "../lib/entry-access";
 import { makeMirrorStore, mirrorWriteContext } from "../integrations/mirror";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
 import { ensureTenantBootstrap } from "../lib/tenancy";
-import { VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import { DISCONNECT_PURGE_PAGE, VECTORIZE_GET_BY_IDS_BATCH } from "../constants";
+import { trashMirroredEntries } from "../memory/trash";
 
 // Batch size for POST /integrations/:provider/move. No external fetch on this
 // path (unlike a sync batch), so the item-count ceiling is sized for D1 cost
@@ -174,6 +171,9 @@ export async function handleIntegrationsRoutes(
       const record = await loadIntegration(env, provider.id);
       if (!record) {
         return json({ ok: false, error: `${provider.name} is not connected` }, 404);
+      }
+      if (record.disconnecting) {
+        return json({ ok: false, error: `${provider.name} is being disconnected` }, 409);
       }
       // The same context the nightly cron uses. Built from the caller before,
       // which meant one connection mirrored into different workspaces depending
@@ -397,52 +397,35 @@ export async function handleIntegrationsRoutes(
 
     // disconnect — remove the connection. Mirrored memories are kept
     // (they're the user's data) unless purge=true.
-    let body: { purge?: boolean } = {};
+    let body: { purge?: boolean; cursor?: unknown } = {};
     try { body = await request.json(); } catch { /* empty body — keep memories */ }
     const record = await loadIntegration(env, provider.id);
     if (!record) return json({ ok: false, error: `${provider.name} is not connected` }, 404);
 
+    // A purge goes through the trash in bounded, resumable pages: at most DISCONNECT_PURGE_PAGE ids a call,
+    // each answered 202 { done: false, next_cursor } until the last page, which removes the connection.
     let purged = 0;
     let skipped = 0;
-    let purgeAudit: AuditEventInput[] = [];
-    // Written per chunk of deletions, awaited, and before the connection is removed, so a
-    // throw or a dead invocation loses at most the chunk in flight, never the whole trail.
-    const flushPurgeAudit = async () => {
-      const events = purgeAudit;
-      purgeAudit = [];
-      await writeAuditEvents(env, events);
-    };
     if (body.purge) {
-      for (const mapped of Object.values(record.itemMap)) {
-        try {
-          // Same guard /forget applies, for the same reason. `forgetEntry` deletes
-          // by id with no workspace clause, and the integration record is one
-          // deployment-wide blob every member can reach, so an unguarded purge let
-          // any member delete mirrored rows out of a colleague's private workspace —
-          // rows they could not read through /entry, edit through /update, or delete
-          // through /forget. A purge now removes only what this caller could have
-          // deleted one at a time; anything else is left standing and counted.
-          const row = await getReadableEntry(env, auth, mapped.entryId);
-          if (!row || assertCanMutateEntry(auth, row)) { skipped++; continue; }
-          const r = await forgetEntry(mapped.entryId, env, { actorId: auth.userId, channel: "rest" }, { reason: "disconnect", config: await resolveConfig(env), purge: false });
-          if (r.status === "deleted") {
-            purged++;
-            purgeAudit.push({
-              entryId: mapped.entryId,
-              actorId: auth.userId,
-              event: "deleted",
-              payload: { reason: "disconnect", provider: provider.id, deletedVectors: r.vectorCount, channel: "rest" },
-            });
-          } else {
-            // Gone already (a racing sync or delete): not ours to count or audit, but the totals must add up.
-            skipped++;
-          }
-        } catch (e) {
-          console.error("Mirror purge failed (non-fatal):", e);
-        }
-        if (purgeAudit.length >= AUDIT_BATCH_MAX) await flushPurgeAudit();
+      if (body.cursor !== undefined && typeof body.cursor !== "string") {
+        return json({ ok: false, error: "cursor must be a string" }, 400);
       }
-      await flushPurgeAudit();
+      const cursor = body.cursor;
+      if (cursor === undefined) {
+        // Syncs skip a record marked disconnecting, so none re-creates memories mid-purge.
+        await updateIntegration(env, provider.id, (r) => { r.disconnecting = { purged: 0, skipped: 0 }; });
+      }
+      const keys = Object.keys(record.itemMap).sort();
+      const remainingKeys = cursor === undefined ? keys : keys.filter((k) => k > cursor);
+      const page = remainingKeys.slice(0, DISCONNECT_PURGE_PAGE);
+      const result = await trashMirroredEntries(env, auth, page.map((k) => record.itemMap[k].entryId), { provider: provider.id });
+      const tally = record.disconnecting ?? { purged: 0, skipped: 0 };
+      purged = tally.purged + result.purged;
+      skipped = tally.skipped + result.skipped;
+      if (remainingKeys.length > page.length) {
+        await updateIntegration(env, provider.id, (r) => { r.disconnecting = { purged, skipped }; });
+        return json({ ok: true, done: false, purged, skipped, next_cursor: page[page.length - 1] }, 202);
+      }
     }
     await deleteIntegration(env, provider.id);
     // A separate name rather than integration_connected with a boolean, for the
@@ -458,6 +441,7 @@ export async function handleIntegrationsRoutes(
     // asked for, plus anything a purge was not allowed to touch.
     return json({
       ok: true,
+      done: true,
       purged,
       kept: body.purge ? skipped : Object.keys(record.itemMap).length,
     });

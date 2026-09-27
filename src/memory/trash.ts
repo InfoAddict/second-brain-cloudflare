@@ -4,6 +4,12 @@ import type { ChangeContext } from "../lib/audit";
 import {
   TRASH_ROW_BUDGET_BYTES, VERSION_DELETE_CHUNK,
 } from "../constants";
+import { DISCONNECT_PURGE_CHUNK } from "../constants";
+import type { Identity } from "../lib/identity";
+import { scopeWhere } from "../lib/scope";
+import { assertCanMutateEntry } from "../lib/entry-access";
+import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
+import { deleteVectorIds } from "../vectorize/batch";
 import { edgesJsonSql, rowJsonSql } from "./entry-columns";
 import { Params } from "./params";
 
@@ -126,6 +132,81 @@ export function trashManyStatements(
 /** Rows one batch changed, on D1 (`changes`) and the test doubles (`rows_written`). */
 export function changedRows(res: { meta?: { changes?: number; rows_written?: number } } | undefined): number {
   return res?.meta?.changes ?? res?.meta?.rows_written ?? 0;
+}
+
+// ── Disconnect purge ─────────────────────────────────────────────────────────
+
+/**
+ * Trash mirrored entries for the disconnect purge, in chunks of DISCONNECT_PURGE_CHUNK: per chunk one
+ * scoped read, one batch (trash, edges, entries) and one audit batch. Rows the caller cannot see or
+ * mutate, and ids already gone, are counted skipped and never touched. Nothing here runs a purge batch.
+ */
+export async function trashMirroredEntries(
+  env: Env,
+  auth: Identity,
+  entryIds: string[],
+  opts: { provider: string; budget?: number },
+): Promise<{ purged: number; skipped: number }> {
+  let purged = 0;
+  let skipped = 0;
+  for (let i = 0; i < entryIds.length; i += DISCONNECT_PURGE_CHUNK) {
+    const chunk = [...new Set(entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK))];
+    const scope = scopeWhere(auth, undefined, "e.workspace_id");
+    const { results } = await env.DB.prepare(
+      // Bare placeholders throughout: the scope clause brings its own.
+      `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
+    ).bind(JSON.stringify(chunk), ...scope.bindings).all<TrashCandidate>();
+    // Same guard /forget applies: a purge removes only what this caller could delete one at a time.
+    const allowed = (results ?? []).filter((r) => !assertCanMutateEntry(auth, r));
+    skipped += entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK).length - allowed.length;
+    if (!allowed.length) continue;
+
+    const plan = planTrash(allowed, opts.budget);
+    const now = Date.now();
+    const change = { actorId: auth.userId, channel: "rest" as const };
+    const batch = await env.DB.batch(trashManyStatements(env, plan, { reason: "disconnect", change, now }));
+    const removed = changedRows(batch[batch.length - 1]);
+    let done = allowed;
+    if (removed !== allowed.length) {
+      // A racing deleter took some between the read and the batch: audit only what this batch removed.
+      const p = new Params();
+      const { results: landed } = await env.DB.prepare(
+        // scope-exempt: by-id: the trash rows this batch just wrote, to tell them from a racer's deletes
+        `SELECT id FROM entries_trash WHERE reason = 'disconnect' AND deleted_at = ${p.add(now)} AND deleted_by = ${p.add(auth.userId)}
+            AND id IN (SELECT value FROM json_each(${p.add(JSON.stringify(allowed.map((r) => r.id)))}))`,
+      ).bind(...p.values()).all<{ id: string }>();
+      const landedIds = new Set((landed ?? []).map((r) => r.id));
+      // A hard-deleted (tier 3) row leaves no trash row to find, so it is taken as removed.
+      const hard = new Set(plan.tier3);
+      done = allowed.filter((r) => landedIds.has(r.id) || hard.has(r.id));
+    }
+    purged += removed;
+    skipped += allowed.length - removed;
+
+    const vectorIds = done.flatMap((r) => { try { return JSON.parse(r.vector_ids ?? "[]") as string[]; } catch { return []; } });
+    try {
+      if (vectorIds.length) await deleteVectorIds(env, vectorIds);
+    } catch (e) {
+      console.error("Vectorize delete failed during disconnect purge (non-fatal):", e);
+    }
+
+    const tier3 = new Set(plan.tier3);
+    const tier2 = new Set(plan.tier2);
+    const events: AuditEventInput[] = done.map((r) => ({
+      entryId: r.id,
+      actorId: auth.userId,
+      event: "deleted",
+      payload: {
+        reason: "disconnect", provider: opts.provider,
+        deletedVectors: (() => { try { return (JSON.parse(r.vector_ids ?? "[]") as string[]).length; } catch { return 0; } })(),
+        trash: !tier3.has(r.id), channel: "rest",
+        ...(tier2.has(r.id) ? { edgesDropped: true } : {}),
+        ...(tier3.has(r.id) ? { tooLargeForTrash: true } : {}),
+      },
+    }));
+    await writeAuditEvents(env, events);
+  }
+  return { purged, skipped };
 }
 
 // ── Purge ────────────────────────────────────────────────────────────────────

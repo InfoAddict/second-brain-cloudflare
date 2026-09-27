@@ -209,7 +209,8 @@ export async function runScheduledIntegrationSync(env: Env, resolved?: Readonly<
   let dueSince = Infinity;
   for (const provider of Object.values(INTEGRATION_PROVIDERS)) {
     const record = await loadIntegration(env, provider.id);
-    if (!record) continue;
+    // A record being disconnected is mid-purge: syncing it would re-create what the purge just trashed.
+    if (!record || record.disconnecting) continue;
     // Strict <, so registry order breaks ties deterministically — which is what
     // orders the first run after two providers are connected together.
     const touchedAt = record.updatedAt ?? 0;

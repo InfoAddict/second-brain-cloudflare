@@ -140,12 +140,12 @@ describe("disconnect purge audit", () => {
     }
   });
 
-  it("the trail costs one batch whether the purge removes 3 rows or 12", async () => {
-    await connectWithItems(3);
+  it("the trail costs one batch whether the purge removes 4 rows or 12", async () => {
+    await connectWithItems(4);
     await disconnect();
     await trail();
-    // Other batches in the request (schema setup) are 2 statements; the audit is the one of 3.
-    expect(batches.filter(n => n === 3)).toHaveLength(1);
+    // The trash batch is 3 statements whatever the row count; the audit is the one batch of 4.
+    expect(batches.filter(n => n === 4)).toHaveLength(1);
 
     // fresh brain, bigger purge
     sqlite.close();
@@ -190,14 +190,11 @@ describe("disconnect purge audit", () => {
   it("a row a racing deleter already removed is counted as skipped, so purged + kept adds up", async () => {
     await connectWithItems(3);
     const db = env.DB as any;
-    const realPrepare = db.prepare.bind(db);
-    // The DELETE for page-1 finds nothing: another deleter got there between the read and the delete.
-    db.prepare = (sql: string) => {
-      const stmt = realPrepare(sql);
-      if (!sql.startsWith("DELETE FROM entries")) return stmt;
-      return { bind: (...args: unknown[]) => args[0] === "page-1"
-        ? { run: async () => ({ meta: { changes: 0 } }) }
-        : stmt.bind(...args) };
+    const realBatch = db.batch.bind(db);
+    // page-1 is deleted by another deleter between the purge's read and its batch.
+    db.batch = async (stmts: unknown[]) => {
+      if (stmts.length === 3) await sqlite.db.prepare(`DELETE FROM entries WHERE id = 'page-1'`).run();
+      return realBatch(stmts);
     };
     const body = await (await disconnect()).json() as any;
     expect(body.purged).toBe(2);
