@@ -47,7 +47,16 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
     jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
   };
   const explicit = /\b(?:on\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:,\s*(\d{4}))?\b/gi;
-  const valid = [...query.matchAll(explicit)].filter(match => {
+
+  // A month-day match isn't always a question date: it can be part of a proper noun ("the Aug 8
+  // Velmora Cafe", where a capitalized word carries straight on), or an "as of" phrase, which
+  // Track 2's as-of path doesn't exist yet to answer (docs/superpowers/specs/2026-09-26-v4/
+  // 02-time-aware-truth.md) — until then it must not become a created-on-that-day filter. Both
+  // are excluded here rather than treated as a date, leaving the query for ordinary retrieval.
+  const isAsOfPhrase = (index: number) => /\bas\s+of\s*$/i.test(query.slice(0, index));
+  const continuesAProperNoun = (index: number, length: number) => /^\s+[A-Z]/.test(query.slice(index + length));
+
+  const calendarValid = [...query.matchAll(explicit)].filter(match => {
     const year = match[3] ? Number(match[3]) : d.getFullYear();
     const month = monthNumber[match[1].toLowerCase().slice(0, 3)];
     const day = Number(match[2]);
@@ -56,8 +65,12 @@ export function parseTimePhrase(query: string, now: number): { after?: number; b
       && candidate.getMonth() === month
       && candidate.getDate() === day;
   });
-  if (valid.length === 1) {
-    const match = valid[0];
+  const genuine = calendarValid.filter(match => match.index !== undefined
+    && !isAsOfPhrase(match.index)
+    && !continuesAProperNoun(match.index, match[0].length));
+
+  if (genuine.length === 1) {
+    const match = genuine[0];
     const year = match[3] ? Number(match[3]) : d.getFullYear();
     const month = monthNumber[match[1].toLowerCase().slice(0, 3)];
     const day = Number(match[2]);

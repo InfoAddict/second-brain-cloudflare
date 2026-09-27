@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSyntheticCorpus } from "./corpus/synthetic";
-import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR } from "./corpus/synthetic-temporal";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_GAP_TAG } from "./corpus/synthetic-temporal";
 import { evaluateGate } from "./gate";
 import { scoreQuery } from "./metrics";
 import { simulate } from "./temporal-oracle";
@@ -106,6 +106,18 @@ describe("retracted-past gold no longer rewards ranking the cancelled move first
 });
 
 describe("the month-day control gap: a mechanical pass is not the same as meeting the acceptance floor", () => {
+  // T-0089.2.5 fixed the parser and removed MONTH_DAY_CONTROL_GAP_TAG from the real corpus (synthetic-temporal.ts):
+  // the controls now score correctly and need no known-gap exclusion. The tag is re-applied only to this fixture's
+  // own reports, independent of the real corpus's current tags, so this demonstration of why a delta-based rule and
+  // an absolute floor are different checks keeps working.
+  const gapTagged = corpus.queries.map(q => q.tags?.includes("subset:control-not-asof") ? { ...q, tags: [...(q.tags ?? []), MONTH_DAY_CONTROL_GAP_TAG] } : q);
+  const reportWithGapTag = (variant: string, rank: (q: GoldenQuery) => string[]): VariantReport => ({
+    schema: 1, variant, corpus: "temporal", embeddingModel: "m", d1Backend: "sqlite", isolate: "warm", topK: 10,
+    runnerVersion: RUNNER_VERSION, dataFingerprint: corpus.dataFingerprint,
+    results: gapTagged.map(q => toResult(q, rank(q))),
+  });
+  const gapBaseline = reportWithGapTag("baseline", baselineRanked);
+
   const controlRanked = (mrr1Count: number) => {
     let seen = 0;
     return (q: GoldenQuery) => {
@@ -118,15 +130,15 @@ describe("the month-day control gap: a mechanical pass is not the same as meetin
   const gapRow = (result: ReturnType<typeof evaluateGate>) => result.deltas.find(d => d.scope === "gap:temporal-month-day-controls (target)" && d.metric === "mrr10")!;
 
   it("a correct parser meets both the mechanical target-gaps rule and the documented floor", () => {
-    const candidate = report("correct-parser", controlRanked(30));
-    const result = evaluateGate(baseline, candidate, { ...FEW, targetGaps });
+    const candidate = reportWithGapTag("correct-parser", controlRanked(30));
+    const result = evaluateGate(gapBaseline, candidate, { ...FEW, targetGaps });
     expect(result.rules.find(r => r.rule === "improvement")!.detail).toMatch(/gap:temporal-month-day-controls (recall10|mrr10) \+/);
     expect(gapRow(result).candidate).toBeGreaterThanOrEqual(MONTH_DAY_CONTROL_ACCEPTANCE_MRR);
   });
 
   it("a parser that only fixes 60 percent of the controls still passes the mechanical rule: the floor is a manual check gate.ts cannot express on a delta alone", () => {
-    const candidate = report("misreading-parser", controlRanked(18)); // 18/30 = 0.60, the figure quoted in the review
-    const result = evaluateGate(baseline, candidate, { ...FEW, targetGaps });
+    const candidate = reportWithGapTag("misreading-parser", controlRanked(18)); // 18/30 = 0.60, the figure quoted in the review
+    const result = evaluateGate(gapBaseline, candidate, { ...FEW, targetGaps });
     expect(result.rules.find(r => r.rule === "improvement")!.detail).toMatch(/gap:temporal-month-day-controls (recall10|mrr10) \+/);
     expect(gapRow(result).candidate).toBeCloseTo(0.6, 5);
     expect(gapRow(result).candidate).toBeLessThan(MONTH_DAY_CONTROL_ACCEPTANCE_MRR);

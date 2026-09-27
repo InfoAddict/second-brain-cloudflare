@@ -104,4 +104,77 @@ describe("parseTimePhrase", () => {
     expect(r.before).toBeDefined();
     expect(r.before! - r.after!).toBe(6 * DAY);
   });
+
+  describe("month-day text that is not a question date", () => {
+    it("does not filter a month-day name embedded in a proper noun", () => {
+      const query = "What time does the Aug 8 Velmora Cafe open?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("does not filter a month-day name followed by more than one capitalized word", () => {
+      const query = "Where is the Jun 3 Northgate Supply Co warehouse?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("does not treat 'as of <date>' as a created-on-that-day filter", () => {
+      const query = "Where was the Velmora studio lease as of April 15, 2026?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("does not treat a bare 'as of <date>' as a filter", () => {
+      const query = "as of Aug 12, 2026";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("is case-insensitive about 'as of'", () => {
+      const query = "As Of August 17, 2024, where did the lease stand?";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("still filters a genuine date elsewhere in a query that also names a month-day place", () => {
+      const query = "The Aug 8 Velmora Cafe reopened on September 3";
+      expect(parseTimePhrase(query, NOW)).toEqual({
+        after: new Date(2026, 8, 3).getTime(),
+        before: new Date(2026, 8, 4).getTime(),
+        cleanQuery: "The Aug 8 Velmora Cafe reopened",
+      });
+    });
+
+    it("leaves a street number alone", () => {
+      const query = "notes about the 123 Main Street lease";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("leaves 'Route 66' alone", () => {
+      const query = "Route 66 roadtrip planning notes";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("leaves a version string alone", () => {
+      const query = "release notes for version 4.2.7";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("leaves 'May' used as a person's name alone", () => {
+      const query = "May Chen's quarterly report";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+  });
+
+  describe("phrasing this parser intentionally does not date-filter yet", () => {
+    // "last <weekday>" and a bare "in <month>" are not part of T-0089.2.5's bug (misreading
+    // month-day names and "as of" phrasing as filters). Adding either here would also add a new
+    // hard filter to real "during <month>" query text in the temporal-during eval category,
+    // which is report-only pending Track 2's as-of gate — out of scope for this fix. Both fall
+    // through untouched today, same as any other non-temporal query text.
+    it("passes 'last Tuesday' through unfiltered", () => {
+      const query = "last Tuesday";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+
+    it("passes a bare 'in March' through unfiltered", () => {
+      const query = "in March";
+      expect(parseTimePhrase(query, NOW)).toEqual({ cleanQuery: query });
+    });
+  });
 });
