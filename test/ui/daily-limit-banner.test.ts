@@ -139,38 +139,38 @@ describe("{time} is resets_at in the viewer's local time, time only", () => {
   });
 });
 
-describe("owners and admins see the upgrade link; members see the ask-owner line", () => {
-  it("an admin (or a solo owner, teamIsAdmin unresolved) sees 'Move to Workers Paid'", async () => {
+describe("owners and admins see the paid-plan note and its link; members see neither (copy deck 6.7)", () => {
+  it("an admin (or a solo owner, teamIsAdmin unresolved) sees the neutral note and the About Workers Paid link", async () => {
     const ctx = load({ admin: true });
     ctx.__setNextResponse(
       resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
     );
     await ctx.fetch("/append");
     const html = el(ctx, "daily-limit-banner").innerHTML;
-    expect(html).toContain("Move to Workers Paid");
-    expect(html).toContain('href="https://dash.cloudflare.com/?to=/:account/workers-and-pages"');
-    expect(html).not.toContain("Ask the owner");
+    expect(html).toContain("Cloudflare&#39;s Workers Paid plan raises this limit.");
+    expect(html).toContain("About Workers Paid");
+    expect(html).toContain('href="https://developers.cloudflare.com/workers/platform/pricing/"');
   });
 
-  it("teamIsAdmin unresolved (null) still shows the link, not the ask-owner line", async () => {
+  it("teamIsAdmin unresolved (null) still shows the note and the link", async () => {
     const ctx = load({ admin: null });
     ctx.__setNextResponse(
       resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
     );
     await ctx.fetch("/append");
-    expect(el(ctx, "daily-limit-banner").innerHTML).toContain("Move to Workers Paid");
+    expect(el(ctx, "daily-limit-banner").innerHTML).toContain("About Workers Paid");
   });
 
-  it("a member sees 'Ask the owner about moving to Workers Paid.', not the link", async () => {
+  it("a member sees only the banner line and the reset time - no note, no link, no 'ask the owner'", async () => {
     const ctx = load({ admin: false });
     ctx.__setNextResponse(
       resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
     );
     await ctx.fetch("/append");
     const html = el(ctx, "daily-limit-banner").innerHTML;
-    expect(html).toContain("Ask the owner about moving to Workers Paid.");
-    expect(html).not.toContain("Move to Workers Paid");
-    expect(html).not.toContain("dash.cloudflare.com");
+    expect(html).not.toContain("Workers Paid");
+    expect(html).not.toContain("Ask the owner");
+    expect(html).not.toContain("developers.cloudflare.com");
   });
 });
 
@@ -254,17 +254,19 @@ describe("both locales", () => {
     await ctx.fetch("/list");
     const html = el(ctx, "daily-limit-banner").innerHTML;
     expect(html).toContain("limite giornaliero gratuito del database di Cloudflare è esaurito");
-    expect(html).toContain("Passa a Workers Paid");
+    expect(html).toContain("Il piano Workers Paid di Cloudflare alza questo limite.");
+    expect(html).toContain("Informazioni su Workers Paid");
   });
 
-  it("a member sees the Italian ask-owner line", async () => {
+  it("a member sees only the Italian banner line, with no note or link", async () => {
     const ctx = load({ admin: false });
     ctx.initI18n("it");
     ctx.__setNextResponse(
       resp({ ok: false, error: "daily_limit", limit: "d1_rows_written", resets_at: "2026-09-28T00:00:00.000Z" }),
     );
     await ctx.fetch("/append");
-    expect(el(ctx, "daily-limit-banner").innerHTML).toContain("Chiedi al proprietario di passare a Workers Paid.");
+    const html = el(ctx, "daily-limit-banner").innerHTML;
+    expect(html).not.toContain("Workers Paid");
   });
 });
 
@@ -281,13 +283,13 @@ describe("CSS: #app makes room for the fixed banner instead of it overlapping th
   });
 });
 
-describe("CSS: a member's ask-owner text is plain, not styled as a link they can't click", () => {
+describe("CSS: the paid-plan note is plain text; only its link is styled as a link", () => {
   const css = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
 
-  it(".daily-limit-ask does not share the danger-red link color with .daily-limit-upgrade", () => {
-    const askRule = css.match(/\.daily-limit-ask\s*{([^}]*)}/);
-    expect(askRule?.[1]).not.toMatch(/color:\s*var\(--danger\)/);
-    const upgradeRule = css.match(/\.daily-limit-upgrade\s*{([^}]*)}/);
-    expect(upgradeRule?.[1]).toMatch(/color:\s*var\(--danger\)/);
+  it(".daily-limit-note does not share the danger-red link color with .daily-limit-link", () => {
+    const noteRule = css.match(/\.daily-limit-note\s*{([^}]*)}/);
+    expect(noteRule?.[1]).not.toMatch(/color:\s*var\(--danger\)/);
+    const linkRule = css.match(/\.daily-limit-link\s*{([^}]*)}/);
+    expect(linkRule?.[1]).toMatch(/color:\s*var\(--danger\)/);
   });
 });

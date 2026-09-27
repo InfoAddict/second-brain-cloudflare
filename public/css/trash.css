@@ -326,22 +326,22 @@
   display: none;
 }
 
-/* A member can't act on this, so it reads as plain banner text, not a link
- * they can't actually click. Only the owner/admin variant, an actual <a>,
- * gets the danger-red link treatment. */
-.daily-limit-upgrade {
+/* Owner/admin only (copy deck 6.7): a neutral fact, not a call to action, so
+ * the note itself is plain text - only the link it hands off to gets the
+ * danger-red link treatment. A member sees neither: this decision belongs to
+ * the account owner, and offering it to someone who cannot act on it read as
+ * an unclickable link before this. */
+.daily-limit-note {
+  white-space: nowrap;
+}
+
+.daily-limit-link {
   color: var(--danger);
   font-weight: 600;
   white-space: nowrap;
 }
 
-.daily-limit-ask {
-  color: inherit;
-  font-weight: inherit;
-  white-space: nowrap;
-}
-
-.daily-limit-upgrade:hover {
+.daily-limit-link:hover {
   text-decoration: underline;
 }
 

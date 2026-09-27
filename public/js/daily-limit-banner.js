@@ -20,14 +20,12 @@
 const DAILY_LIMIT_WRITE_KEYS = new Set(['rows_written', 'd1_rows_written']);
 
 /**
- * Cloudflare's own dashboard deep-link pattern for the Workers & Pages
- * section (where the free-to-paid usage model change lives), documented at
- * developers.cloudflare.com/workers/platform/pricing/ and
- * developers.cloudflare.com/style-guide/build-the-page/components/dash-button/.
- * ":account" is resolved by the dashboard to the signed-in viewer's own
- * account, so one static link works for every Second Brain owner.
+ * Cloudflare's own Workers pricing page - a neutral fact, not a call to
+ * action (copy deck 6.7, decided by the director with the UX advisor: the
+ * paid plan is mentioned, never sold). Members see neither this link nor any
+ * other action, since the decision to upgrade an account is not theirs.
  */
-const DAILY_LIMIT_UPGRADE_URL = 'https://dash.cloudflare.com/?to=/:account/workers-and-pages';
+const DAILY_LIMIT_PRICING_URL = 'https://developers.cloudflare.com/workers/platform/pricing/';
 
 let dailyLimitShown = false;
 
@@ -73,8 +71,8 @@ function updateDailyLimitOffset() {
 /**
  * The owner is always an admin (settings-panel.js and the desktop lane
  * both read teamIsAdmin the same way), so a solo brain - where team.js's
- * probe may not have resolved yet - defaults to showing the upgrade link
- * rather than wrongly telling an owner to go ask themselves.
+ * probe may not have resolved yet - defaults to the owner/admin variant
+ * rather than wrongly withholding it from the one person it is for.
  */
 function dailyLimitViewerIsAdmin() {
   return typeof teamIsAdmin === 'undefined' || teamIsAdmin !== false;
@@ -86,10 +84,13 @@ function showDailyLimitBanner(data) {
   dailyLimitShown = true;
   const time = formatDateUI(data.resets_at, { hour: 'numeric', minute: '2-digit' });
   const key = DAILY_LIMIT_WRITE_KEYS.has(data.limit) ? 'limits.bannerWrite' : 'limits.bannerRead';
-  const action = dailyLimitViewerIsAdmin()
-    ? `<a class="daily-limit-upgrade" href="${escAttr(DAILY_LIMIT_UPGRADE_URL)}" target="_blank" rel="noopener">${escHtml(t('limits.upgrade'))}</a>`
-    : `<span class="daily-limit-ask">${escHtml(t('limits.askOwner'))}</span>`;
-  el.innerHTML = `<span class="daily-limit-text">${escHtml(t(key, { time }))}</span>${action}`;
+  // A member sees only the lead line and the reset time: the paid-plan note
+  // and its link are the owner/admin's to act on, never a member's (copy
+  // deck 6.7, "no link and no ask the owner" for a member).
+  const paidNote = dailyLimitViewerIsAdmin()
+    ? `<span class="daily-limit-note">${escHtml(t('limits.paidNote'))}</span> <a class="daily-limit-link" href="${escAttr(DAILY_LIMIT_PRICING_URL)}" target="_blank" rel="noopener">${escHtml(t('limits.aboutPaid'))}</a>`
+    : '';
+  el.innerHTML = `<span class="daily-limit-text">${escHtml(t(key, { time }))}</span>${paidNote}`;
   el.hidden = false;
   updateDailyLimitOffset();
 }
