@@ -816,7 +816,7 @@ export const it: Messages = {
     stepFinish: "Completamento",
     doneTitle: "Second Brain aggiornato",
     doneLede:
-      "Tutto è all'ultima versione. Memorie, password e strumenti collegati non sono cambiati.",
+      "Tutto è all'ultima versione. I tuoi ricordi, la password e gli strumenti collegati non sono cambiati.",
     whatsNew: {
       title: "Novità della versione 4.0",
       undo: "Ogni modifica a un ricordo viene ora conservata, così puoi annullarla, da te o chiedendolo alla tua IA.",
