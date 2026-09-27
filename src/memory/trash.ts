@@ -292,10 +292,15 @@ export async function purgeTrash(
     const chunk = Math.min(VERSION_DELETE_CHUNK, Math.floor(budget / 2));
     if (chunk < 1) return { ...none, read: candidates.length, budgetCut: true };
     const tp = new Params();
+    const trimId = tp.add(first.id);
+    const trimCutoff = tp.add(cutoff);
     const res = await env.DB.prepare(
       // scope-exempt: retention purge of one trashed entry's versions, oldest first, only while the id is not live
+      // and its trash row is still genuinely expired: a restore plus a re-forget between the candidate
+      // read and this statement gives the same id a fresh, unexpired trash row (round 2 adversary).
       `DELETE FROM entry_versions WHERE id IN (
-         SELECT v.id FROM entry_versions v WHERE v.entry_id = ${tp.add(first.id)} AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = v.entry_id)
+         SELECT v.id FROM entry_versions v WHERE v.entry_id = ${trimId} AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = v.entry_id)
+           AND EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = v.entry_id AND t.deleted_at < ${trimCutoff})
           ORDER BY v.seq LIMIT ${tp.add(chunk)})`,
     ).bind(...tp.values()).run();
     const trimmed = changedRows(res);

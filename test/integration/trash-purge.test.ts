@@ -263,3 +263,44 @@ describe("adversary (MINOR): the nightly purge must not run at half the spec's p
     expect(night.purged).toBeGreaterThanOrEqual(700);
   });
 });
+
+describe("adversary round 2: the oversized-row trim branch must respect the retention cutoff", () => {
+  it("must not trim a trash row restored and re-forgotten after the candidate read", async () => {
+    t = await makeTrashEnv();
+    t.seed("big");
+    for (let s = 1; s <= 30; s++) t.version("big", s);
+    await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false });
+    await t.sqlite.db.prepare(`UPDATE entries_trash SET deleted_at = 1 WHERE id = 'big'`).run();
+    const c = await cfg();
+
+    // Between the candidate read and the trim DELETE: restore, then forget again (a fresh trash row).
+    const { getTrashedEntry, restoreEntry } = await import("../../src/memory/trash");
+    const realPrepare = t.env.DB.prepare.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).prepare = (sql: string) => {
+      const stmt = realPrepare(sql);
+      if (!injected && /DELETE FROM entry_versions WHERE id IN \(\s*SELECT v\.id/.test(sql)) {
+        const bind = stmt.bind.bind(stmt);
+        (stmt as any).bind = (...args: unknown[]) => {
+          const bound = bind(...args);
+          const run = bound.run.bind(bound);
+          (bound as any).run = async () => {
+            injected = true;
+            const trashed = await getTrashedEntry(t.env, undefined, "big");
+            expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, c)).status).toBe("restored");
+            expect((await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false })).status).toBe("deleted");
+            return run();
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    // rowTarget 20 forces the trim branch: the row costs 7 + 2 x 30 = 67.
+    const r = await purgeTrash(t.env, c, { ceiling: 10, rowTarget: 20 });
+    expect(injected).toBe(true);
+    expect(r.trimmed).toBeGreaterThanOrEqual(0);
+    // The trash row now present is minutes old: none of its history may be trimmed.
+    expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'big'`)).length).toBe(30);
+  });
+});
