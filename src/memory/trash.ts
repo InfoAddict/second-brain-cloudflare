@@ -1,9 +1,8 @@
 import type { Env } from "../env";
 import type { ChangeContext } from "../lib/audit";
 import {
-  TRASH_ROW_BUDGET_BYTES, VERSION_DELETE_CHUNK,
+  TRASH_ROW_BUDGET_BYTES, VERSION_DELETE_CHUNK, DISCONNECT_PURGE_CHUNK, MIRRORED_SOURCES,
 } from "../constants";
-import { DISCONNECT_PURGE_CHUNK } from "../constants";
 import type { Identity } from "../lib/identity";
 import { scopeWhere } from "../lib/scope";
 import { assertCanMutateEntry } from "../lib/entry-access";
@@ -15,6 +14,7 @@ import { isVectorizeUnavailable } from "../vectorize/health";
 import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
 import { Params } from "./params";
+import { chunkText } from "../text/chunk";
 
 export type TrashReason = "forget" | "mirror" | "disconnect";
 
@@ -500,47 +500,78 @@ export type DeleteForeverResult =
   | { status: "deleted"; from: "live" | "trash"; deletedVectors: number };
 
 /**
+ * The same deterministic ids store.ts's storeEntry would have produced for this content and
+ * source: a single-chunk row embeds under its own id, a multi-chunk row under `id-chunk-i`.
+ * Delete forever's trash path has no vector_ids to read (entries_trash keeps none — the trash
+ * row's own doc comment: "kept out of row_json so escaping cannot pass the 2 MB row limit" covers
+ * content and vector_ids alike), so this recomputes the chunk count from the same text and source
+ * rather than leaving a failed forget's orphaned vector in the index forever.
+ */
+function deterministicVectorIds(id: string, content: string, source: string): string[] {
+  const allChunks = chunkText(content);
+  const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
+  return chunks.map((_, i) => (chunks.length === 1 ? id : `${id}-chunk-${i}`));
+}
+
+/**
  * Delete forever (T-0089.4.7, human-only in the sense of "not offered to agents": REST uses the
  * same bearer token agents hold; there is no MCP tool or parameter). Hard deletes a live or
  * trashed row, its edges, all its versions and any trash copy, then its vectors. The `purged`
  * audit row is written inside the batch, only when there is something to delete. A racing forget
  * that lands first is still a success, reported `from: "trash"`.
+ *
+ * The vectors to delete are read from the batch's own RETURNING clauses, not from a caller-supplied
+ * row read earlier: a race (a restore bringing the id back to life between the caller's own read
+ * and this call, or a transient Vectorize failure during an earlier forget) means neither the
+ * live row's real vector_ids nor the trash row's content are safe to trust from outside this batch.
  */
-export async function deleteForever(env: Env, row: { id: string; vector_ids?: string }, change: ChangeContext): Promise<DeleteForeverResult> {
+export async function deleteForever(env: Env, id: string, change: ChangeContext): Promise<DeleteForeverResult> {
   const now = Date.now();
   const auditP = new Params();
-  const auditId = auditP.add(row.id);
+  const auditId = auditP.add(id);
+  const auditActor = auditP.add(change.actorId);
   const auditChannel = auditP.add(change.channel);
   const auditNow = auditP.add(now);
   const byId = (sql: (id: string) => string) => {
     const p = new Params();
-    const id = p.add(row.id);
-    return env.DB.prepare(sql(id)).bind(...p.values());
+    const bid = p.add(id);
+    return env.DB.prepare(sql(bid)).bind(...p.values());
   };
   const results = await env.DB.batch([
     env.DB.prepare(
       // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
-       SELECT lower(hex(randomblob(16))), ${auditId}, '', 'purged',
+       SELECT lower(hex(randomblob(16))), ${auditId}, ${auditActor}, 'purged',
               json_object('reason', 'permanent', 'channel', ${auditChannel}, 'from', CASE WHEN EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) THEN 'live' ELSE 'trash' END),
               ${auditNow}
         WHERE EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) OR EXISTS (SELECT 1 FROM entries_trash WHERE id = ${auditId})`,
     ).bind(...auditP.values()),
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM edges WHERE source_id = ${id} OR target_id = ${id}`),
+    byId((bid) => `DELETE FROM edges WHERE source_id = ${bid} OR target_id = ${bid}`),
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM entry_versions WHERE entry_id = ${id}`),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM entries_trash WHERE id = ${id}`),
+    byId((bid) => `DELETE FROM entry_versions WHERE entry_id = ${bid}`),
+    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch.
+    // RETURNING the content and source a failed forget's vectors were embedded from (best-effort
+    // cleanup, since entries_trash keeps no vector_ids at all).
+    byId((bid) => `DELETE FROM entries_trash WHERE id = ${bid} RETURNING content, json_extract(row_json, '$.source') AS source`),
+    // RETURNING vector_ids: this statement's own value at the moment it runs, never a caller's stale
+    // read — a restore racing this call embeds under the same deterministic ids (ADV-trash-4).
     // versioning: hard-delete: permanent (T-0089.4.7)
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM entries WHERE id = ${id}`),
+    byId((bid) => `DELETE FROM entries WHERE id = ${bid} RETURNING vector_ids`),
   ]);
+  const trashRow = results[3].results?.[0] as { content?: string; source?: string } | undefined;
+  const entryRow = results[4].results?.[0] as { vector_ids?: string } | undefined;
   const trashChanges = changedRows(results[3]);
   const entryChanges = changedRows(results[4]);
   if (entryChanges === 0 && trashChanges === 0) return { status: "not_found" };
 
-  const vectorIds: string[] = (() => { try { return JSON.parse(row.vector_ids ?? "[]"); } catch { return []; } })();
+  let vectorIds: string[] = [];
+  if (entryRow) {
+    try { vectorIds = JSON.parse(entryRow.vector_ids ?? "[]"); } catch { vectorIds = []; }
+  } else if (trashRow?.content !== undefined) {
+    vectorIds = deterministicVectorIds(id, trashRow.content, trashRow.source ?? "api");
+  }
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);
   } catch (e) {
