@@ -58,7 +58,7 @@ describe("Cursor hooks cost one recall and one capture per conversation", () => 
     const f = countFetches();
     try {
       for (let i = 0; i < 25; i++) {
-        writeFileSync(transcript, Array.from({ length: i + 3 }, (_, n) => JSON.stringify({ role: "user", message: { content: [{ type: "text", text: `turn ${n} ${"x".repeat(90)}` }] } })).join("\n"));
+        writeFileSync(transcript, Array.from({ length: i + 3 }, (_, n) => JSON.stringify({ role: "user", message: { content: [{ type: "text", text: `<user_query>turn ${n} ${"x".repeat(90)}</user_query>` }] } })).join("\n"));
         await end.runSessionEnd(
           { conversation_id: "c0ffee-conv-1", hook_event_name: "stop", workspace_roots: [dir], transcript_path: transcript },
           { event: "stop", transcriptRoot: root, env, cacheDir: dir },

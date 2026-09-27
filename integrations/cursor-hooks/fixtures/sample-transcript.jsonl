@@ -1,8 +1,0 @@
-{"type":"session-info","sessionId":"cur-1","startedAt":"2026-09-20T10:00:00.000Z"}
-{"role":"user","timestamp":"2026-09-20T10:00:01.000Z","content":"Let's wire the nightly digest onto its own Cron Trigger so it stops getting starved by the sync job."}
-{"role":"assistant","timestamp":"2026-09-20T10:00:02.000Z","content":[{"type":"text","text":"Sure, I'll check the wrangler.toml crons section first."}]}
-{"role":"tool","name":"read_file","path":"wrangler.toml"}
-{"role":"user","timestamp":"2026-09-20T10:00:03.000Z","content":[{"type":"text","text":"Also cap it at 25 entries per run and log a line whenever it stops early so we can tell from the dashboard."}]}
-{"role":"assistant","timestamp":"2026-09-20T10:00:04.000Z","content":{"text":"Done. Added a second cron trigger and a budget check capped at 25, with a console log on early stop."}}
-{"role":"user","timestamp":"2026-09-20T10:00:05.000Z","content":"Ship it once tests pass, and post the PR link her
-{"role":"user","timestamp":"2026-09-20T10:00:06.000Z","content":"Actually hold off on shipping until the budget check has a test covering the early-stop log line too. Here is the staging token in case you need it: sk-abcdef1234567890ABCDEF for testing."}

@@ -23,7 +23,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const {
   readStdinJson, performCapture, gitRemoteUrl, parseProjectLabel, projectSlug, resolveWorkspace, fail,
-  resolveTranscriptPath, writeSessionCache, readSessionCache,
+  resolveTranscriptPath, writeSessionCache, readSessionCache, stripInjectedContext,
 } = require('../agent-hooks-core/core');
 const { normalizeStdin } = require('./session-start');
 
@@ -51,7 +51,8 @@ function textFromContent(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .map((b) => (typeof b === 'string' ? b : b && typeof b.text === 'string' ? b.text : ''))
+      .map((b) => (typeof b === 'string' ? b
+        : b && typeof b.text === 'string' && (b.type === undefined || b.type === 'text') ? b.text : ''))
       .filter(Boolean)
       .join('\n');
   }
@@ -60,20 +61,24 @@ function textFromContent(content) {
 }
 
 /**
- * What the person typed. Real Cursor transcripts wrap it as
- * `<timestamp>...</timestamp><user_query>...</user_query>`; the query is
- * kept and the wrapper dropped. Text without that wrapper is kept as-is.
+ * What the person typed. Cursor wraps it as `<user_query>...</user_query>`
+ * next to injected context (`<timestamp>`, rules, attached files). Only the
+ * wrapped query is kept; a user record without one cannot be told apart from
+ * injected context, so it yields '' and is dropped.
  */
 function userQueryText(text) {
-  const parts = [...text.matchAll(/<user_query>([\s\S]*?)<\/user_query>/g)].map((m) => m[1].trim()).filter(Boolean);
-  return parts.length ? parts.join('\n') : text.replace(/<timestamp>[\s\S]*?<\/timestamp>/g, '').trim();
+  return [...String(text).matchAll(/<user_query>([\s\S]*?)<\/user_query>/g)]
+    .map((m) => stripInjectedContext(m[1]))
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
  * One JSONL line to a turn, or null when it is not a recognisable human turn.
  * The real record shape is `{ role, message: { content: [{ type: 'text',
- * text }, ...] } }`; flatter shapes are still accepted. Never throws: a
- * malformed or truncated line is skipped.
+ * text }, ...] } }`; flatter shapes are still accepted, but a user turn
+ * counts only through its `<user_query>`. Never throws: a malformed or
+ * truncated line is skipped.
  */
 function turnFromLine(line) {
   if (!line || !line.trim()) return null;

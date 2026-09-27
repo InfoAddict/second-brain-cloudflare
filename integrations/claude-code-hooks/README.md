@@ -91,12 +91,20 @@ Capture:
 Before it is sent, the formatted body — header included — is scanned for
 credentials, and each one is replaced with `[redacted]`: your own configured
 token wherever it appears, `Bearer <token>` values, provider key shapes (`sk-`,
-`ghp_`/`gho_`, `github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`),
-whole PEM private-key blocks, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`
-style assignments. Only those shapes: a UUID, a commit SHA, a file path and
-ordinary prose are left exactly as they were, because a memory redacted into
-uselessness is worse than no memory. Tool output — where secrets usually live —
-never reaches the body in the first place.
+`ghp_`/`gho_`, `github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`,
+Stripe, npm), JWTs, whole PEM private-key blocks, the password in
+`scheme://user:password@host`, any other 32+ character token mixing digits
+with upper and lower case, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/
+`*_KEY=`/`CREDENTIALS=` style assignments. Only those shapes: a UUID, a commit
+SHA, a file path and ordinary prose are left exactly as they were, because a
+memory redacted into uselessness is worse than no memory. Tool output (where
+secrets usually live) never reaches the body in the first place.
+
+Context Claude Code injects into user messages never reaches the body either:
+`<system-reminder>` blocks (which carry your CLAUDE.md files), slash-command,
+local-command, bash and IDE wrappers, and meta records are dropped, block by
+block, so the text you typed next to them is kept. A user block that opens
+with any tag is dropped whole, the safe side when it cannot be classified.
 
 The transcript is read backwards from the end until three human turns are in
 hand (1 MB ceiling), and only human-readable turns survive: `tool_use`,

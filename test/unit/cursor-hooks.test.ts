@@ -11,7 +11,6 @@ afterEach(cleanTemp);
 const start = require("../../integrations/cursor-hooks/session-start.js");
 const end = require("../../integrations/cursor-hooks/session-end.js");
 
-const FIXTURE = join(__dirname, "../../integrations/cursor-hooks/fixtures/sample-transcript.jsonl");
 const REAL_SHAPE = join(__dirname, "../../integrations/cursor-hooks/fixtures/real-shape-transcript.jsonl");
 const tmp = () => mkdtempSync(join(tmpdir(), "sb-cursor-hooks-"));
 
@@ -83,6 +82,9 @@ describe("session-start.emitAdditionalContext (output-shape builder)", () => {
 });
 
 describe("session-end transcript parser", () => {
+  const q = (text: string) => `<timestamp>Saturday, Sep 20, 2026</timestamp>\n<user_query>\n${text}\n</user_query>`;
+  const user = (text: string) => JSON.stringify({ role: "user", message: { content: [{ type: "text", text: q(text) }] } });
+
   it("reads the real Cursor record shape (message.content blocks) and unwraps <user_query>", () => {
     const turns = end.readUserTurns(REAL_SHAPE);
     expect(turns).toHaveLength(3);
@@ -92,27 +94,19 @@ describe("session-end transcript parser", () => {
     expect(turns.join("\n")).not.toMatch(/<user_query>|<timestamp>/);
   });
 
-  it("userQueryText keeps only the typed query, or strips the timestamp when there is no wrapper", () => {
-    expect(end.userQueryText("<timestamp>Sun</timestamp>\n<user_query>\nhello there\n</user_query>")).toBe("hello there");
-    expect(end.userQueryText("<timestamp>Sun</timestamp> plain text")).toBe("plain text");
-  });
-
-  it("extracts user turns from the fixture, oldest first, skipping the malformed line", () => {
-    const turns = end.readUserTurns(FIXTURE);
-    expect(turns).toHaveLength(3);
-    expect(turns[0]).toContain("nightly digest");
-    expect(turns[1]).toContain("25 entries per run");
-    expect(turns[2]).toContain("early-stop log line");
-    expect(turns.every((t: string) => typeof t === "string" && t.length > 0)).toBe(true);
+  it("userQueryText keeps only the typed query; without the wrapper there is nothing to keep", () => {
+    expect(end.userQueryText(q("hello there"))).toBe("hello there");
+    expect(end.userQueryText("<timestamp>Sun</timestamp> plain text")).toBe("");
+    expect(end.userQueryText("plain text with no wrapper at all")).toBe("");
   });
 
   it("never throws on a malformed or truncated line, and keeps the turns around it", () => {
     const dir = tmp();
     const file = join(dir, "bad.jsonl");
     writeFileSync(file, [
-      '{"role":"user","content":"first turn is fine and long enough to count towards the gate for capture."}',
-      '{"role":"user","content":"second turn got cut off mid-write and is not valid JSON at all',
-      '{"role":"user","content":"third turn recovers after the bad line above and is captured normally."}',
+      user("first turn is fine and long enough to count towards the gate for capture."),
+      '{"role":"user","message":{"content":[{"type":"text","text":"second turn got cut off mid-write',
+      user("third turn recovers after the bad line above and is captured normally."),
     ].join("\n"));
     expect(() => end.readUserTurns(file)).not.toThrow();
     expect(end.readUserTurns(file)).toEqual([
@@ -121,26 +115,27 @@ describe("session-end transcript parser", () => {
     ]);
   });
 
-  it("skips non-user roles, empty content and lines with no role at all", () => {
+  it("skips non-user roles, empty content, unwrapped user text and lines with no role at all", () => {
     const dir = tmp();
     const file = join(dir, "roles.jsonl");
     writeFileSync(file, [
-      '{"role":"assistant","content":"assistant text, not captured"}',
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"assistant text, not a user turn"}]}}',
       '{"role":"tool","content":"tool output, not captured"}',
-      '{"role":"user","content":""}',
+      '{"role":"user","message":{"content":[{"type":"text","text":""}]}}',
+      '{"role":"user","content":"unwrapped text cannot be told apart from injected context, so it is dropped."}',
       '{"type":"session-info","sessionId":"x"}',
-      '{"role":"user","content":"the only real user turn in this fixture, long enough to matter."}',
+      user("the only real user turn in this fixture, long enough to matter."),
     ].join("\n"));
     expect(end.readUserTurns(file)).toEqual(["the only real user turn in this fixture, long enough to matter."]);
   });
 
-  it("handles content as a plain string, an array of text blocks, and a {text} object", () => {
+  it("accepts <user_query> in a plain string, an array of text blocks, and a {text} object", () => {
     const dir = tmp();
     const file = join(dir, "shapes.jsonl");
     writeFileSync(file, [
-      '{"role":"user","content":"plain string content, long enough to count for the gate too."}',
-      '{"role":"user","content":[{"type":"text","text":"array-shaped content, long enough to count for the gate."}]}',
-      '{"role":"user","content":{"text":"object-shaped content, long enough to count for the gate too."}}',
+      JSON.stringify({ role: "user", content: q("plain string content, long enough to count for the gate too.") }),
+      JSON.stringify({ role: "user", content: [{ type: "text", text: q("array-shaped content, long enough to count for the gate.") }] }),
+      JSON.stringify({ role: "user", content: { text: q("object-shaped content, long enough to count for the gate too.") } }),
     ].join("\n"));
     expect(end.readUserTurns(file)).toEqual([
       "plain string content, long enough to count for the gate too.",

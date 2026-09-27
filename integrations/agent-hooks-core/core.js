@@ -559,10 +559,16 @@ const SECRET_PATTERNS = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bAIza[0-9A-Za-z_-]{35,}/g,
+  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g,
+  /\bnpm_[A-Za-z0-9]{30,}/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /\b(?=[A-Za-z0-9_-]*[0-9])(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])[A-Za-z0-9_-]{32,}/g,
 ];
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g;
+// `scheme://user:password@host` keeps the user and host.
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]{3,}@/gi;
 const ASSIGNMENT_PATTERN =
-  /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd))(\s*[:=]\s*)(["'`]?)([^\s"'`,;]{8,})\3/gi;
+  /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd|passphrase|credentials?|private[_-]?key|[_-]key))(\s*[:=]\s*)(["'`]?)([^\s"'`,;]{8,})\3/gi;
 const CODE_REFERENCE = /^(?:process\.env\b|os\.environ\b|import\.meta\.env\b|env\.|Deno\.env\b|\$|<|\{)/;
 
 function redactSecrets(text, token) {
@@ -572,8 +578,57 @@ function redactSecrets(text, token) {
   }
   for (const re of SECRET_PATTERNS) out = out.replace(re, REDACTED_TOKEN);
   out = out.replace(BEARER_PATTERN, `Bearer ${REDACTED_TOKEN}`);
+  out = out.replace(URL_CREDENTIALS, `$1${REDACTED_TOKEN}@`);
   return out.replace(ASSIGNMENT_PATTERN, (m, name, sep, quote, value) =>
     CODE_REFERENCE.test(value) ? m : `${name}${sep}${quote}${REDACTED_TOKEN}${quote}`);
+}
+
+/**
+ * Wrappers an AI client (or a tool driving it) puts into user-role records.
+ * They carry instruction files, environment details and tool output, never
+ * what the person typed. Observed in Codex rollouts, Cursor and Claude Code
+ * transcripts; matched case-insensitively, with or without attributes.
+ */
+const INJECTED_TAGS = [
+  // Codex
+  'environment_context', 'user_instructions', 'instructions', 'recommended_plugins',
+  'turn_aborted', 'skills_instructions', 'permissions instructions', 'collaboration_mode',
+  'user_shell_command', 'subagent_notification',
+  // Cursor
+  'timestamp', 'user_info', 'rules', 'user_rules', 'cursor_rules', 'agent_requestable_workspace_rules',
+  'additional_data', 'attached_files', 'open_and_recently_viewed_files', 'project_layout',
+  'git_status', 'manually_attached_skills', 'system_reminder',
+  // Claude Code
+  'system-reminder', 'command-name', 'command-message', 'command-args', 'command-contents',
+  'local-command-stdout', 'local-command-stderr', 'local-command-caveat',
+  'bash-input', 'bash-stdout', 'bash-stderr', 'user-prompt-submit-hook',
+  'task-notification', 'task-id', 'ide_selection', 'ide_opened_file', 'ide_diagnostics',
+  // Other tools that drive these clients
+  'paseo-system',
+];
+const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const INJECTED_BLOCK = new RegExp(
+  `<(${INJECTED_TAGS.map(escapeRe).join('|')})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
+const INJECTED_OPEN = new RegExp(`<\\/?(?:${INJECTED_TAGS.map(escapeRe).join('|')})(?:\\s[^>]*)?>`, 'i');
+// A text that opens with any tag, e.g. `<paseo-system>` or one not listed yet.
+const LEADING_TAG = /^<\/?[A-Za-z][\w:.-]*(?:\s[^>]*)?>/;
+// "# AGENTS.md instructions for /path" (Codex) and similar instruction-file headers.
+const INSTRUCTION_FILE_HEADER = /^\s*#+\s*[\w.-]*\.md\s+instructions\b.*$/gim;
+const INSTRUCTION_FILE_LEAD = /^\s*(?:#+\s*[\w.-]*\.md\s+instructions\b|Contents of \S+\.md\b)/i;
+
+/**
+ * What the person typed, from one user-role text, or '' when it cannot be told
+ * apart from injected context (the safe side: drop rather than leak). Known
+ * wrapper blocks are removed wherever they appear; a text that opens with a
+ * tag or an instruction-file header, or still holds an unclosed wrapper
+ * after that, is dropped whole.
+ */
+function stripInjectedContext(text) {
+  let t = String(text ?? '').replace(INJECTED_BLOCK, '');
+  t = t.replace(INJECTED_BLOCK, '').trim(); // nested wrappers
+  if (!t) return '';
+  if (LEADING_TAG.test(t) || INSTRUCTION_FILE_LEAD.test(t) || INJECTED_OPEN.test(t)) return '';
+  return t.replace(INSTRUCTION_FILE_HEADER, '').trim();
 }
 
 /** True marker files: presence means "yes", independent of the text cache used for recall blocks. */
@@ -957,7 +1012,7 @@ module.exports = {
   buildRecallPlan, buildRecallUrl, buildBriefUrl, fetchBrief, startBrief,
   cleanSnippet, compactBriefLines, frameOutput,
   performRecall,
-  redactSecrets, buildSessionCaptureBody, shouldCaptureSession, performCapture,
+  redactSecrets, stripInjectedContext, INJECTED_TAGS, buildSessionCaptureBody, shouldCaptureSession, performCapture,
   recordLastCaptureTime, lastCaptureTime, captureEnabled,
   contentDigest, claimCapture,
   readCaptureSpool, spoolCapture, spoolDir, flushCaptureSpool, logSpooledCapture, logLostCapture, resolveTranscriptPath,

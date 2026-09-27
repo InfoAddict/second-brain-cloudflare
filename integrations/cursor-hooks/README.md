@@ -146,13 +146,21 @@ Capture: Cursor sessions: saves the last few turns of each session to your brain
 }
 ```
 
-Only the last three user turns are kept, never a full transcript. Before
-sending, the body is scanned for credentials and each one is replaced with
-`[redacted]`: your own configured token wherever it appears, `Bearer <token>`
-values, provider key shapes (`sk-`, `ghp_`/`gho_`, `github_pat_`,
-`xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`), whole PEM private-key blocks,
-and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=` style assignments. The body is
-capped at 2000 characters.
+Only the last three user turns are kept, never a full transcript. A user
+turn is only the text inside Cursor's `<user_query>` wrapper: the rules, user
+info, attached files and timestamps Cursor adds around it are dropped, and a
+user record without that wrapper is dropped whole, since it cannot be told
+apart from injected context.
+
+Before sending, the body is scanned for credentials and each one is replaced
+with `[redacted]`: your own configured token wherever it appears,
+`Bearer <token>` values, provider key shapes (`sk-`, `ghp_`/`gho_`,
+`github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`, Stripe, npm),
+JWTs, whole PEM private-key blocks, the password in `scheme://user:password@host`,
+any other 32+ character token mixing digits with upper and lower case, and
+`TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/`*_KEY=`/`CREDENTIALS=` style
+assignments. A UUID, a commit SHA and a file path are left as they were. The
+body is capped at 2000 characters.
 
 Set `SECOND_BRAIN_WORKSPACE=company` to write to the shared layer instead. Set
 `SECOND_BRAIN_DRY_RUN=1` to print the capture body instead of sending it.

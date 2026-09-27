@@ -5,6 +5,7 @@ const {
   loadCredentials, resolveWorkspace, readStdinJson, parseProjectLabel, projectSlug, gitRemoteUrl,
   fetchWithTimeout, fail, hintFor, workerMajorVersion, noticeOncePerDay,
 } = require('./common');
+const { stripInjectedContext } = require('../agent-hooks-core/core.js');
 
 const CAPTURE_TIMEOUT_MS = 20000;
 const BLOCK_BYTES = 64 * 1024;
@@ -34,12 +35,20 @@ const SECRET_PATTERNS = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,                // Slack
   /\bAKIA[0-9A-Z]{16}\b/g,                          // AWS access key id
   /\bAIza[0-9A-Za-z_-]{35,}/g,                      // Google API key
+  /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g,        // Stripe
+  /\bnpm_[A-Za-z0-9]{30,}/g,                        // npm
+  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWT
+  // Any other long token: 32+ chars mixing digits, upper and lower case.
+  // Git SHAs and UUIDs are single-case, so they are left alone.
+  /\b(?=[A-Za-z0-9_-]*[0-9])(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])[A-Za-z0-9_-]{32,}/g,
 ];
 
 // `Bearer <token>` and `NAME=<value>` keep their prefix so the sentence still reads.
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g;
+// `scheme://user:password@host` keeps the user and host.
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]{3,}@/gi;
 const ASSIGNMENT_PATTERN =
-  /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd))(\s*[:=]\s*)(["'`]?)([^\s"'`,;]{8,})\3/gi;
+  /\b([A-Za-z0-9_.-]*(?:auth[_-]?token|access[_-]?token|api[_-]?key|apikey|token|secret|password|passwd|passphrase|credentials?|private[_-]?key|[_-]key))(\s*[:=]\s*)(["'`]?)([^\s"'`,;]{8,})\3/gi;
 
 // A name= whose value NAMES a secret rather than being one. Sessions are mostly
 // talk about code, so `apiKey = process.env.OPENAI_API_KEY` is the common case
@@ -58,6 +67,7 @@ function redactSecrets(text, token) {
   }
   for (const re of SECRET_PATTERNS) out = out.replace(re, REDACTED);
   out = out.replace(BEARER_PATTERN, `Bearer ${REDACTED}`);
+  out = out.replace(URL_CREDENTIALS, `$1${REDACTED}@`);
   return out.replace(ASSIGNMENT_PATTERN, (m, name, sep, quote, value) =>
     CODE_REFERENCE.test(value) ? m : `${name}${sep}${quote}${REDACTED}${quote}`);
 }
@@ -69,12 +79,17 @@ const NOISE_PREFIXES = [
   '<ide_', '<bash-', '[Request interrupted',
 ];
 
-/** A message's human-readable text: strings as-is, arrays → text blocks only. */
-function textOf(message) {
+/**
+ * A message's human-readable text: strings as-is, arrays → text blocks only.
+ * For a user message each block is cleaned on its own: the harness adds
+ * `<system-reminder>`, command and IDE wrappers as blocks next to what was typed.
+ */
+function textOf(message, role) {
   const c = message?.content;
-  if (typeof c === 'string') return c;
+  const clean = role === 'user' ? stripInjectedContext : (x) => x;
+  if (typeof c === 'string') return clean(c);
   if (Array.isArray(c)) {
-    return c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n');
+    return c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => clean(b.text)).filter(Boolean).join('\n');
   }
   return '';
 }
@@ -85,7 +100,7 @@ function turnFromLine(line) {
   try { obj = JSON.parse(line); } catch { return null; }
   if (!obj || (obj.type !== 'user' && obj.type !== 'assistant')) return null;
   if (obj.isSidechain === true || obj.isMeta === true || obj.isCompactSummary === true) return null;
-  const text = textOf(obj.message).trim();
+  const text = textOf(obj.message, obj.type).trim();
   if (!text) return null;
   if (NOISE_PREFIXES.some((p) => text.startsWith(p))) return null;
   return {

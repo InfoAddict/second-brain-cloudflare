@@ -141,7 +141,7 @@ describe('spool, session identity, and transcript validation', () => {
     const transcriptDir = join(hooksDir, 'projects', 'active-project', 'agent-transcripts', 'conversation-123');
     mkdirSync(transcriptDir, { recursive: true });
     const transcriptPath = join(transcriptDir, 'conversation-123.jsonl');
-    writeFileSync(transcriptPath, [1, 2, 3].map((n) => JSON.stringify({ role: 'user', content: `Project request ${n} ${'x'.repeat(90)}` })).join('\n'));
+    writeFileSync(transcriptPath, [1, 2, 3].map((n) => JSON.stringify({ role: 'user', content: `<user_query>Project request ${n} ${'x'.repeat(90)}</user_query>` })).join('\n'));
     const script = join(root, 'integrations/cursor-hooks/session-end.js');
     const preload = `global.fetch = async (url) => new Response(JSON.stringify(String(url).endsWith('/health') ? {version:'4.0.0'} : {ok:true}), {status:200}); require(${JSON.stringify(script)}).main();`;
     const stdout = execFileSync(process.execPath, ['-e', preload], {

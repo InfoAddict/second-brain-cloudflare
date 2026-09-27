@@ -159,13 +159,25 @@ capped at 2000 characters** - this is not a transcript dump:
 }
 ```
 
+Codex writes injected context into `role: user` records, one content block
+each: your AGENTS.md files (`# AGENTS.md instructions for …` with an
+`<INSTRUCTIONS>` body), `<environment_context>` (working directory, shell,
+timezone), `<recommended_plugins>`, `<turn_aborted>` and wrappers from tools
+that drive Codex. None of it is captured. Each block is judged on its own: a
+known wrapper is removed wherever it appears, and a block that opens with any
+tag or an instruction-file header is dropped whole, the safe side when it
+cannot be classified. `developer` and `system` records and tool output are
+never read. A prompt Codex logs twice counts once.
+
 Before it is sent, the content is scanned for credentials and each one is
 replaced with `[redacted]`: your own configured token wherever it appears,
 `Bearer <token>` values, provider key shapes (`sk-`, `ghp_`/`gho_`,
-`github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`), whole PEM
-private-key blocks, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=` style
-assignments. A UUID, a commit SHA, a file path and ordinary prose are left
-exactly as they were.
+`github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`, Stripe, npm),
+JWTs, whole PEM private-key blocks, the password in
+`scheme://user:password@host`, any other 32+ character token mixing digits
+with upper and lower case, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/
+`*_KEY=`/`CREDENTIALS=` style assignments. A UUID, a commit SHA, a file path
+and ordinary prose are left exactly as they were.
 
 A session is captured only when at least one user turn is 40+ characters and
 the conversation totals 200+ characters - a two-word prompt is not a session

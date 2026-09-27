@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   performCapture, parseProjectLabel, projectSlug, gitRemoteUrl, resolveWorkspace, fail,
-  resolveTranscriptPath,
+  resolveTranscriptPath, stripInjectedContext,
 } = require('../agent-hooks-core/core');
 
 const NAMESPACE = 'codex';
@@ -74,7 +74,12 @@ function turnFromRecord(obj) {
     return null;
   }
   if (role !== 'user' && role !== 'assistant') return null;
-  const text = extractText(content).trim();
+  // Codex puts AGENTS.md, <environment_context> and similar into role:user
+  // records, usually one content block each, so each block is judged alone.
+  const text = role === 'user'
+    ? (Array.isArray(content) ? content.map((c) => stripInjectedContext(extractText([c]))) : [stripInjectedContext(extractText(content))])
+      .filter(Boolean).join('\n').trim()
+    : extractText(content).trim();
   if (!text) return null;
   return { role, text };
 }
@@ -93,7 +98,11 @@ function parseTranscript(raw) {
     let obj;
     try { obj = JSON.parse(trimmed); } catch { continue; }
     const t = turnFromRecord(obj);
-    if (t) turns.push(t);
+    if (!t) continue;
+    // Older Codex writes each prompt twice (response_item and event_msg).
+    const prev = turns[turns.length - 1];
+    if (prev && prev.role === t.role && prev.text === t.text) continue;
+    turns.push(t);
   }
   return turns;
 }
