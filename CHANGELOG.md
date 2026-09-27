@@ -21,15 +21,11 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Agents**
 
-- The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
-
-- Agents can inspect who changed a memory, through which channel, and its supersedes links.
-
-- Agents can read the latest existing project or tag digest without starting a new summary or model call.
-
-- Agents can resolve a specific task, due date, stale fact, or pending insight when the user says what to do.
-
 - Agents can ask for a short brief of due items, open commitments, stale memories, and pending insights, optionally scoped to a project. The dashboard brief also accepts a project filter.
+- Agents can resolve a specific task, due date, stale fact, or pending insight when the user says what to do.
+- Agents can read the latest existing project or tag digest without starting a new summary or model call.
+- Agents can inspect who changed a memory, through which channel, and its supersedes links.
+- The session-start brief reads only the rows of its own queues, so it stays cheap on a large brain, and it lists only items you can act on. History for a shared memory starts at the moment it was shared unless you wrote it.
 
 ## [3.7.0] — Search that puts the right answer first
 
