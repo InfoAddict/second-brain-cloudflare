@@ -425,7 +425,7 @@ export class D1Mock {
             const { id, content, vector_ids, ...rest } = e;
             const edges = withEdges ? db.edges.filter((g: any) => g.source_id === id || g.target_id === id) : [];
             db.trash = db.trash.filter((t: any) => t.id !== id);
-            db.trash.push({ id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", content, row_json: JSON.stringify(rest), edges_json: JSON.stringify(edges), deleted_at: now, deleted_by: by, channel, reason });
+            db.trash.push({ id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", content, row_json: JSON.stringify(rest), edges_json: JSON.stringify(edges), vector_ids: vector_ids ?? "[]", deleted_at: now, deleted_by: by, channel, reason });
           }
           return { meta: { changes: rows.length } };
         }
@@ -812,6 +812,7 @@ export class D1Mock {
           const results = db.entries.filter((e: any) => ids.includes(e.id)).map((e: any) => ({
             id: e.id, workspace_id: e.workspace_id ?? "", actor_id: e.actor_id ?? "", vector_ids: e.vector_ids ?? "[]",
             content_bytes: Buffer.byteLength(e.content ?? ""), row_json_bytes: 300, edges_json_bytes: 2,
+            vector_ids_bytes: Buffer.byteLength(e.vector_ids ?? "[]"),
           }));
           return { results };
         }

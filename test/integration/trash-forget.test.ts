@@ -23,7 +23,7 @@ async function forget(id: string, budget?: number) {
 
 describe("chooseTrashTier", () => {
   it("picks full, no-edges or hard delete from the SELECT's byte sizes", () => {
-    const sizes = (content_bytes: number, row_json_bytes: number, edges_json_bytes: number) => ({ content_bytes, row_json_bytes, edges_json_bytes });
+    const sizes = (content_bytes: number, row_json_bytes: number, edges_json_bytes: number) => ({ content_bytes, row_json_bytes, edges_json_bytes, vector_ids_bytes: 2 });
     expect(chooseTrashTier(sizes(100, 200, 300), 10_000)).toBe(1);
     // 100 + 200 + 512 + 9,500 > 10,000 but without edges it fits.
     expect(chooseTrashTier(sizes(100, 200, 9_500), 10_000)).toBe(2);
@@ -32,10 +32,14 @@ describe("chooseTrashTier", () => {
     expect(chooseTrashTier(sizes(1_000_000, 300, 700_000))).toBe(1);
     expect(chooseTrashTier(sizes(1_000_000, 300, 900_000))).toBe(2);
     expect(TRASH_ROW_BUDGET_BYTES).toBeLessThan(2_000_000);
+    // vector_ids is now a stored trash column too (round 2 adversary): a heavily-chunked row's
+    // ids count toward the row, not just the fixed 512-byte slack.
+    expect(chooseTrashTier({ content_bytes: 100, row_json_bytes: 200, edges_json_bytes: 300, vector_ids_bytes: 9_000 }, 10_000)).toBe(2);
+    expect(chooseTrashTier({ content_bytes: 100, row_json_bytes: 200, edges_json_bytes: 0, vector_ids_bytes: 20_000 }, 10_000)).toBe(3);
   });
 
   it("plans a mixed set by tier", () => {
-    const row = (id: string, c: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: 100, edges_json_bytes: e });
+    const row = (id: string, c: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: 100, edges_json_bytes: e, vector_ids_bytes: 2 });
     const plan = planTrash([row("a", 10, 10), row("b", 10, 9_999), row("c", 20_000, 0)], 10_000);
     expect(plan).toEqual({ tier1: ["a"], tier2: ["b"], tier3: ["c"] });
   });
@@ -51,6 +55,7 @@ describe("forget moves the row to the trash", () => {
     expect(await t.one(`SELECT id FROM entries WHERE id = 'n1'`)).toBeNull();
     const row = await t.one<any>(`SELECT * FROM entries_trash WHERE id = 'n1'`);
     expect(row.content).toBe("content of n1");
+    expect(row.vector_ids).toBe('["v1"]');
     expect(row.workspace_id).toBe(t.roots.ownerPersonalWorkspaceId);
     expect(row.actor_id).toBe(t.roots.ownerUserId);
     expect(row.reason).toBe("forget");

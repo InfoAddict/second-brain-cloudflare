@@ -305,6 +305,10 @@ CREATE TABLE IF NOT EXISTS entries_trash (
   content      TEXT NOT NULL,                 -- kept out of row_json so escaping cannot pass the 2 MB row limit
   row_json     TEXT NOT NULL,                 -- every entries column except content and vector_ids
   edges_json   TEXT NOT NULL DEFAULT '[]',    -- edges at either endpoint at deletion time
+  vector_ids   TEXT NOT NULL DEFAULT '[]',    -- the live row's own vector ids at deletion time; not
+                                               -- rederivable, since a short append's chunk is
+                                               -- id-update-<ts>, not a function of content — kept
+                                               -- out of row_json on purpose, like content
   deleted_at   INTEGER NOT NULL,
   deleted_by   TEXT NOT NULL DEFAULT '',
   channel      TEXT NOT NULL DEFAULT '',

@@ -226,6 +226,31 @@ describe("adversary: Delete forever after a failed vector delete (ADV-trash-5)",
   });
 });
 
+describe("round 2 adversary: Delete forever from the trash after a failed forget vector delete", () => {
+  it("removes the vector a short append added (id-update-<ts>), which chunk recomputation cannot derive", async () => {
+    const vz = statefulVectorize();
+    t = await makeTrashEnv({ VECTORIZE: vz.index });
+    const cap = await (await worker.fetch(new Request("http://localhost/capture", { method: "POST", headers, body: JSON.stringify({ content: "base memory text" }) }), t.env, ctx)).json() as any;
+    const id = cap.id as string;
+    expect(id).toBeTruthy();
+    const append = await worker.fetch(new Request("http://localhost/append", { method: "POST", headers, body: JSON.stringify({ id, addition: "the private addition" }) }), t.env, ctx);
+    expect(append.status).toBe(200);
+    const ids = JSON.parse((await t.one<any>(`SELECT vector_ids FROM entries WHERE id = ?`, id))!.vector_ids) as string[];
+    expect(ids.some((v) => v.startsWith(`${id}-update-`))).toBe(true);
+
+    // Forget's Vectorize delete fails (non-fatal): every vector stays in the index, but the
+    // trash row now carries this entry's real ids (round 2 fix), not just what content derives.
+    const del = (vz.index as any).deleteByIds;
+    (vz.index as any).deleteByIds = vi.fn().mockRejectedValueOnce(new Error("vectorize 503"));
+    expect((await post({ id })).status).toBe(200);
+    (vz.index as any).deleteByIds = del;
+
+    expect((await post({ id, permanent: true, confirm: id })).status).toBe(200);
+    const leftovers = [...vz.store.entries()].filter(([, m]) => m.parentId === id).map(([k, m]) => `${k}: ${m.content}`);
+    expect(leftovers).toEqual([]);
+  });
+});
+
 async function withMcp(env: any, run: (client: any) => Promise<void>) {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");

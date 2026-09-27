@@ -9,7 +9,7 @@ import { assertCanMutateEntry } from "../lib/entry-access";
 import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteVectorIds } from "../vectorize/batch";
 import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
-import { upsertEntryVectors } from "../capture/store";
+import { upsertEntryVectors, deleteStaleVectors } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
@@ -23,6 +23,9 @@ export interface TrashSizes {
   content_bytes: number;
   row_json_bytes: number;
   edges_json_bytes: number;
+  // Round 2 adversary: vector_ids is now itself a stored trash column (not just read for
+  // cleanup), and a heavily-chunked row's ids run to tens of KB — real width, not slack.
+  vector_ids_bytes: number;
 }
 
 export interface TrashCandidate extends TrashSizes {
@@ -38,7 +41,7 @@ export interface TrashCandidate extends TrashSizes {
  * The 512 bytes cover the fixed columns; the budget leaves headroom under the 2 MB row limit.
  */
 export function chooseTrashTier(sizes: TrashSizes, budget = TRASH_ROW_BUDGET_BYTES): 1 | 2 | 3 {
-  const base = sizes.content_bytes + sizes.row_json_bytes + 512;
+  const base = sizes.content_bytes + sizes.row_json_bytes + sizes.vector_ids_bytes + 512;
   if (base + sizes.edges_json_bytes <= budget) return 1;
   if (base <= budget) return 2;
   return 3;
@@ -64,7 +67,8 @@ export function trashSizeSelect(alias = "e"): string {
   return `${alias}.id, ${alias}.workspace_id, ${alias}.actor_id, ${alias}.vector_ids,
        length(CAST(${alias}.content AS BLOB)) AS content_bytes,
        length(CAST(${rowJsonSql(alias)} AS BLOB)) AS row_json_bytes,
-       COALESCE(length(CAST(${edgesJsonSql(alias)} AS BLOB)), 2) AS edges_json_bytes`;
+       COALESCE(length(CAST(${edgesJsonSql(alias)} AS BLOB)), 2) AS edges_json_bytes,
+       length(CAST(${alias}.vector_ids AS BLOB)) AS vector_ids_bytes`;
 }
 
 export async function readTrashCandidates(env: Env, ids: string[]): Promise<TrashCandidate[]> {
@@ -77,7 +81,7 @@ export async function readTrashCandidates(env: Env, ids: string[]): Promise<Tras
   return results ?? [];
 }
 
-const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, deleted_at, deleted_by, channel, reason";
+const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason";
 
 /**
  * The statements that move entries to the trash, in one batch: the trash inserts (they read
@@ -97,9 +101,12 @@ export function trashManyStatements(
     const p = new Params();
     const idList = p.add(JSON.stringify(ids));
     stmts.push(env.DB.prepare(
-      // scope-exempt: by-id: callers authorize the entries before building the batch
+      // scope-exempt: by-id: callers authorize the entries before building the batch.
+      // vector_ids is the live row's own value at deletion time (round 2 adversary): a short
+      // append's chunk (id-update-<ts>, store.ts) is not a function of content, so it cannot be
+      // rederived later — Delete forever needs the real ids stored, not just guessed at.
       `INSERT OR REPLACE INTO entries_trash (${TRASH_COLUMNS})
-       SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"},
+       SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
               ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}
          FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))`,
     ).bind(...p.values()));
@@ -364,6 +371,9 @@ export interface TrashedEntryRow {
   content: string;
   row_json: string;
   edges_json: string;
+  // The live row's own vector ids at deletion time (round 2 adversary): a short append's chunk
+  // (id-update-<ts>, store.ts) isn't a function of content, so it can't be rederived later.
+  vector_ids: string;
   deleted_at: number;
   reason: TrashReason | string;
 }
@@ -499,6 +509,17 @@ export async function restoreEntry(
     return { status: "not_found" };
   }
 
+  // The trash row's own stored ids (round 2 adversary): a short append embedded before this
+  // entry was trashed under id-update-<ts>, which the fresh re-embed above never reproduces.
+  // Only the winner cleans up — deleteStaleVectors itself no-ops when vectorIds is empty (the
+  // keyword-only-degrade branch above), leaving the stored ids as the entry's only index.
+  try {
+    const storedIds = JSON.parse(trashed.vector_ids ?? "[]") as string[];
+    await deleteStaleVectors(env, storedIds, vectorIds);
+  } catch (e) {
+    console.error("Stale trash vector cleanup failed (non-fatal):", e);
+  }
+
   return {
     status: "restored",
     edgesRestored: changedRows(results[1]),
@@ -516,10 +537,10 @@ export type DeleteForeverResult =
 /**
  * The same deterministic ids store.ts's storeEntry would have produced for this content and
  * source: a single-chunk row embeds under its own id, a multi-chunk row under `id-chunk-i`.
- * Delete forever's trash path has no vector_ids to read (entries_trash keeps none — the trash
- * row's own doc comment: "kept out of row_json so escaping cannot pass the 2 MB row limit" covers
- * content and vector_ids alike), so this recomputes the chunk count from the same text and source
- * rather than leaving a failed forget's orphaned vector in the index forever.
+ * Backstops the trash row's own stored vector_ids (schema.sql), which cover a short append's
+ * id-update-<ts> chunk but default to '[]' for a trash row written before that column existed —
+ * this recomputes the chunk count from the same text and source for that case, rather than
+ * leaving a failed forget's orphaned vector in the index forever.
  */
 function deterministicVectorIds(id: string, content: string, source: string): string[] {
   const allChunks = chunkText(content);
@@ -565,16 +586,17 @@ export async function deleteForever(env: Env, id: string, change: ChangeContext)
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
     byId((bid) => `DELETE FROM entry_versions WHERE entry_id = ${bid}`),
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch.
-    // RETURNING the content and source a failed forget's vectors were embedded from (best-effort
-    // cleanup, since entries_trash keeps no vector_ids at all).
-    byId((bid) => `DELETE FROM entries_trash WHERE id = ${bid} RETURNING content, json_extract(row_json, '$.source') AS source`),
+    // RETURNING vector_ids too: the trash row's own stored ids (round 2 adversary) cover a short
+    // append's id-update-<ts> chunk, which content+source alone can't rederive — content/source
+    // stay as a best-effort fallback for a trash row from before this column existed.
+    byId((bid) => `DELETE FROM entries_trash WHERE id = ${bid} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
     // RETURNING vector_ids: this statement's own value at the moment it runs, never a caller's stale
     // read — a restore racing this call embeds under the same deterministic ids (ADV-trash-4).
     // versioning: hard-delete: permanent (T-0089.4.7)
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
     byId((bid) => `DELETE FROM entries WHERE id = ${bid} RETURNING vector_ids`),
   ]);
-  const trashRow = results[3].results?.[0] as { content?: string; source?: string } | undefined;
+  const trashRow = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string } | undefined;
   const entryRow = results[4].results?.[0] as { vector_ids?: string } | undefined;
   const trashChanges = changedRows(results[3]);
   const entryChanges = changedRows(results[4]);
@@ -584,7 +606,13 @@ export async function deleteForever(env: Env, id: string, change: ChangeContext)
   if (entryRow) {
     try { vectorIds = JSON.parse(entryRow.vector_ids ?? "[]"); } catch { vectorIds = []; }
   } else if (trashRow?.content !== undefined) {
-    vectorIds = deterministicVectorIds(id, trashRow.content, trashRow.source ?? "api");
+    // Union of the ids actually stored at trash time with the ids the content alone would
+    // derive: a short append's chunk (id-update-<ts>) is only in the stored set, but the
+    // derived set still catches a pre-column trash row (stored defaults to '[]').
+    let stored: string[] = [];
+    try { stored = JSON.parse(trashRow.vector_ids ?? "[]"); } catch { stored = []; }
+    const derived = deterministicVectorIds(id, trashRow.content, trashRow.source ?? "api");
+    vectorIds = [...new Set([...stored, ...derived])];
   }
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);
