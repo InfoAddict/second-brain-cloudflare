@@ -13,12 +13,15 @@ export interface TimelineEvent {
 
 /** The event timeline used by entry detail and MCP history. The caller checks entry scope first. */
 export async function readEntryTimeline(
-  env: Env, id: string, viewerId: string, entryActorId = "", limit?: number, inlineLabels = false,
+  env: Env, id: string, viewerId: string, entryActorId = "", limit?: number, inlineLabels = false, sinceShared = false,
 ): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string> }> {
   const query = inlineLabels
     ? `SELECT ev.actor_id, ev.event, ev.payload, ev.created_at, u.name AS user_name
        FROM entry_events ev LEFT JOIN users u ON u.id = ev.actor_id AND (u.removed_at IS NULL OR u.removed_at = 0)
-       WHERE ev.entry_id = ? ORDER BY ev.created_at DESC LIMIT ?`
+       WHERE ev.entry_id = ?${sinceShared
+         ? ` AND ev.created_at >= COALESCE((SELECT MAX(sh.created_at) FROM entry_events sh WHERE sh.entry_id = ev.entry_id AND sh.event = 'shared'), 0)`
+         : ""}
+       ORDER BY ev.created_at DESC LIMIT ?`
     : limit === undefined
     ? `SELECT actor_id, event, payload, created_at FROM entry_events WHERE entry_id = ? ORDER BY created_at ASC`
     : `SELECT actor_id, event, payload, created_at FROM entry_events WHERE entry_id = ? ORDER BY created_at DESC LIMIT ?`;
@@ -38,17 +41,26 @@ export async function readEntryTimeline(
   return { timeline, labelMap };
 }
 
-/** Scoped basic history, before version snapshots arrive in a later wave. */
+/**
+ * Scoped basic history, before version snapshots arrive in a later wave.
+ *
+ * A reader who is not the author sees events only from the latest `shared` event on: what
+ * happened while the memory was still private is not theirs. A supersedes link is shown only
+ * when its other endpoint is readable too, the way `connections` omits an unreadable neighbour.
+ */
 export async function readEntryHistory(env: Env, identity: Identity, id: string, limit = 10) {
-  const entry = await getReadableEntry(env, identity, id);
+  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id");
   if (!entry) return null;
-  const scope = scopeWhereForRead(identity);
+  const ownHistory = entry.actor_id === identity.userId || entry.workspace_id === identity.personalWorkspaceId;
+  const edgeScope = scopeWhereForRead(identity, undefined, "e.workspace_id");
+  const otherScope = scopeWhereForRead(identity, undefined, "o.workspace_id");
   const [timelineResult, edgeResult] = await Promise.all([
-    readEntryTimeline(env, id, identity.userId, "", limit, true),
-    env.DB.prepare(`SELECT source_id, target_id FROM edges
-      WHERE type = 'supersedes' AND (source_id = ? OR target_id = ?) AND ${scope.clause}
-      ORDER BY created_at DESC`)
-      .bind(id, id, ...scope.bindings).all<{ source_id: string; target_id: string }>(),
+    readEntryTimeline(env, id, identity.userId, "", limit, true, !ownHistory),
+    env.DB.prepare(`SELECT e.source_id, e.target_id FROM edges e
+      JOIN entries o ON o.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
+      WHERE e.type = 'supersedes' AND (e.source_id = ? OR e.target_id = ?) AND ${edgeScope.clause} AND ${otherScope.clause}
+      ORDER BY e.created_at DESC`)
+      .bind(id, id, id, ...edgeScope.bindings, ...otherScope.bindings).all<{ source_id: string; target_id: string }>(),
   ]);
   return { timeline: timelineResult.timeline, edges: edgeResult.results };
 }
