@@ -358,6 +358,7 @@ export async function handleEntriesRoutes(
     const chain = await loadHistory(env, auth, { id: row.id as string, content: row.content as string }, config.VERSION_KEEP);
     const timelineResult = await readEntryTimeline(
       env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""), chain.rows.map(r => r.actor_id),
+      String(row.source ?? ""),
     );
     const { timeline, labelMap } = timelineResult;
     const history = await buildEntryHistoryFromReads(env, auth, {

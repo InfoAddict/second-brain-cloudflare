@@ -54,16 +54,56 @@ describe("visibleTimeline", () => {
     expect(seen.cut).toBe(false);
   });
 
-  it("R3-4: treatAbsentFromAsReadable continues past a pre-4.0 move instead of cutting there, and is not cut", () => {
+  it("R4-L1: no blanket exception for an absent fromWorkspaceId — cuts when there is no earlier move to infer a source from", () => {
+    // 3.7 was already multi-user, so "the move predates fromWorkspaceId" is never sound grounds to
+    // continue past it: with nothing earlier to infer a source from, the source is unknowable.
+    const events = [ev("updated"), ev("shared"), ev("created")];
+    const seen = visibleTimeline(events, { canRead: () => true, isAuthor: false });
+    expect(seen.items.map(e => e.event)).toEqual(["updated", "shared"]);
+    expect(seen.cut).toBe(true);
+  });
+
+  it("R4-L1: infers a pre-4.0 move's missing source from the next older move's own destination, and continues when it is readable", () => {
+    const events = [
+      { event: "unshared", payload: {} }, // no fromWorkspaceId: infer from the older "shared" below
+      { event: "shared", payload: { workspaceId: "personal-a", fromWorkspaceId: "origin" } },
+      { event: "created", payload: {} },
+    ];
+    const seen = visibleTimeline(events, { canRead: readable("personal-a", "origin"), isAuthor: false });
+    expect(seen.items).toEqual(events);
+    expect(seen.cut).toBe(false);
+  });
+
+  it("R4-L1: an inferred source that is not readable still cuts there", () => {
+    const events = [
+      { event: "unshared", payload: {} },
+      { event: "shared", payload: { workspaceId: "bobs-personal" } },
+      { event: "created", payload: {} },
+    ];
+    const seen = visibleTimeline(events, { canRead: readable("company"), isAuthor: false });
+    expect(seen.items.map(e => e.event)).toEqual(["unshared"]);
+    expect(seen.cut).toBe(true);
+  });
+
+  it("R3-4 (narrowed by R4-L1): treatAbsentFromAsReadable is the LAST resort, only when there is no earlier move to infer from at all", () => {
     const events = [ev("updated"), ev("shared"), ev("created")];
     const seen = visibleTimeline(events, { canRead: () => false, isAuthor: false, treatAbsentFromAsReadable: true });
     expect(seen.items).toEqual(events);
     expect(seen.cut).toBe(false);
   });
 
-  it("R3-4: treatAbsentFromAsReadable never widens a move that DOES carry a fromWorkspaceId", () => {
-    // A move recorded with a real origin (even the pre-tenancy "" marker, modeled here as a
-    // string canRead rejects) still goes through the ordinary cut regardless of the flag.
+  it("R3-4 (narrowed by R4-L1): treatAbsentFromAsReadable never widens inference once an earlier move exists to infer from", () => {
+    const events = [
+      { event: "unshared", payload: {} }, // infer from "shared" below; the flag never gets consulted here
+      { event: "shared", payload: { workspaceId: "bobs-personal" } },
+      { event: "created", payload: {} },
+    ];
+    const seen = visibleTimeline(events, { canRead: readable("company"), isAuthor: false, treatAbsentFromAsReadable: true });
+    expect(seen.items.map(e => e.event)).toEqual(["unshared"]);
+    expect(seen.cut).toBe(true);
+  });
+
+  it("R3-4 (narrowed by R4-L1): treatAbsentFromAsReadable never widens a move that DOES carry a fromWorkspaceId", () => {
     const events = [ev("updated"), ev("shared", "bobs-personal"), ev("updated"), ev("created")];
     const seen = visibleTimeline(events, { canRead: () => false, isAuthor: false, treatAbsentFromAsReadable: true });
     expect(seen.items.map(e => e.event)).toEqual(["updated", "shared"]);

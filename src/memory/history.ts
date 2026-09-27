@@ -26,6 +26,10 @@ export async function readEntryTimeline(
    * `inlineLabels` is true: that path resolves labels via a JOIN keyed to entry_events rows, which
    * has no room for an actor id that never wrote an event on this entry. */
   extraLabelActorIds: string[] = [],
+  /** R4-L1: the row's own `source`. A digest or auto-insight (isSystemRow, capture/entry.ts)
+   * carries an empty actor too, but summarizes a SPECIFIC member into THEIR workspace — the
+   * legacy-owner exception below must never widen for one, no matter who currently reads it. */
+  entrySource = "",
 ): Promise<{ timeline: TimelineEvent[]; labelMap: Map<string, string>; cut: boolean }> {
   // ev.rowid breaks a created_at tie by true insertion order (D1/SQLite serializes writes, so rowid
   // assignment IS the real happens-before order), not by whatever order a tied created_at otherwise
@@ -56,15 +60,14 @@ export async function readEntryTimeline(
   // empty actor (isSystemRow), in whichever member's workspace they summarize. R2-4 found that
   // granting the owner a blanket bypass for "the row sits in the owner's own personal workspace"
   // let an admin who unshared someone ELSE's legacy row into their own personal workspace inherit
-  // its private-era history too. R3-4 found the narrower R2-4 fix was still too wide: the owner's
-  // OWN digest, shared and then unshared back into the owner's personal workspace, satisfied the
-  // same "sits in the owner's own workspace" test and exposed the summarized member's private-era
-  // events. There is no version of this check keyed on where the row currently sits that is safe —
-  // isAuthor is never true for a legacy row. What the owner DOES get, via
-  // treatAbsentFromAsReadable below: a move event that predates the fromWorkspaceId field entirely
-  // (truly pre-4.0, when there was only one user to have written anything before it) lets the walk
-  // continue past it instead of cutting there (ADV-11) — never a move event that actually records
-  // a fromWorkspaceId, even the pre-tenancy "" marker, which goes through the ordinary cut.
+  // its private-era history too. R3-4's narrower fix (the owner reading a legacy row with no
+  // fromWorkspaceId on its move continues past it, isOwnerOfLegacyRow below) was STILL too wide:
+  // R4-L1 found 3.7 was already multi-user, and a digest/insight (isSystemRow) with an empty actor
+  // summarizes a SPECIFIC member into THEIR OWN workspace — "no earlier move to infer a source
+  // from" there means "someone else's private era", never "before multi-user existed". isAuthor is
+  // never true for a legacy row, so isOwnerOfLegacyRow now ALSO requires the row not be a system
+  // row, and visibleTimeline tries inferring a missing source from the chain of earlier moves
+  // first, falling back to this flag only when there is no earlier move to infer from at all.
   const isAuthor = entryActorId !== "" && identity.userId === entryActorId;
   let rows = parsedChrono;
   let cut = false;
@@ -72,7 +75,7 @@ export async function readEntryTimeline(
     const newestFirst = [...parsedChrono].reverse();
     const needsOwner = entryActorId === "" || newestFirst.some(e => e.payload.fromWorkspaceId === "");
     const ownerUserId = needsOwner ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
-    const isOwnerOfLegacyRow = entryActorId === "" && ownerUserId !== undefined && identity.userId === ownerUserId;
+    const isOwnerOfLegacyRow = entryActorId === "" && entrySource !== "system" && ownerUserId !== undefined && identity.userId === ownerUserId;
     const visible = visibleTimeline(newestFirst, {
       canRead: ws => workspaceReadable(identity, ws, ownerUserId), isAuthor: false,
       treatAbsentFromAsReadable: isOwnerOfLegacyRow,
@@ -104,7 +107,7 @@ export async function readEntryTimeline(
  * makes covers version actors too.
  */
 export async function readEntryHistory(env: Env, identity: Identity, id: string) {
-  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, created_at");
+  const entry = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, created_at, source");
   if (!entry) return null;
   const edgeScope = scopeWhereForRead(identity, undefined, "e.workspace_id");
   const otherScope = scopeWhereForRead(identity, undefined, "o.workspace_id");
@@ -116,7 +119,7 @@ export async function readEntryHistory(env: Env, identity: Identity, id: string)
   const config = await resolveConfig(env);
   const chain = await loadHistory(env, identity, { id: historyRow.id, content: historyRow.content }, config.VERSION_KEEP);
   const [timelineResult, edgeResult] = await Promise.all([
-    readEntryTimeline(env, id, identity, historyRow.actor_id, undefined, false, historyRow.workspace_id, chain.rows.map(r => r.actor_id)),
+    readEntryTimeline(env, id, identity, historyRow.actor_id, undefined, false, historyRow.workspace_id, chain.rows.map(r => r.actor_id), String(rawEntry.source ?? "")),
     env.DB.prepare(`SELECT e.source_id, e.target_id FROM edges e
       JOIN entries o ON o.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
       WHERE e.type = 'supersedes' AND (e.source_id = ? OR e.target_id = ?) AND ${edgeScope.clause} AND ${otherScope.clause}

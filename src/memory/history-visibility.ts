@@ -8,15 +8,22 @@ export interface VisibleEvent {
 /**
  * Which events of a memory's timeline a reader may see (D-SH). The author sees everything. Anyone else
  * sees events back to the move that brought the memory into a workspace they can read: walking newest
- * first, the cut falls at the first `shared`/`unshared` event whose `fromWorkspaceId` is absent
- * (written before 4.0) or unreadable. That event is included, since it marks the arrival.
+ * first, the cut falls at the first `shared`/`unshared` event whose source is unreadable, or cannot be
+ * determined at all. That event is included, since it marks the arrival.
  *
- * `treatAbsentFromAsReadable` (R3-4): the tenant owner reading a legacy row (empty actor) gets ONE
- * narrow exception to that cut, not a blanket bypass — an absent `fromWorkspaceId` means the move
- * predates the field entirely, back when there was only one user (the owner) to have written
- * anything before it, so the walk continues past it instead of stopping. A move event that DOES
- * carry a `fromWorkspaceId`, even the pre-tenancy "" marker, goes through the ordinary
- * `canRead`/unreadable cut like anyone else's — this flag never widens that check.
+ * A move event written before 4.0 carries no `fromWorkspaceId` at all. When an OLDER move exists,
+ * its own destination (`workspaceId`) tells us where this one's source must have been — the row
+ * cannot have moved again between that landing and this one without ANOTHER recorded move — so we
+ * infer it and check ITS readability, for every reader, not just the owner.
+ *
+ * `treatAbsentFromAsReadable` (R3-4, narrowed by R4-L1): when there is no older move to infer a
+ * source from at all, the source predates every recorded move — genuinely pre-tenancy, back when
+ * there was only one user. That is the ONE case this flag may still widen, and the caller (history.ts)
+ * must never set it for a system row (a digest or auto-insight): those are written into the
+ * summarized MEMBER's workspace with an empty actor, and 3.7 was already multi-user, so "no earlier
+ * move" there means "someone else's private era", not "before multi-user existed". A move event that
+ * DOES carry a fromWorkspaceId, even the pre-tenancy "" marker, or that resolves via inference, goes
+ * through the ordinary `canRead` cut — this flag never widens either of those.
  */
 /**
  * `cut` (T-0101.1.1, BE-7's `footer.shared_cut_by`): whether this walk actually stopped early —
@@ -33,12 +40,24 @@ export function visibleTimeline<E extends VisibleEvent>(
   if (opts.isAuthor) return { items: eventsNewestFirst, cut: false };
   const out: E[] = [];
   let cut = false;
-  for (const e of eventsNewestFirst) {
+  for (let i = 0; i < eventsNewestFirst.length; i++) {
+    const e = eventsNewestFirst[i];
     out.push(e);
     if (!MOVE_EVENTS.has(e.event)) continue;
     const from = e.payload?.fromWorkspaceId;
-    if (typeof from !== "string") { if (opts.treatAbsentFromAsReadable) continue; cut = true; break; }
-    if (!opts.canRead(from)) { cut = true; break; }
+    if (typeof from === "string") {
+      if (!opts.canRead(from)) { cut = true; break; }
+      continue;
+    }
+    const olderMove = eventsNewestFirst.slice(i + 1).find(x => MOVE_EVENTS.has(x.event));
+    const dest = olderMove?.payload?.workspaceId;
+    if (typeof dest === "string") {
+      if (!opts.canRead(dest)) { cut = true; break; }
+      continue;
+    }
+    // No earlier move to infer from at all: the one narrow, caller-gated exception.
+    if (opts.treatAbsentFromAsReadable) continue;
+    cut = true; break;
   }
   return { items: out, cut };
 }
