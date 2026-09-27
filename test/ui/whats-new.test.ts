@@ -214,3 +214,46 @@ describe("the banner sits in normal flow with a symmetric gap, and reflows at 39
     expect(narrow).toMatch(/"see see"/);
   });
 });
+
+/**
+ * The actual "band" complaint was never this file's own spacing: board.css's
+ * .tiles (#board-tiles, the banner's very next sibling) carries its own
+ * margin-top, sized for when it follows .home directly with nothing between
+ * them. With the banner present that stacked on top of the gap above,
+ * doubling it. Computed from the real declarations, at both widths (nothing
+ * here is width-dependent, so one computation covers 1280 and 390), rather
+ * than hand-copied numbers that could drift from the CSS silently.
+ */
+describe("the gap below the banner equals the gap above it (within 4px)", () => {
+  const mainCss = readFileSync(resolve(ROOT, "public/css/main.css"), "utf8");
+  const trashCss = readFileSync(resolve(ROOT, "public/css/trash.css"), "utf8");
+  const rule = (source: string, selector: string) =>
+    source.match(new RegExp(`${selector.replace(/[.#[\]]/g, "\\$&")}\\s*{([^}]*)}`, "s"))?.[1] ?? "";
+
+  it("board.css's #board-tiles margin-top is cancelled when a visible banner precedes it", () => {
+    expect(trashCss).toMatch(/\.whats-new-line:not\(\[hidden\]\)\s*\+\s*#board-tiles\s*{\s*margin-top:\s*0/);
+  });
+
+  it("the two gaps compute equal (within 4px), with the override applied", () => {
+    const recallGap = Number(rule(mainCss, "#recall-messages").match(/gap:\s*(\d+)px/)?.[1]);
+    const homePaddingBottom = Number(rule(mainCss, ".home").match(/padding:\s*[\d.]+\w*\s+[\d.]+\w*\s+(\d+)px/)?.[1]);
+    const bannerMarginBottom = Number(rule(trashCss, ".whats-new-line").match(/margin-bottom:\s*(\d+)px/)?.[1]);
+
+    // #board-tiles' own margin-top is cancelled by the rule above whenever the
+    // banner is visible (the previous test pins that), so it contributes 0
+    // to the "below" gap in that state - the only state this line compares.
+    const gapAbove = homePaddingBottom + recallGap;
+    const gapBelow = bannerMarginBottom + recallGap;
+
+    expect(Number.isNaN(gapAbove)).toBe(false);
+    expect(Number.isNaN(gapBelow)).toBe(false);
+    expect(Math.abs(gapAbove - gapBelow)).toBeLessThanOrEqual(4);
+  });
+
+  it("does not touch #board-tiles' margin when the banner is hidden or absent (dismissed, or a 3.x brain)", () => {
+    // The override is scoped to ":not([hidden]) +", so a hidden or missing
+    // banner leaves .tiles' own margin-top (board.css) as the only rule in
+    // play - unchanged from before this line existed.
+    expect(trashCss).not.toMatch(/(?<!:not\(\[hidden\]\)\s*\+\s*)#board-tiles\s*{\s*margin-top:\s*0/);
+  });
+});

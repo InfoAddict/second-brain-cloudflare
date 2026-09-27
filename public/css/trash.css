@@ -190,7 +190,20 @@
 /* Normal flow, not a floating card: the gap above (chips to banner) is
  * .home's own 8px bottom padding plus #recall-messages' 10px flex gap, so
  * the 8px margin here plus that same 10px flex gap gives the same 18px
- * below - no separate "band" of extra space at 1280. */
+ * below - no separate "band" of extra space at 1280.
+ *
+ * That symmetry needs one more fix, not on this element: board.css's
+ * .tiles (id #board-tiles, the very next sibling) carries its own
+ * margin-top: 26px, sized for when it follows .home directly with no
+ * banner between them. With the banner present that 26px stacks on top
+ * of the 18px above, which was the actual "band" - not this element's own
+ * spacing. Cancelling it only when a VISIBLE banner precedes #board-tiles
+ * keeps the no-banner (dismissed, or a 3.x brain) layout exactly as it
+ * was: board.css is not this lane's file, so the override lives here. */
+.whats-new-line:not([hidden]) + #board-tiles {
+  margin-top: 0;
+}
+
 .whats-new-line {
   display: grid;
   grid-template-columns: 1fr auto auto;
