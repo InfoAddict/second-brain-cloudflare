@@ -34,6 +34,7 @@ import { computeAgentBrief } from "../brief/compute";
 import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { readEntryHistory } from "../memory/history";
+import { listTrash } from "../memory/trash-list";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 import { resolveClientLabel, type McpClientExtra, type McpClientProps } from "./client-label";
 
@@ -177,7 +178,9 @@ const LIST_RECENT_DESCRIPTION =
   + "marker is PARTIAL, so call get(id) for its full text. "
   + "Pass actor to list only what one person wrote — their name as shown in the header, their user id, or \"me\". "
   + "Pass team (id from list_teams) with workspace:\"company\" to browse one team's shared layer. "
-  + "Pass project (slug from list_projects) to browse one project; an unknown slug is an error, not an empty list.";
+  + "Pass project (slug from list_projects) to browse one project; an unknown slug is an error, not an empty list. "
+  + "Pass in_trash: true to list memories in the trash (forgotten recently and not yet removed for good), for "
+  + "example when the user asks to bring back something they deleted. Restore one with undo.";
 
 const LIST_TEAMS_DESCRIPTION =
   "List the shared teams you belong to, with display names and workspace ids. Call this before remember or "
@@ -919,9 +922,32 @@ export function buildMcpServer(
         team: z.string().optional().describe("When workspace is company, restrict to one team — id from list_teams"),
         actor: z.string().optional().describe('Only entries written by one person: their display name as it appears in the header, their user id, or "me" for your own'),
         project: projectParam.describe("Only entries in one project: its slug from list_projects. An unknown slug is an error, not an empty list"),
+        in_trash: z.boolean().optional().describe("List memories in the trash instead of live ones. Works with n and workspace only."),
       },
     },
-    async ({ n, tag, after, before, workspace, team, actor, project }) => {
+    async ({ n, tag, after, before, workspace, team, actor, project, in_trash }) => {
+      if (in_trash) {
+        if (tag !== undefined || after !== undefined || before !== undefined || actor !== undefined || project !== undefined) {
+          return { content: [{ type: "text", text: "in_trash works with n and workspace only." }] };
+        }
+        if (!identity) return { content: [{ type: "text", text: "list_recent(in_trash) requires an authenticated identity." }] };
+        const cfg = await resolveConfig(env);
+        const { items } = await listTrash(env, identity, { limit: n, layer: workspace, config: cfg });
+        if (!items.length) return { content: [{ type: "text", text: "The trash is empty." }] };
+        const blocks = items.map((item, i) => {
+          const date = new Date(item.deleted_at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+          const daysLabel = `${item.days_left} day${item.days_left === 1 ? "" : "s"} left`;
+          const who = item.client ? `via ${item.client}`
+            : item.reason === "mirror" ? "removed by sync"
+            : item.channel === "rest" ? "in the dashboard"
+            : "via an AI tool";
+          const source = item.source ? ` · ${item.source}` : "";
+          return `${i + 1}. [Deleted ${date} · ${daysLabel} · ${who}${source}]\nID: ${item.id}\n${item.preview}`;
+        });
+        const footer = "To bring one back, call undo with its ID. Items are removed for good when their days run out.";
+        return { content: [{ type: "text", text: `${blocks.join("\n\n")}\n\n${footer}` }] };
+      }
+
       const teamRead = identity ? readTeamParam(team, identity, workspace) : {};
       if (teamRead.error) return { content: [{ type: "text", text: teamRead.error }] };
       const projectRows = await resolveProjectArg(project, workspace, teamRead.teamId);
