@@ -668,6 +668,28 @@ describe("scanSource, documented limitations, pinned so the header cannot drift"
     expect(r.violations).toEqual([]);
   });
 
+  it("a literal workspace_id predicate that sits only inside an OR arm does not count as scoping", () => {
+    // `created_at > ? OR (held AND workspace_id = ?)` returns every recent row of every workspace: the
+    // predicate restricts one arm, not the row set. It used to pass because the predicate was "present".
+    const r = scanSource("const q = `SELECT id FROM entries WHERE tags LIKE ? AND (created_at > ? OR (tags LIKE ? AND workspace_id = ?)) LIMIT 1`;");
+    expect(r.violations.length).toBe(1);
+  });
+
+  it("`WHERE x OR workspace_id = ?` is not scoped, the same shape written flat", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE created_at > ? OR workspace_id = ?`;");
+    expect(r.violations.length).toBe(1);
+  });
+
+  it("an OR whose every arm is scoped still counts: `(workspace_id = ? OR workspace_id IN (?, ?))`", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE (workspace_id = ? OR workspace_id IN (?, ?)) AND tags LIKE ?`;");
+    expect(r.violations).toEqual([]);
+  });
+
+  it("a predicate alongside an OR elsewhere still counts: `workspace_id = ? AND (a = ? OR b = ?)`", () => {
+    const r = scanSource("const q = `SELECT id FROM entries WHERE workspace_id = ? AND (created_at > ? OR tags LIKE ?)`;");
+    expect(r.violations).toEqual([]);
+  });
+
   it("limitation 2 + item 4: a conditional hoisted one line up is not caught", () => {
     // Asserted as CURRENT BEHAVIOUR. The rejection in item 4 is a test on the
     // text between ${ and }, so moving the ternary into a const defeats it,
@@ -1162,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (140 queries, 68 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (141 queries, 69 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1236,7 +1258,11 @@ describe("the checker over the real source tree", () => {
     // Deliberate: -1 scope-exempt for T-0089.4.4: deprecateEntry (src/capture/lifecycle.ts) takes an optional
     // workspace and pins its read and write to it when captureEntry passes the writer's workspace; that SELECT
     // now carries the clause in a JS fragment, and the checker no longer needs an exemption for the read it replaced.
-    ).toEqual({ queries: 140, exempt: 68, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query for T-0089.4.4 (src/compression/digest.ts): the held-draft existence check,
+    // scoped by `workspace_id = ?`. And +1 scope-exempt: the nightly corpus-wide 24h cooldown query is back
+    // to its original text and its `scope-exempt: cron` reason. The folded version had put `workspace_id = ?`
+    // inside an OR arm, which the checker used to count as scoped; it no longer does (inUnscopedOrArm).
+    ).toEqual({ queries: 141, exempt: 69, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
