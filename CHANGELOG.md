@@ -4,6 +4,21 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Activity history**
+
+- A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
+- A memory replaced by a newer, contradicting one now records that in its history (status changed to deprecated, with the reason and the newer memory's id).
+- Memories removed by a sync (a trashed Notion page, a cancelled or pruned calendar event) or by disconnecting an integration with "delete synced memories" now leave a "deleted" record in the history, naming the reason and the integration. A large disconnect writes these records in one database call.
+- Every history record now says where the change came from: `mcp` for an AI assistant, `rest` for the dashboard and API, or `system:<job>` for a background job.
+
+**Saving**
+
+- The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched.
+
+**Search**
+
+- Search records which memories it showed with one database call instead of one per result, so a 20-result search uses up to 19 fewer of the free plan's daily database calls.
+
 ## [3.7.0] — Search that puts the right answer first
 
 **Search**
