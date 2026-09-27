@@ -157,3 +157,36 @@ describe("digest: scope", () => {
     expect(await mcp("digest", { tag: "work" }, reader)).toContain("No digest yet");
   });
 });
+
+describe("resolve audit: channel and prior values on both surfaces", () => {
+  const until = new Date(Date.now() + 4 * 86400000).toISOString();
+  const cases: { name: string; tags: string[]; dated?: boolean; mcp: Record<string, unknown>; rest: (id: string) => [string, unknown]; prior: (p: any) => void }[] = [
+    { name: "done", tags: ["task", "work"], mcp: { action: "done" }, rest: id => ["/loops/resolve", { id, action: "done" }], prior: p => expect(p.tags).toEqual(["task", "work"]) },
+    { name: "not_a_task", tags: ["task", "work"], mcp: { action: "not_a_task" }, rest: id => ["/loops/resolve", { id, action: "not-task" }], prior: p => expect(p.tags).toEqual(["task", "work"]) },
+    { name: "snooze", tags: ["task"], dated: true, mcp: { action: "snooze", until }, rest: id => ["/due/snooze", { id, until }], prior: p => expect(p).toMatchObject({ when_kind: "due", when_label: "x", when_source: "explicit", when_at: expect.any(Number) }) },
+    { name: "clear_date", tags: ["task"], dated: true, mcp: { action: "clear_date" }, rest: id => ["/due/clear", { id }], prior: p => expect(p).toMatchObject({ when_kind: "due", when_label: "x", when_source: "explicit", when_at: expect.any(Number) }) },
+    { name: "still_true", tags: ["stale:as-of", "work"], mcp: { action: "still_true" }, rest: id => ["/stale/keep", { id }], prior: p => { expect(p.tags).toEqual(["stale:as-of", "work"]); expect(p).toHaveProperty("updated_at"); expect(p).toHaveProperty("staleness_checked_at"); } },
+    { name: "confirm_insight", tags: ["auto-insight"], mcp: { action: "confirm_insight" }, rest: id => ["/patterns/resolve", { id, action: "confirm" }], prior: p => expect(p.tags).toEqual(["auto-insight"]) },
+    { name: "dismiss_insight", tags: ["auto-insight"], mcp: { action: "dismiss_insight" }, rest: id => ["/patterns/resolve", { id, action: "dismiss" }], prior: p => expect(p.tags).toEqual(["auto-insight"]) },
+  ];
+  for (const c of cases) {
+    it(`${c.name}: REST records channel rest, MCP records channel mcp, both with prior values`, async () => {
+      for (const id of ["r", "m"]) {
+        sqlite.seed({ id, content: "Same content", createdAt: 1000, tags: c.tags });
+        if (c.dated) await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = 'due', when_label = 'x', when_source = 'explicit' WHERE id = ?`).bind(Date.now() + 86400000, id).run();
+      }
+      const [path, body] = c.rest("r");
+      expect((await rest("POST", path, body)).status).toBe(200);
+      expect(await mcp("resolve", { id: "m", ...c.mcp })).toMatch(/^Resolved m/);
+      await Promise.all(pending);
+      for (const [id, channel] of [["r", "rest"], ["m", "mcp"]] as const) {
+        const rows = (await env.DB.prepare(`SELECT payload FROM entry_events WHERE entry_id = ?`).bind(id).all<{ payload: string }>()).results;
+        expect(rows).toHaveLength(1);
+        const payload = JSON.parse(rows[0].payload);
+        expect(payload.channel).toBe(channel);
+        expect(payload.prior, `${id} prior`).toBeTruthy();
+        c.prior(payload.prior);
+      }
+    });
+  }
+});
