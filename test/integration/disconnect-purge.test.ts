@@ -185,3 +185,62 @@ describe("adversary round 2: a repeated page (lost response) must not double-cou
     expect(last).toMatchObject({ purged: 600, kept: 0 });
   });
 });
+
+describe("T-0089.7.5 latent: a sync running when a disconnect purge starts", () => {
+  it("a create that begins after the purge has already set disconnecting mid-batch is refused, not orphaned", async () => {
+    // A big enough itemMap that `disconnecting` stays true across the sync's own batch, the same
+    // way a real one does across a multi-page purge (connected() alone, with its always-empty
+    // /search response, would let the purge finish before the sync could ever race it).
+    await connected(250);
+    fetchSpy.mockImplementation(async (input: any) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/users/me")) return new Response(JSON.stringify({ object: "user", type: "bot", name: "SB", bot: { workspace_name: "Acme" } }), { status: 200 });
+      if (url.endsWith("/search")) return new Response(JSON.stringify({
+        results: [
+          { object: "page", id: "new1", last_edited_time: "v1", url: "https://notion.so/new1", properties: { title: { type: "title", title: [{ plain_text: "New One" }] } } },
+          { object: "page", id: "new2", last_edited_time: "v1", url: "https://notion.so/new2", properties: { title: { type: "title", title: [{ plain_text: "New Two" }] } } },
+        ], has_more: false, next_cursor: null,
+      }), { status: 200 });
+      return new Response(JSON.stringify({ results: [], has_more: false }), { status: 200 });
+    });
+
+    // The sync's own outer check (routes/integrations.ts) already passed before this runs — this
+    // simulates a disconnect purge's FIRST page landing while the sync is already mid-batch, the
+    // exact interleaving that outer check cannot see.
+    const { updateIntegration } = await import("../../src/integrations");
+    const realPrepare = t.env.DB.prepare.bind(t.env.DB);
+    let intercepted = false;
+    (t.env.DB as any).prepare = (sql: string) => {
+      const stmt = realPrepare(sql);
+      if (!intercepted && sql.startsWith(
+        "INSERT INTO entries (id, content, tags, source, created_at, updated_at, vector_ids, importance_score, workspace_id, actor_id)",
+      )) {
+        intercepted = true;
+        const bind = stmt.bind.bind(stmt);
+        (stmt as any).bind = (...args: unknown[]) => {
+          const bound = bind(...args);
+          const run = bound.run.bind(bound);
+          (bound as any).run = async () => {
+            // This first create lands: it began before disconnecting was set, the residual this
+            // fix narrows to rather than closes (documented on the board item).
+            const result = await run();
+            await updateIntegration(t.env, "notion", (r) => { r.disconnecting = { purged: 0, skipped: 0 }; });
+            return result;
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+
+    const res = await worker.fetch(new Request("http://localhost/integrations/notion/sync", { method: "POST", headers }), t.env, ctx);
+    expect(res.status).toBeLessThan(500);
+    const body = await res.json() as any;
+    // One landed (the residual), one refused rather than silently orphaned. The mirror's own id
+    // is a fresh UUID, not the page id, so identify the rows by content.
+    expect(body).toMatchObject({ ok: true, created: 1, failed: 1 });
+    const titles = (await t.all<any>(`SELECT content FROM entries WHERE content LIKE '%New One%' OR content LIKE '%New Two%'`)).map((r) => r.content);
+    expect(titles.some((c) => c.includes("New One"))).toBe(true);
+    expect(titles.some((c) => c.includes("New Two"))).toBe(false);
+  });
+});

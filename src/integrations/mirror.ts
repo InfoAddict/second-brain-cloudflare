@@ -56,6 +56,22 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
   return {
     flushAudit,
     async createEntry(content, tags, source) {
+      // Re-checks live state, not the record this store was built from (T-0089.7.5, "3.7 had the
+      // same problem"): runScheduledIntegrationSync and the manual sync route both check
+      // disconnecting only once, before their whole batch starts, so a disconnect purge that
+      // begins mid-batch was free to finish — snapshot its itemMap, trash it — while this same
+      // batch kept creating mirrors the purge had already stopped looking for. Checked per item,
+      // right before the row would exist, narrows that window from the whole batch's duration to
+      // the gap between this read and the disconnect route's own next KV write; it does not close
+      // it (see the round 2 adversary test for the residual). Absent entirely — never connected,
+      // or the disconnect already finished and deleted the record — is not this check's job: a
+      // caller that never verified the connection exists is a bug elsewhere, and treating "gone"
+      // the same as "disconnecting" here misclassified plenty of tests that build a bare store
+      // with no KV record at all, on purpose, to test mechanics this check has nothing to do with.
+      if (providerId) {
+        const live = await loadIntegration(env, providerId);
+        if (live?.disconnecting) throw new Error(`${providerId} is being disconnected`);
+      }
       const id = crypto.randomUUID();
       const now = Date.now();
       // Classify like a normal capture so mirror entries (email, calendar,
