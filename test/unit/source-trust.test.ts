@@ -180,6 +180,13 @@ const mkCandidate = (over: Partial<CollapseCandidate> & { id: string }): Collaps
 });
 
 describe("collapseNearDuplicates (T-0089.3.1, 4.4)", () => {
+  it("keeps distinct messages with the same subject when their bodies answer different questions", () => {
+    const candidates = [
+      mkCandidate({ id: "wrong", source: "email-gmail", content: "Subject: Reception details\nVenue: North Hall" }),
+      mkCandidate({ id: "right", source: "email-gmail", content: "Subject: Reception details\nVenue: South Hall" }),
+    ];
+    expect(collapseNearDuplicates(candidates).kept.map(c => c.id)).toEqual(["wrong", "right"]);
+  });
   it("groups mirror rows with the same signature; the best-ranked (first) member stays", () => {
     const candidates = [
       mkCandidate({ id: "best", content: "Statement ready: balance $10.00 as of 2026-08-11", createdAt: 3000 }),
