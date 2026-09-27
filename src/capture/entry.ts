@@ -215,7 +215,9 @@ export async function captureEntry(
     // session log is not evidence that the memory of X is wrong.
     protectConflict =
       conflictStatus === "canonical"
-      || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source);
+      || (TRANSCRIPT_SOURCES.has(source) && conflictSource !== source)
+      // A system job never rewrites a row it did not write, deprecation included.
+      || (opts.systemWrite === true && conflictSource !== source);
 
   }
 

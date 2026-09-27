@@ -65,4 +65,21 @@ describe("contradiction audit", () => {
       status: "deprecated", reason: "contradiction", newEntryId: result.id, channel: "rest",
     });
   });
+
+  it("systemWrite: a system capture contradicting a user memory deprecates nothing and lands as a draft", async () => {
+    const before = await env.DB.prepare(`SELECT tags, vector_ids FROM entries WHERE id = 'old'`).first();
+    const result = await captureEntry("I moved to LA", ["auto-insight"], "system", env, ctx, undefined, { workspaceId: "", actorId: "" }, undefined, { systemWrite: true, channel: "system:insight" });
+    expect(result.status).toBe("contradiction_protected");
+    if (result.status !== "contradiction_protected") return;
+    expect(await env.DB.prepare(`SELECT tags, vector_ids FROM entries WHERE id = 'old'`).first()).toEqual(before);
+    const fresh = await env.DB.prepare(`SELECT tags FROM entries WHERE id = ?`).bind(result.id).first() as { tags: string };
+    expect(JSON.parse(fresh.tags)).toContain("status:draft");
+    expect(await events()).toHaveLength(0);
+  });
+
+  it("systemWrite: a system capture may still supersede a row another system job wrote", async () => {
+    sqlite.db.prepare(`UPDATE entries SET source = 'system' WHERE id = 'old'`).run();
+    const result = await captureEntry("I moved to LA", [], "system", env, ctx, undefined, { workspaceId: "", actorId: "" }, undefined, { systemWrite: true, channel: "system:digest" });
+    expect(result.status).toBe("contradiction");
+  });
 });

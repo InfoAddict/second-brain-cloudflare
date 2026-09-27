@@ -13,7 +13,7 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Saving**
 
-- The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched.
+- The nightly digest and the weekly insight pass never merge into or replace a memory you or an assistant wrote. If one of them writes something that looks like an existing memory, it saves a new memory flagged as a possible duplicate and leaves yours untouched. If what they write contradicts one of your memories, they save it as a draft and leave your memory as it was, instead of marking yours deprecated.
 
 **Search**
 
