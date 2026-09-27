@@ -418,7 +418,6 @@ export async function captureEntry(
       }
     }
 
-    scheduleIndex(finalTags);
     // The user path deprecates by id, pinned to the writer's workspace; if the row is no longer
     // there this was not a contradiction this write may rule on: keep the newcomer, no counters, no edge.
     let deprecated = deprecatedBySystem;
@@ -438,10 +437,16 @@ export async function captureEntry(
       }
     }
     if (!deprecated) {
+      // Nothing was superseded, so the newcomer is an ordinary memory: `contradiction-resolved` would
+      // wrongly claim otherwise and permanently exclude it from insight candidates.
+      const keptTags = finalTags.filter(tag => tag !== "contradiction-resolved");
+      await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(keptTags), id).run();
+      scheduleIndex(keptTags);
       classifyThenInfer(id, c, env, ctx, cfg, kind =>
         inferEdgesOnWrite(id, neighbors, env, { suppressId, newKind: kind }));
-      return { status: "stored", id, tags: finalTags };
+      return { status: "stored", id, tags: keptTags };
     }
+    scheduleIndex(finalTags);
     try {
       await env.DB.prepare(`UPDATE entries SET contradiction_wins = contradiction_wins + 1 WHERE id = ?`).bind(id).run();
       await env.DB.prepare(`UPDATE entries SET contradiction_losses = contradiction_losses + 1 WHERE id = ?`).bind(conflictId).run();
