@@ -174,4 +174,22 @@ describe("push wording by kind", () => {
     // due select, subscriptions select, one batch for subscription-state writes
     expect(sq.issued.length - before).toBe(3);
   });
+
+  it("pins the worst case well under Workers' free-plan limit of 50 external fetches per invocation", async () => {
+    sq = await migrated();
+    for (let i = 0; i < 3; i++) {
+      seedDue(sq, `due-${i}`, `Due item ${i}`, Date.now() - DAY, `Due item ${i}`, ["task"]);
+    }
+    for (let i = 0; i < 60; i++) {
+      seedSubscription(sq, `sub-${i}`, "", `https://push.example.com/s${i}`);
+    }
+    const env = makeTestEnv(dbOf(sq) as any, { OAUTH_KV: makeMemoryKV() });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 201 }));
+
+    // 3 due items x 60 subscriptions = 180 possible sends, well past the cap.
+    await pushDueItems(env, "");
+
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(40);
+    expect(fetchSpy.mock.calls.length).toBeLessThan(50);
+  });
 });

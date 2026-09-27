@@ -20,6 +20,15 @@ const LEDGER_DECISION_TAG = "ledger:decision";
 
 /** A feed, not a blast: at most this many due items get a notification per run. */
 const MAX_NOTIFICATIONS_PER_RUN = 3;
+/**
+ * Each push send is an external fetch, and Workers' free plan allows only 50
+ * subrequests per invocation, shared with whatever else the hourly cron does
+ * in that same run. Capped well under that (leaving headroom, not chasing
+ * the ceiling): a candidate whose subscriptions are not all reached within
+ * this budget is left off the pushed-map, so the whole candidate (every one
+ * of its subscriptions, not a partial subset) is retried on the next run.
+ */
+const MAX_PUSH_FETCHES_PER_RUN = 40;
 /** Consecutive send failures a subscription tolerates before it is dropped. */
 const MAX_FAIL_COUNT = 5;
 /** {entryId: when_at at the time it was last pushed}, one map per workspace. */
@@ -218,7 +227,21 @@ async function sendOne(env: Env, sub: PushSubscriptionRow, payload: Record<strin
   return { result: res.ok ? "ok" : "failed", httpStatus: res.status };
 }
 
-/** One batch, whatever it carries: the delete/bump/last_ok_at writes below never cost more than one D1 statement together. */
+/**
+ * D1 bounds a statement to 100 parameters. An IN-list of endpoint hashes is
+ * chunked well under that (leaving room for a chunk's own extra literal
+ * binding, such as toMarkOk's Date.now()) — a large brain's subscription
+ * count must not overflow one statement's bind list.
+ */
+const HASHES_PER_STATEMENT = 90;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** One batch, however many statements it carries: still one D1 subrequest, whatever the chunking above splits it into. */
 async function applySubscriptionOutcomes(
   env: Env,
   outcomes: { hash: string; result: SendResult; failCountBefore: number }[],
@@ -228,20 +251,21 @@ async function applySubscriptionOutcomes(
   const toMarkOk = outcomes.filter(o => o.result === "ok").map(o => o.hash);
 
   const writes = [];
-  if (toDelete.length) {
+  for (const hashes of chunk(toDelete, HASHES_PER_STATEMENT)) {
     writes.push(env.DB.prepare(
-      `DELETE FROM push_subscriptions WHERE endpoint_hash IN (${toDelete.map(() => "?").join(",")})`,
-    ).bind(...toDelete));
+      `DELETE FROM push_subscriptions WHERE endpoint_hash IN (${hashes.map(() => "?").join(",")})`,
+    ).bind(...hashes));
   }
-  if (toBump.length) {
+  for (const hashes of chunk(toBump, HASHES_PER_STATEMENT)) {
     writes.push(env.DB.prepare(
-      `UPDATE push_subscriptions SET fail_count = fail_count + 1 WHERE endpoint_hash IN (${toBump.map(() => "?").join(",")})`,
-    ).bind(...toBump));
+      `UPDATE push_subscriptions SET fail_count = fail_count + 1 WHERE endpoint_hash IN (${hashes.map(() => "?").join(",")})`,
+    ).bind(...hashes));
   }
-  if (toMarkOk.length) {
+  const markOkAt = Date.now();
+  for (const hashes of chunk(toMarkOk, HASHES_PER_STATEMENT)) {
     writes.push(env.DB.prepare(
-      `UPDATE push_subscriptions SET last_ok_at = ?, fail_count = 0 WHERE endpoint_hash IN (${toMarkOk.map(() => "?").join(",")})`,
-    ).bind(Date.now(), ...toMarkOk));
+      `UPDATE push_subscriptions SET last_ok_at = ?, fail_count = 0 WHERE endpoint_hash IN (${hashes.map(() => "?").join(",")})`,
+    ).bind(markOkAt, ...hashes));
   }
   if (writes.length) await env.DB.batch(writes);
 }
@@ -263,6 +287,10 @@ export interface PushDueItemsResult {
  * D1 cost: one SELECT for due candidates, one SELECT for subscriptions, one
  * batch for whatever subscription-state writes the run produced — three
  * statements at most, regardless of how many notifications are sent.
+ *
+ * External-fetch cost: MAX_PUSH_FETCHES_PER_RUN at most, regardless of how
+ * many candidates or subscriptions exist (a candidate not fully covered
+ * within that budget is left for the next run — see below).
  */
 export async function pushDueItems(env: Env, workspaceId: string, resolved?: Readonly<Config>): Promise<PushDueItemsResult> {
   const now = Date.now();
@@ -293,15 +321,28 @@ export async function pushDueItems(env: Env, workspaceId: string, resolved?: Rea
   if (!subs.length) return { sent: 0, candidates: candidates.length, subscriptions: 0, results: [] };
 
   let sent = 0;
+  let fetchesUsed = 0;
+  let budgetExhausted = false;
   const outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[] = [];
   for (const candidate of candidates) {
+    if (budgetExhausted) break;
     const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree, config.TIMEZONE, now);
+    let candidateComplete = true;
     for (const sub of subs) {
+      if (fetchesUsed >= MAX_PUSH_FETCHES_PER_RUN) {
+        candidateComplete = false;
+        budgetExhausted = true;
+        break;
+      }
       const outcome = await sendOne(env, sub, payload(!!sub.content_free));
+      fetchesUsed++;
       if (outcome.result === "ok") sent++;
       outcomes.push({ hash: sub.endpoint_hash, result: outcome.result, httpStatus: outcome.httpStatus, failCountBefore: sub.fail_count });
     }
-    pushed[candidate.id] = candidate.when_at;
+    // Only a fully-covered candidate is marked pushed — a candidate cut short by
+    // the fetch budget stays eligible so its remaining subscriptions (not just
+    // the covered ones) are retried in full next run.
+    if (candidateComplete) pushed[candidate.id] = candidate.when_at;
   }
 
   await applySubscriptionOutcomes(env, outcomes);
