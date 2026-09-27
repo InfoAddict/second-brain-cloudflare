@@ -71,6 +71,10 @@ describe("core.buildRecallPlan / buildRecallUrl / buildBriefUrl", () => {
     expect(url.searchParams.get("project")).toBe("brain-app");
     expect(url.searchParams.get("workspace")).toBe("personal");
   });
+  it("always sends synthesize=0 (4.0: no hook-initiated recall pays for LLM synthesis)", () => {
+    const url = new URL(core.buildRecallUrl("https://w.example", { query: "q", topK: 5, workspace: "personal" }));
+    expect(url.searchParams.get("synthesize")).toBe("0");
+  });
   it("uses a recent-window generic query when there is no project", () => {
     const plan = core.buildRecallPlan(null, "personal", 1_000_000_000_000);
     expect(plan).toHaveLength(1);
@@ -105,6 +109,18 @@ describe("core.frameOutput", () => {
   it("respects a caller-supplied maxChars", () => {
     const out = core.frameOutput(Array.from({ length: 5 }, () => ({ content: "x".repeat(4000) })), null, null, { maxChars: 500 });
     expect(out.length).toBeLessThanOrEqual(500);
+  });
+  it("never renders an insight line, even when one is passed (4.0: no hook pays for LLM synthesis)", () => {
+    const out = core.frameOutput([{ content: "a remembered thing" }], "Two notes agree on the deadline.");
+    expect(out).not.toContain("Insight:");
+    expect(out).not.toContain("Two notes agree");
+  });
+  it("caps a single memory at MEMORY_MAX_CHARS before the shared budget rations between memories", () => {
+    const longOne = "a".repeat(4000);
+    const out = core.frameOutput([{ content: longOne }, { content: "a short second memory" }]);
+    expect(out).toContain("1. " + "a".repeat(core.MEMORY_MAX_CHARS));
+    expect(out).not.toContain("a".repeat(core.MEMORY_MAX_CHARS + 1));
+    expect(out).toContain("2. a short second memory"); // the cap left room for the second memory too
   });
 });
 

@@ -1,16 +1,24 @@
 /**
- * Budget guard for v4/hooks (7b7d8f5d) x release/v4's GET /recall (src/routes/recall.ts):
- * hook-initiated recalls pay for LLM insight synthesis, not just an embed call.
+ * Budget guard for v4/hooks x release/v4's GET /recall (src/routes/recall.ts).
  *
+ * UPDATED (4.0 decision, director + UX advisor, after the original finding
+ * below): every hook now sends `synthesize=0` on every /recall request
+ * (agent-hooks-core/core.js's buildRecallUrl). The first test in this file
+ * used to prove the opposite — that no client ever asked for synthesis to be
+ * off — and is now a regression guard proving the fix stays in place.
+ *
+ * Original finding, still true server-side and worth keeping for context:
  * src/routes/recall.ts builds recallEntries' params as
  * `{ query, topK, tag, after, before, kind, hops, project, explain }` — no
- * `synthesize` field. src/recall/search.ts: `const synthesize = params.synthesize
- * ?? true`, and `synthesize && matches.length > 1` gates one
+ * `synthesize` field read from the query string yet (a separate BE lane is
+ * adding it on v4/ux-be-2). src/recall/search.ts: `const synthesize =
+ * params.synthesize ?? true`, and `synthesize && matches.length > 1` gates one
  * env.AI.run(LLM_MODEL, ...) call (synthesizeInsight, src/recall/insight.ts)
- * per /recall request that finds more than one match. core.js's
- * buildRecallUrl (agent-hooks-core/core.js:222-230) never sets `synthesize`
- * either, so every hook-initiated recall that finds >1 match gets this
- * default and costs an LLM call, not just an embedding.
+ * per /recall request that finds more than one match. Until the BE lane
+ * merges, the Worker ignores the `synthesize=0` this hooks lane now sends and
+ * still synthesizes by default — sending it now is forward compatible and
+ * costs nothing, but does not yet stop the spend on its own. The neuron-cost
+ * pins below describe what is actually saved once server-side wiring lands.
  *
  * LLM_MODEL is @cf/meta/llama-4-scout-17b-16e-instruct (src/constants.ts:1),
  * capped at INSIGHT_MAX_TOKENS (src/constants.ts, 300) output tokens. Using
@@ -43,10 +51,10 @@ function neuronsFor(inputTokens: number, outputTokens: number): number {
     + (outputTokens / 1_000_000) * OUTPUT_NEURONS_PER_M_TOKENS;
 }
 
-describe("GET /recall as a hook calls it: synthesize is never turned off", () => {
-  it("buildRecallUrl never sets a synthesize param, so the server's `?? true` default applies", () => {
+describe("GET /recall as a hook calls it: every client now asks for synthesis to be off", () => {
+  it("buildRecallUrl always sends synthesize=0 (regression guard for the 4.0 fix)", () => {
     const url = coreJs.buildRecallUrl("https://w.example", { query: "q", topK: 5, workspace: "personal" });
-    expect(new URL(url).searchParams.has("synthesize")).toBe(false);
+    expect(new URL(url).searchParams.get("synthesize")).toBe("0");
   });
 });
 

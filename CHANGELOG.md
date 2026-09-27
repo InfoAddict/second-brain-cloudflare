@@ -4,6 +4,10 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 ## [Unreleased]
 
+**Session hooks**
+
+- Session start no longer spends Workers AI allowance: hooks inject your ranked memories directly.
+
 **Activity history**
 
 - A failed edit no longer shows up in a memory's history as an update. When the search re-index failed and the memory was left unchanged, the dashboard's edit still recorded an "updated" event; now only a saved edit does.
