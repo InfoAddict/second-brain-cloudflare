@@ -183,6 +183,8 @@ export async function restoreRowVectors(
 export type UpdateEntryResult =
   | { status: "not_found" }
   | { status: "reembed_failed" }
+  /** The row kept changing under the write: nothing was committed and the vectors were restored to the row as it stands. */
+  | { status: "conflict" }
   | { status: "updated"; vectorIds: string[] | null };
 
 /**
@@ -218,20 +220,6 @@ export async function updateEntryContent(
   writeCtx: WriteContext,
   change: ChangeContext,
 ): Promise<UpdateEntryResult> {
-  // vector_ids has to be read before any mutation: storeEntry overwrites it, and the
-  // cleanup below needs to know which vectors the entry had on the way in.
-  const row = await env.DB.prepare(
-    // scope-exempt: by-id: routes gate with getReadableEntry + assertCanEditContent
-    `SELECT tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
-  ).bind(id).first() as Record<string, any> | null;
-
-  if (!row) return { status: "not_found" };
-
-  const source = row.source as string;
-  const embedCtx = embedContextForRow(row, writeCtx);
-  const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
-  const existingTags: string[] = JSON.parse(row.tags ?? "[]");
-
   // Same treatment captureEntry gives every stored memory, which is the point — but note it
   // flattens all whitespace, so a replacement does not preserve line breaks or code fences.
   // `appendToEntry` deliberately does not flatten; prefer append when the shape matters.
@@ -239,91 +227,129 @@ export async function updateEntryContent(
   // Content that is nothing but hashtags cleans down to "", which would blank the entry —
   // keep it as written in that case and let the tags be extracted anyway.
   const finalContent = cleanContent || newContent;
-  // A caller-supplied verdict is applied after the strip, not before: tagsAfterWrite
-  // removes every volatility tag, so applying it first would throw the value away.
-  // A replacement starts from the tags the Worker owns rather than from every tag
-  // the entry has, so removing "pricing" in the editor cannot also remove the
-  // classifier's `kind:semantic`. Without a replacement this is the union it has
-  // always been, which is why nothing could be removed before.
-  const baseTags = replaceTags ? applyTagReplacement(existingTags, replaceTags) : existingTags;
-  const strippedTags = tagsAfterWrite([...new Set([...baseTags, ...hashtags])]);
-  const mergedTags = (volatility ? withVolatility(strippedTags, volatility) : strippedTags)
-    // `rolled-up` is a claim about content that no longer exists: the nightly digest wrote
-    // it in the same statement that appended a `[Digest: <id>]` marker to the body, and a
-    // full replacement destroys that marker. Left in place it costs the corrected memory a
-    // 0.4x recall penalty (recall/math.ts) and bars it from every future digest, burying
-    // the only copy of the new fact. The same reasoning tagsAfterWrite applies to the
-    // volatility/staleness verdicts, and the reason `append` must NOT strip it — an append
-    // keeps the digested original inside the entry, so the digest still covers it.
-    .filter(t => t !== "rolled-up");
-  // A person's edit takes a digest or insight out of the system's hands, in this same UPDATE.
-  const committedTags = withUserEditMarker(mergedTags);
 
-  // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors untouched and
-  // surface an error, instead of committing new content and then deleting every vector —
-  // which would leave the entry silently unsearchable. null means Vectorize is unreachable
-  // (#270), not that this embed failed.
-  let reembedded: StoredEntry | null;
-  try {
-    reembedded = await reembedOrDegrade(env, id, finalContent, mergedTags, source, config, embedCtx);
-  } catch (e) {
-    console.error("Re-embed failed — entry left unchanged:", e);
-    return { status: "reembed_failed" };
-  }
-  const newVectorIds = reembedded?.vectorIds ?? null;
+  // The row this write embedded from. The commit compares-and-sets on it: a second writer that
+  // committed (and upserted its own vectors under the same deterministic ids) in between must not be
+  // overwritten in D1 while its vectors win in the index.
+  let embeddedFrom: string | null = null;
+  let reembedded: StoredEntry | null = null;
+  let last: { row: Record<string, any>; vectorIds: string[]; embedCtx: WriteContext } | null = null;
 
-  // Safe to commit: either the embed succeeded, or Vectorize is unavailable and the old
-  // vectors are kept below rather than retired.
-  // A replacement is a new logical version of the entry, but it stays IN PLACE:
-  // workspace_id is never touched here (share/unshare moves rows, nothing else does),
-  // and actor_id is left untouched: the original author of a row being edited is not
-  // this call's to decide.
-  // The prior state is kept in the same batch as the change.
-  const now = Date.now();
-  const committed = await env.DB.batch([
-    snapshotStatement(env, { entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now }),
-    env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-      .bind(finalContent, JSON.stringify(committedTags), now, id),
-    pruneStatement(env, id, config.VERSION_KEEP),
-  ]);
-  if (changesOf(committed[1]) === 0) {
-    // Forgotten while the re-embed ran: its vectors were deleted with it, so the fresh ones are orphans.
+  for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
+    // vector_ids has to be read before any mutation: storeEntry overwrites it, and the
+    // cleanup below needs to know which vectors the entry had on the way in.
+    const row = await env.DB.prepare(
+      // scope-exempt: by-id: routes gate with getReadableEntry + assertCanEditContent
+      `SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
+    ).bind(id).first() as Record<string, any> | null;
+
+    if (!row) {
+      // Forgotten meanwhile: its own vectors went with it, and any this write made are orphans.
+      if (reembedded?.vectorIds.length) {
+        try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
+      }
+      return { status: "not_found" };
+    }
+
+    const readContent: string = row.content;
+    const readTags: string = row.tags ?? "[]";
+    const source = row.source as string;
+    const embedCtx = embedContextForRow(row, writeCtx);
+    const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
+    const existingTags: string[] = JSON.parse(readTags);
+    last = { row, vectorIds: oldVectorIds, embedCtx };
+
+    // A caller-supplied verdict is applied after the strip, not before: tagsAfterWrite
+    // removes every volatility tag, so applying it first would throw the value away.
+    // A replacement starts from the tags the Worker owns rather than from every tag
+    // the entry has, so removing "pricing" in the editor cannot also remove the
+    // classifier's `kind:semantic`. Without a replacement this is the union it has
+    // always been, which is why nothing could be removed before.
+    const baseTags = replaceTags ? applyTagReplacement(existingTags, replaceTags) : existingTags;
+    const strippedTags = tagsAfterWrite([...new Set([...baseTags, ...hashtags])]);
+    const mergedTags = (volatility ? withVolatility(strippedTags, volatility) : strippedTags)
+      // `rolled-up` is a claim about content that no longer exists: the nightly digest wrote
+      // it in the same statement that appended a `[Digest: <id>]` marker to the body, and a
+      // full replacement destroys that marker. Left in place it costs the corrected memory a
+      // 0.4x recall penalty (recall/math.ts) and bars it from every future digest, burying
+      // the only copy of the new fact. The same reasoning tagsAfterWrite applies to the
+      // volatility/staleness verdicts, and the reason `append` must NOT strip it — an append
+      // keeps the digested original inside the entry, so the digest still covers it.
+      .filter(t => t !== "rolled-up");
+    // A person's edit takes a digest or insight out of the system's hands, in this same UPDATE.
+    const committedTags = withUserEditMarker(mergedTags);
+
+    // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors untouched and
+    // surface an error, instead of committing new content and then deleting every vector —
+    // which would leave the entry silently unsearchable. null means Vectorize is unreachable
+    // (#270), not that this embed failed. A retry re-embeds only if the row's text changed (another
+    // writer may have upserted over these ids); a tags-only change keeps the vectors already made.
+    if (attempt === 1 || embeddedFrom !== readContent) {
+      try {
+        reembedded = await reembedOrDegrade(env, id, finalContent, mergedTags, source, config, embedCtx);
+      } catch (e) {
+        console.error("Re-embed failed — entry left unchanged:", e);
+        return { status: "reembed_failed" };
+      }
+      embeddedFrom = readContent;
+    }
+    const newVectorIds = reembedded?.vectorIds ?? null;
+
+    // Safe to commit: either the embed succeeded, or Vectorize is unavailable and the old
+    // vectors are kept below rather than retired.
+    // A replacement is a new logical version of the entry, but it stays IN PLACE:
+    // workspace_id is never touched here (share/unshare moves rows, nothing else does),
+    // and actor_id is left untouched: the original author of a row being edited is not
+    // this call's to decide.
+    // The prior state is kept in the same batch as the change, and a lost attempt writes neither.
+    const now = Date.now();
+    const committed = await env.DB.batch([
+      snapshotStatement(env, {
+        entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
+        guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
+      }),
+      env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?`)
+        .bind(finalContent, JSON.stringify(committedTags), now, id, readContent, readTags),
+      pruneStatement(env, id, config.VERSION_KEEP),
+    ]);
+    if (changesOf(committed[1]) === 0) continue;
+
+    // Rewritten content can carry hashtags the brain has never seen, so this is one of the
+    // two places an unknown tag enters the corpus (#288). It sits here rather than in the
+    // route because #289 made this the single update path — putting it in the caller would
+    // have left the MCP tool introducing tags the cache never learned about.
+    await rememberTags(env, mergedTags, embedCtx.workspaceId);
+
     if (newVectorIds) {
-      try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
+      try {
+        await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+      } catch (e) {
+        console.error("Old vector cleanup failed (non-fatal):", e);
+      }
     }
-    return { status: "not_found" };
+
+    // An edit changes what the entry means, so it changes where the entry belongs
+    // in the graph. Run on the vector the re-embed above already produced, so this
+    // costs one Vectorize query and no second embed.
+    //
+    // Skipped on the keyword-only degrade (#270): with no fresh vector there is
+    // nothing to ask the index with, and querying on the stale one would place the
+    // entry by the text it no longer contains.
+    if (reembedded?.values) {
+      try {
+        await inferEdgesOnWrite(id, await neighborsFromVectorQuery(reembedded.values, env), env);
+      } catch (e) {
+        console.error("Update auto-link failed (non-fatal):", e);
+      }
+    }
+
+    return { status: "updated", vectorIds: newVectorIds };
   }
 
-  // Rewritten content can carry hashtags the brain has never seen, so this is one of the
-  // two places an unknown tag enters the corpus (#288). It sits here rather than in the
-  // route because #289 made this the single update path — putting it in the caller would
-  // have left the MCP tool introducing tags the cache never learned about.
-  await rememberTags(env, mergedTags, embedCtx.workspaceId);
-
-  if (newVectorIds) {
-    try {
-      await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-    } catch (e) {
-      console.error("Old vector cleanup failed (non-fatal):", e);
-    }
-  }
-
-  // An edit changes what the entry means, so it changes where the entry belongs
-  // in the graph. Run on the vector the re-embed above already produced, so this
-  // costs one Vectorize query and no second embed.
-  //
-  // Skipped on the keyword-only degrade (#270): with no fresh vector there is
-  // nothing to ask the index with, and querying on the stale one would place the
-  // entry by the text it no longer contains.
-  if (reembedded?.values) {
-    try {
-      await inferEdgesOnWrite(id, await neighborsFromVectorQuery(reembedded.values, env), env);
-    } catch (e) {
-      console.error("Update auto-link failed (non-fatal):", e);
-    }
-  }
-
-  return { status: "updated", vectorIds: newVectorIds };
+  // Out of attempts. The vectors just written describe text that never committed, so re-embed the
+  // row as it now stands: the last upsert in any interleaving must describe committed text.
+  if (last) await restoreRowVectors(env, id, last.vectorIds, reembedded?.vectorIds ?? [], last.row.source as string, config, last.embedCtx);
+  return { status: "conflict" };
 }
 
 /** The row changed under a compare-and-set writer more often than it may retry: nothing was written. HTTP 409. */

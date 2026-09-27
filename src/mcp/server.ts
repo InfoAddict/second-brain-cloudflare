@@ -678,6 +678,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: `Couldn't update entry ${id}: search re-index failed. Your memory is unchanged — please try again.` }] };
       }
 
+      if (result.status === "conflict") {
+        return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was written. Please try again.` }] };
+      }
+
       if (identity && result.status === "updated") {
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp" } });
       }

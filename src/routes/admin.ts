@@ -1520,17 +1520,21 @@ export async function handleAdminRoutes(
 
     let processed = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const row of toProcess as Record<string, any>[]) {
       try {
         // cfg carries the user's LLM_MODEL choice; without it this backfill
         // classifies with the shipped default and ignores their setting.
         const { canonical, kind } = await classifyEntry(row.content as string, env, cfg);
-        let tags: string[] = JSON.parse(row.tags as string);
+        const readTags: string = row.tags as string;
+        let tags: string[] = JSON.parse(readTags);
         if (kind) tags = withKind(tags, kind);
         if (canonical && getStatus(tags) === null && !hasCapsuleTag(tags)) tags = withStatus(tags, "canonical");
-        await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`).bind(JSON.stringify(tags), row.id).run();
-        processed++;
+        // exempt: hygiene, compare-and-set on the tags read (T-0089.10); a miss is skipped, not overwritten.
+        const res = await env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ?`).bind(JSON.stringify(tags), row.id, readTags).run();
+        if ((res.meta.changes ?? res.meta.rows_written ?? 0) === 0) skipped++;
+        else processed++;
       } catch (e) {
         console.error("Classification backfill failed for entry", row.id, e);
         failed++;
@@ -1542,7 +1546,7 @@ export async function handleAdminRoutes(
       `SELECT COUNT(*) as count FROM entries WHERE ${UNCLASSIFIED_WHERE}`
     ).first() as Record<string, any> | null;
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, skipped, remaining: (remaining?.count as number) ?? 0 });
   }
 
   // POST /insights/accrue, run one accrual pass on demand, right now.

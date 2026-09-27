@@ -319,6 +319,13 @@ export class D1Mock {
           if (row) { row.when_at = when_at; row.when_kind = when_kind; row.when_source = "explicit"; }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // classify writes: compare-and-set on the tags read (T-0089.10).
+        if (s.startsWith("UPDATE entries SET tags = ? WHERE id = ? AND tags = ?")) {
+          const [tags, id, readTags] = args;
+          const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags);
+          if (row) row.tags = tags;
+          return { meta: { changes: row ? 1 : 0 } };
+        }
         if (s.startsWith("UPDATE entries SET tags = ? WHERE id")) {
           const [tags, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
@@ -329,6 +336,13 @@ export class D1Mock {
           const [content, tags, updated_at, workspace_id, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; row.workspace_id = workspace_id; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // updateEntryContent's compare-and-set commit.
+        if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?")) {
+          const [content, tags, updated_at, id, readContent, readTags] = args;
+          const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags);
+          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id")) {

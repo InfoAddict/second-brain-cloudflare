@@ -205,16 +205,6 @@ export async function captureEntry(
           // 90 days to re-derive anything. The caller judged the content being merged in, so
           // its verdict describes the combined body more recently than the target's does.
           const incomingVerdict = getVolatility(t);
-          const stripped = tagsAfterWrite(existingTags);
-          const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
-          // A person's capture merging into a digest or insight makes it theirs (a system
-          // job merging into its own row does not).
-          const refreshedTags = opts.systemWrite ? verdictTags : withUserEditMarker(verdictTags);
-          const now = Date.now();
-          // A system merge commits only if the row is still what was read: a person's edit can land
-          // during the re-embed above, and their text and `user-edited` marker must not be overwritten.
-          const cas = opts.systemWrite !== undefined;
-          const casValues = [targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource] as const;
           // The version keeps the target's prior text and the incoming capture, so a merge can be undone
           // and the incoming memory re-created. The incoming text is dropped when the row would not fit.
           const incoming = { incoming: c, incomingTags: t, incomingSource: source };
@@ -222,25 +212,55 @@ export async function captureEntry(
             + new TextEncoder().encode(JSON.stringify(incoming)).length + 1024 <= (opts.versionRowBudgetBytes ?? VERSION_ROW_BUDGET_BYTES)
             ? incoming
             : { incomingTruncated: true, incomingBytes: new TextEncoder().encode(c).length };
-          const results = await env.DB.batch([
-            snapshotStatement(env, {
-              entryId: targetId, reason: mergeAction.action === "merge" ? "merge" : "replace", change, content: { kind: "next", content: newContent },
-              nextTags: refreshedTags, meta: versionMeta, now,
-              // A system merge's snapshot shares its compare-and-set, so a lost merge writes no version.
-              guard: cas ? p => `e.tags = ${p.add(casValues[0])} AND e.content = ${p.add(casValues[1])} AND e.workspace_id = ${p.add(casValues[2])} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(casValues[3])}` : undefined,
-            }),
-            cas
-              ? env.DB.prepare(
+          const reason = mergeAction.action === "merge" ? "merge" as const : "replace" as const;
+
+          // A system job merges only through this one attempt, matching prep: its snapshot shares the
+          // same compare-and-set, so a lost merge writes no version and keeps both rows (unversioned).
+          const commitSystem = async (): Promise<boolean> => {
+            const now = Date.now();
+            const stripped = tagsAfterWrite(existingTags);
+            const refreshedTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+            const results = await env.DB.batch([
+              snapshotStatement(env, {
+                entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
+                guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`,
+              }),
+              env.DB.prepare(
                 // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
                 `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
-                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, ...casValues)
-              : env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-                .bind(newContent, JSON.stringify(refreshedTags), now, targetId),
-            pruneStatement(env, targetId, cfg.VERSION_KEEP),
-          ]);
-          const committed = results[1];
-          if (cas && changesOf(committed) === 0) {
-            console.error("System merge lost the row to a concurrent edit — keeping both");
+                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource),
+              pruneStatement(env, targetId, cfg.VERSION_KEEP),
+            ]);
+            return changesOf(results[1]) > 0;
+          };
+
+          // A person's merge compare-and-sets on the content and tags it embedded from (T-0089.10, W2:
+          // a system merge already did, prep 0798b62). A miss means someone else's edit landed during
+          // the re-embed above, so — like the system path — this keeps both rather than overwriting a
+          // concurrent edit with a merge decision that no longer accounts for it.
+          const commitPerson = async (): Promise<boolean> => {
+            const now = Date.now();
+            const stripped = tagsAfterWrite(existingTags);
+            const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+            // A person's capture merging into a digest or insight makes it theirs.
+            const refreshedTags = withUserEditMarker(verdictTags);
+            const results = await env.DB.batch([
+              snapshotStatement(env, {
+                entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
+                guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)}`,
+              }),
+              env.DB.prepare(
+                // scope-exempt: by-id: the merge target this write read, compare-and-set on the tags and content it embedded from
+                `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?`)
+                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent),
+              pruneStatement(env, targetId, cfg.VERSION_KEEP),
+            ]);
+            return changesOf(results[1]) > 0;
+          };
+
+          const landed = opts.systemWrite !== undefined ? await commitSystem() : await commitPerson();
+          if (!landed) {
+            console.error("Merge lost the row to a concurrent edit — keeping both");
             await restoreRowVectors(env, targetId, oldVectorIds, newVectorIds, existingSource, cfg, writeCtx);
           } else {
             try {
