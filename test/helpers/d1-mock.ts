@@ -73,6 +73,9 @@ const SCHEMA_PROBE_RESULTS = [
   // entry_versions.prior_length_utf16 arrives by ALTER on brains created before it existed and
   // lives in the base CREATE on fresh ones (T-0089.1.1, ADV-10) — a migrated brain reports it either way.
   { kind: "entry_version_column", name: "prior_length_utf16" },
+  // entries_trash.nonce, same shape (T-0089.1.1, adv-final MAJOR 1): ALTER on an old brain, base
+  // CREATE on a fresh one, reported either way by a migrated brain.
+  { kind: "entries_trash_column", name: "nonce" },
 ];
 
 /**
