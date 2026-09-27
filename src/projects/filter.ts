@@ -36,3 +36,16 @@ export function projectMemberTags(rows: readonly ProjectRow[]): Set<string> {
   if (!rows.length) return new Set();
   return new Set([`${PROJECT_TAG_PREFIX}${rows[0].id}`, ...rows.flatMap(r => r.aliases)].map(t => t.toLowerCase()));
 }
+
+/**
+ * The same OR group as one bound JSON array, so a 40-alias project costs one binding however
+ * many statements repeat it. `column` must be qualified when the outer query has other tables.
+ */
+export function projectFilterJsonSql(rows: readonly ProjectRow[], column = "tags"): { clause: string; bindings: string[] } {
+  const { patterns } = expandProjectFilter(rows);
+  if (!patterns.length) throw new Error("projectFilterJsonSql: no project rows to filter by");
+  return {
+    clause: `EXISTS (SELECT 1 FROM json_each(?) AS pf WHERE ${column} LIKE pf.value ${TAG_LIKE_ESCAPE})`,
+    bindings: [JSON.stringify(patterns)],
+  };
+}

@@ -45,10 +45,8 @@ const admin = (teams: number): Identity => ({
 
 describe("brief with a 40-pattern project filter stays under D1's bound-parameter ceiling", () => {
   for (const teams of [1, 8, 30]) {
-    // Known defect (QA T-0089.6.8): the resurface pick binds scope + project patterns twice and
-    // overflows at 8+ workspaces with a 39-alias project. it.fails flips red once that is fixed.
-    const known = teams === 1 ? it : it.fails;
-    known(`computeBrief, admin in ${teams} teams`, async () => {
+    // The project patterns travel as one JSON binding, so scope width no longer multiplies them.
+    it(`computeBrief, admin in ${teams} teams`, async () => {
       expect(await measure(env => computeBrief(env, admin(teams), true, [project]))).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
     });
     it(`computeAgentBrief, admin in ${teams} teams`, async () => {
