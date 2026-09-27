@@ -248,6 +248,15 @@ WHERE instr(lower(tags), '"project:') > 0;
 -- rows. Must stay in step with src/db/init.ts.
 CREATE INDEX IF NOT EXISTS idx_entries_conflict_held ON entries(workspace_id, id)
 WHERE instr(lower(tags), '"conflict-held"') > 0;
+-- Agent brief queues: each scans only its own rows, not every memory. The WHERE clauses are the
+-- instr(...) forms src/brief/compute.ts repeats. Must stay in step with src/db/init.ts.
+-- idx_entries_when (when_at) lives only in src/db/init.ts: when_at is a runtime ALTER column.
+CREATE INDEX IF NOT EXISTS idx_entries_task ON entries(workspace_id, created_at)
+WHERE instr(lower(tags), '"task"') > 0;
+CREATE INDEX IF NOT EXISTS idx_entries_insight ON entries(workspace_id, created_at)
+WHERE instr(lower(tags), '"auto-insight"') > 0;
+CREATE INDEX IF NOT EXISTS idx_entries_stale ON entries(workspace_id, id)
+WHERE instr(lower(tags), '"stale:as-of"') > 0;
 
 -- Web Push subscriptions. One row per subscribed browser/device, scoped to
 -- the workspace it was created against. Must stay in step with src/db/init.ts.

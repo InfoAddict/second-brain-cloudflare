@@ -68,6 +68,8 @@ const ALL_OBJECTS = ["entries", "idx_entries_created_at", "idx_entries_source", 
   "projects", "idx_projects_workspace", "idx_entries_project",
   // Held draft digests (T-0089.4.4); post-column like the capsule and project indexes.
   "idx_entries_conflict_held",
+  // Agent brief queues (T-0089.6): partial indexes, post-column.
+  "idx_entries_when", "idx_entries_task", "idx_entries_insight", "idx_entries_stale",
   // Web Push subscriptions.
   "push_subscriptions", "idx_push_subscriptions_workspace",
   "entries_fts",
@@ -262,7 +264,8 @@ describe("initializeDatabase updated_at migration", () => {
       // GROUP BY seed — five statements, all through prepare(), in their own
       // dedicated batch mirroring entries_fts's ownership rule.
       // MOVED 61 -> 62 (T-0089.4.4) by idx_entries_conflict_held, the partial index behind the digest's held-draft check.
-      expect(migrated).toBe(62); // 27 base objects + 18 ALTERs + 11 post-column objects + the email-index CREATE
+      // MOVED 62 -> 66 (T-0089.6.1) by the four partial indexes behind the agent brief.
+      expect(migrated).toBe(66); // 27 base objects + 18 ALTERs + 15 post-column objects + the email-index CREATE
       expect(execd.length + prepared.length).toBe(migrated + 3); // three probes total
       expect(prepared).toHaveLength(16); // three probes plus thirteen prepared DDLs (four capsule triggers, entries_fts + its three triggers, entry_counts + its three triggers + its seed)
       expect(touchesEntries(execd)).toEqual([]);
@@ -596,7 +599,8 @@ describe("initializeDatabase against real SQLite", () => {
     // MOVED 54 -> 55 (T-0065) by entry_counts, its three triggers, and its
     // GROUP BY seed, created together in ONE batch — same +1, not +5.
     // MOVED 55 -> 56 (T-0089.4.4) by idx_entries_conflict_held.
-    expect(cold).toBe(56); // one probe, then the 55 statements a new brain needs
+    // MOVED 56 -> 60 (T-0089.6.1) by the four partial indexes behind the agent brief.
+    expect(cold).toBe(60); // one probe, then the 59 statements a new brain needs
     expect(d1.issued).toHaveLength(1);
     expect(d1.issued[0]).toMatch(PROBE);
   });
@@ -627,7 +631,8 @@ describe("initializeDatabase against real SQLite", () => {
     // CREATE stood in for it, and two ALTERs it should never have owed showed up
     // here. Anything reappearing in this list means schema.sql and init.ts have
     // drifted apart again.
-    expect(d1.issued.filter(s => /^CREATE/.test(s))).toEqual([]);
+    // idx_entries_when indexes when_at, an ALTER column schema.sql cannot carry, so init owes it.
+    expect(d1.issued.filter(s => /^CREATE/.test(s) && !/idx_entries_when/.test(s))).toEqual([]);
     expect(sameColumns(d1.columns())).toBe(true);
   });
 
