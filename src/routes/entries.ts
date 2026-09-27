@@ -4,7 +4,7 @@ import { initializeDatabase } from "../db/init";
 import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
 import { assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
-import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
+import { layerOf, scopeWhere, readTeamParam, readableWorkspaces } from "../lib/scope";
 import { readEntryTimeline } from "../memory/history";
 import { loadHistory } from "../memory/versions";
 import { buildEntryHistoryFromReads, readEntryVersion } from "../memory/history-view";
@@ -172,7 +172,7 @@ export async function handleEntriesRoutes(
     // company layer: a restore is not a share, and the company layer is only
     // ever reached through POST /share ("move, not copy").
     const writeCtx = { workspaceId: auth.personalWorkspaceId, actorId: auth.userId };
-    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset, projectOffset, writeCtx });
+    const summary = await importExportPayload(env, parsed.payload, { limit, offset, edgeOffset, projectOffset, writeCtx, readableWorkspaceIds: readableWorkspaces(auth) });
     return json(summary);
   }
 

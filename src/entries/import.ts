@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { D1_MAX_BOUND_PARAMS } from "../constants";
-import { isSymmetric, isValidEdgeType } from "../graph/edges";
+import { edgeEndpointsReadableSql, isSymmetric, isValidEdgeType } from "../graph/edges";
 import type { EdgeProvenance } from "../graph/types";
 import { PROVENANCE_VALUES } from "../graph/types";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
@@ -126,6 +126,9 @@ export interface ImportOptions {
    * that have a real Identity must pass one resolved at the edge.
    */
   writeCtx?: WriteContext;
+  /** Workspaces the importer can read (readableWorkspaces). An edge is written only between entries
+   * in them; any other endpoint is skipped like a missing one. Defaults to writeCtx's workspace. */
+  readableWorkspaceIds?: string[];
 }
 
 export interface ImportSummary {
@@ -404,20 +407,38 @@ async function flushInsertBatch(
   }
 }
 
-function bindEdgeInsert(env: Env, edge: PendingEdge, writeCtx: WriteContext) {
+/** Endpoint ids the importer can read: an id outside its workspaces reads exactly like a missing one. */
+async function loadReadableIds(env: Env, ids: string[], readable: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  const step = D1_MAX_BOUND_PARAMS - 1;
+  for (let i = 0; i < ids.length; i += step) {
+    const batch = ids.slice(i, i + step);
+    const { results } = await env.DB.prepare(
+      // scope-checked: workspace_id IN the importer's readable workspaces, bound as one JSON array
+      `SELECT id FROM entries WHERE id IN (${batch.map(() => "?").join(", ")}) AND workspace_id IN (SELECT value FROM json_each(?))`,
+    ).bind(...batch, JSON.stringify(readable)).all() as { results: { id: string }[] };
+    for (const row of results) found.add(row.id);
+  }
+  return found;
+}
+
+function bindEdgeInsert(env: Env, edge: PendingEdge, writeCtx: WriteContext, readable: string[]) {
   let source = edge.source_id;
   let target = edge.target_id;
   if (isValidEdgeType(edge.type) && isSymmetric(edge.type) && source > target) {
     [source, target] = [target, source];
   }
   const now = Date.now();
+  const readableJson = JSON.stringify(readable);
   return env.DB.prepare(
+    // scope-exempt: by-id: the guard reads only this edge's endpoints, scoped by the importer's readable workspaces
     `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE ${edgeEndpointsReadableSql("?", "?", "?")}
      ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`,
   ).bind(
     crypto.randomUUID(), source, target, edge.type, edge.weight, edge.provenance, "{}", edge.created_at, now,
-    writeCtx.workspaceId,
+    writeCtx.workspaceId, source, readableJson, target, readableJson,
   );
 }
 
@@ -426,17 +447,20 @@ async function flushEdgeBatch(
   batch: PendingEdge[],
   existingEdgeKeys: Set<string>,
   results: ImportResultItem[],
-  counters: { imported: number; failed: number },
+  counters: { imported: number; failed: number; skipped: number },
   writeCtx: WriteContext,
+  readable: string[],
 ): Promise<void> {
   if (!batch.length) return;
 
-  const stmts = batch.map(row => bindEdgeInsert(env, row, writeCtx));
+  const stmts = batch.map(row => bindEdgeInsert(env, row, writeCtx, readable));
   try {
-    await env.DB.batch(stmts);
-    for (const row of batch) {
+    const written = await env.DB.batch(stmts);
+    for (const [i, row] of batch.entries()) {
       const key = normalizedEdgeKey(row.source_id, row.target_id, row.type);
       existingEdgeKeys.add(key);
+      // The guard refused it (an endpoint left the importer's reach since the pre-read): a plain skip.
+      if ((written[i]?.meta?.changes ?? 1) === 0) { counters.skipped++; continue; }
       counters.imported++;
       results.push({
         source_id: row.source_id,
@@ -448,9 +472,10 @@ async function flushEdgeBatch(
   } catch {
     for (const row of batch) {
       try {
-        await bindEdgeInsert(env, row, writeCtx).run();
+        const res = await bindEdgeInsert(env, row, writeCtx, readable).run();
         const key = normalizedEdgeKey(row.source_id, row.target_id, row.type);
         existingEdgeKeys.add(key);
+        if ((res?.meta?.changes ?? 1) === 0) { counters.skipped++; continue; }
         counters.imported++;
         results.push({
           source_id: row.source_id,
@@ -598,6 +623,7 @@ export async function importExportPayload(
   const projects = body.projects ?? [];
   const projectOffset = Math.min(Math.max(opts.projectOffset ?? 0, 0), projects.length);
   const writeCtx = opts.writeCtx ?? OWNER_WRITE_CONTEXT;
+  const readable = opts.readableWorkspaceIds ?? [writeCtx.workspaceId];
 
   const results: ImportResultItem[] = [];
   let imported = 0;
@@ -678,17 +704,17 @@ export async function importExportPayload(
       parsedEdges.push(parseEdgeRow(edge));
     }
 
-    // Endpoints this call has not already proven to exist (entries imported above
-    // are in existingIds), resolved in one chunked query.
+    // Endpoints the importer can READ, in one chunked scoped query. existingIds is not enough: it
+    // also holds ids that exist in other workspaces (the entries page skips those), and an edge to
+    // one would put a private id in this importer's export.
     const endpoints = [
       ...new Set(parsedEdges.flatMap(p => ("edge" in p ? [p.edge.source_id, p.edge.target_id] : []))),
     ];
-    const unknown = endpoints.filter(id => !existingIds.has(id));
-    for (const id of (await loadExistingIds(env, unknown, false)).live) existingIds.add(id);
+    const readableIds = await loadReadableIds(env, endpoints, readable);
     const existingEdgeKeys = await loadExistingEdgeKeys(env, endpoints);
 
     const pendingEdgeBatch: PendingEdge[] = [];
-    const edgeBatchCounters = { imported: 0, failed: 0 };
+    const edgeBatchCounters = { imported: 0, failed: 0, skipped: 0 };
     for (const p of parsedEdges) {
       if ("failure" in p) {
         edges_failed++;
@@ -696,9 +722,9 @@ export async function importExportPayload(
         continue;
       }
       const { source_id, target_id, type } = p.edge;
-      if (!existingIds.has(source_id) || !existingIds.has(target_id)) {
-        edges_failed++;
-        results.push({ source_id, target_id, type, status: "failed", reason: "missing_endpoint" });
+      // Missing or not readable: the same plain skip, so the reply never says an id exists elsewhere.
+      if (!readableIds.has(source_id) || !readableIds.has(target_id)) {
+        edges_skipped++;
         continue;
       }
       const edgeKey = normalizedEdgeKey(source_id, target_id, type);
@@ -710,14 +736,15 @@ export async function importExportPayload(
       pendingEdgeBatch.push(p.edge);
 
       if (pendingEdgeBatch.length >= IMPORT_D1_BATCH_SIZE) {
-        await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx);
+        await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx, readable);
       }
     }
     if (pendingEdgeBatch.length) {
-      await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx);
+      await flushEdgeBatch(env, pendingEdgeBatch.splice(0), existingEdgeKeys, results, edgeBatchCounters, writeCtx, readable);
     }
     edges_imported += edgeBatchCounters.imported;
     edges_failed += edgeBatchCounters.failed;
+    edges_skipped += edgeBatchCounters.skipped;
 
     // Projects ride the same call as the edges page, on their own cursor, so a client
     // that only knows entries and edges still restores the first page of them.

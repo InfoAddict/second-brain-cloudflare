@@ -139,7 +139,7 @@ describe("POST /import", () => {
     expect(db.entries).toHaveLength(1);
   });
 
-  it("fails edges with missing endpoints but still imports entries", async () => {
+  it("skips edges with missing endpoints, without saying why, but still imports entries", async () => {
     const payload = {
       version: 2,
       entries: [{ id: "a", content: "Only A", created_at: 1 }],
@@ -150,13 +150,10 @@ describe("POST /import", () => {
     const data = await res.json() as any;
     expect(data.imported).toBe(1);
     expect(data.edges_imported).toBe(0);
-    expect(data.edges_failed).toBe(1);
-    expect(data.results).toContainEqual(expect.objectContaining({
-      source_id: "a",
-      target_id: "missing",
-      status: "failed",
-      reason: "missing_endpoint",
-    }));
+    // A missing endpoint and another member's private one look the same (T-0089.1.1): a plain skip.
+    expect(data.edges_skipped).toBe(1);
+    expect(data.edges_failed).toBe(0);
+    expect(JSON.stringify(data.results)).not.toMatch(/missing/);
   });
 
   it("does not trigger capture duplicate detection for similar content with a new id", async () => {

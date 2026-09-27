@@ -575,8 +575,20 @@ export class D1Mock {
           // ten values, then the pair the guard tests. Modelled here because the
           // rule lives in the statement, so a mock that ignored it would report
           // an insert production would have skipped.
-          if (s.includes("WHERE NOT EXISTS")) {
-            const [ga, gb, gc, gd] = args.slice(10);
+          // The endpoint readability guard every edge insert carries (edgeEndpointsReadableSql): the
+          // ten values, then source, readable JSON, target, readable JSON.
+          let guardEnd = 10;
+          if (s.includes("json_each")) {
+            const [gs, gsr, gt, gtr] = args.slice(10, 14);
+            guardEnd = 14;
+            const readableIn = (id: unknown, json: unknown) => {
+              const allowed = JSON.parse(String(json)) as string[];
+              return db.entries.some((e: any) => e.id === id && allowed.includes(e.workspace_id ?? ""));
+            };
+            if (!readableIn(gs, gsr) || !readableIn(gt, gtr)) return { meta: { changes: 0 } };
+          }
+          if (s.includes("AND NOT EXISTS")) {
+            const [ga, gb, gc, gd] = args.slice(guardEnd);
             const typed = db.edges.some((e: any) =>
               ((e.source_id === ga && e.target_id === gb) || (e.source_id === gc && e.target_id === gd))
               && e.type !== "relates_to");

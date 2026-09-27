@@ -19,7 +19,7 @@ import { getConnections } from "../graph/traverse";
 import type { Identity } from "../lib/identity";
 import { assertCanEditContent, assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { listTeamWorkspaces } from "../lib/team-admin";
-import { layerOf, scopeWhereForRead, scopeWrite, effectiveWriteTarget, readTeamParam, readScopeWorkspaces, primaryCompanyWorkspaceId, type WriteContext } from "../lib/scope";
+import { layerOf, readableWorkspaces, scopeWhereForRead, scopeWrite, effectiveWriteTarget, readTeamParam, readScopeWorkspaces, primaryCompanyWorkspaceId, type WriteContext } from "../lib/scope";
 import { isManagedMirror, mirrorEditError, mirrorUndoError } from "../integrations/mirror";
 import { KIND_VALUES, type MemoryKind } from "../memory/kind";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
@@ -1225,7 +1225,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: kindMismatchMessage(type) }] };
       }
 
-      const edge = await createEdge(source_id, target_id, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id }, env);
+      const edge = await createEdge(source_id, target_id, type, { provenance: "explicit", weight: 1.0, workspaceId: source.workspace_id, readableWorkspaceIds: identity ? readableWorkspaces(identity) : [source.workspace_id] }, env);
       if (!edge) return { content: [{ type: "text", text: "Cannot link an entry to itself." }] };
       return { content: [{ type: "text", text: `Linked ${edge.source_id} → ${edge.target_id} (${edgeLabel(edge.type)}).` }] };
     }

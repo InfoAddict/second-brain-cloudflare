@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (196 queries, 104 exceptions, 15 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (198 queries, 104 exceptions, 17 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1439,7 +1439,10 @@ describe("the checker over the real source tree", () => {
     // read (src/vectorize/pending.ts) is new.
     // Deliberate: +1 query and +1 scope-exempt (195/103 -> 196/104) for T-0089.1.1 round 2: import's
     // entry insert now probes entries and entries_trash by id in the same statement (id uniqueness).
-    ).toEqual({ queries: 196, exempt: 104, checked: 15, outerJoin: 1 });
+    // Deliberate: +2 queries and +2 scope-checked (196/104/15 -> 198/104/17) for T-0089.1.1 round 3:
+    // the shared edge readability guard (graph/edges.ts) and import's scoped endpoint read, both
+    // scoped by the actor's readable workspaces bound as one JSON array.
+    ).toEqual({ queries: 198, exempt: 104, checked: 17, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

@@ -556,7 +556,7 @@ export async function runWeeklyInsights(
         `DELETE FROM edges WHERE source_id = ? AND type = 'drawn_from' AND provenance = 'system'`).bind(id)),
       ...drawnFromPairs
         .map(({ insightId, targetId, workspaceId }) => edgeInsertStatement(
-          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId }, env,
+          insightId, targetId, "drawn_from", { provenance: "system", weight: 1, workspaceId, readableWorkspaceIds: [workspaceId] }, env,
         ))
         .filter((stmt): stmt is D1PreparedStatement => stmt !== null),
       ...typedEdges
@@ -567,7 +567,7 @@ export async function runWeeklyInsights(
           // is why the DELETE comes last rather than first.
           edgeInsertStatement(sourceId, targetId, type, {
             provenance: "system", weight: INSIGHT_EDGE_WEIGHT,
-            metadata: { via: "insight-reasoning" }, workspaceId,
+            metadata: { via: "insight-reasoning" }, workspaceId, readableWorkspaceIds: [workspaceId],
           }, env),
           // WEIGHTS ARE HIGH-WATER MARKS, and this step propagates that into
           // typed edges. `max(weight, excluded.weight)` on the upsert (which

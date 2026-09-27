@@ -8,6 +8,7 @@ import { scopeWhere } from "../lib/scope";
 import { assertCanMutateEntry } from "../lib/entry-access";
 import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteVectorIds } from "../vectorize/batch";
+import { edgeEndpointsReadableSql } from "../graph/edges";
 import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
 import { upsertEntryVectors, deleteStaleVectors, restoreRowVectors } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
@@ -609,12 +610,12 @@ export async function restoreEntry(
           WHERE t.id = ${insertId} AND t.nonce = ${insertNonce}`,
       ).bind(...insertP.values()),
       env.DB.prepare(
-        // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where the other endpoint still exists
+        // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where both endpoints are live in its workspace
         `INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
          SELECT ${edgeCols}
            FROM entries_trash t, json_each(t.edges_json) j
           WHERE t.id = ${edgeId} AND t.nonce = ${edgeNonce}
-            AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
+            AND ${edgeEndpointsReadableSql("json_extract(j.value, '$.source_id')", "json_extract(j.value, '$.target_id')", "json_array(t.workspace_id)")}`,
       ).bind(...edgeP.values()),
       // scope-exempt: by-id: the trash row the caller authorized before building this batch
       env.DB.prepare(

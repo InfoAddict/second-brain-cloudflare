@@ -109,8 +109,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 172, kind: 'snapshot' },
   { file: 'src/memory/actions.ts', line: 183, kind: 'snapshot' },
   // MOVED 218 -> 220, 605 -> 607 (T-0089.1.1 round 2): the trash insert is a plain INSERT, with a comment saying why.
-  { file: 'src/memory/trash.ts', line: 220, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 607, kind: 'exempt' },
+  // MOVED 220 -> 221, 607 -> 608 (T-0089.1.1 round 3): trash.ts imports the shared edge readability guard.
+  { file: 'src/memory/trash.ts', line: 221, kind: 'trash' },
+  { file: 'src/memory/trash.ts', line: 608, kind: 'exempt' },
   // REMOVED trash.ts:760 (T-0089.1.1 close-out): deleteForever no longer deletes a live entry at all;
   // it acts only on a trash row pinned by nonce.
   // MOVED 312 -> 316, 348 -> 352 (T-0089.1.1 round 2): revertEntry takes an optional trash nonce; same sites.

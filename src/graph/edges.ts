@@ -105,6 +105,20 @@ export function kindOfRow(row: { tags?: string | null }): MemoryKind | null {
 }
 
 /**
+ * The guard every edge insert carries (T-0089.1.1): both endpoints are live entries in a workspace
+ * the actor can read. `readable` is a SQL expression for a JSON array of workspace ids, normally
+ * readableWorkspaces(identity) bound as one parameter; a system job passes the workspace it acts in.
+ * Checked in the statement that writes the edge, so an endpoint moved out of reach after the caller's
+ * own check gets no edge, and a private id never lands in an edge its readers could export.
+ */
+export function edgeEndpointsReadableSql(source: string, target: string, readable: string): string {
+  const inReadable = (alias: string, id: string) =>
+    // scope-checked: workspace_id IN the actor's readable workspaces, passed in as a JSON array
+    `EXISTS (SELECT 1 FROM entries ${alias} WHERE ${alias}.id = ${id} AND ${alias}.workspace_id IN (SELECT value FROM json_each(${readable})))`;
+  return `${inReadable("es", source)} AND ${inReadable("et", target)}`;
+}
+
+/**
  * The INSERT createEdge issues, prepared and bound but not run, so a caller
  * with several edges to write can hand them all to env.DB.batch(...) as one
  * subrequest instead of paying one subrequest per createEdge call.
@@ -124,6 +138,8 @@ export function edgeInsertStatement(
   opts: {
     weight?: number; provenance?: EdgeProvenance; metadata?: Record<string, unknown>;
     created_at?: number; workspaceId?: string;
+    /** Workspaces the actor can read (readableWorkspaces); an endpoint outside them gets no edge. */
+    readableWorkspaceIds: string[];
     /**
      * Write nothing if the pair already carries an edge of any type other than
      * relates_to. For the GENERIC edge only: a typed edge is the more specific
@@ -151,35 +167,38 @@ export function edgeInsertStatement(
   const createdAt = opts.created_at ?? now;
 
   const values = [crypto.randomUUID(), source, target, type, weight, provenance, metadata, createdAt, now, opts.workspaceId ?? ""];
+  const readable = JSON.stringify(opts.readableWorkspaceIds);
 
   if (opts.onlyIfNoTypedEdge) {
     // INSERT ... SELECT rather than VALUES, because only the SELECT form takes a
     // WHERE. SQLite needs that WHERE for the upsert clause to parse unambiguously
     // after a SELECT, which this has.
     return env.DB.prepare(
-      // scope-exempt: by-id: the guard reads only the pair being written, whose endpoints the caller has already workspace-checked
+      // scope-exempt: by-id: the guards read only the pair being written, scoped by the actor's readable workspaces
       `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-       WHERE NOT EXISTS (
+       WHERE ${edgeEndpointsReadableSql("?", "?", "?")} AND NOT EXISTS (
          SELECT 1 FROM edges g
          WHERE ((g.source_id = ? AND g.target_id = ?) OR (g.source_id = ? AND g.target_id = ?))
            AND g.type <> 'relates_to')
        ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`
-    ).bind(...values, source, target, target, source);
+    ).bind(...values, source, readable, target, readable, source, target, target, source);
   }
 
   return env.DB.prepare(
+    // scope-exempt: by-id: the guard reads only the pair being written, scoped by the actor's readable workspaces
     `INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE ${edgeEndpointsReadableSql("?", "?", "?")}
      ON CONFLICT(source_id, target_id, type) DO UPDATE SET weight = max(weight, excluded.weight), updated_at = excluded.updated_at`
-  ).bind(...values);
+  ).bind(...values, source, readable, target, readable);
 }
 
 export async function createEdge(
   sourceId: string,
   targetId: string,
   type: string,
-  opts: { weight?: number; provenance?: EdgeProvenance; metadata?: Record<string, unknown>; created_at?: number; workspaceId?: string },
+  opts: { weight?: number; provenance?: EdgeProvenance; metadata?: Record<string, unknown>; created_at?: number; workspaceId?: string; readableWorkspaceIds: string[] },
   env: Env,
 ): Promise<{ source_id: string; target_id: string; type: EdgeType } | null> {
   const stmt = edgeInsertStatement(sourceId, targetId, type, opts, env);
@@ -367,7 +386,7 @@ export async function inferEdgesOnWrite(
          WHERE ((source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?))
            AND type = 'relates_to' AND provenance = 'inferred'`,
       ).bind(newId, n.id, n.id, newId));
-      const typed = edgeInsertStatement(newId, n.id, "follows", { weight: n.score, provenance: "inferred", workspaceId }, env);
+      const typed = edgeInsertStatement(newId, n.id, "follows", { weight: n.score, provenance: "inferred", workspaceId, readableWorkspaceIds: [workspaceId] }, env);
       if (typed) { statements.push(typed); inserted++; }
       continue;
     }
@@ -375,7 +394,7 @@ export async function inferEdgesOnWrite(
     // Guarded: a later write touching a pair that already has a typed edge,
     // an edit, an append, the nightly backfill, falls to this branch outside
     // the follows window and would otherwise stack relates_to on top of it.
-    const generic = edgeInsertStatement(newId, n.id, "relates_to", { weight: n.score, provenance: "inferred", workspaceId, onlyIfNoTypedEdge: true }, env);
+    const generic = edgeInsertStatement(newId, n.id, "relates_to", { weight: n.score, provenance: "inferred", workspaceId, readableWorkspaceIds: [workspaceId], onlyIfNoTypedEdge: true }, env);
     if (generic) { statements.push(generic); inserted++; }
   }
 
