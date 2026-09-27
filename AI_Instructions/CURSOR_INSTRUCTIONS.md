@@ -40,10 +40,10 @@ Use the relationship graph — don't rely on flat search alone. When the user as
 Respect explicit exclusions. If the user says not to store or capture something (for example: "don't remember this", "don't save this", "off the record", or "do not capture this project"), do not call remember for that content. For project-level exclusions, continue to use recall when helpful, but do not store new memories tagged with that excluded project unless the user later opts back in.
 
 Tool guidance:
-- **history** — inspect recorded changes, actors, channels, and supersedes links for one memory. Earlier text is unavailable before 4.0.
-- **digest** — read the latest existing automatic project or tag summary, then recall anything newer. This read never creates a digest.
-- **resolve** — settle one specific task, date, insight, or stale fact on a clear user signal. Never close a batch on your own initiative.
-- **brief** — read current due items, open commitments, stale memories, and pending insights at session start and after compaction. Mention only what matters now.
+- **history**: inspect recorded changes, actors, channels, and supersedes links for one memory. Earlier text is unavailable before 4.0.
+- **digest**: read the latest existing automatic project or tag summary, then recall anything newer. This read never creates a digest.
+- **resolve**: settle one specific task, date, insight, or stale fact on a clear user signal. Never close a batch on your own initiative.
+- **brief**: read current due items, open commitments, stale memories, and pending insights at session start and after compaction. Mention only what matters now.
 - **list_teams** — list shared teams you belong to, with display names and workspace ids. Call before remember/share to company when the user has not named a team; present names and ask which team when more than one.
 - **remember** — store a new piece of information (idea, fact, decision, preference). On team brains, optional `workspace`: `personal` or `company`, and optional `team` (workspace id from list_teams) when writing to a specific team.
 - **append** — add new information to an existing entry without replacing the original. Use when something has changed or new details have emerged. Gets the entry ID from recall or list_recent first.

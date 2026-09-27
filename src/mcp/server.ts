@@ -341,7 +341,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "brief",
     {
-      description: "Call at session start alongside recall, and after compaction. Pass project when known. Mention only relevant items; stay silent when none matter. Do not read the whole brief back to the user.",
+      description: "Call once at the start of a session, next to your first recall, and again after the conversation is cleared or compacted. Pass project when you know it. Mention only items that matter to what the user is doing now; if nothing does, say nothing about the brief. Do not read the whole brief back to the user.",
       inputSchema: {
         project: projectParam.describe("Known project slug; includes its aliases"),
         workspace: z.enum(["personal", "company"]).optional().describe("Restrict to one layer"),
@@ -361,7 +361,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "resolve",
     {
-      description: "Act only on a clear user signal about one specific item: done, not a task, wait, clear date, confirm or dismiss an insight, or still true. Never close several items on your own initiative. Every resolve can be undone.",
+      description: "Call when the user says something tracked is finished, was never a real task, should come back later, has no date, is still true, or that a suggested insight is right or wrong. Also call after you complete work the user asked you to track. Act only on a clear signal about a specific item; never close several items on your own initiative. Every resolve can be undone.",
       inputSchema: {
         id: z.string().describe("Exact memory id"),
         action: z.enum(["done", "not_a_task", "snooze", "clear_date", "confirm_insight", "dismiss_insight", "still_true"]).describe("How to resolve this one item"),
@@ -391,7 +391,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "digest",
     {
-      description: "Call when the user wants a summary of a project or topic. Reads the latest existing automatic digest and its date. Follow up with recall for anything newer. Never creates a digest.",
+      description: "Call when the user wants a summary of a project or topic. It returns the most recent automatic summary and its date; follow up with recall for anything newer than that date. It never creates a summary.",
       inputSchema: {
         project: projectParam.describe("Known project slug; use exactly one of project or tag"),
         tag: z.string().optional().describe("Topic tag; use exactly one of project or tag"),
@@ -428,7 +428,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   server.registerTool(
     "history",
     {
-      description: "Call when the user asks why, when, or by whom a memory changed, or before relying on a changed or stale memory. Shows recorded events and supersedes links; earlier text is not recorded before 4.0.",
+      description: "Call before you rely on or override a memory that shows [updated], a staleness warning, or 'since changed', and when the user asks why, when or by whom something changed. It shows recorded events and supersedes links. Earlier text is not recorded before 4.0.",
       inputSchema: {
         id: z.string().describe("Exact memory id"),
         limit: z.number().int().min(1).max(50).optional().describe("Recent events to show; default 10"),

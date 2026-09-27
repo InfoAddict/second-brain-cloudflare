@@ -81,10 +81,11 @@ describe("MCP resolve", () => {
     sqlite.issued.length = 0;
     expect(await call("resolve", { id: "todo", action: "done" })).toMatch(/todo.*done/i);
     await Promise.all(pending);
+    const statements = sqlite.issued.length;
     expect(sqlite.rows().find(r => r.id === "todo")?.tags).toContain("task:done");
     const event = await env.DB.prepare(`SELECT payload FROM entry_events WHERE entry_id = 'todo'`).first<{ payload: string }>();
     expect(JSON.parse(event!.payload)).toMatchObject({ loop_action: "done", channel: "mcp" });
-    expect(sqlite.issued.length - 1).toBe(3);
+    expect(statements).toBe(3);
   });
 
   it("requires until for snooze and a specific actionable id", async () => {
@@ -134,6 +135,41 @@ describe("MCP resolve", () => {
     const reader = (await resolveIdentityFromToken(member.token, env))!;
     expect(await call("resolve", { id: "private", action: "done" }, reader)).toContain("No entry found");
     expect(JSON.parse(String(sqlite.rows().find(r => r.id === "private")?.tags))).not.toContain("task:done");
+  });
+});
+
+describe("MCP resolve audit parity with REST", () => {
+  const events = async (id: string) => (await env.DB.prepare(`SELECT event, payload FROM entry_events WHERE entry_id = ? ORDER BY created_at, id`).bind(id).all<{ event: string; payload: string }>())
+    .results.map(r => ({ event: r.event, payload: JSON.parse(r.payload) as Record<string, unknown> }));
+
+  it("records the same events as the REST routes plus channel mcp", async () => {
+    const future = new Date(Date.now() + 3 * 86400000).toISOString();
+    sqlite.seed({ id: "t1", content: "Task one", createdAt: 1, tags: ["task"] });
+    sqlite.seed({ id: "t2", content: "Task two", createdAt: 1, tags: ["task"] });
+    sqlite.seed({ id: "t3", content: "Task three", createdAt: 1, tags: ["task"] });
+    sqlite.seed({ id: "s1", content: "Stale fact", createdAt: 1, tags: ["stale:as-of"] });
+    sqlite.seed({ id: "i1", content: "Confirm me", createdAt: 1, tags: ["auto-insight"] });
+    sqlite.seed({ id: "i2", content: "Dismiss me", createdAt: 1, tags: ["auto-insight"] });
+    await call("resolve", { id: "t1", action: "not_a_task" });
+    await call("resolve", { id: "t2", action: "snooze", until: future });
+    await call("resolve", { id: "t3", action: "clear_date" });
+    await call("resolve", { id: "s1", action: "still_true" });
+    await call("resolve", { id: "i1", action: "confirm_insight" });
+    await call("resolve", { id: "i2", action: "dismiss_insight" });
+    await Promise.all(pending);
+    expect(await events("t1")).toEqual([{ event: "status_changed", payload: { loop_action: "not-task", channel: "mcp" } }]);
+    expect(await events("t2")).toEqual([{ event: "status_changed", payload: { due_action: "snooze", until: expect.any(Number), channel: "mcp" } }]);
+    expect(await events("t3")).toEqual([{ event: "status_changed", payload: { due_action: "clear", channel: "mcp" } }]);
+    expect(await events("s1")).toEqual([{ event: "updated", payload: { stale_confirmed: true, channel: "mcp" } }]);
+    expect(await events("i1")).toEqual([{ event: "insight_confirmed", payload: { channel: "mcp" } }]);
+    expect(await events("i2")).toEqual([{ event: "insight_dismissed", payload: { channel: "mcp" } }]);
+  });
+
+  it("rejects insight actions on a memory that is not an insight and leaves it untouched", async () => {
+    sqlite.seed({ id: "plain", content: "Ordinary", createdAt: 1, tags: ["work"] });
+    expect(await call("resolve", { id: "plain", action: "confirm_insight" })).toContain("not a derived insight");
+    expect(await call("resolve", { id: "plain", action: "still_true" })).toContain("not flagged as out of date");
+    expect(JSON.parse(String(sqlite.rows().find(r => r.id === "plain")?.tags))).toEqual(["work"]);
   });
 });
 
