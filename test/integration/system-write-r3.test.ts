@@ -88,4 +88,124 @@ describe("system-write races", () => {
     expect(vectors.get("old")?.workspace_id).toBe("other-workspace");
     sqlite.close();
   });
+  it("moving after scoped hydration but before merge snapshot must not cross workspaces", async () => {
+    const { sqlite, env, vectors } = await setup(0.9, '{"action":"merge","target_id":"old","merged_content":"new system text"}');
+    const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
+    db.prepare = (sql: string) => {
+      if (!raced && sql.startsWith("SELECT content, tags, source, vector_ids, importance_score, actor_id, workspace_id FROM entries WHERE id = ?")) {
+        raced = true;
+        sqlite.db.prepare("UPDATE entries SET workspace_id = 'other-workspace' WHERE id = 'old'").run();
+      }
+      return prepare(sql);
+    };
+    const result = await captureEntry("New digest", ["synthesized"], "system", env, ctx, undefined,
+      { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
+    const old = await env.DB.prepare("SELECT workspace_id, content FROM entries WHERE id = 'old'").first() as any;
+    console.log("early merge move", result.status, old, vectors.get("old"));
+    expect(raced).toBe(true);
+    expect(result.status).not.toBe("merged");
+    expect(old.content).toBe("Old digest");
+    sqlite.close();
+  });
+
+  it("moving after scoped hydration but before contradiction snapshot must not deprecate across workspaces", async () => {
+    const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
+    const db = env.DB as any; const prepare = db.prepare.bind(db); let raced = false;
+    db.prepare = (sql: string) => {
+      if (!raced && sql.startsWith("SELECT content, tags, source, actor_id, workspace_id, vector_ids FROM entries WHERE id = ?")) {
+        raced = true;
+        sqlite.db.prepare("UPDATE entries SET workspace_id = 'other-workspace' WHERE id = 'old'").run();
+      }
+      return prepare(sql);
+    };
+    const result = await captureEntry("New conflicting digest", ["synthesized"], "system", env, ctx, undefined,
+      { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
+    const old = await env.DB.prepare("SELECT workspace_id, tags FROM entries WHERE id = 'old'").first() as any;
+    console.log("early contradiction move", result.status, old);
+    expect(raced).toBe(true);
+    expect(result.status).toBe("contradiction_protected");
+    expect(JSON.parse(old.tags)).not.toContain("status:deprecated");
+    sqlite.close();
+  });
+
+  it("lost conditional deprecation must index the fallback draft with its committed tags", async () => {
+    const { sqlite, env, vectors } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
+    const pending: Promise<unknown>[] = [];
+    const awaitCtx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as unknown as ExecutionContext;
+    const db = env.DB as any; const prepare = db.prepare.bind(db);
+    db.prepare = (sql: string) => {
+      if (sql.startsWith("INSERT INTO entries (id, content")) {
+        sqlite.db.prepare(`UPDATE entries SET content = 'MY CORRECTION', tags = '["synthesized","user-edited"]' WHERE id = 'old'`).run();
+      }
+      return prepare(sql);
+    };
+    sqlite.issued.length = 0;
+    const result = await captureEntry("New conflicting digest", ["synthesized"], "system", env, awaitCtx, undefined,
+      { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
+    await Promise.allSettled(pending);
+    console.log("conditional capture D1 calls", sqlite.issued.length);
+    expect(result.status).toBe("contradiction_protected");
+    if (result.status !== "contradiction_protected") return;
+    const row = await env.DB.prepare("SELECT tags FROM entries WHERE id = ?").bind(result.id).first() as any;
+    const old = await env.DB.prepare("SELECT contradiction_wins, contradiction_losses FROM entries WHERE id = 'old'").first() as any;
+    const newcomer = await env.DB.prepare("SELECT contradiction_wins, contradiction_losses FROM entries WHERE id = ?").bind(result.id).first() as any;
+    const events = (await env.DB.prepare("SELECT event FROM entry_events WHERE entry_id = 'old'").all()).results as any[];
+    console.log("fallback counters/events/tags", old, newcomer, events, row.tags, vectors.get(result.id)?.tags);
+    expect(old.contradiction_losses).toBe(0);
+    expect(newcomer.contradiction_wins).toBe(0);
+    expect(events).toHaveLength(0);
+    expect(vectors.get(result.id)?.tags).toEqual(JSON.parse(row.tags));
+    sqlite.close();
+  });
+
+  it("successful conditional deprecation keeps counters and audit aligned", async () => {
+    const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
+    const pending: Promise<unknown>[] = [];
+    const awaitCtx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as unknown as ExecutionContext;
+    sqlite.issued.length = 0;
+    const result = await captureEntry("New conflicting digest", ["synthesized"], "system", env, awaitCtx, undefined,
+      { workspaceId: "", actorId: "" }, undefined, { systemWrite: "digest", channel: "system:digest" });
+    await Promise.allSettled(pending);
+    console.log("conditional capture D1 calls", sqlite.issued.length);
+    expect(result.status).toBe("contradiction");
+    if (result.status !== "contradiction") return;
+    const old = await env.DB.prepare("SELECT tags, vector_ids, contradiction_losses FROM entries WHERE id = 'old'").first() as any;
+    const newcomer = await env.DB.prepare("SELECT contradiction_wins FROM entries WHERE id = ?").bind(result.id).first() as any;
+    const events = (await env.DB.prepare("SELECT event, payload FROM entry_events WHERE entry_id = 'old'").all()).results as any[];
+    expect(JSON.parse(old.tags)).toContain("status:deprecated");
+    expect(old.vector_ids).toBe("[]");
+    expect(old.contradiction_losses).toBe(1);
+    expect(newcomer.contradiction_wins).toBe(1);
+    expect(events.map(x => x.event)).toEqual(["status_changed"]);
+    expect(JSON.parse(events[0].payload).channel).toBe("system:digest");
+    sqlite.close();
+  });
+
+  it("a draft from a protected conflict must not permit user source rollup on the next cycle", async () => {
+    const day = 86400000;
+    let now = 400 * day;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { sqlite, env } = await setup(0.72, '{"contradicts":true,"conflicting_id":"old","reason":"different"}');
+    sqlite.db.prepare(`UPDATE entries SET tags = '["work"]', source = 'api', actor_id = 'u1' WHERE id = 'old'`).run();
+    for (let i = 0; i < 12; i++) sqlite.seed({ id: `work-${i}`, content: `User work fact ${i}`, tags: ["work"], source: "api", createdAt: 1000 + i });
+    await compressTag("work", env, ctx);
+    const first = (await env.DB.prepare("SELECT id, tags FROM entries WHERE source = 'system'").all()).results as any[];
+    expect(first).toHaveLength(1);
+    expect(JSON.parse(first[0].tags)).toContain("status:draft");
+    expect(JSON.parse(first[0].tags)).toContain("conflict-held");
+    now += 25 * 3600000;
+    (env.VECTORIZE as any).query = vi.fn().mockResolvedValue({ matches: [{ id: first[0].id, score: 0.72, metadata: { parentId: first[0].id } }] });
+    (env.AI as any).run = vi.fn(async (model: string) => model.startsWith("@cf/baai/bge")
+      ? { data: [new Array(384).fill(0.1)] }
+      : stream(JSON.stringify({ contradicts: true, conflicting_id: first[0].id, reason: "different" })));
+    await compressTag("work", env, ctx);
+    const sources = (await env.DB.prepare("SELECT tags FROM entries WHERE id LIKE 'work-%'").all()).results as any[];
+    const digests = (await env.DB.prepare("SELECT id, tags FROM entries WHERE source = 'system'").all()).results as any[];
+    console.log("second cycle", sources.filter(row => JSON.parse(row.tags).includes("rolled-up")).length, digests);
+    expect(sources.some(row => JSON.parse(row.tags).includes("rolled-up"))).toBe(false);
+    // The held draft was neither superseded nor replaced.
+    expect(JSON.parse(digests.find(d => d.id === first[0].id).tags)).not.toContain("status:deprecated");
+    sqlite.close(); vi.restoreAllMocks();
+  });
+
 });

@@ -30,6 +30,13 @@ export const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** Marks a digest or insight a person has edited. Keep in step with public/utils.js. */
 export const USER_EDITED_TAG = "user-edited";
 
+/**
+ * Marks a digest or insight a system job stored as a draft because it contradicted a row it may not
+ * rewrite. It stays a held draft: no later system job supersedes, merges into or replaces it, and
+ * no source is rolled up onto it. Keep in step with public/utils.js.
+ */
+export const CONFLICT_HELD_TAG = "conflict-held";
+
 /** Tags that make a row a system job's output, by job. */
 export const SYSTEM_JOB_TAGS = { digest: "synthesized", insight: "auto-insight" } as const;
 
@@ -72,6 +79,7 @@ const PIPELINE_TAG_NAMES = new Set([
   // A person edited a system-written row (digest or insight). From then on it is theirs,
   // and no system job may merge into or replace it. See markUserEdited.
   USER_EDITED_TAG,
+  CONFLICT_HELD_TAG,
 ]);
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */

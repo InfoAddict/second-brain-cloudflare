@@ -1162,7 +1162,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (140 queries, 71 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (140 queries, 69 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1228,11 +1228,12 @@ describe("the checker over the real source tree", () => {
     // per-term match levels. Same rows, same scope.
     // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4: the weekly insight pass drops the old
     // drawn_from edges of an insight it replaces, by that insight's own id.
-    // Deliberate: +1 query and +1 scope-exempt (by-id) for T-0089.4.4 (src/capture/entry.ts
-    // restoreRowVectors): the SELECT content, tags of a merge target that lost a compare-and-set,
-    // read by the id already read under the write's own workspace. The checker counts SELECTs, so the
-    // CAS UPDATE and the vector_ids UPDATE beside it add nothing.
-    ).toEqual({ queries: 140, exempt: 71, checked: 12, outerJoin: 1 });
+    // Deliberate: net +1 query and no new exemption for T-0089.4.4 (src/capture/entry.ts): the merge-target
+    // and contradiction-conflict snapshot reads are now pinned to the writer's workspace in the predicate
+    // (`AND workspace_id = ?`, writeCtx.workspaceId) instead of trusting the scoped candidate read, so their two
+    // by-id exemptions are gone; restoreRowVectors adds one by-id SELECT after a lost compare-and-set.
+    // The CAS and deprecation UPDATEs are not counted by the checker.
+    ).toEqual({ queries: 140, exempt: 69, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

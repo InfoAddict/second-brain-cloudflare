@@ -462,6 +462,7 @@ const SYSTEM_TAG_NAMES = new Set([
   'duplicate-candidate',
   'contradiction-resolved',
   'user-edited',
+  'conflict-held',
 ])
 
 /**
