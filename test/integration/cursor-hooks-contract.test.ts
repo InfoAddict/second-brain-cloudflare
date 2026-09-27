@@ -305,12 +305,13 @@ describe("session-end.js", () => {
     expect(captured.filter(c => c.url === "/capture")).toHaveLength(0);
   });
 
-  it("reports a network failure on capture: stderr line and exit 1", async () => {
+  it("spools instead of losing the capture when the Worker is down (network error)", async () => {
+    // exit 0, not 1: the capture was handled (spooled for retry), not dropped.
     const transcript = join(scratch, "cap-9.jsonl");
     copyFileSync(FIXTURE, transcript);
     const r = await runHook("session-end.js", endPayload(transcript, "cap-9"), { SECOND_BRAIN_URL: "http://127.0.0.1:1" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^\[Second Brain\] session capture failed:/);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("Second Brain: could not save this session right now. Capture kept on this computer to retry.");
   });
 
   it("honours SECOND_BRAIN_HOOK_CAPTURE_CURSOR without touching recall", async () => {

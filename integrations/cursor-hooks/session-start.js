@@ -28,22 +28,36 @@ const DELIVERED_KEY = 'cursor-delivered';
 const CAP_MS = 3000;
 
 /**
- * Cursor's sessionStart stdin payload, normalized. Field names were not
- * pinned letter-perfect in the fetched docs, so this reads sessionId first
- * (Cursor's own examples favor camelCase), then session_id.
+ * Cursor's sessionStart stdin payload, normalized.
  *
- * `cwd` prefers the documented `workspace_roots` input
- * (https://prod.cursor.com/docs/hooks): a review caught this hook falling
- * back to `process.cwd()` even when workspace_roots was present, which is
- * wrong for a project because Cursor's own hooks run from the user's
- * ~/.cursor directory, not the project - process.cwd() there is never the
- * project. workspace_roots[0] is the project the session is actually in;
- * `cwd` itself and process.cwd() are fallbacks for whenever it is absent.
- * UNVERIFIED; see README.md.
+ * The identity field is `conversation_id`, not `session_id`: verified
+ * against https://cursor.com/docs/agent/hooks (checked 2026-09-27), which
+ * lists `conversation_id` and `generation_id` as COMMON fields present on
+ * every documented hook event (sessionStart, sessionEnd, beforeSubmitPrompt,
+ * stop, and the rest), while `session_id` is only added on sessionStart and
+ * sessionEnd specifically. A budget audit caught this hook (and
+ * before-submit-prompt.js, which shares this function) reading only
+ * sessionId/session_id: on the real beforeSubmitPrompt payload, which has
+ * neither, the once-per-session marker could never be named, so every
+ * prompt ran a full recall. `conversation_id` is used everywhere in this
+ * adapter for exactly this reason: it is the one field every event these
+ * hooks handle actually carries, so the same logical session always maps to
+ * the same marker regardless of which event fired. `session_id`/`sessionId`
+ * are kept as a defensive fallback only.
+ *
+ * `cwd` prefers the documented `workspace_roots` input: a review caught this
+ * hook falling back to `process.cwd()` even when workspace_roots was
+ * present, which is wrong for a project because Cursor's own hooks run from
+ * the user's ~/.cursor directory, not the project - process.cwd() there is
+ * never the project. workspace_roots[0] is the project the session is
+ * actually in; `cwd` itself and process.cwd() are fallbacks for whenever it
+ * is absent.
  */
 function normalizeStdin(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
-  const sessionId = typeof p.sessionId === 'string' ? p.sessionId
+  const sessionId = typeof p.conversation_id === 'string' ? p.conversation_id
+    : typeof p.conversationId === 'string' ? p.conversationId
+    : typeof p.sessionId === 'string' ? p.sessionId
     : typeof p.session_id === 'string' ? p.session_id : '';
   const roots = Array.isArray(p.workspace_roots) ? p.workspace_roots
     : Array.isArray(p.workspaceRoots) ? p.workspaceRoots : [];

@@ -525,3 +525,141 @@ describe("core.performCapture", () => {
     expect(posted[1]).toContain("A final turn");
   });
 });
+
+describe("capture spool: never lose a failed upload silently", () => {
+  const withStub = async <T,>(handler: (url: URL, init?: RequestInit) => { status: number; body: unknown } | null, run: () => Promise<T>): Promise<T> => {
+    const realFetch = global.fetch;
+    // @ts-expect-error test stub
+    global.fetch = async (url: string, init?: RequestInit) => {
+      const u = new URL(String(url));
+      const hit = handler(u, init);
+      if (!hit) throw new Error("unreachable");
+      return new Response(JSON.stringify(hit.body), { status: hit.status, headers: { "Content-Type": "application/json" } });
+    };
+    try { return await run(); } finally { global.fetch = realFetch; }
+  };
+  const captureStderr = async <T,>(run: () => Promise<T>): Promise<{ result: T; stderr: string }> => {
+    const write = process.stderr.write.bind(process.stderr);
+    let stderr = "";
+    process.stderr.write = (chunk: string) => { stderr += String(chunk); return true; };
+    try { return { result: await run(), stderr }; } finally { process.stderr.write = write; }
+  };
+  const meta = { hostLabel: "Codex", project: "brain-app", projectName: "brain-app", workspace: "personal", source: "codex-session" };
+  const goodTurns = ["Please move the digest off the shared cron so sync stops starving it, and cap it at 20 entries per run so it never runs away on a busy day. Log a line whenever it stops early so we can tell, and add a quick test for the cap."];
+
+  it("logs the director's exact copy-deck line and spools on a 429 daily_limit response", async () => {
+    const dir = tmp();
+    const { result: out, stderr } = await captureStderr(() => withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") return { status: 429, body: { ok: false, error: "daily_limit" } };
+        return null;
+      },
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s-429", cacheDir: dir,
+      }),
+    ));
+    expect(out).toMatchObject({ sent: false, reason: "spooled" });
+    expect(process.exitCode).not.toBe(1); // handled, not a hard failure
+    expect(stderr).toContain("Second Brain: daily database limit reached (resets 00:00 UTC). Capture kept on this computer to retry.");
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
+  });
+
+  it("logs a plain generic line and spools on a 5xx response", async () => {
+    const dir = tmp();
+    const { stderr } = await captureStderr(() => withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") return { status: 500, body: { ok: false } };
+        return null;
+      },
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s-500", cacheDir: dir,
+      }),
+    ));
+    expect(stderr).toContain("Second Brain: could not save this session right now. Capture kept on this computer to retry.");
+    expect(stderr).not.toContain("daily database limit");
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
+  });
+
+  it("does NOT spool a plain 4xx (a bad token retries into the same rejection forever)", async () => {
+    const dir = tmp();
+    const out = await withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") return { status: 401, body: { ok: false, code: "unauthorized" } };
+        return null;
+      },
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s-401", cacheDir: dir,
+      }),
+    );
+    expect(out).toMatchObject({ sent: false, reason: "http-error" });
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(0);
+  });
+
+  it("caps the spool at 20 entries, dropping the oldest first", () => {
+    const dir = tmp();
+    for (let i = 0; i < 25; i++) core.spoolCapture("codex", { content: `capture ${i}` }, dir);
+    const spool = core.readCaptureSpool("codex", dir);
+    expect(spool).toHaveLength(20);
+    expect(spool[0].body.content).toBe("capture 5"); // the oldest 5 were dropped
+    expect(spool.at(-1).body.content).toBe("capture 24");
+  });
+
+  it("end to end: a 429 spools the capture, and the next session start (performRecall) resends it and clears the spool", async () => {
+    const dir = tmp();
+    const posts: string[] = [];
+    let captureAttempts = 0;
+
+    // First "session end": the capture fails with 429 and gets spooled.
+    await withStub(
+      (u) => {
+        if (u.pathname === "/health") return { status: 200, body: { ok: true, version: "3.1.0" } };
+        if (u.pathname === "/capture") { captureAttempts++; return { status: 429, body: { ok: false, error: "daily_limit" } }; }
+        return null;
+      },
+      () => core.performCapture({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        userTurns: goodTurns, meta, namespace: "codex", sessionId: "s-e2e", cacheDir: dir,
+      }),
+    );
+    expect(captureAttempts).toBe(1);
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
+
+    // "Next session start": performRecall, this time the Worker accepts the
+    // capture. No real recall/brief endpoints are hit in this stub beyond
+    // what performRecall itself needs; the point under test is the spool.
+    await withStub(
+      (u, init) => {
+        if (u.pathname === "/recall") return { status: 200, body: { ok: true, results: [] } };
+        if (u.pathname === "/brief") return { status: 200, body: { ok: true } };
+        if (u.pathname === "/capture") { posts.push(String(init?.body)); return { status: 200, body: { ok: true } }; }
+        return null;
+      },
+      () => core.performRecall({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" },
+        cwd: "/tmp", sessionId: "next-session", source: "startup", namespace: "codex", cacheDir: dir,
+      }),
+    );
+
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0])).toMatchObject({ source: "codex-session" });
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(0);
+  });
+
+  it("a still-spent daily cap during the retry keeps the entry queued, does not drop it", async () => {
+    const dir = tmp();
+    core.spoolCapture("codex", { content: "queued capture" }, dir);
+    await withStub(
+      () => ({ status: 429, body: { ok: false, error: "daily_limit" } }),
+      () => core.flushCaptureSpool({
+        env: { SECOND_BRAIN_URL: "https://w.example", SECOND_BRAIN_TOKEN: "t" }, namespace: "codex", cacheDir: dir,
+      }),
+    );
+    expect(core.readCaptureSpool("codex", dir)).toHaveLength(1);
+  });
+});

@@ -188,11 +188,18 @@ reliable channel, matching every other adapter in this repo.
 | `[Second Brain] recall failed: HTTP 401 unauthorized …` | the token is wrong or was rotated, re-run `install.sh` |
 | `[Second Brain] recall failed: HTTP 404 …` | the URL points at something that is not the Worker root |
 | `[Second Brain] recall failed: no reply within 3.0s` | the Worker did not answer within the 3 s cap |
-| `[Second Brain] session capture failed: …` | same causes, on the capture call |
+| `[Second Brain] session capture failed: HTTP 401 …` | a bad or expired token; re-run `install.sh` |
 | `[Second Brain] session capture needs Worker 3.0+ …` | the brain has not been redeployed to v3; shown once a day |
+| `Second Brain: daily database limit reached (resets 00:00 UTC). Capture kept on this computer to retry.` | the free plan's daily D1 cap is spent; capture spooled, not lost |
+| `Second Brain: could not save this session right now. Capture kept on this computer to retry.` | a network error or a 5xx; also spooled |
 
 Nothing here blocks the session. A failed hook costs you the recall or the
-capture, not the conversation.
+capture, not the conversation. A capture that fails with a network error, a
+5xx, or a 429 (the daily-cap response) is spooled locally (capped at 20
+entries or 5 MB, mode 600) and retried at the start of the next session,
+bounded so that retry can never make a session hang; `install.sh --check`
+reports how many are waiting. A 401/403 is not spooled - that needs a fixed
+token, not a retry.
 
 ## Unverified: needs a real Cursor smoke test
 
@@ -201,22 +208,30 @@ adapter was written (2026-09-26/27) plus deliberate design choices made to
 cover the gaps those docs left open. None of it has been exercised against a
 real Cursor session:
 
-- **Stdin field names.** The exact casing for the session id and cwd on
-  `sessionStart` and `beforeSubmitPrompt` was not pinned letter-perfect in the
-  fetched docs. This adapter reads `sessionId` before `session_id`, and `cwd`
-  as-is, the opposite priority from the Codex/Copilot family, which favors
-  `session_id`, because Cursor's own examples lean camelCase. The real field
-  names may differ entirely.
+- ~~Stdin field names~~ **VERIFIED (2026-09-27) against
+  https://cursor.com/docs/agent/hooks**: the session identity field is
+  `conversation_id`, a common field present on every documented event
+  (`sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `stop`, and the rest).
+  `session_id` exists too but only on `sessionStart`/`sessionEnd`
+  specifically - a budget audit caught an earlier version of this adapter
+  reading only `sessionId`/`session_id`, which `beforeSubmitPrompt`'s payload
+  never carries, so its once-per-session marker could never be named and
+  every prompt ran a full recall (fixed; `conversation_id` is now the primary
+  identity everywhere in this adapter, with `session_id`/`sessionId` kept as
+  a defensive fallback). `workspace_roots[0]` is confirmed as the project
+  path (a common field too). `cwd` on individual events is confirmed to exist
+  on some (e.g. `preToolUse`) but is not listed as a `beforeSubmitPrompt`
+  field, which is why this adapter prefers `workspace_roots` for the project
+  path rather than relying on a per-event `cwd`.
 - **`sessionStart` source/reason taxonomy.** No confirmed vocabulary
   (equivalent to Claude Code's `startup`/`resume`/`clear`/`compact`) was found
   for this event, so every call is treated as a fresh `startup` and there is
   no skip-list. If Cursor does replay `sessionStart` on a resume-like event,
   this adapter will recall again rather than skip it.
-- **`beforeSubmitPrompt` output shape.** Only `sessionStart`'s flat
-  `additional_context` field is documented in what was fetched. This adapter
-  assumes the same flat shape for `beforeSubmitPrompt`'s output; the real
-  field name for injecting context from that event was not independently
-  confirmed.
+- ~~`beforeSubmitPrompt` output shape~~ **VERIFIED AND FIXED**: this event
+  does not support `sessionStart`'s flat `additional_context` field; only
+  `continue` and `user_message` are recognized. Fixed in a prior review
+  round.
 - **`hooks.json` schema.** The `{"version":1,"hooks":{"<event>":[{"command":
   "…"}]}}` shape is this adapter's best-effort read of the vendor docs, not a
   field-by-field confirmed schema. The installer's non-destructive merge

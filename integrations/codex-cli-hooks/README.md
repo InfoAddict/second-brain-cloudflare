@@ -182,6 +182,23 @@ Capture requires **Worker 3.0 or newer** (`GET /health` reports the version,
 cached for 24h). Against an older brain, recall still works and capture is
 skipped with one notice per day.
 
+## A failed capture is kept, not lost
+
+A budget audit found that when a free-plan brain hits its daily D1 cap, the
+Worker answers `POST /capture` with `HTTP 429` and `error: "daily_limit"` -
+and the hook was simply logging that and moving on, silently losing the
+session. Any capture that fails to upload (network error, 5xx, or 429) is now
+spooled to a small local file instead (capped at 20 entries or 5 MB, oldest
+dropped first, mode 600 in the 0700 cache directory) and retried at the start
+of the *next* session, bounded so it can never make that session-start hang:
+whatever does not fit in a few seconds, or still fails, just waits for the
+session after that. A bad or expired token (401/403) is not spooled - retrying
+the same request against the same rejection would just grow the spool
+forever; that needs you to fix the token, not a retry.
+
+`install.sh --check` reports how many captures are currently waiting to
+retry.
+
 ## Failure lines you will see
 
 `session-start.js` reports failures on stderr and exits non-zero, same
@@ -193,6 +210,13 @@ convention as every other adapter in this repo:
 | `[Second Brain] recall failed: HTTP 404 - is SECOND_BRAIN_URL / workerUrl the Worker origin?` | the URL points at something that is not the Worker root |
 | `[Second Brain] recall failed: no reply within 15s` | the Worker did not answer in time |
 | `[Second Brain] session capture needs Worker 3.0+ …` | the brain has not been redeployed to v3; shown once a day |
+| `Second Brain: daily database limit reached (resets 00:00 UTC). Capture kept on this computer to retry.` | the free plan's daily D1 cap is spent; the capture is spooled, not lost |
+| `Second Brain: could not save this session right now. Capture kept on this computer to retry.` | a network error or a 5xx; also spooled |
+
+These last two are not the `[Second Brain] session capture failed: …` line
+below, and do not set a non-zero exit code: a spooled capture is a handled,
+recoverable condition, not a hard failure. A 401/403 still uses the old line
+and exit code, since retrying it would not help.
 
 `session-end.js` itself almost never fails visibly - it does too little to
 fail. A failed capture is reported by `capture-worker.js`, in its own detached

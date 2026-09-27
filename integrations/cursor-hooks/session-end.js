@@ -111,7 +111,19 @@ async function main() {
     : typeof p.transcriptPath === 'string' ? p.transcriptPath : '';
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return; // no transcript on this event: not a failure
 
-  const sessionId = typeof p.sessionId === 'string' ? p.sessionId
+  // conversation_id, not session_id: verified against
+  // https://cursor.com/docs/agent/hooks (checked 2026-09-27) - it is a common
+  // field present on every event including sessionEnd AND stop, while
+  // session_id is only added on sessionStart/sessionEnd (stop has no
+  // session_id at all). This file is registered for both events, so it needs
+  // the field both of them actually carry, and using the same field
+  // session-start.js/before-submit-prompt.js key their marker on keeps one
+  // logical session's capture-dedup identity consistent across all three
+  // scripts regardless of which event fires. session_id/sessionId are kept
+  // as a defensive fallback only.
+  const sessionId = typeof p.conversation_id === 'string' ? p.conversation_id
+    : typeof p.conversationId === 'string' ? p.conversationId
+    : typeof p.sessionId === 'string' ? p.sessionId
     : typeof p.session_id === 'string' ? p.session_id : '';
   // A review demonstrated a capture worker (Codex's) handed a transcript_path
   // from an unrelated project's session: the same class of check applies

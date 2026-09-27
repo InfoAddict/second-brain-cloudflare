@@ -5,7 +5,7 @@
 // it last actually ran.
 const path = require('node:path');
 const {
-  loadCredentials, fetchWithTimeout, lastCaptureTime, captureEnabled, CONFIG_PATH,
+  loadCredentials, fetchWithTimeout, lastCaptureTime, captureEnabled, readCaptureSpool, CONFIG_PATH,
 } = require('../agent-hooks-core/core');
 const start = require('./session-start');
 const worker = require('./capture-worker');
@@ -28,6 +28,8 @@ async function main() {
   console.log(`Capture toggles: SECOND_BRAIN_HOOK_CAPTURE=${process.env.SECOND_BRAIN_HOOK_CAPTURE ?? '(unset)'} ${PER_CLIENT_ENV_VAR}=${process.env[PER_CLIENT_ENV_VAR] ?? '(unset)'} → ${capOn ? 'on' : 'off'}`);
   const last = lastCaptureTime(worker.NAMESPACE);
   console.log(`Last successful capture: ${last ? new Date(last).toISOString() : 'never'}`);
+  const pending = readCaptureSpool(worker.NAMESPACE).length;
+  console.log(`Captures waiting to retry (spooled after a failed upload): ${pending}`);
 
   console.log('\n- session-start against this brain -');
   await start.main();

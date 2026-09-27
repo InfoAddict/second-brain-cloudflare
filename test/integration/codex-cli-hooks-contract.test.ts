@@ -286,10 +286,13 @@ describe("capture-worker.js", () => {
     expect(r.stderr).toMatch(/^\[Second Brain\] session capture failed: HTTP 401/);
   });
 
-  it("reports a network error when the Worker is down", async () => {
+  it("spools instead of losing the capture when the Worker is down (network error)", async () => {
+    // A budget audit's requirement: a transient failure (network, 5xx, 429)
+    // is never lost silently. exit 0, not 1: the capture was handled
+    // (spooled for retry), not dropped.
     const r = await runWorker(workerPayload("cx-down"), { SECOND_BRAIN_URL: "http://127.0.0.1:1" });
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^\[Second Brain\] session capture failed:/);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("Second Brain: could not save this session right now. Capture kept on this computer to retry.");
     expect(captured).toHaveLength(0);
   });
 

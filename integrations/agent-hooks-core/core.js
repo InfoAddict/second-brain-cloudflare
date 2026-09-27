@@ -452,6 +452,19 @@ async function performRecall({
     if (cached) return cached;
   }
 
+  // A fresh session start is also the moment a budget audit picked to retry
+  // whatever session-end capture failed to upload last time (see
+  // flushCaptureSpool's own comment). This costs nothing when the spool is
+  // empty — the common case is one cheap file read, no network call — and
+  // is bounded by this adapter's own declared budget the rest of the time
+  // (whatever capMs leaves once computed below, or a flat 3s for Claude
+  // Code's generous two-phase model, which never captures so this is moot
+  // for it in practice). Only namespaces that ever call performCapture
+  // (codex, cursor) ever have anything queued.
+  if (cacheableSources.has(source)) {
+    await flushCaptureSpool({ env, configPath, namespace, cacheDir, budgetMs: capMs ?? CAPTURE_SPOOL_FLUSH_BUDGET_MS });
+  }
+
   // Shared-deadline mode (capMs given): a review caught the previous version
   // handing every recall attempt AND the brief its own fresh recallTimeoutMs,
   // so a project-arm miss followed by a fallback attempt could each spend the
@@ -601,6 +614,105 @@ function lastCaptureTime(namespace, dir) {
   try { return parseInt(fs.readFileSync(cachePath(`last-capture-${namespace}`, dir), 'utf8'), 10) || null; } catch { return null; }
 }
 
+// ── Capture spool: a failed upload is kept, not lost ────────────────────────
+//
+// A budget audit found that when a free-plan brain hits its daily D1 cap, the
+// Worker answers with an opaque error and the hook simply logged it and moved
+// on — the session's capture was gone. A network blip or a 5xx does the same.
+// Below, any such failure is spooled to a small local file instead, and the
+// NEXT session-start flushes it: never lose a capture silently, never make
+// the AI tool wait long for a retry that might not even be needed. A bad
+// token (401/403) or any other plain 4xx is NOT spooled here — retrying the
+// same body against the same rejection just grows the spool forever; that
+// class of failure needs the user to act, not a retry.
+const CAPTURE_SPOOL_MAX_ENTRIES = 20;
+const CAPTURE_SPOOL_MAX_BYTES = 5 * 1024 * 1024;
+const CAPTURE_SPOOL_FLUSH_BUDGET_MS = 3000;
+
+function spoolFile(namespace, dir) {
+  return cachePath(`capture-spool-${namespace}.json`, dir);
+}
+
+function readCaptureSpool(namespace, dir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(spoolFile(namespace, dir), 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+/** Oldest entries drop first, both on count and on total size, so the file never grows without bound. */
+function writeCaptureSpool(namespace, entries, dir) {
+  let trimmed = entries.slice(-CAPTURE_SPOOL_MAX_ENTRIES);
+  let json = JSON.stringify(trimmed);
+  while (Buffer.byteLength(json, 'utf8') > CAPTURE_SPOOL_MAX_BYTES && trimmed.length > 1) {
+    trimmed = trimmed.slice(1);
+    json = JSON.stringify(trimmed);
+  }
+  try { writeCacheFile(spoolFile(namespace, dir), json); } catch { /* losing the spool file is not worse than not having one */ }
+}
+
+/** Appends a failed capture body for a later session-start to retry. */
+function spoolCapture(namespace, body, dir) {
+  const entries = readCaptureSpool(namespace, dir);
+  entries.push({ body, queuedAt: Date.now() });
+  writeCaptureSpool(namespace, entries, dir);
+}
+
+/**
+ * The director's copy deck line for a spent daily D1 cap, verbatim, and a
+ * plain generic line for every other spooled failure. Neither goes through
+ * fail(): a spooled capture is a handled, non-fatal condition (it will be
+ * retried), not the same kind of hard failure fail()'s `[Second Brain]
+ * <message>` convention reports elsewhere in this file — so this writes its
+ * own line directly, with no double prefix.
+ */
+function logSpooledCapture(isDailyLimit) {
+  const line = isDailyLimit
+    ? 'Second Brain: daily database limit reached (resets 00:00 UTC). Capture kept on this computer to retry.'
+    : 'Second Brain: could not save this session right now. Capture kept on this computer to retry.';
+  process.stderr.write(`${line}\n`);
+}
+
+/**
+ * Retries whatever this namespace's spool is holding, at the start of a new
+ * session. Bounded by `budgetMs` total (default 3s) so a still-down Worker
+ * cannot make a session-start hook wait indefinitely; whatever does not fit
+ * in the budget, or still fails, stays spooled for the next attempt. Stops
+ * at the first 429 in a run (the daily cap is very unlikely to have cleared
+ * one entry into the retry) rather than spending the rest of the budget on
+ * attempts almost certain to fail the same way.
+ */
+async function flushCaptureSpool({ env = process.env, configPath = CONFIG_PATH, namespace, cacheDir, budgetMs = CAPTURE_SPOOL_FLUSH_BUDGET_MS } = {}) {
+  const entries = readCaptureSpool(namespace, cacheDir);
+  if (!entries.length) return { flushed: 0, remaining: 0 };
+  const creds = loadCredentials(env, configPath);
+  if (!creds) return { flushed: 0, remaining: entries.length };
+
+  const deadline = Date.now() + budgetMs;
+  const remaining = [];
+  let flushed = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const timeLeft = deadline - Date.now();
+    if (timeLeft <= 0) { remaining.push(...entries.slice(i)); break; }
+    let res;
+    try {
+      res = await fetchWithTimeout(`${creds.baseUrl}/capture`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(entries[i].body),
+      }, timeLeft);
+    } catch {
+      remaining.push(...entries.slice(i)); // still unreachable: keep everything left, try again next time
+      break;
+    }
+    if (res.ok) { flushed++; continue; }
+    if (res.status === 429) { remaining.push(...entries.slice(i)); break; } // daily cap still spent: stop this round
+    remaining.push(entries[i]); // some other error on this one: keep it, try the rest
+  }
+  writeCaptureSpool(namespace, remaining, cacheDir);
+  return { flushed, remaining: remaining.length };
+}
+
 /**
  * Whether `transcriptPath` plausibly belongs to `sessionId` at all, checked
  * the one way available without assuming a specific vendor directory layout
@@ -711,13 +823,26 @@ async function performCapture({
       body: JSON.stringify(body),
     }, captureTimeoutMs);
   } catch (e) {
-    fail(`session capture failed: ${e?.name === 'TimeoutError' ? `no reply within ${(captureTimeoutMs / 1000).toFixed(0)}s` : e?.message ?? 'network error'}`);
-    return { sent: false, reason: 'network-error' };
+    // Network failure: transient by nature, so spool it rather than lose it.
+    // A budget audit's requirement: never lose a capture silently.
+    spoolCapture(namespace, body, cacheDir);
+    logSpooledCapture(false);
+    return { sent: false, reason: 'spooled' };
   }
   if (!res.ok) {
-    let detail = '';
-    try { const j = await res.json(); detail = String(j?.error ?? j?.code ?? ''); } catch { /* not JSON */ }
-    fail(`session capture failed: HTTP ${res.status}${detail ? ` ${detail}` : ''}${hintFor(res.status)}`);
+    let errorCode = '';
+    try { errorCode = String((await res.json())?.error ?? ''); } catch { /* not JSON */ }
+    // 429 (the Worker's answer to a spent daily D1 cap, per the budget audit's
+    // addendum) and any 5xx are transient — spool and retry next session
+    // start. Any other 4xx (bad/expired token, a malformed request) will
+    // just fail again identically on retry, so it keeps the original
+    // fail()-reported behavior instead of growing the spool forever.
+    if (res.status === 429 || res.status >= 500) {
+      spoolCapture(namespace, body, cacheDir);
+      logSpooledCapture(res.status === 429 && errorCode === 'daily_limit');
+      return { sent: false, reason: 'spooled' };
+    }
+    fail(`session capture failed: HTTP ${res.status}${errorCode ? ` ${errorCode}` : ''}${hintFor(res.status)}`);
     return { sent: false, reason: 'http-error' };
   }
   recordLastCaptureTime(namespace, cacheDir);
@@ -737,5 +862,7 @@ module.exports = {
   redactSecrets, buildSessionCaptureBody, shouldCaptureSession, performCapture,
   recordLastCaptureTime, lastCaptureTime, captureEnabled,
   contentDigest, claimCapture, transcriptBelongsToSession,
+  readCaptureSpool, writeCaptureSpool, spoolCapture, flushCaptureSpool, logSpooledCapture,
   CAPTURE_MAX_CONTENT_CHARS, CAPTURE_WANT_USER_TURNS, CAPTURE_TIMEOUT_MS,
+  CAPTURE_SPOOL_MAX_ENTRIES, CAPTURE_SPOOL_MAX_BYTES, CAPTURE_SPOOL_FLUSH_BUDGET_MS,
 };

@@ -13,8 +13,10 @@ async function main() {
   const health = await res.json();
   const captureOn = core.captureEnabled(process.env, 'SECOND_BRAIN_HOOK_CAPTURE_CURSOR');
   const last = core.lastCaptureTime('cursor', core.CACHE_DIR);
+  const pending = core.readCaptureSpool('cursor', core.CACHE_DIR).length;
   console.log(`Worker ${health.version} at ${creds.baseUrl} - recall: on; session capture: ${captureOn ? 'on' : 'off'}`);
   console.log(`last capture: ${last ? new Date(last).toISOString() : 'never'}`);
+  console.log(`captures waiting to retry (spooled after a failed upload): ${pending}`);
 
   console.log('\n-- session-start against this brain --');
   await start.main();
