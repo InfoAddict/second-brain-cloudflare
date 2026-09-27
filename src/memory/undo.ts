@@ -226,7 +226,10 @@ export async function revertEntry(
       return { status: "reembed_failed" };
     }
   }
-  const nextVectorIds = targetStatus === "deprecated" ? "[]" : newVectorIds ? JSON.stringify(newVectorIds) : row.vector_ids;
+  // Only set when this revert actually touched the vector index (re-embedded, or deprecating/
+  // undeprecating). Otherwise leaving it out of the UPDATE, rather than rebinding this call's own
+  // stale read, is what stops a re-index that lands mid-undo from being erased (U11).
+  const nextVectorIds = needsReembed ? (newVectorIds ? JSON.stringify(newVectorIds) : undefined) : targetStatus === "deprecated" ? "[]" : undefined;
 
   const nonce = crypto.randomUUID();
   const now = Date.now();
@@ -242,8 +245,9 @@ export async function revertEntry(
   const whenSet = restoreWhen
     ? `, when_at = ${p.add(nextWhen!.when_at ?? null)}, when_kind = ${p.add(nextWhen!.when_kind ?? null)}, when_source = ${p.add(nextWhen!.when_source ?? null)}, when_label = ${p.add(nextWhen!.when_label ?? null)}`
     : "";
+  const vectorIdsSet = nextVectorIds !== undefined ? `, vector_ids = ${p.add(nextVectorIds)}` : "";
   // versioning: snapshot
-  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}, vector_ids = ${p.add(nextVectorIds)}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
+  const updateSql = `UPDATE entries AS e SET content = ${p.add(restoredContent)}, tags = ${p.add(JSON.stringify(restoredTags))}, updated_at = ${p.add(now)}${vectorIdsSet}${whenSet} WHERE e.id = ${p.add(id)} AND ${workspaceGuard(p)} AND ${ownSnapshotLandedSql(p, id, newest.seq, nonce)}`;
 
   let results;
   try {
