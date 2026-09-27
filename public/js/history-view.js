@@ -41,8 +41,9 @@ function historyReasonLabel(item, index, items, entry) {
 }
 
 /** {provider} for a synced-source row: the entry's own source, read the same way everywhere it is shown. */
+/** A brand name for a sentence ("synced from Notion"), not the lowercase badge label. */
 function historyProvider(entry) {
-  return (typeof sourceBadge === 'function' ? sourceBadge(entry.source).label : entry.source) || ''
+  return (typeof providerName === 'function' ? providerName(entry.source) : entry.source) || ''
 }
 
 /**

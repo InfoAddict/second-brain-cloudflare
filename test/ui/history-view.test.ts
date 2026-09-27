@@ -190,6 +190,20 @@ const EVENT_SHARED = {
   actor_name: "Ana",
 };
 
+const CHANGE_SYNCED = {
+  kind: "change",
+  seq: 5,
+  at: 1786000000000,
+  reason: "mirror",
+  channel: "system:mirror",
+  client: null,
+  actor_name: null,
+  before_preview: "The text before the sync overwrote it.",
+  before_status: "canonical",
+  can_undo: false,
+  can_restore: false,
+};
+
 describe("renderHistory — change and event rows", () => {
   it("renders change rows newest first with reason, who and before preview", () => {
     const ctx = load();
@@ -270,6 +284,14 @@ describe("renderHistory — change and event rows", () => {
     ctx.memoryAuthors = { you: "u2", members: [{ userId: "u1", name: "Rahil" }, { userId: "u2", name: "Ana" }] };
     const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST] } });
     expect(tl.innerHTML).toContain("by Rahil via Claude");
+  });
+
+  it("names a synced provider with its brand name, not the lowercase badge label", () => {
+    const ctx = load();
+    const synced = { ...CHANGE_SYNCED };
+    const { tl } = renderAndWire(ctx, { id: "e1", source: "notion", history: { items: [synced] } });
+    expect(tl.innerHTML).toContain("synced from Notion");
+    expect(tl.innerHTML).not.toContain("synced from notion");
   });
 
   it("every history string exists in both locales", () => {

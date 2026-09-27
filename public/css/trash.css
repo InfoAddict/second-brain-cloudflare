@@ -1,0 +1,240 @@
+/* Trash view, settings panel and the what's-new line (T-0101.2.2, .8.3, .8.4).
+ * Shares the sheet chrome (.menu-inner, .patterns-inner, .view-header,
+ * .digest-note, .team-open-row, .team-select-wrap) that already ships in
+ * main.css; this file only adds what those do not already cover. */
+
+/* ── New sheet containers ──────────────────────────────────────────────
+ * main.css's "BOTTOM SHEETS" rule (display/position/backdrop, its .open
+ * state, and the desktop centered-modal override) enumerates sheet ids
+ * explicitly rather than matching a shared class, and main.css is not this
+ * lane's file to edit. #trash-sheet and #settings-sheet replicate that same
+ * rule here, values kept identical to main.css's so a new sheet behaves like
+ * every other one. */
+#trash-sheet,
+#settings-sheet {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(20, 18, 13, 0.42);
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.28s var(--ease);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+#trash-sheet.open,
+#settings-sheet.open {
+  display: flex;
+  opacity: 1;
+}
+
+@media (min-width: 768px) {
+  #trash-sheet,
+  #settings-sheet {
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* ── Memories foot entry point ─────────────────────────────────────────── */
+
+.mem-trash-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 13px 0 calc(13px + env(safe-area-inset-bottom));
+  margin-top: 4px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--line);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.mem-trash-link i {
+  font-size: 16px;
+}
+
+.mem-trash-link:hover {
+  color: var(--text-primary);
+}
+
+/* ── Trash rows ─────────────────────────────────────────────────────────
+ * Same anatomy as .stale-row / .due-row: full-width text, a meta line, then
+ * a wrapping actions row, rather than reusing .stale-row itself — a fourth
+ * caller of that class is how "the queue" stopped meaning one thing. */
+
+.trash-item {
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trash-item:last-child {
+  border-bottom: none;
+}
+
+.trash-item-text {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.trash-item-meta,
+.trash-item-days {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.trash-item-days {
+  margin-bottom: 8px;
+}
+
+.trash-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.trash-btn {
+  flex: 1 1 130px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--r-button);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    opacity 0.15s;
+}
+
+.trash-btn i {
+  font-size: 15px;
+}
+
+.trash-btn--primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--on-accent);
+}
+
+.trash-btn--primary:hover {
+  background: var(--accent-press);
+  border-color: var(--accent-press);
+}
+
+/* Present but quieter than the confirm sheet's own solid Delete forever
+ * button: this is a row action offering the door, not the accept button
+ * behind it, which is where the heavier --danger fill belongs. */
+.trash-btn--danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.trash-btn--danger:hover {
+  background: var(--danger-soft);
+}
+
+/* ── Settings panel ────────────────────────────────────────────────────── */
+
+.settings-row-note {
+  margin: -4px 0 14px;
+}
+
+.settings-row-error {
+  margin: -4px 0 14px;
+  color: var(--danger);
+}
+
+/* main.css's .team-select-wrap has no :disabled rule (its only other user,
+ * team.js, never disables a select), so a member's read-only selects fell
+ * back to the browser default, which barely reads as disabled in most
+ * themes. Scoped to this sheet rather than added to main.css. */
+#settings-sheet select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--surface-muted);
+}
+
+#settings-sheet select:disabled + .ti {
+  opacity: 0.5;
+}
+
+/* ── Brain-version what's-new line ────────────────────────────────────── */
+
+.whats-new-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-card);
+  border-radius: var(--r-card);
+  font-size: 13.5px;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.whats-new-line[hidden] {
+  display: none;
+}
+
+.whats-new-text {
+  flex: 1 1 240px;
+}
+
+.whats-new-see {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-ink);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.whats-new-see:hover {
+  text-decoration: underline;
+}
+
+.whats-new-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  min-width: 32px;
+  min-height: 32px;
+  justify-content: center;
+}
+
+.whats-new-dismiss:hover {
+  color: var(--text-primary);
+}

@@ -63,7 +63,8 @@ function load(sheet: any, innerWidth: number) {
 }
 
 function openSheet() {
-  return { classList: { contains: (c: string) => c === "open" } };
+  const contains: (c: string) => boolean = (c) => c === "open";
+  return { classList: { contains } };
 }
 
 describe("toast position relative to an open sheet", () => {
