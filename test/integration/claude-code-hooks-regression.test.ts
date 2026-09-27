@@ -13,7 +13,7 @@
  * This test proves it stays fixed: it runs the FROZEN pre-refactor script
  * (fixtures/pre-shared-core.session-start.js) and the current session-start.js
  * against the identical stub Worker and stdin payload, and asserts their
- * stdout is byte-for-byte identical — including when the stub is slow enough
+ * stdout is byte-for-byte identical - including when the stub is slow enough
  * that the old 3s-cut version would have produced different (emptier) output
  * than the original 15s-budget version did.
  */
@@ -99,7 +99,7 @@ describe("Claude Code session-start.js vs. its frozen pre-shared-core self", () 
     expect(current.stdout).toContain("a remembered thing");
   });
 
-  it("still recalls when the Worker takes 10s to answer — well past a 3s cap, well inside the original 15s budget", async () => {
+  it("still recalls when the Worker takes 10s to answer - well past a 3s cap, well inside the original 15s budget", async () => {
     behaviour.recallDelayMs = 10000;
     const [current, golden] = await Promise.all([runHook(CURRENT, payload), runHook(GOLDEN, payload)]);
     expect(current.code, current.stderr).toBe(0);
