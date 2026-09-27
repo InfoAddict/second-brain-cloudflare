@@ -43,4 +43,18 @@ describe("visibleTimeline", () => {
     // Callers pass isAuthor: true for an identity-less reader.
     expect(visibleTimeline(newestFirst, { canRead: () => true, isAuthor: true })).toEqual(newestFirst);
   });
+
+  it("R3-4: treatAbsentFromAsReadable continues past a pre-4.0 move instead of cutting there", () => {
+    const events = [ev("updated"), ev("shared"), ev("created")];
+    const seen = visibleTimeline(events, { canRead: () => false, isAuthor: false, treatAbsentFromAsReadable: true });
+    expect(seen).toEqual(events);
+  });
+
+  it("R3-4: treatAbsentFromAsReadable never widens a move that DOES carry a fromWorkspaceId", () => {
+    // A move recorded with a real origin (even the pre-tenancy "" marker, modeled here as a
+    // string canRead rejects) still goes through the ordinary cut regardless of the flag.
+    const events = [ev("updated"), ev("shared", "bobs-personal"), ev("updated"), ev("created")];
+    const seen = visibleTimeline(events, { canRead: () => false, isAuthor: false, treatAbsentFromAsReadable: true });
+    expect(seen.map(e => e.event)).toEqual(["updated", "shared"]);
+  });
 });

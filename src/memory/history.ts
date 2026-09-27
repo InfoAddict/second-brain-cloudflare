@@ -43,25 +43,31 @@ export async function readEntryTimeline(
   }));
 
   // The author sees every event; anyone else sees events from the move that brought the memory
-  // into a workspace they can read (D-SH, A3). A legacy row (actor_id "") has no author on file,
-  // but its own owner still needs the full timeline of a memory sitting in their own personal
-  // workspace — pre-4.0 move events recorded no fromWorkspaceId, so the D-SH walk below would
-  // otherwise cut them off from their own history (ADV-11). This is narrowly the TENANT OWNER,
-  // never any other admin: R2-4 found that matching "the row sits in identity's own personal
-  // workspace" alone let an admin who unshared someone else's legacy row into their OWN personal
-  // workspace inherit its private-era history too, since that check never asked whose tenant this
-  // is. identity must BE the owner, and the row must sit in the owner's own personal workspace
-  // (or, pre-workspace-migration, the legacy "" marker).
-  const isLegacyOwnRow = entryActorId === "" && entryWorkspaceId !== undefined
-    && identity.userId === (await ensureTenantBootstrap(env)).ownerUserId
-    && (entryWorkspaceId === identity.personalWorkspaceId || entryWorkspaceId === "");
-  const isAuthor = (entryActorId !== "" && identity.userId === entryActorId) || isLegacyOwnRow;
+  // into a workspace they can read (D-SH, A3). A legacy row (actor_id "") has no author on file at
+  // all — not even the tenant owner, since digests and auto-insights are ALSO written with an
+  // empty actor (isSystemRow), in whichever member's workspace they summarize. R2-4 found that
+  // granting the owner a blanket bypass for "the row sits in the owner's own personal workspace"
+  // let an admin who unshared someone ELSE's legacy row into their own personal workspace inherit
+  // its private-era history too. R3-4 found the narrower R2-4 fix was still too wide: the owner's
+  // OWN digest, shared and then unshared back into the owner's personal workspace, satisfied the
+  // same "sits in the owner's own workspace" test and exposed the summarized member's private-era
+  // events. There is no version of this check keyed on where the row currently sits that is safe —
+  // isAuthor is never true for a legacy row. What the owner DOES get, via
+  // treatAbsentFromAsReadable below: a move event that predates the fromWorkspaceId field entirely
+  // (truly pre-4.0, when there was only one user to have written anything before it) lets the walk
+  // continue past it instead of cutting there (ADV-11) — never a move event that actually records
+  // a fromWorkspaceId, even the pre-tenancy "" marker, which goes through the ordinary cut.
+  const isAuthor = entryActorId !== "" && identity.userId === entryActorId;
   let rows = parsedChrono;
   if (!isAuthor) {
     const newestFirst = [...parsedChrono].reverse();
-    const needsOwner = newestFirst.some(e => e.payload.fromWorkspaceId === "");
+    const needsOwner = entryActorId === "" || newestFirst.some(e => e.payload.fromWorkspaceId === "");
     const ownerUserId = needsOwner ? (await ensureTenantBootstrap(env)).ownerUserId : undefined;
-    rows = visibleTimeline(newestFirst, { canRead: ws => workspaceReadable(identity, ws, ownerUserId), isAuthor: false }).reverse();
+    const isOwnerOfLegacyRow = entryActorId === "" && ownerUserId !== undefined && identity.userId === ownerUserId;
+    rows = visibleTimeline(newestFirst, {
+      canRead: ws => workspaceReadable(identity, ws, ownerUserId), isAuthor: false,
+      treatAbsentFromAsReadable: isOwnerOfLegacyRow,
+    }).reverse();
   }
 
   const labelMap = inlineLabels
