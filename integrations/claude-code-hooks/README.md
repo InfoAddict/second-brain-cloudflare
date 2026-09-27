@@ -95,7 +95,8 @@ token wherever it appears, `Bearer <token>` values, provider key shapes (`sk-`,
 Stripe, npm), JWTs, whole PEM private-key blocks, the password in
 `scheme://user:password@host`, any other 32+ character token mixing digits
 with upper and lower case, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/
-`*_KEY=`/`CREDENTIALS=` style assignments. Only those shapes: a UUID, a commit
+`*_KEY=`/`CREDENTIALS=` style assignments, including quoted values with
+spaces (`DB_PASSWORD="correct horse battery staple"`). Only those shapes: a UUID, a commit
 SHA, a file path and ordinary prose are left exactly as they were, because a
 memory redacted into uselessness is worse than no memory. Tool output (where
 secrets usually live) never reaches the body in the first place.

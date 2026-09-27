@@ -180,7 +180,8 @@ replaced with `[redacted]`: your own configured token wherever it appears,
 JWTs, whole PEM private-key blocks, the password in
 `scheme://user:password@host`, any other 32+ character token mixing digits
 with upper and lower case, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/
-`*_KEY=`/`CREDENTIALS=` style assignments. A UUID, a commit SHA, a file path
+`*_KEY=`/`CREDENTIALS=` style assignments, including quoted values with
+spaces (`DB_PASSWORD="correct horse battery staple"`). A UUID, a commit SHA, a file path
 and ordinary prose are left exactly as they were.
 
 A session is captured only when at least one user turn is 40+ characters and

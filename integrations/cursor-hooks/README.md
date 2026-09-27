@@ -162,7 +162,8 @@ with `[redacted]`: your own configured token wherever it appears,
 JWTs, whole PEM private-key blocks, the password in `scheme://user:password@host`,
 any other 32+ character token mixing digits with upper and lower case, and
 `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/`*_KEY=`/`CREDENTIALS=` style
-assignments. A UUID, a commit SHA and a file path are left as they were. The
+assignments, including quoted values with spaces
+(`DB_PASSWORD="correct horse battery staple"`). A UUID, a commit SHA and a file path are left as they were. The
 body is capped at 2000 characters.
 
 Set `SECOND_BRAIN_WORKSPACE=company` to write to the shared layer instead. Set
