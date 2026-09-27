@@ -247,3 +247,19 @@ describe("a night with a bulk purge and a pending removal", () => {
     void m;
   });
 });
+
+describe("adversary (MINOR): the nightly purge must not run at half the spec's pace", () => {
+  it("a bulk trash of mirrored rows (3 versions each) purges at the spec's ~770 a night, not one batch cut short by the budget", async () => {
+    t = await makeTrashEnv();
+    await seedTrashRows(t, 1000, { prefix: "m", deletedAt: 1, reason: "disconnect" });
+    await t.sqlite.db.exec(`
+      INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, actor_id, channel, reason, created_at)
+      SELECT t.id, '', s.seq, 'v', NULL, '[]', '', 'system:mirror', 'mirror', 1
+        FROM entries_trash t, (SELECT 1 AS seq UNION ALL SELECT 2 UNION ALL SELECT 3) s`);
+
+    const night = await runNightlyCleanup(t.env);
+    // Spec "Pacing": mirror rows (13 rows each) purge at about 770 a night (10,000 / 13). A batch
+    // cut short by the row budget (not by running out of expired rows) must not stop the loop.
+    expect(night.purged).toBeGreaterThanOrEqual(700);
+  });
+});

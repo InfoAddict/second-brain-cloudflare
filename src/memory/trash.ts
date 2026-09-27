@@ -234,6 +234,12 @@ export interface PurgeResult {
   /** Versions trimmed from one oversized row instead of purging it. */
   trimmed: number;
   rowsWritten: number;
+  /**
+   * True when this batch stopped short of `read` because the row-written budget ran out, not
+   * because there was nothing more expired to purge. The nightly loop (runNightlyCleanup) must
+   * keep going on a budget cut — stopping here, as it once did, halved the spec's purge pacing.
+   */
+  budgetCut: boolean;
 }
 
 /**
@@ -253,7 +259,7 @@ export async function purgeTrash(
   // empty trash never needs the config (one KV read saved on every nightly run).
   const earliest = now - MIN_RETENTION_DAYS * DAY_MS;
   const budget = Math.min(opts.rowTarget, opts.rowsLeft ?? Infinity);
-  const none: PurgeResult = { read: 0, purged: 0, trimmed: 0, rowsWritten: 0 };
+  const none: PurgeResult = { read: 0, purged: 0, trimmed: 0, rowsWritten: 0, budgetCut: false };
   if (budget < PURGE_ROW_COST) return none;
 
   const rp = new Params();
@@ -284,7 +290,7 @@ export async function purgeTrash(
     // Even the first row does not fit. If it is the row itself that is oversized, trim its oldest versions.
     const first = candidates[0];
     const chunk = Math.min(VERSION_DELETE_CHUNK, Math.floor(budget / 2));
-    if (chunk < 1) return { ...none, read: candidates.length };
+    if (chunk < 1) return { ...none, read: candidates.length, budgetCut: true };
     const tp = new Params();
     const res = await env.DB.prepare(
       // scope-exempt: retention purge of one trashed entry's versions, oldest first, only while the id is not live
@@ -293,7 +299,7 @@ export async function purgeTrash(
           ORDER BY v.seq LIMIT ${tp.add(chunk)})`,
     ).bind(...tp.values()).run();
     const trimmed = changedRows(res);
-    return { read: candidates.length, purged: 0, trimmed, rowsWritten: rowsWrittenOf([res], 2 * trimmed) };
+    return { read: candidates.length, purged: 0, trimmed, rowsWritten: rowsWrittenOf([res], 2 * trimmed), budgetCut: true };
   }
 
   // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder.
@@ -332,7 +338,10 @@ export async function purgeTrash(
   ]);
   const purged = changedRows(results3[2]);
   const estimate = 4 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
-  return { read: candidates.length, purged, trimmed: 0, rowsWritten: rowsWrittenOf(results3, estimate) };
+  return {
+    read: candidates.length, purged, trimmed: 0, rowsWritten: rowsWrittenOf(results3, estimate),
+    budgetCut: chosen.length < candidates.length,
+  };
 }
 
 /** Rows written by a batch: the larger of D1's own count and the estimate (the test doubles report only changes). */
