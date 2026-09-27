@@ -303,7 +303,7 @@ describe("Minor 9: resolve statement bounds", () => {
     const racing = { ...env, DB: new Proxy(env.DB, { get(t: any, p) {
       if (p !== "prepare") return typeof t[p] === "function" ? t[p].bind(t) : t[p];
       return (sql: string) => {
-        if (/^UPDATE entries SET tags = \? WHERE id = \? AND tags = \?/.test(sql) && losses < 3) {
+        if (sql.startsWith("UPDATE entries AS e SET tags = ") && losses < 3) {
           losses++;
           void sqlite.db.prepare(`UPDATE entries SET content = content || '.' WHERE id = 'r'`).run();
         }

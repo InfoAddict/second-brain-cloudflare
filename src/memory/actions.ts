@@ -10,7 +10,7 @@ import { resolveConfig } from "../config";
 import { withStatus, getStatus } from "./status";
 import { withKind } from "./kind";
 import { deleteVectorIds } from "../vectorize/batch";
-import { changesOf, pruneManyStatement, pruneStatement, snapshotManyStatement, snapshotStatement, type WhenChange } from "./versions";
+import { buildCasGuard, changesOf, Params, pruneManyStatement, pruneStatement, snapshotManyStatement, snapshotStatement, type WhenChange } from "./versions";
 
 export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "still_true";
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number } | { ok: false; error: string; status: number };
@@ -63,42 +63,52 @@ export async function resolveEntryAction(
     if (denied) return { ok: false, error: denied.message, status: 403 };
     const tags = parseTags(row.tags as string);
     const priorWhen = { when_at: row.when_at ?? null, when_kind: row.when_kind ?? null, when_label: row.when_label ?? null, when_source: row.when_source ?? null };
-    // The date columns join the CAS so the recorded prior is the value actually replaced.
-    const whenUnchanged = `AND when_at IS ? AND when_kind IS ? AND when_label IS ? AND when_source IS ?`;
-    const whenBindings = [priorWhen.when_at, priorWhen.when_kind, priorWhen.when_label, priorWhen.when_source];
     const now = Date.now();
     let statement: D1PreparedStatement;
     let payload: Record<string, unknown>;
     let snapshot: D1PreparedStatement;
+    // The guard is built once and fed to both the snapshot and the UPDATE (spec P3, ADV-1): a
+    // hand-written second copy is exactly how the snapshot's guard fell out of step with the
+    // UPDATE's own WHERE clause and kept writing versions for changes that never landed. It also
+    // pins workspace_id (ADV-2): a row that moved to a workspace this request was never authorized
+    // to write into must miss the CAS, not just miss unnoticed — the retry above then re-reads
+    // through getReadableEntry, which returns not_found or forbidden once the row is truly gone
+    // from this caller's reach, rather than committing into wherever it ended up.
     if (action === "done" || action === "not_a_task") {
       const nextTags = action === "done" ? withTaskDone(tags) : withoutTask(tags);
+      const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id };
       snapshot = snapshotStatement(env, {
         entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { loop_action: action === "done" ? "done" : "not-task" }, now,
-        guard: p => `e.tags = ${p.add(row.tags)} AND e.content = ${p.add(row.content)}`,
+        guard: p => buildCasGuard(p, casColumns),
       });
+      const p = new Params();
+      const nextTagsIdx = p.add(JSON.stringify(nextTags));
       // versioning: snapshot
-      statement = env.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?`)
-        .bind(JSON.stringify(nextTags), id, row.tags, row.content);
+      statement = env.DB.prepare(`UPDATE entries AS e SET tags = ${nextTagsIdx} WHERE e.id = ${p.add(id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values());
       payload = { loop_action: action === "done" ? "done" : "not-task", prior: { tags } };
     } else if (action === "snooze") {
       const nextWhen: WhenChange = { when_at: until };
+      const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id, ...priorWhen };
       snapshot = snapshotStatement(env, {
         entryId: id, reason: "due", change, content: { kind: "unchanged" }, nextTags: tags, nextWhen, meta: { due_action: "snooze", until }, now,
-        guard: p => `e.tags = ${p.add(row.tags)} AND e.content = ${p.add(row.content)}`,
+        guard: p => buildCasGuard(p, casColumns),
       });
+      const p = new Params();
+      const untilIdx = p.add(until);
       // versioning: snapshot
-      statement = env.DB.prepare(`UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ? ${whenUnchanged}`)
-        .bind(until, id, row.tags, row.content, ...whenBindings);
+      statement = env.DB.prepare(`UPDATE entries AS e SET when_at = ${untilIdx} WHERE e.id = ${p.add(id)} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values());
       payload = { due_action: "snooze", until, prior: priorWhen };
     } else {
       const nextWhen: WhenChange = { when_at: null, when_kind: null, when_source: "cleared", when_label: null };
+      const casColumns = { tags: row.tags, content: row.content, workspace_id: row.workspace_id, ...priorWhen };
       snapshot = snapshotStatement(env, {
         entryId: id, reason: "due", change, content: { kind: "unchanged" }, nextTags: tags, nextWhen, meta: { due_action: "clear" }, now,
-        guard: p => `e.tags = ${p.add(row.tags)} AND e.content = ${p.add(row.content)}`,
+        guard: p => buildCasGuard(p, casColumns),
       });
+      const p = new Params();
+      const idIdx = p.add(id);
       // versioning: snapshot
-      statement = env.DB.prepare(`UPDATE entries SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE id = ? AND tags = ? AND content = ? ${whenUnchanged}`)
-        .bind(id, row.tags, row.content, ...whenBindings);
+      statement = env.DB.prepare(`UPDATE entries AS e SET when_at = NULL, when_kind = NULL, when_label = NULL, when_source = 'cleared' WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values());
       payload = { due_action: "clear", prior: priorWhen };
     }
     const results = await env.DB.batch([snapshot, statement, pruneStatement(env, id, cfg.VERSION_KEEP)]);

@@ -186,6 +186,24 @@ export function mirrorPruneStatement(env: Env, entryId: string, keep: number): D
 }
 
 /**
+ * A compare-and-set predicate over `entries`, built once and shared VERBATIM between a snapshot's
+ * guard and its UPDATE's WHERE clause (spec P3: "A snapshot of a CAS-guarded write carries the same
+ * guard"). Passing the same `columns` object to two separate `Params` instances (the snapshot's own,
+ * and the UPDATE's) cannot drift the two apart the way two hand-written fragments did (ADV-1: a guard
+ * that checked fewer columns than its UPDATE let a miss the UPDATE correctly caught still commit a
+ * version, under the caller's actor, for a change that never landed).
+ *
+ * `null` compares with `IS` (so an unset when_* column matches); everything else with `=`. The UPDATE
+ * side aliases its table (`UPDATE entries AS e SET … WHERE …`, valid SQLite/D1) so the identical
+ * `e.<col>` text works unmodified in both places.
+ */
+export function buildCasGuard(p: Params, columns: Record<string, unknown>): string {
+  return Object.entries(columns)
+    .map(([col, val]) => `e.${col} ${val === null ? "IS" : "="} ${p.add(val)}`)
+    .join(" AND ");
+}
+
+/**
  * UPDATE guard for a revert: true only if THIS request's snapshot row exists (seq = expected + 1 and
  * meta.nonce = nonce). A timestamp is not an identity: Workers' Date.now() only advances after I/O.
  */

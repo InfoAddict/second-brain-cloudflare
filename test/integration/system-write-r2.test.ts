@@ -132,7 +132,7 @@ describe("ADV systemWrite", () => {
     const realPrepare = db.prepare.bind(db);
     let raced = false;
     db.prepare = (sql: string) => {
-      if (!raced && sql.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?")) {
+      if (!raced && sql.startsWith("UPDATE entries AS e SET content = ")) {
         raced = true;
         sqlite.db.prepare(`UPDATE entries SET content = 'MY EDIT', tags = '["synthesized","work","user-edited"]' WHERE id = 'old-digest'`).run();
       }
@@ -162,7 +162,7 @@ describe("ADV systemWrite", () => {
   function raceOnMergeUpdate(action: () => void) {
     const db = env.DB as any; const real = db.prepare.bind(db); let raced = false;
     db.prepare = (sql: string) => {
-      if (!raced && sql.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?")) { raced = true; action(); }
+      if (!raced && sql.startsWith("UPDATE entries AS e SET content = ")) { raced = true; action(); }
       return real(sql);
     };
   }

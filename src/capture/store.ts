@@ -14,7 +14,7 @@ import { tagsAfterWrite, tagsAfterAppend } from "../memory/stale";
 import { withVolatility, type Volatility } from "../memory/volatility";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import type { ChangeContext } from "../lib/audit";
-import { changesOf, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
+import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
 
 /** Re-embedding must stamp vectors from the row being edited, not the caller's default write target. */
 export function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: WriteContext): WriteContext {
@@ -256,6 +256,14 @@ export async function updateEntryContent(
   let embeddedFrom: string | null = null;
   let reembedded: StoredEntry | null = null;
   let last: { row: Record<string, any>; vectorIds: string[]; embedCtx: WriteContext } | null = null;
+  // ADV-2: `writeCtx.workspaceId` is the CALLER's default capture target (see embedContextForRow's own
+  // comment) — a member editing a row in a DIFFERENT, but readable and authorized, company workspace
+  // legitimately has a `writeCtx` that disagrees with the row's own workspace, and pinning the guard to
+  // it would refuse every ordinary edit outside the caller's default team. What the guard must pin to
+  // instead is the workspace THIS CALL found the row in on its own first read — the same workspace the
+  // route's own getReadableEntry + assertCanEditContent already authorized moments earlier. A LATER
+  // attempt landing somewhere else is the actual unauthorized-move case (an unshare mid-embed).
+  let authorizedWorkspaceId: string | null = null;
 
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
     // vector_ids has to be read before any mutation: storeEntry overwrites it, and the
@@ -267,6 +275,17 @@ export async function updateEntryContent(
 
     if (!row) {
       // Forgotten meanwhile: its own vectors went with it, and any this write made are orphans.
+      if (reembedded?.vectorIds.length) {
+        try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
+      }
+      return { status: "not_found" };
+    }
+
+    if (authorizedWorkspaceId === null) {
+      authorizedWorkspaceId = row.workspace_id ?? "";
+    } else if (row.workspace_id !== authorizedWorkspaceId) {
+      // The row moved since this call's own first read: write nothing. Retrying would re-authorize
+      // against wherever it landed, which is exactly the cross-tenant write this guard refuses.
       if (reembedded?.vectorIds.length) {
         try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
       }
@@ -307,6 +326,12 @@ export async function updateEntryContent(
     // (#270), not that this embed failed. A retry re-embeds only if the row's text changed (another
     // writer may have upserted over these ids); a tags-only change keeps the vectors already made.
     if (attempt === 1 || embeddedFrom !== readContent) {
+      // A previous attempt's embed is being abandoned for this fresh one (content moved again since
+      // it ran): retire its ids now (ADV-4), or they sit in vector_ids for the next commit — whichever
+      // branch it takes — to build on top of, the exact orphan the short-append json_insert case hit.
+      if (reembedded?.vectorIds.length) {
+        try { await deleteVectorIds(env, reembedded.vectorIds); } catch (e) { console.error("Superseded embed cleanup failed (non-fatal):", e); }
+      }
       try {
         reembedded = await reembedOrDegrade(env, id, finalContent, mergedTags, source, config, embedCtx);
       } catch (e) {
@@ -322,17 +347,28 @@ export async function updateEntryContent(
     // A replacement is a new logical version of the entry, but it stays IN PLACE:
     // workspace_id is never touched here (share/unshare moves rows, nothing else does),
     // and actor_id is left untouched: the original author of a row being edited is not
-    // this call's to decide.
+    // this call's to decide. It IS part of the guard (ADV-2): a row this call is no longer
+    // authorized to write into must miss, not commit into wherever it ended up.
     // The prior state is kept in the same batch as the change, and a lost attempt writes neither.
+    // vector_ids is set HERE, atomically with content and under the same guard (ADV-4) — not left
+    // to storeEntry's own unconditional write, which a losing attempt would otherwise leave behind
+    // for the next attempt's statement to build on top of.
     const now = Date.now();
+    const casColumns = { content: readContent, tags: readTags, workspace_id: authorizedWorkspaceId };
+    const p = new Params();
+    const contentIdx = p.add(finalContent);
+    const tagsIdx = p.add(JSON.stringify(committedTags));
+    const nowIdx = p.add(now);
+    const vectorIdsIdx = p.add(newVectorIds ? JSON.stringify(newVectorIds) : row.vector_ids);
+    const idIdx = p.add(id);
     const committed = await env.DB.batch([
       snapshotStatement(env, {
         entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now,
-        guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
+        guard: p2 => buildCasGuard(p2, casColumns),
       }),
       // versioning: snapshot
-      env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?`)
-        .bind(finalContent, JSON.stringify(committedTags), now, id, readContent, readTags),
+      env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
+        .bind(...p.values()),
       pruneStatement(env, id, config.VERSION_KEEP),
     ]);
     if (changesOf(committed[1]) === 0) continue;
@@ -425,12 +461,25 @@ export async function appendToEntry(
     }
   };
 
+  // ADV-2: pinned to what THIS call's own first read saw, not to writeCtx.workspaceId (the caller's
+  // default capture target, unrelated to which workspace an EXISTING row happens to live in — see
+  // embedContextForRow's own comment and updateEntryContent's identical reasoning above).
+  let authorizedWorkspaceId: string | null = null;
+
   for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
     const row = await env.DB.prepare(
       // scope-exempt: by-id: routes gate with getReadableEntry + assertCanEditContent
       `SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
     ).bind(id).first() as Record<string, any> | null;
     if (!row) { await retireChunk(); throw new EntryGoneError(id); }
+    if (authorizedWorkspaceId === null) {
+      authorizedWorkspaceId = row.workspace_id ?? "";
+    } else if (row.workspace_id !== authorizedWorkspaceId) {
+      // The row moved since this call's own first read: nothing here to append to — retrying would
+      // append into a workspace this request was never cleared to write into.
+      await retireChunk();
+      throw new EntryGoneError(id);
+    }
 
     const readContent: string = row.content;
     const readTags: string = row.tags ?? "[]";
@@ -448,21 +497,35 @@ export async function appendToEntry(
       // The whole text is re-embedded, so this commit must be of the text that was embedded.
       const newContent = readContent + suffix;
       const newVectorIds = (await reembedOrDegrade(env, id, newContent, rowTags, source, config, embedCtx))?.vectorIds ?? null;
+      const longCasColumns = { content: readContent, tags: readTags, workspace_id: authorizedWorkspaceId };
+      const p = new Params();
+      const contentIdx = p.add(newContent);
+      const tagsIdx = p.add(JSON.stringify(refreshedTags));
+      const nowIdx = p.add(now);
+      const vectorIdsIdx = p.add(newVectorIds ? JSON.stringify(newVectorIds) : row.vector_ids);
+      const whenIdx = when ? [p.add(when.at), p.add(when.kind)] : [];
+      const idIdx = p.add(id);
       const committed = await env.DB.batch([
         snapshotStatement(env, {
           entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now,
-          guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
+          guard: p2 => buildCasGuard(p2, longCasColumns),
         }),
-        // versioning: snapshot
-        env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ?${whenSql} WHERE id = ? AND content = ? AND tags = ?`)
-          .bind(newContent, JSON.stringify(refreshedTags), now, ...whenBind, id, readContent, readTags),
+        // versioning: snapshot — vector_ids set here, atomically with content, under the same guard (ADV-4).
+        env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx}, vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
+          .bind(...p.values()),
         pruneStatement(env, id, config.VERSION_KEEP),
       ]);
       if (changesOf(committed[1]) === 0) {
+        // This attempt's own embed never committed: retire it now (ADV-4), not just on final
+        // exhaustion — otherwise it sits in vector_ids for whichever branch the next attempt takes
+        // to build on top of (the short branch's json_insert reads vector_ids fresh at commit time).
+        if (newVectorIds) {
+          try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Losing attempt's vector cleanup failed (non-fatal):", e); }
+        }
         if (attempt < WRITE_CAS_ATTEMPTS) continue;
-        // Out of attempts: the vectors just written describe text that never committed.
+        // Out of attempts: re-embed the row as it now stands, so the last upsert describes committed text.
         await retireChunk();
-        await restoreRowVectors(env, id, existingVectorIds, newVectorIds ?? [], source, config, embedCtx);
+        await restoreRowVectors(env, id, existingVectorIds, [], source, config, embedCtx);
         throw new WriteConflictError();
       }
       // A short attempt earlier may have inserted a chunk this long commit re-embedded away.
@@ -506,15 +569,24 @@ export async function appendToEntry(
     }
     const { id: chunkId, indexed, values } = chunk;
 
+    const shortCasColumns = { tags: readTags, workspace_id: authorizedWorkspaceId };
+    const shortP = new Params();
+    const suffixIdx = shortP.add(suffix);
+    const indexedIdx = shortP.add(indexed ? 1 : 0);
+    const chunkIdx = shortP.add(chunkId);
+    const shortTagsIdx = shortP.add(JSON.stringify(refreshedTags));
+    const shortNowIdx = shortP.add(now);
+    const shortWhenIdx = when ? [shortP.add(when.at), shortP.add(when.kind)] : [];
+    const shortIdIdx = shortP.add(id);
     const committed = await env.DB.batch([
       snapshotStatement(env, {
         entryId: id, reason: "append", change, content: { kind: "suffix" }, nextTags: refreshedTags, nextWhen, meta, now,
-        guard: p => `e.tags = ${p.add(readTags)}`,
+        guard: p => buildCasGuard(p, shortCasColumns),
       }),
       // versioning: snapshot
       env.DB.prepare(
-        `UPDATE entries SET content = content || ?, vector_ids = CASE WHEN ? = 1 THEN json_insert(vector_ids, '$[#]', ?) ELSE vector_ids END, tags = ?, updated_at = ?${whenSql} WHERE id = ? AND tags = ?`
-      ).bind(suffix, indexed ? 1 : 0, chunkId, JSON.stringify(refreshedTags), now, ...whenBind, id, readTags),
+        `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = ${shortNowIdx}${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
+      ).bind(...shortP.values()),
       pruneStatement(env, id, config.VERSION_KEEP),
     ]);
     if (changesOf(committed[1]) === 0) {

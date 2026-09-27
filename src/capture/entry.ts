@@ -17,7 +17,7 @@ import { rememberTags } from "../tags/vocabulary";
 import { CONFLICT_HELD_TAG, isCapsuleTag, SYSTEM_JOB_TAGS, USER_EDITED_TAG, withUserEditMarker } from "../tags/system";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { SYSTEM_SOURCE, TRANSCRIPT_SOURCES, VERSION_ROW_BUDGET_BYTES } from "../constants";
-import { changesOf, pruneStatement, snapshotStatement } from "../memory/versions";
+import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
 import { deleteVectorIds } from "../vectorize/batch";
 import type { WhenKind, WhenSource } from "../when/input";
 import { extractUnambiguousDate } from "../when/heuristic";
@@ -216,45 +216,63 @@ export async function captureEntry(
 
           // A system job merges only through this one attempt, matching prep: its snapshot shares the
           // same compare-and-set, so a lost merge writes no version and keeps both rows (unversioned).
+          // The guard is built once (buildCasGuard) and fed to both the snapshot and the UPDATE — spec
+          // P3, ADV-1 — and it pins workspace_id, so a target the caller is no longer authorized to
+          // write into (moved since the read above) misses rather than commits there (ADV-2).
           const commitSystem = async (): Promise<boolean> => {
             const now = Date.now();
             const stripped = tagsAfterWrite(existingTags);
             const refreshedTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
+            const systemCasColumns = { tags: targetRow.tags ?? "[]", content: existingContent, workspace_id: writeCtx.workspaceId };
             const results = await env.DB.batch([
               snapshotStatement(env, {
                 entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
-                guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`,
+                guard: p => `${buildCasGuard(p, systemCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`,
               }),
-              // versioning: snapshot
-              env.DB.prepare(
+              (() => {
+                const p = new Params();
+                const contentIdx = p.add(newContent);
+                const tagsIdx = p.add(JSON.stringify(refreshedTags));
+                const nowIdx = p.add(now);
+                const idIdx = p.add(targetId);
+                // versioning: snapshot
                 // scope-exempt: by-id: the merge target read above under this write's workspace, compare-and-set on the workspace, system-row identity, tags and content read
-                `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`)
-                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent, writeCtx.workspaceId, existingSource),
+                return env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, systemCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(existingSource)}`)
+                  .bind(...p.values());
+              })(),
               pruneStatement(env, targetId, cfg.VERSION_KEEP),
             ]);
             return changesOf(results[1]) > 0;
           };
 
-          // A person's merge compare-and-sets on the content and tags it embedded from (T-0089.10, W2:
-          // a system merge already did, prep 0798b62). A miss means someone else's edit landed during
-          // the re-embed above, so — like the system path — this keeps both rather than overwriting a
-          // concurrent edit with a merge decision that no longer accounts for it.
+          // A person's merge compare-and-sets on the content, tags AND workspace it embedded from
+          // (T-0089.10, W2: a system merge already did, prep 0798b62; workspace_id added for ADV-2). A
+          // miss means someone else's edit landed, OR the target moved to a workspace this request was
+          // never authorized to write into (an unshare mid-embed) — either way this keeps both rather
+          // than committing a merge decision that no longer accounts for the row as it now stands.
           const commitPerson = async (): Promise<boolean> => {
             const now = Date.now();
             const stripped = tagsAfterWrite(existingTags);
             const verdictTags = incomingVerdict ? withVolatility(stripped, incomingVerdict) : stripped;
             // A person's capture merging into a digest or insight makes it theirs.
             const refreshedTags = withUserEditMarker(verdictTags);
+            const personCasColumns = { tags: targetRow.tags ?? "[]", content: existingContent, workspace_id: writeCtx.workspaceId };
             const results = await env.DB.batch([
               snapshotStatement(env, {
                 entryId: targetId, reason, change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, meta: versionMeta, now,
-                guard: p => `e.tags = ${p.add(targetRow.tags ?? "[]")} AND e.content = ${p.add(existingContent)}`,
+                guard: p => buildCasGuard(p, personCasColumns),
               }),
-              // versioning: snapshot
-              env.DB.prepare(
-                // scope-exempt: by-id: the merge target this write read, compare-and-set on the tags and content it embedded from
-                `UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND tags = ? AND content = ?`)
-                .bind(newContent, JSON.stringify(refreshedTags), now, targetId, targetRow.tags ?? "[]", existingContent),
+              (() => {
+                const p = new Params();
+                const contentIdx = p.add(newContent);
+                const tagsIdx = p.add(JSON.stringify(refreshedTags));
+                const nowIdx = p.add(now);
+                const idIdx = p.add(targetId);
+                // versioning: snapshot
+                // scope-exempt: by-id: the merge target this write read, compare-and-set on the tags, content and workspace it embedded from
+                return env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = ${nowIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, personCasColumns)}`)
+                  .bind(...p.values());
+              })(),
               pruneStatement(env, targetId, cfg.VERSION_KEEP),
             ]);
             return changesOf(results[1]) > 0;
@@ -409,17 +427,22 @@ export async function captureEntry(
       const snap = conflictSnapshot;
       const snapTags: string = snap.tags ?? "[]";
       const deprecatedTags = withStatus(JSON.parse(snapTags), "deprecated");
+      const conflictCasColumns = { tags: snapTags, content: snap.content, workspace_id: writeCtx.workspaceId };
       const results = await env.DB.batch([
         snapshotStatement(env, {
           entryId: conflictId, reason: "status", change, content: { kind: "unchanged" }, nextTags: deprecatedTags,
           meta: { cause: "contradiction", newEntryId: id }, now,
-          guard: p => `e.tags = ${p.add(snapTags)} AND e.content = ${p.add(snap.content)} AND e.workspace_id = ${p.add(writeCtx.workspaceId)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`,
+          guard: p => `${buildCasGuard(p, conflictCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`,
         }),
-        // versioning: snapshot
-        env.DB.prepare(
+        (() => {
+          const p = new Params();
+          const tagsIdx = p.add(JSON.stringify(deprecatedTags));
+          const idIdx = p.add(conflictId);
+          // versioning: snapshot
           // scope-exempt: by-id: compare-and-set on the row read above; workspace_id = the WRITER's workspace is in the predicate
-          `UPDATE entries SET tags = ?, vector_ids = '[]' WHERE id = ? AND tags = ? AND content = ? AND workspace_id = ? AND COALESCE(actor_id, '') = '' AND source = ?`
-        ).bind(JSON.stringify(deprecatedTags), conflictId, snapTags, snap.content, writeCtx.workspaceId, snap.source),
+          return env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}, vector_ids = '[]' WHERE e.id = ${idIdx} AND ${buildCasGuard(p, conflictCasColumns)} AND COALESCE(e.actor_id, '') = '' AND e.source = ${p.add(snap.source)}`)
+            .bind(...p.values());
+        })(),
         pruneStatement(env, conflictId, cfg.VERSION_KEEP),
       ]);
       if (changesOf(results[1]) === 0) return keepAsDraft();

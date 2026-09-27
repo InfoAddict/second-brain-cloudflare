@@ -5,7 +5,9 @@ import { makeAIMock, makeMemoryKV, makeTestEnv, makeVectorizeMock } from "../hel
 import { req } from "../helpers/make-request";
 import { initializeDatabase, resetDatabaseInit } from "../../src/db/init";
 import { ensureTenantBootstrap } from "../../src/lib/tenancy";
-import { updateEntryContent } from "../../src/capture/store";
+import { createMember } from "../../src/lib/team-admin";
+import { resolveIdentityFromToken } from "../../src/lib/identity";
+import { appendToEntry, updateEntryContent } from "../../src/capture/store";
 import { captureEntry } from "../../src/capture/entry";
 import { DEFAULTS } from "../../src/config";
 import type { Env } from "../../src/env";
@@ -150,6 +152,73 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(row.content).toBe("concurrent edit");
     const indexed = [...store.values()].map(v => v.metadata.content);
     expect(indexed).toContain("concurrent edit");
+  });
+
+  it("ADV-2: a person's merge does not land in a member's now-private workspace after an unshare", async () => {
+    const decision = JSON.stringify({ action: "merge", target_id: "t1", merged_content: "combined text" });
+    const stream = (text: string) => new ReadableStream({ start(c) {
+      c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(text)}}\n\n`));
+      c.enqueue(new TextEncoder().encode("data: [DONE]\n\n")); c.close();
+    } });
+    const roots = await ensureTenantBootstrap(env);
+    const bob = (await resolveIdentityFromToken((await createMember(env, { name: "Bob" })).token, env))!;
+    await seed("t1", "Team fact about the launch plan", ["work"]);
+    await d1.db.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = 't1'`).bind(roots.companyWorkspaceId, bob.userId).run();
+    const raceEnv = makeTestEnv(undefined, {
+      DB: d1.db as any, OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [{ id: "t1", score: 0.9, metadata: { parentId: "t1" } }] }),
+        upsert: vi.fn(async (): Promise<any> => ({ mutationId: "m" })),
+        deleteByIds: vi.fn(async (): Promise<any> => ({ mutationId: "m" })),
+      }),
+      AI: { run: vi.fn(async (model: string) => model.startsWith("@cf/baai/bge") ? { data: [new Array(384).fill(0.1)] } : stream(decision)) } as any,
+    }) as Env;
+    const db = raceEnv.DB as any;
+    const prepare = db.prepare.bind(db);
+    let raced = false;
+    db.prepare = (sql: string) => {
+      // Bob unshares his own memory while the merge's re-embed is still in flight.
+      if (!raced && sql.startsWith("INSERT INTO entry_versions")) {
+        raced = true;
+        prepare(`UPDATE entries SET workspace_id = ? WHERE id = 't1'`).bind(bob.personalWorkspaceId).run();
+      }
+      return prepare(sql);
+    };
+    await captureEntry("Alice's private note about the launch", [], "api", raceEnv, ctx, undefined,
+      { workspaceId: roots.companyWorkspaceId, actorId: "alice" }, undefined, { channel: "rest" });
+    const t1 = await live("t1");
+    expect(t1.workspace_id).toBe(bob.personalWorkspaceId);
+    // The merge missed its CAS (workspace changed) and kept both: Alice's text never landed in Bob's private row.
+    expect(t1.content).toBe("Team fact about the launch plan");
+    expect((await versions("t1")).filter((v: any) => v.actor_id === "alice")).toEqual([]);
+  });
+
+  it("ADV-4: a long append that loses to an update and then commits short leaves no replaced text in the row's vectors", async () => {
+    const secret = "SECRET-PLAN ".repeat(140); // ~1,680 chars: any append goes down the long branch
+    await seed("e3", secret);
+    let n = 0;
+    const raw = env.DB as any;
+    const racing = { ...env, DB: { ...raw, prepare(sql: string) {
+      const st = raw.prepare(sql);
+      if (!sql.startsWith("SELECT content, tags, source, vector_ids, workspace_id FROM entries")) return st;
+      return { bind: (...a: unknown[]) => ({ first: async () => {
+        const r = await st.bind(...a).first();
+        // The author replaces the text (removing SECRET-PLAN) right after the append read the row.
+        if (++n === 1) {
+          const r2 = await updateEntryContent(env, "e3", "short public text", DEFAULTS, undefined, undefined,
+            { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" });
+          expect(r2.status).toBe("updated");
+        }
+        return r;
+      } }) };
+    } } } as unknown as Env;
+    await appendToEntry(racing, "e3", "", "an addition", [], "api", DEFAULTS, undefined,
+      { workspaceId: wsId, actorId: ownerId }, { actorId: ownerId, channel: "rest" });
+    const finalRow = await live("e3");
+    expect(finalRow.content).toContain("short public text");
+    expect(finalRow.content).toContain("an addition");
+    const described = (JSON.parse(finalRow.vector_ids) as string[]).map(vid => String(store.get(vid)?.metadata?.content ?? ""));
+    expect(described.some(t => t.includes("SECRET-PLAN"))).toBe(false);
   });
 
   it("a lost attempt writes no version", async () => {

@@ -72,6 +72,19 @@ const SCHEMA_PROBE_RESULTS = [
   { kind: "admin_event_column", name: "workspace_id" },
 ];
 
+/**
+ * Values bound through a Params-numbered statement (`?1..?n`, dense, values reused by identity —
+ * ADV-1/ADV-2/Task 6), in the order their placeholders appear in the SQL text. `Params` gives a
+ * value REUSED verbatim (e.g. tags unchanged: the SET clause and the CAS guard bind the same
+ * string) the SAME number, so `args` can be shorter than the number of semantic slots a statement
+ * has — indexing positionally into `args` the way earlier, unnumbered branches in this file do
+ * would silently misread every slot after the first reuse. This resolves each occurrence back to
+ * its real value by placeholder number instead.
+ */
+function placeholderArgs(sql: string, args: unknown[]): unknown[] {
+  return [...sql.matchAll(/\?(\d+)/g)].map(m => args[Number(m[1]) - 1]);
+}
+
 export class D1Mock {
   entries: any[] = [];
   edges: any[] = [];
@@ -221,6 +234,62 @@ export class D1Mock {
           const [content, vector_ids, tags, updated_at, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
           if (row) { row.content = content; row.vector_ids = vector_ids; row.tags = tags; row.updated_at = updated_at; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // Short append (T-0089.9/ADV-1/ADV-2, buildCasGuard/Params, dense-numbered): content is
+        // concatenated in SQL, guarded on tags AND workspace_id (the row this call is authorized for).
+        if (s.startsWith("UPDATE entries AS e SET content = content || ")) {
+          const args2 = placeholderArgs(s, args);
+          const hasWhen = /when_at = \?\d+/.test(s);
+          const [suffix, indexed, chunk, tags, updated_at, ...rest] = args2;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readTags, workspace_id] = rest;
+          const row = db.entries.find((e: any) => e.id === id && (e.tags ?? "[]") === readTags && (e.workspace_id ?? "") === workspace_id);
+          if (row) {
+            row.content = row.content + suffix;
+            if (indexed === 1) row.vector_ids = JSON.stringify([...JSON.parse(row.vector_ids ?? "[]"), chunk]);
+            row.tags = tags; row.updated_at = updated_at;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // updateEntryContent's compare-and-set commit, and the append long branch (identical shape):
+        // SET content, tags, updated_at, vector_ids atomically (ADV-4), guarded on content, tags AND
+        // workspace_id (ADV-2, buildCasGuard).
+        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = \?\d+, vector_ids = \?\d+/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const hasWhen = /when_at = \?\d+/.test(s);
+          const [content, tags, updated_at, vector_ids, ...rest] = args2;
+          const when = hasWhen ? rest.splice(0, 2) : [];
+          const [id, readContent, readTags, workspace_id] = rest;
+          const row = db.entries.find((e: any) => e.id === id && e.content === readContent && (e.tags ?? "[]") === readTags && (e.workspace_id ?? "") === workspace_id);
+          if (row) {
+            row.content = content; row.tags = tags; row.updated_at = updated_at; row.vector_ids = vector_ids;
+            if (hasWhen) { row.when_at = when[0]; row.when_kind = when[1]; row.when_source = "explicit"; }
+          }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // A person's or a system's merge/replace commit (entry.ts): SET content, tags, updated_at; the
+        // system form adds the actor/source identity check (an empty actor and its own source).
+        if (/^UPDATE entries AS e SET content = \?\d+, tags = \?\d+, updated_at = \?\d+ WHERE e\.id/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const hasActorSourceTail = s.includes("COALESCE(e.actor_id, '') = ''");
+          const [content, tags, updated_at, id, readTags, readContent, workspace_id, source] = args2;
+          const row = db.entries.find((e: any) =>
+            e.id === id && (e.tags ?? "[]") === readTags && e.content === readContent && (e.workspace_id ?? "") === workspace_id
+            && (!hasActorSourceTail || ((e.actor_id ?? "") === "" && e.source === source)));
+          if (row) { row.content = content; row.tags = tags; row.updated_at = updated_at; }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        // A system job's contradiction deprecation (entry.ts): SET tags and empty vector_ids, guarded
+        // on tags, content, workspace_id and the same actor/source identity check.
+        if (/^UPDATE entries AS e SET tags = \?\d+, vector_ids = '\[\]' WHERE e\.id/.test(s)) {
+          const args2 = placeholderArgs(s, args);
+          const [tags, id, readTags, readContent, workspace_id, source] = args2;
+          const row = db.entries.find((e: any) =>
+            e.id === id && (e.tags ?? "[]") === readTags && e.content === readContent && (e.workspace_id ?? "") === workspace_id
+            && (e.actor_id ?? "") === "" && e.source === source);
+          if (row) { row.tags = tags; row.vector_ids = "[]"; }
           return { meta: { changes: row ? 1 : 0 } };
         }
         // Short append: content is concatenated in SQL and the write compares-and-sets on the tags it read.

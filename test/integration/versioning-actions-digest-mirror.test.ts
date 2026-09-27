@@ -75,7 +75,7 @@ describe("versioning: resolve actions (loops, still_true, due)", () => {
     const raw = env.DB as any;
     const racing = { ...env, DB: { ...raw, prepare: (sql: string) => {
       const st = raw.prepare(sql);
-      if (sql.startsWith("UPDATE entries SET tags = ? WHERE id = ? AND tags = ? AND content = ?")) {
+      if (sql.startsWith("UPDATE entries AS e SET tags = ")) {
         sqlite.db.prepare(`UPDATE entries SET content = content || ?  WHERE id = 'l2'`).bind(`.${++n}`).run();
       }
       return st;
@@ -114,12 +114,35 @@ describe("versioning: resolve actions (loops, still_true, due)", () => {
     expect(await versions("d3")).toEqual([]);
   });
 
+  it("ADV-1: a 409 snooze (or clear) whose collision was a when_* change alone still writes no version", async () => {
+    // The snapshot's own guard used to check only tags and content, so a concurrent when_at change
+    // (invisible to that guard) still let the UPDATE miss while the snapshot committed regardless —
+    // a phantom "due" version, under the caller's actor, for a change that never landed (spec P3).
+    await seed("d5", { whenAt: 5_000_000_000_000, whenKind: "due", whenLabel: "call bob" });
+    let n = 0;
+    const raw = env.DB as any;
+    const racing = { ...env, DB: { ...raw, prepare: (sql: string) => {
+      const st = raw.prepare(sql);
+      if (sql.startsWith("SELECT id, workspace_id, actor_id, tags, content, when_at")) {
+        return { bind: (...a: unknown[]) => ({ first: async () => {
+          const r = await st.bind(...a).first();
+          await sqlite.db.prepare(`UPDATE entries SET when_at = ? WHERE id = 'd5'`).bind(5_000_000_000_000 + ++n * 1000).run();
+          return r;
+        } }) };
+      }
+      return st;
+    } } } as unknown as Env;
+    const result = await resolveEntryAction(racing, ctx, owner, "d5", "snooze", new Date(Date.now() + 86400000).toISOString(), { actorId: owner.userId, channel: "rest" });
+    expect(result.ok).toBe(false);
+    expect(await versions("d5")).toEqual([]);
+  });
+
   it("a snooze that loses the CAS race writes no version", async () => {
     await seed("d4", { whenAt: 1000, whenKind: "due" });
     const raw = env.DB as any;
     let n = 0;
     const racing = { ...env, DB: { ...raw, prepare: (sql: string) => {
-      if (sql.startsWith("UPDATE entries SET when_at = ? WHERE id = ? AND tags = ? AND content = ?")) {
+      if (sql.startsWith("UPDATE entries AS e SET when_at = ")) {
         sqlite.db.prepare(`UPDATE entries SET tags = ? WHERE id = 'd4'`).bind(JSON.stringify([`raced-${++n}`])).run();
       }
       return raw.prepare(sql);
