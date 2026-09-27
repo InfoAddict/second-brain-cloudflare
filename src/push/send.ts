@@ -11,6 +11,7 @@ import { encryptWebPush } from "./crypto";
 import { vapidAuthHeader } from "./vapid";
 import { fromBase64Url } from "./base64url";
 import { OWED_TO_ME_TAG, COUNTERPARTY_TAG_PREFIX, counterpartyName } from "../commitments/direction";
+import { reviewLabel } from "../decisions/capture";
 
 // Literal for now, not imported from a shared reserved-tag list: Track 7's
 // Lane A (src/tags/t7.ts) owns that list and lands separately. Reconcile once
@@ -133,6 +134,9 @@ function toReportedOutcomes(outcomes: { hash: string; result: SendResult; httpSt
   }));
 }
 
+/** The attribution line, its own short sentence with the product name capitalized. */
+const FROM_SECOND_BRAIN = "From your Second Brain.";
+
 /**
  * The Worker has no browser locale to render in, so the notification body's
  * date is formatted directly in the brain's configured TIMEZONE via Intl —
@@ -140,30 +144,44 @@ function toReportedOutcomes(outcomes: { hash: string; result: SendResult; httpSt
  * (Workers run in UTC anyway, and even if they did not, "the machine
  * happened to run on" is not "the zone this brain is configured for").
  */
-function formattedZonedDate(atMs: number, timezone: string): string {
+function zonedDateParts(atMs: number, timezone: string): { year: string; month: string; day: string } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(atMs);
   const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
+  return { year: get("year"), month: get("month"), day: get("day") };
 }
 
-function notificationPayload(candidate: DueCandidate, contentFree: boolean, timezone: string): Record<string, unknown> {
-  if (contentFree) return { title: "1 thing due - tap to view" };
-  const dueDate = formattedZonedDate(candidate.when_at, timezone);
+/**
+ * "today", or a friendly "Sep 1" ("Sep 1, 2025" when the year differs from
+ * the current one in the brain's timezone) — never the ISO date the old
+ * wording used (18-copy-deck.md section 5.1).
+ */
+function friendlyDueDate(atMs: number, now: number, timezone: string): string {
+  const due = zonedDateParts(atMs, timezone);
+  const today = zonedDateParts(now, timezone);
+  if (due.year === today.year && due.month === today.month && due.day === today.day) return "today";
+  const options: Intl.DateTimeFormatOptions = { timeZone: timezone, month: "short", day: "numeric" };
+  if (due.year !== today.year) options.year = "numeric";
+  return new Intl.DateTimeFormat("en-US", options).format(atMs);
+}
+
+function notificationPayload(candidate: DueCandidate, contentFree: boolean, timezone: string, now: number): Record<string, unknown> {
+  if (contentFree) return { title: "Something is due. Tap to see it." };
+  const dueDate = friendlyDueDate(candidate.when_at, now, timezone);
   const kind = pushKindOf(candidate.tags);
 
   if (kind === "decision") {
-    return { title: candidate.label, body: "Time to check how it went - from your second brain", entry_id: candidate.id };
+    return { title: reviewLabel(candidate.label), body: `How did this decision turn out? ${FROM_SECOND_BRAIN}`, entry_id: candidate.id };
   }
   if (kind === "inbound") {
     const counterparty = counterpartyOf(candidate.tags);
     const body = counterparty
-      ? `Owed to you by ${counterparty}, was due ${dueDate} - from your second brain`
-      : `Owed to you, was due ${dueDate} - from your second brain`;
+      ? `${counterparty} owes you this. Due ${dueDate}. ${FROM_SECOND_BRAIN}`
+      : `Owed to you. Due ${dueDate}. ${FROM_SECOND_BRAIN}`;
     return { title: candidate.label, body, entry_id: candidate.id };
   }
-  return { title: candidate.label, body: `due ${dueDate} - from your second brain`, entry_id: candidate.id };
+  return { title: candidate.label, body: `Due ${dueDate}. ${FROM_SECOND_BRAIN}`, entry_id: candidate.id };
 }
 
 /**
@@ -277,7 +295,7 @@ export async function pushDueItems(env: Env, workspaceId: string, resolved?: Rea
   let sent = 0;
   const outcomes: { hash: string; result: SendResult; httpStatus: number | null; failCountBefore: number }[] = [];
   for (const candidate of candidates) {
-    const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree, config.TIMEZONE);
+    const payload = (contentFree: boolean) => notificationPayload(candidate, contentFree, config.TIMEZONE, now);
     for (const sub of subs) {
       const outcome = await sendOne(env, sub, payload(!!sub.content_free));
       if (outcome.result === "ok") sent++;

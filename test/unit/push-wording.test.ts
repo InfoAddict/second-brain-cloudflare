@@ -1,9 +1,10 @@
 /**
  * Push wording for commitments and decisions (src/push/send.ts,
- * notificationPayload): inbound items name the counterparty and "was due";
- * decision reviews use the label and a fixed review body; every other row
- * stays byte for byte what it always was. Same real-SQLite harness as
- * test/integration/push-send.test.ts.
+ * notificationPayload), per 18-copy-deck.md section 5.1: friendly dates
+ * ("Sep 1", "today"), no ISO, the attribution as its own capitalized
+ * sentence, and a decision review's title built fresh by push (the stored
+ * when_label carries no English prefix — see decisions-capture.test.ts).
+ * Same real-SQLite harness as test/integration/push-send.test.ts.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { pushDueItems } from "../../src/push/send";
@@ -64,16 +65,17 @@ async function sentPayload(s: SqliteD1): Promise<any> {
 }
 
 describe("push wording by kind", () => {
-  it("names the counterparty and 'was due' for an inbound commitment", async () => {
+  it("names the counterparty and a friendly date (no year: same as the current year) for an inbound commitment", async () => {
     sq = await migrated();
-    const midnightUtc = Date.UTC(2026, 8, 1); // 2026-09-01
+    const midnightUtc = Date.UTC(2026, 8, 1); // 2026-09-01, safely in the past, same year as "now"
     seedDue(sq, "e1", "Priya: send the signed contract", midnightUtc, null, ["task", "owed-to-me", "counterparty:priya"]);
     seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
 
     const payload = await sentPayload(sq);
-    expect(payload.body).toBe("Owed to you by Priya, was due 2026-09-01 - from your second brain");
     expect(payload.title).toBe("Priya: send the signed contract");
+    expect(payload.body).toBe("Priya owes you this. Due Sep 1. From your Second Brain.");
     expect(payload.body).not.toContain("—");
+    expect(payload.body).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
   it("drops the counterparty clause when the row has no counterparty tag", async () => {
@@ -83,34 +85,68 @@ describe("push wording by kind", () => {
     seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
 
     const payload = await sentPayload(sq);
-    expect(payload.body).toBe("Owed to you, was due 2026-09-01 - from your second brain");
+    expect(payload.body).toBe("Owed to you. Due Sep 1. From your Second Brain.");
   });
 
-  it("titles a decision review with its label and a fixed check-in body", async () => {
+  it("adds the year when the due date falls in a different year than today", async () => {
     sq = await migrated();
+    const midnightUtc = Date.UTC(2020, 8, 1); // clearly a past year
+    seedDue(sq, "e1", "Something owed", midnightUtc, null, ["task", "owed-to-me", "counterparty:priya"]);
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+
+    const payload = await sentPayload(sq);
+    expect(payload.body).toBe("Priya owes you this. Due Sep 1, 2020. From your Second Brain.");
+  });
+
+  it("titles a decision review by building 'Review: <label>' fresh, from the bare stored label", async () => {
+    sq = await migrated();
+    // when_label carries no English prefix once capture.ts stores it (fix
+    // for "Italian on the Due sheet") — push builds "Review: " itself.
     seedDue(
       sq, "e1", "Decided to hire Dana for the design lead role.", Date.now() - DAY,
-      "Review: hiring Dana", ["ledger:decision", "confidence:0.7", "confidence-source:stated"],
+      "hiring Dana", ["ledger:decision", "confidence:0.7", "confidence-source:stated"],
     );
     seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
 
     const payload = await sentPayload(sq);
     expect(payload.title).toBe("Review: hiring Dana");
-    expect(payload.body).toBe("Time to check how it went - from your second brain");
+    expect(payload.body).toBe("How did this decision turn out? From your Second Brain.");
     expect(payload.body).not.toContain("—");
   });
 
-  it("leaves an ordinary due row's wording exactly as it was", async () => {
+  it("leaves an ordinary due row's title unchanged, with the new friendly-date body", async () => {
     sq = await migrated();
-    seedDue(sq, "e1", "File the report", Date.now() - DAY, "File the report", ["task"]);
+    const midnightUtc = Date.UTC(2026, 8, 1);
+    seedDue(sq, "e1", "File the report", midnightUtc, "File the report", ["task"]);
     seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
 
     const payload = await sentPayload(sq);
     expect(payload.title).toBe("File the report");
-    expect(payload.body).toMatch(/^due \d{4}-\d{2}-\d{2} - from your second brain$/);
+    expect(payload.body).toBe("Due Sep 1. From your Second Brain.");
   });
 
-  it("content-free subscriptions are unchanged regardless of kind", async () => {
+  it("says 'today' when the due date is today in the brain's timezone, with no year or month/day", async () => {
+    sq = await migrated();
+    seedDue(sq, "e1", "File the report", Date.now() - 60_000, "File the report", ["task"]);
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+
+    const payload = await sentPayload(sq);
+    expect(payload.body).toBe("Due today. From your Second Brain.");
+  });
+
+  it("omits the year when the due date falls in the current year", async () => {
+    sq = await migrated();
+    const now = new Date();
+    const thisYearButYesterday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), Math.max(1, now.getUTCDate() - 1));
+    seedDue(sq, "e1", "File the report", thisYearButYesterday, "File the report", ["task"]);
+    seedSubscription(sq, "sub-1", "", "https://push.example.com/s1");
+
+    const payload = await sentPayload(sq);
+    expect(payload.body).not.toMatch(/\d{4}/);
+    expect(payload.body).toContain("From your Second Brain.");
+  });
+
+  it("content-free subscriptions get the new fixed title, regardless of kind", async () => {
     sq = await migrated();
     seedDue(sq, "e1", "Priya: send the signed contract", Date.now() - DAY, null, ["task", "owed-to-me", "counterparty:priya"]);
     sq.db.prepare(
@@ -122,7 +158,7 @@ describe("push wording by kind", () => {
     ).run();
 
     const payload = await sentPayload(sq);
-    expect(payload.title).toBe("1 thing due - tap to view");
+    expect(payload.title).toBe("Something is due. Tap to see it.");
     expect(payload.body).toBeUndefined();
   });
 
