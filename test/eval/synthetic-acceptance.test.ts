@@ -76,6 +76,30 @@ describe("standing measurement report", () => {
   });
 });
 
+describe("T-0089.2.5's acceptance floor is visible on the gap row, not only inside a passing gate check", () => {
+  const gapResult = (queryId: string, mrr10: number): QueryResult => ({
+    queryId, category: "temporal", clusterKey: queryId, tags: [MONTH_DAY_CONTROL_GAP_TAG], rankedIds: [], leaked: [],
+    metrics: { recall5: mrr10, recall10: mrr10, mrr10, ndcg10: mrr10 }, cost,
+  });
+  const withGap = (mrr10: number): VariantReport => ({
+    schema: 1, variant: "v", corpus: "temporal", embeddingModel: "hash-smoke", d1Backend: "sqlite", isolate: "warm", topK: 10,
+    runnerVersion: RUNNER_VERSION, results: [result("q-1", "temporal"), gapResult("gap-1", mrr10)],
+  });
+
+  it("prints 'not met' when the row is below the floor", () => {
+    expect(formatReport(withGap(0))).toMatch(/acceptance floor MRR@10 0\.95 \(T-0089\.2\.5\): not met/);
+  });
+
+  it("prints 'met' once the row reaches the floor", () => {
+    expect(formatReport(withGap(0.97))).toMatch(/acceptance floor MRR@10 0\.95 \(T-0089\.2\.5\): met/);
+  });
+
+  it("prints nothing about the floor for a report with no gap row", () => {
+    const report: VariantReport = { schema: 1, variant: "v", corpus: "temporal", embeddingModel: "hash-smoke", d1Backend: "sqlite", isolate: "warm", topK: 10, runnerVersion: RUNNER_VERSION, results: [result("q-1", "temporal")] };
+    expect(formatReport(report)).not.toMatch(/acceptance floor/);
+  });
+});
+
 describe("SYNTHETIC-CORPORA.md", () => {
   const doc = readFileSync(resolve(import.meta.dirname, "SYNTHETIC-CORPORA.md"), "utf8");
   it("contains no em or en dashes", () => {

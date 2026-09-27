@@ -6,8 +6,18 @@ import { scoreQuery } from "./metrics";
 import { simulate } from "./temporal-oracle";
 import { RUNNER_VERSION, type CostSample, type GoldRef, type GoldenQuery, type QueryResult, type VariantReport } from "./types";
 
-// Re-scores the real temporal corpus under hand-built rankings, the way the round-3 adversary re-scored recorded
-// candidates: no model calls (fast, deterministic), but real gold, real validity data, and the real gate.
+// IMPORTANT: the rankings below are INVENTED (two or three ids per query, hand-picked to exercise a specific
+// mechanism), not recorded from a real embedding run. This file proves GATE MECHANICS ONLY: that evaluateGate can
+// distinguish an improving change from a regressing one when the underlying rankings behave as designed, using the
+// real corpus's gold, validity data, categories and clusters so the query and cluster counts are honest.
+//
+// It is NOT evidence that the temporal-during category is a reliable Track 2 gate on real rankings. Round 4 found
+// that on the RECORDED baseline (real model, real candidate pools), several shortcuts with no as-of logic at all
+// pass --target temporal-during (demoting the newest document, boosting tense words, boosting "Correction"/"Looking
+// back" documents), because in every "during" subset here the gold is never the newest document of its timeline.
+// See SYNTHETIC-CORPORA.md for the real, recorded-baseline numbers; temporal-during is documented there as
+// report-only, not yet a gate, for exactly that reason (and for the open retraction-semantics decision in MAJOR B
+// of that review). Do not read a PASS in this file as validation of the corpus; it validates only evaluateGate.
 
 const corpus = buildSyntheticCorpus("temporal");
 const byId = new Map(corpus.entries.map(e => [e.id, e] as const));

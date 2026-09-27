@@ -18,6 +18,7 @@ import { COMMITTED_LAYER_VARIANTS, dryReranker, exportCache, prepare } from "./p
 import { PUBLIC_CORPORA } from "./public/neutral";
 import { readReport, runVariant } from "./runner";
 import { syntheticLines } from "./synthetic-report";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_GAP_TAG } from "./corpus/synthetic-temporal";
 import { ALL_QUERY_CATEGORIES, type QueryCategory, type VariantReport } from "./types";
 import { excludeNeedles } from "./corpus/exclude";
 import { VARIANTS, getVariant, type VariantSpec } from "./variants";
@@ -142,6 +143,12 @@ const f = (n: number) => n.toFixed(3);
 const dist = (d: { mean: number; p50: number; p95: number }, digits = 1) => `mean ${d.mean.toFixed(digits)}  p50 ${d.p50.toFixed(digits)}  p95 ${d.p95.toFixed(digits)}`;
 const metricsLine = (s: Summary) => `recall@5 ${f(s.metrics.recall5)}  recall@10 ${f(s.metrics.recall10)}  MRR@10 ${f(s.metrics.mrr10)}  nDCG@10 ${f(s.metrics.ndcg10)}`;
 const row = (name: string, s: Summary) => `  ${name.padEnd(14)} n=${String(s.n).padEnd(4)} ${metricsLine(s)}`;
+/** T-0089.2.5's acceptance floor is an absolute bar the mechanical target-gaps rule cannot express from a delta
+ * alone (round 4: a parser fixing only 60% of the controls still passes it). Printed on the row itself so it is
+ * never read only from a passing gate check. */
+const acceptanceNote = (key: string, s: Summary) => key === MONTH_DAY_CONTROL_GAP_TAG
+  ? `  acceptance floor MRR@10 ${MONTH_DAY_CONTROL_ACCEPTANCE_MRR} (T-0089.2.5): ${s.metrics.mrr10 >= MONTH_DAY_CONTROL_ACCEPTANCE_MRR ? "met" : "not met"}`
+  : "";
 
 /** Why rows_read is absent: an unmeasured backend, or a workerd run where some statements reported none. */
 function rowsReadMissing(report: VariantReport): string {
@@ -170,7 +177,7 @@ export function formatReport(report: VariantReport): string {
     ] : []),
     ...(gapKeys.length ? [
       "  known gaps:",
-      ...gapKeys.map(k => row(k, knownGaps.byGap[k])),
+      ...gapKeys.map(k => row(k, knownGaps.byGap[k]) + acceptanceNote(k, knownGaps.byGap[k])),
       row("all queries", allQueries),
     ] : []),
     "  cost per query (all queries):",
