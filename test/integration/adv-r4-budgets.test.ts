@@ -159,7 +159,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 72 -> 73 (T-0089.1.1 round 3): the pass's content read of the rows it chose.
     expect(L.calls.length).toBeLessThanOrEqual(73);
     // MOVED 22 -> 23: the pass resolves config (one KV read) only on a night with deferred rows.
-    expect(L.kv.length).toBe(23);
+    // MOVED 23 -> 24 (T-0089.1.1 round 5): plus the failure-count read, only on a night with deferred rows.
+    expect(L.kv.length).toBe(24);
     // The cron makes no external (non-Cloudflare) fetches at all, so it is nowhere near the
     // separate 50-external-fetch cap either.
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -176,7 +177,8 @@ describe("R4-B1 (re-graded MINOR): the whole scheduled() invocation's real cost,
     // MOVED 49 -> 51 (T-0089.1.1 close-out): the nightly vectorize-pending read and write batch.
     // MOVED 51 -> 52 (T-0089.1.1 round 3): the pass plans from lengths, then reads only the chosen rows' content.
     expect(L.calls.length).toBe(52);
-    expect(L.kv.length).toBe(20);
+    // MOVED 20 -> 21 (T-0089.1.1 round 5): the vectorize-pending failure-count read.
+    expect(L.kv.length).toBe(21);
   });
 });
 

@@ -130,7 +130,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // NEW (T-0089.1.1 close-out): the nightly vectorize-pending pass's batched vector_ids CAS, as storeEntry's.
   // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
   // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
-  { file: 'src/vectorize/pending.ts', line: 93, kind: 'exempt' },
+  // MOVED 93 -> 131 (T-0089.1.1 round 5): failure counting and demotion above the batch; same site.
+  { file: 'src/vectorize/pending.ts', line: 131, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 

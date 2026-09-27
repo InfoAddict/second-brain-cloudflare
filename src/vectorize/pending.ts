@@ -42,21 +42,37 @@ function chunkBound(len: number, source: string): number {
   return 2 + Math.ceil((len - CHUNK_MAX_CHARS) / (CHUNK_MAX_CHARS / 2 - CHUNK_OVERLAP_CHARS));
 }
 
+/** Consecutive failed nights after which a row is moved behind the other deferred rows. */
+export const VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION = 3;
+/** KV: { [entryId]: consecutive failed nights }. Cleared for a row the night it indexes. */
+const FAILURES_KV_KEY = "vectorize-pending:failures";
+
+async function readFailures(env: Env): Promise<Record<string, number>> {
+  try { return JSON.parse((await env.OAUTH_KV.get(FAILURES_KV_KEY)) ?? "{}") as Record<string, number>; } catch { return {}; }
+}
+
 /**
- * The nightly pass. Plans from lengths alone (no content read yet): the oldest deferred row always
- * goes, then more rows oldest first while they fit the chunk budget; the first that does not fit
- * ends the night and heads the next one, so nothing behind it overtakes it. Only the chosen rows'
- * content is read. Chunks are embedded 100 per AI call, and the vector_ids writes go in ONE batch
- * (the same content CAS storeEntry uses). Config is resolved only when there is work.
+ * The nightly pass. Plans from lengths alone (no content read yet): the row at the head always
+ * goes, then more rows in queue order while they fit the chunk budget; the first that does not fit
+ * ends the night and heads the next one, so nothing behind it overtakes it. Queue order is oldest
+ * first, except that a row which failed VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION nights running
+ * goes behind the rest (still retried, at the back), so one bad row never blocks the others. Only
+ * the chosen rows' content is read. Chunks are embedded 100 per AI call, and the vector_ids writes
+ * go in ONE batch. Config and the failure counts are read only when there is work.
  */
 export async function runNightlyVectorizePending(
   env: Env, cfg: Readonly<Config> | (() => Promise<Readonly<Config>>),
 ): Promise<{ processed: number; failed: number }> {
-  const { results: queue } = await env.DB.prepare(
+  const readQueue = (demoted: string[]) => env.DB.prepare(
     // scope-exempt: deployment-wide maintenance; each row is indexed under its own workspace
-    `SELECT id, length(content) AS len, source FROM entries WHERE ${PENDING_WHERE} ORDER BY created_at ASC, id LIMIT ?`,
-  ).bind(Date.now() - graceMs(env), VECTORIZE_PENDING_NIGHTLY_ROWS).all<{ id: string; len: number; source: string }>();
+    `SELECT id, length(content) AS len, source FROM entries WHERE ${PENDING_WHERE}
+      ORDER BY (id IN (SELECT value FROM json_each(?))) ASC, created_at ASC, id LIMIT ?`,
+  ).bind(Date.now() - graceMs(env), JSON.stringify(demoted), VECTORIZE_PENDING_NIGHTLY_ROWS).all<{ id: string; len: number; source: string }>();
+  let { results: queue } = await readQueue([]);
   if (!queue.length) return { processed: 0, failed: 0 };
+  const failures = await readFailures(env);
+  const demoted = Object.keys(failures).filter(id => failures[id] >= VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION);
+  if (demoted.length) queue = (await readQueue(demoted)).results;
 
   const chosen: string[] = [];
   let planned = 0;
@@ -73,6 +89,27 @@ export async function runNightlyVectorizePending(
   ).bind(JSON.stringify(chosen), Date.now() - graceMs(env)).all<PendingRow>();
   const rows = chosen.map(id => loaded.find(r => r.id === id)).filter((r): r is PendingRow => !!r);
 
+  const failedIds: string[] = [];
+  const indexedIds: string[] = [];
+  for (const id of chosen) {
+    if (demoted.includes(id)) console.warn(`vectorize-pending: ${id} failed ${failures[id]} nights running; retrying it behind the other deferred rows`);
+  }
+  // Consecutive failures per row: +1 for a failed embed, cleared once it indexes. A lost commit (the
+  // row changed mid-embed) is neither. Written back only when something changed.
+  const finish = async (processed: number, failed: number) => {
+    let changed = false;
+    for (const id of failedIds) {
+      failures[id] = (failures[id] ?? 0) + 1;
+      changed = true;
+      if (failures[id] === VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION) console.warn(`vectorize-pending: ${id} failed ${failures[id]} nights running; moving it behind the other deferred rows`);
+    }
+    for (const id of indexedIds) if (id in failures) { delete failures[id]; changed = true; }
+    if (changed) {
+      try { await env.OAUTH_KV.put(FAILURES_KV_KEY, JSON.stringify(failures)); } catch (e) { console.error("Saving vectorize-pending failure counts failed (non-fatal):", e); }
+    }
+    return { processed, failed };
+  };
+
   let failed = 0;
   const upserted: { row: PendingRow; vectorIds: string[] }[] = [];
   for (const row of rows) {
@@ -82,10 +119,11 @@ export async function runNightlyVectorizePending(
       upserted.push({ row, vectorIds: stored.vectorIds });
     } catch (e) {
       console.error("Nightly re-embed failed for entry", row.id, e);
+      failedIds.push(row.id);
       failed++;
     }
   }
-  if (!upserted.length) return { processed: 0, failed };
+  if (!upserted.length) return finish(0, failed);
   // CAS on the content AND the workspace the vectors were stamped for (round 5): a share or move
   // during the embed misses, and the upload is settled below instead of committed.
   const written = await env.DB.batch(upserted.map(({ row, vectorIds }) => env.DB.prepare(
@@ -94,7 +132,7 @@ export async function runNightlyVectorizePending(
   ).bind(JSON.stringify(vectorIds), row.id, row.content, row.workspace_id)));
   let processed = 0;
   for (let i = 0; i < upserted.length; i++) {
-    if (changedRows(written[i]) > 0) { processed++; continue; }
+    if (changedRows(written[i]) > 0) { processed++; indexedIds.push(upserted[i].row.id); continue; }
     // Lost the CAS (content edited, or the row shared or moved): delete the stale upload and leave
     // the row pending for next night, or repair it if another writer has committed meanwhile.
     const { row, vectorIds } = upserted[i];
@@ -104,5 +142,5 @@ export async function runNightlyVectorizePending(
       console.error("Nightly re-embed settle failed for entry", row.id, e);
     }
   }
-  return { processed, failed };
+  return finish(processed, failed);
 }
