@@ -131,7 +131,8 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   // MOVED 78 -> 89 (T-0089.1.1 round 3): the pass plans from lengths, then reads the chosen rows.
   // MOVED 89 -> 93 (T-0089.1.1 round 5): indexPendingRow reports whether its commit landed.
   // MOVED 93 -> 131 (T-0089.1.1 round 5): failure counting and demotion above the batch; same site.
-  { file: 'src/vectorize/pending.ts', line: 131, kind: 'exempt' },
+  // MOVED 131 -> 151 (T-0089.1.1, budget auditor R11): the 128 KB nightly cap and its skip count.
+  { file: 'src/vectorize/pending.ts', line: 151, kind: 'exempt' },
   { file: 'src/when/pass.ts', line: 367, kind: 'exempt' },
 ];
 

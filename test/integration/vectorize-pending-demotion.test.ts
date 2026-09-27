@@ -14,25 +14,26 @@ const indexed = async (id: string) =>
   JSON.parse((await t.one<{ vector_ids: string }>(`SELECT vector_ids FROM entries WHERE id = ?`, id))!.vector_ids).length > 0;
 
 describe("a deferred row that keeps failing does not block the queue", () => {
-  it("after 3 consecutive failures the head row moves behind the others, keeps being retried, and logs a line", async () => {
+  it("after 3 consecutive failures, rows that fill every slot move behind the others, keep being retried, and log a line", async () => {
     t = await makeTrashEnv();
-    // Big enough to take a whole night alone at the head of the queue, so without demotion it would
-    // block every row behind it forever.
-    t.seed("poison", { content: "A sentence that never indexes. ".repeat(7_000), created_at: OLD - 100 });
-    for (let i = 0; i < 12; i++) t.seed(`ok${i}`, { content: `fact ${i}`, created_at: OLD + i });
+    // The oldest ten deferred rows always fail: without demotion they would take all ten nightly slots
+    // forever and nothing behind them would ever be indexed.
+    for (let i = 0; i < 10; i++) t.seed(`poison${i}`, { content: `never indexes ${i}`, created_at: OLD - 100 + i });
+    for (let i = 0; i < 5; i++) t.seed(`ok${i}`, { content: `fact ${i}`, created_at: OLD + i });
     const up = t.env.VECTORIZE.upsert.bind(t.env.VECTORIZE);
     let poisonTries = 0;
     (t.env.VECTORIZE as any).upsert = async (vs: any[]) => {
-      if (vs.some((v) => v.metadata?.parentId === "poison")) { poisonTries++; throw new Error("vectorize 503"); }
+      if (vs.some((v) => String(v.metadata?.parentId).startsWith("poison"))) { poisonTries++; throw new Error("vectorize 503"); }
       return up(vs);
     };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
-    for (let night = 0; night < VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION + 3; night++) await runNightlyVectorizePending(t.env, DEFAULTS);
-    for (let i = 0; i < 12; i++) expect(await indexed(`ok${i}`), `ok${i}`).toBe(true);
-    expect(await indexed("poison")).toBe(false);
-    expect(poisonTries).toBeGreaterThan(VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION); // still retried, at the back
-    expect(warn.mock.calls.some((c) => String(c[0]).includes("poison"))).toBe(true);
+    for (let night = 0; night < VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION + 1; night++) await runNightlyVectorizePending(t.env, DEFAULTS);
+    for (let i = 0; i < 5; i++) expect(await indexed(`ok${i}`), `ok${i}`).toBe(true);
+    expect(await indexed("poison0")).toBe(false);
+    // 3 nights x 10 rows, then still retried at the back once the others are done.
+    expect(poisonTries).toBeGreaterThan(VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION * 10);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("poison0"))).toBe(true);
   });
 
   it("a demoted row that later succeeds is indexed and its failure count is cleared", async () => {

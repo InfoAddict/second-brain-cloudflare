@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import worker from "../../src/index";
 import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
-import { runNightlyVectorizePending, VECTORIZE_PENDING_NIGHTLY_EMBEDS } from "../../src/vectorize/pending";
+import { runNightlyVectorizePending, VECTORIZE_PENDING_NIGHTLY_EMBEDS, VECTORIZE_PENDING_NIGHTLY_ROWS } from "../../src/vectorize/pending";
 import { chunkText } from "../../src/text/chunk";
 import { DEFAULTS } from "../../src/config";
 import { D1_ROW_MAX_BYTES } from "../../src/constants";
@@ -52,22 +53,35 @@ describe("nightly vectorize-pending: rows of any size", () => {
     expect(count()).toBeLessThanOrEqual(Math.ceil(chunks / 100) + 1 + 3);
   });
 
-  it("a row near D1's 2 MB row limit, more than a whole night's budget, is still indexed the night it reaches the head, under 1,000 subrequests", async () => {
+  it("a legacy row over the 128 KB cap is skipped with one log line a night, takes no slot, and blocks nothing", async () => {
     t = await makeTrashEnv();
-    const content = worstCase(Math.floor(D1_ROW_MAX_BYTES * 0.9));
-    const chunks = chunkText(content).length;
-    expect(chunks).toBeGreaterThan(VECTORIZE_PENDING_NIGHTLY_EMBEDS);
-    t.seed("small", { content: "a small fact", created_at: OLD + 1 });
-    t.seed("huge", { content, created_at: OLD });
-    const { env, count } = counted(t.env);
-    await runNightlyVectorizePending(env, DEFAULTS);
-    expect(await indexed("huge")).toBe(true);
-    expect(count()).toBeLessThan(1000);
-    // It took the night: the smaller row behind it waits one night, it is not skipped either.
-    expect(await indexed("small")).toBe(false);
+    // 3.7 had no size cap: a legacy note near D1's 2 MB row limit, the oldest deferred row.
+    t.seed("legacy", { content: worstCase(Math.floor(D1_ROW_MAX_BYTES * 0.9)), created_at: OLD - 1000 });
+    for (let i = 0; i < 12; i++) t.seed(`s${i}`, { content: `small fact ${i}`, created_at: OLD + i });
+    const embedded: string[] = [];
+    const run = t.env.AI.run.bind(t.env.AI);
+    (t.env.AI as any).run = async (m: string, input: any) => { embedded.push(...(Array.isArray(input?.text) ? input.text : [input?.text])); return run(m, input); };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await runNightlyVectorizePending(t.env, DEFAULTS);
-    expect(await indexed("small")).toBe(true);
+    // Ten small rows get the ten slots: the legacy row took none of them and embedded nothing.
+    expect((await Promise.all(Array.from({ length: 12 }, (_, i) => indexed(`s${i}`)))).filter(Boolean)).toHaveLength(VECTORIZE_PENDING_NIGHTLY_ROWS);
+    await runNightlyVectorizePending(t.env, DEFAULTS);
+    for (let i = 0; i < 12; i++) expect(await indexed(`s${i}`), `s${i}`).toBe(true);
+    expect(await indexed("legacy")).toBe(false);
+    expect(embedded.some((x) => x.startsWith("x".repeat(800)))).toBe(false);
+    const lines = warn.mock.calls.filter((c) => String(c[0]).includes("128 KB"));
+    expect(lines).toHaveLength(2); // one line a night
+    warn.mockRestore();
   }, 60_000);
+
+  it("POST /vectorize-pending, which a person runs on purpose, still indexes a legacy row over the cap", async () => {
+    t = await makeTrashEnv();
+    t.seed("legacy", { content: worstCase(KB128 * 2), created_at: OLD });
+    const res = await worker.fetch(new Request("http://localhost/vectorize-pending", { method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" } }), t.env, { waitUntil: () => {} } as unknown as ExecutionContext);
+    expect(await res.json()).toMatchObject({ processed: 1, failed: 0 });
+    expect(await indexed("legacy")).toBe(true);
+  });
 
   it("a big row that does not fit behind others waits at most one night, and nothing behind it overtakes it", async () => {
     t = await makeTrashEnv();

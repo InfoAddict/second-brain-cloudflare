@@ -21,6 +21,11 @@ export const PENDING_WHERE = `vector_ids = '[]' AND created_at < ? AND ${INDEXAB
  * about 185 neurons; a 128 KB note is about 40k tokens, about 75 neurons.
  */
 export const VECTORIZE_PENDING_NIGHTLY_ROWS = 10;
+/** Notes are capped at 128 KB; a deferred row over it can only be a legacy 3.7 note (no cap then, up to
+ * D1's 2 MB, about 1,500 chunks and 1,000+ neurons in one night). The nightly pass never touches one:
+ * it takes no slot and blocks nothing, and one log line a night points to the admin routes a person runs
+ * on purpose (POST /vectorize-pending, POST /migration/reembed), which still index it (budget auditor R11). */
+export const VECTORIZE_PENDING_NIGHTLY_MAX_BYTES = 128 * 1024;
 export const VECTORIZE_PENDING_NIGHTLY_EMBEDS = 250;
 
 export interface PendingRow {
@@ -63,12 +68,27 @@ async function readFailures(env: Env): Promise<Record<string, number>> {
 export async function runNightlyVectorizePending(
   env: Env, cfg: Readonly<Config> | (() => Promise<Readonly<Config>>),
 ): Promise<{ processed: number; failed: number }> {
-  const readQueue = (demoted: string[]) => env.DB.prepare(
-    // scope-exempt: deployment-wide maintenance; each row is indexed under its own workspace
-    `SELECT id, length(content) AS len, source FROM entries WHERE ${PENDING_WHERE}
-      ORDER BY (id IN (SELECT value FROM json_each(?))) ASC, created_at ASC, id LIMIT ?`,
-  ).bind(Date.now() - graceMs(env), JSON.stringify(demoted), VECTORIZE_PENDING_NIGHTLY_ROWS).all<{ id: string; len: number; source: string }>();
-  let { results: queue } = await readQueue([]);
+  // One statement, always one row: how many deferred rows are over the cap, and the queue (rows within
+  // it, demoted rows last) as a JSON array, re-sorted below so order never rests on aggregate order.
+  const readQueue = async (demoted: string[]) => {
+    const cutoff = Date.now() - graceMs(env);
+    const row = await env.DB.prepare(
+      // scope-exempt: deployment-wide maintenance; each row is indexed under its own workspace
+      `SELECT (SELECT COUNT(*) FROM entries WHERE ${PENDING_WHERE} AND length(CAST(content AS BLOB)) > ?) AS oversize,
+              (SELECT json_group_array(json_object('id', q.id, 'len', q.len, 'source', q.source, 'created_at', q.created_at, 'demoted', q.demoted))
+                 FROM (SELECT id, length(content) AS len, source, created_at, (id IN (SELECT value FROM json_each(?))) AS demoted
+                         FROM entries WHERE ${PENDING_WHERE} AND length(CAST(content AS BLOB)) <= ?
+                        ORDER BY demoted ASC, created_at ASC, id LIMIT ?) q) AS queue`,
+    ).bind(cutoff, VECTORIZE_PENDING_NIGHTLY_MAX_BYTES, JSON.stringify(demoted), cutoff, VECTORIZE_PENDING_NIGHTLY_MAX_BYTES, VECTORIZE_PENDING_NIGHTLY_ROWS)
+      .first<{ oversize: number; queue: string | null }>();
+    type Queued = { id: string; len: number; source: string; created_at: number; demoted: number };
+    let results: Queued[] = [];
+    try { results = JSON.parse(row?.queue ?? "[]") as Queued[]; } catch { results = []; }
+    results.sort((x, y) => x.demoted - y.demoted || x.created_at - y.created_at || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+    return { oversize: row?.oversize ?? 0, results };
+  };
+  let { results: queue, oversize } = await readQueue([]);
+  if (oversize > 0) console.warn(`vectorize-pending: skipped ${oversize} deferred row(s) over the 128 KB note cap (legacy); index them with POST /vectorize-pending or POST /migration/reembed`);
   if (!queue.length) return { processed: 0, failed: 0 };
   const failures = await readFailures(env);
   const demoted = Object.keys(failures).filter(id => failures[id] >= VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION);
