@@ -146,8 +146,9 @@
  *  8. Rejecting every conditional interpolation is a false-positive bias by
  *     choice. A legitimately unconditional clause that happens to contain `?`,
  *     `&&` or `||` will be flagged and must be annotated.
- *  9. Only `entries` and `edges` are checked. Every other table is out of scope
- *     for this script by design.
+ *  9. Only `entries`, `edges`, `entry_versions` and `entries_trash` are checked
+ *     (Task 12 added the latter two). Every other table is out of scope for
+ *     this script by design.
  * 10. The line-leading `*` / `//` prose skip applies only OUTSIDE a template.
  *     Inside one there is no such thing as a comment line, only SQL — an earlier
  *     draft skipped there too and silently ate `SELECT\n  * FROM entries`, which
@@ -242,7 +243,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The tables whose rows are memory content and must never be read corpus-wide. */
 const QUALIFIER = `(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"]*"|\\[[^\\]]*\\])`;
 
 /**
@@ -264,6 +264,21 @@ const TABLE_TOKEN_RE = () =>
   );
 
 /**
+ * The tables whose rows are memory content and must never be read corpus-wide.
+ *
+ * `entry_versions` and `entries_trash` joined `entries` and `edges` here
+ * (Task 12): every version row and every trashed row belongs to one entry's
+ * workspace, so a corpus-wide read of either is the same leak `entries` itself
+ * exists to guard against, one join away.
+ */
+const CORPUS_TABLES = ["entries", "edges", "entry_versions", "entries_trash"];
+const CORPUS_TABLE_ALT = CORPUS_TABLES.join("|");
+/** A bare substring test, no word boundary — for a token that failed to parse at all. */
+const CORPUS_TABLE_LOOSE_RE = new RegExp(CORPUS_TABLE_ALT, "i");
+/** A whole-word test — for a token that parsed cleanly as something else. */
+const CORPUS_TABLE_RE = new RegExp(`\\b(?:${CORPUS_TABLE_ALT})\\b`, "i");
+
+/**
  * The file-level sweep. Its job is to SEE every reference, in any spelling —
  * `entries`, `"entries"`, `[entries]`, `main.entries`, `"main"."entries"`,
  * `[main].[entries]`. Whether a reference can then be parsed and attributed is
@@ -275,11 +290,11 @@ const TABLE_TOKEN_RE = () =>
  * quoted and bracketed names too — three of the six spellings used to vanish here.
  */
 const FILE_TABLE_PATTERN =
-  new RegExp(`\\b(?:FROM|JOIN)\\s+(?:${QUALIFIER}\\s*\\.\\s*)*["'\\[]?\\s*(entries|edges)\\b`, "gi");
+  new RegExp(`\\b(?:FROM|JOIN)\\s+(?:${QUALIFIER}\\s*\\.\\s*)*["'\\[]?\\s*(${CORPUS_TABLE_ALT})\\b`, "gi");
 
 /** The same reference test, for looking inside one interpolation. */
 const HIDDEN_TABLE = new RegExp(
-  `\\b(?:FROM|JOIN)\\s+(?:${QUALIFIER}\\s*\\.\\s*)*["'\\[]?\\s*(entries|edges)\\b`, "i");
+  `\\b(?:FROM|JOIN)\\s+(?:${QUALIFIER}\\s*\\.\\s*)*["'\\[]?\\s*(${CORPUS_TABLE_ALT})\\b`, "i");
 
 /**
  * A SQL statement's opening verb. Used only to tell SQL from English prose when
@@ -820,14 +835,14 @@ function tableRefs(sql) {
   while ((m = re.exec(sql)) !== null) {
     const norm = normaliseTableToken(m[1]);
     if (norm.unparseable) {
-      if (/entries|edges/i.test(m[1])) unreadable.push(m[1]);
+      if (CORPUS_TABLE_LOOSE_RE.test(m[1])) unreadable.push(m[1]);
       continue;
     }
-    if (norm.name !== "entries" && norm.name !== "edges") {
+    if (!CORPUS_TABLES.includes(norm.name)) {
       // A token that parsed cleanly as something else but still MENTIONS one of
       // our tables is the qualifier-only case: `FROM main . entries b` used to
       // yield the name "main" and be dropped on the spot. Reported, not skipped.
-      if (/\b(entries|edges)\b/i.test(m[1])) unreadable.push(m[1]);
+      if (CORPUS_TABLE_RE.test(m[1])) unreadable.push(m[1]);
       continue;
     }
     const candidate = m[2];
@@ -1480,7 +1495,7 @@ function main() {
     .map((f) => `    ${f.file}:${f.line}  (no clause for: ${f.unscoped.join(", ") || "?"})\n      ${f.snippet}`)
     .join("\n\n");
   console.error(`
-✖ ${failures.length} corpus quer${failures.length === 1 ? "y reads" : "ies read"} entries or edges with no workspace scope.
+✖ ${failures.length} corpus quer${failures.length === 1 ? "y reads" : "ies read"} entries, edges, entry_versions or entries_trash with no workspace scope.
 
 ${list}
 

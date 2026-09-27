@@ -381,7 +381,12 @@ export interface TrashedEntryRow {
 /** Scoped like `getReadableEntry`: an id outside the caller's readable trash reads as missing. */
 export async function getTrashedEntry(env: Env, identity: Identity | undefined, id: string): Promise<TrashedEntryRow | null> {
   if (!identity) {
-    // scope-exempt: identity-less branch: pre-tenancy callers and unit fixtures
+    // Reached only by a direct call with no request context: unit/integration fixtures and
+    // pre-tenancy compatibility. Every production caller resolves a real Identity first —
+    // routes/entries.ts's POST /forget (permanent) and POST /restore narrow `auth` past
+    // requireIdentity's `Identity | Response`; revertEntry (memory/undo.ts) is the only other
+    // caller, itself unreachable today (POST /undo and the MCP undo tool are T-0089.6.6, backlog).
+    // scope-exempt: identity-less branch takes no live request; see above for why
     return env.DB.prepare(`SELECT * FROM entries_trash WHERE id = ?`).bind(id).first<TrashedEntryRow>();
   }
   const scope = scopeWhere(identity);
@@ -501,6 +506,7 @@ export async function restoreEntry(
           WHERE t.id = ${edgeId}
             AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
       ).bind(...edgeP.values()),
+      // scope-exempt: by-id: the trash row the caller authorized before building this batch
       env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
     ]);
   } catch (e) {

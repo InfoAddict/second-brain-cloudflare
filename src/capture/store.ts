@@ -562,6 +562,8 @@ export async function appendToEntry(
           // (already clamped itself), the same reasoning as buildSnapshot's own created_at floor —
           // this UPDATE runs after that INSERT in the same batch, so it sees the fresh row.
           // versioning: snapshot — vector_ids set here, atomically with content, under the same guard (ADV-4).
+          // scope-exempt: by-id: the clamp's entry_versions subquery is correlated to this same
+          // row's id, the same id the outer UPDATE's own WHERE clause already pins.
           env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE((SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = ${idIdx}), 0)), vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
             .bind(...p.values()),
           pruneStatement(env, id, config.VERSION_KEEP),
@@ -647,6 +649,7 @@ export async function appendToEntry(
           guard: p => buildCasGuard(p, shortCasColumns),
         }),
         // versioning: snapshot — R2-6: updated_at clamped, same reasoning as the long branch above.
+        // scope-exempt: by-id: same correlated-subquery reasoning as the long branch above.
         env.DB.prepare(
           `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = MAX(${shortNowIdx}, COALESCE((SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = ${shortIdIdx}), 0))${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
         ).bind(...shortP.values()),
