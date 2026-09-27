@@ -1271,7 +1271,11 @@ describe("the checker over the real source tree", () => {
     // tools: the four agent-brief reads (src/brief/compute.ts), the digest lookup
     // (src/mcp/server.ts) and the history supersedes read (src/memory/history.ts).
     // Each carries the caller's clause; the timeline read is by-id after getReadableEntry.
-    ).toEqual({ queries: 148, exempt: 70, checked: 12, outerJoin: 1 });
+    // Deliberate: +1 query (148 -> 149) for Track 7: the decision ledger's
+    // calibration read (src/decisions/queries.ts calibrationQuery). It carries
+    // both the read scope and the actionable clause (personal workspace or
+    // authored by the caller, P7.7), so it needs no exemption.
+    ).toEqual({ queries: 149, exempt: 70, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
