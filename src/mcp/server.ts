@@ -418,6 +418,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       const row = await env.DB.prepare(
         `SELECT content, created_at FROM entries
          WHERE ${scope.clause} AND actor_id = '' AND source = 'system' AND tags NOT LIKE '%"status:deprecated"%'
+           AND tags NOT LIKE '%"status:draft"%' AND tags NOT LIKE '%"conflict-held"%'
            AND tags LIKE ? ${TAG_LIKE_ESCAPE} AND tags LIKE ? ${TAG_LIKE_ESCAPE}
          ORDER BY created_at DESC, id DESC LIMIT 1`,
       ).bind(...scope.bindings, tagLikePattern("synthesized"), tagLikePattern(digestTag))

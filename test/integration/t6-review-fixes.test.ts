@@ -190,6 +190,19 @@ describe("Minor 2 and 3: digest serves only live system digests", () => {
     expect(text).toContain("Digest live");
     expect(text).not.toContain("Digest dead");
   });
+  it("skips a newer held or draft digest and serves the latest live one", async () => {
+    await digest("live", ["synthesized", "work"], { at: 5 });
+    await digest("older-live", ["synthesized", "work"], { at: 3 });
+    await digest("held", ["synthesized", "work", "conflict-held"], { at: 9 });
+    await digest("draft", ["synthesized", "work", "status:draft"], { at: 8 });
+    const text = await call("digest", { tag: "work" });
+    expect(text).toContain("Digest live");
+    expect(text).not.toContain("Digest held");
+    expect(text).not.toContain("Digest draft");
+    // with the live one gone from view, the older live digest is next
+    await env.DB.prepare(`UPDATE entries SET tags = '["synthesized","work","status:deprecated"]' WHERE id = 'live'`).run();
+    expect(await call("digest", { tag: "work" })).toContain("Digest older-live");
+  });
   it("ignores a memory a member tagged synthesized", async () => {
     await digest("fake", ["synthesized", "ops"], { actor: owner.userId, source: "claude", at: 10 });
     expect(await call("digest", { tag: "ops" })).toContain("No digest yet");
