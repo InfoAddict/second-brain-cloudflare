@@ -91,12 +91,24 @@ Capture:
 Before it is sent, the formatted body — header included — is scanned for
 credentials, and each one is replaced with `[redacted]`: your own configured
 token wherever it appears, `Bearer <token>` values, provider key shapes (`sk-`,
-`ghp_`/`gho_`, `github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`),
-whole PEM private-key blocks, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`
-style assignments. Only those shapes: a UUID, a commit SHA, a file path and
-ordinary prose are left exactly as they were, because a memory redacted into
-uselessness is worse than no memory. Tool output — where secrets usually live —
-never reaches the body in the first place.
+`ghp_`/`gho_`, `github_pat_`, `xoxb-`/`xoxp-`, AWS `AKIA…`, Google `AIza…`,
+Stripe, npm), JWTs, whole PEM private-key blocks, the password in
+`scheme://user:password@host`, any other 32+ character token mixing digits
+with upper and lower case, and `TOKEN=`/`SECRET=`/`PASSWORD=`/`API_KEY=`/
+`*_KEY=`/`CREDENTIALS=` style assignments, including quoted values with
+spaces (`DB_PASSWORD="correct horse battery staple"`). Only those shapes: a UUID, a commit
+SHA, a file path and ordinary prose are left exactly as they were, because a
+memory redacted into uselessness is worse than no memory. Tool output (where
+secrets usually live) never reaches the body in the first place.
+
+Context Claude Code injects into user messages never reaches the body either:
+`<system-reminder>` blocks (which carry your CLAUDE.md files), slash-command,
+local-command, bash and IDE wrappers, and meta records are dropped. Meta,
+sidechain, compact-summary and transcript-only records are skipped by their
+flags; then each user text block is judged on its own, and a block holding
+any tag-like markup (`<name>`) or an instruction-file header anywhere is
+dropped whole. The cost of that safe side: a typed message that contains
+markup, say "`<button>` needs an accessible name", is not captured.
 
 The transcript is read backwards from the end until three human turns are in
 hand (1 MB ceiling), and only human-readable turns survive: `tool_use`,
