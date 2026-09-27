@@ -21,8 +21,8 @@ import { rememberTags } from "../tags/vocabulary";
 import { OWNER_WRITE_CONTEXT, scopeWrite, type WriteContext } from "../lib/scope";
 import { resolveIdentityByUserId } from "../lib/identity";
 import { ensureTenantBootstrap } from "../lib/tenancy";
-import { MIRROR_VERSION_KEEP } from "../constants";
-import { mirrorPruneStatement, pruneStatement, snapshotStatement } from "../memory/versions";
+import { MIRROR_VERSION_KEEP, WRITE_CAS_ATTEMPTS } from "../constants";
+import { changesOf, mirrorPruneStatement, pruneStatement, snapshotStatement } from "../memory/versions";
 
 export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_CONTEXT, resolved?: Readonly<Config>, providerId?: string): MirrorStore & { flushAudit(): Promise<void> } {
   // The write context is a property of the store rather than of each method because
@@ -97,50 +97,63 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       return id;
     },
     async updateEntry(id, content) {
-      const row = await env.DB.prepare(
-        // scope-exempt: by-id: the mirrored row this connector wrote
-        `SELECT tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
-      ).bind(id).first() as Record<string, any> | null;
-      if (!row) return false;
-
-      const tags: string[] = JSON.parse(row.tags ?? "[]");
-      const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
-
-      const refreshedTags = tagsAfterWrite(tags);
-      const now = Date.now();
       const cfg = await config();
+      // Compare-and-set on the tags (and content) this attempt read (ADV-8): a user's set_status
+      // committed between the read and the batch must not be silently overwritten by tags this
+      // attempt computed from a state that has since moved. A lost attempt re-reads and recomputes
+      // rather than retrying the same stale write, bounded like every other CAS writer.
+      for (let attempt = 1; attempt <= WRITE_CAS_ATTEMPTS; attempt++) {
+        const row = await env.DB.prepare(
+          // scope-exempt: by-id: the mirrored row this connector wrote
+          `SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
+        ).bind(id).first() as Record<string, any> | null;
+        if (!row) return false;
 
-      // Versioned, keeping the last MIRROR_VERSION_KEEP (D1.1): the normal prune caps the row
-      // at VERSION_KEEP whatever it holds, and the mirror prune below brings it back to 3 once
-      // no user version remains in the window (N1) — both bottom-up, so the chain stays contiguous.
-      await env.DB.batch([
-        snapshotStatement(env, {
-          entryId: id, reason: "mirror", change: { actorId: writeCtx.actorId, channel: "system:mirror" },
-          content: { kind: "next", content }, nextTags: refreshedTags, meta: { provider: providerId }, now,
-        }),
-        // versioning: snapshot
-        env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-          .bind(content, JSON.stringify(refreshedTags), now, id),
-        pruneStatement(env, id, cfg.VERSION_KEEP),
-        mirrorPruneStatement(env, id, Math.min(MIRROR_VERSION_KEEP, cfg.VERSION_KEEP)),
-      ]);
-      // The sync's write context decides where a NEW mirror goes (createEntry).
-      // An UPDATE refreshes a row whose home is already decided and may have moved
-      // since this batch's context was resolved (#351) — stamp from the row itself,
-      // exactly as the manual-edit path does.
-      const embedCtx = embedContextForRow(row, writeCtx);
-      let newVectorIds: string[] = [];
-      try {
-        newVectorIds = (await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx)).vectorIds;
-      } catch (e) {
-        console.error("Vectorize re-embed failed (non-fatal):", e);
+        const readContent: string = row.content;
+        const readTags: string = row.tags ?? "[]";
+        const tags: string[] = JSON.parse(readTags);
+        const oldVectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
+
+        const refreshedTags = tagsAfterWrite(tags);
+        const now = Date.now();
+
+        // Versioned, keeping the last MIRROR_VERSION_KEEP (D1.1): the normal prune caps the row
+        // at VERSION_KEEP whatever it holds, and the mirror prune below brings it back to 3 once
+        // no user version remains in the window (N1) — both bottom-up, so the chain stays contiguous.
+        const results = await env.DB.batch([
+          snapshotStatement(env, {
+            entryId: id, reason: "mirror", change: { actorId: writeCtx.actorId, channel: "system:mirror" },
+            content: { kind: "next", content }, nextTags: refreshedTags, meta: { provider: providerId }, now,
+            guard: p => `e.content = ${p.add(readContent)} AND e.tags = ${p.add(readTags)}`,
+          }),
+          // versioning: snapshot
+          env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ? AND content = ? AND tags = ?`)
+            .bind(content, JSON.stringify(refreshedTags), now, id, readContent, readTags),
+          pruneStatement(env, id, cfg.VERSION_KEEP),
+          mirrorPruneStatement(env, id, Math.min(MIRROR_VERSION_KEEP, cfg.VERSION_KEEP)),
+        ]);
+        if (changesOf(results[1]) === 0) continue;
+
+        // The sync's write context decides where a NEW mirror goes (createEntry).
+        // An UPDATE refreshes a row whose home is already decided and may have moved
+        // since this batch's context was resolved (#351) — stamp from the row itself,
+        // exactly as the manual-edit path does.
+        const embedCtx = embedContextForRow(row, writeCtx);
+        let newVectorIds: string[] = [];
+        try {
+          newVectorIds = (await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx)).vectorIds;
+        } catch (e) {
+          console.error("Vectorize re-embed failed (non-fatal):", e);
+        }
+        try {
+          await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+        } catch (e) {
+          console.error("Old vector cleanup failed (non-fatal):", e);
+        }
+        return true;
       }
-      try {
-        await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-      } catch (e) {
-        console.error("Old vector cleanup failed (non-fatal):", e);
-      }
-      return true;
+      console.error(`Mirror update lost its compare-and-set ${WRITE_CAS_ATTEMPTS} times in a row (non-fatal): ${id}`);
+      return false;
     },
     async deleteEntry(id) {
       const r = await forgetEntry(id, env, { actorId: writeCtx.actorId, channel: "system:mirror" }, { reason: "mirror", config: await config(), purge: false });

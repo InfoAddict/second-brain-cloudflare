@@ -68,6 +68,7 @@ async function markSourcesRolledUp(env: Env, sources: { id: string; content: str
   const change: ChangeContext = { actorId: "", channel: "system:digest" };
   const now = Date.now();
   const ids = sources.map(s => s.id);
+  // versioning: snapshot
   const mark = (id: string, content: string) => env.DB.prepare(
     `UPDATE entries SET tags = json_insert(tags, '$[#]', 'rolled-up'), content = content || ? WHERE id = ? AND workspace_id = ? AND content = ?`
   ).bind(note, id, workspaceId, content);
@@ -80,7 +81,6 @@ async function markSourcesRolledUp(env: Env, sources: { id: string; content: str
 
   try {
     await env.DB.batch([
-      // versioning: snapshot
       ...sources.flatMap(({ id, content }) => [snapshotFor(id, content), mark(id, content)]),
       pruneManyStatement(env, ids, config.VERSION_KEEP),
     ]);
@@ -89,7 +89,6 @@ async function markSourcesRolledUp(env: Env, sources: { id: string; content: str
     for (const { id, content } of sources) {
       try {
         await env.DB.batch([
-          // versioning: snapshot
           snapshotFor(id, content),
           mark(id, content),
           pruneStatement(env, id, config.VERSION_KEEP),
