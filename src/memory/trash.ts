@@ -367,6 +367,27 @@ export type RestoreResult =
   | { status: "restored"; edgesRestored: number; trashedReason: string; vectorCount: number };
 
 /**
+ * A losing restore's cleanup. Vector ids are deterministic (the entry id, or `id-chunk-i`,
+ * store.ts), so when this attempt's own batch did not land, the ids it just upserted are only
+ * safe to delete if `id` is genuinely not live: a winning restore of the SAME trash row embedded
+ * the identical content and got the identical ids, and deleting them would blind the live row
+ * (spec, Restore step 4: "delete the fresh vectors only if the id is not in entries").
+ */
+async function deleteOrphanedRestoreVectors(env: Env, id: string, vectorIds: string[]): Promise<void> {
+  if (!vectorIds.length) return;
+  try {
+    const p = new Params();
+    const liveId = p.add(id);
+    // scope-exempt: by-id: only decides whether THIS attempt's own vectors are safe to delete
+    const live = await env.DB.prepare(`SELECT 1 FROM entries WHERE id = ${liveId}`).bind(...p.values()).first();
+    if (live) return;
+    await deleteVectorIds(env, vectorIds);
+  } catch (e) {
+    console.error("Orphaned restore vector cleanup failed (non-fatal):", e);
+  }
+}
+
+/**
  * Restore a trashed entry with its links: embeds first (so a transient failure leaves it safely in
  * the trash), then one batch inserts the entries row, restores the edges whose other endpoint still
  * exists, and removes the trash row. No version is written — restore is the trash's own undo.
@@ -380,6 +401,19 @@ export async function restoreEntry(
   const row = JSON.parse(trashed.row_json) as Record<string, unknown>;
   const tags: string[] = (() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })();
   const deprecated = getStatus(tags) === "deprecated";
+
+  // A live-again id (the id was re-captured while its old copy sat in the trash) is a conflict
+  // before anything else runs: vector ids are deterministic (the id itself, or id-chunk-i,
+  // store.ts), so embedding now would silently overwrite the live row's own vector with this
+  // trash row's stale text, whatever the batch below decides.
+  {
+    const p = new Params();
+    const liveId = p.add(trashed.id);
+    // scope-exempt: by-id: only decides whether to embed at all; the batch below is the real guard
+    if (await env.DB.prepare(`SELECT 1 FROM entries WHERE id = ${liveId}`).bind(...p.values()).first()) {
+      return { status: "conflict" };
+    }
+  }
 
   let vectorIds: string[] = [];
   if (!deprecated) {
@@ -426,14 +460,18 @@ export async function restoreEntry(
       env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
     ]);
   } catch (e) {
-    if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
+    // Vector ids are deterministic (the entry id, or id-chunk-i, store.ts), so a winning restore
+    // racing the same trash row upserted these SAME ids: deleting them here without checking would
+    // delete the WINNER's live vectors too. Only clean up if this attempt's id truly lost.
+    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds);
     if (isPrimaryKeyConflict(e)) return { status: "conflict" };
     throw e;
   }
 
   if (changedRows(results[2]) === 0) {
-    // The trash row vanished between the read and the batch (a racing restore or purge).
-    if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
+    // The trash row vanished between the read and the batch (a racing restore or purge). If a
+    // racing restore is the winner, it embedded the same deterministic ids — never delete them.
+    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds);
     return { status: "not_found" };
   }
 
