@@ -65,7 +65,8 @@ function buildRecallUrl(baseUrl, step) {
 }
 
 function buildBriefUrl(baseUrl, project) {
-  const p = new URLSearchParams();
+  // preview: a read here must not advance the dashboard's resurface rotation
+  const p = new URLSearchParams({ preview: '1' });
   if (project) p.set('project', project);
   return `${baseUrl}/brief?${p.toString()}`;
 }

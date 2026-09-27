@@ -148,6 +148,8 @@ describe("session-start.js", () => {
     const briefs = captured.filter(c => c.url.startsWith("/brief?"));
     expect(briefs).toHaveLength(1);
     expect(new URL(`http://x${briefs[0].url}`).searchParams.get("project")).toBeTruthy();
+    // preview keeps the hook from advancing the dashboard's resurface rotation
+    expect(new URL(`http://x${briefs[0].url}`).searchParams.get("preview")).toBe("1");
     expect(r.stdout).toContain("Due: 2");
     expect(r.stdout).toContain("Open commitments: 1");
     const url = new URL(`http://x${recalls[0].url}`);
