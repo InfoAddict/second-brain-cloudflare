@@ -22,6 +22,7 @@ const EXPECTED_TOOLS = [
   "brief",
   "resolve",
   "digest",
+  "history",
   "remember",
   "recall",
   "list_recent",

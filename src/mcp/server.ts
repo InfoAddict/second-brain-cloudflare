@@ -33,6 +33,7 @@ import { resolveProjectRead } from "../projects/resolve";
 import { computeAgentBrief } from "../brief/compute";
 import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
+import { readEntryHistory } from "../memory/history";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -421,6 +422,31 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         .first<{ content: string; created_at: number }>();
       if (!row) return { content: [{ type: "text", text: "No digest yet. One is built automatically overnight once there are 10 or more eligible memories. Use recall with project instead." }] };
       return { content: [{ type: "text", text: `Digest from ${new Date(row.created_at).toISOString().slice(0, 10)}:\n${row.content}` }] };
+    },
+  );
+
+  server.registerTool(
+    "history",
+    {
+      description: "Call when the user asks why, when, or by whom a memory changed, or before relying on a changed or stale memory. Shows recorded events and supersedes links; earlier text is not recorded before 4.0.",
+      inputSchema: {
+        id: z.string().describe("Exact memory id"),
+        limit: z.number().int().min(1).max(50).optional().describe("Recent events to show; default 10"),
+      },
+    },
+    async ({ id: rawId, limit }) => {
+      if (!identity) return { content: [{ type: "text", text: "History requires an authenticated identity." }] };
+      const id = rawId.trim();
+      if (!id) return { content: [{ type: "text", text: "id is required" }] };
+      const history = await readEntryHistory(env, identity, id, limit ?? 10);
+      if (!history) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+      const events = history.timeline.length
+        ? history.timeline.map(e => `- ${new Date(e.created_at).toISOString()} ${e.event} by ${e.actor_name} (channel: ${String(e.payload.channel ?? "unknown")}) ${JSON.stringify(e.payload)}`).join("\n")
+        : "No recorded events.";
+      const edges = history.edges.map(e => e.source_id === id
+        ? `- Supersedes ${e.target_id}` : `- Superseded by ${e.source_id}`).join("\n");
+      const text = `History for ${id}\n${events}${edges ? `\n\nLinks\n${edges}` : ""}\n\nEarlier text is not recorded before 4.0.`;
+      return { content: [{ type: "text", text }] };
     },
   );
 

@@ -176,3 +176,40 @@ describe("MCP digest", () => {
     expect(sqlite.issued).toHaveLength(1);
   });
 });
+
+describe("MCP history", () => {
+  it("shows recent events with actors and channels plus supersedes edges in three statements", async () => {
+    sqlite.seed({ id: "current", content: "Current decision", createdAt: 1, tags: ["work"] });
+    sqlite.seed({ id: "older", content: "Older decision", createdAt: 1, tags: ["work"] });
+    sqlite.seed({ id: "newer", content: "Newer decision", createdAt: 1, tags: ["work"] });
+    for (let i = 0; i < 12; i++) {
+      await env.DB.prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES (?, 'current', ?, 'updated', ?, ?)`)
+        .bind(`ev-${i}`, identity.userId, JSON.stringify({ channel: "mcp", seq: i }), i).run();
+    }
+    for (const [id, source, target] of [["e1", "current", "older"], ["e2", "newer", "current"]]) {
+      await env.DB.prepare(`INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
+        VALUES (?, ?, ?, 'supersedes', 1, 'explicit', '{}', 1, 1, '')`).bind(id, source, target).run();
+    }
+    sqlite.issued.length = 0;
+    const text = await call("history", { id: "current" });
+    expect(text).toContain("You");
+    expect(text).toContain("mcp");
+    expect(text).toContain("Supersedes older");
+    expect(text).toContain("Superseded by newer");
+    expect(text).toContain("Earlier text is not recorded before 4.0.");
+    expect(text.match(/ updated by /g)).toHaveLength(10);
+    expect(text).not.toContain('"seq":0');
+    expect(text).toContain('"seq":11');
+    expect(sqlite.issued).toHaveLength(3);
+  });
+
+  it("hides another member's personal history", async () => {
+    const other = await createMember(env, { name: "Other" });
+    sqlite.seed({ id: "private", content: "Private", createdAt: 1 });
+    await env.DB.prepare(`UPDATE entries SET workspace_id = ? WHERE id = 'private'`).bind(other.member.personalWorkspaceId).run();
+    const reader = await createMember(env, { name: "Reader" });
+    const member = (await resolveIdentityFromToken(reader.token, env))!;
+    expect(await call("history", { id: "private" }, member)).toContain("No entry found");
+    expect(await call("history", { id: "private" }, null)).toContain("authenticated identity");
+  });
+});

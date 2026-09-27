@@ -21,6 +21,8 @@ All notable changes to Second Brain are documented here. Version numbers match `
 
 **Agents**
 
+- Agents can inspect who changed a memory, through which channel, and its supersedes links.
+
 - Agents can read the latest existing project or tag digest without starting a new summary or model call.
 
 - Agents can resolve a specific task, due date, stale fact, or pending insight when the user says what to do.
