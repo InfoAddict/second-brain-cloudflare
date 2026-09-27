@@ -1009,19 +1009,26 @@ function controlCard(c: ControlView, readOnly = false): HTMLElement {
 
   const group = h("div", { class: "settings-levels", role: "radiogroup" });
   group.setAttribute("aria-label", t(`${base}.label`));
+  // Screen readers get this from the group; a sighted member gets it from the
+  // banner above the section (render()) plus the non-interactive pill style
+  // below - the pointer cursor a disabled <input> leaves on its label was the
+  // part that still read as clickable.
+  if (readOnly) group.setAttribute("aria-readonly", "true");
 
   for (const levelId of c.levels) {
     const input = h("input", { type: "radio", name: `sb-${c.id}`, value: levelId });
     (input as HTMLInputElement).checked = shown === levelId;
     (input as HTMLInputElement).disabled = locked() || readOnly;
     input.addEventListener("change", () => stage(c.id, { kind: "level", id: levelId }, c));
-    const label = h("label", { class: "settings-level" }, [
+    const label = h("label", { class: `settings-level${readOnly ? " settings-level-readonly" : ""}` }, [
       input,
       t(`${base}.levels.${levelId}.name`),
     ]);
-    // Hovering previews that level's notice; leaving restores the shown one.
-    label.addEventListener("mouseenter", () => paint(levelId));
-    label.addEventListener("mouseleave", () => paint(shown));
+    if (!readOnly) {
+      // Hovering previews that level's notice; leaving restores the shown one.
+      label.addEventListener("mouseenter", () => paint(levelId));
+      label.addEventListener("mouseleave", () => paint(shown));
+    }
     group.append(label);
   }
   card.append(group);
@@ -1038,13 +1045,18 @@ function controlCard(c: ControlView, readOnly = false): HTMLElement {
     card.append(h("div", { class: "settings-forward-note" }, [`ⓘ ${t(`${base}.note`)}`]));
   }
 
-  const reset = h("button", { class: "btn-secondary settings-reset", type: "button" }, [
-    t("settingsPanel.reset"),
-  ]);
-  // Reset is itself staged, so it can be cancelled like any other edit.
-  (reset as HTMLButtonElement).disabled = locked() || readOnly || shown === c.defaultLevel;
-  reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
-  card.append(reset);
+  // Hidden rather than disabled for a read-only member: nothing on this card
+  // is theirs to change, so an inert Reset button is a control with no
+  // purpose rather than a clearly unavailable one.
+  if (!readOnly) {
+    const reset = h("button", { class: "btn-secondary settings-reset", type: "button" }, [
+      t("settingsPanel.reset"),
+    ]);
+    // Reset is itself staged, so it can be cancelled like any other edit.
+    (reset as HTMLButtonElement).disabled = locked() || shown === c.defaultLevel;
+    reset.addEventListener("click", () => stage(c.id, { kind: "reset" }, c));
+    card.append(reset);
+  }
 
   return card;
 }
@@ -1189,9 +1201,15 @@ function render(): void {
   pane.append(
     h("h2", { class: "pane-title" }, [t(`settingsPanel.${section.labelKey}`)]),
     h("p", { class: "settings-lede" }, [
-      // The shared lede promises "applies to your next search", which is not
-      // what a rebuild does. That pane says what it actually does.
-      active === "matching" ? t("settingsPanel.migration.lede") : t("settingsPanel.lede"),
+      // The shared lede promises "applies to your next search", which is
+      // true for neither of these panes: a rebuild has its own sequence, and
+      // trash length and versions kept take effect on different schedules
+      // (tonight's cleanup vs. a memory's next edit) - so each states its own.
+      active === "matching"
+        ? t("settingsPanel.migration.lede")
+        : active === "history"
+          ? t("settingsPanel.historyLede")
+          : t("settingsPanel.lede"),
     ]),
   );
 

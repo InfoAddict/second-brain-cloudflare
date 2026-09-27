@@ -43,6 +43,7 @@ export const it: Messages = {
     sectionAi: "AI",
     sectionMatching: "Corrispondenze",
     historyReadOnly: "Solo il proprietario del Second Brain o un amministratore può cambiare per quanto tempo il cestino conserva i ricordi o quante versioni vengono conservate.",
+    historyLede: "Per quanto tempo i ricordi dimenticati restano nel cestino, e quante versioni passate di ogni ricordo vengono conservate. Una modifica alla durata del cestino ha effetto questa notte; una modifica al numero di versioni conservate ha effetto alla prossima modifica di quel ricordo.",
     custom: "Personalizzato",
     customNote: "Questi valori sono stati impostati fuori dall'app e non corrispondono a nessun livello. Scegliendo un livello qui sotto verranno sostituiti.",
     reset: "Ripristina il valore predefinito",

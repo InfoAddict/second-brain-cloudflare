@@ -53,6 +53,8 @@ export type Messages = {
     customNote: string;
     /** Shown above History and trash for anyone who can see but not change it. */
     historyReadOnly: string;
+    /** History and trash's own lede - the shared one promises "next search", which is true of neither setting here. */
+    historyLede: string;
     reset: string;
     save: string;
     cancel: string;

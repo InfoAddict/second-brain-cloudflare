@@ -47,6 +47,9 @@ export const en: Messages = {
     // Shown above the History and trash controls for anyone who can see but
     // not change them (4.0, UX-D.2).
     historyReadOnly: "Only the brain's owner or an admin can change how long the trash keeps memories or how many versions are kept.",
+    // The shared lede above is wrong here (it promises "next search"). Trash
+    // length and versions kept run on different schedules, so this says both.
+    historyLede: "How long forgotten memories wait in the trash, and how many past versions of each memory are kept. A trash length change takes effect tonight; a versions-kept change takes effect the next time you edit that memory.",
     reset: "Reset to default",
     save: "Save changes",
     cancel: "Cancel",
