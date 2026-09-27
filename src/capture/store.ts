@@ -169,14 +169,13 @@ export async function restoreRowVectors(
 ): Promise<void> {
   try {
     const current = await env.DB.prepare(
-      // Pinned to the write's own workspace (recheck ownership): a row that moved out of it since
-      // the merge's failed CAS is no longer this call's to repair, the same reasoning as the merge
-      // guard itself (ADV-2). Wherever it landed owns its own vector_ids now.
-      `SELECT content, tags, workspace_id FROM entries WHERE id = ? AND workspace_id = ?`
-    ).bind(id, writeCtx.workspaceId).first() as Record<string, any> | null;
+      // scope-exempt: by-id: a faithful repair of the row's OWN vectors to match its OWN current
+      // content is harmless regardless of which workspace it moved to since the merge's failed CAS
+      // — unlike the destructive fallback below, this never touches content this call did not read.
+      `SELECT content, tags, workspace_id FROM entries WHERE id = ?`
+    ).bind(id).first() as Record<string, any> | null;
     if (!current) {
-      // Forgotten, or moved out of this write's workspace, during the merge's re-embed: nothing
-      // here is this call's to repair any more, only the orphaned vectors this attempt made.
+      // Forgotten during the merge's re-embed: nothing owns the merge's vectors any more.
       await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);
       return;
     }
@@ -189,7 +188,7 @@ export async function restoreRowVectors(
     try {
       // versioning: exempt: vector bookkeeping (L5)
       await env.DB.prepare(
-        // Pinned to the write's own workspace, same reasoning as the read above.
+        // Pinned to the write's workspace: a destructive clear must not touch a row that moved (recheck ownership).
         `UPDATE entries SET vector_ids = '[]' WHERE id = ? AND workspace_id = ?`
       ).bind(id, writeCtx.workspaceId).run();
       await deleteVectorIds(env, [...new Set([...oldVectorIds, ...mergedVectorIds])]);

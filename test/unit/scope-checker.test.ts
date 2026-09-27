@@ -1288,10 +1288,7 @@ describe("the checker over the real source tree", () => {
     // separate by-id statements (each needs its own dense Params, so each carries its own comment).
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts): revertEntry's post-miss
     // liveness check is by-id, the row having been read above under the caller's own scope.
-    // Deliberate: -1 scope-exempt (162/81 -> 162/80, T-0089.4.4, src/capture/store.ts): restoreRowVectors'
-    // read and its own vector_ids cleanup UPDATE now carry a real workspace_id = ? guard (recheck
-    // ownership) instead of an unscoped by-id exemption.
-    ).toEqual({ queries: 162, exempt: 80, checked: 12, outerJoin: 1 });
+    ).toEqual({ queries: 162, exempt: 81, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
