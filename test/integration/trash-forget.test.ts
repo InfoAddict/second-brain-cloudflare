@@ -253,3 +253,32 @@ describe("a losing tier-3 forget racing a tier-1 forget of the same id", () => {
     expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
   });
 });
+
+describe("adversary: the dashboard's forget confirm reads the real config shape", () => {
+  it("reads TRASH_RETENTION_DAYS from GET /config's real shape ({ ok, config, ... }), not a flat cfg.TRASH_RETENTION_DAYS", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    t = await makeTrashEnv();
+    const res = await worker.fetch(new Request("http://localhost/config", { headers: { Authorization: "Bearer test-token" } }), t.env, ctx);
+    const cfg = await res.json() as any;
+    expect(typeof cfg.config.TRASH_RETENTION_DAYS).toBe("number");
+
+    // The exact read memory-crud.js makes on that response.
+    const src = readFileSync(resolve(import.meta.dirname, "../../public/js/memory-crud.js"), "utf8");
+    const read = src.match(/const days = (cfg[^\n]+)/)?.[1];
+    expect(read).toBeDefined();
+    const days = new Function("cfg", `return ${read}`)(cfg);
+    // If this is not a number, the confirm keeps its default (retention-unaware) wording for every forget.
+    expect(typeof days).toBe("number");
+    expect(days).toBe(14);
+  });
+
+  it("the default confirm body never claims the forget cannot be undone", () => {
+    const { readFileSync } = require("node:fs");
+    const { resolve } = require("node:path");
+    for (const file of ["public/index.html", "public/js/i18n.js"]) {
+      const src = readFileSync(resolve(import.meta.dirname, "../..", file), "utf8");
+      expect(src, file).not.toMatch(/can't be undone.*memory will be removed|cannot be undone.*memory will be removed/i);
+    }
+  });
+});

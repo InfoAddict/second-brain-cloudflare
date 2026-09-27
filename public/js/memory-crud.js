@@ -159,7 +159,7 @@ function openConfirm(id, btnOrCard) {
   if (typeof readTeamConfig === 'function') {
     readTeamConfig()
       .then((cfg) => {
-        const days = cfg?.TRASH_RETENTION_DAYS
+        const days = cfg?.config?.TRASH_RETENTION_DAYS
         if (typeof days !== 'number' || pendingForgetId !== id) return
         const body = document.getElementById('confirm-body')
         if (body) body.textContent = t('memories.confirmBodyRetention', { n: days })
