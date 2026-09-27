@@ -31,18 +31,23 @@ function metered(db: D1Database, log: { sql: string; rows: number }[]): D1Databa
 // 2% pending insights, 1% stale, 0.5% dated). Measured / budget:
 //   2k:  MCP 684 / 900    lean 442 / 600     REST /brief 6,162 / 6,800
 //   10k: MCP 3,404 / 4,500  lean 2,202 / 3,000  REST /brief 46,002 / 50,500
+// With a 16-alias project (LIKE-OR, the registry cap; a json_each filter billed every scanned row and read 154k):
+//   2k:  MCP 565 / 900  lean 442 / 600  REST 8,045 / 8,800
+//   10k: MCP 2,805 / 4,500  lean 2,202 / 3,000  REST 55,885 / 61,500
 // The MCP and lean budgets are ~1.3x measured: they read only the rows their queue holds (the open-task
 // count visits each of the ~500 tasks at 10k, about four reads apiece), so they grow with the queue, not
 // the brain, and the margin absorbs SQLite planner drift without hiding a return to full scans.
 // REST /brief is the dashboard's own path and still scans; it is pinned at ~1.1x only as a regression guard.
 // Before the partial indexes: MCP brief 8,232 / 41,112 rows, so a hook plus agent brief cost ~87k per session start at 10k.
 // D1's free plan allows 5M rows read per day account-wide; lean at 10k is ~2.2k, about 2,300 session starts.
-const BUDGET: Record<number, { mcp: number; lean: number; rest: number }> = {
-  2000: { mcp: 900, lean: 600, rest: 6800 },
-  10000: { mcp: 4500, lean: 3000, rest: 50500 },
+const BUDGET: Record<number, { mcp: number; lean: number; rest: number; restScoped: number }> = {
+  2000: { mcp: 900, lean: 600, rest: 6800, restScoped: 8800 },
+  10000: { mcp: 4500, lean: 3000, rest: 50500, restScoped: 61500 },
 };
 
-const project: ProjectRow = { id: "work", workspace_id: "ws-p", name: "Work", description: "", status: "active", aliases: [], created_at: 1, updated_at: null };
+// 16 aliases is the registry cap (MAX_PROJECT_ALIASES); 'work' matches every seeded row, so the filter
+// keeps rows instead of short-circuiting, and 17 LIKE patterns are OR-ed on each.
+const project: ProjectRow = { id: "work", workspace_id: "ws-p", name: "Work", description: "", status: "active", aliases: ["work", ...Array.from({ length: 15 }, (_, i) => `alias-${i}`)], created_at: 1, updated_at: null };
 
 describe.runIf(process.env.EVAL_WORKERD === "1")("brief rows_read on workerd", () => {
   for (const N of [2000, 10000]) it(`N=${N}`, async () => {
@@ -70,11 +75,15 @@ describe.runIf(process.env.EVAL_WORKERD === "1")("brief rows_read on workerd", (
       const mcp = await measure(() => computeAgentBrief(env, auth));
       const lean = await measure(() => computeLeanBrief(env, auth));
       const scoped = await measure(() => computeLeanBrief(env, auth, [project]));
-      console.log(`N=${N} rows_read REST /brief=${rest.rows} MCP brief=${mcp.rows} lean brief=${lean.rows} lean brief with project=${scoped.rows}\nMCP ${mcp.detail}\nLEAN ${lean.detail}`);
+      const mcpScoped = await measure(() => computeAgentBrief(env, auth, [project]));
+      const restScoped = await measure(() => computeBrief(env, auth, true, [project]));
+      console.log(`N=${N} rows_read REST /brief=${rest.rows} MCP brief=${mcp.rows} lean brief=${lean.rows} with a 16-alias project: REST=${restScoped.rows} MCP=${mcpScoped.rows} lean=${scoped.rows}\nMCP ${mcp.detail}\nLEAN ${lean.detail}`);
       const budget = BUDGET[N];
       expect(mcp.rows).toBeLessThanOrEqual(budget.mcp);
       expect(lean.rows).toBeLessThanOrEqual(budget.lean);
       expect(scoped.rows).toBeLessThanOrEqual(budget.lean);
+      expect(mcpScoped.rows).toBeLessThanOrEqual(budget.mcp);
+      expect(restScoped.rows).toBeLessThanOrEqual(budget.restScoped);
       expect(rest.rows).toBeLessThanOrEqual(budget.rest);
     } finally { await d1.close(); }
   }, 120_000);

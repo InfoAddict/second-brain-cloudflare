@@ -41,6 +41,10 @@ const events = async (id: string) => (await env.DB.prepare(`SELECT event, payloa
   .all<{ event: string; payload: string; created_at: number }>()).results.map(r => ({ event: r.event, created_at: r.created_at, payload: JSON.parse(r.payload) as Record<string, any> }));
 const place = (id: string, workspace: string, actor: string) =>
   env.DB.prepare(`UPDATE entries SET workspace_id = ?, actor_id = ? WHERE id = ?`).bind(workspace, actor, id).run();
+const memberWithToken = async (name: string) => {
+  const m = await createMember(env, { name });
+  return { identity: (await resolveIdentityFromToken(m.token, env))!, token: m.token };
+};
 const member = async (name: string) => (await resolveIdentityFromToken((await createMember(env, { name })).token, env))!;
 
 beforeEach(async () => {
@@ -212,11 +216,48 @@ describe("Minor 4: the brief lists only what the caller can act on", () => {
     // resolve refuses the same row, so the two surfaces agree
     expect(await call("resolve", { id: "theirs", action: "done" }, a)).toMatch(/author|admin/i);
   });
-  it("shows an admin every readable row", async () => {
+  it("lists only the caller's own rows for an admin too, so the owner's brief is not the team's", async () => {
     const b = await member("B");
     sqlite.seed({ id: "theirs", content: "Row theirs", createdAt: 1000, tags: ["task"] });
     await place("theirs", b.companyWorkspaceIds[0], b.userId);
-    expect(await call("brief", {}, owner)).toContain("theirs");
+    sqlite.seed({ id: "legacy", content: "Row legacy", createdAt: 1001, tags: ["task"] });
+    sqlite.seed({ id: "mine", content: "Row mine", createdAt: 1002, tags: ["task"] });
+    await place("mine", b.companyWorkspaceIds[0], owner.userId);
+    const text = await call("brief", {}, owner);
+    expect(text).not.toContain("theirs");
+    expect(text).toContain("mine");
+    expect(text).toContain("legacy"); // pre-tenancy rows belong to the owner
+  });
+});
+
+describe("N4: dashboard counts readable rows, lean and MCP count the caller's own", () => {
+  it("a member sees a teammate's company task in the dashboard count but not in the agent brief", async () => {
+    const { identity: a, token } = await memberWithToken("A"); const b = await member("B");
+    sqlite.seed({ id: "theirs", content: "Row theirs", createdAt: 1000, tags: ["task"] });
+    await place("theirs", a.companyWorkspaceIds[0], b.userId);
+    sqlite.seed({ id: "mine", content: "Row mine", createdAt: 1001, tags: ["task"] });
+    await place("mine", a.personalWorkspaceId, a.userId);
+    const asA = (path: string) => worker.fetch(req("GET", path, { token }), env, ctx).then(r => r.json()) as Promise<any>;
+    expect((await asA("/brief?preview=1")).loops.open).toBe(2);
+    const lean = await asA("/brief?lean=1");
+    expect(lean.loops.open).toBe(1);
+    expect(lean.loops.items.map((i: any) => i.id)).toEqual(["mine"]);
+  });
+});
+
+describe("N3: GET /entry cuts pre-share events for non-authors like history", () => {
+  it("teammate sees the timeline from the share point; the author sees all", async () => {
+    const { identity: alice, token: aliceToken } = await memberWithToken("Alice");
+    const { token: bobToken } = await memberWithToken("Bob");
+    sqlite.seed({ id: "m", content: "Memo", createdAt: 1 });
+    await place("m", alice.personalWorkspaceId, alice.userId);
+    await env.DB.prepare(`INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at) VALUES ('old', 'm', ?, 'updated', '{"note":"personal-era"}', 1)`).bind(alice.userId).run();
+    await call("share", { id: "m", workspace: "company" }, alice);
+    await Promise.all(pending);
+    const timeline = async (token: string) => ((await (await worker.fetch(req("GET", "/entry?id=m", { token }), env, ctx)).json()) as any).entry.timeline
+      .map((e: any) => e.payload.note ?? e.event);
+    expect(await timeline(bobToken)).toEqual(["shared"]);
+    expect(await timeline(aliceToken)).toEqual(["personal-era", "shared"]);
   });
 });
 

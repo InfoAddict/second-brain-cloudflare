@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
 import type { ProjectRow } from "../projects/registry";
-import { projectFilterJsonSql } from "../projects/filter";
+import { projectFilterSql } from "../projects/filter";
 import { scopeWhereForRead, type ScopeClause } from "../lib/scope";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 import { isTopicTagSql } from "../compression/eligibility";
@@ -71,12 +71,13 @@ const RESURFACE_EXCLUDE_BOUND_CAP = 20;
 
 function briefScope(auth: Identity, projectRows?: ProjectRow[], layer?: "personal" | "company", teamId?: string): ScopeClause {
   const baseScope = scopeWhereForRead(auth, { layer, teamId });
-  const project = projectRows ? projectFilterJsonSql(projectRows) : null;
+  const project = projectRows ? projectFilterSql(projectRows) : null;
   return project
     ? { clause: `${baseScope.clause} AND ${project.clause}`, bindings: [...baseScope.bindings, ...project.bindings] }
     : baseScope;
 }
 
+/** The dashboard brief: counts every readable row, unlike the caller-only agent brief below. */
 export async function computeBrief(env: Env, auth: Identity, preview = false, projectRows?: ProjectRow[]) {
   const scope = briefScope(auth, projectRows);
   const now = Date.now();
@@ -281,12 +282,13 @@ const INSIGHT_INDEXED = `instr(lower(tags), '"auto-insight"') > 0`;
 const STALE_INDEXED = `instr(lower(tags), '"${STALE_AS_OF}"') > 0`;
 
 /**
- * Rows the caller may change, which resolve enforces: a teammate's company row is theirs to
- * settle, so listing it as the caller's own item sends them to a refusal. Admins may act on all.
+ * The caller's own rows: their personal workspace (or a pre-tenancy '' row, which is the owner's)
+ * or anything they authored. The dashboard brief counts every READABLE row, a teammate's company
+ * task included; this agent view lists only what the caller owes and can settle, for admins too,
+ * because resolve would otherwise send them to a refusal or hand them the team's commitments.
  */
 function actionable(auth: Identity): ScopeClause {
-  if (auth.role === "admin") return { clause: "1 = 1", bindings: [] };
-  return { clause: "(workspace_id = ? OR actor_id = ?)", bindings: [auth.personalWorkspaceId, auth.userId] };
+  return { clause: "(workspace_id IN (?, '') OR actor_id = ?)", bindings: [auth.personalWorkspaceId, auth.userId] };
 }
 
 export type BriefPart = "due" | "loops" | "stale" | "insights";
@@ -420,6 +422,9 @@ async function pickResurface(
   today: number,
 ): Promise<ResurfaceRow | undefined> {
   const budget = Math.max(0, Math.floor((D1_MAX_BOUND_PARAMS - 1) / 2) - 2 - scope.bindings.length);
+  // This is the one statement that binds scope twice. When workspaces plus a wide project filter
+  // alone would pass D1's ceiling, skip the pick rather than fail the whole brief.
+  if (scope.bindings.length + 2 > Math.floor((D1_MAX_BOUND_PARAMS - 1) / 2)) return undefined;
 
   let topicTags = topics.map(t => t.tag);
   let boundExcluded = excluded.slice(0, Math.min(RESURFACE_EXCLUDE_BOUND_CAP, excluded.length, budget));
