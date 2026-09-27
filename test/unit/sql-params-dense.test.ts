@@ -76,7 +76,7 @@ describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () 
   const change = { actorId: "u", channel: "rest" as const };
 
   it("trashManyStatements: tier 1, tier 2, tier 3 and a mixed batch", () => {
-    const row = (id: string, c: number, r: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: r, edges_json_bytes: e });
+    const row = (id: string, c: number, r: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: r, edges_json_bytes: e, vector_ids_bytes: 2 });
     const cases = [
       [row("a", 10, 10, 10)],
       [row("a", 10, 10, 2_000_000)],
@@ -117,13 +117,13 @@ describe("trash.ts builders are dense (T-0089.1.2, T-0089.4.7, T-0089.4.9)", () 
 
   it("deleteForever's batch", async () => {
     const { env, calls } = captureEnv();
-    await deleteForever(env, { id: "a", vector_ids: "[]" }, change);
+    await deleteForever(env, "a", change);
     for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });
 
   it("restoreEntry's batch", async () => {
     const { env, calls } = captureEnv();
-    const trashed = { id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", deleted_at: 1, reason: "forget" as const };
+    const trashed = { id: "a", workspace_id: "", actor_id: "", content: "c", row_json: JSON.stringify({ tags: '["status:deprecated"]' }), edges_json: "[]", vector_ids: "[]", deleted_at: 1, reason: "forget" as const };
     await restoreEntry(env, trashed, change, DEFAULTS);
     for (const c of calls) expect(denseProblem(c.sql, c.args), c.sql).toBeNull();
   });

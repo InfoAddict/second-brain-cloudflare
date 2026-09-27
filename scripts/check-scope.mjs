@@ -491,6 +491,84 @@ export function templateSpans(text) {
   return spans;
 }
 
+/**
+ * Every string literal that could hold a raw SQL statement: a backtick template at ANY nesting
+ * depth (unlike templateSpans, which reports only the outermost one — the write-path inventory
+ * guard, test/unit/entry-write-inventory.test.ts, needs to see a writer template nested inside
+ * another template's `${...}`, and templateSpans deliberately keeps that nested content invisible
+ * so scanSource's own hidden-table detection can treat it as one unresolvable, human-annotated
+ * unit instead of a second independently-scored query — ADV-5 vs. scanSource's A1 fix, at odds on
+ * the very same shape, resolved here by giving the guard its own, more aggressive scan), plus
+ * single- and double-quoted strings (D1 runs a query however it is quoted; house style always
+ * uses a backtick, but the guard cannot assume a writer always will).
+ *
+ * Only the guard (and its own test) should call this. scanSource's structural SQL analysis
+ * — table refs, scope predicates, join structure — assumes templateSpans' one-span-per-statement
+ * shape and must keep using that.
+ */
+export function writerSpans(text) {
+  const spans = [];
+  const stack = [];
+  const top = () => stack[stack.length - 1];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\\") { i += 2; continue; }
+    if (top()?.kind === "tpl") {
+      if (c === "`") {
+        const opened = stack.pop();
+        spans.push({ start: opened.start, end: i }); // every level, not only the outermost
+        i++; continue;
+      }
+      if (c === "$" && text[i + 1] === "{") { stack.push({ kind: "expr" }); i += 2; continue; }
+      i++; continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    if (c === "/" && opensRegex(text, i)) {
+      i++;
+      let inClass = false;
+      while (i < text.length) {
+        const r = text[i];
+        if (r === "\\") { i += 2; continue; }
+        if (r === "\n") break;
+        if (r === "[") inClass = true;
+        else if (r === "]") inClass = false;
+        else if (r === "/" && !inClass) { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      // Unlike templateSpans, this records the span — an unterminated string (hits end-of-line or
+      // end-of-file before its closing quote) isn't valid JS either way and gets none.
+      const start = i;
+      i++;
+      while (i < text.length && text[i] !== c && text[i] !== "\n") i += text[i] === "\\" ? 2 : 1;
+      if (text[i] === c) spans.push({ start, end: i });
+      i++; continue;
+    }
+    if (c === "`") { stack.push({ kind: "tpl", start: i }); i++; continue; }
+    if (c === "{" && (top()?.kind === "expr" || top()?.kind === "brace")) {
+      stack.push({ kind: "brace" }); i++; continue;
+    }
+    if (c === "}" && (top()?.kind === "expr" || top()?.kind === "brace")) {
+      stack.pop(); i++; continue;
+    }
+    i++;
+  }
+  spans.balanced = stack.length === 0;
+  return spans;
+}
+
 const lineOf = (text, index) => text.slice(0, index).split("\n").length;
 
 /** Words that can follow a table name but are not an alias for it. */

@@ -38,8 +38,10 @@ export async function runNightlyCleanup(env: Env): Promise<NightlyCleanupResult>
       });
       purged += r.purged;
       purgeRows += r.rowsWritten;
-      // Stop at the first batch that did less than it read, unless it made progress trimming one row's versions.
-      if (r.read === 0 || (r.purged < r.read && r.trimmed === 0)) break;
+      // Stop at the first batch that read nothing, or that purged less than it read for a reason
+      // OTHER than the row budget: a budget cut means more expired rows are still waiting, so the
+      // loop must keep going (stopping here halved the spec's purge pacing, ADV-trash-8).
+      if (r.read === 0 || (r.purged < r.read && r.trimmed === 0 && !r.budgetCut)) break;
     }
   } catch (e) {
     console.error("Trash purge failed (non-fatal):", e);

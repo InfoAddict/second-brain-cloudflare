@@ -50,12 +50,12 @@ export async function makeTrashEnv(overrides: Partial<Env> = {}) {
 export type TrashEnv = Awaited<ReturnType<typeof makeTrashEnv>>;
 
 /** Insert `n` trash rows named `<prefix>0..n-1` directly, expired unless `deletedAt` says otherwise. */
-export async function seedTrashRows(t: TrashEnv, n: number, opts: { prefix?: string; deletedAt?: number; workspaceId?: string; reason?: string } = {}) {
-  const { prefix = "t", deletedAt = 1, workspaceId = t.roots.ownerPersonalWorkspaceId, reason = "forget" } = opts;
+export async function seedTrashRows(t: TrashEnv, n: number, opts: { prefix?: string; deletedAt?: number; workspaceId?: string; reason?: string; vectorIds?: string } = {}) {
+  const { prefix = "t", deletedAt = 1, workspaceId = t.roots.ownerPersonalWorkspaceId, reason = "forget", vectorIds = "[]" } = opts;
   await t.sqlite.db.exec(`
     WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ${n - 1})
-    INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, deleted_at, deleted_by, channel, reason)
-    SELECT '${prefix}' || i, '${workspaceId}', '', 'c', '{"created_at":1}', '[]', ${deletedAt}, '', 'rest', '${reason}' FROM n`);
+    INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason)
+    SELECT '${prefix}' || i, '${workspaceId}', '', 'c', '{"created_at":1}', '[]', '${vectorIds}', ${deletedAt}, '', 'rest', '${reason}' FROM n`);
 }
 
 /** Give every trash row with the prefix `k` versions (seq 1..k), inserted in one statement. */

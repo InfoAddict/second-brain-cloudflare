@@ -1,20 +1,20 @@
 import type { Env } from "../env";
 import type { ChangeContext } from "../lib/audit";
 import {
-  TRASH_ROW_BUDGET_BYTES, VERSION_DELETE_CHUNK,
+  TRASH_ROW_BUDGET_BYTES, VERSION_DELETE_CHUNK, DISCONNECT_PURGE_CHUNK, MIRRORED_SOURCES,
 } from "../constants";
-import { DISCONNECT_PURGE_CHUNK } from "../constants";
 import type { Identity } from "../lib/identity";
 import { scopeWhere } from "../lib/scope";
 import { assertCanMutateEntry } from "../lib/entry-access";
 import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteVectorIds } from "../vectorize/batch";
 import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
-import { upsertEntryVectors } from "../capture/store";
+import { upsertEntryVectors, deleteStaleVectors, restoreRowVectors } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
 import { Params } from "./params";
+import { chunkText } from "../text/chunk";
 
 export type TrashReason = "forget" | "mirror" | "disconnect";
 
@@ -23,6 +23,9 @@ export interface TrashSizes {
   content_bytes: number;
   row_json_bytes: number;
   edges_json_bytes: number;
+  // Round 2 adversary: vector_ids is now itself a stored trash column (not just read for
+  // cleanup), and a heavily-chunked row's ids run to tens of KB — real width, not slack.
+  vector_ids_bytes: number;
 }
 
 export interface TrashCandidate extends TrashSizes {
@@ -38,7 +41,7 @@ export interface TrashCandidate extends TrashSizes {
  * The 512 bytes cover the fixed columns; the budget leaves headroom under the 2 MB row limit.
  */
 export function chooseTrashTier(sizes: TrashSizes, budget = TRASH_ROW_BUDGET_BYTES): 1 | 2 | 3 {
-  const base = sizes.content_bytes + sizes.row_json_bytes + 512;
+  const base = sizes.content_bytes + sizes.row_json_bytes + sizes.vector_ids_bytes + 512;
   if (base + sizes.edges_json_bytes <= budget) return 1;
   if (base <= budget) return 2;
   return 3;
@@ -64,7 +67,8 @@ export function trashSizeSelect(alias = "e"): string {
   return `${alias}.id, ${alias}.workspace_id, ${alias}.actor_id, ${alias}.vector_ids,
        length(CAST(${alias}.content AS BLOB)) AS content_bytes,
        length(CAST(${rowJsonSql(alias)} AS BLOB)) AS row_json_bytes,
-       COALESCE(length(CAST(${edgesJsonSql(alias)} AS BLOB)), 2) AS edges_json_bytes`;
+       COALESCE(length(CAST(${edgesJsonSql(alias)} AS BLOB)), 2) AS edges_json_bytes,
+       length(CAST(${alias}.vector_ids AS BLOB)) AS vector_ids_bytes`;
 }
 
 export async function readTrashCandidates(env: Env, ids: string[]): Promise<TrashCandidate[]> {
@@ -77,7 +81,7 @@ export async function readTrashCandidates(env: Env, ids: string[]): Promise<Tras
   return results ?? [];
 }
 
-const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, deleted_at, deleted_by, channel, reason";
+const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason";
 
 /**
  * The statements that move entries to the trash, in one batch: the trash inserts (they read
@@ -97,9 +101,12 @@ export function trashManyStatements(
     const p = new Params();
     const idList = p.add(JSON.stringify(ids));
     stmts.push(env.DB.prepare(
-      // scope-exempt: by-id: callers authorize the entries before building the batch
+      // scope-exempt: by-id: callers authorize the entries before building the batch.
+      // vector_ids is the live row's own value at deletion time (round 2 adversary): a short
+      // append's chunk (id-update-<ts>, store.ts) is not a function of content, so it cannot be
+      // rederived later — Delete forever needs the real ids stored, not just guessed at.
       `INSERT OR REPLACE INTO entries_trash (${TRASH_COLUMNS})
-       SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"},
+       SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
               ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}
          FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))`,
     ).bind(...p.values()));
@@ -109,8 +116,11 @@ export function trashManyStatements(
   if (plan.tier3.length) {
     const p = new Params();
     stmts.push(env.DB.prepare(
-      // scope-exempt: by-id: versions of entries the caller authorized; an oversized entry leaves no history behind
-      `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))`,
+      // scope-exempt: by-id: versions of entries the caller authorized; an oversized entry leaves no history behind.
+      // Guarded on the id not already being trashed: a losing tier-3 forget (its stale size read predates a
+      // shrink that let a racing forget trash the row normally) must not wipe the winner's trashed history.
+      `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${p.add(JSON.stringify(plan.tier3))}))
+         AND NOT EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id)`,
     ).bind(...p.values()));
   }
   const ids = JSON.stringify(all);
@@ -231,6 +241,12 @@ export interface PurgeResult {
   /** Versions trimmed from one oversized row instead of purging it. */
   trimmed: number;
   rowsWritten: number;
+  /**
+   * True when this batch stopped short of `read` because the row-written budget ran out, not
+   * because there was nothing more expired to purge. The nightly loop (runNightlyCleanup) must
+   * keep going on a budget cut — stopping here, as it once did, halved the spec's purge pacing.
+   */
+  budgetCut: boolean;
 }
 
 /**
@@ -250,7 +266,7 @@ export async function purgeTrash(
   // empty trash never needs the config (one KV read saved on every nightly run).
   const earliest = now - MIN_RETENTION_DAYS * DAY_MS;
   const budget = Math.min(opts.rowTarget, opts.rowsLeft ?? Infinity);
-  const none: PurgeResult = { read: 0, purged: 0, trimmed: 0, rowsWritten: 0 };
+  const none: PurgeResult = { read: 0, purged: 0, trimmed: 0, rowsWritten: 0, budgetCut: false };
   if (budget < PURGE_ROW_COST) return none;
 
   const rp = new Params();
@@ -281,48 +297,63 @@ export async function purgeTrash(
     // Even the first row does not fit. If it is the row itself that is oversized, trim its oldest versions.
     const first = candidates[0];
     const chunk = Math.min(VERSION_DELETE_CHUNK, Math.floor(budget / 2));
-    if (chunk < 1) return { ...none, read: candidates.length };
+    if (chunk < 1) return { ...none, read: candidates.length, budgetCut: true };
     const tp = new Params();
+    const trimId = tp.add(first.id);
+    const trimCutoff = tp.add(cutoff);
     const res = await env.DB.prepare(
       // scope-exempt: retention purge of one trashed entry's versions, oldest first, only while the id is not live
+      // and its trash row is still genuinely expired: a restore plus a re-forget between the candidate
+      // read and this statement gives the same id a fresh, unexpired trash row (round 2 adversary).
       `DELETE FROM entry_versions WHERE id IN (
-         SELECT v.id FROM entry_versions v WHERE v.entry_id = ${tp.add(first.id)} AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = v.entry_id)
+         SELECT v.id FROM entry_versions v WHERE v.entry_id = ${trimId} AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = v.entry_id)
+           AND EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = v.entry_id AND t.deleted_at < ${trimCutoff})
           ORDER BY v.seq LIMIT ${tp.add(chunk)})`,
     ).bind(...tp.values()).run();
     const trimmed = changedRows(res);
-    return { read: candidates.length, purged: 0, trimmed, rowsWritten: rowsWrittenOf([res], 2 * trimmed) };
+    return { read: candidates.length, purged: 0, trimmed, rowsWritten: rowsWrittenOf([res], 2 * trimmed), budgetCut: true };
   }
 
   // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder.
+  // Every statement also re-checks deleted_at < cutoff (not just id IN (...)): a restore plus a
+  // re-forget can land between the candidate read above and this batch, giving the same id a
+  // fresh, unexpired trash row that must not be swept up just because it matched the id list.
   const idsJson = JSON.stringify(chosen);
   const auditP = new Params();
   const auditIds = auditP.add(idsJson);
   const auditNow = auditP.add(now);
+  const auditCutoff = auditP.add(cutoff);
   const versionsP = new Params();
   const versionsIds = versionsP.add(idsJson);
+  const versionsCutoff = versionsP.add(cutoff);
   const trashP = new Params();
   const trashIds = trashP.add(idsJson);
+  const trashCutoff = trashP.add(cutoff);
   const results3 = await env.DB.batch([
     env.DB.prepare(
       // scope-exempt: retention purge: the audit row of each expired trash row, in the batch that removes it
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
        SELECT lower(hex(randomblob(16))), t.id, '', 'purged',
               json_object('channel', 'system:purge', 'reason', t.reason, 'deleted_at', t.deleted_at), ${auditNow}
-         FROM entries_trash t WHERE t.id IN (SELECT value FROM json_each(${auditIds}))`,
+         FROM entries_trash t WHERE t.id IN (SELECT value FROM json_each(${auditIds})) AND t.deleted_at < ${auditCutoff}`,
     ).bind(...auditP.values()),
     env.DB.prepare(
-      // scope-exempt: retention purge: versions of expired trash rows, never of a live entry
+      // scope-exempt: retention purge: versions of expired trash rows, never of a live entry, and only while that trash row is still expired
       `DELETE FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(${versionsIds}))
-         AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = entry_versions.entry_id)`,
+         AND NOT EXISTS (SELECT 1 FROM entries x WHERE x.id = entry_versions.entry_id)
+         AND EXISTS (SELECT 1 FROM entries_trash t WHERE t.id = entry_versions.entry_id AND t.deleted_at < ${versionsCutoff})`,
     ).bind(...versionsP.values()),
     env.DB.prepare(
       // scope-exempt: retention purge: expired trash rows
-      `DELETE FROM entries_trash WHERE id IN (SELECT value FROM json_each(${trashIds}))`,
+      `DELETE FROM entries_trash WHERE id IN (SELECT value FROM json_each(${trashIds})) AND deleted_at < ${trashCutoff}`,
     ).bind(...trashP.values()),
   ]);
   const purged = changedRows(results3[2]);
   const estimate = 4 * changedRows(results3[0]) + 2 * changedRows(results3[1]) + 3 * purged;
-  return { read: candidates.length, purged, trimmed: 0, rowsWritten: rowsWrittenOf(results3, estimate) };
+  return {
+    read: candidates.length, purged, trimmed: 0, rowsWritten: rowsWrittenOf(results3, estimate),
+    budgetCut: chosen.length < candidates.length,
+  };
 }
 
 /** Rows written by a batch: the larger of D1's own count and the estimate (the test doubles report only changes). */
@@ -340,6 +371,9 @@ export interface TrashedEntryRow {
   content: string;
   row_json: string;
   edges_json: string;
+  // The live row's own vector ids at deletion time (round 2 adversary): a short append's chunk
+  // (id-update-<ts>, store.ts) isn't a function of content, so it can't be rederived later.
+  vector_ids: string;
   deleted_at: number;
   reason: TrashReason | string;
 }
@@ -367,6 +401,35 @@ export type RestoreResult =
   | { status: "restored"; edgesRestored: number; trashedReason: string; vectorCount: number };
 
 /**
+ * A losing restore's cleanup. Vector ids are deterministic (the entry id, or `id-chunk-i`,
+ * store.ts), so a winning restore of the SAME trash row embeds the identical content and gets
+ * the identical ids — nothing to reconcile there. But a slow loser can lose to something else
+ * live under the same id by the time its own upsert finally lands (checklist 36g): this
+ * attempt's own embed already overwrote the vector with ITS text, which the live row does not
+ * hold. Reconcile by re-embedding from whatever the live row now says, same as a lost
+ * compare-and-set elsewhere (store.ts's restoreRowVectors) — a bare delete would just leave the
+ * live row's real vectors on the ids it just clobbered.
+ */
+async function deleteOrphanedRestoreVectors(
+  env: Env, id: string, vectorIds: string[], source: string, cfg: Readonly<Config>, writeCtx: { workspaceId: string; actorId: string },
+): Promise<void> {
+  if (!vectorIds.length) return;
+  try {
+    const p = new Params();
+    const liveId = p.add(id);
+    // scope-exempt: by-id: only decides whether THIS attempt's own vectors are safe to delete outright
+    const live = await env.DB.prepare(`SELECT 1 FROM entries WHERE id = ${liveId}`).bind(...p.values()).first();
+    if (live) {
+      await restoreRowVectors(env, id, vectorIds, [], source, cfg, writeCtx);
+      return;
+    }
+    await deleteVectorIds(env, vectorIds);
+  } catch (e) {
+    console.error("Orphaned restore vector cleanup failed (non-fatal):", e);
+  }
+}
+
+/**
  * Restore a trashed entry with its links: embeds first (so a transient failure leaves it safely in
  * the trash), then one batch inserts the entries row, restores the edges whose other endpoint still
  * exists, and removes the trash row. No version is written — restore is the trash's own undo.
@@ -381,11 +444,26 @@ export async function restoreEntry(
   const tags: string[] = (() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })();
   const deprecated = getStatus(tags) === "deprecated";
 
+  // A live-again id (the id was re-captured while its old copy sat in the trash) is a conflict
+  // before anything else runs: vector ids are deterministic (the id itself, or id-chunk-i,
+  // store.ts), so embedding now would silently overwrite the live row's own vector with this
+  // trash row's stale text, whatever the batch below decides.
+  {
+    const p = new Params();
+    const liveId = p.add(trashed.id);
+    // scope-exempt: by-id: only decides whether to embed at all; the batch below is the real guard
+    if (await env.DB.prepare(`SELECT 1 FROM entries WHERE id = ${liveId}`).bind(...p.values()).first()) {
+      return { status: "conflict" };
+    }
+  }
+
+  const source = String(row.source ?? "api");
+  const cfg = config ?? await resolveConfig(env);
+  const writeCtx = { workspaceId: trashed.workspace_id, actorId: trashed.actor_id };
   let vectorIds: string[] = [];
   if (!deprecated) {
     try {
-      const cfg = config ?? await resolveConfig(env);
-      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, String(row.source ?? "api"), Date.now(), cfg, { workspaceId: trashed.workspace_id, actorId: trashed.actor_id });
+      const stored = await upsertEntryVectors(env, trashed.id, trashed.content, tags, source, Date.now(), cfg, writeCtx);
       vectorIds = stored.vectorIds;
     } catch (e) {
       if (!(await isVectorizeUnavailable(env))) return { status: "reembed_failed" };
@@ -426,15 +504,30 @@ export async function restoreEntry(
       env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
     ]);
   } catch (e) {
-    if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
+    // Vector ids are deterministic (the entry id, or id-chunk-i, store.ts), so a winning restore
+    // racing the same trash row upserted these SAME ids: deleting them here without checking would
+    // delete the WINNER's live vectors too. Only clean up if this attempt's id truly lost.
+    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
     if (isPrimaryKeyConflict(e)) return { status: "conflict" };
     throw e;
   }
 
   if (changedRows(results[2]) === 0) {
-    // The trash row vanished between the read and the batch (a racing restore or purge).
-    if (vectorIds.length) { try { await deleteVectorIds(env, vectorIds); } catch { /* non-fatal */ } }
+    // The trash row vanished between the read and the batch (a racing restore or purge). If a
+    // racing restore is the winner, it embedded the same deterministic ids — never delete them.
+    await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
     return { status: "not_found" };
+  }
+
+  // The trash row's own stored ids (round 2 adversary): a short append embedded before this
+  // entry was trashed under id-update-<ts>, which the fresh re-embed above never reproduces.
+  // Only the winner cleans up — deleteStaleVectors itself no-ops when vectorIds is empty (the
+  // keyword-only-degrade branch above), leaving the stored ids as the entry's only index.
+  try {
+    const storedIds = JSON.parse(trashed.vector_ids ?? "[]") as string[];
+    await deleteStaleVectors(env, storedIds, vectorIds);
+  } catch (e) {
+    console.error("Stale trash vector cleanup failed (non-fatal):", e);
   }
 
   return {
@@ -452,47 +545,85 @@ export type DeleteForeverResult =
   | { status: "deleted"; from: "live" | "trash"; deletedVectors: number };
 
 /**
+ * The same deterministic ids store.ts's storeEntry would have produced for this content and
+ * source: a single-chunk row embeds under its own id, a multi-chunk row under `id-chunk-i`.
+ * Backstops the trash row's own stored vector_ids (schema.sql), which cover a short append's
+ * id-update-<ts> chunk but default to '[]' for a trash row written before that column existed —
+ * this recomputes the chunk count from the same text and source for that case, rather than
+ * leaving a failed forget's orphaned vector in the index forever.
+ */
+function deterministicVectorIds(id: string, content: string, source: string): string[] {
+  const allChunks = chunkText(content);
+  const chunks = MIRRORED_SOURCES.has(source) ? allChunks.slice(0, 1) : allChunks;
+  return chunks.map((_, i) => (chunks.length === 1 ? id : `${id}-chunk-${i}`));
+}
+
+/**
  * Delete forever (T-0089.4.7, human-only in the sense of "not offered to agents": REST uses the
  * same bearer token agents hold; there is no MCP tool or parameter). Hard deletes a live or
  * trashed row, its edges, all its versions and any trash copy, then its vectors. The `purged`
  * audit row is written inside the batch, only when there is something to delete. A racing forget
  * that lands first is still a success, reported `from: "trash"`.
+ *
+ * The vectors to delete are read from the batch's own RETURNING clauses, not from a caller-supplied
+ * row read earlier: a race (a restore bringing the id back to life between the caller's own read
+ * and this call, or a transient Vectorize failure during an earlier forget) means neither the
+ * live row's real vector_ids nor the trash row's content are safe to trust from outside this batch.
  */
-export async function deleteForever(env: Env, row: { id: string; vector_ids?: string }, change: ChangeContext): Promise<DeleteForeverResult> {
+export async function deleteForever(env: Env, id: string, change: ChangeContext): Promise<DeleteForeverResult> {
   const now = Date.now();
   const auditP = new Params();
-  const auditId = auditP.add(row.id);
+  const auditId = auditP.add(id);
+  const auditActor = auditP.add(change.actorId);
   const auditChannel = auditP.add(change.channel);
   const auditNow = auditP.add(now);
   const byId = (sql: (id: string) => string) => {
     const p = new Params();
-    const id = p.add(row.id);
-    return env.DB.prepare(sql(id)).bind(...p.values());
+    const bid = p.add(id);
+    return env.DB.prepare(sql(bid)).bind(...p.values());
   };
   const results = await env.DB.batch([
     env.DB.prepare(
       // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
-       SELECT lower(hex(randomblob(16))), ${auditId}, '', 'purged',
+       SELECT lower(hex(randomblob(16))), ${auditId}, ${auditActor}, 'purged',
               json_object('reason', 'permanent', 'channel', ${auditChannel}, 'from', CASE WHEN EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) THEN 'live' ELSE 'trash' END),
               ${auditNow}
         WHERE EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) OR EXISTS (SELECT 1 FROM entries_trash WHERE id = ${auditId})`,
     ).bind(...auditP.values()),
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM edges WHERE source_id = ${id} OR target_id = ${id}`),
+    byId((bid) => `DELETE FROM edges WHERE source_id = ${bid} OR target_id = ${bid}`),
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM entry_versions WHERE entry_id = ${id}`),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM entries_trash WHERE id = ${id}`),
+    byId((bid) => `DELETE FROM entry_versions WHERE entry_id = ${bid}`),
+    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch.
+    // RETURNING vector_ids too: the trash row's own stored ids (round 2 adversary) cover a short
+    // append's id-update-<ts> chunk, which content+source alone can't rederive — content/source
+    // stay as a best-effort fallback for a trash row from before this column existed.
+    byId((bid) => `DELETE FROM entries_trash WHERE id = ${bid} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
+    // RETURNING vector_ids: this statement's own value at the moment it runs, never a caller's stale
+    // read — a restore racing this call embeds under the same deterministic ids (ADV-trash-4).
     // versioning: hard-delete: permanent (T-0089.4.7)
     // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((id) => `DELETE FROM entries WHERE id = ${id}`),
+    byId((bid) => `DELETE FROM entries WHERE id = ${bid} RETURNING vector_ids`),
   ]);
+  const trashRow = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string } | undefined;
+  const entryRow = results[4].results?.[0] as { vector_ids?: string } | undefined;
   const trashChanges = changedRows(results[3]);
   const entryChanges = changedRows(results[4]);
   if (entryChanges === 0 && trashChanges === 0) return { status: "not_found" };
 
-  const vectorIds: string[] = (() => { try { return JSON.parse(row.vector_ids ?? "[]"); } catch { return []; } })();
+  let vectorIds: string[] = [];
+  if (entryRow) {
+    try { vectorIds = JSON.parse(entryRow.vector_ids ?? "[]"); } catch { vectorIds = []; }
+  } else if (trashRow?.content !== undefined) {
+    // Union of the ids actually stored at trash time with the ids the content alone would
+    // derive: a short append's chunk (id-update-<ts>) is only in the stored set, but the
+    // derived set still catches a pre-column trash row (stored defaults to '[]').
+    let stored: string[] = [];
+    try { stored = JSON.parse(trashRow.vector_ids ?? "[]"); } catch { stored = []; }
+    const derived = deterministicVectorIds(id, trashRow.content, trashRow.source ?? "api");
+    vectorIds = [...new Set([...stored, ...derived])];
+  }
   try {
     if (vectorIds.length) await deleteVectorIds(env, vectorIds);
   } catch (e) {

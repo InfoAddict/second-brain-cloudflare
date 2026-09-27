@@ -137,6 +137,13 @@ class SqliteStatement {
     if (/^\s*(SELECT|WITH)\b/i.test(this.sql)) {
       return { results: statement.all(...(q.args as never[])), success: true, meta: { rows_written: 0 } };
     }
+    // A write with a RETURNING clause: node:sqlite's own .run() silently drops whatever it would
+    // have returned, so this goes through .all() instead (which both performs the write and hands
+    // back its rows) — same as D1, which reports the RETURNING rows through a batched write too.
+    if (/\bRETURNING\b/i.test(this.sql)) {
+      const rows = statement.all(...(q.args as never[]));
+      return { results: rows, success: true, meta: { rows_written: rows.length } };
+    }
     const result = statement.run(...(q.args as never[]));
     return { success: true, meta: { rows_written: Number(result.changes) } };
   }

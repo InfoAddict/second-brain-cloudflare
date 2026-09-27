@@ -125,6 +125,35 @@ describe("purge", () => {
     expect(await count(`SELECT COUNT(*) n FROM entries_trash`)).toBe(5);
     expect((await t.all<any>(`SELECT reason FROM entries_trash WHERE id IN ('m','d') ORDER BY id`)).map((r) => r.reason)).toEqual(["disconnect", "mirror"]);
   });
+
+  it("adversary (MINOR): must not delete a trash row that was restored and re-forgotten between the candidate read and the batch", async () => {
+    const { getTrashedEntry, restoreEntry } = await import("../../src/memory/trash");
+    t = await makeTrashEnv();
+    t.seed("a"); t.version("a", 1); t.version("a", 2);
+    await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false });
+    // Age the trash row past 14 days.
+    await t.sqlite.db.prepare(`UPDATE entries_trash SET deleted_at = 1 WHERE id = 'a'`).run();
+    const c = await cfg();
+
+    const realBatch = t.env.DB.batch.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).batch = async (stmts: any[]) => {
+      const first = String(stmts[0]?.sourceSql?.() ?? "");
+      if (!injected && first.includes("'purged'") && first.includes("system:purge")) {
+        injected = true;
+        // Between the purge's candidate read and its batch: the user restores, then forgets again.
+        const trashed = await getTrashedEntry(t.env, undefined, "a");
+        expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, c)).status).toBe("restored");
+        expect((await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false })).status).toBe("deleted");
+      }
+      return realBatch(stmts);
+    };
+    await purgeTrash(t.env, c, { ceiling: 10, rowTarget: 1000 });
+
+    // The trash row now in place was written a moment ago: it must survive, with its history.
+    expect(await t.one(`SELECT deleted_at FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
+    expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
+  });
 });
 
 describe("nightly cleanup", () => {
@@ -216,5 +245,62 @@ describe("a night with a bulk purge and a pending removal", () => {
     expect(quiet.purged).toBe(0);
     expect(await t.one(`SELECT id FROM entries WHERE id = 'm1'`)).toBeNull();
     void m;
+  });
+});
+
+describe("adversary (MINOR): the nightly purge must not run at half the spec's pace", () => {
+  it("a bulk trash of mirrored rows (3 versions each) purges at the spec's ~770 a night, not one batch cut short by the budget", async () => {
+    t = await makeTrashEnv();
+    await seedTrashRows(t, 1000, { prefix: "m", deletedAt: 1, reason: "disconnect" });
+    await t.sqlite.db.exec(`
+      INSERT INTO entry_versions (entry_id, workspace_id, seq, content, prior_length, tags, actor_id, channel, reason, created_at)
+      SELECT t.id, '', s.seq, 'v', NULL, '[]', '', 'system:mirror', 'mirror', 1
+        FROM entries_trash t, (SELECT 1 AS seq UNION ALL SELECT 2 UNION ALL SELECT 3) s`);
+
+    const night = await runNightlyCleanup(t.env);
+    // Spec "Pacing": mirror rows (13 rows each) purge at about 770 a night (10,000 / 13). A batch
+    // cut short by the row budget (not by running out of expired rows) must not stop the loop.
+    expect(night.purged).toBeGreaterThanOrEqual(700);
+  });
+});
+
+describe("adversary round 2: the oversized-row trim branch must respect the retention cutoff", () => {
+  it("must not trim a trash row restored and re-forgotten after the candidate read", async () => {
+    t = await makeTrashEnv();
+    t.seed("big");
+    for (let s = 1; s <= 30; s++) t.version("big", s);
+    await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: await cfg(), purge: false });
+    await t.sqlite.db.prepare(`UPDATE entries_trash SET deleted_at = 1 WHERE id = 'big'`).run();
+    const c = await cfg();
+
+    // Between the candidate read and the trim DELETE: restore, then forget again (a fresh trash row).
+    const { getTrashedEntry, restoreEntry } = await import("../../src/memory/trash");
+    const realPrepare = t.env.DB.prepare.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).prepare = (sql: string) => {
+      const stmt = realPrepare(sql);
+      if (!injected && /DELETE FROM entry_versions WHERE id IN \(\s*SELECT v\.id/.test(sql)) {
+        const bind = stmt.bind.bind(stmt);
+        (stmt as any).bind = (...args: unknown[]) => {
+          const bound = bind(...args);
+          const run = bound.run.bind(bound);
+          (bound as any).run = async () => {
+            injected = true;
+            const trashed = await getTrashedEntry(t.env, undefined, "big");
+            expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, c)).status).toBe("restored");
+            expect((await forgetEntry("big", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: c, purge: false })).status).toBe("deleted");
+            return run();
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    // rowTarget 20 forces the trim branch: the row costs 7 + 2 x 30 = 67.
+    const r = await purgeTrash(t.env, c, { ceiling: 10, rowTarget: 20 });
+    expect(injected).toBe(true);
+    expect(r.trimmed).toBeGreaterThanOrEqual(0);
+    // The trash row now present is minutes old: none of its history may be trimmed.
+    expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'big'`)).length).toBe(30);
   });
 });

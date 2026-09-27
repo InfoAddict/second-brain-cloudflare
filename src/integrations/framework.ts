@@ -73,8 +73,14 @@ export interface IntegrationRecord {
   lastSyncedAt: number | null;
   lastSyncError: string | null;
   itemMap: Record<string, ItemMapEntry>;
-  /** Set while a disconnect purge is paging through the item map; syncs skip the record. Carries the running totals. */
-  disconnecting?: { purged: number; skipped: number };
+  /**
+   * Set while a disconnect purge is paging through the item map; syncs skip the record. Carries
+   * the running totals, plus the cursor this page was computed from (`fromCursor`, undefined for
+   * the first page) and the cursor it handed back (`nextCursor`, undefined once done): a repeated
+   * call whose own cursor matches `fromCursor` is the same page again (its response was lost) and
+   * must return this same state rather than reprocessing and double-counting it.
+   */
+  disconnecting?: { purged: number; skipped: number; fromCursor?: string; nextCursor?: string };
   createdAt: number;
   updatedAt: number;
 }
@@ -226,9 +232,13 @@ export function integrationStatus(
 export interface MirrorStore {
   // Insert a new entry and return its id.
   createEntry(content: string, tags: string[], source: string): Promise<string>;
-  // Replace an entry's content wholesale (re-embed). False if the entry no
-  // longer exists — the caller re-creates the mirror.
-  updateEntry(entryId: string, content: string): Promise<boolean>;
+  // Replace an entry's content wholesale (re-embed): "updated" on success, "not_found" when the
+  // entry is genuinely gone (the caller re-creates the mirror), "busy" when the row is still
+  // there but every compare-and-set attempt lost the race (round 2 adversary, ADV-8 exhaustion:
+  // a caller that read "busy" as "gone" and re-created the mirror duplicated the memory). The
+  // caller must leave its item map untouched on "busy" so the next sync retries the same row
+  // rather than orphaning it under a second, freshly created copy.
+  updateEntry(entryId: string, content: string): Promise<"updated" | "not_found" | "busy">;
   // Permanently delete an entry and its vectors.
   deleteEntry(entryId: string): Promise<void>;
 }

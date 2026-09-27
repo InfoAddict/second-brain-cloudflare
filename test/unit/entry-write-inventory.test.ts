@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { templateSpans } from "../../scripts/check-scope.mjs";
+import { writerSpans } from "../../scripts/check-scope.mjs";
 import { isEntriesWriteSql } from "../../src/db/fts-write-guard";
 
 const ROOT = resolveRoot();
@@ -40,7 +40,7 @@ function scanInventory(): Site[] {
     const file = relative(ROOT, path);
     const text = readFileSync(path, "utf8");
     const lines = text.split("\n");
-    const spans = templateSpans(text) as { start: number; end: number }[];
+    const spans = writerSpans(text) as { start: number; end: number }[];
     for (const span of spans) {
       const sql = text.slice(span.start + 1, span.end);
       if (!isEntriesWriteSql(sql)) continue;
@@ -69,41 +69,12 @@ function scanInventory(): Site[] {
 const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/capture/classify.ts', line: 68, kind: 'exempt' },
   { file: 'src/capture/classify.ts', line: 78, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 240, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 273, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 359, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 396, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 403, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 405, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 443, kind: 'snapshot' },
-  { file: 'src/capture/entry.ts', line: 487, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 496, kind: 'exempt' },
-  { file: 'src/capture/entry.ts', line: 498, kind: 'exempt' },
   { file: 'src/capture/lifecycle.ts', line: 108, kind: 'snapshot' },
   { file: 'src/capture/lifecycle.ts', line: 132, kind: 'snapshot' },
   { file: 'src/capture/share.ts', line: 61, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 53, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 192, kind: 'exempt' },
-  { file: 'src/capture/store.ts', line: 376, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 524, kind: 'snapshot' },
-  { file: 'src/capture/store.ts', line: 602, kind: 'snapshot' },
-  { file: 'src/compression/digest.ts', line: 62, kind: 'snapshot' },
   { file: 'src/entries/import.ts', line: 26, kind: 'exempt' },
-  { file: 'src/integrations/mirror.ts', line: 80, kind: 'exempt' },
-  { file: 'src/integrations/mirror.ts', line: 122, kind: 'snapshot' },
   { file: 'src/lib/team-admin.ts', line: 576, kind: 'hard-delete' },
   { file: 'src/lib/tenancy.ts', line: 128, kind: 'exempt' },
-  { file: 'src/memory/actions.ts', line: 60, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 103, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 115, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 127, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 168, kind: 'snapshot' },
-  { file: 'src/memory/actions.ts', line: 179, kind: 'snapshot' },
-  { file: 'src/memory/trash.ts', line: 130, kind: 'trash' },
-  { file: 'src/memory/trash.ts', line: 415, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 489, kind: 'hard-delete' },
-  { file: 'src/memory/undo.ts', line: 124, kind: 'snapshot' },
-  { file: 'src/memory/undo.ts', line: 173, kind: 'exempt' },
   { file: 'src/recall/search.ts', line: 1115, kind: 'exempt' },
   { file: 'src/routes/admin.ts', line: 1538, kind: 'exempt' },
   { file: 'src/staleness/pass.ts', line: 86, kind: 'exempt' },

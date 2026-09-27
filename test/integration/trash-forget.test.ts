@@ -23,7 +23,7 @@ async function forget(id: string, budget?: number) {
 
 describe("chooseTrashTier", () => {
   it("picks full, no-edges or hard delete from the SELECT's byte sizes", () => {
-    const sizes = (content_bytes: number, row_json_bytes: number, edges_json_bytes: number) => ({ content_bytes, row_json_bytes, edges_json_bytes });
+    const sizes = (content_bytes: number, row_json_bytes: number, edges_json_bytes: number) => ({ content_bytes, row_json_bytes, edges_json_bytes, vector_ids_bytes: 2 });
     expect(chooseTrashTier(sizes(100, 200, 300), 10_000)).toBe(1);
     // 100 + 200 + 512 + 9,500 > 10,000 but without edges it fits.
     expect(chooseTrashTier(sizes(100, 200, 9_500), 10_000)).toBe(2);
@@ -32,10 +32,14 @@ describe("chooseTrashTier", () => {
     expect(chooseTrashTier(sizes(1_000_000, 300, 700_000))).toBe(1);
     expect(chooseTrashTier(sizes(1_000_000, 300, 900_000))).toBe(2);
     expect(TRASH_ROW_BUDGET_BYTES).toBeLessThan(2_000_000);
+    // vector_ids is now a stored trash column too (round 2 adversary): a heavily-chunked row's
+    // ids count toward the row, not just the fixed 512-byte slack.
+    expect(chooseTrashTier({ content_bytes: 100, row_json_bytes: 200, edges_json_bytes: 300, vector_ids_bytes: 9_000 }, 10_000)).toBe(2);
+    expect(chooseTrashTier({ content_bytes: 100, row_json_bytes: 200, edges_json_bytes: 0, vector_ids_bytes: 20_000 }, 10_000)).toBe(3);
   });
 
   it("plans a mixed set by tier", () => {
-    const row = (id: string, c: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: 100, edges_json_bytes: e });
+    const row = (id: string, c: number, e: number) => ({ id, workspace_id: "", actor_id: "", vector_ids: "[]", content_bytes: c, row_json_bytes: 100, edges_json_bytes: e, vector_ids_bytes: 2 });
     const plan = planTrash([row("a", 10, 10), row("b", 10, 9_999), row("c", 20_000, 0)], 10_000);
     expect(plan).toEqual({ tier1: ["a"], tier2: ["b"], tier3: ["c"] });
   });
@@ -51,6 +55,7 @@ describe("forget moves the row to the trash", () => {
     expect(await t.one(`SELECT id FROM entries WHERE id = 'n1'`)).toBeNull();
     const row = await t.one<any>(`SELECT * FROM entries_trash WHERE id = 'n1'`);
     expect(row.content).toBe("content of n1");
+    expect(row.vector_ids).toBe('["v1"]');
     expect(row.workspace_id).toBe(t.roots.ownerPersonalWorkspaceId);
     expect(row.actor_id).toBe(t.roots.ownerUserId);
     expect(row.reason).toBe("forget");
@@ -222,5 +227,98 @@ describe("routes", () => {
     };
     const res = await forgetEntry("a", t.env, change, { reason: "forget", config: await resolveConfig(t.env) });
     expect(res.status).toBe("deleted");
+  });
+});
+
+describe("a losing tier-3 forget racing a tier-1 forget of the same id", () => {
+  it("adversary (MINOR): must not wipe the history of the row the winner put in the trash", async () => {
+    t = await makeTrashEnv();
+    t.seed("a", { content: "x".repeat(20_000) });
+    t.version("a", 1); t.version("a", 2);
+    const cfg = await resolveConfig(t.env);
+
+    // Forget #1 sizes the row while it is large (tier 3 under a 10 KB budget). Before its batch,
+    // the row shrinks (an update) and forget #2 trashes it normally, with its history.
+    const realBatch = t.env.DB.batch.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).batch = async (stmts: any[]) => {
+      const sqls = stmts.map((s: any) => String(s?.sourceSql?.() ?? ""));
+      if (!injected && sqls.some((s) => s.startsWith("DELETE FROM entry_versions WHERE entry_id IN"))) {
+        injected = true;
+        await t.sqlite.db.prepare(`UPDATE entries SET content = 'short now' WHERE id = 'a'`).run();
+        const r2 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 });
+        expect(r2).toMatchObject({ status: "deleted", trashed: true });
+      }
+      return realBatch(stmts);
+    };
+    const r1 = await forgetEntry("a", t.env, { actorId: "u", channel: "rest" }, { reason: "forget", config: cfg, purge: false, budget: 10_000 });
+    expect(r1.status).toBe("not_found");
+    expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).not.toBeNull();
+    // The trashed memory's history must be intact (the plan promises versions survive a trash).
+    expect((await t.all(`SELECT seq FROM entry_versions WHERE entry_id = 'a'`)).length).toBe(2);
+  });
+});
+
+describe("adversary: the dashboard's forget confirm reads the real config shape", () => {
+  it("reads TRASH_RETENTION_DAYS from GET /config's real shape ({ ok, config, ... }), not a flat cfg.TRASH_RETENTION_DAYS", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    t = await makeTrashEnv();
+    const res = await worker.fetch(new Request("http://localhost/config", { headers: { Authorization: "Bearer test-token" } }), t.env, ctx);
+    const cfg = await res.json() as any;
+    expect(typeof cfg.config.TRASH_RETENTION_DAYS).toBe("number");
+
+    // The exact read memory-crud.js makes on that response.
+    const src = readFileSync(resolve(import.meta.dirname, "../../public/js/memory-crud.js"), "utf8");
+    const read = src.match(/const days = (cfg[^\n]+)/)?.[1];
+    expect(read).toBeDefined();
+    const days = new Function("cfg", `return ${read}`)(cfg);
+    // If this is not a number, the confirm keeps its default (retention-unaware) wording for every forget.
+    expect(typeof days).toBe("number");
+    expect(days).toBe(14);
+  });
+
+  it("the default confirm body never claims the forget cannot be undone", () => {
+    const { readFileSync } = require("node:fs");
+    const { resolve } = require("node:path");
+    for (const file of ["public/index.html", "public/js/i18n.js"]) {
+      const src = readFileSync(resolve(import.meta.dirname, "../..", file), "utf8");
+      expect(src, file).not.toMatch(/can't be undone.*memory will be removed|cannot be undone.*memory will be removed/i);
+    }
+  });
+
+  it("the default confirm body's retention wording does not address only members who could change it", () => {
+    const { readFileSync } = require("node:fs");
+    const { resolve } = require("node:path");
+    const src = readFileSync(resolve(import.meta.dirname, "../../public/js/i18n.js"), "utf8");
+    // "unless you changed it" / "salvo modifiche" presume the reader can change retention, which a
+    // team member cannot (round 2 adversary): every locale's default wording must stay neutral.
+    expect(src).not.toMatch(/unless you changed it/i);
+    expect(src).not.toMatch(/salvo modifiche/i);
+  });
+});
+
+describe("round 2 adversary: dashboard copy for a memory too large for the trash", () => {
+  it("the dashboard tells the person when a forget was a hard delete (REST answers trash:false)", async () => {
+    t = await makeTrashEnv();
+    t.seed("huge", { content: "x".repeat(1_850_000) });
+    const res = await post("/forget", { id: "huge" });
+    const body = await res.json() as any;
+    expect(body).toMatchObject({ ok: true, trash: false });
+
+    // The confirm promised "It moves to the trash"; the success path must read `trash` to correct that.
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(import.meta.dirname, "../../public/js/memory-crud.js"), "utf8");
+    const confirmForget = src.slice(src.indexOf("async function confirmForget"), src.indexOf("\n}\n", src.indexOf("async function confirmForget")));
+    expect(confirmForget).toMatch(/\.trash\b/);
+    // No em dashes in whatever it shows for that case (wording nit alongside the fix).
+    const toastCall = confirmForget.match(/showToast\(t\(['"]([\w.]+)['"]\)\)/)?.[1];
+    expect(toastCall).toBeDefined();
+    const i18n = readFileSync(resolve(import.meta.dirname, "../../public/js/i18n.js"), "utf8");
+    const key = toastCall!.split(".").pop()!;
+    const strings = [...i18n.matchAll(new RegExp(`${key}: '([^']*)'`, "g"))].map((m) => m[1]);
+    expect(strings.length).toBeGreaterThanOrEqual(2); // en and it both have it
+    for (const s of strings) expect(s).not.toMatch(/—/);
   });
 });

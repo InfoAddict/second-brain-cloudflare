@@ -366,8 +366,11 @@ describe("compressTag()", () => {
 
     expect(result.synthesizedId).not.toBeNull();
     expect(calls.batches).toBe(1);
-    // 15 marks plus the version snapshot and the prune, all in the same batch as the change.
-    expect(calls.batchedStatements).toBe(17);
+    // MOVED 17 -> 31 (ADV-3/ADV-9 fix): the mark's compare-and-set is now per-source (workspace and
+    // content, so a source that moved or was edited mid-run is skipped rather than corrupted), which
+    // means a per-row snapshot with its own guard rather than one shared many-row snapshot: 15 marks
+    // + 15 snapshots + the one prune, still the one batch (one D1 execution) it always was.
+    expect(calls.batchedStatements).toBe(31);
     expect(rolledUp(db)).toHaveLength(15);
   });
 

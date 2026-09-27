@@ -81,11 +81,13 @@ describe("Delete forever", () => {
     expect(await t.one(`SELECT id FROM entries_trash WHERE id = 'a'`)).toBeNull();
   });
 
-  it("the purged audit row is written in the same batch, and no audit row is written when nothing was deleted", async () => {
+  it("the purged audit row is written in the same batch, names the actor, and no audit row is written when nothing was deleted", async () => {
     t = await makeTrashEnv();
     t.seed("a");
     await post({ id: "a", permanent: true, confirm: "a" });
-    const ev = await t.one<any>(`SELECT payload FROM entry_events WHERE entry_id = 'a' AND event = 'purged'`);
+    const ev = await t.one<any>(`SELECT actor_id, payload FROM entry_events WHERE entry_id = 'a' AND event = 'purged'`);
+    // adversary (MINOR): the audit event must name who deleted it forever, not ''.
+    expect(ev!.actor_id).toBe(t.roots.ownerUserId);
     expect(JSON.parse(ev!.payload)).toMatchObject({ reason: "permanent", channel: "rest", from: "live" });
     // A second call: nothing left to delete, so no second purged row.
     const res2 = await post({ id: "a", permanent: true, confirm: "a" });
@@ -137,6 +139,116 @@ describe("Delete forever", () => {
     expect(res.status).toBe(404);
   });
 
+});
+
+/** A Vectorize double that keeps state, so "which vectors exist, with what text" can be asserted. */
+function statefulVectorize() {
+  const store = new Map<string, Record<string, unknown>>();
+  return {
+    store,
+    index: {
+      query: vi.fn().mockResolvedValue({ matches: [] }),
+      insert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v.metadata); return { mutationId: "m" }; }),
+      upsert: vi.fn(async (vs: any[]) => { for (const v of vs) store.set(v.id, v.metadata); return { mutationId: "m" }; }),
+      deleteByIds: vi.fn(async (ids: string[]) => { for (const id of ids) store.delete(id); return { mutationId: "m" }; }),
+      getByIds: vi.fn(async (ids: string[]) => ids.filter((id) => store.has(id)).map((id) => ({ id, metadata: store.get(id) }))),
+      describe: vi.fn().mockResolvedValue({}),
+    } as unknown as VectorizeIndex,
+  };
+}
+
+describe("adversary: Delete forever racing a restore (ADV-trash-4)", () => {
+  it("Delete forever of a trashed memory that a racing restore brought back leaves no vector (content) behind", async () => {
+    const vz = statefulVectorize();
+    t = await makeTrashEnv({ VECTORIZE: vz.index });
+    t.seed("a", { content: "secret text that must be gone" });
+    await forget("a");
+    const cfg = await resolveConfig(t.env);
+
+    const realBatch = t.env.DB.batch.bind(t.env.DB);
+    let injected = false;
+    (t.env.DB as any).batch = async (stmts: any[]) => {
+      const first = String(stmts[0]?.sourceSql?.() ?? "");
+      if (!injected && first.includes("'permanent'")) {
+        injected = true;
+        // After the route authorized the TRASH row, before its batch: a restore commits.
+        const { getTrashedEntry, restoreEntry } = await import("../../src/memory/trash");
+        const trashed = await getTrashedEntry(t.env, undefined, "a");
+        expect((await restoreEntry(t.env, trashed!, { actorId: "u", channel: "rest" }, cfg)).status).toBe("restored");
+      }
+      return realBatch(stmts);
+    };
+    const res = await post({ id: "a", permanent: true, confirm: "a" });
+    expect(res.status).toBe(200);
+    expect(await t.one(`SELECT id FROM entries WHERE id = 'a'`)).toBeNull();
+    // Nothing of the memory may remain: its vector metadata carries the text.
+    expect([...vz.store.values()].map((m) => m.content)).not.toContain("secret text that must be gone");
+  });
+});
+
+describe("adversary: Delete forever after a failed vector delete (ADV-trash-5)", () => {
+  it("Delete forever from the trash removes vectors a failed forget left behind (ids are deterministic)", async () => {
+    const vz = statefulVectorize();
+    t = await makeTrashEnv({ VECTORIZE: vz.index });
+    t.seed("a", { content: "private words", vector_ids: '["a"]' });
+    vz.store.set("a", { content: "private words", parentId: "a" });
+    // Forget's vector delete is non-fatal: a transient Vectorize error leaves the vector in place.
+    const del = (vz.index as any).deleteByIds;
+    (vz.index as any).deleteByIds = vi.fn().mockRejectedValueOnce(new Error("vectorize 503"));
+    expect((await post({ id: "a" })).status).toBe(200);
+    (vz.index as any).deleteByIds = del;
+    expect(vz.store.has("a")).toBe(true);
+
+    expect((await post({ id: "a", permanent: true, confirm: "a" })).status).toBe(200);
+    expect(vz.store.has("a")).toBe(false);
+  });
+
+  it("derives the chunk count from the trashed row's own content and source, deleting every chunk", async () => {
+    const vz = statefulVectorize();
+    t = await makeTrashEnv({ VECTORIZE: vz.index });
+    // A long, non-mirrored memory: storeEntry would have chunked this into more than one vector.
+    const long = "word ".repeat(20_000);
+    t.seed("a", { content: long, source: "api", vector_ids: '["a-chunk-0","a-chunk-1"]' });
+    vz.store.set("a-chunk-0", { content: long.slice(0, 100) });
+    vz.store.set("a-chunk-1", { content: long.slice(100, 200) });
+    // The forget's own vector delete fails (transient), same as the test above: the chunks survive
+    // into the trash, so Delete forever is the only thing that can still remove them.
+    const del = (vz.index as any).deleteByIds;
+    (vz.index as any).deleteByIds = vi.fn().mockRejectedValueOnce(new Error("vectorize 503"));
+    expect((await post({ id: "a" })).status).toBe(200);
+    (vz.index as any).deleteByIds = del;
+    expect(vz.store.has("a-chunk-0")).toBe(true);
+    expect(vz.store.has("a-chunk-1")).toBe(true);
+
+    expect((await post({ id: "a", permanent: true, confirm: "a" })).status).toBe(200);
+    expect(vz.store.has("a-chunk-0")).toBe(false);
+    expect(vz.store.has("a-chunk-1")).toBe(false);
+  });
+});
+
+describe("round 2 adversary: Delete forever from the trash after a failed forget vector delete", () => {
+  it("removes the vector a short append added (id-update-<ts>), which chunk recomputation cannot derive", async () => {
+    const vz = statefulVectorize();
+    t = await makeTrashEnv({ VECTORIZE: vz.index });
+    const cap = await (await worker.fetch(new Request("http://localhost/capture", { method: "POST", headers, body: JSON.stringify({ content: "base memory text" }) }), t.env, ctx)).json() as any;
+    const id = cap.id as string;
+    expect(id).toBeTruthy();
+    const append = await worker.fetch(new Request("http://localhost/append", { method: "POST", headers, body: JSON.stringify({ id, addition: "the private addition" }) }), t.env, ctx);
+    expect(append.status).toBe(200);
+    const ids = JSON.parse((await t.one<any>(`SELECT vector_ids FROM entries WHERE id = ?`, id))!.vector_ids) as string[];
+    expect(ids.some((v) => v.startsWith(`${id}-update-`))).toBe(true);
+
+    // Forget's Vectorize delete fails (non-fatal): every vector stays in the index, but the
+    // trash row now carries this entry's real ids (round 2 fix), not just what content derives.
+    const del = (vz.index as any).deleteByIds;
+    (vz.index as any).deleteByIds = vi.fn().mockRejectedValueOnce(new Error("vectorize 503"));
+    expect((await post({ id })).status).toBe(200);
+    (vz.index as any).deleteByIds = del;
+
+    expect((await post({ id, permanent: true, confirm: id })).status).toBe(200);
+    const leftovers = [...vz.store.entries()].filter(([, m]) => m.parentId === id).map(([k, m]) => `${k}: ${m.content}`);
+    expect(leftovers).toEqual([]);
+  });
 });
 
 async function withMcp(env: any, run: (client: any) => Promise<void>) {

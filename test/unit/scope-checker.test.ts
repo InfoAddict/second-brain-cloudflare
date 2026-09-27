@@ -1184,7 +1184,7 @@ describe("the checker over the real source tree", () => {
   // orphan half is gone — FTS5's rowid ranges are not honored as seeks on
   // real D1, so orphans ride on count parity and the unhealthy-branch DELETE,
   // whose licence stays.
-  it("reports the checker's pinned totals (162 queries, 81 exceptions, 12 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (164 queries, 83 exceptions, 12 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1288,7 +1288,11 @@ describe("the checker over the real source tree", () => {
     // separate by-id statements (each needs its own dense Params, so each carries its own comment).
     // Deliberate: +1 query and +1 scope-exempt (T-0089.1.3, src/memory/undo.ts): revertEntry's post-miss
     // liveness check is by-id, the row having been read above under the caller's own scope.
-    ).toEqual({ queries: 162, exempt: 81, checked: 12, outerJoin: 1 });
+    // Deliberate: +2 queries and +2 scope-exempt (161/80 -> 163/82) for T-0089.1.2 (adversary
+    // MAJOR fix): restoreEntry's upfront liveness check, and deleteOrphanedRestoreVectors' own
+    // liveness check before a losing restore's vector cleanup — both by-id, the caller already
+    // authorized the trash row.
+    ).toEqual({ queries: 164, exempt: 83, checked: 12, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

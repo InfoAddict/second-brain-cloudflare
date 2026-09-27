@@ -159,7 +159,7 @@ function openConfirm(id, btnOrCard) {
   if (typeof readTeamConfig === 'function') {
     readTeamConfig()
       .then((cfg) => {
-        const days = cfg?.TRASH_RETENTION_DAYS
+        const days = cfg?.config?.TRASH_RETENTION_DAYS
         if (typeof days !== 'number' || pendingForgetId !== id) return
         const body = document.getElementById('confirm-body')
         if (body) body.textContent = t('memories.confirmBodyRetention', { n: days })
@@ -246,7 +246,16 @@ async function confirmForget(_checked, done) {
   }
 
   try {
-    await apiMcp('forget', { id: idToForget })
+    // REST, not the MCP tool: the confirm sheet promised "it moves to the trash", and only REST's
+    // structured `trash` field (round 2 adversary) lets this correct that when a memory is too
+    // large for the trash and forget hard-deleted it instead (memory/trash.ts's tier 3).
+    const res = await fetch(`${WORKER_URL}/forget`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ id: idToForget }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.ok) throw new Error(data.error || t('memories.forgetFailed', { message: '' }))
     closeThis()
     if (cardElement) {
       cardElement.style.transition = 'none'
@@ -259,6 +268,7 @@ async function confirmForget(_checked, done) {
     // above have already handled — reloading it here would swap the element out
     // from under its own exit animation.
     refreshAll({ list: false })
+    if (data.trash === false) showToast(t('memories.forgetHardDeleted'))
   } catch (e) {
     showToast(t('memories.forgetFailed', { message: e.message }))
   } finally {
