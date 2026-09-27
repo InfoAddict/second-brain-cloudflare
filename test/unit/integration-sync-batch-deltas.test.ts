@@ -32,7 +32,7 @@ function store() {
   let n = 0;
   return {
     createEntry: vi.fn(async () => `e-${++n}`),
-    updateEntry: vi.fn(async () => true),
+    updateEntry: vi.fn(async (): Promise<"updated" | "not_found" | "busy"> => "updated"),
     deleteEntry: vi.fn(async (_id: string) => {}),
   };
 }
@@ -97,7 +97,7 @@ describe("Notion sync: in-batch reads see earlier deltas", () => {
         : { results: [], has_more: false },
     })));
     const s = store();
-    s.updateEntry.mockResolvedValue(false as never); // mirror gone out-of-band: re-create
+    s.updateEntry.mockResolvedValue("not_found"); // mirror gone out-of-band: re-create
 
     const out = await notionProvider.sync({ OAUTH_KV: kv }, s);
 

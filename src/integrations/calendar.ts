@@ -620,9 +620,14 @@ async function runCalendarSync(env: IntegrationEnv, store: MirrorStore, provider
     try {
       const content = buildEventContent(occ);
       const existing = delta.get(occ.key);
-      if (existing && (await store.updateEntry(existing.entryId, content))) {
-        delta.put(occ.key, { entryId: existing.entryId, version: occ.version });
+      const result = existing ? await store.updateEntry(existing.entryId, content) : "not_found";
+      if (result === "updated") {
+        delta.put(occ.key, { entryId: existing!.entryId, version: occ.version });
         updated++;
+      } else if (result === "busy") {
+        // Still live, just lost every compare-and-set: leave the item map untouched so the
+        // next sync retries this same occurrence rather than duplicating it (round 2 adversary).
+        failed++;
       } else {
         // New occurrence — or its mirror was deleted out-of-band; (re-)create it.
         const entryId = await store.createEntry(content, ["calendar", providerId], providerId);

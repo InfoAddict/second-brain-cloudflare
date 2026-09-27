@@ -107,7 +107,7 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
           // scope-exempt: by-id: the mirrored row this connector wrote
           `SELECT content, tags, source, vector_ids, workspace_id FROM entries WHERE id = ?`
         ).bind(id).first() as Record<string, any> | null;
-        if (!row) return false;
+        if (!row) return "not_found";
 
         const readContent: string = row.content;
         const readTags: string = row.tags ?? "[]";
@@ -150,10 +150,13 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         } catch (e) {
           console.error("Old vector cleanup failed (non-fatal):", e);
         }
-        return true;
+        return "updated";
       }
+      // The row is still live (ADV-8's fix already checked that above) — every attempt just lost
+      // the race. Distinct from "not_found": a caller reading this as "gone" and re-creating the
+      // mirror duplicates the memory (round 2 adversary). The next sync retries it untouched.
       console.error(`Mirror update lost its compare-and-set ${WRITE_CAS_ATTEMPTS} times in a row (non-fatal): ${id}`);
-      return false;
+      return "busy";
     },
     async deleteEntry(id) {
       const r = await forgetEntry(id, env, { actorId: writeCtx.actorId, channel: "system:mirror" }, { reason: "mirror", config: await config(), purge: false });
