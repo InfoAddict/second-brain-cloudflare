@@ -729,6 +729,13 @@ export class D1Mock {
           const unclassified = db.entries.filter((e: any) => !String(e.tags).includes('"status:') && !String(e.tags).includes('"kind:')).length;
           return { count, avg_importance, unvectorized, unclassified };
         }
+        // POST /vectorize-pending's remaining count (adv-final MAJOR 2): every unindexed row, no
+        // grace cutoff, plus the oldest one's created_at so the route can compute retryAfterMs.
+        if (s.includes("COUNT(*) as count") && s.includes("MIN(created_at) as oldest") && s.includes("vector_ids = '[]'")) {
+          const unindexed = db.entries.filter((e: any) => e.vector_ids === '[]');
+          const oldest = unindexed.length ? Math.min(...unindexed.map((e: any) => e.created_at)) : null;
+          return { count: unindexed.length, oldest };
+        }
         if (s.includes("COUNT(*) as count") && s.includes("vector_ids = '[]'") && s.includes("created_at <")) {
           const cutoff = Number(args[0]);
           const count = db.entries.filter((e: any) => e.vector_ids === '[]' && e.created_at < cutoff).length;
