@@ -312,8 +312,12 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
     });
 
     it("stays short enough to work as a tool contract", async () => {
-      // 2200 before the Projects paragraph; that paragraph is the four-axis contract.
-      expect((await descriptions()).recall.length).toBeLessThan(2500);
+      // 2200 before the Projects paragraph; that paragraph is the four-axis contract. 2500 before the one-sentence EXPLAIN paragraph (T-0089.5.1).
+      expect((await descriptions()).recall.length).toBeLessThan(2600);
+    });
+
+    it("says when to ask for an explanation", async () => {
+      expect((await descriptions()).recall).toMatch(/explain: true when the user asks why a memory came back, or when results look wrong/);
     });
   });
 
