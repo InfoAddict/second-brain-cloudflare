@@ -13,6 +13,8 @@ import { isVectorizeUnavailable } from "../vectorize/health";
 import { tagsAfterWrite, tagsAfterAppend } from "../memory/stale";
 import { withVolatility, type Volatility } from "../memory/volatility";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
+import type { ChangeContext } from "../lib/audit";
+import { changesOf, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
 
 /** Re-embedding must stamp vectors from the row being edited, not the caller's default write target. */
 export function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: WriteContext): WriteContext {
@@ -168,15 +170,16 @@ export async function updateEntryContent(
   id: string,
   newContent: string,
   config: Readonly<Config> = DEFAULTS,
-  volatility?: Volatility,
+  volatility: Volatility | undefined,
   /**
    * The user's tags for this entry, replacing the ones it has. `undefined` means
    * "leave them alone" and is what every caller but the editor passes; `[]` means
    * the user removed the last one. The two must stay distinguishable — collapsing
    * them would let any caller that omits tags wipe them.
    */
-  replaceTags?: string[],
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  replaceTags: string[] | undefined,
+  writeCtx: WriteContext,
+  change: ChangeContext,
 ): Promise<UpdateEntryResult> {
   // vector_ids has to be read before any mutation: storeEntry overwrites it, and the
   // cleanup below needs to know which vectors the entry had on the way in.
@@ -238,8 +241,21 @@ export async function updateEntryContent(
   // workspace_id is never touched here (share/unshare moves rows, nothing else does),
   // and actor_id is left untouched: the original author of a row being edited is not
   // this call's to decide.
-  await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-    .bind(finalContent, JSON.stringify(committedTags), Date.now(), id).run();
+  // The prior state is kept in the same batch as the change.
+  const now = Date.now();
+  const committed = await env.DB.batch([
+    snapshotStatement(env, { entryId: id, reason: "update", change, content: { kind: "next", content: finalContent }, nextTags: committedTags, now }),
+    env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
+      .bind(finalContent, JSON.stringify(committedTags), now, id),
+    pruneStatement(env, id, config.VERSION_KEEP),
+  ]);
+  if (changesOf(committed[1]) === 0) {
+    // Forgotten while the re-embed ran: its vectors were deleted with it, so the fresh ones are orphans.
+    if (newVectorIds) {
+      try { await deleteVectorIds(env, newVectorIds); } catch (e) { console.error("Orphan vector cleanup failed (non-fatal):", e); }
+    }
+    return { status: "not_found" };
+  }
 
   // Rewritten content can carry hashtags the brain has never seen, so this is one of the
   // two places an unknown tag enters the corpus (#288). It sits here rather than in the
@@ -281,9 +297,16 @@ export async function appendToEntry(
   tags: string[],
   source: string,
   config: Readonly<Config> = DEFAULTS,
-  volatility?: Volatility,
-  writeCtx: WriteContext = OWNER_WRITE_CONTEXT
+  volatility: Volatility | undefined,
+  writeCtx: WriteContext,
+  change: ChangeContext,
+  /** An explicit time anchor set in the same batch as the text, so one undo restores both. */
+  when?: { at: number; kind: string },
 ): Promise<boolean> {
+  const nextWhen: WhenChange | undefined = when ? { when_at: when.at, when_kind: when.kind, when_source: "explicit" } : undefined;
+  const whenSql = when ? `, when_at = ?, when_kind = ?, when_source = 'explicit'` : "";
+  const whenBind = when ? [when.at, when.kind] : [];
+  const meta = when ? { when: true } : undefined;
   const row = await env.DB.prepare(
     // scope-exempt: by-id: routes gate with getReadableEntry + assertCanEditContent
     `SELECT vector_ids, workspace_id FROM entries WHERE id = ?`
@@ -313,8 +336,12 @@ export async function appendToEntry(
 
     // Both commits below are new logical versions (rewritten body, fresh index) that
     // stay in place — workspace_id and actor_id are never altered by an update.
-    await env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ? WHERE id = ?`)
-      .bind(newContent, JSON.stringify(refreshedTags), now, id).run();
+    await env.DB.batch([
+      snapshotStatement(env, { entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now }),
+      env.DB.prepare(`UPDATE entries SET content = ?, tags = ?, updated_at = ?${whenSql} WHERE id = ?`)
+        .bind(newContent, JSON.stringify(refreshedTags), now, ...whenBind, id),
+      pruneStatement(env, id, config.VERSION_KEEP),
+    ]);
 
     // Skipped when Vectorize is unavailable: the old vectors are the entry's only
     // remaining semantic index, and retiring them would leave it unsearchable.
@@ -371,9 +398,12 @@ export async function appendToEntry(
 
   const now = Date.now();
 
-  await env.DB.prepare(
-    `UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ? WHERE id = ?`
-  ).bind(newContent, JSON.stringify(indexed ? [...existingVectorIds, newChunkId] : existingVectorIds), JSON.stringify(refreshedTags), now, id).run();
+  await env.DB.batch([
+    snapshotStatement(env, { entryId: id, reason: "append", change, content: { kind: "next", content: newContent }, nextTags: refreshedTags, nextWhen, meta, now }),
+    env.DB.prepare(`UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ?${whenSql} WHERE id = ?`)
+      .bind(newContent, JSON.stringify(indexed ? [...existingVectorIds, newChunkId] : existingVectorIds), JSON.stringify(refreshedTags), now, ...whenBind, id),
+    pruneStatement(env, id, config.VERSION_KEEP),
+  ]);
 
   try {
     await inferEdgesOnWrite(id, await neighborsFromVectorQuery(values, env), env);

@@ -221,6 +221,19 @@ export class D1Mock {
           if (row) { row.content = content; row.vector_ids = vector_ids; row.tags = tags; row.updated_at = updated_at; }
           return { meta: { changes: row ? 1 : 0 } };
         }
+        // An append that also sets the time anchor (Task 3 folds the separate `when` UPDATE into the batch).
+        if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ?, tags = ?, updated_at = ?, when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id")) {
+          const [content, vector_ids, tags, updated_at, when_at, when_kind, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { Object.assign(row, { content, vector_ids, tags, updated_at, when_at, when_kind, when_source: "explicit" }); }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
+        if (s.startsWith("UPDATE entries SET content = ?, tags = ?, updated_at = ?, when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id")) {
+          const [content, tags, updated_at, when_at, when_kind, id] = args;
+          const row = db.entries.find((e: any) => e.id === id);
+          if (row) { Object.assign(row, { content, tags, updated_at, when_at, when_kind, when_source: "explicit" }); }
+          return { meta: { changes: row ? 1 : 0 } };
+        }
         if (s.startsWith("UPDATE entries SET content = ?, vector_ids = ? WHERE id")) {
           const [content, vector_ids, id] = args;
           const row = db.entries.find((e: any) => e.id === id);

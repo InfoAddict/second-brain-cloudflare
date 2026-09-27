@@ -193,6 +193,11 @@ export function ownSnapshotLandedSql(p: Params, entryId: string, expectedNewestS
   return `EXISTS (SELECT 1 FROM entry_versions ov WHERE ov.entry_id = ${p.add(entryId)} AND ov.seq = ${p.add(expectedNewestSeq + 1)} AND json_extract(ov.meta, '$.nonce') = ${p.add(nonce)})`;
 }
 
+/** Rows a batch statement changed. Unknown (a test double without meta) counts as one, so only a real zero reads as a lost write. */
+export function changesOf(result: { meta?: { changes?: number; rows_written?: number } } | undefined): number {
+  return result?.meta?.changes ?? result?.meta?.rows_written ?? 1;
+}
+
 /** When history began: the marker init writes, else a conservative MIN(created_at) (pruning can only raise it). */
 export async function getVersionsSince(env: Env): Promise<number> {
   const stored = await env.OAUTH_KV.get(VERSIONS_SINCE_KV_KEY);

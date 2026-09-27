@@ -8,7 +8,7 @@ import { buildEntryFilterQuery, captureEntry } from "../capture/entry";
 import { appendToEntry, updateEntryContent } from "../capture/store";
 import { applyStatus, forgetEntry } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
-import { auditEvent } from "../lib/audit";
+import { auditEvent, type ChangeContext } from "../lib/audit";
 import { lookupActorLabels, resolveActorFilter, resolveActorLabel } from "../lib/actors";
 import { createEdge, deleteEdge, edgeLabel, isValidEdgeType, kindMismatchMessage, kindOfRow, kindsAllowEdge, CROSS_WORKSPACE_LINK_MESSAGE } from "../graph/edges";
 import { EDGE_TYPES } from "../graph/types";
@@ -269,6 +269,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
   const writeCtx: WriteContext = identity
     ? { workspaceId: scopeWrite(identity), actorId: identity.userId }
     : { workspaceId: "", actorId: "" };
+  // Who and which surface made a change, recorded on the versions it writes.
+  const mcpChange: ChangeContext = { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" };
 
   /**
    * The read-side `project` argument: registry rows, undefined when absent, or the error
@@ -601,21 +603,12 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
 
       let indexed: boolean;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx);
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, mcpChange, whenInput);
       } catch (e) {
         console.error("Append failed:", e);
         return {
           content: [{ type: "text", text: `Append failed: ${(e as Error).message}` }],
         };
-      }
-
-      // A separate, simple UPDATE rather than threading `when` through
-      // appendToEntry: that function already has two content-rewrite branches
-      // (short append, reembed-on-overflow) and the time anchor is orthogonal
-      // to both — it does not care which one ran.
-      if (whenInput) {
-        await env.DB.prepare(`UPDATE entries SET when_at = ?, when_kind = ?, when_source = 'explicit' WHERE id = ?`)
-          .bind(whenInput.at, whenInput.kind, id).run();
       }
 
       if (identity) {
@@ -668,7 +661,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx);
+      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, mcpChange);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {

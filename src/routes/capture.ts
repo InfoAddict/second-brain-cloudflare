@@ -192,7 +192,7 @@ export async function handleCaptureRoutes(
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx);
+      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, await resolveConfig(env), appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" });
     } catch (e) {
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
@@ -256,7 +256,7 @@ export async function handleCaptureRoutes(
     const writeCtx = await writeContextFor(env, identity);
     if (writeCtx instanceof Response) return writeCtx;
 
-    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx);
+    const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), updateVol.value, replaceTags, writeCtx, { actorId: identity.userId, channel: "rest" });
 
     // Only reachable if the entry was deleted between the guard read and the write.
     if (result.status === "not_found") {

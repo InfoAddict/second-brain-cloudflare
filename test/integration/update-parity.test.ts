@@ -99,6 +99,8 @@ type World = {
 type Snapshot = {
   row: Record<string, unknown> | null;
   vectors: { id: string; content: unknown }[];
+  /** entry_versions rows, oldest first. */
+  versions: Record<string, unknown>[];
 };
 
 /**
@@ -108,10 +110,12 @@ type Snapshot = {
  * Freshness is asserted separately, against the clock.
  */
 function normalize(snapshot: Snapshot): Snapshot {
-  if (!snapshot.row) return snapshot;
+  // The caller's channel, the clock and the row id are the only fields that may differ between REST and MCP.
+  const versions = snapshot.versions.map(({ id: _id, channel: _channel, created_at: _created, valid_from: _valid, ...rest }) => rest);
+  if (!snapshot.row) return { ...snapshot, versions };
   const row = { ...snapshot.row };
   if (typeof row.updated_at === "number") row.updated_at = "<written>";
-  return { ...snapshot, row };
+  return { ...snapshot, row, versions };
 }
 
 describe("POST /update and the MCP update tool write identical state (#289)", () => {
@@ -162,6 +166,7 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
     // in the file would get its row backfilled and later ones would not.
     const owner = await ownerOf(env);
     await d1.prepare(`DELETE FROM entries`).run();
+    await d1.prepare(`DELETE FROM entry_versions`).run();
     if (world.connectedIntegration) {
       await OAUTH_KV.put(
         `integrations:${world.connectedIntegration}`,
@@ -188,7 +193,9 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
 
   async function capture(store: Map<string, any>): Promise<Snapshot> {
     const row = await d1.prepare(`SELECT * FROM entries WHERE id = ?`).bind(ENTRY_ID).first();
+    const versions = (await d1.prepare(`SELECT * FROM entry_versions WHERE entry_id = ? ORDER BY seq`).bind(ENTRY_ID).all()).results as Record<string, unknown>[];
     return {
+      versions,
       row: (row as Record<string, unknown> | null) ?? null,
       vectors: [...store.values()]
         .map(v => ({ id: v.id as string, content: v.metadata?.content }))
@@ -439,6 +446,21 @@ describe("POST /update and the MCP update tool write identical state (#289)", ()
 
     expect(reply).toMatch(/No entry found with ID: nope/);
     expect(normalize(await capture(mcpStore))).toEqual(normalize(httpSnapshot));
+  });
+
+  it("one version per successful update, none on reembed_failed; REST and MCP differ only in channel", async () => {
+    const ok: World = { seed: { content: "I live in Berlin", tags: ["home"] }, vectors: [{ id: ENTRY_ID, content: "I live in Berlin" }] };
+    const http = await viaHttp(ok, "I live in Lisbon");
+    const mcp = await viaMcp(ok, "I live in Lisbon");
+    expect(http.snapshot.versions).toHaveLength(1);
+    expect(mcp.snapshot.versions).toHaveLength(1);
+    expect(http.snapshot.versions[0]).toMatchObject({ seq: 1, reason: "update", channel: "rest", content: "I live in Berlin" });
+    expect(mcp.snapshot.versions[0]).toMatchObject({ seq: 1, reason: "update", channel: "mcp", content: "I live in Berlin" });
+    expect(mcp.snapshot.versions[0].actor_id).toBe(http.snapshot.versions[0].actor_id);
+
+    const failing: World = { ...ok, embedFails: true };
+    expect((await viaHttp(failing, "I live in Lisbon")).snapshot.versions).toEqual([]);
+    expect((await viaMcp(failing, "I live in Lisbon")).snapshot.versions).toEqual([]);
   });
 
   // ── The replies, which are the one thing that legitimately differs ─────────────────────
