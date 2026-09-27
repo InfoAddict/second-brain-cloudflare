@@ -3,8 +3,10 @@ import { buildSyntheticCorpus, SYNTHETIC_CORPORA } from "./synthetic";
 import { INJECTION_DOCS, INJECTION_SUBJECTS, PLANT_STYLES, plantText } from "./synthetic-injection";
 import { NOISE_FOOTER } from "./synthetic-noise";
 import { STANDING, UNRELATED_QUERIES } from "./synthetic-standing";
-import { TEMPORAL_TYPES } from "./synthetic-temporal";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_GAP_TAG, TEMPORAL_TYPES } from "./synthetic-temporal";
 import { validAt } from "../temporal-oracle";
+
+const DURING_SUBSETS = ["phrase-vague", "backdated-past", "retracted-past"];
 
 const byTag = <T extends { tags?: string[] }>(qs: T[], tag: string): T[] => qs.filter(q => q.tags?.includes(tag));
 const clusters = (qs: { clusterKey?: string }[]) => new Set(qs.map(q => q.clusterKey)).size;
@@ -72,13 +74,44 @@ describe("temporal", () => {
       expect(q.asOf).toBeUndefined();
       expect(q.expectedAsOf).toBeUndefined();
       // Baseline already misreads these (0/0), so a delta-from-baseline gate can never see them get worse; excluded from
-      // the headline via the known-gap mechanism instead of being averaged into the temporal category.
-      expect(q.tags).toContain("gap:temporal-month-day-controls");
+      // the headline via the known-gap mechanism instead of being averaged into the temporal category. Pinned against
+      // T-0089.2.5's acceptance floor and against SYNTHETIC-CORPORA.md in synthetic-acceptance.test.ts, so neither can
+      // drift silently.
+      expect(q.tags).toContain(MONTH_DAY_CONTROL_GAP_TAG);
+      expect(MONTH_DAY_CONTROL_GAP_TAG).toBe("gap:temporal-month-day-controls");
+      expect(MONTH_DAY_CONTROL_ACCEPTANCE_MRR).toBe(0.95);
     }
   });
-  it("meets the gate's power floors per category", () => {
-    for (const cat of ["temporal", "knowledge-update"]) { const qs = c.queries.filter(q => q.category === cat); expect(qs.length).toBeGreaterThanOrEqual(100); expect(clusters(qs)).toBeGreaterThanOrEqual(30); }
+  it("meets the gate's power floors per category, including the split-out as-of gate", () => {
+    for (const cat of ["temporal", "temporal-during", "knowledge-update"]) {
+      const qs = c.queries.filter(q => q.category === cat);
+      expect(qs.length, cat).toBeGreaterThanOrEqual(100);
+      expect(clusters(qs), cat).toBeGreaterThanOrEqual(30);
+    }
     expect(c.queries.length).toBeGreaterThanOrEqual(200);
+  });
+  it("puts every during-subset query in the temporal-during category, and only those there", () => {
+    const during = c.queries.filter(q => DURING_SUBSETS.some(s => q.tags?.includes(`subset:${s}`)));
+    expect(during).toHaveLength(100);
+    expect(clusters(during)).toBe(100);
+    for (const q of during) expect(q.category).toBe("temporal-during");
+    for (const q of c.queries.filter(q => q.category === "temporal-during")) expect(DURING_SUBSETS.some(s => q.tags?.includes(`subset:${s}`))).toBe(true);
+  });
+  it("gives the retracted-past question the actually-true gold only: ranking the cancelled move first is not rewarded", () => {
+    for (const q of byTag(c.queries, "subset:retracted-past")) {
+      expect(q.gold).toHaveLength(1);
+      expect(q.gold[0].grade).toBe(2);
+      expect(q.gold[0].id).toMatch(/-old$/);
+      const badId = q.gold[0].id.replace(/-old$/, "-bad");
+      expect(c.entries.some(e => e.id === badId)).toBe(true);
+      expect(q.gold.map(g => g.id)).not.toContain(badId);
+    }
+  });
+  it("gives every during-subset query's gold a document that is valid at its expectedAsOf, for every timeline shape", () => {
+    for (const q of c.queries.filter(x => x.category === "temporal-during")) {
+      expect(q.expectedAsOf).toBeDefined();
+      for (const g of q.gold) expect(validAt(c.entries.find(e => e.id === g.id)!, q.expectedAsOf!)).toBe(true);
+    }
   });
   it("makes the current answer valid now and its predecessors not, per the declared validity", () => {
     const now = Date.UTC(2026, 8, 1);

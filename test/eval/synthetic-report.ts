@@ -50,6 +50,14 @@ export function syntheticLines(report: VariantReport): string[] {
   if (report.corpus === "temporal") {
     out.push("  supersession oracle (simulated on these rankings; recall@10 / MRR@10). baseline | supersession applied | recency-only reorder:");
     for (const row of oracleTable(report, buildSyntheticCorpus("temporal"))) out.push(`    ${row.scope.padEnd(40)} n=${String(row.n).padEnd(4)} ${f(row.baseline.recall10)}/${f(row.baseline.mrr10)}  |  ${f(row.supersession.recall10)}/${f(row.supersession.mrr10)}  |  ${f(row.recency.recall10)}/${f(row.recency.mrr10)}`);
+
+    // The cancelled move ("bad") is not gold: report how often it still surfaces, a belief-time diagnostic rather
+    // than a metric a change could be judged on.
+    const retracted = report.results.filter(r => subsetsOf(r).includes("retracted-past"));
+    if (retracted.length) {
+      const surfaced = retracted.filter(r => r.rankedIds.slice(0, 10).includes(`tm-retracted-${r.clusterKey.replace("tm-", "")}-bad`)).length;
+      out.push(`  belief-time diagnostic (not gold): the cancelled move surfaced in the top 10 for ${surfaced}/${retracted.length} retracted-past queries`);
+    }
   }
 
   if (report.standing) {

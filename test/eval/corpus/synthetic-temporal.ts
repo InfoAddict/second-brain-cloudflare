@@ -17,6 +17,13 @@ export const AS_OF_APRIL = utc(4, 15);
 export const AS_OF_JULY = utc(7, 10);
 export const AS_OF_LATE_JULY = utc(7, 20);
 
+/** Tag that removes the month-day-name controls from the temporal category's regression and improvement rows (see
+ * below); pinned in a corpus test alongside SYNTHETIC-CORPORA.md so the two cannot drift apart. */
+export const MONTH_DAY_CONTROL_GAP_TAG = "gap:temporal-month-day-controls";
+/** T-0089.2.5's acceptance floor for that row, an absolute bar gate.ts's delta-based target-gaps rule cannot express
+ * on its own (see SYNTHETIC-CORPORA.md); pinned here so the corpus test and the doc cannot drift apart. */
+export const MONTH_DAY_CONTROL_ACCEPTANCE_MRR = 0.95;
+
 export function temporal(seed: number): CorpusSpec {
   const rand = rng(seed);
   const entries: CorpusEntry[] = [], queries: GoldenQuery[] = [], edges: CorpusEdge[] = [];
@@ -32,7 +39,7 @@ export function temporal(seed: number): CorpusSpec {
     const feb = utc(2, 1 + (i % 25));
     const id = (k: string) => `tm-${kind}-${i}-${k}`;
     const tags = (subset: string) => [`subset:${subset}`, `timeline:${kind}`];
-    const q = (n: string, category: "temporal" | "knowledge-update", text: string, gold: Parameters<typeof query>[3], subset: string, extra: Partial<GoldenQuery> = {}) =>
+    const q = (n: string, category: "temporal" | "temporal-during" | "knowledge-update", text: string, gold: Parameters<typeof query>[3], subset: string, extra: Partial<GoldenQuery> = {}) =>
       queries.push(query(`tm-q-${i}-${n}`, category, text, gold, { clusterKey: cluster, tags: tags(subset), ...extra }));
     const past = (gold: Parameters<typeof query>[3], month: string, asOf: number, phraseGold = gold) => {
       q("pre", "temporal", `Where was the ${subject} in ${month}?`, gold, "prefiltered", { asOf });
@@ -46,7 +53,7 @@ export function temporal(seed: number): CorpusSpec {
       edges.push(edge(id("new"), id("old")));
       q("now", "knowledge-update", `Where is the ${subject} now?`, [id("new")], "current");
       past([id("old")], "April", AS_OF_APRIL);
-      q("vague", "temporal", `Where was the ${subject} during April?`, [id("old")], "phrase-vague", { expectedAsOf: AS_OF_APRIL });
+      q("vague", "temporal-during", `Where was the ${subject} during April?`, [id("old")], "phrase-vague", { expectedAsOf: AS_OF_APRIL });
     } else if (kind === "retro") {
       const jun = utc(6, 1 + (i % 25)), aug = utc(8, 18 + (i % 4)), late = aug + 5 * 86_400_000;
       entries.push(entry(id("old"), `On ${isoDay(feb)} the ${subject} was set up at ${A}.`, { createdAt: feb, validFrom: feb, validUntil: jun }));
@@ -56,21 +63,24 @@ export function temporal(seed: number): CorpusSpec {
       edges.push(edge(id("new"), id("old")), edge(id("new"), id("recap")));
       q("now", "knowledge-update", `Where is the ${subject} now?`, [id("new")], "current");
       past([id("old")], "April", AS_OF_APRIL, [id("old"), id("recap")]);
-      q("vague", "temporal", `Where was the ${subject} during July?`, [id("new")], "backdated-past", { expectedAsOf: AS_OF_JULY });
+      q("vague", "temporal-during", `Where was the ${subject} during July?`, [id("new")], "backdated-past", { expectedAsOf: AS_OF_JULY });
     } else if (kind === "retracted") {
       const jul = utc(7, 1 + (i % 12)), aug = utc(8, 10 + (i % 15));
       entries.push(entry(id("old"), `On ${isoDay(feb)} the ${subject} was set up at ${A}.`, { createdAt: feb, validFrom: feb }));
       // Actually-true semantics: the move never really happened, so "bad" declares an empty validity window (validUntil
-      // equals validFrom) rather than one closed by the retraction. retractedAt still records when the correction landed
-      // (aug), so the two fields answer different questions: was it ever true (no), and when did we learn that (aug).
+      // equals validFrom, half-open and never valid) rather than one closed by the retraction. retractedAt still records
+      // when the correction landed (aug), so the two fields answer different questions: was it ever true (no), and when
+      // did we learn that (aug). Whether a shipped implementation should instead model "later retracted" as its own
+      // status distinct from an empty valid_until window is Track 2's decision, not this corpus's; see the docs.
       entries.push(entry(id("bad"), `The ${subject} moved to ${B} on ${isoDay(jul)}.`, { createdAt: jul, validFrom: jul, validUntil: jul, retractedAt: aug }));
       entries.push(entry(id("fix"), `Correction: the move of the ${subject} to ${B} was cancelled and it stays at ${A}.`, { createdAt: aug, validFrom: aug }));
       edges.push(edge(id("fix"), id("bad")));
       q("now", "knowledge-update", `Where is the ${subject} now?`, [id("old"), id("fix")], "current");
       past([id("old")], "April", AS_OF_APRIL);
-      // Gold favors the actually-true answer (old, grade 2); "bad" is graded partially relevant (1), the belief a reader
-      // held during the retracted window, consistent with "bad" never being actually valid per its declared validity above.
-      q("vague", "temporal", `Where was the ${subject} during July?`, [{ id: id("old"), grade: 2 }, { id: id("bad"), grade: 1 }], "retracted-past", { expectedAsOf: AS_OF_LATE_JULY });
+      // Gold is the actually-true answer only (old): recallAtK and mrrAtK ignore grade, so a second, lower-grade gold
+      // id would let a system that ranks the cancelled move ("bad") first pass just as well as one that ranks the
+      // actually-true answer first. "bad" surfacing is reported as a diagnostic (see synthetic-report.ts), not as gold.
+      q("vague", "temporal-during", `Where was the ${subject} during July?`, [id("old")], "retracted-past", { expectedAsOf: AS_OF_LATE_JULY });
     } else {
       const aug = utc(8, 5 + (i % 20));
       entries.push(entry(id("only"), `The ${subject} is at ${A}. Edited on ${isoDay(aug)}: the entrance is now on the ${pick(rand, KINDS)} side.`, {
@@ -94,7 +104,7 @@ export function temporal(seed: number): CorpusSpec {
     const at = utc(1 + ((c * 5) % 12) , 20 + (c % 8));
     const ident = `tm-control-${c}`;
     entries.push(entry(ident, `The ${name} on ${PLACES[(c * 7) % PLACES.length]} opens at nine and closes at five.`, { createdAt: at, validFrom: at }));
-    queries.push(query(`tm-q-control-${c}`, "temporal", `What time does the ${name} open?`, [ident], { clusterKey: `tm-control-${c}`, tags: ["subset:control-not-asof", "timeline:control", "gap:temporal-month-day-controls"] }));
+    queries.push(query(`tm-q-control-${c}`, "temporal", `What time does the ${name} open?`, [ident], { clusterKey: `tm-control-${c}`, tags: ["subset:control-not-asof", "timeline:control", MONTH_DAY_CONTROL_GAP_TAG] }));
   }
 
   // Distractors that share the category nouns but belong to no timeline.

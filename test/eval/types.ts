@@ -2,7 +2,7 @@ export const QUERY_CATEGORIES = [
   "identifier", "cjk", "rare-word", "common-word", "short-word", "paraphrase", "multi-hop", "long-context", "agent-framed",
 ] as const;
 /** Categories of the opt-in synthetic corpora (T-0089.1.8); the core categories above stay what the core gate and audits iterate. */
-export const SYNTHETIC_QUERY_CATEGORIES = ["temporal", "knowledge-update", "noise", "injection", "standing"] as const;
+export const SYNTHETIC_QUERY_CATEGORIES = ["temporal", "temporal-during", "knowledge-update", "noise", "injection", "standing"] as const;
 export const ALL_QUERY_CATEGORIES = [...QUERY_CATEGORIES, ...SYNTHETIC_QUERY_CATEGORIES] as const;
 export type QueryCategory = (typeof ALL_QUERY_CATEGORIES)[number];
 export type ViewerId = "avery" | "blake" | "outsider";

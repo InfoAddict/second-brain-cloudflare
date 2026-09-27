@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { formatReport, parseCli } from "./cli";
 import { CORPUS_IDS } from "./corpus/build";
 import { SYNTHETIC_CORPORA, buildSyntheticCorpus } from "./corpus/synthetic";
+import { MONTH_DAY_CONTROL_ACCEPTANCE_MRR, MONTH_DAY_CONTROL_GAP_TAG } from "./corpus/synthetic-temporal";
 import { listCorpora, replayPaths } from "./corpora";
 import { ALL_QUERY_CATEGORIES, QUERY_CATEGORIES, RUNNER_VERSION, SYNTHETIC_QUERY_CATEGORIES, type CostSample, type QueryResult, type VariantReport } from "./types";
 
@@ -83,5 +84,11 @@ describe("SYNTHETIC-CORPORA.md", () => {
   it("names only commands that exist: every corpus in its table is registered", () => {
     for (const id of SYNTHETIC_CORPORA) expect(doc).toContain(`\`${id}\``);
     expect(doc).toContain("npm run eval:recall -- prepare --variant baseline --corpus ID");
+  });
+  it("states T-0089.2.5's acceptance floor at the value the corpus tag is pinned to, so the two cannot drift apart", () => {
+    expect(doc).toContain(MONTH_DAY_CONTROL_GAP_TAG);
+    expect(doc).toContain(`MRR@10 >= ${MONTH_DAY_CONTROL_ACCEPTANCE_MRR}`);
+    expect(doc).toContain("--target-gaps temporal-month-day-controls");
+    expect(doc).toContain("temporal-during");
   });
 });

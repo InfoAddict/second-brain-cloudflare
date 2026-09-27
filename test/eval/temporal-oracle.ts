@@ -1,6 +1,6 @@
 import type { CorpusEntry, CorpusSpec } from "./corpus/types";
 import { EVAL_NOW } from "./corpus/types";
-import { scoreQuery } from "./metrics";
+import { gapKey, scoreQuery } from "./metrics";
 import type { GoldenQuery, QueryMetrics, VariantReport } from "./types";
 
 /** True when the document's declared validity covers instant t (validFrom defaults to createdAt; a retraction ends validity). */
@@ -43,7 +43,9 @@ export function oracleTable(report: VariantReport, spec: CorpusSpec): OracleRow[
   };
   for (const r of report.results) {
     const q = queries.get(r.queryId);
-    if (!q) continue;
+    // Match the headline: the gate's known-gap queries (the month-day controls) are excluded from the temporal
+    // category there, so counting them here too would print a scope total ("temporal n=...") that disagrees with it.
+    if (!q || gapKey(q.tags) !== null) continue;
     const base = scoreQuery(r.rankedIds, q.gold);
     const sup = scoreQuery(simulate("supersession", r.rankedIds, q, byId), q.gold);
     const rec = scoreQuery(simulate("recency", r.rankedIds, q, byId), q.gold);
