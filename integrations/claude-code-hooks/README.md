@@ -102,9 +102,12 @@ secrets usually live) never reaches the body in the first place.
 
 Context Claude Code injects into user messages never reaches the body either:
 `<system-reminder>` blocks (which carry your CLAUDE.md files), slash-command,
-local-command, bash and IDE wrappers, and meta records are dropped, block by
-block, so the text you typed next to them is kept. A user block that opens
-with any tag is dropped whole, the safe side when it cannot be classified.
+local-command, bash and IDE wrappers, and meta records are dropped. Meta,
+sidechain, compact-summary and transcript-only records are skipped by their
+flags; then each user text block is judged on its own, and a block holding
+any tag-like markup (`<name>`) or an instruction-file header anywhere is
+dropped whole. The cost of that safe side: a typed message that contains
+markup, say "`<button>` needs an accessible name", is not captured.
 
 The transcript is read backwards from the end until three human turns are in
 hand (1 MB ceiling), and only human-readable turns survive: `tool_use`,

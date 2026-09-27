@@ -55,6 +55,7 @@ describe("Codex: injected role:user blocks never reach a capture", () => {
     for (const s of SENTINELS) expect(all).not.toContain(s);
     const users = turns.filter((t: any) => t.role === "user").map((t: any) => t.text);
     expect(users).toHaveLength(2); // the response_item/event_msg pair counts once
+    expect(all).not.toContain("Typed words that share a block"); // dropped whole with its wrapper
     expect(users[0]).toMatch(new RegExp(`^${TYPED_1}`));
     expect(users[1]).toMatch(/^Also log a line/);
     expect(turns.some((t: any) => t.role === "assistant" && t.text.startsWith(ASSISTANT))).toBe(true);
@@ -131,13 +132,15 @@ describe("recall-only adapters never read a transcript", () => {
 });
 
 describe("stripInjectedContext", () => {
-  it("removes a wrapper after typed text, and drops a text that is only (or opens with) injected context", () => {
-    expect(core.stripInjectedContext("fix the digest\n<system-reminder>x</system-reminder>")).toBe("fix the digest");
+  it("drops a whole block that holds any wrapper-like tag or instruction-file header anywhere", () => {
+    expect(core.stripInjectedContext("fix the digest\n<system-reminder>x</system-reminder>")).toBe("");
+    expect(core.stripInjectedContext("fix the digest\n<tool_context>x</tool_context>")).toBe("");
+    expect(core.stripInjectedContext("fix the digest\n\n# AGENTS.md instructions for /x\nrules")).toBe("");
+    expect(core.stripInjectedContext("fix the digest. Contents of /x/CLAUDE.md follow")).toBe("");
     expect(core.stripInjectedContext("<environment_context><cwd>/x</cwd></environment_context>")).toBe("");
-    expect(core.stripInjectedContext("# AGENTS.md instructions for /x\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>")).toBe("");
-    expect(core.stripInjectedContext("<not_seen_before>anything</not_seen_before>")).toBe("");
-    expect(core.stripInjectedContext("typed, then an unclosed <environment_context> wrapper")).toBe("");
-    expect(core.stripInjectedContext("a sentence that mentions <div> tags is kept")).toBe("a sentence that mentions <div> tags is kept");
+    expect(core.stripInjectedContext("a sentence that mentions <div> tags")).toBe("");
+    expect(core.stripInjectedContext("  plain typed text, kept as typed  ")).toBe("plain typed text, kept as typed");
+    expect(core.stripInjectedContext("compare a < b and c > d")).toBe("compare a < b and c > d");
   });
 });
 

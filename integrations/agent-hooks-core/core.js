@@ -583,52 +583,26 @@ function redactSecrets(text, token) {
     CODE_REFERENCE.test(value) ? m : `${name}${sep}${quote}${REDACTED_TOKEN}${quote}`);
 }
 
-/**
- * Wrappers an AI client (or a tool driving it) puts into user-role records.
- * They carry instruction files, environment details and tool output, never
- * what the person typed. Observed in Codex rollouts, Cursor and Claude Code
- * transcripts; matched case-insensitively, with or without attributes.
- */
-const INJECTED_TAGS = [
-  // Codex
-  'environment_context', 'user_instructions', 'instructions', 'recommended_plugins',
-  'turn_aborted', 'skills_instructions', 'permissions instructions', 'collaboration_mode',
-  'user_shell_command', 'subagent_notification',
-  // Cursor
-  'timestamp', 'user_info', 'rules', 'user_rules', 'cursor_rules', 'agent_requestable_workspace_rules',
-  'additional_data', 'attached_files', 'open_and_recently_viewed_files', 'project_layout',
-  'git_status', 'manually_attached_skills', 'system_reminder',
-  // Claude Code
-  'system-reminder', 'command-name', 'command-message', 'command-args', 'command-contents',
-  'local-command-stdout', 'local-command-stderr', 'local-command-caveat',
-  'bash-input', 'bash-stdout', 'bash-stderr', 'user-prompt-submit-hook',
-  'task-notification', 'task-id', 'ide_selection', 'ide_opened_file', 'ide_diagnostics',
-  // Other tools that drive these clients
-  'paseo-system',
-];
-const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const INJECTED_BLOCK = new RegExp(
-  `<(${INJECTED_TAGS.map(escapeRe).join('|')})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
-const INJECTED_OPEN = new RegExp(`<\\/?(?:${INJECTED_TAGS.map(escapeRe).join('|')})(?:\\s[^>]*)?>`, 'i');
-// A text that opens with any tag, e.g. `<paseo-system>` or one not listed yet.
-const LEADING_TAG = /^<\/?[A-Za-z][\w:.-]*(?:\s[^>]*)?>/;
-// "# AGENTS.md instructions for /path" (Codex) and similar instruction-file headers.
-const INSTRUCTION_FILE_HEADER = /^\s*#+\s*[\w.-]*\.md\s+instructions\b.*$/gim;
-const INSTRUCTION_FILE_LEAD = /^\s*(?:#+\s*[\w.-]*\.md\s+instructions\b|Contents of \S+\.md\b)/i;
+// Any tag-like markup: `<name>`, `</name>` or `<name attr=...>`. Clients and
+// the tools driving them inject context in wrappers like these, and new ones
+// appear without notice, so no list of names is trusted.
+const WRAPPER_TAG = /<\/?[A-Za-z][\w:.-]*(?:\s[^<>]*)?\/?>/;
+// Instruction-file headers and bodies: "# AGENTS.md instructions for /path"
+// (Codex), "Contents of /path/CLAUDE.md" (Claude Code) and the like.
+const INSTRUCTION_FILE = /(?:^|\n)\s*#+\s*[\w.-]*\.md\b[^\n]*\binstructions\b|\bContents of \S+\.md\b|\b(?:AGENTS|CLAUDE|GEMINI|COPILOT)\.md instructions\b/i;
 
 /**
- * What the person typed, from one user-role text, or '' when it cannot be told
- * apart from injected context (the safe side: drop rather than leak). Known
- * wrapper blocks are removed wherever they appear; a text that opens with a
- * tag or an instruction-file header, or still holds an unclosed wrapper
- * after that, is dropped whole.
+ * One user-role text block, after the adapter has already filtered by record
+ * type, role and metadata: the block as typed, or '' when it holds any
+ * wrapper-like tag or instruction-file header ANYWHERE. The whole block is
+ * dropped, never trimmed, because injected context can follow typed text in
+ * the same block. A typed message that contains markup (say `<button>`) is
+ * dropped too: a lost turn lowers capture quality, a leaked block is worse.
  */
 function stripInjectedContext(text) {
-  let t = String(text ?? '').replace(INJECTED_BLOCK, '');
-  t = t.replace(INJECTED_BLOCK, '').trim(); // nested wrappers
-  if (!t) return '';
-  if (LEADING_TAG.test(t) || INSTRUCTION_FILE_LEAD.test(t) || INJECTED_OPEN.test(t)) return '';
-  return t.replace(INSTRUCTION_FILE_HEADER, '').trim();
+  const t = String(text ?? '').trim();
+  if (!t || WRAPPER_TAG.test(t) || INSTRUCTION_FILE.test(t)) return '';
+  return t;
 }
 
 /** True marker files: presence means "yes", independent of the text cache used for recall blocks. */
@@ -1012,7 +986,7 @@ module.exports = {
   buildRecallPlan, buildRecallUrl, buildBriefUrl, fetchBrief, startBrief,
   cleanSnippet, compactBriefLines, frameOutput,
   performRecall,
-  redactSecrets, stripInjectedContext, INJECTED_TAGS, buildSessionCaptureBody, shouldCaptureSession, performCapture,
+  redactSecrets, stripInjectedContext, buildSessionCaptureBody, shouldCaptureSession, performCapture,
   recordLastCaptureTime, lastCaptureTime, captureEnabled,
   contentDigest, claimCapture,
   readCaptureSpool, spoolCapture, spoolDir, flushCaptureSpool, logSpooledCapture, logLostCapture, resolveTranscriptPath,

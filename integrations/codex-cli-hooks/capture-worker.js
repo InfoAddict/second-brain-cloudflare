@@ -64,7 +64,11 @@ function turnFromRecord(obj) {
     role = obj.payload.role;
     content = obj.payload.content;
   } else if (obj.type === 'event_msg' && obj.payload && typeof obj.payload === 'object') {
-    if (obj.payload.type === 'user_message') { role = 'user'; content = obj.payload.message ?? obj.payload.text; }
+    if (obj.payload.type === 'user_message') {
+      // Some Codex versions tag injected input: kind user_instructions / environment_context.
+      if (obj.payload.kind != null && obj.payload.kind !== 'plain') return null;
+      role = 'user'; content = obj.payload.message ?? obj.payload.text;
+    }
     else if (obj.payload.type === 'agent_message') { role = 'assistant'; content = obj.payload.message ?? obj.payload.text; }
     else return null;
   } else if (obj.role === 'user' || obj.role === 'assistant') {
@@ -76,8 +80,11 @@ function turnFromRecord(obj) {
   if (role !== 'user' && role !== 'assistant') return null;
   // Codex puts AGENTS.md, <environment_context> and similar into role:user
   // records, usually one content block each, so each block is judged alone.
+  // Only typed-input blocks count for a user; anything else (images, or a
+  // block type Codex adds later) is not what the person typed.
+  const typed = (c) => typeof c === 'string' || (c && (c.type === undefined || c.type === 'input_text' || c.type === 'text'));
   const text = role === 'user'
-    ? (Array.isArray(content) ? content.map((c) => stripInjectedContext(extractText([c]))) : [stripInjectedContext(extractText(content))])
+    ? (Array.isArray(content) ? content.filter(typed).map((c) => stripInjectedContext(extractText([c]))) : [stripInjectedContext(extractText(content))])
       .filter(Boolean).join('\n').trim()
     : extractText(content).trim();
   if (!text) return null;

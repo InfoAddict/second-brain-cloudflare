@@ -163,11 +163,15 @@ Codex writes injected context into `role: user` records, one content block
 each: your AGENTS.md files (`# AGENTS.md instructions for …` with an
 `<INSTRUCTIONS>` body), `<environment_context>` (working directory, shell,
 timezone), `<recommended_plugins>`, `<turn_aborted>` and wrappers from tools
-that drive Codex. None of it is captured. Each block is judged on its own: a
-known wrapper is removed wherever it appears, and a block that opens with any
-tag or an instruction-file header is dropped whole, the safe side when it
-cannot be classified. `developer` and `system` records and tool output are
-never read. A prompt Codex logs twice counts once.
+that drive Codex. None of it is captured. Record type and role come first:
+`developer` and `system` records, tool output, non-text blocks and user
+events Codex marks as injected are never read. Then each remaining user block
+is judged on its own, and a block holding any tag-like markup (`<name>`) or an
+instruction-file header anywhere is dropped whole, because injected context
+can follow typed text in the same block. A prompt Codex logs twice counts once.
+
+The cost of that safe side: a typed message that contains markup, say
+"`<button>` needs an accessible name", is not captured.
 
 Before it is sent, the content is scanned for credentials and each one is
 replaced with `[redacted]`: your own configured token wherever it appears,

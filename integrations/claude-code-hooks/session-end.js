@@ -99,7 +99,7 @@ function turnFromLine(line) {
   let obj;
   try { obj = JSON.parse(line); } catch { return null; }
   if (!obj || (obj.type !== 'user' && obj.type !== 'assistant')) return null;
-  if (obj.isSidechain === true || obj.isMeta === true || obj.isCompactSummary === true) return null;
+  if (obj.isSidechain === true || obj.isMeta === true || obj.isCompactSummary === true || obj.isVisibleInTranscriptOnly === true) return null;
   const text = textOf(obj.message, obj.type).trim();
   if (!text) return null;
   if (NOISE_PREFIXES.some((p) => text.startsWith(p))) return null;

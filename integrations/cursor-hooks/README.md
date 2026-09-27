@@ -150,7 +150,10 @@ Only the last three user turns are kept, never a full transcript. A user
 turn is only the text inside Cursor's `<user_query>` wrapper: the rules, user
 info, attached files and timestamps Cursor adds around it are dropped, and a
 user record without that wrapper is dropped whole, since it cannot be told
-apart from injected context.
+apart from injected context. A query holding any tag-like markup (`<name>`)
+or an instruction-file header is dropped too: a typed "`<button>` needs an
+accessible name" is not captured, the accepted cost of never leaking an
+injected block.
 
 Before sending, the body is scanned for credentials and each one is replaced
 with `[redacted]`: your own configured token wherever it appears,
