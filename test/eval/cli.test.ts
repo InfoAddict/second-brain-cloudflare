@@ -47,6 +47,9 @@ describe("parseCli", () => {
     expect(parseCli(["lock", "--accept-data-change", "new queries"])).toMatchObject({ kind: "lock", acceptDataChange: "new queries" });
     expect(parseCli(["--list"])).toEqual({ kind: "list" });
     expect(parseCli(["--compare", "a,b", "--target-gaps", "T-0072,T-0073"])).toMatchObject({ targetGaps: ["T-0072", "T-0073"] });
+    expect(parseCli(["--compare", "a,b", "--target-subsets", "knowledge-update:ku-silent,temporal-during:backdated-past"]))
+      .toMatchObject({ targetSubsets: ["knowledge-update:ku-silent", "temporal-during:backdated-past"] });
+    expect(parseCli(["--compare", "a,b"])).toMatchObject({ targetSubsets: [] });
   });
 
   it("rejects bad input with a UsageError", () => {
@@ -111,11 +114,12 @@ describe("exit codes and formatting", () => {
 
   it("names the rule behind a verdict", () => {
     const rule = (r: string, status: "pass" | "fail" | "inconclusive") => ({ rule: r, status, detail: "" });
-    expect(describeVerdict({ verdict: "FAIL", deltas: [], mde: {}, rules: [rule("regression", "pass"), rule("improvement", "fail")] })).toMatch(/improvement only; no regression/);
-    expect(describeVerdict({ verdict: "FAIL", deltas: [], mde: {}, rules: [rule("isolation", "fail"), rule("improvement", "fail")] })).toBe("FAIL (failed: isolation, improvement)");
-    expect(describeVerdict({ verdict: "INCONCLUSIVE", deltas: [], mde: {}, rules: [{ rule: "power", status: "inconclusive", detail: "100 queries is below the 200-query floor" }] }))
+    const base = { deltas: [], mde: {}, subsetRegressions: [], floorFailures: [] };
+    expect(describeVerdict({ ...base, verdict: "FAIL", rules: [rule("regression", "pass"), rule("improvement", "fail")] })).toMatch(/improvement only; no regression/);
+    expect(describeVerdict({ ...base, verdict: "FAIL", rules: [rule("isolation", "fail"), rule("improvement", "fail")] })).toBe("FAIL (failed: isolation, improvement)");
+    expect(describeVerdict({ ...base, verdict: "INCONCLUSIVE", rules: [{ rule: "power", status: "inconclusive", detail: "100 queries is below the 200-query floor" }] }))
       .toBe("INCONCLUSIVE (power: 100 queries is below the 200-query floor)");
-    expect(describeVerdict({ verdict: "PASS", deltas: [], mde: {}, rules: [] })).toBe("PASS");
+    expect(describeVerdict({ ...base, verdict: "PASS", rules: [] })).toBe("PASS");
   });
 
   it("prints no known-gap block or all-queries line when no query is tagged", () => {
