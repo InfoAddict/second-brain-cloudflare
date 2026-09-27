@@ -35,6 +35,7 @@ import { applyInsightResolution, resolveEntryAction } from "../memory/actions";
 import { TAG_LIKE_ESCAPE, tagLikePattern } from "../memory/tag-sql";
 import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
+import { resolveClientLabel, type McpClientExtra, type McpClientProps } from "./client-label";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -260,7 +261,20 @@ async function labelsForRows(
       : null;
 }
 
-export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Identity): McpServer {
+/**
+ * `clientProps` is `ctx.props` from the OAuth grant (or the static-bearer
+ * shape from src/index.ts's resolveExternalToken), read once by
+ * src/mcp/handler.ts. `bearer` is the raw Authorization token, needed only for
+ * a legacy grant's `unwrapToken` lookup (resolveClientLabel source 2) — never
+ * logged or stored itself.
+ */
+export function buildMcpServer(
+  env: Env,
+  ctx: ExecutionContext,
+  identity?: Identity,
+  clientProps?: McpClientProps,
+  bearer?: string | null,
+): McpServer {
   const server = new McpServer({ name: "second-brain", version: "1.0.0" });
 
   // Absent an Identity (direct construction in tests, or a caller that has not
@@ -271,6 +285,17 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
     : { workspaceId: "", actorId: "" };
   // Who and which surface made a change, recorded on the versions it writes.
   const mcpChange: ChangeContext = { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" };
+
+  /**
+   * The calling AI tool's label (BE-5), resolved fresh per call: `extra` is
+   * per-tool-invocation (the SDK's own dispatch), so it cannot be folded into
+   * the single `mcpChange` built once above. `undefined`, never `null`, so a
+   * spread (`{ ...mcpChange, client }`) or a payload literal (`{ ...(client ?
+   * { client } : {}) }`) omits the key outright when there is nothing to say.
+   */
+  async function resolveClient(extra: unknown): Promise<string | undefined> {
+    return (await resolveClientLabel(clientProps, extra as McpClientExtra | undefined, env, bearer ?? null)) ?? undefined;
+  }
 
   /**
    * The read-side `project` argument: registry rows, undefined when absent, or the error
@@ -371,21 +396,24 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         until: z.string().optional().describe("Future date for snooze"),
       },
     },
-    async ({ id: rawId, action, until }) => {
+    async ({ id: rawId, action, until }, extra) => {
       if (!identity) return { content: [{ type: "text", text: "Resolve requires an authenticated identity." }] };
       const id = rawId.trim();
       if (!id) return { content: [{ type: "text", text: "id is required" }] };
+      // Carried on the ChangeContext for whenever the version/history writers this
+      // feeds (src/memory/actions.ts, Builder A's) start reading it — not yet.
+      const client = await resolveClient(extra);
       if (action === "confirm_insight" || action === "dismiss_insight") {
         const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, tags, vector_ids") as (Record<string, any> | null);
         if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
         if (!(JSON.parse(row.tags ?? "[]") as string[]).includes("auto-insight")) {
           return { content: [{ type: "text", text: "Entry is not a derived insight" }] };
         }
-        const result = await applyInsightResolution(env, ctx, mcpChange, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss");
+        const result = await applyInsightResolution(env, ctx, { ...mcpChange, client }, [row], 1, action === "confirm_insight" ? "confirm" : "dismiss");
         const text = result.resolved.length ? `Resolved ${id}: ${action}` : `Already resolved: ${id}`;
         return { content: [{ type: "text", text }] };
       }
-      const result = await resolveEntryAction(env, ctx, identity, id, action, until, mcpChange);
+      const result = await resolveEntryAction(env, ctx, identity, id, action, until, { ...mcpChange, client });
       if (!result.ok) return { content: [{ type: "text", text: result.error }] };
       return { content: [{ type: "text", text: `Resolved ${id}: ${action}${result.when_at ? ` until ${new Date(result.when_at).toISOString()}` : ""}` }] };
     },
@@ -473,7 +501,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         when_kind: whenKindParam,
       },
     },
-    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind }) => {
+    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind }, extra) => {
       // Same grammar checks, same messages, as POST /capture. Bad input fails before any write.
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
@@ -512,6 +540,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           actorId: identity.userId,
         };
       }
+      // Not threaded into captureEntry's own CaptureOptions (its internal
+      // ChangeContext feeds version snapshots — BE-6, Builder A): only this
+      // tool's own "created"/"updated" audit event below is BE-5's to touch.
+      const client = identity ? await resolveClient(extra) : undefined;
       const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, identity ? { channel: "mcp" } : {});
       // Silent, after the write: a lost registry row never fails the memory.
       if (identity && projectSlug && result.status !== "blocked") {
@@ -522,7 +554,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           entryId: result.id,
           actorId: identity.userId,
           event: result.status === "stored" || result.status === "flagged" ? "created" : "updated",
-          payload: { captureStatus: result.status, channel: "mcp" },
+          payload: { captureStatus: result.status, channel: "mcp", ...(client ? { client } : {}) },
         });
       }
       if (result.status === "blocked") {
@@ -563,7 +595,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         when_kind: whenKindParam,
       },
     },
-    async ({ id, addition, volatility, when, when_kind }) => {
+    async ({ id, addition, volatility, when, when_kind }, extra) => {
       const row = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id, content, tags, source");
 
       if (!row) {
@@ -601,9 +633,10 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(source) }] };
       }
 
+      const client = identity ? await resolveClient(extra) : undefined;
       let indexed: boolean;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, mcpChange, whenInput, row.workspace_id as string);
+        indexed = await appendToEntry(env, id, existingContent, a, tags, source, await resolveConfig(env), volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string);
       } catch (e) {
         if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
         if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
@@ -614,7 +647,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
 
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp" } });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp", ...(client ? { client } : {}) } });
       }
 
       return {
@@ -639,7 +672,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         volatility: volatilityParam,
       },
     },
-    async ({ id, content, volatility, tags }) => {
+    async ({ id, content, volatility, tags }, extra) => {
       const newContent = content.trim();
       if (!newContent) {
         return { content: [{ type: "text", text: "Content cannot be empty." }] };
@@ -663,7 +696,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         return { content: [{ type: "text", text: mirrorEditError(row.source as string) }] };
       }
 
-      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, mcpChange, row.workspace_id as string);
+      const client = identity ? await resolveClient(extra) : undefined;
+      const result = await updateEntryContent(env, id, newContent, await resolveConfig(env), volatility as Volatility | undefined, tags, writeCtx, { ...mcpChange, client }, row.workspace_id as string);
 
       // Only reachable if the entry was deleted between the guard read and the write.
       if (result.status === "not_found") {
@@ -688,7 +722,7 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       }
 
       if (identity && result.status === "updated") {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp" } });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp", ...(client ? { client } : {}) } });
       }
 
       if (!result.vectorIds) {
@@ -716,16 +750,17 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         status: z.enum([...STATUS_VALUES] as [string, ...string[]]).describe("canonical | draft | deprecated"),
       },
     },
-    async ({ id, status }) => {
+    async ({ id, status }, extra) => {
       const row = await getReadableEntry(env, identity, id);
       if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
-      const ok = await applyStatus(id, status as MemoryStatus, env, mcpChange, await resolveConfig(env), row.workspace_id as string);
+      const client = identity ? await resolveClient(extra) : undefined;
+      const ok = await applyStatus(id, status as MemoryStatus, env, { ...mcpChange, client }, await resolveConfig(env), row.workspace_id as string);
       if (!ok) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp" } });
+        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "status_changed", payload: { status, channel: "mcp", ...(client ? { client } : {}) } });
       }
       return { content: [{ type: "text", text: status === "deprecated" ? `Entry ${id} deprecated — removed from recall, kept for audit.` : `Entry ${id} marked ${status}.` }] };
     }
@@ -1009,21 +1044,22 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         id: z.string().describe("Entry ID from recall or list_recent"),
       },
     },
-    async ({ id }) => {
+    async ({ id }, extra) => {
       const row = await getReadableEntry(env, identity, id);
       if (!row) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       const denied = assertCanMutateEntry(identity, row);
       if (denied) return { content: [{ type: "text", text: denied.message }] };
 
       const cfg = await resolveConfig(env);
-      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp" }, { reason: "forget", config: cfg }, row.workspace_id as string);
+      const client = identity ? await resolveClient(extra) : undefined;
+      const result = await forgetEntry(id, env, { actorId: identity?.userId ?? writeCtx.actorId, channel: "mcp", client }, { reason: "forget", config: cfg }, row.workspace_id as string);
       if (result.status === "not_found") {
         return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
       }
       if (identity) {
         auditEvent(env, ctx, {
           entryId: id, actorId: identity.userId, event: "deleted",
-          payload: { deletedVectors: result.vectorCount, channel: "mcp", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
+          payload: { deletedVectors: result.vectorCount, channel: "mcp", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}), ...(client ? { client } : {}) },
         });
       }
       return { content: [{ type: "text", text: result.trashed
