@@ -759,10 +759,17 @@ function parseEntryRow(entry: ExportEntry): { row: PendingInsert } | { failure: 
   // Absent in exports taken before /export carried the field; created_at is what the
   // column would have coalesced to anyway. A restore must not launder a bad value into
   // a "recently touched" ranking signal, so a malformed one fails the row instead.
-  const updatedAt = entry.updated_at ?? created_at;
-  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) {
+  const rawUpdatedAt = entry.updated_at ?? created_at;
+  if (typeof rawUpdatedAt !== "number" || !Number.isFinite(rawUpdatedAt)) {
     return { failure: { id, status: "failed", reason: "invalid_updated_at" } };
   }
+  // Cap at now (R4-U1/U2/U3): every writer clamps updated_at to MAX(now, prev + 1) to keep it
+  // strictly increasing, but that clamp is a no-op once prev is already >= now (a future date or
+  // a huge exported value) — the next edit's own clamp can never move it, the digest guard then
+  // treats every later edit as unseen, and entry_versions.created_at/valid_from (themselves
+  // clamped against this column) inherit the poisoned value forever. An uncapped import launders
+  // exactly the bad value the check above already refuses to accept unbounded.
+  const updatedAt = Math.min(rawUpdatedAt, Date.now());
 
   const recallCountParsed = parseOptionalNumber(entry.recall_count, "invalid_recall_count");
   if (!recallCountParsed.ok) return { failure: { id, status: "failed", reason: recallCountParsed.reason } };

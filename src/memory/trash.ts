@@ -74,14 +74,89 @@ export function trashSizeSelect(alias = "e"): string {
 export async function readTrashCandidates(env: Env, ids: string[]): Promise<TrashCandidate[]> {
   if (!ids.length) return [];
   const p = new Params();
-  const { results } = await env.DB.prepare(
-    // scope-exempt: by-id: routes gate with getReadableEntry before calling
-    `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(${p.add(JSON.stringify(ids))}))`,
-  ).bind(...p.values()).all<TrashCandidate>();
-  return results ?? [];
+  try {
+    const { results } = await env.DB.prepare(
+      // scope-exempt: by-id: routes gate with getReadableEntry before calling
+      `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(${p.add(JSON.stringify(ids))}))`,
+    ).bind(...p.values()).all<TrashCandidate>();
+    return results ?? [];
+  } catch (e) {
+    if (!isTooBig(e)) throw e;
+    return readTrashCandidatesIsolating(env, ids);
+  }
 }
 
-const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason";
+/** D1's shape for SQLite's own per-value size ceiling, hit by edgesJsonSql's aggregate on a row with too many edges. */
+function isTooBig(e: unknown): boolean {
+  return /too big/i.test(String((e as { message?: string })?.message ?? e));
+}
+
+/**
+ * Larger than any TRASH_ROW_BUDGET_BYTES this codebase will ever pass chooseTrashTier, so a row
+ * carrying it in content_bytes fails both the tier 1 and the tier 2 check and always lands in
+ * tier 3, whatever budget the caller uses. content_bytes specifically (not a fourth field) so
+ * this reuses chooseTrashTier's own arithmetic instead of adding a rule that duplicates it.
+ */
+const SIZE_UNMEASURABLE = Number.POSITIVE_INFINITY;
+
+/**
+ * One id in a batch has more edges than edgesJsonSql's json_group_array aggregate can even be
+ * measured at all: past roughly 10,000+ edges it exceeds real D1's per-value size ceiling and
+ * the batched read above throws SQLITE_TOOBIG before chooseTrashTier ever runs. Retried one id
+ * at a time so the OTHER ids in the same batch (the common case: everything else has a normal
+ * edge count) are not punished for the one that does not: only the id(s) that themselves also
+ * throw fall back to readTrashCandidateForcedTier3. `scope`, when given, is applied to both the
+ * per-id retry and the fallback so a row outside the caller's scope is still silently excluded,
+ * exactly as the batched read that just failed would have excluded it.
+ */
+async function readTrashCandidatesIsolating(
+  env: Env, ids: string[], scope?: { clause: string; bindings: unknown[] },
+): Promise<TrashCandidate[]> {
+  const out: TrashCandidate[] = [];
+  for (const id of ids) {
+    const where = scope ? `e.id = ? AND ${scope.clause}` : `e.id = ?`;
+    const bindings = [id, ...(scope?.bindings ?? [])];
+    try {
+      // scope-checked: by-id (readTrashCandidates, unscoped, same as its own batched read above)
+      // or scoped (trashMirroredEntries): the caller's clause IS applied into `where` above when
+      // given; the lexer cannot see into this JS-assembled fragment.
+      const row = await env.DB.prepare(`SELECT ${trashSizeSelect("e")} FROM entries e WHERE ${where}`)
+        .bind(...bindings).first<TrashCandidate>();
+      if (row) out.push(row);
+    } catch (e) {
+      if (!isTooBig(e)) throw e;
+      const forced = await readTrashCandidateForcedTier3(env, id, scope);
+      if (forced) out.push(forced);
+    }
+  }
+  return out;
+}
+
+/**
+ * The safe fallback once an id's own edge aggregate has proven too big to measure: this id is
+ * always tier 3 (hard delete, no trash-row snapshot), never re-attempting the aggregate and
+ * never guessing whether tier 2 (trash without edges) might otherwise have fit. Only the
+ * identity columns forget/the disconnect purge actually need (workspace_id for the authorization
+ * check, vector_ids for the Vectorize cleanup) are read; the size columns are the sentinel that
+ * drives chooseTrashTier to tier 3 unconditionally, not real measurements.
+ */
+async function readTrashCandidateForcedTier3(
+  env: Env, id: string, scope?: { clause: string; bindings: unknown[] },
+): Promise<TrashCandidate | null> {
+  const where = scope ? `e.id = ? AND ${scope.clause}` : `e.id = ?`;
+  const bindings = [id, ...(scope?.bindings ?? [])];
+  const row = await env.DB.prepare(
+    // scope-checked: by-id (unscoped) or scoped to mirror the batch read this id's caller already
+    // applied: the caller's clause IS applied into `where` above when given; the lexer cannot
+    // see into this JS-assembled fragment. No content, row_json or edges_json read here at all;
+    // this id is going to tier 3 regardless.
+    `SELECT e.id, e.workspace_id, e.actor_id, e.vector_ids FROM entries e WHERE ${where}`,
+  ).bind(...bindings).first<Pick<TrashCandidate, "id" | "workspace_id" | "actor_id" | "vector_ids">>();
+  if (!row) return null;
+  return { ...row, content_bytes: SIZE_UNMEASURABLE, row_json_bytes: 0, edges_json_bytes: 0, vector_ids_bytes: 0 };
+}
+
+const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce";
 
 /**
  * The statements that move entries to the trash, in one batch: the trash inserts (they read
@@ -97,6 +172,9 @@ export function trashManyStatements(
   const all = [...plan.tier1, ...plan.tier2, ...plan.tier3];
   if (!all.length) return [];
   const stmts: D1PreparedStatement[] = [];
+  // nonce (last column, TRASH_COLUMNS): a fresh per-row identity (adv-final MAJOR 1), the same
+  // randomblob-per-row pattern entry_events uses for its own id below — evaluated once per row
+  // of the INSERT...SELECT, never the same value across a multi-row tier1/tier2 batch.
   const insert = (ids: string[], withEdges: boolean) => {
     const p = new Params();
     const idList = p.add(JSON.stringify(ids));
@@ -107,7 +185,7 @@ export function trashManyStatements(
       // rederived later — Delete forever needs the real ids stored, not just guessed at.
       `INSERT OR REPLACE INTO entries_trash (${TRASH_COLUMNS})
        SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
-              ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}
+              ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}, lower(hex(randomblob(16)))
          FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))`,
     ).bind(...p.values()));
   };
@@ -166,12 +244,20 @@ export async function trashMirroredEntries(
   for (let i = 0; i < entryIds.length; i += DISCONNECT_PURGE_CHUNK) {
     const chunk = [...new Set(entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK))];
     const scope = scopeWhere(auth, undefined, "e.workspace_id");
-    const { results } = await env.DB.prepare(
-      // Bare placeholders throughout: the scope clause brings its own.
-      `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
-    ).bind(JSON.stringify(chunk), ...scope.bindings).all<TrashCandidate>();
+    let results: TrashCandidate[];
+    try {
+      const res = await env.DB.prepare(
+        // Bare placeholders throughout: the scope clause brings its own.
+        `SELECT ${trashSizeSelect("e")} FROM entries e WHERE e.id IN (SELECT value FROM json_each(?)) AND ${scope.clause}`,
+      ).bind(JSON.stringify(chunk), ...scope.bindings).all<TrashCandidate>();
+      results = res.results ?? [];
+    } catch (e) {
+      if (!isTooBig(e)) throw e;
+      // One id in this chunk has too many edges to measure at all; isolate it (see readTrashCandidates).
+      results = await readTrashCandidatesIsolating(env, chunk, scope);
+    }
     // Same guard /forget applies: a purge removes only what this caller could delete one at a time.
-    const allowed = (results ?? []).filter((r) => !assertCanMutateEntry(auth, r));
+    const allowed = results.filter((r) => !assertCanMutateEntry(auth, r));
     skipped += entryIds.slice(i, i + DISCONNECT_PURGE_CHUNK).length - allowed.length;
     if (!allowed.length) continue;
 
@@ -376,6 +462,12 @@ export interface TrashedEntryRow {
   vector_ids: string;
   deleted_at: number;
   reason: TrashReason | string;
+  // Per-row identity (adv-final MAJOR 1): id alone is not stable (a purge frees it, a fresh
+  // forget reuses it) and neither is SQLite's own rowid (it can be reused too, on the same
+  // millisecond a fast enough race hits). Every mutation that consumes a row read earlier pins
+  // to this instead. '' means the row predates the column: no mutation may treat that as a
+  // value to match, only as "this row's identity cannot be verified" (see restoreEntry).
+  nonce: string;
 }
 
 /** Scoped like `getReadableEntry`: an id outside the caller's readable trash reads as missing. */
@@ -445,6 +537,12 @@ export async function restoreEntry(
   change: ChangeContext,
   config?: Readonly<Config>,
 ): Promise<RestoreResult> {
+  // A row that predates the nonce column (adv-final MAJOR 1) has no safe per-row identity to
+  // pin this batch to: id can be reused after a purge, and so can SQLite's own rowid, on the
+  // same millisecond a fast enough race hits. Fail closed before any embed work runs, rather
+  // than trust '' as if it were a value that could ever uniquely match one row.
+  if (trashed.nonce === "") return { status: "conflict" };
+
   const row = JSON.parse(trashed.row_json) as Record<string, unknown>;
   const tags: string[] = (() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })();
   const deprecated = getStatus(tags) === "deprecated";
@@ -481,13 +579,22 @@ export async function restoreEntry(
   // workspace_id comes from the restored entry, not the trashed edge's own snapshot (spec: "taken from the source entry").
   const edgeCols = EDGE_ROW_COLUMNS.map((c) => c === "workspace_id" ? "t.workspace_id" : `json_extract(j.value, '$.${c}')`).join(", ");
   // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder in that statement.
+  // Every statement also pins to the exact physical row `trashed` came from (its own nonce, not
+  // just its id): id alone is not a stable row identity (adv-final MAJOR 1) — a purge can free an
+  // id and a different member's forget can reuse it before this batch runs, and an id-only match
+  // would then restore (and delete) THEIR trash row under THIS caller's authorization. Nonce, not
+  // rowid: SQLite can reuse a rowid too, on the same millisecond a fast enough race hits, which
+  // rowid + deleted_at alone cannot rule out.
   const insertP = new Params();
   const insertId = insertP.add(trashed.id);
+  const insertNonce = insertP.add(trashed.nonce);
   const vecJson = insertP.add(JSON.stringify(vectorIds));
   const edgeP = new Params();
   const edgeId = edgeP.add(trashed.id);
+  const edgeNonce = edgeP.add(trashed.nonce);
   const deleteP = new Params();
   const deleteId = deleteP.add(trashed.id);
+  const deleteNonce = deleteP.add(trashed.nonce);
   let results;
   try {
     results = await env.DB.batch([
@@ -496,18 +603,21 @@ export async function restoreEntry(
         // the trash row and any surviving versions already are its history
         // scope-exempt: by-id: the caller authorized the trash row before building this batch
         `INSERT INTO entries (id, ${names}, content, vector_ids)
-         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t WHERE t.id = ${insertId}`,
+         SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t
+          WHERE t.id = ${insertId} AND t.nonce = ${insertNonce}`,
       ).bind(...insertP.values()),
       env.DB.prepare(
         // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where the other endpoint still exists
         `INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
          SELECT ${edgeCols}
            FROM entries_trash t, json_each(t.edges_json) j
-          WHERE t.id = ${edgeId}
+          WHERE t.id = ${edgeId} AND t.nonce = ${edgeNonce}
             AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
       ).bind(...edgeP.values()),
       // scope-exempt: by-id: the trash row the caller authorized before building this batch
-      env.DB.prepare(`DELETE FROM entries_trash WHERE id = ${deleteId}`).bind(...deleteP.values()),
+      env.DB.prepare(
+        `DELETE FROM entries_trash WHERE id = ${deleteId} AND nonce = ${deleteNonce}`,
+      ).bind(...deleteP.values()),
     ]);
   } catch (e) {
     // Vector ids are deterministic (the entry id, or id-chunk-i, store.ts), so a winning restore
@@ -519,10 +629,17 @@ export async function restoreEntry(
   }
 
   if (changedRows(results[2]) === 0) {
-    // The trash row vanished between the read and the batch (a racing restore or purge). If a
-    // racing restore is the winner, it embedded the same deterministic ids — never delete them.
+    // Either genuinely gone (a racing restore or purge won the SAME row — it embedded the same
+    // deterministic ids, never delete them), or a DIFFERENT trash row now lives under this id
+    // (adv-final MAJOR 1: the id was purged and reused). Tell those apart before answering: a
+    // stale read of a row that still exists, just not the one we authorized against, is a
+    // conflict to retry, not a 404 claiming nothing is there.
     await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
-    return { status: "not_found" };
+    const stillP = new Params();
+    const stillId = stillP.add(trashed.id);
+    // scope-exempt: by-id: deciding only whether the id is gone or now belongs to a different row
+    const stillThere = await env.DB.prepare(`SELECT 1 FROM entries_trash WHERE id = ${stillId}`).bind(...stillP.values()).first();
+    return { status: stillThere ? "conflict" : "not_found" };
   }
 
   // The trash row's own stored ids (round 2 adversary): a short append embedded before this
@@ -548,6 +665,7 @@ export async function restoreEntry(
 
 export type DeleteForeverResult =
   | { status: "not_found" }
+  | { status: "conflict" }
   | { status: "deleted"; from: "live" | "trash"; deletedVectors: number };
 
 /**
@@ -575,48 +693,86 @@ function deterministicVectorIds(id: string, content: string, source: string): st
  * row read earlier: a race (a restore bringing the id back to life between the caller's own read
  * and this call, or a transient Vectorize failure during an earlier forget) means neither the
  * live row's real vector_ids nor the trash row's content are safe to trust from outside this batch.
+ *
+ * Every statement below also checks the row still belongs to `authorizedWorkspaceId` (Class 1,
+ * R3-1): the caller's own scoped read authorized this id in one workspace, and an unshare landing
+ * in the gap before this batch runs must not let it touch the row wherever it ended up instead — a
+ * live row moved to a personal workspace the caller cannot reach is exactly what an admin's
+ * "permanent" forget must never be able to delete. Checked fresh, in the same statement that would
+ * do the deleting, not from a read made moments earlier.
  */
-export async function deleteForever(env: Env, id: string, change: ChangeContext): Promise<DeleteForeverResult> {
+export async function deleteForever(
+  env: Env, id: string, change: ChangeContext,
+  /** The workspace the caller's own scoped read authorized (Class 1) — a live row's, or a trashed
+   * row's for an id already forgotten. Required: every DELETE below is pinned to it. */
+  authorizedWorkspaceId: string,
+  /** The trash row's own nonce (adv-final MAJOR 1), when the caller's read found this id in the
+   * trash rather than live: undefined for a live row (nothing to pin), '' for a row that predates
+   * the nonce column (fails closed below, the same rule restoreEntry applies), otherwise the exact
+   * physical row the caller authorized, not just its id. */
+  authorizedTrashNonce?: string,
+): Promise<DeleteForeverResult> {
+  if (authorizedTrashNonce === "") return { status: "conflict" };
   const now = Date.now();
+  // Live or trashed: whichever this id currently is, checked against the SAME workspace value in
+  // both branches (a row is never both at once). Trash rows never change workspace_id once written
+  // (nothing updates entries_trash after the trash insert), so this half is defensive, not a race
+  // this codebase can actually trigger today — confirmed by test.
+  const homeGuard = (p: Params, bid: string) => {
+    const ws = p.add(authorizedWorkspaceId);
+    const nonceClause = authorizedTrashNonce === undefined ? "" : ` AND h.nonce = ${p.add(authorizedTrashNonce)}`;
+    return `(EXISTS (SELECT 1 FROM entries h WHERE h.id = ${bid} AND h.workspace_id = ${ws}) OR EXISTS (SELECT 1 FROM entries_trash h WHERE h.id = ${bid} AND h.workspace_id = ${ws}${nonceClause}))`;
+  };
+
   const auditP = new Params();
   const auditId = auditP.add(id);
   const auditActor = auditP.add(change.actorId);
   const auditChannel = auditP.add(change.channel);
   const auditNow = auditP.add(now);
-  const byId = (sql: (id: string) => string) => {
+  const auditGuard = homeGuard(auditP, auditId);
+  const byId = (sql: (id: string, guard: string) => string) => {
     const p = new Params();
     const bid = p.add(id);
-    return env.DB.prepare(sql(bid)).bind(...p.values());
+    return env.DB.prepare(sql(bid, homeGuard(p, bid))).bind(...p.values());
   };
   const results = await env.DB.batch([
     env.DB.prepare(
-      // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
+      // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
       `INSERT INTO entry_events (id, entry_id, actor_id, event, payload, created_at)
        SELECT lower(hex(randomblob(16))), ${auditId}, ${auditActor}, 'purged',
               json_object('reason', 'permanent', 'channel', ${auditChannel}, 'from', CASE WHEN EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) THEN 'live' ELSE 'trash' END),
               ${auditNow}
-        WHERE EXISTS (SELECT 1 FROM entries WHERE id = ${auditId}) OR EXISTS (SELECT 1 FROM entries_trash WHERE id = ${auditId})`,
+        WHERE ${auditGuard}`,
     ).bind(...auditP.values()),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((bid) => `DELETE FROM edges WHERE source_id = ${bid} OR target_id = ${bid}`),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((bid) => `DELETE FROM entry_versions WHERE entry_id = ${bid}`),
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch.
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
+    byId((bid, guard) => `DELETE FROM edges WHERE (source_id = ${bid} OR target_id = ${bid}) AND ${guard}`),
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
+    byId((bid, guard) => `DELETE FROM entry_versions WHERE entry_id = ${bid} AND ${guard}`),
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1).
     // RETURNING vector_ids too: the trash row's own stored ids (round 2 adversary) cover a short
     // append's id-update-<ts> chunk, which content+source alone can't rederive — content/source
     // stay as a best-effort fallback for a trash row from before this column existed.
-    byId((bid) => `DELETE FROM entries_trash WHERE id = ${bid} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
+    byId((bid, guard) => `DELETE FROM entries_trash WHERE id = ${bid} AND ${guard} RETURNING content, json_extract(row_json, '$.source') AS source, vector_ids`),
     // RETURNING vector_ids: this statement's own value at the moment it runs, never a caller's stale
     // read — a restore racing this call embeds under the same deterministic ids (ADV-trash-4).
     // versioning: hard-delete: permanent (T-0089.4.7)
-    // scope-exempt: by-id: the caller authorized the live or trashed row before building this batch
-    byId((bid) => `DELETE FROM entries WHERE id = ${bid} RETURNING vector_ids`),
+    // scope-exempt: by-id, pinned to its authorized workspace (Class 1, R3-1)
+    byId((bid, guard) => `DELETE FROM entries WHERE id = ${bid} AND ${guard} RETURNING vector_ids`),
   ]);
   const trashRow = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string } | undefined;
   const entryRow = results[4].results?.[0] as { vector_ids?: string } | undefined;
   const trashChanges = changedRows(results[3]);
   const entryChanges = changedRows(results[4]);
-  if (entryChanges === 0 && trashChanges === 0) return { status: "not_found" };
+  if (entryChanges === 0 && trashChanges === 0) {
+    // Either genuinely gone, or it exists but no longer in the workspace the caller authorized
+    // (the guard above refused either way) — the caller needs to tell those apart: a conflict, to
+    // retry against whatever is authorized now, not a 404 claiming nothing is there for anyone.
+    // scope-exempt: by-id: deciding only which of the two already-refused outcomes this is
+    const stillThere = await env.DB.prepare(
+      `SELECT 1 AS ok FROM entries WHERE id = ?1 UNION ALL SELECT 1 AS ok FROM entries_trash WHERE id = ?1 LIMIT 1`,
+    ).bind(id).first();
+    return { status: stillThere ? "conflict" : "not_found" };
+  }
 
   let vectorIds: string[] = [];
   if (entryRow) {

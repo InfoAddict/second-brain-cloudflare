@@ -64,6 +64,27 @@ export const DEFAULTS = {
   COMPRESSION_MIN_RECALL: 2,
   COMPRESSION_MIN_AGE_MS: 60 * 86400000,
 
+  // ── Source trust in retrieval (src/recall/source-trust.ts, Track 3) ──
+  // All five start at their neutral / off value: source weighting, the
+  // mirror/transcript occupancy cap and the near-duplicate collapse ship
+  // lock-neutral, so every intermediate commit changes no ranking. A later
+  // tuning task flips these once the eval sets their final values (P1).
+  SOURCE_WEIGHT_MIRROR: 1.0,
+  SOURCE_WEIGHT_TRANSCRIPT: 1.0,
+  SOURCE_WEIGHT_SYSTEM: 1.0,
+  MIRROR_MAX_SHARE: 1.0,
+  NOTICE_COLLAPSE: "off",
+
+  // ── Self-protecting quarantine (src/quarantine/score.ts, Track 4) ──
+  // A write scoring at or above the threshold is held out of recall.
+  // Nothing computes a score yet in this commit, so the default is inert;
+  // 100 disables holds outright once scoring lands, but is not the default.
+  QUARANTINE_THRESHOLD: 1.0,
+  // MCP content writes by one actor inside a 10-minute window before a burst hold fires.
+  QUARANTINE_WRITE_BURST: 40,
+  // Status changes by one actor inside a 10-minute window before the brief groups them.
+  QUARANTINE_STATUS_BURST: 10,
+
   // ── Capture tuning (src/constants.ts) ──
   TAG_BOOST_STEP: 0.15,
   TAG_BOOST_MAX: 1.5,
@@ -199,6 +220,16 @@ export const RULES: Record<ConfigKey, Rule> = {
   COMPRESSION_MIN_RECALL: { kind: "number", min: 0, max: 100, integer: true },
   COMPRESSION_MIN_AGE_MS: { kind: "number", min: 0, max: 10 * 365 * 86400000, integer: true },
 
+  SOURCE_WEIGHT_MIRROR: { kind: "number", min: 0.5, max: 1.0 },
+  SOURCE_WEIGHT_TRANSCRIPT: { kind: "number", min: 0.5, max: 1.0 },
+  SOURCE_WEIGHT_SYSTEM: { kind: "number", min: 0.5, max: 1.0 },
+  MIRROR_MAX_SHARE: { kind: "number", min: 0.1, max: 1.0 },
+  NOTICE_COLLAPSE: { kind: "string" },
+
+  QUARANTINE_THRESHOLD: { kind: "number", min: 0.5, max: 100 },
+  QUARANTINE_WRITE_BURST: { kind: "number", min: 5, max: 1000, integer: true },
+  QUARANTINE_STATUS_BURST: { kind: "number", min: 3, max: 1000, integer: true },
+
   TAG_BOOST_STEP: { kind: "number", min: 0, max: 1 },
   TAG_BOOST_MAX: { kind: "number", min: 1, max: 5 },
   CONTRADICTION_IMPORTANCE_STEP: { kind: "number", min: 0, max: 5 },
@@ -237,6 +268,11 @@ function isValidTimeZone(value: string): boolean {
 export const RERANK_MODES = ["off", "on", "auto"] as const;
 export type RerankMode = (typeof RERANK_MODES)[number];
 export const isRerankMode = (value: unknown): value is RerankMode => (RERANK_MODES as readonly unknown[]).includes(value);
+
+export const NOTICE_COLLAPSE_MODES = ["off", "on"] as const;
+export type NoticeCollapseMode = (typeof NOTICE_COLLAPSE_MODES)[number];
+export const isNoticeCollapseMode = (value: unknown): value is NoticeCollapseMode =>
+  (NOTICE_COLLAPSE_MODES as readonly unknown[]).includes(value);
 
 /** RFC 8292 section 2's two accepted VAPID `sub` shapes. */
 function isValidPushContact(value: string): boolean {
@@ -285,6 +321,10 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
     // A closed enum: an unknown stored value reads as "off" (never the model), not as the default.
     if (key === "RERANK_MODE" && !isRerankMode(value)) {
       return { value: "off" as Config[ConfigKey], note: `${key}: expected off, on or auto, got ${JSON.stringify(value)}; reranking stays off` };
+    }
+    // A closed enum: an unknown stored value reads as "off" (the collapse stays off), not as the default.
+    if (key === "NOTICE_COLLAPSE" && !isNoticeCollapseMode(value)) {
+      return { value: "off" as Config[ConfigKey], note: `${key}: expected off or on, got ${JSON.stringify(value)}; the collapse stays off` };
     }
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };
@@ -397,6 +437,7 @@ function validateStrict(key: string, value: unknown): string | null {
         : `${key} must be empty, a mailto:<address>, or an https:// URL`;
     }
     if (key === "RERANK_MODE") return isRerankMode(value) ? null : `${key} must be one of ${RERANK_MODES.join(", ")}`;
+    if (key === "NOTICE_COLLAPSE") return isNoticeCollapseMode(value) ? null : `${key} must be one of ${NOTICE_COLLAPSE_MODES.join(", ")}`;
     if (typeof value !== "string" || value.trim() === "") return `${key} must be a non-empty string`;
     if (key === "TIMEZONE" && !isValidTimeZone(value)) {
       return `${key} must be a recognized IANA timezone name (e.g. "America/New_York")`;

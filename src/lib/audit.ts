@@ -26,11 +26,9 @@ export type EntryEventName =
 /** Where a change came from. Recorded on every version and on the events the domain layer writes. */
 export type AuditChannel = "rest" | "mcp" | `system:${string}` | "unspecified";
 
-/**
- * Who changed a memory and through which surface. Required on every content,
- * tag or due-date writer. `client` (BE-5, T-0101.5.1) is the calling AI tool's
- * resolved label — MCP writes only; REST and system writes never set it.
- */
+/** Who changed a memory and through which surface. Required on every content, tag or due-date
+ * writer. `client` (BE-5, T-0101.5.1) is the resolved MCP client label — Claude, Cursor, and so
+ * on — set only for `channel: "mcp"`; absent for REST and system writes. */
 export interface ChangeContext { actorId: string; channel: AuditChannel; client?: string }
 
 export interface AuditEventInput {

@@ -1,8 +1,10 @@
 import type { Env } from "../env";
-import { withStatus, type MemoryStatus } from "../memory/status";
+import { getStatus, withStatus, type MemoryStatus } from "../memory/status";
 import { deleteVectorIds } from "../vectorize/batch";
+import { reembedOrDegrade } from "./store";
 import type { Config } from "../config";
 import type { ChangeContext } from "../lib/audit";
+import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement } from "../memory/versions";
 import { TRASH_PURGE_ON_FORGET, FORGET_PURGE_ROWS } from "../constants";
 import { planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashManyStatements, type TrashReason } from "../memory/trash";
@@ -136,27 +138,62 @@ export async function deprecateEntry(
   return true;
 }
 
-export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>, workspaceId: string): Promise<boolean> {
-  if (status === "deprecated") return deprecateEntry(id, env, change, config, workspaceId, { meta: { status } });
+export type ApplyStatusResult =
+  | { status: "ok"; indexed: boolean }
+  | { status: "not_found" }
+  /** A transient embed failure while leaving "deprecated": nothing below was written, the entry
+   * is unchanged. Vectorize being unreachable is NOT this — that degrades to keyword-only instead
+   * (indexed: false on the "ok" result), the same fallback restoreEntry uses (P8). */
+  | { status: "reembed_failed" };
+
+export async function applyStatus(id: string, status: MemoryStatus, env: Env, change: ChangeContext, config: Readonly<Config>, workspaceId: string): Promise<ApplyStatusResult> {
+  if (status === "deprecated") {
+    const ok = await deprecateEntry(id, env, change, config, workspaceId, { meta: { status } });
+    return ok ? { status: "ok", indexed: false } : { status: "not_found" };
+  }
   // R2-3: pinned to the caller's authorized workspace, same reasoning as deprecateEntry above
   // (including its null/undefined normalization for a legacy row's column value).
   const pinnedWorkspaceId = workspaceId ?? "";
-  const row = await env.DB.prepare(`SELECT tags FROM entries WHERE id = ? AND workspace_id = ?`).bind(id, pinnedWorkspaceId).first() as Record<string, any> | null;
-  if (!row) return false;
-  const nextTags = withStatus(JSON.parse(row.tags ?? "[]") as string[], status);
+  const row = await env.DB.prepare(`SELECT content, tags, source, vector_ids FROM entries WHERE id = ? AND workspace_id = ?`).bind(id, pinnedWorkspaceId).first() as Record<string, any> | null;
+  if (!row) return { status: "not_found" };
+  const currentTags: string[] = JSON.parse(row.tags ?? "[]");
+  const nextTags = withStatus(currentTags, status);
   const casColumns = { workspace_id: pinnedWorkspaceId };
+
+  // BE-9 (T-0101.8.2): deprecateEntry empties vector_ids on the way INTO "deprecated" (recall
+  // must not find it), so leaving deprecated for any other status re-embeds before the status
+  // commits, or the row would sit un-deprecated with a stale empty index. reembedOrDegrade is the
+  // same fail-closed contract every other content writer uses: a transient failure throws (nothing
+  // below runs, nothing is written); Vectorize being unreachable returns null and this degrades to
+  // keyword-only, same as restoreEntry's own P8 fallback.
+  let newVectorIdsJson: string | undefined;
+  let indexed = (JSON.parse(row.vector_ids ?? "[]") as unknown[]).length > 0;
+  if (getStatus(currentTags) === "deprecated") {
+    const writeCtx: WriteContext = { workspaceId: pinnedWorkspaceId, actorId: change.actorId || OWNER_WRITE_CONTEXT.actorId };
+    let stored;
+    try {
+      stored = await reembedOrDegrade(env, id, row.content as string, nextTags, row.source as string, config, writeCtx);
+    } catch (e) {
+      console.error("Status re-embed failed while leaving deprecated (nothing written):", e);
+      return { status: "reembed_failed" };
+    }
+    newVectorIdsJson = JSON.stringify(stored?.vectorIds ?? []);
+    indexed = stored !== null;
+  }
+
   // A status set to what the row already has (tags may merely reorder) writes no version.
   const p = new Params();
   const tagsIdx = p.add(JSON.stringify(nextTags));
   const idIdx = p.add(id);
+  const vectorIdsSet = newVectorIdsJson !== undefined ? `, vector_ids = ${p.add(newVectorIdsJson)}` : "";
   const results = await env.DB.batch([
     snapshotStatement(env, {
       entryId: id, reason: "status", change, content: { kind: "unchanged" }, nextTags, meta: { status }, now: Date.now(),
       guard: p2 => buildCasGuard(p2, casColumns),
     }),
     // versioning: snapshot
-    env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()),
+    env.DB.prepare(`UPDATE entries AS e SET tags = ${tagsIdx}${vectorIdsSet} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`).bind(...p.values()),
     pruneStatement(env, id, config.VERSION_KEEP),
   ]);
-  return changesOf(results[1]) > 0;
+  return changesOf(results[1]) > 0 ? { status: "ok", indexed } : { status: "not_found" };
 }

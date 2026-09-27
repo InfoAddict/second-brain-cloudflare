@@ -1496,15 +1496,21 @@ export async function handleAdminRoutes(
       }
     }
 
-    // Same filter as the select above, or the loop never reaches zero: the
-    // dashboard presses this until `remaining` is 0, so counting rows the select
-    // refuses to process would spin until the batch-made-no-progress guard.
+    // Every still-unindexed row, not just the past-grace ones the select above can touch (adv-final
+    // MAJOR 2): a row inside its grace window is genuinely pending, not done, so reporting
+    // `remaining: 0` while it sits there would tell a caller — including the undo reply this
+    // backs — that indexing finished when it has not even started. oldest, of that same set,
+    // drives retryAfterMs: 0 once nothing is left, otherwise how long until the longest-waiting
+    // row leaves its grace window and this endpoint can actually make progress on it.
     const remaining = await env.DB.prepare(
-      // scope-exempt: admin repair backlog: must match the SELECT above or the loop never reaches zero
-      `SELECT COUNT(*) as count FROM entries WHERE vector_ids = '[]' AND created_at < ? AND ${INDEXABLE_SQL}`
-    ).bind(graceCutoff).first() as Record<string, any> | null;
+      // scope-exempt: admin repair backlog: deployment-wide by design, returns counts not content
+      `SELECT COUNT(*) as count, MIN(created_at) as oldest FROM entries WHERE vector_ids = '[]' AND ${INDEXABLE_SQL}`
+    ).first() as Record<string, any> | null;
+    const remainingCount = (remaining?.count as number) ?? 0;
+    const oldestCreatedAt = remaining?.oldest as number | null;
+    const retryAfterMs = remainingCount === 0 ? 0 : Math.max(0, (oldestCreatedAt as number) + graceMs(env) - Date.now());
 
-    return json({ processed, failed, remaining: (remaining?.count as number) ?? 0 });
+    return json({ processed, failed, remaining: remainingCount, retryAfterMs });
   }
 
   // POST /classify-pending

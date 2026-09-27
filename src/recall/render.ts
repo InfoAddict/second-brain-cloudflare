@@ -1,5 +1,6 @@
-import type { RecallMatch } from "./types";
+import type { RecallMatch, WhyTrace } from "./types";
 import { formatAsOfQualifier } from "../memory/stale";
+import { getStatus } from "../memory/status";
 import { DEFAULTS, type Config } from "../config";
 import { allowanceFor, snippetOf, truncationNote, type Snippet } from "./snippet";
 import { computeCompoundStale } from "./compound-stale";
@@ -67,6 +68,8 @@ export function renderRecallText(
       : snippetOf(m.content, allowanceFor(i, m.score, cfg), { queryTokens: opts.queryTokens });
     const body = s.truncated ? `${s.text}${truncationNote(m.id, s)}` : s.text;
     const block = `${i + 1}. [${header}] (${score}% match)${updateLabel}${hopLabel}${staleLabel}\nID: ${m.id}\n${body}`;
+    // The why line rides outside the budget: asking for an explanation must not change which memories come back.
+    const whyLine = m.why ? `why: ${whyText(m, m.why, contentById)}\n` : "";
 
     // Stop once the budget is spent, but always return at least one match.
     if (!opts.full && blocks.length && used + block.length > cfg.RECALL_OUTPUT_BUDGET) {
@@ -75,7 +78,7 @@ export function renderRecallText(
     }
     used += block.length;
     renderedMatches.push(m);
-    blocks.push(block);
+    blocks.push(whyLine ? block.replace(`\nID: ${m.id}\n`, `\nID: ${m.id}\n${whyLine}`) : block);
   }
 
   const compoundStale = opts.compoundStale ?? computeCompoundStale(renderedMatches);
@@ -91,6 +94,44 @@ export function renderRecallText(
   }
   const body = insight ? `**Insight:** ${insight}\n\n---\n\n${text}` : text;
   return prefix ? prefix + body : body;
+}
+
+// A term is "rare" once its idf clears this (about one note in twenty holds it).
+const RARE_IDF = 3;
+const WHY_MAX_TERMS = 3;
+
+const shortDate = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+/** One plain line saying why a memory came back, from the trace recall already computed. */
+function whyText(m: RecallMatch, why: WhyTrace, contentById: Map<string, string>): string {
+  const parts: string[] = [];
+  if (why.dense_rank !== null) parts.push(`meaning #${why.dense_rank}`);
+  if (why.keyword_terms.length) {
+    const shown = why.keyword_terms.slice(0, WHY_MAX_TERMS).map(t => {
+      const notes = [t.level === 2 && t.idf >= RARE_IDF ? "rare" : "", t.level === 1 ? "inside a longer word" : ""].filter(Boolean);
+      return `"${t.term}"${notes.length ? ` (${notes.join(", ")})` : ""}`;
+    });
+    const more = why.keyword_terms.length - shown.length;
+    parts.push(`keywords ${shown.join(", ")}${more > 0 ? ` +${more} more` : ""}`);
+  }
+  if (getStatus(m.tags) === "canonical") parts.push("canonical");
+  const mult = why.multipliers;
+  if (mult) {
+    if (why.age_known === false) parts.push("age unknown");
+    else if (mult.recency >= 0.95) parts.push(`recent (${shortDate(m.createdAt)})`);
+    if (mult.importance > 1) parts.push("high importance");
+    else if (mult.importance < 1) parts.push("low importance");
+    if (mult.tag_boost > 1) parts.push("tag match");
+    if (mult.frequency > 1) parts.push("recalled before");
+  }
+  if (why.rerank_move) parts.push(`reranked ${why.rerank_move}`);
+  if (why.graph) {
+    const from = contentById.get(why.graph.from);
+    parts.push(`linked from ${from ? `"${snippet(from)}"` : why.graph.from}`);
+  }
+  if (why.slot === "evidence") parts.push("evidence slot");
+  else if (why.slot === "deeper") parts.push("deeper list");
+  return parts.length ? parts.join(" · ") : "ranked on its combined score";
 }
 
 // For a graph-expanded match, describe why it surfaced: who formed the edge

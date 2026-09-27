@@ -14,7 +14,15 @@ const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); } } as Execution
 
 afterEach(async () => { await Promise.allSettled(pending); vi.restoreAllMocks(); pending.length = 0; });
 
-it("does not clear vectors in another workspace after a lost system merge and embed failure", async () => {
+// R4-V3 (T-0089.1.1) supersedes T-0089.4.4's own fix: pinning the failure branch's clear to
+// writeCtx.workspaceId (the caller's ORIGINAL, now-stale attempt) rather than the row's CURRENT
+// workspace (read moments earlier in the very same call) is exactly what let an unshare mid-edit
+// commit a dangling vector_ids reference — the clear missed on the stale pin, yet the delete ran
+// unconditionally anyway, deleting a live vector while vector_ids still named it. Pinning to the
+// row's current workspace instead means the clear lands wherever the row actually is, so a race
+// into another workspace now empties vector_ids there (self-healing via /vectorize-pending)
+// instead of leaving a reference to a vector this call just deleted.
+it("clears vectors in the row's current workspace, not the caller's stale one, after a lost system merge and embed failure", async () => {
   resetDatabaseInit();
   const sqlite = makeSqliteD1();
   let restoreEmbedFails = false;
@@ -52,6 +60,9 @@ it("does not clear vectors in another workspace after a lost system merge and em
   const target = sqlite.rows().find(r => r.id === "target")!;
   expect(raced).toBe(true);
   expect(target.workspace_id).toBe("other-private");
-  expect(target.vector_ids).not.toBe("[]");
+  // R4-V3: the clear is pinned to the row's current workspace ("other-private", read before the
+  // embed failure), so it lands there and empties vector_ids — never a dangling reference to a
+  // vector this same call went on to delete.
+  expect(target.vector_ids).toBe("[]");
   sqlite.close();
 });

@@ -11,6 +11,7 @@ import { createProject } from "../../src/projects/registry";
 import { createMember } from "../../src/lib/team-admin";
 import type { Env } from "../../src/env";
 import * as compression from "../../src/compression/digest";
+import { VERSIONS_SINCE_KV_KEY } from "../../src/constants";
 
 let sqlite: SqliteD1;
 let env: Env;
@@ -226,17 +227,17 @@ describe("MCP history", () => {
       await env.DB.prepare(`INSERT INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
         VALUES (?, ?, ?, 'supersedes', 1, 'explicit', '{}', 1, 1, '')`).bind(id, source, target).run();
     }
+    await env.OAUTH_KV.put(VERSIONS_SINCE_KV_KEY, "500");
     sqlite.issued.length = 0;
     const text = await call("history", { id: "current" });
     expect(text).toContain("You");
-    expect(text).toContain("mcp");
     expect(text).toContain("Supersedes older");
     expect(text).toContain("Superseded by newer");
-    expect(text).toContain("Earlier text is not recorded before 4.0.");
-    expect(text.match(/ updated by /g)).toHaveLength(10);
-    expect(text).not.toContain('"seq":0');
-    expect(text).toContain('"seq":11');
-    expect(sqlite.issued).toHaveLength(3);
+    expect(text).toContain("Changes before 1970-01-01 were not recorded.");
+    // BE-11: events are unbounded now (a version, not a truncated event list, covers the ceiling);
+    // all 12 seeded "updated" events predate the versions:since marker above, so all twelve show.
+    expect(text.match(/ updated by /g)).toHaveLength(12);
+    expect(sqlite.issued).toHaveLength(5);
   });
 
   it("hides another member's personal history", async () => {

@@ -73,6 +73,9 @@ const SCHEMA_PROBE_RESULTS = [
   // entry_versions.prior_length_utf16 arrives by ALTER on brains created before it existed and
   // lives in the base CREATE on fresh ones (T-0089.1.1, ADV-10) — a migrated brain reports it either way.
   { kind: "entry_version_column", name: "prior_length_utf16" },
+  // entries_trash.nonce, same shape (T-0089.1.1, adv-final MAJOR 1): ALTER on an old brain, base
+  // CREATE on a fresh one, reported either way by a migrated brain.
+  { kind: "entries_trash_column", name: "nonce" },
 ];
 
 /**
@@ -728,6 +731,13 @@ export class D1Mock {
             : 0;
           const unclassified = db.entries.filter((e: any) => !String(e.tags).includes('"status:') && !String(e.tags).includes('"kind:')).length;
           return { count, avg_importance, unvectorized, unclassified };
+        }
+        // POST /vectorize-pending's remaining count (adv-final MAJOR 2): every unindexed row, no
+        // grace cutoff, plus the oldest one's created_at so the route can compute retryAfterMs.
+        if (s.includes("COUNT(*) as count") && s.includes("MIN(created_at) as oldest") && s.includes("vector_ids = '[]'")) {
+          const unindexed = db.entries.filter((e: any) => e.vector_ids === '[]');
+          const oldest = unindexed.length ? Math.min(...unindexed.map((e: any) => e.created_at)) : null;
+          return { count: unindexed.length, oldest };
         }
         if (s.includes("COUNT(*) as count") && s.includes("vector_ids = '[]'") && s.includes("created_at <")) {
           const cutoff = Number(args[0]);

@@ -16,7 +16,11 @@ export type ResolveAction = "done" | "not_a_task" | "snooze" | "clear_date" | "s
 export type ActionResult = { ok: true; id: string; action: ResolveAction; when_at?: number } | { ok: false; error: string; status: number };
 
 type AuditContext = { waitUntil(promise: Promise<unknown>): void };
-const channelPayload = (change: ChangeContext) => ({ channel: change.channel });
+/** BE-5/BE-6 (T-0101.5.1/T-0101.5.2): every audit event this file writes carries the same
+ * channel-and-client pair a version's own meta does, so the history and trash surfaces can name
+ * the client without a special case for resolve/forget/set_status. `client` is spread only when
+ * present, so an old event payload's shape (channel alone) is unchanged for REST and system writes. */
+const channelPayload = (change: ChangeContext) => ({ channel: change.channel, ...(change.client ? { client: change.client } : {}) });
 
 /** The REST routes and MCP resolve tool use this same read, guard, write and audit path. */
 export async function resolveEntryAction(

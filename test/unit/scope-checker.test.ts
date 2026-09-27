@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (186 queries, 102 exceptions, 13 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (195 queries, 105 exceptions, 15 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1411,11 +1411,14 @@ describe("the checker over the real source tree", () => {
     // merge paths, undo's revertEntry, the mirror sync) picks up the same clamp for the digest
     // guard's own change signal, but only ever reads its OWN row (e.updated_at/e.created_at), so
     // none of them add a new corpus query either.
-    // Deliberate: +1 query (190 -> 191) for T-0101.2.1 (BE-1): listTrash's own entries_trash SELECT,
-    // scoped by workspace_id IN (...) same as every other properly-scoped read — no new exemption,
-    // since its second statement (the deleting client/channel lookup) reads entry_events, not one
-    // of the four tables this checker tracks.
-    ).toEqual({ queries: 191, exempt: 103, checked: 13, outerJoin: 1 });
+    // MOVED 190/103/13/1 -> real --inventory output (merge of v4/ux-be into v4/t1-foundations
+    // 2e879ccc): this branch's own +1 query for T-0101.2.1 (BE-1, listTrash's entries_trash SELECT,
+    // scoped by workspace_id — no new exemption, since its second statement reads entry_events, not
+    // one of the four tracked tables) and Track 1's independent chain (191/103/13/1 -> 196/105/15/1
+    // via Builder B's Task 10, R4-V4, R4-C1 and adv-final MAJOR 1, detailed on that side) landed on
+    // independently-tracked running totals from the same 190/103/13/1 base — recomputed against the
+    // real scanner output after combining rather than hand-reconciling the two deltas.
+    ).toEqual({ queries: 197, exempt: 105, checked: 15, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

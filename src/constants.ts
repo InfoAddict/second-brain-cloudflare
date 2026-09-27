@@ -316,3 +316,8 @@ export const MEMBER_HISTORY_CHUNK = 1000;
 export const MEMBER_HISTORY_SLICE = 1000;
 export const MEMBER_HISTORY_MAX_CHUNKS = 10;
 export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;
+/** Undo: a to_version rollback re-creates one row per merge it crosses, but only re-embeds this
+ * many inline (AI + Vectorize, one call each) — at VERSION_KEEP's ceiling that could otherwise be
+ * hundreds of merges in one request, over the platform's per-invocation service subrequest limit.
+ * The rest are written with vector_ids = '[]' for POST /vectorize-pending to backfill. */
+export const UNDO_MERGE_REEMBED_INLINE = 25;

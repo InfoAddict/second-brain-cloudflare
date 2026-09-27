@@ -60,7 +60,7 @@ describe("R2-7 (MAJOR): revertEntry writes into the author's personal memory aft
       }
       return raw.prepare(sql);
     } } } as unknown as Env;
-    await revertEntry(racing, admin, "u9", { actorId: admin.userId, channel: "rest" }, DEFAULTS);
+    await revertEntry(racing, admin, "u9", { actorId: admin.userId, channel: "rest" }, DEFAULTS, undefined, companyWs);
     const row = await live("u9");
     expect(row.workspace_id).toBe(author.personalWorkspaceId);
     expect(row.content).toBe("v2 text"); // FAILS on d4c71ddc: "v1 text" written into Bob's private memory by the admin

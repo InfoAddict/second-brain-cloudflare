@@ -3,13 +3,17 @@ import { importExportPayload, parseImportBody, parseImportLimit, parseImportOffs
 import { initializeDatabase } from "../db/init";
 import { json } from "../lib/http";
 import { requireIdentity } from "../lib/identity";
-import { assertCanMutateEntry, getReadableEntry } from "../lib/entry-access";
+import { assertCanMutateEntry, getReadableEntry, FORBIDDEN_MSG } from "../lib/entry-access";
 import { layerOf, scopeWhere, readTeamParam } from "../lib/scope";
 import { readEntryTimeline } from "../memory/history";
+import { loadHistory } from "../memory/versions";
+import { buildEntryHistoryFromReads, readEntryVersion } from "../memory/history-view";
 import { lookupActorLabels, resolveActorLabel } from "../lib/actors";
 import { forgetEntry } from "../capture/lifecycle";
 import { deleteForever, getTrashedEntry, restoreEntry } from "../memory/trash";
 import { decodeTrashCursor, listTrash } from "../memory/trash-list";
+import { revertEntry, goneMessage, prunedMessage, restoredMessage, revertedMessage, unreadableMessage } from "../memory/undo";
+import { mirrorUndoError } from "../integrations/mirror";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
@@ -196,8 +200,9 @@ export async function handleEntriesRoutes(
       const denied = assertCanMutateEntry(auth, row);
       if (denied) return json({ ok: false, error: denied.message }, 403);
 
-      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" });
+      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" }, row.workspace_id as string, trashedRow?.nonce);
       if (result.status === "not_found") return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      if (result.status === "conflict") return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       return json({ ok: true, id, permanent: true, from: result.from, deletedVectors: result.deletedVectors });
     }
 
@@ -281,6 +286,77 @@ export async function handleEntriesRoutes(
     return json({ ok: true, retention_days: cfg.TRASH_RETENTION_DAYS, items, next_cursor: nextCursor });
   }
 
+  // POST /undo — reverse the most recent change to a memory (or a specific earlier version, with
+  // to_version), or restore it from the trash when nothing live remains. Mirrors the MCP `undo`
+  // tool; both call revertEntry, so REST and MCP undo leave identical rows and versions.
+  if (url.pathname === "/undo" && request.method === "POST") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    let body: { id?: string; to_version?: unknown };
+    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
+    if (!body.id?.trim()) return json({ ok: false, error: "id is required" }, 400);
+    const id = body.id.trim();
+
+    let toVersion: number | undefined;
+    if (body.to_version !== undefined) {
+      if (typeof body.to_version !== "number" || !Number.isInteger(body.to_version) || body.to_version < 1) {
+        return json({ ok: false, error: "to_version must be a positive integer" }, 400);
+      }
+      toVersion = body.to_version;
+    }
+
+    // The workspace THIS call's own scoped read authorizes (Class 1): a live row's, or — undo of a
+    // forget — a trashed row's. revertEntry reads the row again moments later on its own; pinning
+    // its CAS guard to what this read found is what keeps an unshare in that gap from landing (the
+    // same reason forgetEntry, updateEntryContent and appendToEntry all take this same parameter).
+    // No permission check here: revertEntry's own canRevert applies rule (b) (a member's own newest
+    // change on a company row), which assertCanMutateEntry alone would wrongly refuse.
+    const liveRow = await getReadableEntry(env, auth, id, "id, workspace_id");
+    const trashedRow = liveRow ? null : await getTrashedEntry(env, auth, id);
+    const authorizedWorkspaceId = (liveRow?.workspace_id ?? trashedRow?.workspace_id) as string | undefined;
+
+    const cfg = await resolveConfig(env);
+    const result = await revertEntry(env, auth, id, { actorId: auth.userId, channel: "rest" }, cfg, toVersion, authorizedWorkspaceId ?? "");
+
+    switch (result.status) {
+      case "reverted":
+        return json({
+          ok: true, id, status: "reverted", targetSeq: result.targetSeq, message: revertedMessage(id, result),
+          ...(result.recreatedIncomingId ? { recreatedIncomingId: result.recreatedIncomingId } : {}),
+          ...(result.incomingTruncated ? { incomingTruncated: true } : {}),
+          ...(result.keptIncoming ? { keptIncoming: result.keptIncoming } : {}),
+          ...(result.deferredIncoming ? { deferredIncoming: result.deferredIncoming } : {}),
+        });
+      case "restored":
+        return json({
+          ok: true, id, status: "restored", message: restoredMessage(id, result),
+          ...(result.mirrorSource ? { mirrorWarning: true } : {}),
+        });
+      case "no_change":
+        return json({ ok: true, id, status: "no_change", changed: false, message: `Entry ${id} already matches that version; nothing changed.` });
+      // A hidden version reads exactly like one that never existed (D-SH): never reveals whether
+      // history predating a share exists.
+      case "unreadable":
+        return json({ ok: false, error: unreadableMessage(id) }, 404);
+      case "pruned":
+        return json({ ok: false, error: prunedMessage(id, toVersion!, result.oldestKept, cfg.VERSION_KEEP), oldestKept: result.oldestKept }, 404);
+      case "not_found":
+        if (result.gone) return json({ ok: false, error: goneMessage(id, result.gone, cfg.TRASH_RETENTION_DAYS), gone: result.gone }, 404);
+        return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+      case "forbidden":
+        return json({ ok: false, error: FORBIDDEN_MSG }, 403);
+      case "mirrored":
+        return json({ ok: false, error: mirrorUndoError(result.source) }, 409);
+      case "stale":
+        return json({ ok: false, error: "Entry changed after you looked at it; check history and try again." }, 409);
+      case "nothing_to_undo":
+        return json({ ok: false, error: `Entry ${id} has no recorded changes to undo.` }, 409);
+      case "reembed_failed":
+        return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged; please try again." }, 500);
+    }
+  }
+
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open
   // (/graph ships 80-char labels only; fattening it with full content would bloat
   // every graph load to serve a per-tap need). Dashboard-only, no MCP twin.
@@ -309,13 +385,26 @@ export async function handleEntriesRoutes(
     let vectorIds: unknown[] = [];
     try { vectorIds = JSON.parse(row.vector_ids ?? "[]"); } catch { vectorIds = []; }
 
-    const { timeline, labelMap } = await readEntryTimeline(env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""));
+    // BE-7 (T-0101.1.1): history's versions read is the ONE new statement /entry gains. The events
+    // read below is the SAME one `timeline` always made — chain.rows' own actor ids just ride along
+    // as extraLabelActorIds, so the one `users` lookup that call already does covers version actors
+    // too, and buildEntryHistoryFromReads never reads entry_events or users a second time.
+    const config = await resolveConfig(env);
+    const chain = await loadHistory(env, auth, { id: row.id as string, content: row.content as string }, config.VERSION_KEEP);
+    const timelineResult = await readEntryTimeline(
+      env, id, auth, String(row.actor_id ?? ""), undefined, false, String(row.workspace_id ?? ""), chain.rows.map(r => r.actor_id),
+      String(row.source ?? ""),
+    );
+    const { timeline, labelMap } = timelineResult;
+    const history = await buildEntryHistoryFromReads(env, auth, {
+      id: row.id as string, workspace_id: String(row.workspace_id ?? ""), actor_id: String(row.actor_id ?? ""),
+      content: row.content as string, created_at: row.created_at as number,
+    }, config, chain, timelineResult);
     const layer = layerOf(auth, row.workspace_id);
     const actorName = resolveActorLabel(String(row.actor_id ?? ""), labelMap, {
       viewerId: auth.userId,
       source: row.source as string,
     });
-
 
     return json({
       ok: true,
@@ -350,7 +439,40 @@ export async function handleEntriesRoutes(
           actor_id: String(row.actor_id ?? ""),
         }) === null,
         timeline,
+        history,
       },
+    });
+  }
+
+  // GET /entry/version — the full text, tags and status of one visible version, for the
+  // dashboard's "Show all" on a history row (contract 4.2, BE-8, T-0101.1.1).
+  if (url.pathname === "/entry/version" && request.method === "GET") {
+    const auth = await requireIdentity(request, env);
+    if (auth instanceof Response) return auth;
+
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) return json({ ok: false, error: "id is required" }, 400);
+    const seqParam = url.searchParams.get("seq");
+    const seq = seqParam === null ? NaN : Number(seqParam);
+    if (!Number.isInteger(seq) || seq < 1) return json({ ok: false, error: "seq must be a positive integer" }, 400);
+
+    const config = await resolveConfig(env);
+    const result = await readEntryVersion(env, auth, id, seq, config);
+    if (!result.ok) {
+      const messages: Record<typeof result.reason, string> = {
+        pruned: `Version ${seq} of entry ${id} is no longer kept (only the last ${config.VERSION_KEEP} changes are). The oldest kept is version ${result.oldestKept}.`,
+        not_visible: `No version ${seq} of entry ${id} is visible to you.`,
+        no_version: `Entry ${id} has no version ${seq}.`,
+      };
+      return json({
+        ok: false, error: messages[result.reason], reason: result.reason,
+        ...(result.reason === "pruned" ? { oldest_kept: result.oldestKept } : {}),
+      }, 404);
+    }
+    return json({
+      ok: true, id: result.id, seq: result.seq, content: result.content, tags: result.tags,
+      status: result.status, at: result.at, reason: result.reason, channel: result.channel,
+      client: result.client, actor_name: result.actor_name,
     });
   }
 
@@ -413,14 +535,17 @@ export async function handleEntriesRoutes(
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const ok = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
+    const result = await applyStatus(id, status, env, { actorId: auth.userId, channel: "rest" }, await resolveConfig(env), row.workspace_id as string);
 
-    if (!ok) {
+    if (result.status === "not_found") {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
+    }
+    if (result.status === "reembed_failed") {
+      return json({ ok: false, error: "Could not change the status: re-indexing failed. Nothing changed. Try again." }, 502);
     }
 
     auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "status_changed", payload: { status, channel: "rest" } });
-    return json({ ok: true, id, status });
+    return json({ ok: true, id, status, indexed: result.indexed });
   }
 
   return null;

@@ -138,11 +138,14 @@ export async function handleRecallRoutes(
     // payload. Renderers that show the whole memory (the dashboard) pass full=1.
     const full = ["1", "true", "yes"].includes((url.searchParams.get("full") ?? "").toLowerCase());
 
+    // Off by default: `why` adds a structured trace to every result.
+    const explain = ["1", "true", "yes"].includes((url.searchParams.get("explain") ?? "").toLowerCase());
+
     const project = await readProjectParam(env, identity, url, { layer: workspace, teamId: team });
     if (project instanceof Response) return project;
 
     const cfg = await resolveConfig(env);
-    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
+    const { matches, insight, semanticUnavailable, queryUsed, queryTokens, compoundStale } = await recallEntries({ query, topK, tag, after, before, kind, hops, project, explain }, env, ctx, cfg, { identity, workspaceFilter: workspace, teamId: team });
 
     if (!matches.length) {
       return json({
@@ -183,6 +186,7 @@ export async function handleRecallRoutes(
           via_type: m.viaType ?? null,
           linked_at: m.viaLinkedAt ?? null,
           related_to: m.viaFrom ?? null,
+          ...(explain ? { why: m.why ?? null } : {}),
         };
       }),
       insight: insight || null,

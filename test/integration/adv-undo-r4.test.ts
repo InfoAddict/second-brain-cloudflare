@@ -133,7 +133,7 @@ describe("ADV-U18 (MINOR): the re-creation insert can no longer fail separately 
       if (stmts.length && stmts.every(s => s.sourceSql?.().startsWith("INSERT INTO entries (id, content"))) sawSeparateInsertBatch = true;
       return raw.batch(stmts);
     } } } as unknown as Env;
-    const r = await revertEntry(watched, owner, "old", change(), DEFAULTS);
+    const r = await revertEntry(watched, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(r.status).toBe("reverted");
     expect((r as any).recreatedIncomingId).toBeDefined();
     expect(sawSeparateInsertBatch).toBe(false);
@@ -151,11 +151,11 @@ describe("ADV-U19 (MINOR): the oversize fallback drops the record, so 'at most o
     // The row keeps growing after the merge (still well inside D1's 2 MB row).
     expect(await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).toBe(true);
     // First rollback: the version row needs a full 1.85 MB copy, so recreated_incoming is dropped.
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
     expect(live(incoming)).toHaveLength(1);
     // Undo the rollback, then roll back to the merge again.
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS)).status).toBe("reverted");
-    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).status).toBe("reverted");
+    expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
     expect(live(incoming)).toHaveLength(1); // actual: 2
   }, 120_000);
 });
@@ -165,9 +165,9 @@ describe("ADV-U20 (MINOR): keptIncoming says a row is kept after it has been del
     const e = mergingEnv("old");
     await seed("old", { content: "Old text", tags: ["work"] });
     await capture(e, "Incoming fact");
-    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS)) as any).recreatedIncomingId as string;
-    await deleteForever(e, x, change());
-    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS);
+    const x = ((await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId)) as any).recreatedIncomingId as string;
+    await deleteForever(e, x, change(), owner.personalWorkspaceId);
+    const redo = await revertEntry(e, owner, "old", change(), DEFAULTS, undefined, owner.personalWorkspaceId);
     expect(row(x)).toBeUndefined();
     // Task 15 will turn this into user-facing text; it must not claim a memory exists that does not.
     const claim = ((redo as any).keptIncoming ?? []).find((k: any) => k.id === x);
