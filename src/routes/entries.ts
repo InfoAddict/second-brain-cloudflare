@@ -199,7 +199,7 @@ export async function handleEntriesRoutes(
       const denied = assertCanMutateEntry(auth, row);
       if (denied) return json({ ok: false, error: denied.message }, 403);
 
-      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" }, row.workspace_id as string);
+      const result = await deleteForever(env, id, { actorId: auth.userId, channel: "rest" }, row.workspace_id as string, trashedRow?.nonce);
       if (result.status === "not_found") return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
       if (result.status === "conflict") return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       return json({ ok: true, id, permanent: true, from: result.from, deletedVectors: result.deletedVectors });

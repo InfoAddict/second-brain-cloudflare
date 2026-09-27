@@ -315,7 +315,14 @@ CREATE TABLE IF NOT EXISTS entries_trash (
   deleted_at   INTEGER NOT NULL,
   deleted_by   TEXT NOT NULL DEFAULT '',
   channel      TEXT NOT NULL DEFAULT '',
-  reason       TEXT NOT NULL DEFAULT 'forget' -- forget | mirror | disconnect
+  reason       TEXT NOT NULL DEFAULT 'forget', -- forget | mirror | disconnect
+  nonce        TEXT NOT NULL DEFAULT ''        -- per-row identity (adv-final MAJOR 1): a
+                                                -- purge can free `id` and a fresh forget can
+                                                -- reuse it, with SQLite reusing its own rowid
+                                                -- on top; every trash mutation pins to this,
+                                                -- not to id (or rowid) alone. '' means this row
+                                                -- predates the column: no mutation may treat an
+                                                -- empty nonce as a match, only as "conflict".
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_trash_deleted ON entries_trash(deleted_at);

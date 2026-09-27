@@ -156,7 +156,7 @@ async function readTrashCandidateForcedTier3(
   return { ...row, content_bytes: SIZE_UNMEASURABLE, row_json_bytes: 0, edges_json_bytes: 0, vector_ids_bytes: 0 };
 }
 
-const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason";
+const TRASH_COLUMNS = "id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce";
 
 /**
  * The statements that move entries to the trash, in one batch: the trash inserts (they read
@@ -172,6 +172,9 @@ export function trashManyStatements(
   const all = [...plan.tier1, ...plan.tier2, ...plan.tier3];
   if (!all.length) return [];
   const stmts: D1PreparedStatement[] = [];
+  // nonce (last column, TRASH_COLUMNS): a fresh per-row identity (adv-final MAJOR 1), the same
+  // randomblob-per-row pattern entry_events uses for its own id below — evaluated once per row
+  // of the INSERT...SELECT, never the same value across a multi-row tier1/tier2 batch.
   const insert = (ids: string[], withEdges: boolean) => {
     const p = new Params();
     const idList = p.add(JSON.stringify(ids));
@@ -182,7 +185,7 @@ export function trashManyStatements(
       // rederived later — Delete forever needs the real ids stored, not just guessed at.
       `INSERT OR REPLACE INTO entries_trash (${TRASH_COLUMNS})
        SELECT e.id, e.workspace_id, e.actor_id, e.content, ${rowJsonSql("e")}, ${withEdges ? edgesJsonSql("e") : "'[]'"}, e.vector_ids,
-              ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}
+              ${p.add(meta.now)}, ${p.add(meta.change.actorId)}, ${p.add(meta.change.channel)}, ${p.add(meta.reason)}, lower(hex(randomblob(16)))
          FROM entries e WHERE e.id IN (SELECT value FROM json_each(${idList}))`,
     ).bind(...p.values()));
   };
@@ -448,10 +451,6 @@ function rowsWrittenOf(results: Array<{ meta?: { rows_written?: number } } | und
 // ── Restore ──────────────────────────────────────────────────────────────────
 
 export interface TrashedEntryRow {
-  // SQLite's own implicit rowid: `id` is a TEXT PRIMARY KEY, not an INTEGER one, so it is not a
-  // rowid alias — a purged id can be reused by a fresh INSERT, which gets a new rowid. Every
-  // mutation that consumes a row read earlier pins to this, not to `id` alone (adv-final MAJOR 1).
-  rowid: number;
   id: string;
   workspace_id: string;
   actor_id: string;
@@ -463,6 +462,12 @@ export interface TrashedEntryRow {
   vector_ids: string;
   deleted_at: number;
   reason: TrashReason | string;
+  // Per-row identity (adv-final MAJOR 1): id alone is not stable (a purge frees it, a fresh
+  // forget reuses it) and neither is SQLite's own rowid (it can be reused too, on the same
+  // millisecond a fast enough race hits). Every mutation that consumes a row read earlier pins
+  // to this instead. '' means the row predates the column: no mutation may treat that as a
+  // value to match, only as "this row's identity cannot be verified" (see restoreEntry).
+  nonce: string;
 }
 
 /** Scoped like `getReadableEntry`: an id outside the caller's readable trash reads as missing. */
@@ -474,11 +479,11 @@ export async function getTrashedEntry(env: Env, identity: Identity | undefined, 
     // requireIdentity's `Identity | Response`; revertEntry (memory/undo.ts) is the only other
     // caller, itself unreachable today (POST /undo and the MCP undo tool are T-0089.6.6, backlog).
     // scope-exempt: identity-less branch takes no live request; see above for why
-    return env.DB.prepare(`SELECT rowid, * FROM entries_trash WHERE id = ?`).bind(id).first<TrashedEntryRow>();
+    return env.DB.prepare(`SELECT * FROM entries_trash WHERE id = ?`).bind(id).first<TrashedEntryRow>();
   }
   const scope = scopeWhere(identity);
   return env.DB.prepare(
-    `SELECT rowid, * FROM entries_trash WHERE id = ? AND ${scope.clause}`,
+    `SELECT * FROM entries_trash WHERE id = ? AND ${scope.clause}`,
   ).bind(id, ...scope.bindings).first<TrashedEntryRow>();
 }
 
@@ -532,6 +537,12 @@ export async function restoreEntry(
   change: ChangeContext,
   config?: Readonly<Config>,
 ): Promise<RestoreResult> {
+  // A row that predates the nonce column (adv-final MAJOR 1) has no safe per-row identity to
+  // pin this batch to: id can be reused after a purge, and so can SQLite's own rowid, on the
+  // same millisecond a fast enough race hits. Fail closed before any embed work runs, rather
+  // than trust '' as if it were a value that could ever uniquely match one row.
+  if (trashed.nonce === "") return { status: "conflict" };
+
   const row = JSON.parse(trashed.row_json) as Record<string, unknown>;
   const tags: string[] = (() => { try { return JSON.parse(String(row.tags ?? "[]")); } catch { return []; } })();
   const deprecated = getStatus(tags) === "deprecated";
@@ -568,23 +579,22 @@ export async function restoreEntry(
   // workspace_id comes from the restored entry, not the trashed edge's own snapshot (spec: "taken from the source entry").
   const edgeCols = EDGE_ROW_COLUMNS.map((c) => c === "workspace_id" ? "t.workspace_id" : `json_extract(j.value, '$.${c}')`).join(", ");
   // Each statement gets its own dense Params: D1 rejects a bound value with no matching placeholder in that statement.
-  // Every statement also pins to the exact physical row `trashed` came from (its rowid and
-  // deleted_at, not just its id): id alone is not a stable row identity (adv-final MAJOR 1) — a
-  // purge can free an id and a different member's forget can reuse it before this batch runs, and
-  // an id-only match would then restore (and delete) THEIR trash row under THIS caller's authorization.
+  // Every statement also pins to the exact physical row `trashed` came from (its own nonce, not
+  // just its id): id alone is not a stable row identity (adv-final MAJOR 1) — a purge can free an
+  // id and a different member's forget can reuse it before this batch runs, and an id-only match
+  // would then restore (and delete) THEIR trash row under THIS caller's authorization. Nonce, not
+  // rowid: SQLite can reuse a rowid too, on the same millisecond a fast enough race hits, which
+  // rowid + deleted_at alone cannot rule out.
   const insertP = new Params();
   const insertId = insertP.add(trashed.id);
-  const insertRowid = insertP.add(trashed.rowid);
-  const insertDeletedAt = insertP.add(trashed.deleted_at);
+  const insertNonce = insertP.add(trashed.nonce);
   const vecJson = insertP.add(JSON.stringify(vectorIds));
   const edgeP = new Params();
   const edgeId = edgeP.add(trashed.id);
-  const edgeRowid = edgeP.add(trashed.rowid);
-  const edgeDeletedAt = edgeP.add(trashed.deleted_at);
+  const edgeNonce = edgeP.add(trashed.nonce);
   const deleteP = new Params();
   const deleteId = deleteP.add(trashed.id);
-  const deleteRowid = deleteP.add(trashed.rowid);
-  const deleteDeletedAt = deleteP.add(trashed.deleted_at);
+  const deleteNonce = deleteP.add(trashed.nonce);
   let results;
   try {
     results = await env.DB.batch([
@@ -594,19 +604,19 @@ export async function restoreEntry(
         // scope-exempt: by-id: the caller authorized the trash row before building this batch
         `INSERT INTO entries (id, ${names}, content, vector_ids)
          SELECT t.id, ${exprs}, t.content, ${vecJson} FROM entries_trash t
-          WHERE t.id = ${insertId} AND t.rowid = ${insertRowid} AND t.deleted_at = ${insertDeletedAt}`,
+          WHERE t.id = ${insertId} AND t.nonce = ${insertNonce}`,
       ).bind(...insertP.values()),
       env.DB.prepare(
         // scope-exempt: by-id: edges of the trash row the caller authorized, restored only where the other endpoint still exists
         `INSERT OR IGNORE INTO edges (id, source_id, target_id, type, weight, provenance, metadata, created_at, updated_at, workspace_id)
          SELECT ${edgeCols}
            FROM entries_trash t, json_each(t.edges_json) j
-          WHERE t.id = ${edgeId} AND t.rowid = ${edgeRowid} AND t.deleted_at = ${edgeDeletedAt}
+          WHERE t.id = ${edgeId} AND t.nonce = ${edgeNonce}
             AND EXISTS (SELECT 1 FROM entries x WHERE x.id = (CASE WHEN json_extract(j.value, '$.source_id') = ${edgeId} THEN json_extract(j.value, '$.target_id') ELSE json_extract(j.value, '$.source_id') END))`,
       ).bind(...edgeP.values()),
       // scope-exempt: by-id: the trash row the caller authorized before building this batch
       env.DB.prepare(
-        `DELETE FROM entries_trash WHERE id = ${deleteId} AND rowid = ${deleteRowid} AND deleted_at = ${deleteDeletedAt}`,
+        `DELETE FROM entries_trash WHERE id = ${deleteId} AND nonce = ${deleteNonce}`,
       ).bind(...deleteP.values()),
     ]);
   } catch (e) {
@@ -696,7 +706,13 @@ export async function deleteForever(
   /** The workspace the caller's own scoped read authorized (Class 1) — a live row's, or a trashed
    * row's for an id already forgotten. Required: every DELETE below is pinned to it. */
   authorizedWorkspaceId: string,
+  /** The trash row's own nonce (adv-final MAJOR 1), when the caller's read found this id in the
+   * trash rather than live: undefined for a live row (nothing to pin), '' for a row that predates
+   * the nonce column (fails closed below, the same rule restoreEntry applies), otherwise the exact
+   * physical row the caller authorized, not just its id. */
+  authorizedTrashNonce?: string,
 ): Promise<DeleteForeverResult> {
+  if (authorizedTrashNonce === "") return { status: "conflict" };
   const now = Date.now();
   // Live or trashed: whichever this id currently is, checked against the SAME workspace value in
   // both branches (a row is never both at once). Trash rows never change workspace_id once written
@@ -704,7 +720,8 @@ export async function deleteForever(
   // this codebase can actually trigger today — confirmed by test.
   const homeGuard = (p: Params, bid: string) => {
     const ws = p.add(authorizedWorkspaceId);
-    return `(EXISTS (SELECT 1 FROM entries h WHERE h.id = ${bid} AND h.workspace_id = ${ws}) OR EXISTS (SELECT 1 FROM entries_trash h WHERE h.id = ${bid} AND h.workspace_id = ${ws}))`;
+    const nonceClause = authorizedTrashNonce === undefined ? "" : ` AND h.nonce = ${p.add(authorizedTrashNonce)}`;
+    return `(EXISTS (SELECT 1 FROM entries h WHERE h.id = ${bid} AND h.workspace_id = ${ws}) OR EXISTS (SELECT 1 FROM entries_trash h WHERE h.id = ${bid} AND h.workspace_id = ${ws}${nonceClause}))`;
   };
 
   const auditP = new Params();

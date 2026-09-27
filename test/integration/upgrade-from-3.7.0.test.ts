@@ -432,19 +432,22 @@ describe("the 3.7.0 d1-mock probe shape", () => {
 
     await initializeDatabase(mockEnv);
 
-    // The four new objects, in SCHEMA_OBJECTS's own declaration order, plus one harmless
-    // artifact: applySchema probes once up front and never again, so the freshly-created
-    // entry_versions table's own prior_length_utf16 column (baked into its CREATE) still gets
-    // an ALTER attempted against the stale pre-creation probe. D1 (and real SQLite) reject it as
-    // a duplicate column, caught by isDuplicateColumn — the same routine, non-fatal collision a
-    // brand-new brain hits on every cold start (test/unit/db-init.test.ts's "migrates a
-    // genuinely empty database"), not a new one Task 11 introduced.
+    // The four new objects, in SCHEMA_OBJECTS's own declaration order, plus two harmless
+    // artifacts: applySchema probes once up front and never again, so the freshly-created
+    // entry_versions and entries_trash tables' own prior_length_utf16 and nonce columns (baked
+    // into their CREATEs) still get an ALTER attempted against the stale pre-creation probe. D1
+    // (and real SQLite) reject it as a duplicate column, caught by isDuplicateColumn — the same
+    // routine, non-fatal collision a brand-new brain hits on every cold start
+    // (test/unit/db-init.test.ts's "migrates a genuinely empty database"), not a new one Task 11
+    // introduced. MOVED (T-0089.1.1, adv-final MAJOR 1): entries_trash.nonce joins
+    // prior_length_utf16 in this list.
     expect(execd.map(target)).toEqual([
       "entry_versions",
       "idx_entry_versions_entry",
       "entries_trash",
       "idx_entries_trash_deleted",
       "entry_versions.prior_length_utf16",
+      "entries_trash.nonce",
     ]);
     expect(execd[0]).toContain("prior_length_utf16"); // created already the wide way, not by a later ALTER
     expect(prepared).toEqual([expect.stringMatching(PROBE)]);

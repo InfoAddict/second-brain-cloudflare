@@ -103,11 +103,14 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/actions.ts', line: 183, kind: 'snapshot' },
   // MOVED (T-0100): readTrashCandidates's SQLITE_TOOBIG fallback added ~75 lines above these
   // three sites (two new read-only helpers); same sites, shifted line numbers only.
-  { file: 'src/memory/trash.ts', line: 215, kind: 'trash' },
-  // MOVED 581 -> 595, 719 -> 743 (T-0089.1.1, adv-final MAJOR 1): restoreEntry's batch grew a
-  // rowid/deleted_at identity guard (new Params lines above each statement); same sites, shifted.
-  { file: 'src/memory/trash.ts', line: 595, kind: 'exempt' },
-  { file: 'src/memory/trash.ts', line: 743, kind: 'hard-delete' },
+  // MOVED 215 -> 218 (T-0089.1.1, adv-final MAJOR 1): the nonce comment above trashManyStatements'
+  // insert() helper.
+  { file: 'src/memory/trash.ts', line: 218, kind: 'trash' },
+  // MOVED 581 -> 595 -> 605, 719 -> 743 -> 753 -> 760 (T-0089.1.1, adv-final MAJOR 1):
+  // restoreEntry's batch grew a nonce identity guard, the trash-insert helper gained a comment
+  // above it, and deleteForever grew a nonce param and doc comment; same sites, shifted only.
+  { file: 'src/memory/trash.ts', line: 605, kind: 'exempt' },
+  { file: 'src/memory/trash.ts', line: 760, kind: 'hard-delete' },
   { file: 'src/memory/undo.ts', line: 312, kind: 'snapshot' },
   // MOVED 337 -> 348 (T-0089.1.1, adv-final MAJOR 2): the merge-recreation loop gained the inline
   // re-embed budget check above this INSERT; same site, shifted line only.

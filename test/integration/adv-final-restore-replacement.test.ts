@@ -42,6 +42,10 @@ it("same-millisecond Delete forever and ID reuse cannot pass the stale restore r
   await forgetEntry("same-ms", t.env, { actorId: owner.userId, channel: "rest" },
     { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
   const ownerRead = (await getTrashedEntry(t.env, owner, "same-ms"))!;
+  // Raw, not through TrashedEntryRow (adv-final MAJOR 1 follow-up): rowid is no longer part of
+  // that type, since the fix below no longer trusts it — this is only proving the exploit's own
+  // setup produces a genuine rowid collision, not something the fix needs to consult.
+  const ownerRowid = (await t.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "same-ms"))!.rowid;
 
   expect((await deleteForever(t.env, "same-ms", { actorId: owner.userId, channel: "rest" },
     owner.personalWorkspaceId)).status).toBe("deleted");
@@ -51,7 +55,7 @@ it("same-millisecond Delete forever and ID reuse cannot pass the stale restore r
     { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
   const bobTrash = (await t.one<{ rowid: number; deleted_at: number }>(
     "SELECT rowid, deleted_at FROM entries_trash WHERE id = ?", "same-ms"))!;
-  expect(bobTrash).toMatchObject({ rowid: ownerRead.rowid, deleted_at: ownerRead.deleted_at });
+  expect(bobTrash).toMatchObject({ rowid: ownerRowid, deleted_at: ownerRead.deleted_at });
 
   const result = await restoreEntry(t.env, ownerRead, { actorId: owner.userId, channel: "rest" }, DEFAULTS);
   expect(result.status).not.toBe("restored");

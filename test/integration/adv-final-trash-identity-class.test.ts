@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { makeTrashEnv, type TrashEnv } from "../helpers/trash-env";
 import { createMember, cleanupMemberData } from "../../src/lib/team-admin";
 import { resolveIdentityByUserId } from "../../src/lib/identity";
@@ -7,7 +7,7 @@ import { getTrashedEntry, restoreEntry, deleteForever, purgeTrash } from "../../
 import { DEFAULTS } from "../../src/config";
 
 let t: TrashEnv;
-afterEach(() => t?.close());
+afterEach(() => { t?.close(); vi.restoreAllMocks(); });
 
 const forget = (id: string, actorId: string, workspaceId: string) =>
   forgetEntry(id, t.env, { actorId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, workspaceId);
@@ -120,5 +120,147 @@ it("every trash mutation is conditional on the exact row it read or the workspac
     expect(await t.one("SELECT id FROM entries_trash WHERE id = ?", "id-mr-old")).toBeNull();
     expect(await t.one("SELECT id FROM entries_trash WHERE id = ?", "id-mr-new")).toBeNull();
     expect(await t.one("SELECT id FROM entries_trash WHERE id = ?", "id-mr-owner")).not.toBeNull();
+  }
+});
+
+/**
+ * The follow-up finding (Codex re-check of 0436a226): rowid + deleted_at can BOTH collide when a
+ * delete and a reuse land in the same millisecond and the deleted row was the table's own max
+ * rowid — SQLite is then free to hand the very same rowid back to the next insert. Each section
+ * below runs in its own fresh, otherwise-empty trash table (so the rowid it frees is guaranteed to
+ * be reused) and freezes Date.now() so deleted_at collides too — the exact worst case the id-plus-
+ * rowid-plus-deleted_at guard could not tell apart, which the nonce column (a fresh
+ * crypto.randomUUID()/randomblob per row, never reused) always can.
+ */
+it("every trash mutation resists a same-millisecond, rowid-reusing row swap, not just a purge-and-reuse gap", async () => {
+  // Large enough that a trash row seeded with deleted_at = 1 (section 3) is comfortably past
+  // every retention/purge cutoff computed from it.
+  const FROZEN = 1_700_000_000_000;
+
+  // 1. Restore.
+  {
+    const env = await makeTrashEnv();
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(FROZEN);
+      const owner = (await resolveIdentityByUserId(env.env, env.roots.ownerUserId))!;
+      const { member: bob } = await createMember(env.env, { name: "Bob" });
+      env.seed("x", { content: "owner's memory" });
+      await forgetEntry("x", env.env, { actorId: owner.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
+      const ownerRead = (await getTrashedEntry(env.env, owner, "x"))!;
+      const ownerRowid = (await env.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "x"))!.rowid;
+
+      await env.env.DB.prepare("DELETE FROM entries_trash WHERE id = ?").bind("x").run();
+      env.seed("x", { content: "Bob's memory", actor_id: bob.userId, workspace_id: bob.personalWorkspaceId });
+      await forgetEntry("x", env.env, { actorId: bob.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
+      const bobTrash = (await env.one<{ rowid: number; deleted_at: number }>("SELECT rowid, deleted_at FROM entries_trash WHERE id = ?", "x"))!;
+      expect(bobTrash).toMatchObject({ rowid: ownerRowid, deleted_at: ownerRead.deleted_at }); // the collision is real, not assumed
+
+      const result = await restoreEntry(env.env, ownerRead, { actorId: owner.userId, channel: "rest" }, DEFAULTS);
+      expect(result.status).not.toBe("restored");
+      expect(await env.one("SELECT id FROM entries WHERE id = ?", "x")).toBeNull();
+      expect(await env.one<{ workspace_id: string }>("SELECT workspace_id FROM entries_trash WHERE id = ?", "x")).toMatchObject({ workspace_id: bob.personalWorkspaceId });
+    } finally {
+      vi.restoreAllMocks();
+      env.close();
+    }
+  }
+
+  // 2. Delete forever.
+  {
+    const env = await makeTrashEnv();
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(FROZEN);
+      const owner = (await resolveIdentityByUserId(env.env, env.roots.ownerUserId))!;
+      const { member: bob } = await createMember(env.env, { name: "Bob" });
+      env.seed("x", { content: "owner's memory" });
+      await forgetEntry("x", env.env, { actorId: owner.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
+      const ownerRead = (await getTrashedEntry(env.env, owner, "x"))!;
+      const ownerRowid = (await env.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "x"))!.rowid;
+
+      await env.env.DB.prepare("DELETE FROM entries_trash WHERE id = ?").bind("x").run();
+      env.seed("x", { content: "Bob's memory", actor_id: bob.userId, workspace_id: bob.personalWorkspaceId });
+      await forgetEntry("x", env.env, { actorId: bob.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
+      const bobRowid = (await env.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "x"))!.rowid;
+      expect(bobRowid).toBe(ownerRowid); // the collision is real, not assumed
+
+      const result = await deleteForever(env.env, "x", { actorId: owner.userId, channel: "rest" }, ownerRead.workspace_id, ownerRead.nonce);
+      expect(result.status).not.toBe("deleted");
+      expect(await env.one<{ workspace_id: string }>("SELECT workspace_id FROM entries_trash WHERE id = ?", "x")).toMatchObject({ workspace_id: bob.personalWorkspaceId });
+    } finally {
+      vi.restoreAllMocks();
+      env.close();
+    }
+  }
+
+  // 3. Purge: the candidate read and the delete batch straddle the same swap.
+  {
+    const env = await makeTrashEnv();
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(FROZEN);
+      const { member: bob } = await createMember(env.env, { name: "Bob" });
+      await env.sqlite.db.exec(
+        `INSERT INTO entries_trash (id, workspace_id, actor_id, content, row_json, edges_json, vector_ids, deleted_at, deleted_by, channel, reason, nonce)
+         VALUES ('x', '${env.roots.ownerPersonalWorkspaceId}', '', 'c', '{"created_at":1}', '[]', '[]', 1, '', 'rest', 'forget', lower(hex(randomblob(16))))`,
+      );
+      const ownerRowid = (await env.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "x"))!.rowid;
+
+      const realBatch = env.env.DB.batch.bind(env.env.DB);
+      let swapped = false;
+      (env.env.DB as unknown as { batch: typeof realBatch }).batch = async (stmts) => {
+        if (!swapped) {
+          swapped = true;
+          await env.env.DB.prepare("DELETE FROM entries_trash WHERE id = ?").bind("x").run();
+          env.seed("x", { content: "Bob's fresh memory", actor_id: bob.userId, workspace_id: bob.personalWorkspaceId });
+          await forgetEntry("x", env.env, { actorId: bob.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
+        }
+        return realBatch(stmts);
+      };
+      try {
+        await purgeTrash(env.env, DEFAULTS, { ceiling: 100, rowTarget: 5000, now: FROZEN });
+      } finally {
+        (env.env.DB as unknown as { batch: typeof realBatch }).batch = realBatch;
+      }
+      const bobRow = (await env.one<{ rowid: number; workspace_id: string }>("SELECT rowid, workspace_id FROM entries_trash WHERE id = ?", "x"))!;
+      expect(bobRow.rowid).toBe(ownerRowid); // the collision is real, not assumed
+      expect(bobRow).toMatchObject({ workspace_id: bob.personalWorkspaceId });
+    } finally {
+      vi.restoreAllMocks();
+      env.close();
+    }
+  }
+
+  // 4. Member removal: the final sweep's own workspace scope, not any earlier-read row identity,
+  // is what protects it — a rowid/deleted_at collision on an UNRELATED id changes nothing here.
+  {
+    const env = await makeTrashEnv();
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(FROZEN);
+      const owner = (await resolveIdentityByUserId(env.env, env.roots.ownerUserId))!;
+      const { member: bob } = await createMember(env.env, { name: "Bob" });
+      env.seed("owner-row", { content: "owner's own" });
+      await forgetEntry("owner-row", env.env, { actorId: owner.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, owner.personalWorkspaceId);
+
+      // A same-millisecond delete-and-reuse in Bob's own workspace, right before the final sweep:
+      // the freed slot is Bob's own row's rowid (SQLite can only reuse a just-freed slot, not an
+      // arbitrary occupied one, so the owner's still-live row is never the one reused here) — the
+      // point is that SOME rowid collision happens right before the sweep, and the sweep's
+      // protection (workspace scope, not row identity) must not care either way.
+      env.seed("bob-row", { content: "bob's own", workspace_id: bob.personalWorkspaceId, actor_id: bob.userId });
+      await forgetEntry("bob-row", env.env, { actorId: bob.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
+      const bobRowidBefore = (await env.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "bob-row"))!.rowid;
+      await env.env.DB.prepare("DELETE FROM entries_trash WHERE id = ?").bind("bob-row").run();
+      env.seed("bob-row", { content: "bob's own, again", workspace_id: bob.personalWorkspaceId, actor_id: bob.userId });
+      await forgetEntry("bob-row", env.env, { actorId: bob.userId, channel: "rest" }, { reason: "forget", config: DEFAULTS, purge: false }, bob.personalWorkspaceId);
+      const bobRowid = (await env.one<{ rowid: number }>("SELECT rowid FROM entries_trash WHERE id = ?", "bob-row"))!.rowid;
+      expect(bobRowid).toBe(bobRowidBefore); // the collision is real, not assumed
+
+      await cleanupMemberData(env.env, bob.userId, bob.personalWorkspaceId);
+
+      expect(await env.one("SELECT id FROM entries_trash WHERE id = ?", "bob-row")).toBeNull();
+      expect(await env.one("SELECT id FROM entries_trash WHERE id = ?", "owner-row")).not.toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+      env.close();
+    }
   }
 });
