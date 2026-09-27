@@ -300,6 +300,8 @@ A successful response looks like `{"ok":true,"id":"..."}`.
 - **Gemini CLI:** session-start recall — [`integrations/gemini-cli-hooks/`](integrations/gemini-cli-hooks/)
 - **Dashboard:** Capture, recall, browse, graph, share, back up, and restore from the built-in web interface
 
+Not yet supported, revisit later: **Windsurf** (no documented session-start context injection event, only a post-response hook); **OpenCode** and **Oh My Pi** (plugin/event-callback APIs, not stdin/stdout scripts, so they need their own integration model rather than an adapter like the ones above).
+
 See [Capture from Anywhere](https://github.com/rahilp/second-brain-cloudflare/wiki/Capture-from-Anywhere) for setup and usage instructions.
 
 ## What's new in v3
