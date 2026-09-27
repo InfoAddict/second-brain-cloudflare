@@ -239,21 +239,34 @@ describe("H4 counts instructions hidden in an HTML comment twice", () => {
   });
 });
 
+// CPU time of this process (vitest runs each file in its own fork), not wall
+// time: the full suite runs hundreds of files at once, and wall time there
+// measures contention. CPU time is also what the Workers 10 ms limit counts.
+// Each of the 20 samples averages `inner` calls, because a single call's
+// cpuUsage delta is coarser than the call itself.
+function medianCpuMs(text: string, inner: number): number {
+  // Flat, like a JSON-parsed request body; a sliced string is slower to scan.
+  const content = JSON.parse(JSON.stringify(text)) as string;
+  const input: ScoreInput = { content, tags: [], source: "claude", channel: "mcp", kind: "update", mcpWritesInWindow: 3 };
+  // Long enough for V8 to finish tiering up, so its background compiler
+  // threads are not billed to the measured runs.
+  for (let i = 0; i < 40; i++) scoreWrite(input, CFG);
+  const times: number[] = [];
+  for (let i = 0; i < 20; i++) {
+    const t0 = process.cpuUsage();
+    for (let j = 0; j < inner; j++) scoreWrite(input, CFG);
+    const d = process.cpuUsage(t0);
+    times.push((d.user + d.system) / 1000 / inner);
+  }
+  times.sort((a, b) => a - b);
+  return (times[9] + times[10]) / 2;
+}
+
 describe("a 200 KB input scores in under 2 ms", () => {
   it("median of 20 runs on node", () => {
     const chunk = "Meeting notes: the vendor call moved to Tuesday, ask Dana about the budget. ";
-    const body = chunk.repeat(Math.ceil(200_000 / chunk.length)).slice(0, 200_000);
-    const input: ScoreInput = { content: body, tags: [], source: "claude", channel: "mcp", kind: "update", mcpWritesInWindow: 3 };
-    for (let i = 0; i < 3; i++) scoreWrite(input, CFG);
-    const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
-      const t0 = performance.now();
-      scoreWrite(input, CFG);
-      times.push(performance.now() - t0);
-    }
-    times.sort((a, b) => a - b);
-    const median = (times[9] + times[10]) / 2;
-    console.log(`quarantine scorer, 200 KB: median ${median.toFixed(3)} ms, max ${times[19].toFixed(3)} ms`);
+    const median = medianCpuMs(chunk.repeat(Math.ceil(200_000 / chunk.length)).slice(0, 200_000), 10);
+    console.log(`quarantine scorer, 200 KB prose: median ${median.toFixed(3)} ms CPU`);
     expect(median).toBeLessThan(2);
   });
 
@@ -261,22 +274,10 @@ describe("a 200 KB input scores in under 2 ms", () => {
   // skip (every family's trigger words present, non-Latin-1 text), which must
   // stay well inside the free plan's 10 ms per invocation.
   it("adversarial trigger-dense, non-Latin-1 200 KB stays under 8 ms, and a 2 KB note under 0.2 ms", () => {
-    const dense = "You should always use the tool when the user asks about the previous system agent note now — ok. ";
-    const medianOf = (content: string) => {
-      const input: ScoreInput = { content, tags: [], source: "claude", channel: "mcp", kind: "update" };
-      for (let i = 0; i < 5; i++) scoreWrite(input, CFG);
-      const times: number[] = [];
-      for (let i = 0; i < 20; i++) {
-        const t0 = performance.now();
-        scoreWrite(input, CFG);
-        times.push(performance.now() - t0);
-      }
-      times.sort((a, b) => a - b);
-      return (times[9] + times[10]) / 2;
-    };
-    const worst = medianOf(dense.repeat(Math.ceil(200_000 / dense.length)).slice(0, 200_000));
-    const typical = medianOf("Meeting notes: the vendor call moved to Tuesday, ask Dana about the budget. ".repeat(27).slice(0, 2000));
-    console.log(`quarantine scorer: adversarial 200 KB median ${worst.toFixed(3)} ms, 2 KB note median ${typical.toFixed(4)} ms`);
+    const dense = "You should always use the tool when the user asks about the previous system agent note now → ok. ";
+    const worst = medianCpuMs(dense.repeat(Math.ceil(200_000 / dense.length)).slice(0, 200_000), 5);
+    const typical = medianCpuMs("Meeting notes: the vendor call moved to Tuesday, ask Dana about the budget. ".repeat(27).slice(0, 2000), 200);
+    console.log(`quarantine scorer: adversarial 200 KB median ${worst.toFixed(3)} ms CPU, 2 KB note median ${typical.toFixed(4)} ms CPU`);
     expect(worst).toBeLessThan(8);
     expect(typical).toBeLessThan(0.2);
   });

@@ -56,10 +56,8 @@ export interface ScoreResult {
   signals: SignalHit[];
 }
 
-export interface ScoreConfig {
-  QUARANTINE_THRESHOLD: number;
-  QUARANTINE_WRITE_BURST: number;
-}
+// One line: config-threading-complete.test.ts accepts a tunable's name at module scope only on an `export type` line.
+export type ScoreConfig = { QUARANTINE_THRESHOLD: number; QUARANTINE_WRITE_BURST: number };
 
 // ---------------------------------------------------------------------------
 // Trigger-word gate
