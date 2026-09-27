@@ -841,12 +841,14 @@
           <i class="ti ti-trash"></i>
           <span data-i18n="settingsPanel.retentionLabel">Keep forgotten memories for</span>
           <span class="team-select-wrap"><select class="team-select" id="setting-trash-retention" onchange="onSettingChange('setting-trash-retention', 'TRASH_RETENTION_DAYS')"></select><i class="ti ti-chevron-down"></i></span>
+          <button type="button" class="digest-btn digest-btn--quiet" id="setting-trash-retention-reset" onclick="resetSetting('TRASH_RETENTION_DAYS')" title="Reset to the default" data-i18n="settingsPanel.resetAria" data-i18n-attr="title" hidden><span data-i18n="settingsPanel.reset">Reset</span></button>
         </div>
         <p class="digest-note settings-row-note" data-i18n="settingsPanel.retentionHelp">After this, a forgotten memory is removed for good. Memories already in the trash longer than this are removed at the next cleanup.</p>
         <div class="team-open-row">
           <i class="ti ti-history"></i>
           <span data-i18n="settingsPanel.keepLabel">Changes kept per memory</span>
           <span class="team-select-wrap"><select class="team-select" id="setting-version-keep" onchange="onSettingChange('setting-version-keep', 'VERSION_KEEP')"></select><i class="ti ti-chevron-down"></i></span>
+          <button type="button" class="digest-btn digest-btn--quiet" id="setting-version-keep-reset" onclick="resetSetting('VERSION_KEEP')" title="Reset to the default" data-i18n="settingsPanel.resetAria" data-i18n-attr="title" hidden><span data-i18n="settingsPanel.reset">Reset</span></button>
         </div>
         <p class="digest-note settings-row-note" data-i18n="settingsPanel.keepHelp">Older changes beyond this number are removed as new ones arrive. Raising it does not bring back changes already removed.</p>
         <!-- No visible stub: this shows only once GET /config's `defaults`

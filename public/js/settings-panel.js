@@ -12,6 +12,22 @@ const SETTINGS_CHOICES = {
   VERSION_KEEP: [10, 20, 50],
 };
 
+/** Must equal the Worker's shipped DEFAULTS (src/config.ts) — what Reset goes back to. */
+const SETTINGS_DEFAULT = {
+  TRASH_RETENTION_DAYS: 14,
+  VERSION_KEEP: 20,
+};
+
+const SETTINGS_SELECT_ID = {
+  TRASH_RETENTION_DAYS: 'setting-trash-retention',
+  VERSION_KEEP: 'setting-version-keep',
+};
+
+const SETTINGS_RESET_BTN_ID = {
+  TRASH_RETENTION_DAYS: 'setting-trash-retention-reset',
+  VERSION_KEEP: 'setting-version-keep-reset',
+};
+
 /** The effective value each select currently shows, for Undo's "prior value". */
 const settingsCurrent = { TRASH_RETENTION_DAYS: null, VERSION_KEEP: null };
 
@@ -52,12 +68,21 @@ function retentionDaysLabel(n) {
  * reconstructs the option text and not just the selected value. */
 const SETTINGS_LABEL = { TRASH_RETENTION_DAYS: retentionDaysLabel, VERSION_KEEP: undefined };
 
+/** Reset is an admin-only affordance, and only means something once the
+ * effective value has actually left the shipped default. */
+function updateResetVisibility(key, value) {
+  const btn = document.getElementById(SETTINGS_RESET_BTN_ID[key]);
+  if (!btn) return;
+  btn.hidden = teamIsAdmin === false || value === SETTINGS_DEFAULT[key];
+}
+
 function applySettingsRole(admin) {
   const note = document.getElementById('settings-admin-note');
   if (note) note.hidden = admin;
-  for (const id of ['setting-trash-retention', 'setting-version-keep']) {
-    const sel = document.getElementById(id);
+  for (const key of Object.keys(SETTINGS_SELECT_ID)) {
+    const sel = document.getElementById(SETTINGS_SELECT_ID[key]);
     if (sel) sel.disabled = !admin;
+    updateResetVisibility(key, settingsCurrent[key]);
   }
 }
 
@@ -101,6 +126,7 @@ async function onSettingChange(selectId, key) {
   try {
     await patchSetting(key, value);
     settingsCurrent[key] = value;
+    updateResetVisibility(key, value);
     showToast(t('settingsPanel.saved'), {
       action: t('team.undo'),
       onAction: async () => {
@@ -108,6 +134,7 @@ async function onSettingChange(selectId, key) {
           await patchSetting(key, previous);
           settingsCurrent[key] = previous;
           renderSettingsOptions(selectId, SETTINGS_CHOICES[key], previous, SETTINGS_LABEL[key]);
+          updateResetVisibility(key, previous);
         } catch (e) {
           showToast(e.message || t('team.actionFailed'));
         }
@@ -117,6 +144,7 @@ async function onSettingChange(selectId, key) {
     // A refused write leaves the effective value unchanged; the select goes
     // back to it rather than sitting on a value the Worker never accepted.
     renderSettingsOptions(selectId, SETTINGS_CHOICES[key], previous, SETTINGS_LABEL[key]);
+    updateResetVisibility(key, previous);
     if (e.status === 403) {
       // The role may have changed since the sheet opened: re-probe rather
       // than assume this was a stale admin flag.
@@ -124,5 +152,28 @@ async function onSettingChange(selectId, key) {
     } else {
       showToast(e.message || t('settingsPanel.failed', { message: '' }));
     }
+  }
+}
+
+/**
+ * Reset one key to the Worker's shipped default (DELETE /config/:key),
+ * independent of the other setting — the same per-key reset the route
+ * already offers admins elsewhere.
+ */
+async function resetSetting(key) {
+  const selectId = SETTINGS_SELECT_ID[key];
+  try {
+    const res = await fetch(`${WORKER_URL}/config/${key}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || t('settingsPanel.failed', { message: String(res.status) }));
+    settingsCurrent[key] = SETTINGS_DEFAULT[key];
+    renderSettingsOptions(selectId, SETTINGS_CHOICES[key], SETTINGS_DEFAULT[key], SETTINGS_LABEL[key]);
+    updateResetVisibility(key, SETTINGS_DEFAULT[key]);
+    showToast(t('settingsPanel.wasReset'));
+  } catch (e) {
+    showToast(e.message || t('settingsPanel.failed', { message: '' }));
   }
 }

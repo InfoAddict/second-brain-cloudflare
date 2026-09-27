@@ -72,6 +72,9 @@ function load(configResponse: any, opts: { admin?: boolean } = {}) {
   for (const f of ["public/utils.js", "public/js/state.js", "public/js/settings-panel.js"]) {
     vm.runInContext(readFileSync(resolve(ROOT, f), "utf8"), ctx);
   }
+  // state.js declares these with `let`, which shadows the ctx properties set
+  // above (danger-sheet.test.ts's harness hits the same thing).
+  vm.runInContext(`WORKER_URL = "https://example.test"; AUTH_TOKEN = "t"`, ctx);
   ctx.__els = els;
   ctx.__toasts = toasts;
   ctx.__patches = patches;
@@ -205,5 +208,56 @@ describe("both locales", () => {
     await ctx.onSettingChange("setting-version-keep", "VERSION_KEEP");
     expect(ctx.__toasts[0].message).toBe("Salvato");
     expect(ctx.__toasts[0].opts.action).toBe("Annulla");
+  });
+});
+
+describe("Reset to default", () => {
+  it("stays hidden while the effective value already is the default", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 14, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(true);
+    expect(el(ctx, "setting-version-keep-reset").hidden).toBe(true);
+  });
+
+  it("shows for an admin once the value is anything other than the default, including a Custom one", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 30, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(false);
+    expect(el(ctx, "setting-version-keep-reset").hidden).toBe(true);
+
+    const ctxCustom = load({ config: { TRASH_RETENTION_DAYS: 21, VERSION_KEEP: 20 }, defaults: {} });
+    await ctxCustom.loadSettingsPanel();
+    expect(el(ctxCustom, "setting-trash-retention-reset").hidden).toBe(false);
+  });
+
+  it("never shows for a member, even on a non-default value", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 30, VERSION_KEEP: 20 }, defaults: {} }, { admin: false });
+    await ctx.loadSettingsPanel();
+    expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(true);
+  });
+
+  it("DELETEs the key, restores the default, and hides itself again", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 30, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+
+    await ctx.resetSetting("TRASH_RETENTION_DAYS");
+
+    expect(ctx.__patches).toHaveLength(1);
+    expect(ctx.__patches[0]).toMatchObject({ method: "DELETE", url: "https://example.test/config/TRASH_RETENTION_DAYS" });
+    expect(el(ctx, "setting-trash-retention").value).toBe("14");
+    expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(true);
+    expect(ctx.__toasts[0].message).toBe("Reset to default");
+  });
+
+  it("reports a failed reset without changing the effective value", async () => {
+    const ctx = load({ config: { TRASH_RETENTION_DAYS: 30, VERSION_KEEP: 20 }, defaults: {} });
+    await ctx.loadSettingsPanel();
+    ctx.__patchResponse = () => ({ ok: false, status: 500, json: async () => ({ ok: false, error: "server error" }) });
+
+    await ctx.resetSetting("TRASH_RETENTION_DAYS");
+
+    expect(el(ctx, "setting-trash-retention").value).toBe("30");
+    expect(el(ctx, "setting-trash-retention-reset").hidden).toBe(false);
+    expect(ctx.__toasts[0].message).toBe("server error");
   });
 });

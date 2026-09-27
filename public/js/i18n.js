@@ -416,6 +416,9 @@ const I18N_EN = {
     adminOnly: 'Only an admin can change these.',
     saved: 'Saved',
     failed: 'Could not save: {message}',
+    reset: 'Reset',
+    resetAria: 'Reset to the default',
+    wasReset: 'Reset to default',
   },
   whatsNew: {
     line: "New in 4.0: every change to a memory is kept, so you can undo it, and forgotten memories wait in the trash for {n} days.",
@@ -1468,6 +1471,9 @@ const I18N_IT = {
     adminOnly: 'Solo un amministratore può modificarle.',
     saved: 'Salvato',
     failed: 'Impossibile salvare: {message}',
+    reset: 'Reimposta',
+    resetAria: 'Reimposta al valore predefinito',
+    wasReset: 'Ripristinato al valore predefinito',
   },
   whatsNew: {
     line: "Novità della 4.0: ogni modifica a un ricordo viene conservata, quindi puoi annullarla, e i ricordi dimenticati restano nel cestino per {n} giorni.",
