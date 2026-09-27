@@ -263,11 +263,12 @@ export async function handleCaptureRoutes(
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated" });
-
     if (result.status === "reembed_failed") {
       return json({ ok: false, error: "Couldn't update: search re-index failed. Your memory is unchanged — please try again." }, 500);
     }
+
+    // Only a write that happened is audited.
+    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated" });
 
     if (!result.vectorIds) {
       return json({
