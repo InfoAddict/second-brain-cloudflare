@@ -6,6 +6,7 @@ import { extractHashtags } from "../text/hashtags";
 import { classifyThenInfer, scheduleClassifyAndTag } from "./classify";
 import { checkDuplicateAndContradiction } from "./duplicate";
 import { deprecateEntry } from "./lifecycle";
+import { auditEvent } from "../lib/audit";
 import { deleteStaleVectors, reembedOrThrow, storeEntry } from "./store";
 import { tagsAfterWrite } from "../memory/stale";
 import { getVolatility, withVolatility } from "../memory/volatility";
@@ -85,6 +86,17 @@ export function normalizeCaptureInput(rawContent: string, tags: string[]): { con
   };
 }
 
+export interface CaptureOptions {
+  /**
+   * A system job (digest, weekly insight) is writing. It never merges into or
+   * replaces an existing row: a user's or agent's memory is left byte-identical
+   * and the newcomer is stored as its own row, still flagged as a duplicate.
+   */
+  systemWrite?: boolean;
+  /** Audit channel for events the domain layer writes itself: "mcp", "rest" or "system:<job>". */
+  channel?: string;
+}
+
 export async function captureEntry(
   rawContent: string,
   tags: string[],
@@ -97,6 +109,7 @@ export async function captureEntry(
   // "stored" INSERT below — a merged/replaced/protected write survives as an
   // EXISTING row with its own timing, which this does not touch.
   when?: { at: number; kind: WhenKind; source: WhenSource },
+  opts: CaptureOptions = {},
 ): Promise<CaptureResult> {
   // Resolved once per capture and threaded through duplicate detection and
   // every embed below. Recall and capture must agree on EMBEDDING_MODEL or the
@@ -280,7 +293,14 @@ export async function captureEntry(
       console.error("Contradiction count update failed (non-fatal):", e);
     }
     try {
-      await deprecateEntry(conflictId, env);
+      if (await deprecateEntry(conflictId, env)) {
+        auditEvent(env, ctx, {
+          entryId: conflictId,
+          actorId: writeCtx.actorId,
+          event: "status_changed",
+          payload: { status: "deprecated", reason: "contradiction", newEntryId: id, channel: opts.channel ?? "unspecified" },
+        });
+      }
     } catch (e) {
       console.error("Contradiction deprecation failed (non-fatal):", e);
     }

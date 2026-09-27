@@ -1,0 +1,68 @@
+/**
+ * The row a contradicting capture deprecates gets its own audit event.
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { captureEntry } from "../../src/capture/entry";
+import { resetDatabaseInit, initializeDatabase } from "../../src/db/init";
+import { makeTestEnv, makeMemoryKV, makeVectorizeMock } from "../helpers/make-env";
+import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
+import type { Env } from "../../src/env";
+
+const pending: Promise<unknown>[] = [];
+const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as ExecutionContext;
+
+function makeAI(decision: string) {
+  return {
+    run: vi.fn().mockImplementation(async (model: string) => {
+      if (model === "@cf/baai/bge-small-en-v1.5") return { data: [new Array(384).fill(0.1)] };
+      return new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(`data: {"response":${JSON.stringify(decision)}}\n\n`));
+          c.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+          c.close();
+        },
+      });
+    }),
+  } as unknown as Ai;
+}
+
+describe("contradiction audit", () => {
+  let sqlite: SqliteD1;
+  let env: Env;
+
+  beforeEach(async () => {
+    resetDatabaseInit();
+    pending.length = 0;
+    sqlite = makeSqliteD1();
+    env = makeTestEnv(undefined, {
+      DB: sqlite.db as unknown as Env["DB"],
+      OAUTH_KV: makeMemoryKV(),
+      VECTORIZE: makeVectorizeMock({
+        query: vi.fn().mockResolvedValue({ matches: [{ id: "old", score: 0.72, metadata: { parentId: "old" } }] }),
+      }),
+      AI: makeAI('{"contradicts": true, "conflicting_id": "old", "reason": "different city"}'),
+    });
+    await initializeDatabase(env);
+    sqlite.seed({ id: "old", content: "I live in NYC", tags: [], createdAt: 1000 });
+  });
+
+  afterEach(() => sqlite.close());
+
+  const events = async () => {
+    await Promise.allSettled(pending);
+    return ((await env.DB.prepare(`SELECT entry_id, actor_id, event, payload FROM entry_events`).all()).results) as
+      { entry_id: string; actor_id: string; event: string; payload: string }[];
+  };
+
+  it("writes status_changed for the deprecated row, naming the new row", async () => {
+    const result = await captureEntry("I moved to LA", [], "api", env, ctx, undefined, { workspaceId: "", actorId: "u1" }, undefined, { channel: "rest" });
+    expect(result.status).toBe("contradiction");
+    if (result.status !== "contradiction") return;
+    const trail = await events();
+    expect(trail).toHaveLength(1);
+    expect(trail[0]).toMatchObject({ entry_id: "old", actor_id: "u1", event: "status_changed" });
+    expect(JSON.parse(trail[0].payload)).toEqual({
+      status: "deprecated", reason: "contradiction", newEntryId: result.id, channel: "rest",
+    });
+  });
+});
