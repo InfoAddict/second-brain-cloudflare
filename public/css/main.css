@@ -2512,6 +2512,22 @@
         color: var(--text-primary);
       }
 
+      /* Track 7 lane B's decision rows: a small localized cue, not text baked
+         into the stored label. */
+      .due-review-cue {
+        display: inline-block;
+        font-size: 10.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--accent-ink);
+        background: var(--accent-soft);
+        border-radius: var(--r-chip);
+        padding: 2px 6px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
       .due-tags {
         margin-bottom: 8px;
       }

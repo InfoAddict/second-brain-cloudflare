@@ -868,6 +868,10 @@ const I18N_EN = {
   },
   due: {
     title: 'Due',
+    // Track 7 lane B stores a decision row's bare label, without a "Review:"
+    // prefix baked into the stored text, so the sheet supplies its own
+    // localized cue for a row tagged ledger:decision.
+    reviewCue: 'Review',
     empty: 'Nothing due.',
     loadFailed: 'Could not load what is due.',
     due: 'Due {date}',
@@ -1912,6 +1916,7 @@ const I18N_IT = {
   },
   due: {
     title: 'Scadenze',
+    reviewCue: 'Da rivedere',
     empty: 'Nessuna scadenza.',
     loadFailed: 'Impossibile caricare le scadenze.',
     due: 'Scade il {date}',
