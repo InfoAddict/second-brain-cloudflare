@@ -11,6 +11,7 @@ import { forgetEntry } from "../capture/lifecycle";
 import { applyStatus } from "../capture/lifecycle";
 import { moveEntry, restampVectorWorkspace, type ShareTarget } from "../capture/share";
 import { auditEvent } from "../lib/audit";
+import { resolveConfig } from "../config";
 import { STATUS_VALUES, type MemoryStatus } from "../memory/status";
 import { getTagVocabulary } from "../tags/vocabulary";
 import { projectRowsOf } from "../projects/registry";
@@ -185,14 +186,18 @@ export async function handleEntriesRoutes(
     const denied = assertCanMutateEntry(auth, row);
     if (denied) return json({ ok: false, error: denied.message }, 403);
 
-    const result = await forgetEntry(id, env);
+    const cfg = await resolveConfig(env);
+    const result = await forgetEntry(id, env, { actorId: auth.userId, channel: "rest" }, { reason: "forget", config: cfg });
 
     if (result.status === "not_found") {
       return json({ ok: false, error: `No entry found with ID: ${id}` }, 404);
     }
 
-    auditEvent(env, ctx, { entryId: id, actorId: auth.userId, event: "deleted", payload: { deletedVectors: result.vectorCount, channel: "rest" } });
-    return json({ ok: true, id, deletedVectors: result.vectorCount });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: auth.userId, event: "deleted",
+      payload: { deletedVectors: result.vectorCount, channel: "rest", trash: result.trashed, reason: result.trashed ? "forget" : "too_large_for_trash", ...(result.edgesDropped ? { edgesDropped: true } : {}) },
+    });
+    return json({ ok: true, id, deletedVectors: result.vectorCount, trash: result.trashed, retention_days: cfg.TRASH_RETENTION_DAYS });
   }
 
   // GET /entry — one full row by id, for the dashboard graph view's tap-to-open

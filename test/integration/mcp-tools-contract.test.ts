@@ -417,11 +417,13 @@ describe("MCP tool descriptions teach generic recall behaviour", () => {
       }
     });
 
-    it("forget is still explicit about permanent deletion", async () => {
+    it("forget stays explicit about deleting, and says where a deleted entry goes", async () => {
       const forget = (await descriptions()).forget;
-      expect(forget).toMatch(/permanently delete/i);
       expect(forget).toMatch(/only call when the user explicitly asks/i);
-      expect(forget).toMatch(/cannot be undone/i);
+      // T-0089.1.2: forget moves to the trash, so it no longer claims to be permanent or unrecoverable.
+      expect(forget).not.toMatch(/cannot be undone|permanently/i);
+      expect(forget).toMatch(/trash/i);
+      expect(forget).toMatch(/removed for good after the retention period \(14 days/i);
     });
   });
 

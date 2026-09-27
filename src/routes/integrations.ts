@@ -16,6 +16,7 @@ import { adminAuditEvent, writeAdminEvent } from "../lib/admin-audit";
 import { requireAdmin, requireIdentity } from "../lib/identity";
 import { listRoster } from "../lib/team-admin";
 import { forgetEntry } from "../capture/lifecycle";
+import { resolveConfig } from "../config";
 import { getReadableEntry, assertCanMutateEntry } from "../lib/entry-access";
 import { makeMirrorStore, mirrorWriteContext } from "../integrations/mirror";
 import { moveEntry, restampVectorWorkspace } from "../capture/share";
@@ -423,7 +424,7 @@ export async function handleIntegrationsRoutes(
           // deleted one at a time; anything else is left standing and counted.
           const row = await getReadableEntry(env, auth, mapped.entryId);
           if (!row || assertCanMutateEntry(auth, row)) { skipped++; continue; }
-          const r = await forgetEntry(mapped.entryId, env);
+          const r = await forgetEntry(mapped.entryId, env, { actorId: auth.userId, channel: "rest" }, { reason: "disconnect", config: await resolveConfig(env), purge: false });
           if (r.status === "deleted") {
             purged++;
             purgeAudit.push({

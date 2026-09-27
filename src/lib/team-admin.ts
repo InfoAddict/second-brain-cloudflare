@@ -1,7 +1,9 @@
 import type { Env } from "../env";
 import { resolveConfig } from "../config";
 import { hashToken } from "./identity";
-import { D1_MAX_BOUND_PARAMS } from "../constants";
+import {
+  D1_MAX_BOUND_PARAMS, MEMBER_HISTORY_CHUNK, MEMBER_HISTORY_MAX_CHUNKS, MEMBER_HISTORY_SLICE,
+} from "../constants";
 
 /** Team membership, workspace, and offboarding operations. */
 
@@ -403,7 +405,7 @@ export async function removeMember(
   env: Env,
   actorId: string,
   userId: string,
-): Promise<{ removedEntries: number; vectorIds: string[] }> {
+): Promise<RemovalProgress> {
   if (userId === actorId) {
     throw new TeamAdminError(400, "You cannot remove your own account");
   }
@@ -451,33 +453,146 @@ export async function removeMember(
   ).bind(userId).first<{ wid: string }>();
   if (!personal) throw new TeamAdminError(404, `No member found with ID: ${userId}`);
 
+  return cleanupMemberData(env, userId, personal.wid);
+}
+
+export interface RemovalProgress {
+  /** False while history remains: the caller answers 202, and writes no audit and deletes no vectors yet. */
+  done: boolean;
+  removedEntries: number;
+  vectorIds: string[];
+  /** Entry ids whose history is not fully cleaned yet (done: false only). */
+  remaining?: number;
+  /** Rows written by this call, for the nightly budget. */
+  rowsWritten?: number;
+}
+
+/**
+ * A member's data cleanup, chain-safe and resumable. History goes first, in bounded bottom-up
+ * chunks (so no chain is ever left with a gap or an orphan); only when none remains does the
+ * one final batch delete the rows themselves, the trash rows, the membership and the workspace.
+ * `rowsLeft` (the nightly resume) shrinks each chunk and defers a final batch that would not fit,
+ * unless `allowOversize` (a night when the purge wrote nothing).
+ */
+export async function cleanupMemberData(
+  env: Env,
+  userId: string,
+  personalWid: string,
+  opts: { rowsLeft?: number; allowOversize?: boolean } = {},
+): Promise<RemovalProgress> {
+  let rowsWritten = 0;
+  const left = () => (opts.rowsLeft ?? Infinity) - rowsWritten;
+
+  // Affected ids, collected once per call. A: rows and trash rows the member owns; B: entries whose
+  // history carries the member's personal-era versions (shared out since), minus A.
+  const idsA = new Set<string>();
+  {
+    const { results } = await env.DB.prepare(
+      // scope-exempt: offboarding: ids in the removed member's own workspace
+      `SELECT id FROM entries WHERE workspace_id = ?1 UNION SELECT id FROM entries_trash WHERE workspace_id = ?1`,
+    ).bind(personalWid).all<{ id: string }>();
+    for (const r of results ?? []) idsA.add(r.id);
+  }
+  const idsB: string[] = [];
+  {
+    const { results } = await env.DB.prepare(
+      // scope-exempt: offboarding: versions stamped with the removed member's personal workspace
+      `SELECT DISTINCT entry_id FROM entry_versions WHERE workspace_id = ?1`,
+    ).bind(personalWid).all<{ entry_id: string }>();
+    for (const r of results ?? []) if (!idsA.has(r.entry_id)) idsB.push(r.entry_id);
+  }
+
+  // Work units: slices of ids, each deleted a chunk at a time until it returns fewer than asked.
+  type Unit = { kind: "A" | "B"; ids: string[] };
+  const slices = (kind: "A" | "B", ids: string[]): Unit[] => {
+    const out: Unit[] = [];
+    for (let i = 0; i < ids.length; i += MEMBER_HISTORY_SLICE) out.push({ kind, ids: ids.slice(i, i + MEMBER_HISTORY_SLICE) });
+    return out;
+  };
+  const units = [...slices("A", [...idsA]), ...slices("B", idsB)];
+  let executions = 0;
+  while (units.length && executions < MEMBER_HISTORY_MAX_CHUNKS) {
+    const chunk = Math.min(MEMBER_HISTORY_CHUNK, Math.floor(left() / 2));
+    if (chunk < 1) break;
+    const unit = units[0];
+    const res = unit.kind === "A"
+      ? await env.DB.prepare(
+        // scope-exempt: offboarding: oldest versions first of entries the removed member owns
+        `DELETE FROM entry_versions WHERE id IN (
+           SELECT id FROM entry_versions WHERE entry_id IN (SELECT value FROM json_each(?1)) ORDER BY seq LIMIT ?2)`,
+      ).bind(JSON.stringify(unit.ids), chunk).run()
+      : await env.DB.prepare(
+        // scope-exempt: offboarding: versions up to the newest one stamped with the removed member's personal workspace, oldest first
+        `DELETE FROM entry_versions WHERE id IN (
+           SELECT v.id FROM entry_versions v
+            WHERE v.entry_id IN (SELECT value FROM json_each(?1))
+              AND v.seq <= (SELECT MAX(w.seq) FROM entry_versions w WHERE w.entry_id = v.entry_id AND w.workspace_id = ?2)
+            ORDER BY v.seq LIMIT ?3)`,
+      ).bind(JSON.stringify(unit.ids), personalWid, chunk).run();
+    executions++;
+    const n = changedRows(res);
+    rowsWritten += 2 * n;
+    if (n < chunk) units.shift();
+  }
+  if (units.length) {
+    return { done: false, removedEntries: 0, vectorIds: [], remaining: units.reduce((n, u) => n + u.ids.length, 0), rowsWritten };
+  }
+
   // Collect the doomed rows' vectors first: D1 rows go in one batch, the
   // Vectorize delete is the caller's (it may be absent entirely).
   const { results: vectorRows } = await env.DB.prepare(
     `SELECT vector_ids FROM entries WHERE workspace_id = ? AND vector_ids != '[]'`,
-  ).bind(personal.wid).all<{ vector_ids: string }>();
+  ).bind(personalWid).all<{ vector_ids: string }>();
   const vectorIds = (vectorRows ?? []).flatMap((r) => {
     try { return JSON.parse(r.vector_ids) as string[]; } catch { return []; }
   });
 
-  const { results: counts } = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM entries WHERE workspace_id = ?`,
-  ).bind(personal.wid).all<{ n: number }>();
-  const removedEntries = counts?.[0]?.n ?? 0;
+  const count = await env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM entries WHERE workspace_id = ?1) AS entries,
+            (SELECT COUNT(*) FROM entries_trash WHERE workspace_id = ?1) AS trashed,
+            (SELECT COUNT(*) FROM edges WHERE workspace_id = ?1) AS edges`,
+  ).bind(personalWid).first<{ entries: number; trashed: number; edges: number }>();
+  const removedEntries = count?.entries ?? 0;
+  // A final batch that would not fit the night's budget waits for a night when nothing else wrote,
+  // unless it is the only thing left to do (the 3.7 route paid this cost at click time).
+  const estimate = 10 * removedEntries + 3 * (count?.trashed ?? 0) + 6 * (count?.edges ?? 0);
+  if (opts.rowsLeft !== undefined && estimate > left() && !opts.allowOversize) {
+    return { done: false, removedEntries: 0, vectorIds: [], remaining: removedEntries + (count?.trashed ?? 0), rowsWritten };
+  }
 
   await env.DB.batch([
+    // A version written between the chunks and here (a racing writer) must not outlive its entry.
+    env.DB.prepare(
+      // scope-exempt: offboarding: leftover versions of the removed member's rows and trash rows
+      `DELETE FROM entry_versions WHERE entry_id IN (SELECT id FROM entries WHERE workspace_id = ?1 UNION SELECT id FROM entries_trash WHERE workspace_id = ?1)`,
+    ).bind(personalWid),
     // Edges before entries: the edge delete resolves endpoints through the
     // entries table, so it has to run while the rows still exist.
     env.DB.prepare(
       // scope-exempt: offboarding: deletes exactly the edges whose endpoints are in the removed member's workspace, per the two subselects
       `DELETE FROM edges WHERE source_id IN (SELECT id FROM entries WHERE workspace_id = ?) OR target_id IN (SELECT id FROM entries WHERE workspace_id = ?)`,
-    ).bind(personal.wid, personal.wid),
-    env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personal.wid),
+    ).bind(personalWid, personalWid),
+    env.DB.prepare(`DELETE FROM entries WHERE workspace_id = ?`).bind(personalWid),
+    env.DB.prepare(`DELETE FROM entries_trash WHERE workspace_id = ?`).bind(personalWid),
     env.DB.prepare(`DELETE FROM memberships WHERE user_id = ?`).bind(userId),
-    env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personal.wid),
+    env.DB.prepare(`DELETE FROM workspaces WHERE id = ?`).bind(personalWid),
   ]);
 
-  return { removedEntries, vectorIds };
+  return { done: true, removedEntries, vectorIds, rowsWritten: rowsWritten + estimate };
+}
+
+/**
+ * The oldest removal still waiting on its history cleanup (the dashboard may never re-call
+ * after a 202, and the roster hides removed members), for the nightly resume.
+ */
+export async function findPendingRemoval(env: Env): Promise<{ userId: string; personalWid: string } | null> {
+  const row = await env.DB.prepare(
+    `SELECT m.user_id AS user_id, m.workspace_id AS wid FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       JOIN workspaces w ON w.id = m.workspace_id AND w.kind = 'personal'
+      WHERE u.removed_at > 0 LIMIT 1`,
+  ).first<{ user_id: string; wid: string }>();
+  return row ? { userId: row.user_id, personalWid: row.wid } : null;
 }
 
 /** Rename a member, or set their email. At least one of name or email must be supplied. */

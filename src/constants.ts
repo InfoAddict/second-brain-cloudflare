@@ -293,6 +293,8 @@ export const TRASH_PURGE_NIGHTLY = 400;
 export const TRASH_PURGE_NIGHTLY_MAX_BATCHES = 5;
 /** Rows-written target for one purge batch. */
 export const TRASH_PURGE_BATCH_ROWS = 5000;
+/** Rows-written target for the one purge batch a forget runs. */
+export const FORGET_PURGE_ROWS = 1000;
 /** One rows-written budget per night, shared by the trash purge and the member-removal resume. */
 export const NIGHTLY_CLEANUP_ROWS = 15000;
 /** The purge's share of NIGHTLY_CLEANUP_ROWS; the resume gets the rest. */
@@ -310,5 +312,7 @@ export const VERSION_ROW_BUDGET_BYTES = 1_800_000;
 export const TRASH_ROW_BUDGET_BYTES = 1_800_000;
 /** Member removal: history rows deleted per chunk, chunks per call, removals resumed per night. */
 export const MEMBER_HISTORY_CHUNK = 1000;
+/** Entry ids per history delete during member removal. */
+export const MEMBER_HISTORY_SLICE = 1000;
 export const MEMBER_HISTORY_MAX_CHUNKS = 10;
 export const MEMBER_REMOVAL_NIGHTLY_MAX = 1;

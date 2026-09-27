@@ -760,8 +760,12 @@ async function removeTeamMember(id) {
       const btn = document.getElementById('confirm-accept-btn')
       if (btn) btn.textContent = t('team.removing')
       try {
-        const r = await postTeam('/team/members/remove', { id })
-        if (!r.ok || !r.data.ok) throw new Error(r.data.error || t('team.actionFailed'))
+        // A large history is cleaned in bounded calls: 202 with done:false means call again.
+        let r = await postTeam('/team/members/remove', { id })
+        for (let i = 0; i < 200 && r.ok && r.data.ok && r.data.done === false; i++) {
+          r = await postTeam('/team/members/remove', { id })
+        }
+        if (!r.ok || !r.data.ok || r.data.done === false) throw new Error(r.data.error || t('team.actionFailed'))
         await loadTeam()
       } catch (e) {
         showToast(e.message || t('team.actionFailed'))

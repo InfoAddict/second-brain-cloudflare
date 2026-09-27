@@ -128,13 +128,13 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
       return true;
     },
     async deleteEntry(id) {
-      const r = await forgetEntry(id, env);
+      const r = await forgetEntry(id, env, { actorId: writeCtx.actorId, channel: "system:mirror" }, { reason: "mirror", config: await config(), purge: false });
       if (r.status !== "deleted") return;
       auditBuffer.push({
         entryId: id,
         actorId: writeCtx.actorId,
         event: "deleted",
-        payload: { reason: "mirror", provider: providerId ?? null, deletedVectors: r.vectorCount, channel: "system:mirror" },
+        payload: { reason: "mirror", provider: providerId ?? null, deletedVectors: r.vectorCount, trash: r.trashed, channel: "system:mirror" },
       });
       if (auditBuffer.length >= AUDIT_BATCH_MAX) await flushAudit();
     },

@@ -1,42 +1,58 @@
 import type { Env } from "../env";
 import { withStatus, type MemoryStatus } from "../memory/status";
 import { deleteVectorIds } from "../vectorize/batch";
+import type { Config } from "../config";
+import type { ChangeContext } from "../lib/audit";
+import { TRASH_PURGE_ON_FORGET, FORGET_PURGE_ROWS } from "../constants";
+import { changedRows, planTrash, purgeLimit, purgeTrash, readTrashCandidates, trashManyStatements, type TrashReason } from "../memory/trash";
 
 export type ForgetResult =
   | { status: "not_found" }
-  | { status: "deleted"; vectorCount: number };
+  | { status: "deleted"; vectorCount: number; trashed: boolean; edgesDropped: boolean };
 
-export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
-  const row = await env.DB.prepare(
-    // scope-exempt: by-id: routes gate with getReadableEntry before calling
-    `SELECT vector_ids FROM entries WHERE id = ?`
-  ).bind(id).first() as Record<string, any> | null;
+export interface ForgetOptions {
+  reason: TrashReason;
+  config: Readonly<Config>;
+  /** Run one bounded purge batch afterwards. Mirror and disconnect pass false: they audit and bound their own work. */
+  purge?: boolean;
+  /** Trash row budget in bytes; tests shrink it to reach the fallback tiers. */
+  budget?: number;
+}
 
+/**
+ * Forget moves the entry to the trash: one batch inserts the trash row (with its edges), then
+ * deletes the edges and the entry. An entry too large for the trash is hard deleted, versions
+ * included. `not_found` when the batch's entry delete removed nothing (a racing deleter won).
+ */
+export async function forgetEntry(id: string, env: Env, change: ChangeContext, opts: ForgetOptions): Promise<ForgetResult> {
+  const [row] = await readTrashCandidates(env, [id]);
   if (!row) return { status: "not_found" };
 
   const vectorIds: string[] = JSON.parse(row.vector_ids ?? "[]");
-
-  // scope-exempt: by-id delete: routes gate with getReadableEntry before calling
-  const deletion = await env.DB.prepare(`DELETE FROM entries WHERE id = ?`).bind(id).run();
-  // A racing deleter removed it between the read and here: it owns the cleanup and the audit.
-  if (deletion?.meta?.changes === 0) return { status: "not_found" };
-
-  try {
-    // scope-exempt: by-id cascade: edge endpoints of the row just deleted
-    await env.DB.prepare(`DELETE FROM edges WHERE source_id = ? OR target_id = ?`).bind(id, id).run();
-  } catch (e) {
-    console.error("Edge cascade-delete failed (non-fatal):", e);
-  }
+  const plan = planTrash([row], opts.budget);
+  const stmts = trashManyStatements(env, plan, { reason: opts.reason, change, now: Date.now() });
+  const results = await env.DB.batch(stmts);
+  // A racing deleter removed it between the read and the batch: it owns the cleanup and the audit.
+  if (changedRows(results[results.length - 1]) === 0) return { status: "not_found" };
 
   try {
-    if (vectorIds.length) {
-      await deleteVectorIds(env, vectorIds);
-    }
+    if (vectorIds.length) await deleteVectorIds(env, vectorIds);
   } catch (e) {
     console.error("Vectorize delete failed (non-fatal):", e);
   }
 
-  return { status: "deleted", vectorCount: vectorIds.length };
+  if (opts.purge !== false) {
+    try {
+      await purgeTrash(env, opts.config, {
+        ceiling: purgeLimit(opts.config.VERSION_KEEP, TRASH_PURGE_ON_FORGET, FORGET_PURGE_ROWS),
+        rowTarget: FORGET_PURGE_ROWS,
+      });
+    } catch (e) {
+      console.error("Trash purge failed (non-fatal):", e);
+    }
+  }
+
+  return { status: "deleted", vectorCount: vectorIds.length, trashed: plan.tier3.length === 0, edgesDropped: plan.tier2.length > 0 };
 }
 
 /**
