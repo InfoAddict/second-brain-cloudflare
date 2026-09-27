@@ -441,6 +441,17 @@ const SYSTEM_TAG_PREFIXES = [
   'capsule:',
   'capsule-slot:',
   'project:',
+  // Track 4 (self-protecting): src/quarantine/tags.ts
+  'quarantine:',
+  'edited-canonical:',
+  // Track 7 (standing memory, decision ledger, commitments): src/tags/t7.ts
+  'standing:',
+  'ledger:',
+  'confidence:',
+  'confidence-source:',
+  'outcome:',
+  'review-rearms:',
+  'counterparty:',
 ]
 
 /** Membership tag written on a memory that belongs to a project: `project:<slug>`. */
@@ -463,6 +474,8 @@ const SYSTEM_TAG_NAMES = new Set([
   'contradiction-resolved',
   'user-edited',
   'conflict-held',
+  // Track 7's inbound-commitment marker: a bare word, not a namespace (P7.3).
+  'owed-to-me',
 ])
 
 /**

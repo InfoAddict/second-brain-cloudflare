@@ -14,6 +14,8 @@
 // additionally hides machine identifiers (`#5118`, `#fd540a`). That extra rule is
 // deliberately absent here: hiding a junk tag costs nothing, but treating it as
 // unowned would let an edit silently delete a tag that is genuinely stored.
+import { QUARANTINE_TAG_PREFIX, EDITED_CANONICAL_TAG_PREFIX } from "../quarantine/tags";
+import { T7_TAG_PREFIXES, OWED_TO_ME_TAG } from "./t7";
 
 /** Prompt Capsule bookkeeping prefixes shared by selection and pipeline guards. */
 export const CAPSULE_TAG_PREFIX = "capsule:";
@@ -51,13 +53,16 @@ export function withUserEditMarker(tags: string[]): string[] {
 }
 
 /** Namespaces the Worker writes and owns; `prefix:value` shaped. */
-const RESERVED_TAG_PREFIXES = [
+export const RESERVED_TAG_PREFIXES = [
   "kind:",
   "status:",
   "volatility:",
   "stale:",
   CAPSULE_TAG_PREFIX,
   CAPSULE_SLOT_TAG_PREFIX,
+  QUARANTINE_TAG_PREFIX,
+  EDITED_CANONICAL_TAG_PREFIX,
+  ...T7_TAG_PREFIXES,
 ];
 
 /**
@@ -80,6 +85,8 @@ const PIPELINE_TAG_NAMES = new Set([
   // and no system job may merge into or replace it. See markUserEdited.
   USER_EDITED_TAG,
   CONFLICT_HELD_TAG,
+  // The inbound-commitment marker (Track 7); a bare word, not a namespace (P7.3).
+  OWED_TO_ME_TAG,
 ]);
 
 /** True when the tag is the brain's own bookkeeping rather than the user's word. */
