@@ -57,4 +57,10 @@ describe("recall_count bump", () => {
     const rows = (await db.prepare(`SELECT id, recall_count FROM entries`).all()).results as { id: string; recall_count: number }[];
     for (const r of rows) expect(r.recall_count).toBe(presented.includes(r.id) ? 1 : 0);
   });
+
+  it("issues no bump statement when nothing is presented", async () => {
+    const { presented, issued } = await recallN(0);
+    expect(presented).toHaveLength(0);
+    expect(issued.filter(s => s.includes("UPDATE entries SET recall_count"))).toHaveLength(0);
+  });
 });
