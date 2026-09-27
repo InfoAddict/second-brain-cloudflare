@@ -210,7 +210,7 @@ describe("renderHistory — change and event rows", () => {
     const { tl } = renderAndWire(ctx, { id: "e1", history: { items: [CHANGE_NEWEST, CHANGE_OLDER, EVENT_SHARED] } });
     const html = tl.innerHTML as string;
     const editedAt = html.indexOf("Edited");
-    const addedAt = html.indexOf("Added to");
+    const addedAt = html.indexOf("Text added");
     const sharedAt = html.indexOf("Ana");
     expect(editedAt).toBeGreaterThanOrEqual(0);
     expect(addedAt).toBeGreaterThan(editedAt); // newest first

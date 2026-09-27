@@ -174,7 +174,8 @@ describe("the status control", () => {
     await Promise.resolve();
     const toastHtml = ctx.__els.get("app-toast").innerHTML as string;
     expect(toastHtml).toContain("Marked as trusted");
-    expect(toastHtml).toContain("Search finds it only by its exact words");
+    expect(toastHtml).toContain("Not searchable by meaning until it");
+    expect(toastHtml).toContain("s indexed.");
   });
 
   it("locked for a non-author teammate", () => {

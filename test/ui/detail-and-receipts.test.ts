@@ -453,7 +453,7 @@ describe("the history of a shared memory", () => {
     expect(labels).toEqual([
       "Captured",
       "Edited",
-      "Added to",
+      "Text added",
       "Deleted",
       "Status changed",
       "Shared with the team",
