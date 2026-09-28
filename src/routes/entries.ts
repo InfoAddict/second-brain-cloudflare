@@ -89,7 +89,7 @@ export async function handleEntriesRoutes(
     const scope = scopeWhere(auth);
 
     const { results: entryRows } = await env.DB.prepare(
-      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses FROM entries WHERE ${scope.clause} ORDER BY created_at ASC`
+      `SELECT id, content, tags, source, created_at, COALESCE(updated_at, created_at) AS last_updated, recall_count, importance_score, contradiction_wins, contradiction_losses, valid_from, valid_until FROM entries WHERE ${scope.clause} ORDER BY created_at ASC`
     ).bind(...scope.bindings).all() as { results: Record<string, any>[] };
     const { results: edgeRows } = await env.DB.prepare(
       `SELECT source_id, target_id, type, weight, provenance, created_at FROM edges WHERE ${scope.clause}`
@@ -122,6 +122,9 @@ export async function handleEntriesRoutes(
       importance_score: r.importance_score ?? 0,
       contradiction_wins: r.contradiction_wins ?? 0,
       contradiction_losses: r.contradiction_losses ?? 0,
+      // T-0089.2.1: the raw columns, so a restore tells a stated start from "since created_at".
+      valid_from: r.valid_from ?? null,
+      valid_until: r.valid_until ?? null,
     }));
     const edges = edgeRows.map(r => ({
       source_id: r.source_id,
