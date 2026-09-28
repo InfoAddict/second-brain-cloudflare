@@ -134,6 +134,9 @@ const REVIEWED_TABLE: { file: string; line: number; kind: string }[] = [
   { file: 'src/memory/validity.ts', line: 330, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 373, kind: 'snapshot' },
   { file: 'src/memory/validity.ts', line: 417, kind: 'snapshot' },
+  // NEW (T-0089.2.1, Task A4): update(valid_from / valid_until) and its propagate UPDATE, each with its validity snapshot.
+  { file: 'src/memory/validity.ts', line: 576, kind: 'snapshot' },
+  { file: 'src/memory/validity.ts', line: 594, kind: 'snapshot' },
   // NEW (merge of release/v4 ebc8010d, lane Q): holdStatements' guarded tags UPDATE, whose snapshot rides
   // in the same batch. Not wired into a writer yet; a caller deletes the cleared vectors after commit.
   { file: 'src/quarantine/hold.ts', line: 94, kind: 'snapshot' },

@@ -15,7 +15,7 @@ import { edgeEndpointsReadableSql } from "../graph/edges";
 import { RETRACTED_SOURCE_TAG } from "../tags/system";
 
 export { RETRACTED_SOURCE_TAG };
-import { buildDerivedSnapshot, Params, pruneStatement, snapshotStatement } from "./versions";
+import { buildDerivedSnapshot, changesOf, Params, pruneStatement, snapshotStatement } from "./versions";
 
 /**
  * A stated start of "unknown": a fact told only with its end ("I lived in Boston until 2020"),
@@ -481,6 +481,146 @@ export function validityReplySuffix(v: ValidityOutcome, subject: string, kind: "
   else if (v.reclosed.length > 1) text += ` Entries ${v.reclosed.map(r => r.id).join(", ")} are replaced by ${subject} again.`;
   if (v.flagged === 1) text += " 1 memory built on it was flagged for a check.";
   else if (v.flagged > 1) text += ` ${v.flagged} memories built on it were flagged for a check.`;
+  return text;
+}
+
+// ── Explicit validity (T-0089.2.1, D2.2; spec 14 5.4) ──────────────────────
+
+export const VALIDITY_WITH_CONTENT_ERROR = "To record that something changed, remember the new fact; the old one is kept as history.";
+
+/**
+ * valid_from / valid_until as a surface received them: absent (undefined), a date string, or null
+ * (update only: back to "since created_at", or "still true"). Parsed in the brain's TIMEZONE; the
+ * first bad field is named so REST can return it.
+ */
+export function parseValidityInput(
+  raw: { valid_from?: unknown; valid_until?: unknown }, now: number, timezone: string, opts: { allowNull: boolean },
+): { value: { from?: number | null; until?: number | null } } | { error: string; field: "valid_from" | "valid_until" } {
+  const value: { from?: number | null; until?: number | null } = {};
+  for (const [field, key] of [["valid_from", "from"], ["valid_until", "until"]] as const) {
+    const v = raw[field];
+    if (v === undefined) continue;
+    if (v === null && opts.allowNull) { value[key] = null; continue; }
+    if (typeof v !== "string") return { error: `${field} must be a date like 2026-06-15, a month like 2026-06, or a year like 2026.`, field };
+    const parsed = parseValidityDate(v, now, timezone, "start");
+    if (typeof parsed !== "number") return { error: parsed.error, field };
+    value[key] = parsed;
+  }
+  if (typeof value.from === "number" && typeof value.until === "number" && value.until < value.from) {
+    return { error: "valid_until is before valid_from.", field: "valid_until" };
+  }
+  return { value };
+}
+
+export type UpdateValidityResult =
+  | { status: "updated"; validFrom: number | null; validUntil: number | null; effectiveFrom: number; propagated: string[]; changed: { from: boolean; until: boolean } }
+  | { status: "no_change" }
+  | { status: "not_found" }
+  | { status: "conflict" }
+  | { status: "refused"; error: string; field: "valid_from" | "valid_until" };
+
+const PROPAGATE_LIMIT = 10;
+
+/**
+ * update(valid_from / valid_until) without new content: one read, one batch. The row compare-and-sets
+ * the window it was read with and its workspace; the caller has already authorized it (the same scoped
+ * read and author lock as a content edit). When the start moves, every row this one closed at its old
+ * start (at most PROPAGATE_LIMIT, same workspace) moves its end to match (cause propagate), so
+ * "replaced by" stays true; a move to or before such a row's own start is refused, naming it.
+ */
+export async function updateEntryValidity(
+  env: Env, id: string, next: { from?: number | null; until?: number | null }, change: ChangeContext, cfg: Readonly<Config>,
+  authorizedWorkspaceId: string,
+): Promise<UpdateValidityResult> {
+  const ws = authorizedWorkspaceId ?? "";
+  const row = await env.DB.prepare(
+    // scope-checked: pinned to the workspace the caller's own scoped read authorized; the replaced rows share it
+    `SELECT e.created_at, e.valid_from, e.valid_until,
+            (SELECT json_group_array(json_object('id', t.id, 'from', t.start)) FROM (
+               SELECT y.id AS id, COALESCE(y.valid_from, y.created_at) AS start FROM edges g JOIN entries y ON y.id = g.target_id
+                WHERE g.source_id = e.id AND g.type = 'supersedes' AND y.workspace_id = e.workspace_id
+                  AND y.valid_until = COALESCE(e.valid_from, e.created_at)
+                ORDER BY y.id LIMIT ${PROPAGATE_LIMIT}) t) AS replaced_json
+       FROM entries e WHERE e.id = ? AND e.workspace_id = ?`,
+  ).bind(id, ws).first<{ created_at: number; valid_from: number | null; valid_until: number | null; replaced_json: string | null }>();
+  if (!row) return { status: "not_found" };
+
+  const validFrom = next.from !== undefined ? next.from : row.valid_from;
+  const validUntil = next.until !== undefined ? next.until : row.valid_until;
+  const oldStart = row.valid_from ?? row.created_at;
+  const effectiveFrom = validFrom ?? row.created_at;
+  if (validUntil !== null && validUntil < effectiveFrom) {
+    return {
+      status: "refused", field: "valid_until",
+      error: `That end date is before this memory's start (${formatValidityDate(effectiveFrom, cfg.TIMEZONE)}). Pass valid_from too if it began earlier.`,
+    };
+  }
+  const changed = { from: validFrom !== row.valid_from, until: validUntil !== row.valid_until };
+  if (!changed.from && !changed.until) return { status: "no_change" };
+
+  const replaced = (JSON.parse(row.replaced_json ?? "[]") as { id: string; from: number }[]).filter(r => r && r.id);
+  const moving = effectiveFrom !== oldStart ? replaced : [];
+  const blocking = moving.find(r => effectiveFrom <= r.from);
+  if (blocking) {
+    return {
+      status: "refused", field: "valid_from",
+      error: `Entry ${blocking.id} began on ${formatValidityDate(blocking.from, cfg.TIMEZONE)}, so ${id} cannot start before that. Nothing changed.`,
+    };
+  }
+
+  const now = Date.now();
+  const cas = (p: Params) => `e.workspace_id = ${p.add(ws)} AND e.valid_from IS ${p.add(row.valid_from)} AND e.valid_until IS ${p.add(row.valid_until)}`;
+  const up = new Params();
+  // versioning: snapshot
+  // scope-exempt: by-id: the row the caller's scoped read authorized; the CAS re-pins its workspace
+  const updateSql = `UPDATE entries AS e SET valid_from = ${up.add(validFrom)}, valid_until = ${up.add(validUntil)} WHERE e.id = ${up.add(id)} AND ${cas(up)}`;
+  const statements: D1PreparedStatement[] = [
+    snapshotStatement(env, {
+      entryId: id, reason: "validity", change, content: { kind: "unchanged" }, nextTags: "unchanged",
+      nextState: { valid_from: validFrom, valid_until: validUntil }, meta: { cause: "explicit" }, now, guard: cas,
+    }),
+    env.DB.prepare(updateSql).bind(...up.values()),
+    pruneStatement(env, id, cfg.VERSION_KEEP),
+  ];
+  // Each replaced row moves only if this row's new start landed, and only if its end still meets the old one.
+  const landed = (p: Params) =>
+    // scope-exempt: by-id: the row this batch's own UPDATE just wrote
+    `EXISTS (SELECT 1 FROM entries x WHERE x.id = ${p.add(id)} AND COALESCE(x.valid_from, x.created_at) = ${p.add(effectiveFrom)})`;
+  for (const r of moving) {
+    const guard = (p: Params) => `e.workspace_id = ${p.add(ws)} AND e.valid_until = ${p.add(oldStart)} AND ${landed(p)}`;
+    const pp = new Params();
+    // versioning: snapshot
+    // scope-exempt: by-id: a row this one replaced, read above in the same workspace; the guard re-pins it
+    const sql = `UPDATE entries AS e SET valid_until = ${pp.add(effectiveFrom)} WHERE e.id = ${pp.add(r.id)} AND ${guard(pp)}`;
+    statements.push(
+      snapshotStatement(env, {
+        entryId: r.id, reason: "validity", change, content: { kind: "unchanged" }, nextTags: "unchanged",
+        nextState: { valid_until: effectiveFrom }, meta: { cause: "propagate", by: id }, now, guard,
+      }),
+      env.DB.prepare(sql).bind(...pp.values()),
+      pruneStatement(env, r.id, cfg.VERSION_KEEP),
+    );
+  }
+  const results = await env.DB.batch(statements);
+  if (changesOf(results[1]) === 0) return { status: "conflict" };
+  const propagated = moving.filter((_, i) => changesOf(results[4 + i * 3]) > 0).map(r => r.id);
+  await writeAuditEvents(env, [
+    { entryId: id, actorId: change.actorId, event: "validity_changed", payload: { cause: "explicit", valid_from: validFrom, valid_until: validUntil, channel: change.channel } },
+    ...propagated.map(pid => ({ entryId: pid, actorId: change.actorId, event: "validity_changed" as const, payload: { cause: "propagate", by: id, until: effectiveFrom, channel: change.channel } })),
+  ]);
+  return { status: "updated", validFrom, validUntil, effectiveFrom, propagated, changed };
+}
+
+/** The update reply for a validity change (spec 14 5.4). */
+export function updateValidityReply(id: string, r: Extract<UpdateValidityResult, { status: "updated" }>, timezone: string): string {
+  const d = (ms: number) => formatValidityDate(ms, timezone);
+  let text: string;
+  if (r.changed.from && r.validUntil !== null) text = `Entry ${id} is now recorded as true from ${d(r.effectiveFrom)} until ${d(r.validUntil)}. It stays in history and is left out of current answers. Undo is available.`;
+  else if (r.changed.from) text = `Entry ${id} is now recorded as true from ${d(r.effectiveFrom)}.`;
+  else if (r.validUntil === null) text = `Entry ${id} is current again. Undo is available.`;
+  else text = `Entry ${id} is now recorded as true until ${d(r.validUntil)}. It stays in history and is left out of current answers. Undo is available.`;
+  if (r.propagated.length === 1) text += ` Entry ${r.propagated[0]}'s end date moved to match.`;
+  else if (r.propagated.length > 1) text += ` Entries ${r.propagated.join(", ")} had their end dates moved to match.`;
   return text;
 }
 

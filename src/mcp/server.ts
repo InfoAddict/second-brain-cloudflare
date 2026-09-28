@@ -40,7 +40,9 @@ import { readEntryHistory } from "../memory/history";
 import { STORED_DATA_NOTICE, cleanStored } from "../lib/stored-data";
 import { heldReason, holdReasonPhrase, isHeld } from "../quarantine/tags";
 import { contentByteLength, isOverContentLimit, tooLargeMcpMessage, MAX_CONTENT_BYTES } from "../lib/content-size";
-import { supersedeReply, validityReplySuffix } from "../memory/validity";
+import {
+  parseValidityInput, supersedeReply, updateEntryValidity, updateValidityReply, validityReplySuffix, VALIDITY_WITH_CONTENT_ERROR,
+} from "../memory/validity";
 
 // Asking the calling model for this is the whole point: it has already read the content
 // in order to decide to store it, so the judgment is free, and it is a far better
@@ -530,9 +532,11 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         team: z.string().optional().describe("When workspace is company, which team workspace — id from list_teams. Omit for your primary team."),
         when: whenParam,
         when_kind: whenKindParam,
+        valid_from: z.string().optional().describe("When this became true, if the user said so ('I moved to Austin in June' = 2026-06). A date, month or year. Omit it when the fact is new today. Never a future date: use when for plans and deadlines."),
+        valid_until: z.string().optional().describe("When this stopped being true, for a fact that is already over ('I lived in Boston until 2020' = 2020). Omit it for anything still true."),
       },
     },
-    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind }) => {
+    async ({ content, tags, project, source, volatility, workspace, team, when, when_kind, valid_from, valid_until }) => {
       // Same grammar checks, same messages, as POST /capture. Bad input fails before any write.
       const badProjectTag = tags === undefined ? null : projectTagError(tags);
       if (badProjectTag) return { content: [{ type: "text", text: badProjectTag }] };
@@ -546,6 +550,9 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       } else if (when_kind !== undefined) {
         return { content: [{ type: "text", text: "when_kind requires when" }] };
       }
+      // T-0089.2.1: what the user said about when this was true, checked before any write.
+      const validity = parseValidityInput({ valid_from, valid_until }, Date.now(), (await resolveConfig(env)).TIMEZONE, { allowNull: false });
+      if ("error" in validity) return { content: [{ type: "text", text: validity.error }] };
       const projectSlug = project?.trim() || undefined;
       const badSlug = projectSlug ? projectSlugError(projectSlug) : null;
       if (badSlug) return { content: [{ type: "text", text: badSlug }] };
@@ -578,7 +585,8 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
           actorId: identity.userId,
         };
       }
-      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput, identity ? { channel: "mcp" } : {});
+      const result = await captureEntry(content, withVerdict, source ?? "claude", env, ctx, undefined, targetCtx, whenInput,
+        { ...(identity ? { channel: "mcp" as const } : {}), validity: validity.value });
       // Silent, after the write: a lost registry row never fails the memory.
       if (identity && projectSlug && result.status !== "blocked") {
         await autoCreateProject(env, ctx, { workspaceId: targetCtx.workspaceId, actorId: identity.userId, slug: projectSlug });
@@ -710,12 +718,37 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
       description: UPDATE_DESCRIPTION,
       inputSchema: {
         id: z.string().describe("Entry ID to update — from recall or list_recent"),
-        content: z.string().refine(value => !value.includes("\0"), "NUL is not allowed").describe("The new content to replace the existing entry with"),
+        content: z.string().refine(value => !value.includes("\0"), "NUL is not allowed").optional().describe("The new content to replace the existing entry with. Optional only when valid_from or valid_until is given."),
         tags: z.array(z.string().max(MAX_INPUT_TAG_CHARS).refine(value => !value.includes("\0"), "NUL is not allowed")).max(MAX_INPUT_TAGS).optional().describe("Replacement topic tags. Supplying any capsule: or capsule-slot: tag replaces both capsule namespaces; include the complete new definition. Omit to preserve tags. Use set_status to unpublish."),
         volatility: volatilityParam,
+        valid_from: z.string().nullable().optional().describe("Corrects when this memory's current content became true. Cannot be combined with new content."),
+        valid_until: z.string().nullable().optional().describe("When the memory stopped being true ('that ended in May' = 2026-05). Pass null if the user says it is true again. It stays in history and is left out of current answers. valid_until only for a date that has already passed; for future dates use when."),
       },
     },
-    async ({ id, content, volatility, tags }) => {
+    async ({ id, content, volatility, tags, valid_from, valid_until }) => {
+      // T-0089.2.1: validity fields, checked before any write (P5 future dates, P6 no start with new text).
+      const hasValidity = valid_from !== undefined || valid_until !== undefined;
+      if (content === undefined && !hasValidity) return { content: [{ type: "text", text: "Nothing to update: pass content, valid_from or valid_until." }] };
+      if (content === undefined && (tags !== undefined || volatility !== undefined)) return { content: [{ type: "text", text: "To change tags or volatility, pass content too." }] };
+      if (content !== undefined && valid_from !== undefined) return { content: [{ type: "text", text: VALIDITY_WITH_CONTENT_ERROR }] };
+      const validityCfg = hasValidity ? await resolveConfig(env) : null;
+      const validity = hasValidity ? parseValidityInput({ valid_from, valid_until }, Date.now(), validityCfg!.TIMEZONE, { allowNull: true }) : null;
+      if (validity && "error" in validity) return { content: [{ type: "text", text: validity.error }] };
+      const setValidity = async (workspaceId: string): Promise<string> => {
+        const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg!, workspaceId);
+        if (r.status === "updated") return updateValidityReply(id, r, validityCfg!.TIMEZONE);
+        if (r.status === "refused") return r.error;
+        if (r.status === "no_change") return `Entry ${id} already has those dates; nothing changed.`;
+        if (r.status === "conflict") return `Entry ${id} changed while saving, so nothing was written. Please try again.`;
+        return `No entry found with ID: ${id}`;
+      };
+      if (content === undefined) {
+        const target = await getReadableEntry(env, identity, id, "id, workspace_id, actor_id");
+        if (!target) return { content: [{ type: "text", text: `No entry found with ID: ${id}` }] };
+        const refused = assertCanEditContent(identity, target);
+        if (refused) return { content: [{ type: "text", text: refused.message }] };
+        return { content: [{ type: "text", text: await setValidity(target.workspace_id as string) }] };
+      }
       const newContent = content.trim();
       if (!newContent) {
         return { content: [{ type: "text", text: "Content cannot be empty." }] };
@@ -775,17 +808,20 @@ export function buildMcpServer(env: Env, ctx: ExecutionContext, identity?: Ident
         auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp" } });
       }
 
+      // New content plus an end date: the text first, then the window, each its own version.
+      const endSuffix = hasValidity ? ` ${await setValidity(row.workspace_id as string)}` : "";
+
       if (!result.vectorIds) {
         return {
           content: [{
             type: "text",
-            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.${noteSuffix}`,
+            text: `Updated entry ${id}. Note: it was not re-indexed for semantic search because the Vectorize index is missing — the previous index is kept and it is still findable by keyword. Fix: ${VECTORIZE_FIX_HINT}.${noteSuffix}${endSuffix}`,
           }],
         };
       }
 
       return {
-        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).${noteSuffix}` }],
+        content: [{ type: "text", text: `Updated entry ${id}. Re-embedded as ${result.vectorIds.length} vector(s).${noteSuffix}${endSuffix}` }],
       };
     }
   );

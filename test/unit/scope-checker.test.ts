@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (214 queries, 111 exceptions, 25 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (216 queries, 112 exceptions, 26 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1480,7 +1480,11 @@ describe("the checker over the real source tree", () => {
     // T-0089.2.4 cascade: builtOn (x pinned to the authorized pairs, the dependent to x's workspace)
     // and the flag / unflag UPDATEs' own-nonce rows are scope-checked; the dependents pre-filter and
     // the unflag's version reads of an already-pinned row are by-id exemptions.
-    ).toEqual({ queries: 214, exempt: 111, checked: 25, outerJoin: 1 });
+    // Deliberate: +2 queries, +1 scope-exempt, +1 scope-checked (214/111/25 -> 216/112/26) for
+    // T-0089.2.1 Task A4 (updateEntryValidity): its read, pinned to the caller's authorized workspace
+    // with the replaced rows sharing it (scope-checked), and the propagate "this row's new start landed"
+    // guard (by-id). Its two UPDATEs pin the workspace in their own compare-and-set.
+    ).toEqual({ queries: 216, exempt: 112, checked: 26, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {
