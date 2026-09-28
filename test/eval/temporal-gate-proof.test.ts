@@ -30,7 +30,8 @@ function candidate(name: string, transform: Transform): VariantReport {
 // (1.000/1.000/1.000, or 0.500 MRR for retracted-past) so the baseline itself now carries the proof, with
 // CorpusSpec.floors as the mechanical backstop the delta-based rules alone cannot express.
 const duringGate = (cand: VariantReport, base: VariantReport = baseline) => evaluateGate(base, cand, { targetCategories: ["temporal-during"], bootstrap: BOOTSTRAP, allowUnmeasuredRowsRead: true, floors: corpus.floors });
-const kuGate = (cand: VariantReport, base: VariantReport = baseline) => evaluateGate(base, cand, { targetCategories: ["knowledge-update"], bootstrap: BOOTSTRAP, allowUnmeasuredRowsRead: true, floors: corpus.floors });
+const kuGate = (cand: VariantReport, base: VariantReport = baseline, extra: Parameters<typeof evaluateGate>[2] = {}) =>
+  evaluateGate(base, cand, { targetCategories: ["knowledge-update"], bootstrap: BOOTSTRAP, allowUnmeasuredRowsRead: true, floors: corpus.floors, ...extra });
 const rule = (r: ReturnType<typeof evaluateGate>, name: string) => r.rules.find(x => x.rule === name);
 
 describe("temporal-during: a plan-following implementation passes", () => {
@@ -143,9 +144,14 @@ describe("temporal-during: every known shortcut fails, and names why", () => {
 
 describe("knowledge-update: D-RET's restore is what a right implementation needs", () => {
   it("KU-1: the current oracle (drop rows closed at now, deprecated rows) PASSES", () => {
-    const result = kuGate(candidate("ku-current-oracle", onlyCategory("knowledge-update", currentOracle)));
+    // Adversary round 2: ku-silent-fresh and ku-silent-true carry no supersede edge (by design, same as ku-silent),
+    // so supersession leaves them, ku-corrected, ku-retracted and ku-silent unchanged; only "current" moves. That
+    // dilutes the category-wide average below its margin, so the real, provable win is targeted directly, the
+    // same pattern KU-4 uses for ku-silent.
+    const result = kuGate(candidate("ku-current-oracle", onlyCategory("knowledge-update", currentOracle)), baseline, { targetSubsets: ["knowledge-update:current"] });
     expect(result.verdict).toBe("PASS");
     expect(rule(result, "improvement")?.status).toBe("pass");
+    expect(rule(result, "improvement")?.detail).toContain("knowledge-update:current");
   });
 
   it("KU-2: the current oracle without D-RET's restore FAILs on the retracted current questions, from the RECORDED BASELINE directly (old stays hidden after bad is itself retracted)", () => {

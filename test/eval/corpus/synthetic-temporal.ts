@@ -10,15 +10,22 @@ const PLACES = STREETS.flatMap(s => KINDS.map(k => `${s} ${k}`));
 const MONTH_DAY_NAMES = [["Aug", 8], ["Jun", 3], ["Apr", 12], ["Jul", 21], ["Mar", 9], ["May", 17], ["Oct", 5], ["Nov", 14], ["Dec", 2], ["Feb", 26]] as const;
 
 /**
- * Timeline shapes (T-0089.2.6 adds the last four to fix round-4's shortcut-friendly gold, 14-t2-time-spec.md 6.2).
+ * Timeline shapes (T-0089.2.6 adds the last four to fix round-4's shortcut-friendly gold, 14-t2-time-spec.md 6.2;
+ * silent-fresh and silent-true add two more in the adversary round 2 fix, see the "silent" cases below).
  * update: plain change, gold split into a before/after pair. retro: backdated and retrospective notes, gold in the
  * middle. retracted: a fact later withdrawn, then the withdrawal itself retracted (D-RET restores it). edited: one
  * document edited after the as-of date. retro-norecap: backdated with no recap note, so gold is the newest document
  * and created after the as-of date. corrected: wrong from the start, corrected later; gold is newest, forbidden is
  * the original. recap-only: the recap is the only valid document at the as-of date, and also the newest by creation.
  * silent: a contradiction the loader never linked with an edge, so nothing but staleness can favor the new fact.
+ * silent-fresh: the same shape, but "old" is under the 90-day staleness threshold, so gold stays "old". silent-true:
+ * a lone state fact past the threshold with no rival at all, so demoting on age and tag alone still has room to
+ * lose.
  */
-export const TEMPORAL_TYPES = { update: 35, retro: 35, retracted: 30, edited: 20, "retro-norecap": 30, corrected: 30, "recap-only": 30, silent: 30 } as const;
+export const TEMPORAL_TYPES = {
+  update: 35, retro: 35, retracted: 30, edited: 20, "retro-norecap": 30, corrected: 30, "recap-only": 30, silent: 30,
+  "silent-fresh": 20, "silent-true": 20,
+} as const;
 type Kind = keyof typeof TEMPORAL_TYPES;
 
 /** The dates the past questions are asked about. */
@@ -48,6 +55,9 @@ export const MONTH_DAY_CONTROL_FLOOR_SCOPE = "temporal [subset:control-not-asof]
 
 /** T-0089.2.3's target: knowledge-update's silent-contradiction subset, gated only through --target-subsets. */
 export const KU_SILENT_TARGET = "knowledge-update:ku-silent";
+/** T-0089.2.3's own staleness rule: a volatility:state row past this age is eligible for the penalty. Pinned here
+ * so the corpus (silent-fresh/silent-true, adversary round 2) and staleDemote cannot drift apart on the number. */
+export const STALE_THRESHOLD_DAYS = 90;
 
 /** D-RET floors (T-0089.2.6 adversary round): the recorded baseline scores these four subsets 1.000/1.000/1.000
  * (or 0.500 for retracted-past's MRR, where "old" and the July as-of question legitimately compete against each
@@ -180,6 +190,23 @@ export function temporal(seed: number): CorpusSpec {
       entries.push(entry(id("old"), `The ${subject} is at ${A}.`, { createdAt: may, tags: ["volatility:state"] }));
       entries.push(entry(id("new"), `Heard secondhand that the ${subject} may have moved to ${B}; meant to double check but have not yet.`, { createdAt: jul }));
       q("now", "knowledge-update", `Where is the ${subject} now?`, [id("new")], "ku-silent");
+    } else if (kind === "silent-fresh") {
+      // Adversary round 2 (T-0089.2.6): the same shape as "silent", except "old" is UNDER the 90-day staleness
+      // threshold at EVAL_NOW (2026-09-01), so gold stays "old" -- an age-blind penalty that demotes any
+      // volatility:state row regardless of how old it is has real room to lose here, and the hedge/secondhand
+      // wording sits on "new", which is NOT gold, so a wording shortcut that just promotes hedge phrasing loses too.
+      const augOld = utc(8, 1 + (i % 12)), augNew = utc(8, 14 + (i % 12));
+      entries.push(entry(id("old"), `The ${subject} is at ${A}.`, { createdAt: augOld, tags: ["volatility:state"] }));
+      entries.push(entry(id("new"), `Heard secondhand that the ${subject} may have moved to ${B}; meant to double check but have not yet.`, { createdAt: augNew }));
+      q("now", "knowledge-update", `Where is the ${subject} now?`, [id("old")], "ku-silent-fresh");
+    } else if (kind === "silent-true") {
+      // Adversary round 2 (T-0089.2.6): a lone state fact, past the 90-day staleness threshold, with no rival at
+      // all in its own timeline -- gold, but stale and unsuperseded, so R4's concern ("no stale-but-still-true
+      // gold exists") has a real instance, and a penalty that demotes any volatility:state row past the age
+      // threshold regardless of whether a rival exists (rather than only when one does) still has room to lose.
+      const may = utc(5, 10 + (i % 20));
+      entries.push(entry(id("old"), `The ${subject} is at ${A}.`, { createdAt: may, tags: ["volatility:state"] }));
+      q("now", "knowledge-update", `Where is the ${subject} now?`, [id("old")], "ku-silent-true");
     } else {
       const aug = utc(8, 5 + (i % 20));
       entries.push(entry(id("only"), `The ${subject} is at ${A}. Edited on ${isoDay(aug)}: the entrance is now on the ${pick(rand, KINDS)} side.`, {

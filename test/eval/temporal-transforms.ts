@@ -3,7 +3,9 @@
 // shortcut, without running any new code: the base data is the real, recorded baseline, only the order (and
 // occasionally the membership) changes per hypothesis. They read nothing but the report and the spec (no clock,
 // no randomness, no I/O), so temporal-gate-proof.test.ts can assert byte-identical results across runs.
+import { STALE_THRESHOLD_DAYS } from "./corpus/synthetic-temporal";
 import type { CorpusEntry, CorpusSpec } from "./corpus/types";
+import { DAY_MS } from "./corpus/types";
 import { scoreQuery } from "./metrics";
 import { questionTime, simulate, validAt } from "./temporal-oracle";
 import type { GoldenQuery, QueryCategory, QueryResult, VariantReport } from "./types";
@@ -195,10 +197,19 @@ export const currentOracle: Transform = planOracle;
  * "current" queries) by demoting any candidate that is state-volatile and structurally unsuperseded (no validUntil
  * or retractedAt of its own: nothing ever closed it) below every other candidate. This is an upper bound on what a
  * 0.9 multiplier could achieve, not a proportional simulation: rankedIds carry no raw score to multiply. */
-export const staleDemote: Transform = (report, corpus) => apply(report, corpus, (ranked, _q, byId) => {
+/** T-0089.2.3's own rule (STALE_THRESHOLD_DAYS): the penalty applies only past 90 days, and only where this
+ * query's own timeline (via clusterKey, not gold) actually has more than one member to prefer over it -- a lone,
+ * unrivalled state fact (silent-true, adversary round 2) has nothing to lose to and must not be demoted just for
+ * being old. Age-blind and rival-blind demotion (round 2's R1) demotes silent-fresh's still-current "old" and
+ * silent-true's lone gold too; this is why those are wrong. */
+export const staleDemote: Transform = (report, corpus) => apply(report, corpus, (ranked, q, byId) => {
+  const now = questionTime(q);
+  const hasRival = timelineEntries(q, byId).length > 1;
   const isStaleUnsuperseded = (id: string) => {
     const e = byId.get(id);
-    return !!e && e.tags.includes("volatility:state") && e.validUntil === undefined && e.retractedAt === undefined;
+    if (!e || !e.tags.includes("volatility:state") || e.validUntil !== undefined || e.retractedAt !== undefined) return false;
+    const ageDays = (now - e.createdAt) / DAY_MS;
+    return ageDays >= STALE_THRESHOLD_DAYS && hasRival;
   };
   return [...ranked.filter(id => !isStaleUnsuperseded(id)), ...ranked.filter(isStaleUnsuperseded)];
 });
