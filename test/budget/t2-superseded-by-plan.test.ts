@@ -5,6 +5,8 @@
  * workspace for every row that has no superseding fact: measured on workerd at 3e5961b7, GET /list?n=50 reads
  * 100,135 rows at 2k memories and 500,135 at 10k (release 132 and 135), and a topK-10 recall 29,151 and 133,551
  * (release 9,151 and 33,551). The lookup must start from edges (idx_edges_target) and fetch `s` by primary key.
+ * The as-of belief read (T2-B, src/recall/as-of.ts) repeated the pattern: 20,008 rows at 10k memories for one
+ * as-of recall on workerd at 936bf372, against 1,306 for the same recall without as_of.
  * Requires the valid_until column; skipped before Track 2.
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,16 +33,18 @@ describe("the superseded_by lookup starts from edges, never from the workspace i
       const v = target[p]; return typeof v === "function" ? v.bind(target) : v;
     } });
     const env = { ...t.env, DB: { prepare: (sql: string) => wrap(prepare(sql), sql), batch: (s: any[]) => db.batch(s.map((x: any) => x.__inner ?? x)), exec: (q: string) => db.exec(q) } } as any;
-    for (const p of ["/list?n=50", "/recall?query=atlas+ledger&topK=10&synthesize=0"]) {
+    const today = new Date().toISOString().slice(0, 10);
+    for (const p of ["/list?n=50", "/recall?query=atlas+ledger&topK=10&synthesize=0", `/recall?query=atlas+ledger&topK=10&synthesize=0&as_of=${today}`]) {
       await worker.fetch(new Request(`http://localhost${p}`, { headers: { Authorization: "Bearer test-token" } }), env, { waitUntil: () => {} } as any);
     }
-    const lookups = captured.filter(c => /supersedes/.test(c.sql) && /superseded_by/.test(c.sql));
+    // Every statement that joins the supersedes edges to entries (the superseded_by readers and, since T2-B B3/B4,
+    // the as-of belief read in src/recall/as-of.ts) must start from edges.
+    const lookups = captured.filter(c => /supersedes/.test(c.sql) && /\bentries\b/.test(c.sql) && /\bedges\b/.test(c.sql));
     expect(lookups.length, "statements carrying the superseded_by lookup").toBeGreaterThanOrEqual(2);
     const bad: string[] = [];
     for (const { sql, args } of lookups) {
       const plan = ((await prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...args.map(a => (a === undefined ? null : a))).all()).results as { detail: string }[]).map(r => r.detail);
-      const sub = plan.slice(plan.findIndex(d => d.startsWith("CORRELATED SCALAR SUBQUERY")));
-      if (sub.some(d => /^SEARCH s USING INDEX idx_entries_workspace_created/.test(d))) bad.push(`${plan.join(" ; ")}  <=  ${sql.replace(/\s+/g, " ").slice(0, 80)}`);
+      if (plan.some(d => /^SEARCH s USING INDEX idx_entries_workspace_created/.test(d))) bad.push(`${plan.join(" ; ")}  <=  ${sql.replace(/\s+/g, " ").slice(0, 80)}`);
     }
     expect(bad).toEqual([]);
   }, 60_000);
