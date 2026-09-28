@@ -44,6 +44,7 @@ import { levelInLower, rowWithLevels, settleLevels, withMatchLevels } from "./ke
 import { vectorSortKey } from "../vectorize/ids";
 import { isHeld, NOT_HELD_SQL } from "../quarantine/tags";
 import { applyOccupancyCap, CAP_LOOKAHEAD, collapseLift, collapseNearDuplicates, liftFor } from "./source-trust";
+import { maybeLogRecall, type RecallLogChannel } from "./log";
 
 /**
  * The terms whose matches all fit `limit` (the rarest first), and the rest, or null when the window needs no help:
@@ -411,7 +412,7 @@ export function fuseDenseAndKeyword(
 }
 
 export async function recallEntries(
-  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[]; explain?: boolean },
+  params: { query: string; topK: number; tag?: string; after?: number; before?: number; kind?: MemoryKind; hops?: number; synthesize?: boolean; project?: readonly ProjectRow[]; explain?: boolean; channel?: RecallLogChannel },
   env: Env,
   ctx: ExecutionContext,
   // Resolved once at request entry by the route/MCP caller and threaded down.
@@ -1237,6 +1238,18 @@ export async function recallEntries(
         .catch(e => console.error("recall_count update failed (non-fatal):", e))
     );
   }
+
+  // T-0089.5.2 Part A: opt-in (RECALL_LOG, off by default everywhere) and sampled — a
+  // no-op below cfg.RECALL_LOG === "on", so this costs nothing on every brain that never
+  // turns it on. Never touches `matches`, so ranking is unaffected either way.
+  ctx.waitUntil(maybeLogRecall(env, cfg, {
+    workspaceId: identity?.personalWorkspaceId ?? "",
+    channel: params.channel ?? "rest",
+    query,
+    params: { topK, tag: tag ?? null, after: after ?? null, before: before ?? null, kind: kind ?? null, hops, project: params.project?.map(p => p.id) ?? null },
+    returnedIds: matches.map(m => m.id),
+    now,
+  }));
 
   const maxScore = matches.reduce((mx, m) => Math.max(mx, m.score), 0);
   if (maxScore > 0) for (const m of matches) m.score = m.score / maxScore;
