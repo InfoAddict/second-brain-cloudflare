@@ -241,6 +241,21 @@ describe("undoGroup() (S3)", () => {
     expect(new Set(allReverted.map(r => r.id)).size).toBe(12);
   });
 
+  it("advances past the first page when the undo lands in the group's end millisecond", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `e${i}`);
+    await seedStatusBurst(ids, now - 11 * MIN); // newest event is exactly Date.now()
+    const group = await discoverGroup();
+    expect(group.until).toBe(now);
+    const change = { actorId: "u1", channel: "mcp" as const, client: "Cursor" };
+
+    const first = await undoGroup(env, identity, group.group, change, CFG);
+    const second = await undoGroup(env, identity, group.group, change, CFG);
+
+    expect(first!.remaining).toBe(7);
+    expect(second!.results.map(r => r.id)).toEqual(ids.slice(5, 10));
+    expect(second!.remaining).toBe(2);
+  });
+
   it("a tampered group key selects only the caller's readable, permitted events", async () => {
     const ids = ["e0", "e1", "e2"];
     await seedStatusBurst(ids, now - HOUR);
@@ -273,6 +288,24 @@ describe("undoGroup() (S3)", () => {
     for (const id of otherIds) {
       expect(await maxSeqOf(id)).toBe(2);
     }
+  });
+
+  it("a widened group key cannot roll back an earlier teammate edit outside the group", async () => {
+    const start = now - HOUR;
+    await seedStatusBurst(["e0", "e1", "e2"], start);
+    // The status group's first change to e0 is seq 2. Seq 1 is an earlier edit by
+    // a teammate using the same client; its pre-image must remain outside the undo.
+    await sqlite.db.prepare(`UPDATE entry_versions SET seq = 2 WHERE entry_id = 'e0'`).run();
+    await insertVersion({ entryId: "e0", seq: 1, tags: ["original"], actorId: "u2",
+      channel: "mcp", reason: "update", meta: { client: "Cursor" }, createdAt: start - 30 * MIN });
+    const group = await discoverGroup();
+    const decoded = JSON.parse(Buffer.from(group.group.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    const widened = Buffer.from(JSON.stringify({ ...decoded, s: start - 30 * MIN }))
+      .toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+    await undoGroup(env, identity, widened, { actorId: "u1", channel: "mcp" }, CFG);
+
+    expect(await tagsOf("e0")).toEqual(["work"]);
   });
 
   it("group larger than 50 is capped", async () => {
