@@ -10,7 +10,7 @@
  */
 import type { Env } from "../env";
 import type { Identity } from "../lib/identity";
-import { scopeWhereForRead } from "../lib/scope";
+import { scopeWhereForIdRead, scopeWhereForRead } from "../lib/scope";
 import { ensureTenantBootstrap } from "../lib/tenancy";
 import { getStatus, type MemoryStatus } from "../memory/status";
 import { buildChain, workspaceReadable, type VersionRow } from "../memory/versions";
@@ -122,14 +122,17 @@ export async function enrichWithAsOf(
   const trueIds = trueMatches.map(m => m.id);
   const deprecatedIds = standaloneBeliefs.map(m => m.id);
 
-  const sScope = identity ? scopeWhereForRead(identity, { layer: opts.workspaceFilter, teamId: opts.teamId }, "s.workspace_id") : null;
-  const eScope = identity ? scopeWhereForRead(identity, { layer: opts.workspaceFilter, teamId: opts.teamId }, "e.workspace_id") : null;
+  // R18 (budget audit): scopeWhereForIdRead's unary `+` blocks SQLite from using it to drive the
+  // plan off a workspace index — both branches must be reached from the edges/id join, not a
+  // workspace-wide scan, the same reasoning as R16's supersededBySql fix.
+  const sScope = identity ? scopeWhereForIdRead(scopeWhereForRead(identity, { layer: opts.workspaceFilter, teamId: opts.teamId }, "s.workspace_id")) : null;
+  const eScope = identity ? scopeWhereForIdRead(scopeWhereForRead(identity, { layer: opts.workspaceFilter, teamId: opts.teamId }, "e.workspace_id")) : null;
   // scope-checked: both branches ARE scoped — sScope/eScope apply the caller's clause to s/e in the ternaries below, invisible to the lexer; the entry_versions subqueries and the edges join are pinned to s.id/e.id, already-scoped ids the caller may read
   // validity: as-of: a belief is, by definition, a deprecated row — never a current-facts answer (5.7 item 5)
   const beliefsSql = `
     SELECT s.id, s.content, s.created_at, s.tags, g.target_id AS attached_to,
            (SELECT MAX(v.created_at) FROM entry_versions v WHERE v.entry_id = s.id AND v.tags NOT LIKE '%"status:deprecated"%') AS retracted_at
-      FROM edges g JOIN entries s ON s.id = g.source_id
+      FROM edges g CROSS JOIN entries s ON s.id = g.source_id
      WHERE g.type = 'supersedes' AND g.target_id IN (SELECT value FROM json_each(?))
        AND s.tags LIKE '%"status:deprecated"%' AND s.created_at <= ?${sScope ? ` AND ${sScope.clause}` : ""}
     UNION ALL
