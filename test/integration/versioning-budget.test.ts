@@ -100,7 +100,7 @@ describe("compare-and-set retries: A's write-conflict loop", () => {
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(2);
   });
 
-  it("exhausting all retries costs the per-retry total, PLUS a vector repair the spec's row does not name", async () => {
+  it("exhausting all retries costs exactly the per-retry total", async () => {
     t = await makeTrashEnv();
     t.seed("e1");
     // Race every attempt: none ever commits, so the loop exhausts all WRITE_CAS_ATTEMPTS.
@@ -121,7 +121,9 @@ describe("compare-and-set retries: A's write-conflict loop", () => {
     // whichever text actually won (restoreRowVectors, store.ts:174): a re-read of the live row plus
     // an UPDATE of vector_ids, +2 more the spec's "at most 2 retries" row does not mention because
     // it fires once on total exhaustion, not per retry. Measured total: 8, not 6.
-    expect(t.sqlite.issued).toHaveLength(WRITE_CAS_ATTEMPTS * 2 + 2);
+    // MOVED 8 -> 6 (T-0089.1.1 round 6): per-upload vector ids retire the exhaustion repair; the last
+    // attempt's own upload is deleted in Vectorize, with no D1 call.
+    expect(t.sqlite.issued).toHaveLength(WRITE_CAS_ATTEMPTS * 2);
     expect(t.sqlite.issued.filter((s) => s === "BATCH")).toHaveLength(WRITE_CAS_ATTEMPTS);
   });
 });

@@ -44,6 +44,7 @@ it("stale-upload cleanup cannot delete a concurrent winner's deterministic vecto
   const row = (await t.one<{ vector_ids: string }>("SELECT vector_ids FROM entries WHERE id = 'race'"))!;
   const ids = JSON.parse(row.vector_ids) as string[];
   expect(winnerCommitted).toBe(true);
-  expect(ids).toEqual(["race"]);
+  // Per-upload vector ids (round 6): the winner's one vector, whatever its id, is the only one listed.
+  expect(ids).toHaveLength(1);
   expect(ids.every(id => present.get(id) === t.roots.companyWorkspaceId)).toBe(true);
 });

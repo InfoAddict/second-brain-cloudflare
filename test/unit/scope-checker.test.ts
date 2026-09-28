@@ -1268,7 +1268,7 @@ describe("the checker over the real source tree", () => {
   // annotations) against Design "Who can read history" (D-SH) and the trash/purge/removal flows:
   // none is a caller-reachable read with no scope. All 25 exemptions and the 1 checked marker
   // hold up; nothing here needed a code fix beyond the annotations themselves.
-  it("reports the checker's pinned totals (200 queries, 106 exceptions, 17 scope-checked, 1 outer-join)", () => {
+  it("reports the checker's pinned totals (196 queries, 102 exceptions, 17 scope-checked, 1 outer-join)", () => {
     const run = spawnSync("node", [resolve(ROOT, "scripts/check-scope.mjs")], {
       cwd: ROOT,
       encoding: "utf8",
@@ -1446,7 +1446,10 @@ describe("the checker over the real source tree", () => {
     // nightly vectorize-pending pass reads lengths to plan, then the chosen rows' content by id.
     // Deliberate: +1 query and +1 scope-exempt (199/105 -> 200/106) for T-0089.1.1 round 5:
     // settleLostVectorCommit reads the row's vector_ids by id to settle a lost vector commit.
-    ).toEqual({ queries: 200, exempt: 106, checked: 17, outerJoin: 1 });
+    // Deliberate: -4 queries and -4 scope-exempt (200/106 -> 196/102) for T-0089.1.1 round 6: per-upload
+    // vector ids retire restoreRowVectors (its two by-id reads), settleLostVectorCommit's read, and the
+    // losing restore's liveness probe; a losing writer now only deletes its own upload.
+    ).toEqual({ queries: 196, exempt: 102, checked: 17, outerJoin: 1 });
   });
 
   it("is wired into package.json and CI, or nothing runs it", () => {

@@ -77,7 +77,16 @@ const groupOf = (q: GoldenQuery): StandingGroup => {
 
 /** Measures firing for each query embedding input (the distilled one recall really used, and the raw query text). */
 export async function measureStanding(corpus: LoadedCorpus, queries: readonly GoldenQuery[], inputs: Record<"distilled" | "raw", ReadonlyMap<string, number[]>>): Promise<StandingReport> {
-  const vectors = await corpus.vectorize.getByIds(corpus.standingIds);
+  // Vector ids are minted per upload (T-0089.1.1), so each standing memory's first vector is looked up
+  // through the row's own vector_ids and scored under its entry id.
+  const heads: string[] = [];
+  for (const id of corpus.standingIds) {
+    const row = await corpus.env.DB.prepare(`SELECT vector_ids FROM entries WHERE id = ?`).bind(id).first<{ vector_ids: string }>();
+    const head = (JSON.parse(row?.vector_ids ?? "[]") as string[])[0];
+    if (head) heads.push(head);
+  }
+  const fetched = await corpus.vectorize.getByIds(heads);
+  const vectors = fetched.map(v => ({ ...v, id: ((v.metadata as { parentId?: string } | undefined)?.parentId ?? v.id) as string }));
   if (vectors.length !== corpus.standingIds.length) throw new Error(`standing vectors missing: ${vectors.length}/${corpus.standingIds.length}`);
   const build = (name: "distilled" | "raw") => queries.map((q): StandingProbe => {
     const probe = inputs[name].get(q.id);

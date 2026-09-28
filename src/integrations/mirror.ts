@@ -158,15 +158,22 @@ export function makeMirrorStore(env: Env, writeCtx: WriteContext = OWNER_WRITE_C
         // exactly as the manual-edit path does.
         const embedCtx = embedContextForRow(row, writeCtx);
         let newVectorIds: string[] = [];
+        let committed = false;
         try {
-          newVectorIds = (await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx)).vectorIds;
+          // Compare-and-set on the vector_ids read with the row (round 6): the old ids are retired
+          // below only if this upload is what replaced them.
+          const stored = await storeEntry(env, id, content, refreshedTags, row.source as string, now, cfg, embedCtx, { expectedVectorIds: (row.vector_ids as string) ?? "[]" });
+          newVectorIds = stored.vectorIds;
+          committed = stored.committed !== false;
         } catch (e) {
           console.error("Vectorize re-embed failed (non-fatal):", e);
         }
-        try {
-          await deleteStaleVectors(env, oldVectorIds, newVectorIds);
-        } catch (e) {
-          console.error("Old vector cleanup failed (non-fatal):", e);
+        if (committed) {
+          try {
+            await deleteStaleVectors(env, oldVectorIds, newVectorIds);
+          } catch (e) {
+            console.error("Old vector cleanup failed (non-fatal):", e);
+          }
         }
         return "updated";
       }

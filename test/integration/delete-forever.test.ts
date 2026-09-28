@@ -217,7 +217,8 @@ describe("round 2 adversary: Delete forever from the trash after a failed forget
     const append = await worker.fetch(new Request("http://localhost/append", { method: "POST", headers, body: JSON.stringify({ id, addition: "the private addition" }) }), t.env, ctx);
     expect(append.status).toBe(200);
     const ids = JSON.parse((await t.one<any>(`SELECT vector_ids FROM entries WHERE id = ?`, id))!.vector_ids) as string[];
-    expect(ids.some((v) => v.startsWith(`${id}-update-`))).toBe(true);
+    // The addition's own chunk, under a fresh per-upload id (T-0089.1.1).
+    expect(ids).toHaveLength(2);
 
     // Forget's Vectorize delete fails (non-fatal): every vector stays in the index, but the
     // trash row now carries this entry's real ids (round 2 fix), not just what content derives.

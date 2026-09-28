@@ -147,9 +147,12 @@ describe("ADV systemWrite", () => {
     const others = rows.filter(x => String(x.tags).includes('"synthesized"') && x.id !== "old-digest");
     expect(others).toHaveLength(1);
     expect(String(others[0].content)).not.toContain("MY EDIT");
-    // The vectors under the user's row describe the user's text again, not the system's.
-    const last = upserts.filter(v => v.id === "old-digest").pop()!;
-    expect(last.metadata.content).toBe("MY EDIT");
+    // Per-upload vector ids (T-0089.1.1): the lost merge's own upload (the system text) is deleted and
+    // never listed by the user's row.
+    const mergeUpload = upserts.filter(v => v.metadata?.parentId === "old-digest").map(v => v.id);
+    const deletedIds = (env.VECTORIZE.deleteByIds as any).mock?.calls?.flatMap((c: any) => c[0]) ?? [];
+    for (const id of mergeUpload) expect(deletedIds).toContain(id);
+    expect(JSON.parse(String(mine.vector_ids ?? "[]")).some((id: string) => mergeUpload.includes(id))).toBe(false);
   });
 
   function statefulVectors() {
@@ -177,10 +180,11 @@ describe("ADV systemWrite", () => {
     ai.run.mockImplementation(async (m: string, o: any) => { if (failEmbeds && m.startsWith("@cf/baai/bge")) throw new Error("embed 503"); return base(m, o); });
     raceOnMergeUpdate(() => { sqlite.db.prepare(`UPDATE entries SET content = 'MY EDIT', tags = '["synthesized","work","user-edited"]' WHERE id = 'd'`).run(); failEmbeds = true; });
     await compressTag("work", env, ctx);
-    // content = "MY EDIT", vector_ids = ["d-chunk-0","d-chunk-1","d-chunk-2"], all three vectors hold "combined digest text"
+    // No vector of the lost merge's system text survives under the user's row.
     expect([...store.values()].filter(m => m.parentId === "d").every(m => !String(m.content).includes("combined digest"))).toBe(true);
-    // The repair job (/vectorize-pending) re-indexes a row whose vector_ids is empty.
-    expect(sqlite.rows().find(x => x.id === "d")!.vector_ids).toBe("[]");
+    // Round 6: the lost merge only deleted its own upload, so the row still lists (and has) its own vector.
+    expect(sqlite.rows().find(x => x.id === "d")!.vector_ids).toBe('["d"]');
+    expect(store.has("d")).toBe(true);
   });
 
   it("P3: row forgotten during the merge re-embed leaves the merge's vectors orphaned", async () => {

@@ -213,8 +213,10 @@ describe("ADV-U12 (MINOR): a lost revert deletes the row's live vectors before i
       return raw.prepare(sql);
     } } } as unknown as Env;
     await expect(revertEntry(flaky, owner, "lv1", change(), DEFAULTS, undefined, owner.personalWorkspaceId)).rejects.toThrow();
-    expect(row("lv1")).toMatchObject({ content: "three", vector_ids: JSON.stringify(["lv1"]) });
-    // undo.ts:206 deleted "lv1" (the winner's live vector) before the read that tells stale from not_found.
-    expect(store.get("lv1")?.metadata.content).toBe("three"); // actual: undefined — the row names a vector that no longer exists
+    expect(row("lv1")).toMatchObject({ content: "three" });
+    // Per-upload vector ids (T-0089.1.1): whatever the lost undo deleted, the winner's listed vector is intact.
+    const listed = JSON.parse(row("lv1").vector_ids) as string[];
+    expect(listed).toHaveLength(1);
+    expect(store.get(listed[0])?.metadata.content).toBe("three");
   });
 });

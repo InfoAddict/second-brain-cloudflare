@@ -159,7 +159,8 @@ export async function applyInsightResolution(
   for (const row of found) {
     const tags: string[] = JSON.parse(row.tags ?? "[]");
     if (!tags.includes("auto-insight") || getStatus(tags) === "deprecated") continue;
-    const casColumns = { tags: row.tags ?? "[]", workspace_id: row.workspace_id };
+    // vector_ids pinned too (round 6): a dismiss clears them and deletes exactly the ids it read.
+    const casColumns = { tags: row.tags ?? "[]", workspace_id: row.workspace_id, vector_ids: row.vector_ids ?? null };
     if (action === "confirm") {
       const promoted = withStatus(withKind(tags.filter(t => t !== "auto-insight"), "semantic"), "canonical");
       statements.push(snapshotStatement(env, {

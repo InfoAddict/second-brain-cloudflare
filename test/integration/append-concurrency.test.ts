@@ -1,3 +1,4 @@
+import { parentIdOfVectorId } from "../../src/vectorize/ids";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import worker from "../../src/index";
 import { makeSqliteD1, type SqliteD1 } from "../helpers/sqlite-d1";
@@ -102,7 +103,7 @@ describe("append concurrency (T-0089.9)", () => {
     expect(row.content).toContain("addition");
     expect(JSON.parse(row.tags)).toEqual(expect.arrayContaining(["a", "status:canonical"]));
     // The addition's chunk vector is independent of the row text: inserted once, not per attempt.
-    expect(inserts.filter(i => i.startsWith("e1-update-"))).toHaveLength(1);
+    expect(inserts.filter(i => parentIdOfVectorId(i) === "e1")).toHaveLength(1);
     expect(JSON.parse(row.vector_ids)).toHaveLength(1);
     // The lost attempt wrote no version.
     expect(await versions("e1")).toHaveLength(1);
@@ -117,7 +118,7 @@ describe("append concurrency (T-0089.9)", () => {
     await expect(append(racing, "e1", "addition")).rejects.toBeInstanceOf(WriteConflictError);
     expect((await live("e1")).content).toBe("base");
     expect(await versions("e1")).toEqual([]);
-    expect(deleted.some(id => id.startsWith("e1-update-"))).toBe(true);
+    expect(deleted.some(id => parentIdOfVectorId(id) === "e1")).toBe(true);
 
     // And through the route: HTTP 409.
     n = 0;
@@ -145,7 +146,7 @@ describe("append concurrency (T-0089.9)", () => {
     expect(chain.text(1)).toBe(base);
   });
 
-  it("a long append that loses 3 compare-and-set attempts returns 409 and re-embeds the committed row", async () => {
+  it("a long append that loses 3 compare-and-set attempts returns 409 and leaves none of its own uploads behind", async () => {
     const base = "y".repeat(1580);
     await seed("e1", base);
     let n = 0;
@@ -156,10 +157,11 @@ describe("append concurrency (T-0089.9)", () => {
     const { content } = await live("e1");
     expect(content).not.toContain("will-not-land");
     expect(await versions("e1")).toEqual([]);
-    // restoreRowVectors ran: the vectors describe what the row now holds.
+    // Per-upload vector ids (T-0089.1.1): each lost attempt deletes its own upload and nothing else.
     const indexed = [...store.values()].map(v => v.metadata.content as string).join("");
     expect(indexed).not.toContain("will-not-land");
-    expect(indexed.length).toBeGreaterThan(0);
+    expect((await live("e1")).vector_ids).toBe("[]");
+    expect([...store.keys()].filter(k => parentIdOfVectorId(k) === "e1")).toEqual([]);
   });
 
   it("appendToEntry ignores a stale existingContent passed by the caller", async () => {
@@ -175,6 +177,6 @@ describe("append concurrency (T-0089.9)", () => {
     const racing = racingEnv(async () => { await d1.db.prepare(`DELETE FROM entries WHERE id = 'e1'`).run(); }, 1);
     // The first read finds the row; the delete lands after it, so the CAS misses and the retry finds nothing.
     await expect(append(racing, "e1", "addition")).rejects.toBeInstanceOf(EntryGoneError);
-    expect(deleted.some(id => id.startsWith("e1-update-"))).toBe(true);
+    expect(deleted.some(id => parentIdOfVectorId(id) === "e1")).toBe(true);
   });
 });

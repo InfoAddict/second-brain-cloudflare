@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { Config } from "../config";
 import { CHUNK_MAX_CHARS, CHUNK_OVERLAP_CHARS, MIRRORED_SOURCES } from "../constants";
 import { graceMs } from "../lib/ai";
-import { storeEntry, upsertEntryVectors, settleLostVectorCommit } from "../capture/store";
+import { storeEntry, upsertEntryVectors, discardUpload } from "../capture/store";
 import { changedRows } from "../memory/trash";
 import { INDEXABLE_SQL } from "../capture/lifecycle";
 
@@ -36,7 +36,7 @@ export interface PendingRow {
  * row's content or workspace changed during the embed: the upload is settled and the row stays pending. */
 export async function indexPendingRow(env: Env, row: PendingRow, cfg: Readonly<Config>): Promise<boolean> {
   const stored = await storeEntry(env, row.id, row.content, JSON.parse(row.tags), row.source, row.created_at, cfg,
-    { workspaceId: row.workspace_id, actorId: row.actor_id });
+    { workspaceId: row.workspace_id, actorId: row.actor_id }, { expectedVectorIds: "[]" });
   return stored.committed !== false;
 }
 
@@ -49,11 +49,24 @@ function chunkBound(len: number, source: string): number {
 
 /** Consecutive failed nights after which a row is moved behind the other deferred rows. */
 export const VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION = 3;
-/** KV: { [entryId]: consecutive failed nights }. Cleared for a row the night it indexes. */
+/** KV: { [entryId]: { n: consecutive failed nights, at: last failure ms } }. Cleared for a row the night
+ * it indexes; an entry whose last failure is over 30 days old is dropped, and the key itself carries
+ * a 30-day TTL, so counts for rows that were forgotten or fixed some other way cannot pile up. */
 const FAILURES_KV_KEY = "vectorize-pending:failures";
+const FAILURES_TTL_SECONDS = 30 * 86_400;
+type FailureCounts = Record<string, { n: number; at: number }>;
 
-async function readFailures(env: Env): Promise<Record<string, number>> {
-  try { return JSON.parse((await env.OAUTH_KV.get(FAILURES_KV_KEY)) ?? "{}") as Record<string, number>; } catch { return {}; }
+async function readFailures(env: Env): Promise<FailureCounts> {
+  let raw: Record<string, unknown> = {};
+  try { raw = JSON.parse((await env.OAUTH_KV.get(FAILURES_KV_KEY)) ?? "{}") as Record<string, unknown>; } catch { raw = {}; }
+  const cutoff = Date.now() - FAILURES_TTL_SECONDS * 1000;
+  const out: FailureCounts = {};
+  for (const [id, v] of Object.entries(raw)) {
+    // A bare number is the pre-TTL shape: treat it as failing now, so it ages out on schedule.
+    const entry = typeof v === "number" ? { n: v, at: Date.now() } : (v as { n?: number; at?: number });
+    if (typeof entry?.n === "number" && typeof entry.at === "number" && entry.at >= cutoff) out[id] = { n: entry.n, at: entry.at };
+  }
+  return out;
 }
 
 /**
@@ -91,7 +104,7 @@ export async function runNightlyVectorizePending(
   if (oversize > 0) console.warn(`vectorize-pending: skipped ${oversize} deferred row(s) over the 128 KB note cap (legacy); index them with POST /vectorize-pending or POST /migration/reembed`);
   if (!queue.length) return { processed: 0, failed: 0 };
   const failures = await readFailures(env);
-  const demoted = Object.keys(failures).filter(id => failures[id] >= VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION);
+  const demoted = Object.keys(failures).filter(id => failures[id].n >= VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION);
   if (demoted.length) queue = (await readQueue(demoted)).results;
 
   const chosen: string[] = [];
@@ -112,20 +125,20 @@ export async function runNightlyVectorizePending(
   const failedIds: string[] = [];
   const indexedIds: string[] = [];
   for (const id of chosen) {
-    if (demoted.includes(id)) console.warn(`vectorize-pending: ${id} failed ${failures[id]} nights running; retrying it behind the other deferred rows`);
+    if (demoted.includes(id)) console.warn(`vectorize-pending: ${id} failed ${failures[id].n} nights running; retrying it behind the other deferred rows`);
   }
   // Consecutive failures per row: +1 for a failed embed, cleared once it indexes. A lost commit (the
   // row changed mid-embed) is neither. Written back only when something changed.
   const finish = async (processed: number, failed: number) => {
     let changed = false;
     for (const id of failedIds) {
-      failures[id] = (failures[id] ?? 0) + 1;
+      failures[id] = { n: (failures[id]?.n ?? 0) + 1, at: Date.now() };
       changed = true;
-      if (failures[id] === VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION) console.warn(`vectorize-pending: ${id} failed ${failures[id]} nights running; moving it behind the other deferred rows`);
+      if (failures[id].n === VECTORIZE_PENDING_FAILURES_BEFORE_DEMOTION) console.warn(`vectorize-pending: ${id} failed ${failures[id].n} nights running; moving it behind the other deferred rows`);
     }
     for (const id of indexedIds) if (id in failures) { delete failures[id]; changed = true; }
     if (changed) {
-      try { await env.OAUTH_KV.put(FAILURES_KV_KEY, JSON.stringify(failures)); } catch (e) { console.error("Saving vectorize-pending failure counts failed (non-fatal):", e); }
+      try { await env.OAUTH_KV.put(FAILURES_KV_KEY, JSON.stringify(failures), { expirationTtl: FAILURES_TTL_SECONDS }); } catch (e) { console.error("Saving vectorize-pending failure counts failed (non-fatal):", e); }
     }
     return { processed, failed };
   };
@@ -144,20 +157,20 @@ export async function runNightlyVectorizePending(
     }
   }
   if (!upserted.length) return finish(0, failed);
-  // CAS on the content AND the workspace the vectors were stamped for (round 5): a share or move
-  // during the embed misses, and the upload is settled below instead of committed.
+  // CAS on the content AND the workspace the vectors were stamped for (round 5), and on the row still
+  // being pending (round 6): whoever committed first won, and a loser discards only its own upload.
   const written = await env.DB.batch(upserted.map(({ row, vectorIds }) => env.DB.prepare(
     // versioning: exempt: vector bookkeeping
-    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ?`,
+    `UPDATE entries SET vector_ids = ? WHERE id = ? AND content = ? AND workspace_id = ? AND vector_ids = '[]'`,
   ).bind(JSON.stringify(vectorIds), row.id, row.content, row.workspace_id)));
   let processed = 0;
   for (let i = 0; i < upserted.length; i++) {
     if (changedRows(written[i]) > 0) { processed++; indexedIds.push(upserted[i].row.id); continue; }
-    // Lost the CAS (content edited, or the row shared or moved): delete the stale upload and leave
-    // the row pending for next night, or repair it if another writer has committed meanwhile.
+    // Lost the CAS (content edited, row shared or moved, or another writer committed first): this
+    // upload's ids are its own, so delete them; a still-pending row retries next night.
     const { row, vectorIds } = upserted[i];
     try {
-      await settleLostVectorCommit(env, row.id, vectorIds, row.source, config, { workspaceId: row.workspace_id, actorId: row.actor_id });
+      await discardUpload(env, vectorIds);
     } catch (e) {
       console.error("Nightly re-embed settle failed for entry", row.id, e);
     }

@@ -135,6 +135,19 @@ export class D1Mock {
         .replace(/WHERE\s*\)/gi, ")");
     }
 
+    // Round 6 (T-0089.1.1): writers that replace vector_ids also compare-and-set the vector_ids they
+    // read (`AND e.vector_ids = ?N`). Modelled once here: the clause is checked against the row at run
+    // time and stripped, so every existing branch below keeps matching the statement it always did.
+    let vectorIdsGuard: { valueIdx: number; idIdx: number } | null = null;
+    {
+      const vg = /\s+AND e\.vector_ids (?:=|IS) \?(\d+)/.exec(s);
+      const idm = /e\.id = \?(\d+)/.exec(s);
+      if (vg && idm) {
+        vectorIdsGuard = { valueIdx: Number(vg[1]) - 1, idIdx: Number(idm[1]) - 1 };
+        s = s.replace(vg[0], "");
+      }
+    }
+
     // Production pairs every tag LIKE clause with `ESCAPE '\\'` (see tagLikePattern). The
     // escape clause never changes which query a statement IS, so branches that identify a
     // query by its exact text compare against this form rather than each growing a suffix.
@@ -146,6 +159,11 @@ export class D1Mock {
       const args = scopeDrop.size ? allArgs.filter((_, i) => !scopeDrop.has(i)) : allArgs;
       const stmt: any = {
       async run() {
+        if (vectorIdsGuard) {
+          const row = db.entries.find((e: any) => e.id === args[vectorIdsGuard!.idIdx]);
+          const expected = args[vectorIdsGuard.valueIdx];
+          if (row && expected !== null && (row.vector_ids ?? "[]") !== expected) return { meta: { changes: 0 } };
+        }
         // D1 returns each batched statement's rows as well as its meta, and a
         // batch carries reads as well as writes: identity resolution pairs its
         // SELECT with the throttled last_used_at write so the pair costs one
@@ -391,6 +409,9 @@ export class D1Mock {
         if (s.startsWith("UPDATE entries SET vector_ids")) {
           const [vector_ids, id] = args;
           const row = db.entries.find((e: any) => e.id === id);
+          // storeEntry's and the nightly pass's compare-and-set on the vector_ids read (round 6).
+          if (row && s.endsWith("AND vector_ids = ?") && (row.vector_ids ?? "[]") !== args[args.length - 1]) return { meta: { changes: 0 } };
+          if (row && s.includes("AND vector_ids = '[]'") && (row.vector_ids ?? "[]") !== "[]") return { meta: { changes: 0 } };
           if (row) row.vector_ids = vector_ids;
           return { meta: { changes: row ? 1 : 0 } };
         }

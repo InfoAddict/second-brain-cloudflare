@@ -1,3 +1,4 @@
+import { parentIdOfVectorId } from "../../src/vectorize/ids";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -94,7 +95,8 @@ describe("versioning update", () => {
     });
     const r = await updateEntryContent(env, "e1", "after", DEFAULTS, undefined, undefined, { workspaceId: wsId, actorId: ownerId }, change, wsId);
     expect(r).toEqual({ status: "not_found" });
-    expect(deleted.flat()).toContain("e1");
+    // The update's own upload (fresh ids naming e1) is deleted: nothing owns it now.
+    expect(deleted.flat().some((v: string) => parentIdOfVectorId(v) === "e1")).toBe(true);
     expect(await versions("e1")).toEqual([]);
   });
 

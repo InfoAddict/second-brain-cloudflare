@@ -7,13 +7,12 @@ import { resolveIdentityByUserId } from "../../src/lib/identity";
 import { moveEntry } from "../../src/capture/share";
 import { runNightlyVectorizePending } from "../../src/vectorize/pending";
 import { runBatch } from "../../src/migration/embedding";
-import { restoreRowVectors } from "../../src/capture/store";
 import { DEFAULTS } from "../../src/config";
 import { writerSpans } from "../../scripts/check-scope.mjs";
 
 // T-0089.1.1 close-out round 5: a vector_ids write commits only if the row still has the content AND
 // the workspace its vectors were stamped for; otherwise the stale upload is deleted (the row stays
-// pending) or, if another writer committed meanwhile, the row is repaired as it stands.
+// pending). Round 6 removed restoreRowVectors: with per-upload ids a loser only ever deletes its own.
 
 let t: TrashEnv;
 afterEach(() => { t?.close(); vi.restoreAllMocks(); });
@@ -54,7 +53,7 @@ describe("vector_ids commits check workspace and content", () => {
     expect(race.deleted).toEqual(expect.arrayContaining(race.stamped.map((s) => s.id)));
   });
 
-  it("migration re-embed: a row shared mid-embed is not counted done, and no vector it lists is left stamped for the old workspace", async () => {
+  it("migration re-embed: a row shared mid-embed is not counted done, and its old-workspace upload is deleted", async () => {
     t = await makeTrashEnv();
     // A migration row already lists its (deterministic) ids, so the lost commit repairs it in place
     // under its current workspace instead of deleting vectors the row points at.
@@ -63,23 +62,12 @@ describe("vector_ids commits check workspace and content", () => {
     const result = await runBatch(t.env, DEFAULTS);
     expect(race.moved()).toBe(true);
     expect(result.processed).toBe(0);
+    // Round 6: the run's own upload (stamped for the old workspace) is deleted; the row keeps what it listed.
     const listed = JSON.parse((await t.one<{ vector_ids: string }>(`SELECT vector_ids FROM entries WHERE id = 'm'`))!.vector_ids) as string[];
-    const last = new Map(race.stamped.map((x) => [x.id, x.ws]));
-    for (const id of listed) if (!race.deleted.includes(id)) expect(last.get(id), id).toBe(t.roots.companyWorkspaceId);
+    expect(listed).toEqual(["m"]);
+    for (const x of race.stamped) if (x.ws !== t.roots.companyWorkspaceId) expect(race.deleted, x.id).toContain(x.id);
   });
 
-  it("restoreRowVectors: a move during its re-embed ends with vectors stamped for the row's current workspace", async () => {
-    t = await makeTrashEnv();
-    t.seed("r", { content: "repaired fact", created_at: OLD, vector_ids: '["r"]' });
-    const race = await moveDuringUpload("r");
-    await restoreRowVectors(t.env, "r", [], [], "api", DEFAULTS, { workspaceId: t.roots.ownerPersonalWorkspaceId, actorId: t.roots.ownerUserId });
-    expect(race.moved()).toBe(true);
-    const row = (await t.one<{ vector_ids: string; workspace_id: string }>(`SELECT vector_ids, workspace_id FROM entries WHERE id = 'r'`))!;
-    expect(row.workspace_id).toBe(t.roots.companyWorkspaceId);
-    const listed = JSON.parse(row.vector_ids) as string[];
-    const last = new Map(race.stamped.map((s) => [s.id, s.ws]));
-    for (const id of listed) expect(last.get(id), id).toBe(t.roots.companyWorkspaceId);
-  });
 });
 
 describe("structural", () => {
@@ -107,7 +95,7 @@ describe("structural", () => {
         expect(ok, `${f.file}: ${sql.slice(0, 100)}`).toBe(true);
       }
     }
-    expect(sites.length).toBeGreaterThanOrEqual(10);
+    expect(sites.length).toBeGreaterThanOrEqual(8);
   });
 
 });

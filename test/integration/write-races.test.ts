@@ -83,7 +83,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(await versions("e1")).toHaveLength(1);
   });
 
-  it("an update that loses 3 compare-and-set attempts returns conflict and the row's vectors are re-embedded from its committed content", async () => {
+  it("an update that loses 3 compare-and-set attempts returns conflict and leaves none of its own uploads behind", async () => {
     await seed("e1", "base", []);
     let n = 0;
     const racing = racingEnv(async () => {
@@ -94,9 +94,10 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(await versions("e1")).toEqual([]);
     const row = await live("e1");
     expect(row.content).not.toBe("my edit");
-    // restoreRowVectors ran: the index now describes the row as it stands.
-    const indexed = [...store.values()].map(v => v.metadata.content);
-    expect(indexed).toContain(row.content);
+    // Per-upload vector ids (T-0089.1.1): each lost attempt deletes only its own upload, never a vector
+    // the row lists, so none of "my edit" survives and the row still lists what it did.
+    expect([...store.values()].map(v => v.metadata.content)).not.toContain("my edit");
+    expect(row.vector_ids).toBe("[]");
   });
 
   it("a tags-only concurrent change makes the update retry without re-embedding", async () => {
@@ -116,7 +117,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(JSON.parse((await live("e1")).tags)).toEqual(expect.arrayContaining(["a", "b"]));
   });
 
-  it("a person's merge that loses to a concurrent edit keeps both rows and restores the target's vectors", async () => {
+  it("a person's merge that loses to a concurrent edit keeps both rows, leaves the target's vectors alone, and deletes its own upload", async () => {
     // captureEntry's own duplicate-and-merge path already tests this fully (versioning-capture-status.test.ts);
     // this asserts the vector restoration specifically.
     const decision = JSON.stringify({ action: "merge", target_id: "old", merged_content: "combined" });
@@ -150,8 +151,13 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(r.status).not.toBe("merged");
     const row = await live("old");
     expect(row.content).toBe("concurrent edit");
-    const indexed = [...store.values()].map(v => v.metadata.content);
-    expect(indexed).toContain("concurrent edit");
+    // The target still lists what it listed (the concurrent edit's own writer owns its re-index), and
+    // the merge's upload (per-upload ids, T-0089.1.1) was deleted rather than left under the target.
+    expect(row.vector_ids).toBe('["old"]');
+    const mergeUpload = [...store.values()].filter(v => v.metadata.parentId === "old" && v.metadata.content === "combined").map(v => v.id);
+    expect(mergeUpload.length).toBeGreaterThan(0);
+    for (const id of mergeUpload) expect(deleted).toContain(id);
+    expect(deleted).not.toContain("old");
   });
 
   it("ADV-2: a person's merge does not land in a member's now-private workspace after an unshare", async () => {
@@ -273,7 +279,7 @@ describe("write races: re-embed ordering (T-0089.10)", () => {
     expect(vs.length).toBeLessThanOrEqual(1);
   });
 
-  it("restoreRowVectors empties vector_ids when the re-embed fails", async () => {
+  it("an update whose re-embed fails after losing a race reports reembed_failed and writes nothing", async () => {
     await seed("e1", "base", []);
     let n = 0;
     const racing = racingEnv(async () => { await d1.db.prepare(`UPDATE entries SET content = ? WHERE id = 'e1'`).bind(`race${++n}`).run(); });

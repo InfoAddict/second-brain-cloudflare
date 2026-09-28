@@ -118,7 +118,8 @@ function scoredMultiplier(
   const recency = recencyFloor + (1 - recencyFloor) * Math.exp(-ageMs / halfLifeMs);
   const frequency = options.useRecallFrequency === false ? 1 : 1 + Math.log1p(rc);
   const combined = Math.min(1.0, recency * frequency);
-  const isShortAppend = match.id.includes("-update-") &&
+  // metadata.isUpdate marks an append's own chunk; "-update-" is 3.7's deterministic id for one.
+  const isShortAppend = (meta?.isUpdate === true || match.id.includes("-update-")) &&
     typeof meta?.content === "string" && meta.content.length < CHUNK_OVERLAP_CHARS;
   const appendPenalty = isShortAppend ? 0.2 : 1.0;
   const rolledUpPenalty = tags.includes("rolled-up") ? 0.4 : 1.0;

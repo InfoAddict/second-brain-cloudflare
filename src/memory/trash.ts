@@ -10,7 +10,7 @@ import { writeAuditEvents, type AuditEventInput } from "../lib/audit";
 import { deleteVectorIds } from "../vectorize/batch";
 import { edgeEndpointsReadableSql } from "../graph/edges";
 import { EDGE_ROW_COLUMNS, edgesJsonSql, restoreColumnsSql, rowJsonSql } from "./entry-columns";
-import { upsertEntryVectors, deleteStaleVectors, restoreRowVectors } from "../capture/store";
+import { upsertEntryVectors, deleteStaleVectors, discardUpload } from "../capture/store";
 import { isVectorizeUnavailable } from "../vectorize/health";
 import { resolveConfig, type Config } from "../config";
 import { getStatus } from "./status";
@@ -501,32 +501,13 @@ export type RestoreResult =
   | { status: "restored"; edgesRestored: number; trashedReason: string; vectorCount: number };
 
 /**
- * A losing restore's cleanup. Vector ids are deterministic (the entry id, or `id-chunk-i`,
- * store.ts), so a winning restore of the SAME trash row embeds the identical content and gets
- * the identical ids — nothing to reconcile there. But a slow loser can lose to something else
- * live under the same id by the time its own upsert finally lands (checklist 36g): this
- * attempt's own embed already overwrote the vector with ITS text, which the live row does not
- * hold. Reconcile by re-embedding from whatever the live row now says, same as a lost
- * compare-and-set elsewhere (store.ts's restoreRowVectors) — a bare delete would just leave the
- * live row's real vectors on the ids it just clobbered.
+ * A losing restore's cleanup: its upload's ids were minted for this attempt alone (round 6), so they
+ * are deleted outright; a winner, live under the same entry id, lists ids of its own.
  */
 async function deleteOrphanedRestoreVectors(
-  env: Env, id: string, vectorIds: string[], source: string, cfg: Readonly<Config>, writeCtx: { workspaceId: string; actorId: string },
+  env: Env, _id: string, vectorIds: string[], _source: string, _cfg: Readonly<Config>, _writeCtx: { workspaceId: string; actorId: string },
 ): Promise<void> {
-  if (!vectorIds.length) return;
-  try {
-    const p = new Params();
-    const liveId = p.add(id);
-    // scope-exempt: by-id: only decides whether THIS attempt's own vectors are safe to delete outright
-    const live = await env.DB.prepare(`SELECT 1 FROM entries WHERE id = ${liveId}`).bind(...p.values()).first();
-    if (live) {
-      await restoreRowVectors(env, id, vectorIds, [], source, cfg, writeCtx);
-      return;
-    }
-    await deleteVectorIds(env, vectorIds);
-  } catch (e) {
-    console.error("Orphaned restore vector cleanup failed (non-fatal):", e);
-  }
+  await discardUpload(env, vectorIds);
 }
 
 /**
@@ -551,9 +532,8 @@ export async function restoreEntry(
   const deprecated = getStatus(tags) === "deprecated";
 
   // A live-again id (the id was re-captured while its old copy sat in the trash) is a conflict
-  // before anything else runs: vector ids are deterministic (the id itself, or id-chunk-i,
-  // store.ts), so embedding now would silently overwrite the live row's own vector with this
-  // trash row's stale text, whatever the batch below decides.
+  // before anything else runs: the INSERT below would fail on the primary key anyway, and checking
+  // first spares an embed that could only be thrown away.
   {
     const p = new Params();
     const liveId = p.add(trashed.id);
@@ -623,17 +603,16 @@ export async function restoreEntry(
       ).bind(...deleteP.values()),
     ]);
   } catch (e) {
-    // Vector ids are deterministic (the entry id, or id-chunk-i, store.ts), so a winning restore
-    // racing the same trash row upserted these SAME ids: deleting them here without checking would
-    // delete the WINNER's live vectors too. Only clean up if this attempt's id truly lost.
+    // This attempt's upload never became the row's: its ids are per upload (T-0089.1.1), so deleting
+    // them can never touch a winning restore's vectors.
     await deleteOrphanedRestoreVectors(env, trashed.id, vectorIds, source, cfg, writeCtx);
     if (isPrimaryKeyConflict(e)) return { status: "conflict" };
     throw e;
   }
 
   if (changedRows(results[2]) === 0) {
-    // Either genuinely gone (a racing restore or purge won the SAME row — it embedded the same
-    // deterministic ids, never delete them), or a DIFFERENT trash row now lives under this id
+    // Either genuinely gone (a racing restore or purge won the SAME row; this attempt's own upload
+    // goes either way, its ids are per upload), or a DIFFERENT trash row now lives under this id
     // (adv-final MAJOR 1: the id was purged and reused). Tell those apart before answering: a
     // stale read of a row that still exists, just not the one we authorized against, is a
     // conflict to retry, not a 404 claiming nothing is there.
@@ -671,8 +650,9 @@ export type DeleteForeverResult =
   | { status: "deleted"; deletedVectors: number };
 
 /**
- * The same deterministic ids store.ts's storeEntry would have produced for this content and
- * source: a single-chunk row embeds under its own id, a multi-chunk row under `id-chunk-i`.
+ * The deterministic ids 3.7's storeEntry produced for this content and source (a single-chunk row
+ * under its own id, a multi-chunk row under `id-chunk-i`); uploads since T-0089.1.1 mint per-upload
+ * ids and are always in the stored vector_ids, so this only matters for a legacy trash row.
  * Backstops the trash row's own stored vector_ids (schema.sql), which cover a short append's
  * id-update-<ts> chunk but default to '[]' for a trash row written before that column existed —
  * this recomputes the chunk count from the same text and source for that case, rather than
@@ -736,7 +716,7 @@ export async function deleteForever(
 
   const row = results[3].results?.[0] as { content?: string; source?: string; vector_ids?: string; vectors_free?: number } | undefined;
   let vectorIds: string[] = [];
-  // Vector ids are deterministic per id: a live row holding this id owns them, so leave them.
+  // 3.7's derived ids are the entry id's own: if a live row somehow holds this id, leave them to it.
   if (row?.content !== undefined && row.vectors_free) {
     let stored: string[] = [];
     try { stored = JSON.parse(row.vector_ids ?? "[]"); } catch { stored = []; }

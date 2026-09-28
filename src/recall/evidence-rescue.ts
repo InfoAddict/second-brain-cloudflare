@@ -1,3 +1,4 @@
+import { vectorSortKey } from "../vectorize/ids";
 export type EvidenceSlotSource = "omitted-root" | "related";
 
 export interface EvidenceSlotCandidate {
@@ -44,7 +45,7 @@ const compareEvidence = (a: EvidenceSlotCandidate, b: EvidenceSlotCandidate) =>
   || b.exactMatchCount - a.exactMatchCount
   || b.metadataAlignment - a.metadataAlignment
   || b.score - a.score
-  || a.id.localeCompare(b.id);
+  || vectorSortKey(a.id).localeCompare(vectorSortKey(b.id));
 
 /**
  * Chooses one final-slot candidate using only evidence already computed during

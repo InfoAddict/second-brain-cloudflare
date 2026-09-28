@@ -344,7 +344,8 @@ describe("captureEntry()", () => {
     const { ctx } = makeCtx();
     await captureEntry("I switched to Cursor", [], "api", env, ctx);
     // Only the stale chunk is deleted; the reused "existing" vector survives.
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-chunk-1"]);
+    // Per-upload vector ids (T-0089.1.1): the re-embed never reuses an old id, so every old one is retired.
+    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing", "existing-chunk-1"]);
   });
 
   it("replace: falls through to normal insert when target not found in DB", async () => {
@@ -428,7 +429,8 @@ describe("captureEntry()", () => {
     const { ctx } = makeCtx();
     await captureEntry("I like dark mode at night", [], "api", env, ctx);
     // Only the stale chunk is deleted; the reused "existing" vector survives.
-    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing-chunk-1"]);
+    // Per-upload vector ids (T-0089.1.1): the re-embed never reuses an old id, so every old one is retired.
+    expect(deleteByIdsMock).toHaveBeenCalledWith(["existing", "existing-chunk-1"]);
   });
 
   // ── Smart merge: keep_both falls back to flagged (existing behaviour) ────────
