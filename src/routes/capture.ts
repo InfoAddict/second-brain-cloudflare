@@ -322,7 +322,7 @@ export async function handleCaptureRoutes(
     const validity = hasValidity ? parseValidityInput(body, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
     if (validity && "error" in validity) return json({ ok: false, error: validity.error, field: validity.field }, 400);
     const setValidity = (workspaceId: string) =>
-      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId);
+      updateEntryValidity(env, body.id!.trim(), validity!.value as { from?: number | null; until?: number | null }, { actorId: identity.userId, channel: "rest" }, validityCfg as Config, workspaceId, ctx);
     const validityBody = (r: UpdateValidityResult): { status: number; body: Record<string, unknown> } => {
       if (r.status === "updated") return { status: 200, body: { validity: { valid_from: r.effectiveFrom, valid_from_stated: r.validFrom !== null, valid_until: r.validUntil, propagated: r.propagated } } };
       if (r.status === "refused") return { status: 400, body: { ok: false, error: r.error, field: r.field } };

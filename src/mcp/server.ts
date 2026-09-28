@@ -845,7 +845,7 @@ export function buildMcpServer(
       const validity = hasValidity ? parseValidityInput({ valid_from, valid_until }, Date.now(), (validityCfg as Config).TIMEZONE, { allowNull: true }) : null;
       if (validity && "error" in validity) return { content: [{ type: "text", text: validity.error }] };
       const setValidity = async (workspaceId: string): Promise<string> => {
-        const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg as Config, workspaceId);
+        const r = await updateEntryValidity(env, id, validity!.value as { from?: number | null; until?: number | null }, mcpChange, validityCfg as Config, workspaceId, ctx);
         if (r.status === "updated") return updateValidityReply(id, r, (validityCfg as Config).TIMEZONE);
         if (r.status === "refused") return r.error;
         if (r.status === "no_change") return `Memory ${id} already has those dates; nothing changed.`;

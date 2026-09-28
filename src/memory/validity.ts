@@ -16,6 +16,7 @@ import { RETRACTED_SOURCE_TAG } from "../tags/system";
 
 export { RETRACTED_SOURCE_TAG };
 import { buildDerivedSnapshot, changesOf, Params, pruneStatement, snapshotStatement } from "./versions";
+import { buildStandingCache, standingTouched } from "../standing/cache";
 
 /**
  * A stated start of "unknown": a fact told only with its end ("I lived in Boston until 2020"),
@@ -575,18 +576,19 @@ const PROPAGATE_LIMIT = 10;
 export async function updateEntryValidity(
   env: Env, id: string, next: { from?: number | null; until?: number | null }, change: ChangeContext, cfg: Readonly<Config>,
   authorizedWorkspaceId: string,
+  ctx?: ExecutionContext,
 ): Promise<UpdateValidityResult> {
   const ws = authorizedWorkspaceId ?? "";
   const row = await env.DB.prepare(
     // scope-checked: pinned to the workspace the caller's own scoped read authorized; the replaced rows share it
-    `SELECT e.created_at, e.valid_from, e.valid_until,
+    `SELECT e.created_at, e.valid_from, e.valid_until, e.tags,
             (SELECT json_group_array(json_object('id', t.id, 'from', t.start)) FROM (
                SELECT y.id AS id, COALESCE(y.valid_from, y.created_at) AS start FROM edges g JOIN entries y ON y.id = g.target_id
                 WHERE g.source_id = e.id AND g.type = 'supersedes' AND y.workspace_id = e.workspace_id
                   AND y.valid_until = COALESCE(e.valid_from, e.created_at)
                 ORDER BY y.id LIMIT ${PROPAGATE_LIMIT}) t) AS replaced_json
        FROM entries e WHERE e.id = ? AND e.workspace_id = ?`,
-  ).bind(id, ws).first<{ created_at: number; valid_from: number | null; valid_until: number | null; replaced_json: string | null }>();
+  ).bind(id, ws).first<{ created_at: number; valid_from: number | null; valid_until: number | null; tags: string; replaced_json: string | null }>();
   if (!row) return { status: "not_found" };
 
   const validFrom = next.from !== undefined ? next.from : row.valid_from;
@@ -652,6 +654,23 @@ export async function updateEntryValidity(
     { entryId: id, actorId: change.actorId, event: "validity_changed", payload: { cause: "explicit", valid_from: validFrom, valid_until: validUntil, channel: change.channel } },
     ...propagated.map(pid => ({ entryId: pid, actorId: change.actorId, event: "validity_changed" as const, payload: { cause: "propagate", by: id, until: effectiveFrom, channel: change.channel } })),
   ]);
+  // Review NIT (spec 15 2.6): a standing row whose window just opened or closed changes whether
+  // the cache build's own currentValidityAt filter admits it. Hydration already re-checks this
+  // independently (2.4/2.6), so a missed touch is never unsafe, but it would otherwise sit stale
+  // for up to 24h and GET /standing would keep reporting firing: true. Propagated rows are not
+  // checked here — a standing row is never itself in a supersede chain via valid_from/until
+  // propagation, and if it were, the same 24h self-heal applies.
+  {
+    let tags: string[] = [];
+    try { tags = JSON.parse(row.tags ?? "[]"); } catch { /* leave empty: an unparsable tags column touches nothing */ }
+    if (tags.includes("standing:active")) {
+      // ctx is optional here (unlike the other lane D writers): a validity edit is rare enough
+      // that a caller with no ExecutionContext to defer into still gets a correct rebuild, just
+      // an awaited one instead of one off the response path.
+      if (ctx) standingTouched(env, ctx, cfg, [ws]);
+      else await buildStandingCache(env, cfg, ws);
+    }
+  }
   return { status: "updated", validFrom, validUntil, effectiveFrom, propagated, changed };
 }
 
