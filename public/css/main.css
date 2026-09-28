@@ -1308,6 +1308,23 @@
         font-weight: 500;
       }
 
+      /* A long state phrase (Italian's translations run longer than English's)
+         squeezed the content column so narrow it wrapped to many lines, with
+         the vertically-centered state label landing mid-way through them
+         rather than beside a single line. Below content instead, never
+         beside it, once a row is narrow enough for that to happen. */
+      @media (max-width: 480px) {
+        .standing-filter-row {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 6px;
+        }
+
+        .standing-filter-state {
+          white-space: normal;
+        }
+      }
+
       #recent-list .card-content,
       #project-memories .card-content {
         font-size: 14.5px;

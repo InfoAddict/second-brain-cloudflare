@@ -386,9 +386,17 @@ async function maybeRevealActorFilter() {
  */
 const STANDING_FILTER_VALUE = 'standing:active'
 
+/**
+ * Copywriter final (18-copy-deck.md section 10): the over-limit line cites
+ * the workspace's configured STANDING_MAX ("only {max} can be active"),
+ * never a typed-in number. GET /standing does not return that value today
+ * (backend gap, reported: test/integration/standing-limit-field.test.ts) -
+ * read from `item.limit` for when it does, leaving the placeholder
+ * unfilled (interpolate's own behavior) rather than guessing a number.
+ */
 function standingStateLabel(item) {
   if (item.firing) return t('standing.stateActive')
-  if (item.reason === 'over_limit') return t('standing.stateOverLimit')
+  if (item.reason === 'over_limit') return t('standing.stateOverLimit', { max: item.limit })
   if (item.reason === 'not_indexed_yet') return t('standing.stateNotIndexed')
   if (item.reason === 'held') return t('standing.stateHeld')
   return t('standing.statePendingRefresh') // pending_refresh, or a future reason an older dashboard has no label for

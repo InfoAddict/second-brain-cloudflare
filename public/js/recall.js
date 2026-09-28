@@ -258,7 +258,9 @@ async function sendRecall(retryQuery) {
 function makeStandingCard(fire) {
   const card = document.createElement('div')
   card.className = 'standing-card'
-  const title = fire.actor_name ? t('standing.recallCardTitleBy', { name: fire.actor_name }) : t('standing.recallCardTitle')
+  const title = fire.actor_name
+    ? t('standing.recallCardTitleBy', { name: fire.actor_name, date: formatDateUI(fire.created_at, { year: 'numeric', month: 'short', day: 'numeric' }) })
+    : t('standing.recallCardTitle')
   card.innerHTML = `
     <div class="standing-card-title"><i class="ti ti-pin"></i> ${escHtml(title)}</div>
     <div class="standing-card-text">${escHtml(fire.content)}</div>

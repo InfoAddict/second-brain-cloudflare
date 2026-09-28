@@ -999,9 +999,14 @@ const I18N_EN = {
     topicUnder: "On {topic}, you've been right more often than you expected so far, based on {n} decisions.",
     lineNotReady: "You'll see how your confidence compares with what happened after {needed} reviewed decisions. You have {n} so far.",
   },
-  // T7-E Task 14: drafts pending the copywriter (1aa406a6) through the
-  // director, except badgeTitle, filterEmpty and sheetLine, which are exact
-  // strings from 15-t7-wow-spec.md section 7.3 and the director's decisions.
+  // T7-E Task 14. Copywriter final (18-copy-deck.md section 10):
+  // stateActive, stateOverLimit, stateNotIndexed, statePendingRefresh,
+  // stopped, recallCardTitleBy, and recallCardTitle (confirmed as-is: never
+  // "you set", authorship is unverifiable). Still draft pending the
+  // copywriter (1aa406a6): badge, filterLabel, filterLoadFailed, tryAgain,
+  // stop, stopFailed, recallOpen, recallStop. badgeTitle, filterEmpty and
+  // sheetLine are exact strings from 15-t7-wow-spec.md 7.3 and the
+  // director's decisions.
   standing: {
     badge: 'Standing',
     badgeTitle: 'Shown to your AI tools when a question closely matches it.',
@@ -1009,25 +1014,21 @@ const I18N_EN = {
     filterEmpty: 'No standing instructions yet. Ask your AI to remind you of something whenever a topic comes up.',
     filterLoadFailed: 'Could not load standing instructions.',
     tryAgain: 'Try again',
-    stateActive: 'Active',
-    stateOverLimit: 'Not firing: over the limit of 50',
-    stateNotIndexed: 'Not firing yet: still indexing',
-    // Track 4 (Task 16) has not shipped a sub-reason yet, so this cannot cite
-    // one: draft, flagged for the copywriter.
+    stateActive: 'In use',
+    // {max} is the workspace's configured STANDING_MAX, never a typed-in
+    // number - see standingStateLabel (recent.js) for the backend gap this
+    // depends on (GET /standing does not return the limit yet).
+    stateOverLimit: 'Not in use: only {max} can be active',
+    stateNotIndexed: 'Not in use yet: still being indexed',
     stateHeld: 'Held',
-    // DRAFT: the spec's filter list (7.3) names no copy for `pending_refresh`
-    // (Design 2.12): a Worker still rebuilding the freshest cache, not
-    // literally "still indexing".
-    statePendingRefresh: 'Not firing yet: refreshing',
+    statePendingRefresh: 'Not in use yet: updating',
     sheetLine: 'Standing instruction · comes up when this topic does',
     stop: 'Stop',
-    stopped: 'Stopped',
+    stopped: 'Stopped. The memory stays.',
     stopFailed: 'Could not stop this: {message}',
-    // DRAFT: 7.3 says the recall card title is "Standing instruction you
-    // set", but the director's decision 1 says the title must never claim
-    // "you set" (authorship is unverifiable) - flagged for the copywriter.
     recallCardTitle: 'Standing instruction',
-    recallCardTitleBy: 'Standing instruction (set by {name})',
+    // {date} from formatDateUI, matching the rest of the dashboard's date rendering.
+    recallCardTitleBy: 'Standing instruction (set by {name}, {date})',
     recallOpen: 'Open',
     recallStop: 'Stop',
   },
@@ -2240,8 +2241,7 @@ const I18N_IT = {
     topicUnder: 'Su {topic}, finora hai avuto ragione più spesso di quanto ti aspettassi, su {n} decisioni.',
     lineNotReady: "Vedrai come la tua sicurezza si confronta con com'è andata dopo {needed} decisioni valutate. Finora ne hai {n}.",
   },
-  // DRAFT throughout except badgeTitle and stopped's toast pairing with the
-  // shared "Annulla" action - see the English catalog's note.
+  // See the English catalog's note for what is copywriter-final vs draft.
   standing: {
     badge: 'Permanente',
     badgeTitle: 'Mostrato ai tuoi strumenti di IA quando una domanda vi corrisponde da vicino.',
@@ -2250,16 +2250,16 @@ const I18N_IT = {
     filterLoadFailed: 'Impossibile caricare le istruzioni permanenti.',
     tryAgain: 'Riprova',
     stateActive: 'Attiva',
-    stateOverLimit: 'Non attiva: oltre il limite di 50',
-    stateNotIndexed: 'Non ancora attiva: indicizzazione in corso',
-    stateHeld: 'In sospeso',
-    statePendingRefresh: 'Non ancora attiva: aggiornamento in corso',
+    stateOverLimit: 'Non in uso: possono essere attive solo {max}',
+    stateNotIndexed: 'Non ancora in uso: indicizzazione in corso',
+    stateHeld: 'Trattenuta',
+    statePendingRefresh: 'Non ancora in uso: aggiornamento in corso',
     sheetLine: "Istruzione permanente · si attiva quando l'argomento ricorre",
     stop: 'Disattiva',
-    stopped: 'Disattivata',
+    stopped: 'Disattivata. Il ricordo resta.',
     stopFailed: 'Impossibile disattivarla: {message}',
     recallCardTitle: 'Istruzione permanente',
-    recallCardTitleBy: 'Istruzione permanente (impostata da {name})',
+    recallCardTitleBy: 'Istruzione permanente (impostata da {name} il {date})',
     recallOpen: 'Apri',
     recallStop: 'Disattiva',
   },

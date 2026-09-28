@@ -183,28 +183,37 @@ describe("filter lists firing state from /standing", () => {
   });
 
   it("fetches GET /standing and shows each item's firing state", async () => {
-    const ctx = load({ ok: true, standing: [item({ id: "s1", firing: true }), item({ id: "s2", firing: false, reason: "over_limit" })] });
+    const ctx = load({ ok: true, standing: [item({ id: "s1", firing: true }), item({ id: "s2", firing: false, reason: "over_limit", limit: 50 })] });
 
     await ctx.loadStandingFilter();
 
     expect(ctx.__fetchCalls[0]).toContain("/standing");
-    const html = ctx.__els.get("recent-list").innerHTML;
     // innerHTML was cleared and rows appended via appendChild in this harness,
     // so read the rows straight off the tracked children instead.
     const rows = ctx.__els.get("recent-list").kids;
     expect(rows).toHaveLength(2);
-    expect(rows[0].innerHTML).toContain("Active");
-    expect(rows[1].innerHTML).toContain("Not firing: over the limit of 50");
+    expect(rows[0].innerHTML).toContain("In use");
+    expect(rows[1].innerHTML).toContain("Not in use: only 50 can be active");
   });
 
-  it("names 'not firing yet: still indexing' and a held reason", async () => {
+  it("names 'not in use yet: still being indexed' and a held reason", async () => {
     const ctx = load({ ok: true, standing: [item({ id: "s1", firing: false, reason: "not_indexed_yet" }), item({ id: "s2", firing: false, reason: "held" })] });
 
     await ctx.loadStandingFilter();
 
     const rows = ctx.__els.get("recent-list").kids;
-    expect(rows[0].innerHTML).toContain("Not firing yet: still indexing");
+    expect(rows[0].innerHTML).toContain("Not in use yet: still being indexed");
     expect(rows[1].innerHTML).toContain("Held");
+  });
+
+  it("leaves the {max} placeholder literal rather than guessing a number when GET /standing has not shipped the limit field yet", async () => {
+    const ctx = load({ ok: true, standing: [item({ id: "s1", firing: false, reason: "over_limit" })] });
+
+    await ctx.loadStandingFilter();
+
+    const rows = ctx.__els.get("recent-list").kids;
+    expect(rows[0].innerHTML).not.toMatch(/only \d+ can be active/);
+    expect(rows[0].innerHTML).toContain("{max}");
   });
 
   it("shows the empty state when there are no standing instructions", async () => {
@@ -273,7 +282,7 @@ describe("Stop posts /standing/stop and shows Undo", () => {
     expect(ctx.__fetchCalls[0].url).toBe("https://example.test/standing/stop");
     expect(JSON.parse(ctx.__fetchCalls[0].init.body)).toEqual({ id: "m1" });
     expect(ctx.__toasts).toHaveLength(1);
-    expect(ctx.__toasts[0].message).toBe("Stopped");
+    expect(ctx.__toasts[0].message).toBe("Stopped. The memory stays.");
     expect(ctx.__toasts[0].opts.action).toBe("Undo");
     expect(typeof ctx.__toasts[0].opts.onAction).toBe("function");
   });
