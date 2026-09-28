@@ -150,7 +150,7 @@ describe("ADV-U19 (MINOR): the oversize fallback drops the record, so 'at most o
     expect((await capture(e, incoming)).status).toBe("merged");
     const mergeSeq = (await versions("big"))[0].seq;
     // The row keeps growing after the merge (still well inside D1's 2 MB row).
-    expect(await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).toBe(true);
+    expect((await appendToEntry(e, "big", "", "g".repeat(950_000), [], "api", DEFAULTS, undefined, { workspaceId: owner.personalWorkspaceId, actorId: owner.userId }, change(), undefined, owner.personalWorkspaceId)).indexed).toBe(true);
     // First rollback: the version row needs a full 1.85 MB copy, so recreated_incoming is dropped.
     expect((await revertEntry(e, owner, "big", change(), DEFAULTS, mergeSeq, owner.personalWorkspaceId)).status).toBe("reverted");
     expect(live(incoming)).toHaveLength(1);

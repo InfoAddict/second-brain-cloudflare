@@ -804,9 +804,9 @@ export function buildMcpServer(
 
       const client = identity ? await resolveClient(extra) : undefined;
       const cfg = await resolveConfig(env);
-      let indexed: boolean;
+      let appendResult: Awaited<ReturnType<typeof appendToEntry>>;
       try {
-        indexed = await appendToEntry(env, id, existingContent, a, tags, source, cfg, volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string);
+        appendResult = await appendToEntry(env, id, existingContent, a, tags, source, cfg, volatility as Volatility | undefined, writeCtx, { ...mcpChange, client }, whenInput, row.workspace_id as string);
       } catch (e) {
         if (e instanceof WriteConflictError) return { content: [{ type: "text", text: `Entry ${id} changed while saving, so nothing was appended. Please try again.` }] };
         if (e instanceof EntryGoneError) return { content: [{ type: "text", text: e.message }] };
@@ -815,14 +815,28 @@ export function buildMcpServer(
           content: [{ type: "text", text: `Append failed: ${(e as Error).message}` }],
         };
       }
+      const { indexed, held, wasCanonical } = appendResult;
 
       if (identity) {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "mcp", ...(client ? { client } : {}) } });
+        auditEvent(env, ctx, {
+          entryId: id, actorId: identity.userId, event: "appended",
+          payload: { channel: "mcp", ...(client ? { client } : {}), ...(wasCanonical ? { was_canonical: true } : {}) },
+        });
+        if (held) {
+          auditEvent(env, ctx, {
+            entryId: id, actorId: identity.userId, event: "held",
+            payload: { reasons: held.reasons, score: held.score, channel: "mcp", ...(client ? { client } : {}) },
+          });
+        }
       }
       // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
       // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
       // hand from appendToEntry above, so this adds no second KV read.
       ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+      if (held) {
+        return { content: [{ type: "text", text: `Appended to entry ${id}, but it is now held out of recall: ${holdReasonPhrase(held.reasons[0])}. The user can release it.` }] };
+      }
 
       return {
         content: [{
@@ -930,7 +944,21 @@ export function buildMcpServer(
       }
 
       if (identity && result.status === "updated") {
-        auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "mcp", ...(client ? { client } : {}) } });
+        auditEvent(env, ctx, {
+          entryId: id, actorId: identity.userId, event: "updated",
+          payload: {
+            channel: "mcp", ...(client ? { client } : {}),
+            ...(result.wasCanonical ? { was_canonical: true } : {}),
+            ...(result.capsuleChanged ? { capsule_changed: true } : {}),
+          },
+        });
+        // 5.4: the hold's own event, written alongside the write's own.
+        if (result.held) {
+          auditEvent(env, ctx, {
+            entryId: id, actorId: identity.userId, event: "held",
+            payload: { reasons: result.held.reasons, score: result.held.score, channel: "mcp", ...(client ? { client } : {}) },
+          });
+        }
       }
       // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
       // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
@@ -941,6 +969,13 @@ export function buildMcpServer(
 
       // New content plus an end date: the text first, then the window, each its own version.
       const endSuffix = hasValidity ? ` ${await setValidity(row.workspace_id as string)}` : "";
+
+      // 5.5: checked before the "Vectorize index missing" branch below, which also sees
+      // vectorIds: null for an entirely different reason — a held update must never be
+      // mistaken for a degraded index.
+      if (result.held) {
+        return { content: [{ type: "text", text: `Updated entry ${id}, but it is now held out of recall: ${holdReasonPhrase(result.held.reasons[0])}. The user can release it.${noteSuffix}${endSuffix}` }] };
+      }
 
       if (!result.vectorIds) {
         return {

@@ -290,22 +290,36 @@ export async function handleCaptureRoutes(
     }
 
     const cfg = await resolveConfig(env);
-    let indexed: boolean;
+    let appendResult: Awaited<ReturnType<typeof appendToEntry>>;
     try {
       const writeCtx = await writeContextFor(env, identity);
       if (writeCtx instanceof Response) return writeCtx;
-      indexed = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
+      appendResult = await appendToEntry(env, id, existingContent, addition, tags, source, cfg, appendVol.value, writeCtx, { actorId: identity.userId, channel: "rest" }, undefined, row.workspace_id as string);
     } catch (e) {
       if (e instanceof WriteConflictError) return json({ ok: false, error: "Entry changed while saving, try again" }, 409);
       if (e instanceof EntryGoneError) return json({ ok: false, error: e.message }, 404);
       return json({ ok: false, error: `Append failed: ${(e as Error).message}` }, 500);
     }
+    const { indexed, held, wasCanonical } = appendResult;
 
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "appended", payload: { channel: "rest" } });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: identity.userId, event: "appended",
+      payload: { channel: "rest", ...(wasCanonical ? { was_canonical: true } : {}) },
+    });
+    if (held) {
+      auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "held", payload: { reasons: held.reasons, score: held.score, channel: "rest" } });
+    }
     // T-0089.5.2 Part B: an append on a recently-recalled id is implicit feedback
     // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
     // hand from appendToEntry above, so this adds no second KV read.
     ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+    if (held) {
+      return json({
+        ok: true, id, held: { reason: held.reasons[0] },
+        message: "Update appended, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.",
+      });
+    }
 
     return json({
       ok: true,
@@ -420,13 +434,33 @@ export async function handleCaptureRoutes(
     }
 
     // Only a write that happened is audited.
-    auditEvent(env, ctx, { entryId: id, actorId: identity.userId, event: "updated", payload: { channel: "rest" } });
+    auditEvent(env, ctx, {
+      entryId: id, actorId: identity.userId, event: "updated",
+      payload: {
+        channel: "rest",
+        ...(result.wasCanonical ? { was_canonical: true } : {}),
+        ...(result.capsuleChanged ? { capsule_changed: true } : {}),
+      },
+    });
+    if (result.held) {
+      auditEvent(env, ctx, {
+        entryId: id, actorId: identity.userId, event: "held",
+        payload: { reasons: result.held.reasons, score: result.held.score, channel: "rest" },
+      });
+    }
     // New content plus an end date: the text first, then the window, each its own version.
     const endFields = hasValidity ? validityBody(await setValidity(row.workspace_id as string)).body : {};
     // T-0089.5.2 Part B: an update on a recently-recalled id is implicit feedback
     // that the recall was used. No-op unless RECALL_LOG is on — cfg is already on
     // hand from updateEntryContent above, so this adds no second KV read.
     ctx.waitUntil(maybeMarkFollowed(env, row.workspace_id, id, Date.now(), cfg));
+
+    if (result.held) {
+      return json(withReservedNote({
+        ...endFields, ok: true, id, held: { reason: result.held.reasons[0] },
+        message: "Updated, but held out of recall: it looks like an instruction to an AI. Release it once you're sure it's fine.",
+      }, ignoredReservedTags));
+    }
 
     if (!result.vectorIds) {
       return json(withReservedNote({

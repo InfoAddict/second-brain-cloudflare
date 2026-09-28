@@ -14,8 +14,20 @@ import { isVectorizeUnavailable } from "../vectorize/health";
 import { tagsAfterWrite, tagsAfterAppend } from "../memory/stale";
 import { withVolatility, type Volatility } from "../memory/volatility";
 import { OWNER_WRITE_CONTEXT, type WriteContext } from "../lib/scope";
-import type { ChangeContext } from "../lib/audit";
+import type { ChangeContext, AuditChannel } from "../lib/audit";
 import { buildCasGuard, changesOf, Params, pruneStatement, snapshotStatement, type WhenChange } from "../memory/versions";
+import { scoreWrite, type QuarantineChannel } from "../quarantine/score";
+import { heldTagsFor, holdStatements, type HeldInfo } from "../quarantine/hold";
+import { isHeld, withEditedCanonical } from "../quarantine/tags";
+import { countMcpWritesInWindow } from "../quarantine/burst";
+import { getStatus } from "../memory/status";
+import { isCapsuleTag } from "../tags/system";
+
+/** 5.7/5.2 C1: the capsule: / capsule-slot: tag set changed between two tag lists. */
+function capsuleTagsDiffer(before: readonly string[], after: readonly string[]): boolean {
+  const norm = (tags: readonly string[]) => JSON.stringify([...tags].filter(isCapsuleTag).sort());
+  return norm(before) !== norm(after);
+}
 
 /** Re-embedding must stamp vectors from the row being edited, not the caller's default write target. */
 export function embedContextForRow(row: { workspace_id?: unknown }, writeCtx: WriteContext): WriteContext {
@@ -210,7 +222,15 @@ export type UpdateEntryResult =
   | { status: "reembed_failed" }
   /** The row kept changing under the write: nothing was committed and the vectors were restored to the row as it stands. */
   | { status: "conflict" }
-  | { status: "updated"; vectorIds: string[] | null };
+  | {
+    status: "updated"; vectorIds: string[] | null;
+    /** Track 4 (5.4 W-b): set when this edit scored high enough to be held. */
+    held?: HeldInfo;
+    /** 5.7: this row's status was canonical before this edit landed (mcp only; REST gets no label). */
+    wasCanonical?: boolean;
+    /** 5.7: this edit added or redefined a capsule:/capsule-slot: tag. */
+    capsuleChanged?: boolean;
+  };
 
 /**
  * Replace an entry's content outright, keeping D1, the tags and the vector index in step.
@@ -323,14 +343,40 @@ export async function updateEntryContent(
       // keeps the digested original inside the entry, so the digest still covers it.
       .filter(t => t !== "rolled-up");
     // A person's edit takes a digest or insight out of the system's hands, in this same UPDATE.
-    const committedTags = withUserEditMarker(mergedTags);
+    let committedTags = withUserEditMarker(mergedTags);
+
+    // 5.7: the canonical-edit label. MCP only — a REST edit (the person) gets no label. Added to
+    // the tags this edit is writing whether or not it ends up held below: a held row's status
+    // moves to draft either way, so the label is moot there, but it costs nothing to include.
+    const wasCanonical = getStatus(existingTags) === "canonical";
+    if (change.channel === "mcp" && wasCanonical) committedTags = withEditedCanonical(committedTags, Date.now());
+    const capsuleChanged = capsuleTagsDiffer(existingTags, committedTags);
+
+    // Track 4 (5.1, 5.4 W-b): scored on the resulting content. D4.1: an already-held row is
+    // never rescored — quarantine:* is worker-owned, so applyTagReplacement above already kept
+    // it regardless of what the caller asked to replace it with.
+    const alreadyHeld = isHeld(existingTags);
+    let score: ReturnType<typeof scoreWrite> | null = null;
+    if (!alreadyHeld && (change.channel === "mcp" || change.channel === "rest")) {
+      const channel: QuarantineChannel = change.channel;
+      const mcpWritesInWindow = channel === "mcp"
+        ? await countMcpWritesInWindow(env, change.actorId, Date.now(), config.QUARANTINE_WRITE_BURST)
+        : undefined;
+      score = scoreWrite(
+        { content: finalContent, tags: committedTags, source, channel, kind: "update", mcpWritesInWindow, capsuleTagsChanged: capsuleChanged },
+        config,
+      );
+    }
+    const heldTags = score?.hold ? heldTagsFor(committedTags, score.reasons) : null;
 
     // Re-embed FIRST (#212): if it fails, leave the entry's content and vectors untouched and
     // surface an error, instead of committing new content and then deleting every vector —
     // which would leave the entry silently unsearchable. null means Vectorize is unreachable
     // (#270), not that this embed failed. A retry re-embeds only if the row's text changed (another
     // writer may have upserted over these ids); a tags-only change keeps the vectors already made.
-    if (attempt === 1 || embeddedFrom !== readContent) {
+    // 5.4 W-b: a held write skips this pre-commit re-embed entirely (saves a model call) — the
+    // row is never vectorized, so there is nothing to embed for.
+    if (!heldTags && (attempt === 1 || embeddedFrom !== readContent)) {
       // A previous attempt's embed is being abandoned for this fresh one (content moved again since
       // it ran): delete its upload now, before embedding again.
       await recoverFromLostAttempt();
@@ -342,6 +388,7 @@ export async function updateEntryContent(
       }
       embeddedFrom = readContent;
     }
+    if (heldTags) await recoverFromLostAttempt();
     const newVectorIds = reembedded?.vectorIds ?? null;
 
     // Safe to commit: either the embed succeeded, or Vectorize is unavailable and the old
@@ -383,6 +430,14 @@ export async function updateEntryContent(
         env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE(e.updated_at, e.created_at) + 1), vector_ids = ${vectorIdsIdx} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, casColumns)}`)
           .bind(...p.values()),
         pruneStatement(env, id, config.VERSION_KEEP),
+        // 5.4 W-b: holdStatements appended to the same batch — the edit above is its own version
+        // and the hold is the next. Guarded on the edit's own post-state, so a lost compare-and-set
+        // (the UPDATE above changed nothing) cannot land the hold either.
+        ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+          entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+          // holdStatements' own UPDATE targets plain `entries`, unaliased (unlike the snapshot's `entries e` above).
+          guard: p2 => `content = ${p2.add(finalContent)} AND tags = ${p2.add(JSON.stringify(committedTags))}`,
+        }) : []),
       ]);
     } catch (e) {
       // The batch never landed, but the embed above already committed vector_ids-shaped ids
@@ -398,6 +453,20 @@ export async function updateEntryContent(
     // route because #289 made this the single update path — putting it in the caller would
     // have left the MCP tool introducing tags the cache never learned about.
     await rememberTags(env, mergedTags, embedCtx.workspaceId);
+
+    if (heldTags) {
+      // No new upload to compare stale ids against (deleteStaleVectors no-ops when newIds is
+      // empty, by design — held is the one caller that means it): delete the row's PRIOR
+      // vectors directly, after commit, same as deprecateEntry (5.3 point 1).
+      if (oldVectorIds.length) {
+        try {
+          await deleteEntryVectors(env, [{ entryId: id, vectorIds: oldVectorIds }]);
+        } catch (e) {
+          console.error("Vectorize delete failed after a held update (non-fatal):", e);
+        }
+      }
+      return { status: "updated", vectorIds: null, held: { reasons: score!.reasons, score: score!.score }, wasCanonical, capsuleChanged };
+    }
 
     if (newVectorIds) {
       try {
@@ -422,7 +491,7 @@ export async function updateEntryContent(
       }
     }
 
-    return { status: "updated", vectorIds: newVectorIds };
+    return { status: "updated", vectorIds: newVectorIds, wasCanonical, capsuleChanged };
   }
 
   // Out of attempts: the last upload never became the row's, so it goes.
@@ -449,6 +518,18 @@ export class EntryGoneError extends Error {
  * compare-and-set on the tags they read. Long appends re-embed the whole text, so they compare-and-set
  * on content and tags and retry from a fresh read. Either way a lost attempt writes no version.
  */
+/** 5.4 W-c: the appended text is scored with this much of the prior content for context, not
+ * the whole entry — bounded, regardless of how long the entry already is. */
+export const APPEND_SCORE_CONTEXT_CHARS = 2000;
+
+export interface AppendResult {
+  indexed: boolean;
+  /** Track 4 (5.4 W-c): set when this append scored high enough to be held. */
+  held?: HeldInfo;
+  /** 5.7: this row's status was canonical before this append landed (mcp only). */
+  wasCanonical?: boolean;
+}
+
 export async function appendToEntry(
   env: Env,
   id: string,
@@ -465,7 +546,7 @@ export async function appendToEntry(
   /** The workspace the CALLER's own scoped read authorized, same reasoning as updateEntryContent's
    * identical parameter (R2-3): this call's guard pins to it, not to whatever it reads later. */
   authorizedWorkspaceId: string,
-): Promise<boolean> {
+): Promise<AppendResult> {
   // See updateEntryContent's identical normalization: this call's own read of the row (below)
   // always coalesces workspace_id to "", so the pin must match that or a legacy row with no
   // workspace_id column value yet ever appends again.
@@ -515,12 +596,37 @@ export async function appendToEntry(
     const embedCtx = embedContextForRow(row, writeCtx);
     // Unlike a replacement this keeps any existing volatility verdict (see tagsAfterAppend); a caller-supplied one overrides it.
     const appendedTags = tagsAfterAppend(rowTags);
-    const refreshedTags = withUserEditMarker(volatility ? withVolatility(appendedTags, volatility) : appendedTags);
+    let refreshedTags = withUserEditMarker(volatility ? withVolatility(appendedTags, volatility) : appendedTags);
+
+    // 5.7: the canonical-edit label applies to append too, MCP only.
+    const wasCanonical = getStatus(rowTags) === "canonical";
+    if (change.channel === "mcp" && wasCanonical) refreshedTags = withEditedCanonical(refreshedTags, Date.now());
+
+    // Track 4 (5.1, 5.4 W-c): scored on the addition plus bounded prior context, never the
+    // whole entry. D4.1: an already-held row is never rescored.
+    const alreadyHeld = isHeld(rowTags);
+    let score: ReturnType<typeof scoreWrite> | null = null;
+    if (!alreadyHeld && (change.channel === "mcp" || change.channel === "rest")) {
+      const channel: QuarantineChannel = change.channel;
+      const mcpWritesInWindow = channel === "mcp"
+        ? await countMcpWritesInWindow(env, change.actorId, Date.now(), config.QUARANTINE_WRITE_BURST)
+        : undefined;
+      score = scoreWrite(
+        {
+          content: readContent.slice(-APPEND_SCORE_CONTEXT_CHARS) + addition,
+          tags: refreshedTags, source, channel, kind: "append", mcpWritesInWindow,
+        },
+        config,
+      );
+    }
+    const heldTags = score?.hold ? heldTagsFor(refreshedTags, score.reasons) : null;
 
     if (readContent.length + suffix.length > CHUNK_MAX_CHARS) {
       // The whole text is re-embedded, so this commit must be of the text that was embedded.
       const newContent = readContent + suffix;
-      const newVectorIds = (await reembedOrDegrade(env, id, newContent, rowTags, source, config, embedCtx))?.vectorIds ?? null;
+      // 5.4 W-c: no pre-commit re-embed for a held append — saves a model call, and the row is
+      // never vectorized.
+      const newVectorIds = heldTags ? null : (await reembedOrDegrade(env, id, newContent, rowTags, source, config, embedCtx))?.vectorIds ?? null;
       // ADV-12: taken AFTER the embed, not before — a slow embed that lets a concurrent append commit
       // first must not stamp this later write with an earlier time than the one it lands on top of.
       const now = Date.now();
@@ -547,6 +653,12 @@ export async function appendToEntry(
           env.DB.prepare(`UPDATE entries AS e SET content = ${contentIdx}, tags = ${tagsIdx}, updated_at = MAX(${nowIdx}, COALESCE(e.updated_at, e.created_at) + 1), vector_ids = ${vectorIdsIdx}${when ? `, when_at = ${whenIdx[0]}, when_kind = ${whenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${idIdx} AND ${buildCasGuard(p, longCasColumns)}`)
             .bind(...p.values()),
           pruneStatement(env, id, config.VERSION_KEEP),
+          // 5.4 W-c: holdStatements appended to the same batch, guarded on this append's own
+          // post-state so a lost compare-and-set cannot land the hold either.
+          ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+            entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+            guard: p2 => `content = ${p2.add(newContent)} AND tags = ${p2.add(JSON.stringify(refreshedTags))}`,
+          }) : []),
         ]);
       } catch (e) {
         // U6: the batch never landed, but the embed above already committed vector_ids-shaped ids
@@ -567,6 +679,19 @@ export async function appendToEntry(
       // A short attempt earlier may have inserted a chunk this long commit re-embedded away.
       await retireChunk();
 
+      if (heldTags) {
+        // No new upload to compare stale ids against: delete the row's PRIOR vectors directly,
+        // after commit, same as deprecateEntry (5.3 point 1).
+        if (existingVectorIds.length) {
+          try {
+            await deleteEntryVectors(env, [{ entryId: id, vectorIds: existingVectorIds }]);
+          } catch (e) {
+            console.error("Vectorize delete failed after a held append (non-fatal):", e);
+          }
+        }
+        return { indexed: false, held: { reasons: score!.reasons, score: score!.score }, wasCanonical };
+      }
+
       // Skipped when Vectorize is unavailable: the old vectors are the entry's only remaining semantic index.
       if (newVectorIds) {
         try {
@@ -580,10 +705,11 @@ export async function appendToEntry(
       } catch (e) {
         console.error("Append auto-link failed (non-fatal):", e);
       }
-      return newVectorIds !== null;
+      return { indexed: newVectorIds !== null, wasCanonical };
     }
 
-    if (!chunk) {
+    // 5.4 W-c: a held append is never indexed — no chunk embed, no Vectorize insert.
+    if (!heldTags && !chunk) {
       const values = await embed(addition, env, config);
       const [chunkId] = mintVectorIds(id, 1);
       const metadata: Record<string, any> = {
@@ -603,7 +729,9 @@ export async function appendToEntry(
       }
       chunk = { id: chunkId, indexed, values };
     }
-    const { id: chunkId, indexed, values } = chunk;
+    const chunkId = chunk?.id ?? "";
+    const indexed = chunk?.indexed ?? false;
+    const values = chunk?.values ?? null;
 
     // ADV-12: taken AFTER the chunk embed, not before — see the long branch's identical reasoning above.
     const now = Date.now();
@@ -632,6 +760,15 @@ export async function appendToEntry(
           `UPDATE entries AS e SET content = content || ${suffixIdx}, vector_ids = CASE WHEN ${indexedIdx} = 1 THEN json_insert(vector_ids, '$[#]', ${chunkIdx}) ELSE vector_ids END, tags = ${shortTagsIdx}, updated_at = MAX(${shortNowIdx}, COALESCE(e.updated_at, e.created_at) + 1)${when ? `, when_at = ${shortWhenIdx[0]}, when_kind = ${shortWhenIdx[1]}, when_source = 'explicit'` : ""} WHERE e.id = ${shortIdIdx} AND ${buildCasGuard(shortP, shortCasColumns)}`
         ).bind(...shortP.values()),
         pruneStatement(env, id, config.VERSION_KEEP),
+        // 5.4 W-c: holdStatements appended to the same batch. The short branch's own guard is
+        // tags + workspace only (R2-1, above), not content — this hold guard matches that: the
+        // edit's own UPDATE unconditionally sets tags to refreshedTags on a match, so checking
+        // tags = refreshedTags here still proves the edit landed, with no need to know the exact
+        // resulting content (which a concurrent short append could also have touched).
+        ...(heldTags ? holdStatements(env, { snapshotStatement, pruneStatement, versionKeep: config.VERSION_KEEP }, {
+          entryId: id, reasons: score!.reasons, score: score!.score, signals: score!.signals, change, heldTags, now,
+          guard: p2 => `tags = ${p2.add(JSON.stringify(refreshedTags))} AND workspace_id = ${p2.add(pinnedWorkspaceId)}`,
+        }) : []),
       ]);
     } catch (e) {
       await retireChunk();
@@ -643,12 +780,25 @@ export async function appendToEntry(
       throw new WriteConflictError();
     }
 
+    if (heldTags) {
+      // The short branch never touches the row's EXISTING chunks — but held means vector_ids
+      // ends at '[]', so every chunk the row had going in must go too, not just a new one.
+      if (existingVectorIds.length) {
+        try {
+          await deleteEntryVectors(env, [{ entryId: id, vectorIds: existingVectorIds }]);
+        } catch (e) {
+          console.error("Vectorize delete failed after a held append (non-fatal):", e);
+        }
+      }
+      return { indexed: false, held: { reasons: score!.reasons, score: score!.score }, wasCanonical };
+    }
+
     try {
-      await inferEdgesOnWrite(id, await neighborsFromVectorQuery(values, env), env);
+      await inferEdgesOnWrite(id, await neighborsFromVectorQuery(values!, env), env);
     } catch (e) {
       console.error("Append auto-link failed (non-fatal):", e);
     }
-    return indexed;
+    return { indexed, wasCanonical };
   }
   throw new WriteConflictError();
 }
