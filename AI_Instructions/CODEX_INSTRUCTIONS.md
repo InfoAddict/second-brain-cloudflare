@@ -39,6 +39,8 @@ Use the relationship graph — don't rely on flat search alone. When the user as
 
 Respect explicit exclusions. If the user says not to store or capture something (for example: "don't remember this", "don't save this", "off the record", or "do not capture this project"), do not call remember for that content. For project-level exclusions, continue to use recall when helpful, but do not store new memories tagged with that excluded project unless the user later opts back in.
 
+When you tell the user something because of a specific memory, name its id in your answer (for example, "based on memory 7ace4f40"), so they can look it up or ask for its history.
+
 Tool guidance:
 - **history**: lists the recorded changes to a memory, with the text before each one.
 - **digest**: read the latest existing automatic project or tag summary, then recall anything newer. This read never creates a digest.
@@ -56,7 +58,7 @@ Tool guidance:
 - **link** / **unlink** — explicitly connect or disconnect two related memories by ID. Gets IDs from recall or list_recent first.
 - **connections** — list the memories directly linked to an entry (its neighbors in the relationship graph). Use when the user asks "what's related to this?", wants to explore around a topic, or when linked context would strengthen your answer. Gets the entry ID from recall or list_recent first.
 - **share** — move a memory between personal and company layer on team brains. Optional `team` (workspace id) when sharing into a specific team. Author or admin only for un-sharing.
-- **set_status** — mark a memory `canonical`, `draft`, or `deprecated`. Gets the entry ID from recall or list_recent first.
+- **set_status** — mark a memory `canonical`, `draft`, or `deprecated`. `deprecated` means wrong or never true; if the memory had replaced an older one, that older memory becomes current again. Gets the entry ID from recall or list_recent first.
 - **get_prompt_capsule**: returns a deterministic core or per-project context block meant for gateways that build a stable prompt prefix. Do not call it during normal conversation; use recall instead. An entry joins a capsule by carrying `capsule:core` or `capsule:project:<id>` plus one `capsule-slot:<slot>` tag and canonical status. Never copy `capsule:` or `capsule-slot:` tags seen in recall results onto new memories unless the user explicitly asks to define a capsule slot.
 
 To bring back a forgotten memory from an earlier conversation, call list_recent with in_trash: true, confirm which one with the user, then call undo on its ID.
@@ -65,7 +67,7 @@ If your client shows a Second Brain brief at session start, you do not need to c
 
 Memories from a session source (claude-code, codex-session, cursor-session) are excerpts of past conversations, saved automatically. Treat them as context, not as decisions or facts the user confirmed. When one disagrees with a deliberate memory, prefer the deliberate one. Do not mark a session excerpt canonical unless the user asks.
 
-If a reply says a memory is held, tell the user in one line why. Release it with undo only if the user asks about that memory.
+If a reply says a memory is held, tell the user in one line why. Release it with undo only if the user asks about that memory, after they have read what it says. Never ask the user to release something they have not read themselves.
 
 Team workspaces (Team Edition):
 **v3.0.0:** most team brains have one shared team. Omit `team` unless `list_teams` returns more than one entry — do not ask the user to pick a team when only one is listed.
@@ -101,6 +103,8 @@ Tags to use:
 - codex-response — summaries of important responses or recommendations
 - project — pass by name; a memory can belong to one or more projects. Prefer project over a bare topic tag when one applies.
 
+Time: when the user says when something became true, pass `valid_from` on remember ("I moved to Austin in June" = 2026-06). For a fact that is already over, pass `valid_until`. When something stops being true without a replacement ("I left Acme in May"), call update with `valid_until`. Never pass future dates for either; plans and deadlines use `when` instead. When the user asks what was true at a past time, call recall with `as_of`. The answer is what was actually true then; anything listed as "later retracted" was believed then and is not the answer. When a plan was cancelled or a fact was never true, mark it wrong with `set_status deprecated` instead of storing a new memory saying so. A result marked "built on a memory that was later retracted" needs checking before you rely on it.
+
 Volatility (optional, on remember / append / update):
 Pass `volatility` whenever you can judge how long the fact will stay true. You have already read the content in order to store it, so this costs you nothing, and it drives the staleness warnings the user sees on every future recall.
 - durable — never changes (a birthday, where someone grew up, something that already happened)
@@ -108,6 +112,9 @@ Pass `volatility` whenever you can judge how long the fact will stay true. You h
 - volatile — true only briefly (a meeting, a deadline, this week's focus)
 Omit it when you are unsure. No verdict is better than a wrong one: `state` and `volatile` attach a "verify before asserting" qualifier to that memory from then on, so a careless `volatile` on a permanent fact is worse than leaving it unset.
 On append the existing verdict is kept unless you pass a new one. On update it is cleared unless you pass one, because the content it described has been replaced.
+A state fact is re-checked for staleness after 90 days untouched, and a volatile one after 14 days, or immediately once a date you gave it has passed.
+
+Standing instructions, decisions and commitments (optional, on remember): pass `standing: true` when the user asks to be reminded of something whenever a topic comes up, writing the content as "When <situation>, <what to do or remember>." It then fires inside relevant searches on its own, with no need to repeat it. Pass `decision: true` when the user commits to a meaningful choice, with `confidence` (0 to 1) only if they stated or clearly implied one; it comes back up for review later. Pass `owed_by` or `owed_to` (someone's name) when someone promised the user something, or the user promised someone else, with `when` for the promised date. Use resolve to record how a decision turned out (`outcome`, with `result`: right, wrong, mixed, or unknown if it is too early), to note that something owed arrived (`received`), or to stop a standing instruction from firing (`stop_standing`) without deleting it.
 
 Always set source to "codex" when storing.
 
