@@ -254,10 +254,10 @@ export async function captureEntry(
     );
   }
   // Codex review class D (T-0089.4.2): a `partial` score (over 32 KB, only the head and tail
-  // scanned) holds too, reason pending-scan, not just an outright `hold` — see holdDecision.
+  // scanned) holds too, reason too_long, not just an outright `hold` — see holdDecision.
   const decision = score ? holdDecision(score) : { hold: false as const };
   // The model call below is skipped only for a real hold (a matched suspicious signal), not
-  // merely because the write is oversized and pending-scan: a benign large capture still
+  // merely because the write is oversized and too_long: a benign large capture still
   // deserves a normal merge/duplicate decision, and skipping it would silently strand every
   // oversized merge as a standalone held row instead of landing on its target.
   const { duplicate: dup, contradiction, mergeAction, neighbors } = await checkDuplicateAndContradiction(
@@ -273,7 +273,14 @@ export async function captureEntry(
 
   // A capsule definition must land as its own row: a merge discards the
   // incoming tags, and the slot tags are the whole point of the write.
-  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule) {
+  //
+  // Codex recheck (T-0089.4.2): a held write — too_long included — must never merge, replace,
+  // supersede or deprecate an existing row. The model call above still runs for a merely-oversized
+  // write (skipModelCall is narrower than decision.hold, see above), so mergeAction can still come
+  // back "merge"/"replace" for one; committing that would publish the write's own unscanned or
+  // unreviewed content into a target row that was never held, exactly the exposure a hold exists
+  // to prevent. A held write always falls through to landing as its own standalone (held) row.
+  if (dup.status === "flagged" && mergeAction && mergeAction.action !== "keep_both" && !definesCapsule && !decision.hold) {
     const targetId = mergeAction.target_id;
     const newContent = mergeAction.action === "merge" ? mergeAction.merged_content : c;
 
@@ -537,7 +544,7 @@ export async function captureEntry(
     // 5.4: the INSERT (with the tags the write asked for) and the hold's own version, guarded
     // UPDATE and prune all land in ONE batch, so a crash between them can never leave an
     // unheld row. No scheduleIndex: a held create is never vectorized (5.3 point 1). Class D
-    // (T-0089.4.2): this also covers a `partial` score, held reason pending-scan.
+    // (T-0089.4.2): this also covers a `partial` score, held reason too_long.
     const heldTags = heldTagsFor(finalTags, decision.reasons);
     await env.DB.batch([
       insertStatement,

@@ -120,8 +120,19 @@ describe("ADV-U13 (MAJOR): undoing a large merge writes a version row D1 cannot 
   it("the revert's own version row stays under D1's 2,000,000-byte row limit", async () => {
     const e = mergingEnv("big");
     await seed("big", { content: "a".repeat(700_000), tags: ["work"] });
-    // 700 KB + 1 MB + 1 KB fits VERSION_ROW_BUDGET_BYTES (1.8 MB), so the merge keeps meta.incoming.
-    expect((await capture(e, "b".repeat(1_000_000))).status).toBe("merged");
+    // Codex recheck (T-0089.4.2): a person's own 1 MB capture (channel mcp/rest) would score
+    // `partial` (over the scorer's 32 KB budget) and hold too_long, which now refuses to merge at
+    // all (finding #1) -- the exact protection this test's own scenario would otherwise defeat by
+    // publishing an unscanned 1 MB write straight into an existing row. Only mcp/rest channels are
+    // ever scored (Q-F, 5.1), so this omits channel purely to reach the same oversized-merge shape
+    // ADV-U13 is about (the revert's own D1 row-budget truncation), unrelated to what this finding
+    // fixed -- commitPerson (not commitSystem) still runs, since systemWrite is still unset.
+    // mergingEnv's AI mock reads its merged text from `pending` (normally filled by the shared
+    // `capture()` helper below) -- filled here directly since this call bypasses that helper.
+    pending.push("b".repeat(1_000_000));
+    const captured = await captureEntry("b".repeat(1_000_000), [], "api", e, ctx, undefined,
+      { workspaceId: owner.personalWorkspaceId, actorId: owner.userId });
+    expect(captured.status).toBe("merged");
     const mergeRow = (await versions("big")).at(-1)!;
     expect(JSON.parse(mergeRow.meta).incoming).toHaveLength(1_000_000);
 

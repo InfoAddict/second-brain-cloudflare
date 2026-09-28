@@ -60,6 +60,9 @@ export async function storeEntry(
   /** The vector_ids the caller read for this row (JSON, e.g. '[]' for a new or pending row). */
   commit: { expectedVectorIds: string } = { expectedVectorIds: "[]" },
 ): Promise<StoredEntry> {
+  // batch-embed: exempt — a create-time embed. A held write never reaches storeEntry at all (it
+  // takes the holdStatements batch instead, class A), so the only content that lands here is
+  // already under the scorer's 32 KB budget: too few chunks for batching to matter (R20).
   const stored = await upsertEntryVectors(env, id, content, tags, source, now, config, writeCtx);
 
   // This UPDATE is the tail of a version write (fresh vectors for the row). It
@@ -191,9 +194,16 @@ export async function deleteStaleVectors(env: Env, entryId: string, oldIds: stri
  * here too, would race ahead of that guarded batch and could overwrite a concurrent short append's
  * json_insert with a vector_ids list that never saw it (ADV-4, residual). storeEntry is the one
  * writer without such a batch; it compare-and-sets vector_ids on its own.
+ *
+ * Budget auditor R20 (T-0089.4.2, T-0089.5.9): always batchEmbeds — every caller here is
+ * re-embedding EXISTING or merged content, which can be arbitrarily large (a 128 KB Release, a
+ * merge target), unlike storeEntry's own create-time embed, which only ever sees content a hold
+ * would have already caught above the scorer's 32 KB budget. embedMany costs the same one AI call
+ * as the single-text embed helper does for the common few-chunk case (it batches up to
+ * embedBatchSize() texts per call), so there is no downside to always taking this path here.
  */
 export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS, writeCtx: WriteContext = OWNER_WRITE_CONTEXT): Promise<StoredEntry> {
-  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx);
+  const stored = await upsertEntryVectors(env, id, content, tags, source, Date.now(), config, writeCtx, { batchEmbeds: true });
   if (!stored.vectorIds.length) throw new Error("re-embed produced no vectors");
   return stored;
 }
@@ -377,7 +387,7 @@ export async function updateEntryContent(
         config,
       );
     }
-    // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan.
+    // Codex review class D (T-0089.4.2): a `partial` score holds too, reason too_long.
     const decision = score ? holdDecision(score) : { hold: false as const };
     const heldTags = decision.hold ? heldTagsFor(committedTags, decision.reasons) : null;
 
@@ -643,11 +653,23 @@ export async function appendToEntry(
         config,
       );
     }
-    // Codex review class D (T-0089.4.2): a `partial` score holds too, reason pending-scan — the
+    // Codex review class D (T-0089.4.2): a `partial` score holds too, reason too_long — the
     // scored slice here is already bounded (2,000 characters of context plus the addition), so
     // this only fires when the addition itself is large enough to trip the scorer's own 32 KB cap.
     const decision = score ? holdDecision(score) : { hold: false as const };
     const heldTags = decision.hold ? heldTagsFor(refreshedTags, decision.reasons) : null;
+
+    // Codex recheck (T-0089.4.2): an earlier attempt's short-branch chunk embed below can commit
+    // it to Vectorize, then lose its own CAS guard to a concurrent write that holds the row —
+    // this retry then finds heldTags or alreadyHeld true, but `chunk` still names that now-stale
+    // upload. Left alone, the short branch's UPDATE (further below) would json_insert it into
+    // vector_ids regardless, indexing a row a hold excludes (5.4 W-c, the embed gate's own
+    // invariant) through a path that never calls upsertEntryVectors at all. Retire and forget it,
+    // so this attempt behaves exactly as if no chunk had ever been embedded.
+    if ((heldTags || alreadyHeld) && chunk) {
+      await retireChunk();
+      chunk = null;
+    }
 
     if (readContent.length + suffix.length > CHUNK_MAX_CHARS) {
       // The whole text is re-embedded, so this commit must be of the text that was embedded.

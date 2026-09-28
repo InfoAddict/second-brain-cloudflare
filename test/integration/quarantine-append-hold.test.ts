@@ -49,6 +49,35 @@ describe("an MCP append that becomes instruction-like is held", () => {
   });
 });
 
+describe("short append retry cannot reuse a vector after the row becomes held", () => {
+  it("does not commit the first attempt's chunk into a held row", async () => {
+    sq = await migrated();
+    sq.seed({ id: "retry-held", content: "A plain note.", createdAt: 1000, tags: ["work"], vectorIds: [] });
+    const base = envFor(sq);
+    let injected = false;
+    const env = { ...base, DB: {
+      ...base.DB,
+      prepare: (sql: string) => base.DB.prepare(sql),
+      batch: async (statements: D1PreparedStatement[]) => {
+        if (!injected) {
+          injected = true;
+          await base.DB.prepare(`UPDATE entries SET tags = ? WHERE id = ?`)
+            .bind(JSON.stringify(withHold(["work"], "instruction")), "retry-held").run();
+        }
+        return base.DB.batch(statements);
+      },
+    } as D1Database } as Env;
+
+    await appendToEntry(env, "retry-held", "", "An ordinary addition.", [], "api", undefined, undefined,
+      { workspaceId: "", actorId: "u-1" }, mcpChange, undefined, "");
+
+    const row = await env.DB.prepare(`SELECT tags, vector_ids FROM entries WHERE id = ?`).bind("retry-held").first() as any;
+    expect(injected).toBe(true);
+    expect(isHeld(JSON.parse(row.tags))).toBe(true);
+    expect(JSON.parse(row.vector_ids)).toEqual([]);
+  });
+});
+
 describe("append is scored on the appended text plus 2,000 characters of context", () => {
   it("instruction text far outside the 2,000-char window does not hold a benign addition", async () => {
     sq = await migrated();
