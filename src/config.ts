@@ -161,6 +161,12 @@ export const DEFAULTS = {
   // placeholder string, is what this key protects — see the comment on the
   // .local placeholder this replaced in src/push/vapid.ts.
   PUSH_CONTACT: "",
+
+  // ── Sampled recall log (src/recall/log.ts, T-0089.5.2) ──
+  // Off by default everywhere (D5.2): the log holds the user's own query text, so it is
+  // opt-in rather than opt-out. Consequences of leaving it off: Part B's implicit feedback
+  // never accrues, and T-0043's golden set can only harvest from a brain that turned it on.
+  RECALL_LOG: "off",
 } as const;
 
 // DEFAULTS is `as const` so the shipped values are pinned and a typo shows up
@@ -239,6 +245,7 @@ export const RULES: Record<ConfigKey, Rule> = {
   TEAM_MODE: { kind: "string" },
   TIMEZONE: { kind: "string" },
   PUSH_CONTACT: { kind: "string" },
+  RECALL_LOG: { kind: "string" },
 };
 
 /**
@@ -265,6 +272,11 @@ export const NOTICE_COLLAPSE_MODES = ["off", "on"] as const;
 export type NoticeCollapseMode = (typeof NOTICE_COLLAPSE_MODES)[number];
 export const isNoticeCollapseMode = (value: unknown): value is NoticeCollapseMode =>
   (NOTICE_COLLAPSE_MODES as readonly unknown[]).includes(value);
+
+export const RECALL_LOG_MODES = ["off", "on"] as const;
+export type RecallLogMode = (typeof RECALL_LOG_MODES)[number];
+export const isRecallLogMode = (value: unknown): value is RecallLogMode =>
+  (RECALL_LOG_MODES as readonly unknown[]).includes(value);
 
 /** RFC 8292 section 2's two accepted VAPID `sub` shapes. */
 function isValidPushContact(value: string): boolean {
@@ -317,6 +329,10 @@ export function coerce(key: ConfigKey, value: unknown): { value: Config[ConfigKe
     // A closed enum: an unknown stored value reads as "off" (the collapse stays off), not as the default.
     if (key === "NOTICE_COLLAPSE" && !isNoticeCollapseMode(value)) {
       return { value: "off" as Config[ConfigKey], note: `${key}: expected off or on, got ${JSON.stringify(value)}; the collapse stays off` };
+    }
+    // A closed enum: an unknown stored value reads as "off" (the log stays off, D5.2's opt-in default), not as the default key's own value — which happens to also be "off" today, but this must not depend on that coincidence.
+    if (key === "RECALL_LOG" && !isRecallLogMode(value)) {
+      return { value: "off" as Config[ConfigKey], note: `${key}: expected off or on, got ${JSON.stringify(value)}; the log stays off` };
     }
     if (typeof value !== "string" || value.trim() === "") {
       return { value: fallback, note: `${key}: expected a non-empty string, got ${typeof value}` };

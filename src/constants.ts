@@ -286,3 +286,18 @@ export const CJK_STOPWORDS = new Set([
 
 /** The `source` the digest and weekly-insight jobs write; with an empty actor it is how their rows are told from a client's. */
 export const SYSTEM_SOURCE = "system";
+
+// ── Sampled recall log (T-0089.5.2 Part A, src/recall/log.ts) ──
+// Opt-in via config RECALL_LOG, off by default everywhere (D5.2). At most this many
+// recall_log rows written per workspace per day, gated by a KV counter checked before any
+// D1 write — a workspace over budget costs one KV read and nothing else. At 2 D1 rows
+// written per logged recall (the insert plus its lazy purge), 200/day is about 400 rows,
+// 0.4% of the 100k/day free-plan write cap.
+export const RECALL_LOG_PER_DAY = 200;
+// How long a logged query is kept before its lazy purge deletes it.
+export const RECALL_LOG_RETENTION_DAYS = 30;
+// Oldest-expired rows deleted per insert (bounded, not a full-table scan).
+export const RECALL_LOG_PURGE_BATCH = 20;
+// Part B: a get/append/update/link on an id within this long of a recall that returned it
+// counts as implicit feedback on that recall (feeds the golden set only, D5.4).
+export const RECALL_LOG_FOLLOW_WINDOW_MS = 30 * 60 * 1000;
